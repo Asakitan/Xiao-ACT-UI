@@ -4,17 +4,31 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_generic_backing_get_kind(sao_ui_widget_handle_t handle, int32_t* out_kind);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_input_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_chart_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
 
 namespace {
 
 struct WidgetEventHandler {
     uint64_t token{};
+    uint64_t generation{};
     int32_t event_type{};
     sao_ui_widget_event_cb_t callback{};
     void* user_data{};
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t in_flight{};
+    bool accepting{true};
 };
 
 struct WidgetRendererProvider {
@@ -26,7 +40,9 @@ struct WidgetRendererProvider {
 
 struct WidgetExtensionRegistry {
     std::mutex mutex;
-    std::unordered_map<sao_ui_widget_handle_t, std::vector<WidgetEventHandler>> handlers;
+    std::unordered_map<sao_ui_widget_handle_t,
+                       std::vector<std::shared_ptr<WidgetEventHandler>>>
+        handlers;
     std::unordered_map<int32_t, WidgetRendererProvider> renderers;
     std::unordered_map<uint64_t, int32_t> renderer_kinds;
     std::atomic<uint64_t> next_token{1};
@@ -36,6 +52,79 @@ WidgetExtensionRegistry& extension_registry() {
     static WidgetExtensionRegistry registry;
     return registry;
 }
+
+struct ActiveEventHandler {
+    const WidgetEventHandler* handler{};
+    ActiveEventHandler* previous{};
+};
+
+thread_local ActiveEventHandler* active_event_handler = nullptr;
+
+bool event_handler_is_active(const WidgetEventHandler* handler) {
+    for (const ActiveEventHandler* active = active_event_handler; active != nullptr;
+         active = active->previous) {
+        if (active->handler == handler)
+            return true;
+    }
+    return false;
+}
+
+void retire_event_handler(const std::shared_ptr<WidgetEventHandler>& handler) {
+    {
+        std::lock_guard lock(handler->mutex);
+        handler->accepting = false;
+    }
+    if (event_handler_is_active(handler.get()))
+        return;
+    std::unique_lock lock(handler->mutex);
+    handler->cv.wait(lock, [&] { return handler->in_flight == 0; });
+}
+
+class EventHandlerLease {
+  public:
+    explicit EventHandlerLease(std::shared_ptr<WidgetEventHandler> handler)
+        : handler_(std::move(handler)) {
+        std::lock_guard lock(handler_->mutex);
+        if (!handler_->accepting)
+            return;
+        ++handler_->in_flight;
+        callback_ = handler_->callback;
+        user_data_ = handler_->user_data;
+        marker_ = {handler_.get(), active_event_handler};
+        active_event_handler = &marker_;
+        acquired_ = true;
+    }
+
+    ~EventHandlerLease() {
+        if (!acquired_)
+            return;
+        active_event_handler = marker_.previous;
+        {
+            std::lock_guard lock(handler_->mutex);
+            --handler_->in_flight;
+        }
+        handler_->cv.notify_all();
+    }
+
+    explicit operator bool() const noexcept {
+        return acquired_;
+    }
+
+    sao_ui_widget_event_cb_t callback() const noexcept {
+        return callback_;
+    }
+
+    void* user_data() const noexcept {
+        return user_data_;
+    }
+
+  private:
+    std::shared_ptr<WidgetEventHandler> handler_;
+    sao_ui_widget_event_cb_t callback_{};
+    void* user_data_{};
+    ActiveEventHandler marker_{};
+    bool acquired_{};
+};
 
 uint64_t allocate_token() {
     auto& registry = extension_registry();
@@ -121,6 +210,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_kind(
     sao_ui_widget_handle_t handle, int32_t* out_kind) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_kind == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const sao_status_t generic_status = sao_ui_widget_generic_backing_get_kind(handle, out_kind);
+    if (generic_status == SAO_STATUS_OK)
+        return SAO_STATUS_OK;
+    if (generic_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (sao_ui_widget_input_get_generation(handle, nullptr) == SAO_STATUS_OK ||
+        sao_ui_widget_chart_get_generation(handle, nullptr) == SAO_STATUS_OK) {
+        *out_kind = *reinterpret_cast<const int32_t*>(handle);
+        return valid_widget_kind(*out_kind) ? SAO_STATUS_OK : SAO_STATUS_ERR_HANDLE_INVALID;
+    }
     const int32_t kind = *reinterpret_cast<const int32_t*>(handle);
     if (!valid_widget_kind(kind)) return SAO_STATUS_ERR_HANDLE_INVALID;
     *out_kind = kind;
@@ -145,8 +244,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_add_event_handler(
     try {
         auto& registry = extension_registry();
         std::lock_guard lock(registry.mutex);
-        registry.handlers[handle].push_back(
-            {token, event_type, callback, user_data});
+        auto handler = std::make_shared<WidgetEventHandler>();
+        handler->token = token;
+        handler->generation = token;
+        handler->event_type = event_type;
+        handler->callback = callback;
+        handler->user_data = user_data;
+        registry.handlers[handle].push_back(std::move(handler));
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -158,22 +262,32 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_remove_event_handler(
     sao_ui_widget_handle_t handle, uint64_t subscription_token) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (subscription_token == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& registry = extension_registry();
-    std::lock_guard lock(registry.mutex);
-    const auto owner = registry.handlers.find(handle);
-    if (owner == registry.handlers.end()) {
-        return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+    try {
+        std::shared_ptr<WidgetEventHandler> removed;
+        auto& registry = extension_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            const auto owner = registry.handlers.find(handle);
+            if (owner == registry.handlers.end())
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            auto& handlers = owner->second;
+            const auto found = std::find_if(
+                handlers.begin(), handlers.end(),
+                [subscription_token](const std::shared_ptr<WidgetEventHandler>& handler) {
+                    return handler->token == subscription_token;
+                });
+            if (found == handlers.end())
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            removed = *found;
+            handlers.erase(found);
+            if (handlers.empty())
+                registry.handlers.erase(owner);
+        }
+        retire_event_handler(removed);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    auto& handlers = owner->second;
-    const auto found = std::find_if(
-        handlers.begin(), handlers.end(),
-        [subscription_token](const WidgetEventHandler& handler) {
-            return handler.token == subscription_token;
-        });
-    if (found == handlers.end()) return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
-    handlers.erase(found);
-    if (handlers.empty()) registry.handlers.erase(owner);
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
@@ -185,7 +299,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
-    std::vector<uint64_t> dispatch_order;
+    std::vector<std::shared_ptr<WidgetEventHandler>> dispatch_order;
     try {
         auto& registry = extension_registry();
         std::lock_guard lock(registry.mutex);
@@ -193,36 +307,23 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
         if (owner == registry.handlers.end()) return SAO_STATUS_OK;
         dispatch_order.reserve(owner->second.size());
         for (const auto& handler : owner->second) {
-            if (handler.event_type == event_type) {
-                dispatch_order.push_back(handler.token);
+            if (handler->event_type == event_type) {
+                dispatch_order.push_back(handler);
             }
         }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
 
-    for (const uint64_t token : dispatch_order) {
-        sao_ui_widget_event_cb_t callback = nullptr;
-        void* user_data = nullptr;
-        {
-            auto& registry = extension_registry();
-            std::lock_guard lock(registry.mutex);
-            const auto owner = registry.handlers.find(handle);
-            if (owner != registry.handlers.end()) {
-                const auto found = std::find_if(
-                    owner->second.begin(), owner->second.end(),
-                    [token, event_type](const WidgetEventHandler& handler) {
-                        return handler.token == token &&
-                               handler.event_type == event_type;
-                    });
-                if (found != owner->second.end()) {
-                    callback = found->callback;
-                    user_data = found->user_data;
-                }
-            }
-        }
-        if (callback != nullptr) {
-            callback(event_type, event_payload_json_utf8, payload_len, user_data);
+    for (const auto& handler : dispatch_order) {
+        EventHandlerLease lease(handler);
+        if (!lease || lease.callback() == nullptr)
+            continue;
+        try {
+            lease.callback()(event_type, event_payload_json_utf8, payload_len,
+                             lease.user_data());
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
         }
     }
     return SAO_STATUS_OK;
@@ -231,18 +332,27 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_release_event_handlers(
     sao_ui_widget_handle_t handle, uint32_t* out_removed_count) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    auto& registry = extension_registry();
-    std::lock_guard lock(registry.mutex);
-    const auto owner = registry.handlers.find(handle);
-    const size_t count = owner == registry.handlers.end()
-        ? 0U
-        : owner->second.size();
-    if (owner != registry.handlers.end()) registry.handlers.erase(owner);
-    if (out_removed_count != nullptr) {
-        *out_removed_count = static_cast<uint32_t>(std::min<size_t>(
-            count, static_cast<size_t>(UINT32_MAX)));
+    try {
+        std::vector<std::shared_ptr<WidgetEventHandler>> removed;
+        auto& registry = extension_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            const auto owner = registry.handlers.find(handle);
+            if (owner != registry.handlers.end()) {
+                removed = std::move(owner->second);
+                registry.handlers.erase(owner);
+            }
+        }
+        if (out_removed_count != nullptr) {
+            *out_removed_count = static_cast<uint32_t>(std::min<size_t>(
+                removed.size(), static_cast<size_t>(UINT32_MAX)));
+        }
+        for (const auto& handler : removed)
+            retire_event_handler(handler);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(

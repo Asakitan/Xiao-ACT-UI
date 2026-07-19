@@ -2,16 +2,21 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "sao/core/status.h"
 #include "sao/ui/alerts.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/d3d11_device.h"
-#include "sao/ui/dcomp_bridge.h"
 #include "sao/ui/dc_mutation.h"
+#include "sao/ui/dcomp_bridge.h"
 #include "sao/ui/dxgi_dup.h"
 #include "sao/ui/gpu_overlay_window.h"
 #include "sao/ui/input_router.h"
@@ -19,23 +24,22 @@
 #include "sao/ui/z_order.h"
 
 #if defined(_WIN32)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
-extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_dc_mut_test_drain(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    uint32_t timeout_ms);
 extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_dc_mut_test_last_op(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    char* out_op, size_t out_op_cap,
-    char* out_method, size_t out_method_cap,
-    char* out_args, size_t out_args_cap);
+    sao_ui_dc_mutation_coordinator_handle_t handle, char* out_op, size_t out_op_cap,
+    char* out_method, size_t out_method_cap, char* out_args, size_t out_args_cap);
+extern "C" SAO_UI_API uint32_t SAO_UI_CALL sao_ui_gpu_overlay_test_pump_trace_remaining(void);
+extern "C" SAO_UI_API uint64_t SAO_UI_CALL sao_ui_gpu_overlay_test_pump_trace_emitted(void);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_gpu_overlay_test_set_create_failure_point(int32_t point);
 
 namespace {
 
@@ -57,11 +61,48 @@ struct ReentrantHotkeyLog {
     std::atomic<uint32_t> calls{0};
 };
 
-void SAO_UI_CALL unregistering_hotkey_callback(
-    const char*, const SaoUiInputEvent*, void* user_data) {
+void SAO_UI_CALL unregistering_hotkey_callback(const char*, const SaoUiInputEvent*,
+                                               void* user_data) {
     auto* log = static_cast<ReentrantHotkeyLog*>(user_data);
     ++log->calls;
     CHECK(sao_ui_input_router_unregister_hotkey(log->router, log->binding) == SAO_STATUS_OK);
+}
+
+void SAO_UI_CALL count_gpu_render_tick(void*, float, void* user_data) {
+    ++*static_cast<std::atomic<uint32_t>*>(user_data);
+}
+
+struct BlockingGpuCallback {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    std::atomic<bool> returned{false};
+};
+
+void SAO_UI_CALL blocking_gpu_render_tick(void*, float, void* user_data) {
+    auto* callback = static_cast<BlockingGpuCallback*>(user_data);
+    std::unique_lock<std::mutex> lock(callback->mutex);
+    callback->entered = true;
+    callback->cv.notify_all();
+    callback->cv.wait(lock, [callback] { return callback->release; });
+    callback->returned.store(true, std::memory_order_release);
+}
+
+struct ReentrantGpuCallback {
+    sao_ui_gpu_overlay_window_handle_t window = nullptr;
+    std::atomic<uint32_t> calls{0};
+    std::atomic<bool> destroy_returned{false};
+    std::atomic<sao_status_t> stale_status{SAO_STATUS_OK};
+};
+
+void SAO_UI_CALL destroying_gpu_render_tick(void*, float, void* user_data) {
+    auto* callback = static_cast<ReentrantGpuCallback*>(user_data);
+    ++callback->calls;
+    sao_ui_gpu_overlay_window_destroy(callback->window);
+    callback->destroy_returned.store(true, std::memory_order_release);
+    callback->stale_status.store(sao_ui_gpu_overlay_window_show(callback->window),
+                                 std::memory_order_release);
 }
 
 #if defined(_WIN32)
@@ -79,20 +120,40 @@ struct HiddenWindow {
         window_class.hInstance = instance;
         window_class.lpszClassName = class_name.c_str();
         atom = ::RegisterClassExW(&window_class);
-        hwnd = ::CreateWindowExW(
-            0, class_name.c_str(), L"state completion", WS_POPUP,
-            0, 0, 64, 64, nullptr, nullptr, instance, nullptr);
+        hwnd = ::CreateWindowExW(0, class_name.c_str(), L"state completion", WS_POPUP, 0, 0, 64, 64,
+                                 nullptr, nullptr, instance, nullptr);
     }
 
     ~HiddenWindow() {
-        if (hwnd != nullptr) ::DestroyWindow(hwnd);
-        if (atom != 0) ::UnregisterClassW(class_name.c_str(), instance);
+        if (hwnd != nullptr)
+            ::DestroyWindow(hwnd);
+        if (atom != 0)
+            ::UnregisterClassW(class_name.c_str(), instance);
     }
 };
 
+bool drain_dc_mutations_with_message_pump(sao_ui_dc_mutation_coordinator_handle_t coordinator,
+                                          std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        MSG message{};
+        while (::PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            ::TranslateMessage(&message);
+            ::DispatchMessageW(&message);
+        }
+        SaoDcMutationStats stats{};
+        if (sao_ui_dc_mutation_coordinator_stats(coordinator, &stats) == SAO_STATUS_OK &&
+            stats.inflight_operations == 0 && stats.queued_operations == 0) {
+            return true;
+        }
+        (void)::MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+    return false;
+}
+
 #endif
 
-}  // namespace
+} // namespace
 
 TEST_CASE("gpu overlay window delegates state to compositor layer",
           "[ui][completion][gpu_overlay][state]") {
@@ -128,6 +189,250 @@ TEST_CASE("gpu overlay window delegates state to compositor layer",
     sao_ui_compositor_destroy(compositor);
 }
 
+TEST_CASE("gpu overlay pump trace consumes exactly eight real present ticks",
+          "[ui][completion][gpu_overlay][pump_trace]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+
+    std::atomic<uint32_t> first_callbacks{0};
+    std::atomic<uint32_t> second_callbacks{0};
+    SaoGpuOverlayWindowConfig first_config = gpu_window_config();
+    first_config.title_utf8 = "pump_trace_first";
+    first_config.render_fn = reinterpret_cast<void*>(&count_gpu_render_tick);
+    first_config.render_fn_user_data = &first_callbacks;
+    SaoGpuOverlayWindowConfig second_config = first_config;
+    second_config.title_utf8 = "pump_trace_second";
+    second_config.render_fn_user_data = &second_callbacks;
+
+    sao_ui_gpu_overlay_window_handle_t first = nullptr;
+    sao_ui_gpu_overlay_window_handle_t second = nullptr;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &first_config, &first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &second_config, &second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_show(first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_show(second) == SAO_STATUS_OK);
+
+    const uint64_t emitted_before = sao_ui_gpu_overlay_test_pump_trace_emitted();
+    sao_ui_arm_pump_trace();
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 8u);
+    SaoGpuOverlayWindowState state{};
+    REQUIRE(sao_ui_gpu_overlay_window_get_state(first, &state) == SAO_STATUS_OK);
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 8u);
+
+    for (uint32_t tick = 0; tick < 8; ++tick) {
+        CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+        CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 7u - tick);
+    }
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_emitted() == emitted_before + 8u);
+    CHECK(first_callbacks.load() == 8u);
+    CHECK(second_callbacks.load() == 8u);
+
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 0u);
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_emitted() == emitted_before + 8u);
+    CHECK(first_callbacks.load() == 9u);
+    CHECK(second_callbacks.load() == 9u);
+
+    sao_ui_arm_pump_trace();
+    REQUIRE(sao_ui_gpu_overlay_test_pump_trace_remaining() == 8u);
+    sao_ui_gpu_overlay_window_destroy(first);
+    first = nullptr;
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 7u);
+    sao_ui_arm_pump_trace();
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 8u);
+    for (uint32_t tick = 0; tick < 8; ++tick) {
+        CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    }
+    CHECK(sao_ui_gpu_overlay_test_pump_trace_remaining() == 0u);
+
+    sao_ui_gpu_overlay_window_destroy(second);
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("gpu overlay destroy waits for in-flight callback user data",
+          "[ui][completion][gpu_overlay][lifecycle]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+
+    BlockingGpuCallback callback{};
+    SaoGpuOverlayWindowConfig config = gpu_window_config();
+    config.title_utf8 = "blocking_callback";
+    config.render_fn = reinterpret_cast<void*>(&blocking_gpu_render_tick);
+    config.render_fn_user_data = &callback;
+    sao_ui_gpu_overlay_window_handle_t window = nullptr;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &config, &window) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_show(window) == SAO_STATUS_OK);
+
+    std::atomic<bool> destroy_started{false};
+    std::atomic<bool> destroy_returned{false};
+    std::atomic<bool> destroy_was_blocked{false};
+    std::thread destroyer([&] {
+        {
+            std::unique_lock<std::mutex> lock(callback.mutex);
+            callback.cv.wait(lock, [&callback] { return callback.entered; });
+        }
+        destroy_started.store(true, std::memory_order_release);
+        sao_ui_gpu_overlay_window_destroy(window);
+        destroy_returned.store(true, std::memory_order_release);
+    });
+    std::thread releaser([&] {
+        while (!destroy_started.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        destroy_was_blocked.store(!destroy_returned.load(std::memory_order_acquire),
+                                  std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(callback.mutex);
+            callback.release = true;
+        }
+        callback.cv.notify_all();
+    });
+
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    destroyer.join();
+    releaser.join();
+    CHECK(destroy_was_blocked.load(std::memory_order_acquire));
+    CHECK(callback.returned.load(std::memory_order_acquire));
+    CHECK(destroy_returned.load(std::memory_order_acquire));
+    CHECK(sao_ui_gpu_overlay_window_show(window) == SAO_STATUS_ERR_HANDLE_INVALID);
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("gpu overlay callback can destroy itself without deadlock",
+          "[ui][completion][gpu_overlay][reentry]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+
+    ReentrantGpuCallback callback{};
+    SaoGpuOverlayWindowConfig config = gpu_window_config();
+    config.title_utf8 = "reentrant_destroy";
+    config.render_fn = reinterpret_cast<void*>(&destroying_gpu_render_tick);
+    config.render_fn_user_data = &callback;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &config, &callback.window) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_show(callback.window) == SAO_STATUS_OK);
+
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(callback.calls.load() == 1u);
+    CHECK(callback.destroy_returned.load(std::memory_order_acquire));
+    CHECK(callback.stale_status.load(std::memory_order_acquire) == SAO_STATUS_ERR_HANDLE_INVALID);
+    size_t layer_count = 1;
+    REQUIRE(sao_ui_compositor_list_layers(compositor, nullptr, 0, &layer_count) == SAO_STATUS_OK);
+    CHECK(layer_count == 0u);
+
+    sao_ui_gpu_overlay_window_destroy(callback.window);
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("gpu overlay visibility keeps callback binding and layer aligned",
+          "[ui][completion][gpu_overlay][visibility]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+
+    std::atomic<uint32_t> callbacks{0};
+    SaoGpuOverlayWindowConfig config = gpu_window_config();
+    config.title_utf8 = "visibility_consistency";
+    config.render_fn = reinterpret_cast<void*>(&count_gpu_render_tick);
+    config.render_fn_user_data = &callbacks;
+    sao_ui_gpu_overlay_window_handle_t window = nullptr;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &config, &window) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_show(window) == SAO_STATUS_OK);
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(callbacks.load() == 1u);
+
+    REQUIRE(sao_ui_gpu_overlay_window_hide(window) == SAO_STATUS_OK);
+    SaoGpuOverlayWindowState state{};
+    REQUIRE(sao_ui_gpu_overlay_window_get_state(window, &state) == SAO_STATUS_OK);
+    CHECK_FALSE(state.visible);
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(callbacks.load() == 1u);
+
+    REQUIRE(sao_ui_gpu_overlay_window_show(window) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_gpu_overlay_window_get_state(window, &state) == SAO_STATUS_OK);
+    CHECK(state.visible);
+    CHECK(sao_ui_compositor_present(compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(callbacks.load() == 2u);
+
+    sao_ui_gpu_overlay_window_destroy(window);
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("gpu overlay concurrent APIs reject a retired stable handle",
+          "[ui][completion][gpu_overlay][concurrency]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+    SaoGpuOverlayWindowConfig config = gpu_window_config();
+    config.title_utf8 = "concurrent_destroy";
+    sao_ui_gpu_overlay_window_handle_t window = nullptr;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &config, &window) == SAO_STATUS_OK);
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> unexpected_statuses{0};
+    std::vector<std::thread> callers;
+    for (int32_t index = 0; index < 6; ++index) {
+        callers.emplace_back([&, index] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            while (!stop.load(std::memory_order_acquire)) {
+                const sao_status_t status = index % 3 == 0 ? sao_ui_gpu_overlay_window_show(window)
+                                            : index % 3 == 1
+                                                ? sao_ui_gpu_overlay_window_hide(window)
+                                                : sao_ui_gpu_overlay_window_set_alpha(window, 0.5F);
+                if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_HANDLE_INVALID)
+                    ++unexpected_statuses;
+                SaoGpuOverlayWindowState state{};
+                const sao_status_t get_status = sao_ui_gpu_overlay_window_get_state(window, &state);
+                if (get_status != SAO_STATUS_OK && get_status != SAO_STATUS_ERR_HANDLE_INVALID)
+                    ++unexpected_statuses;
+            }
+        });
+    }
+    start.store(true, std::memory_order_release);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    sao_ui_gpu_overlay_window_destroy(window);
+    stop.store(true, std::memory_order_release);
+    for (auto& caller : callers)
+        caller.join();
+
+    CHECK(unexpected_statuses.load() == 0u);
+    CHECK(sao_ui_gpu_overlay_window_show(window) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_gpu_overlay_window_layer(window) == nullptr);
+    CHECK(sao_ui_gpu_overlay_window_hwnd(window) == nullptr);
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("gpu overlay create failures roll back every admitted layer",
+          "[ui][completion][gpu_overlay][rollback]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+    const SaoGpuOverlayWindowConfig config = gpu_window_config();
+
+    for (int32_t failure_point = 1; failure_point <= 4; ++failure_point) {
+        sao_ui_gpu_overlay_test_set_create_failure_point(failure_point);
+        sao_ui_gpu_overlay_window_handle_t window =
+            reinterpret_cast<sao_ui_gpu_overlay_window_handle_t>(static_cast<uintptr_t>(1));
+        const sao_status_t status = sao_ui_gpu_overlay_window_create(compositor, &config, &window);
+        sao_ui_gpu_overlay_test_set_create_failure_point(0);
+        CHECK(status == SAO_STATUS_ERR_UNKNOWN);
+        CHECK(window == nullptr);
+        size_t layer_count = 1;
+        REQUIRE(sao_ui_compositor_list_layers(compositor, nullptr, 0, &layer_count) ==
+                SAO_STATUS_OK);
+        CHECK(layer_count == 0u);
+    }
+    sao_ui_gpu_overlay_window_handle_t recovered = nullptr;
+    REQUIRE(sao_ui_gpu_overlay_window_create(compositor, &config, &recovered) == SAO_STATUS_OK);
+    sao_ui_gpu_overlay_window_destroy(recovered);
+    sao_ui_compositor_destroy(compositor);
+}
+
 TEST_CASE("input router dispatches subset hotkey outside its lock",
           "[ui][completion][input_router]") {
     sao_ui_input_router_deep_handle_t router = nullptr;
@@ -140,9 +445,9 @@ TEST_CASE("input router dispatches subset hotkey outside its lock",
     spec.virtual_key = 0x74;
     spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
     spec.prevent_default = true;
-    REQUIRE(sao_ui_input_router_register_hotkey(
-        router, "core", &spec, &unregistering_hotkey_callback, &log,
-        &log.binding) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_register_hotkey(router, "core", &spec,
+                                                &unregistering_hotkey_callback, &log,
+                                                &log.binding) == SAO_STATUS_OK);
 
     SaoUiInputEvent event{};
     event.kind = SAO_UI_INPUT_KEY_DOWN;
@@ -154,14 +459,13 @@ TEST_CASE("input router dispatches subset hotkey outside its lock",
     CHECK(log.calls.load() == 1);
 
 #if defined(_WIN32)
-    CHECK(sao_ui_input_router_feed_raw_win32(
-              router, WM_NULL, 0, 0, &consumed) == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(sao_ui_input_router_feed_raw_win32(router, WM_NULL, 0, 0, &consumed) ==
+          SAO_STATUS_ERR_NOT_FOUND);
 #endif
     sao_ui_input_router_deep_destroy(router);
 }
 
-TEST_CASE("alert drain text remains valid until banner hide",
-          "[ui][completion][alerts]") {
+TEST_CASE("alert drain text remains valid until banner hide", "[ui][completion][alerts]") {
     const uint16_t first[] = {'f', 'i', 'r', 's', 't', 0};
     const uint16_t second[] = {'s', 'e', 'c', 'o', 'n', 'd', 0};
     uint64_t first_id = 0;
@@ -180,8 +484,7 @@ TEST_CASE("alert drain text remains valid until banner hide",
     REQUIRE(sao_ui_alerts_banner_hide(second_id) == SAO_STATUS_OK);
 }
 
-TEST_CASE("graphics state snapshots zero invalid outputs",
-          "[ui][completion][graphics][state]") {
+TEST_CASE("graphics state snapshots zero invalid outputs", "[ui][completion][graphics][state]") {
     SaoD3d11DeviceState d3d_state{};
     d3d_state.feature_level = 0xFFFFFFFFu;
     CHECK(sao_ui_d3d11_device_get_state(nullptr, &d3d_state) == SAO_STATUS_ERR_HANDLE_INVALID);
@@ -214,15 +517,14 @@ TEST_CASE("overlay z order submits configured exstyle mutation",
 
     sao_ui_z_order_manager_handle_t z_order = nullptr;
     REQUIRE(sao_ui_z_order_manager_create(host, &z_order) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_z_order_hide_exstyle_mask(
-        z_order, SAO_UI_WS_EX_TOPMOST | SAO_UI_WS_EX_LAYERED) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_dc_mut_test_drain(coordinator, 1000));
+    REQUIRE(sao_ui_z_order_hide_exstyle_mask(z_order, SAO_UI_WS_EX_TOPMOST |
+                                                          SAO_UI_WS_EX_LAYERED) == SAO_STATUS_OK);
+    REQUIRE(drain_dc_mutations_with_message_pump(coordinator, std::chrono::seconds(1)));
     char operation[64]{};
     char method[64]{};
     char args[128]{};
-    REQUIRE(sao_ui_dc_mut_test_last_op(
-        coordinator, operation, sizeof(operation), method, sizeof(method),
-        args, sizeof(args)));
+    REQUIRE(sao_ui_dc_mut_test_last_op(coordinator, operation, sizeof(operation), method,
+                                       sizeof(method), args, sizeof(args)));
     CHECK(std::string(operation) == "host-exstyle");
     CHECK(std::string(method) == "hide_exstyle");
     CHECK(std::string(args).find("mask") != std::string::npos);
@@ -232,8 +534,7 @@ TEST_CASE("overlay z order submits configured exstyle mutation",
     sao_ui_dc_mutation_coordinator_destroy(coordinator);
 }
 
-TEST_CASE("D3D11 and DComp snapshots track live resources",
-          "[ui][completion][graphics][state]") {
+TEST_CASE("D3D11 and DComp snapshots track live resources", "[ui][completion][graphics][state]") {
     SaoD3d11DeviceConfig device_config{};
     device_config.prefer_warp = true;
     sao_ui_d3d11_device_handle_t device = nullptr;
@@ -275,11 +576,9 @@ TEST_CASE("D3D11 and DComp snapshots track live resources",
     CHECK(bridge_state.height == 2u);
 
     const std::array<uint8_t, 16> pixels = {
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     };
-    REQUIRE(sao_ui_dcomp_bridge_upload_bgra(
-        bridge, pixels.data(), 2, 2, 8) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dcomp_bridge_upload_bgra(bridge, pixels.data(), 2, 2, 8) == SAO_STATUS_OK);
     REQUIRE(sao_ui_dcomp_bridge_get_state(bridge, &bridge_state) == SAO_STATUS_OK);
     CHECK(bridge_state.upload_texture_ready);
     REQUIRE(sao_ui_dcomp_bridge_resize(bridge, 3, 1) == SAO_STATUS_OK);
@@ -298,7 +597,7 @@ TEST_CASE("DXGI duplication snapshot exposes configured state or skips",
     invalid_config.staging_width = 4;
     sao_ui_dxgi_dup_handle_t invalid_duplication = nullptr;
     CHECK(sao_ui_dxgi_dup_create(&invalid_config, &invalid_duplication) ==
-        SAO_STATUS_ERR_INVALID_ARGUMENT);
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
     CHECK(invalid_duplication == nullptr);
 
     SaoDxgiDupConfig config{};
@@ -308,7 +607,8 @@ TEST_CASE("DXGI duplication snapshot exposes configured state or skips",
     config.staging_height = 4;
     sao_ui_dxgi_dup_handle_t duplication = nullptr;
     const sao_status_t status = sao_ui_dxgi_dup_create(&config, &duplication);
-    if (status != SAO_STATUS_OK) SKIP("DXGI duplication unavailable");
+    if (status != SAO_STATUS_OK)
+        SKIP("DXGI duplication unavailable");
     SaoDxgiDupState state{};
     REQUIRE(sao_ui_dxgi_dup_get_state(duplication, &state) == SAO_STATUS_OK);
     CHECK(state.output_index == 0u);
@@ -324,8 +624,7 @@ TEST_CASE("DXGI duplication snapshot exposes configured state or skips",
 
 #else
 
-TEST_CASE("Win32 production graphics completion requires Windows",
-          "[ui][completion][graphics]") {
+TEST_CASE("Win32 production graphics completion requires Windows", "[ui][completion][graphics]") {
     SUCCEED("Windows-only state APIs");
 }
 

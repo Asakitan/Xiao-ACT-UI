@@ -256,6 +256,10 @@ target_link_libraries(sao_platform_ui_wave6e_tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+if (WIN32)
+    target_link_libraries(sao_platform_ui_wave6e_tests PRIVATE user32)
+endif()
+
 target_compile_definitions(sao_platform_ui_wave6e_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_wave6e_tests PRIVATE cxx_std_20)
 
@@ -425,6 +429,7 @@ if (WIN32)
 
     target_link_libraries(sao_platform_ui_overlay_region_tests PRIVATE
         Catch2::Catch2WithMain
+        nlohmann_json::nlohmann_json
         user32 gdi32 dwmapi
     )
 

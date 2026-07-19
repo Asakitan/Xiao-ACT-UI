@@ -56,27 +56,27 @@ typedef struct sao_ui_gpu_overlay_window_s* sao_ui_gpu_overlay_window_handle_t;
 
 struct SaoGpuOverlayWindowConfig {
     // Position + size on the host.  Coordinates are host-window-local.
-    int32_t     x;
-    int32_t     y;
-    int32_t     width;
-    int32_t     height;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
 
     // Whether the layer receives mouse events.  false → the compositor's
     // click-through RGN skips this layer, mouse passes through.
-    bool        click_through;
+    bool click_through;
 
     // Title (mainly for debug diagnostics).  UTF-8, NULL → empty.
     const char* title_utf8;
 
     // Vsync — if true, target_fps is set to the display refresh rate.
-    bool        vsync;
+    bool vsync;
 
     // Z-order.  Default 100.  See `compositor.h::sao_ui_layer_set_z_order`.
-    int32_t     z_order;
+    int32_t z_order;
 
     // Optional render callback.  NULL → BGRA upload path only.
-    void*       render_fn;      // sao_ui_layer_render_fn_t*
-    void*       render_fn_user_data;
+    void* render_fn; // sao_ui_layer_render_fn_t*
+    void* render_fn_user_data;
 };
 
 // Query legacy WGL availability.  The D3D/DComp production build returns false.
@@ -87,57 +87,59 @@ SAO_UI_API bool SAO_UI_CALL sao_ui_gpu_overlay_supported(void);
 // `lock_acquire`/`lock_release`.  Never manually lock this;
 // use the RAII wrapper.  Handle is process-lifetime.
 SAO_UI_API void* SAO_UI_CALL sao_ui_get_wgl_serialize_lock(void);
-SAO_UI_API void SAO_UI_CALL sao_ui_wgl_serialize_lock_acquire(
-    void* lock_handle);
-SAO_UI_API void SAO_UI_CALL sao_ui_wgl_serialize_lock_release(
-    void* lock_handle);
+SAO_UI_API void SAO_UI_CALL sao_ui_wgl_serialize_lock_acquire(void* lock_handle);
+SAO_UI_API void SAO_UI_CALL sao_ui_wgl_serialize_lock_release(void* lock_handle);
 
-// Create a GPU overlay window (delegate to compositor).
+// Create a GPU overlay window (delegate to compositor). The returned opaque
+// handle may be called from any thread. Mutators/getters are serialized with
+// destroy and either complete before destroy returns or reject the retired
+// handle with SAO_STATUS_ERR_HANDLE_INVALID.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_create(
-    sao_ui_compositor_handle_t compositor,
-    const SaoGpuOverlayWindowConfig* config,
+    sao_ui_compositor_handle_t compositor, const SaoGpuOverlayWindowConfig* config,
     sao_ui_gpu_overlay_window_handle_t* out_handle);
 
-SAO_UI_API void SAO_UI_CALL sao_ui_gpu_overlay_window_destroy(
-    sao_ui_gpu_overlay_window_handle_t handle);
+// Removes the handle from the active registry and waits for in-flight render
+// callbacks and API calls before returning. If called by this window's render
+// callback, teardown is deferred until that callback returns so the callback
+// never waits for itself. Repeated/stale-handle destroy calls are safe no-ops.
+SAO_UI_API void SAO_UI_CALL
+sao_ui_gpu_overlay_window_destroy(sao_ui_gpu_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_show(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_show(sao_ui_gpu_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_hide(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_hide(sao_ui_gpu_overlay_window_handle_t handle);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_set_geometry(
-    sao_ui_gpu_overlay_window_handle_t handle,
-    int32_t x, int32_t y, int32_t width, int32_t height);
+    sao_ui_gpu_overlay_window_handle_t handle, int32_t x, int32_t y, int32_t width, int32_t height);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_move(
-    sao_ui_gpu_overlay_window_handle_t handle,
-    int32_t x, int32_t y);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_move(sao_ui_gpu_overlay_window_handle_t handle, int32_t x, int32_t y);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_set_click_through(
     sao_ui_gpu_overlay_window_handle_t handle, bool click_through);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_set_alpha(
-    sao_ui_gpu_overlay_window_handle_t handle, float alpha);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_set_alpha(sao_ui_gpu_overlay_window_handle_t handle, float alpha);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_raise_to_top(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_raise_to_top(sao_ui_gpu_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_set_z(
-    sao_ui_gpu_overlay_window_handle_t handle, int32_t z);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_set_z(sao_ui_gpu_overlay_window_handle_t handle, int32_t z);
 
 // Get underlying compositor layer (delegate target).
-SAO_UI_API sao_ui_layer_handle_t SAO_UI_CALL sao_ui_gpu_overlay_window_layer(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API sao_ui_layer_handle_t SAO_UI_CALL
+sao_ui_gpu_overlay_window_layer(sao_ui_gpu_overlay_window_handle_t handle);
 
 // Get the compositor host's HWND (for D3D interop).
-SAO_UI_API void* SAO_UI_CALL sao_ui_gpu_overlay_window_hwnd(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL
+sao_ui_gpu_overlay_window_hwnd(sao_ui_gpu_overlay_window_handle_t handle);
 
 // Get the legacy GL context.  Returns NULL in the D3D/DComp production build.
-SAO_UI_API void* SAO_UI_CALL sao_ui_gpu_overlay_window_gl_ctx(
-    sao_ui_gpu_overlay_window_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL
+sao_ui_gpu_overlay_window_gl_ctx(sao_ui_gpu_overlay_window_handle_t handle);
 
 struct SaoGpuOverlayWindowState {
     int32_t x;
@@ -153,13 +155,13 @@ struct SaoGpuOverlayWindowState {
 };
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_get_state(
-    sao_ui_gpu_overlay_window_handle_t handle,
-    SaoGpuOverlayWindowState* out_state);
+    sao_ui_gpu_overlay_window_handle_t handle, SaoGpuOverlayWindowState* out_state);
 
-// One-shot diagnostic pump trace armor.  Emits per-line markers for
-// the next 8 pump ticks.  For debugging pump-hang bugs.
+// Arm diagnostic trace markers for the next 8 actual compositor render ticks
+// observed by a visible GPU overlay layer. Calls that do not execute a render
+// tick do not consume the counter. Re-arming restarts the count at 8.
 SAO_UI_API void SAO_UI_CALL sao_ui_arm_pump_trace(void);
 
 #ifdef __cplusplus
-}  // extern "C"
+} // extern "C"
 #endif

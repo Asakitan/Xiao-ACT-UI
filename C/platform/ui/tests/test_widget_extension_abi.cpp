@@ -5,12 +5,17 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace {
+
+using namespace std::chrono_literals;
 
 struct Pixel {
     uint8_t b;
@@ -78,6 +83,38 @@ void SAO_UI_CALL count_event(
     int32_t, const uint8_t*, size_t, void* user_data) {
     static_cast<std::atomic<uint32_t>*>(user_data)->fetch_add(
         1, std::memory_order_relaxed);
+}
+
+struct BlockingEvent {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered{};
+    bool release{};
+};
+
+void SAO_UI_CALL block_event(int32_t, const uint8_t*, size_t, void* user_data) {
+    auto* event = static_cast<BlockingEvent*>(user_data);
+    std::unique_lock lock(event->mutex);
+    event->entered = true;
+    event->cv.notify_all();
+    event->cv.wait(lock, [event] { return event->release; });
+}
+
+struct SelfRemoveEvent {
+    sao_ui_widget_handle_t widget{};
+    uint64_t token{};
+    sao_status_t remove_status{SAO_STATUS_ERR_UNKNOWN};
+    size_t calls{};
+};
+
+void SAO_UI_CALL remove_self(int32_t, const uint8_t*, size_t, void* user_data) {
+    auto* event = static_cast<SelfRemoveEvent*>(user_data);
+    ++event->calls;
+    event->remove_status = sao_ui_widget_remove_event_handler(event->widget, event->token);
+}
+
+void SAO_UI_CALL throw_event(int32_t, const uint8_t*, size_t, void*) {
+    throw std::runtime_error("generic callback failure");
 }
 
 struct RendererProbe {
@@ -246,6 +283,109 @@ TEST_CASE("generic widget registry supports concurrent registration and removal"
     }
     for (auto& worker : workers) worker.join();
     REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
+    sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("generic widget callback removal waits for the active generation",
+          "[ui][widget_extension][events][rundown]") {
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
+            SAO_STATUS_OK);
+    BlockingEvent event;
+    uint64_t token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, block_event, &event,
+                                            &token) == SAO_STATUS_OK);
+    std::atomic<sao_status_t> dispatch_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread dispatch([&] {
+        dispatch_status.store(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0));
+    });
+    {
+        std::unique_lock lock(event.mutex);
+        REQUIRE(event.cv.wait_for(lock, 1s, [&event] { return event.entered; }));
+    }
+    std::atomic_bool removed{false};
+    std::atomic<sao_status_t> remove_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread remove([&] {
+        remove_status.store(sao_ui_widget_remove_event_handler(widget, token));
+        removed.store(true);
+    });
+    std::this_thread::sleep_for(30ms);
+    CHECK_FALSE(removed.load());
+    {
+        std::lock_guard lock(event.mutex);
+        event.release = true;
+    }
+    event.cv.notify_all();
+    dispatch.join();
+    remove.join();
+    CHECK(dispatch_status.load() == SAO_STATUS_OK);
+    CHECK(remove_status.load() == SAO_STATUS_OK);
+    CHECK(removed.load());
+    sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("generic widget release and destroy wait for active callbacks",
+          "[ui][widget_extension][events][rundown]") {
+    for (const bool destroy_owner : {false, true}) {
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
+                SAO_STATUS_OK);
+        BlockingEvent event;
+        uint64_t token = 0;
+        REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, block_event, &event,
+                                                &token) == SAO_STATUS_OK);
+        std::thread dispatch(
+            [&] { CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
+                       SAO_STATUS_OK); });
+        {
+            std::unique_lock lock(event.mutex);
+            REQUIRE(event.cv.wait_for(lock, 1s, [&event] { return event.entered; }));
+        }
+        std::atomic_bool teardown_done{false};
+        std::thread teardown([&] {
+            if (destroy_owner) {
+                sao_ui_widget_destroy(widget);
+            } else {
+                uint32_t removed = 0;
+                CHECK(sao_ui_widget_release_event_handlers(widget, &removed) == SAO_STATUS_OK);
+                CHECK(removed == 1);
+            }
+            teardown_done.store(true);
+        });
+        std::this_thread::sleep_for(30ms);
+        CHECK_FALSE(teardown_done.load());
+        {
+            std::lock_guard lock(event.mutex);
+            event.release = true;
+        }
+        event.cv.notify_all();
+        dispatch.join();
+        teardown.join();
+        CHECK(teardown_done.load());
+        if (!destroy_owner)
+            sao_ui_widget_destroy(widget);
+    }
+}
+
+TEST_CASE("generic widget self removal and callback exceptions stay inside the C ABI",
+          "[ui][widget_extension][events][rundown]") {
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
+            SAO_STATUS_OK);
+    SelfRemoveEvent self{widget};
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, remove_self, &self,
+                                            &self.token) == SAO_STATUS_OK);
+    CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    CHECK(self.remove_status == SAO_STATUS_OK);
+    CHECK(self.calls == 1);
+    CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    CHECK(self.calls == 1);
+
+    uint64_t throwing_token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, throw_event, nullptr,
+                                            &throwing_token) == SAO_STATUS_OK);
+    CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
+          SAO_STATUS_ERR_UNKNOWN);
     sao_ui_widget_destroy(widget);
 }
 

@@ -41,34 +41,51 @@ extern "C" {
 typedef struct sao_ui_compositor_overlay_window_s* sao_ui_compositor_overlay_window_handle_t;
 typedef struct sao_ui_compositor_bgra_presenter_s* sao_ui_compositor_bgra_presenter_handle_t;
 
+typedef enum SaoUiCompositorOverlayBackingState {
+    SAO_UI_COMPOSITOR_OVERLAY_BACKING_FIXTURE = 0,
+    SAO_UI_COMPOSITOR_OVERLAY_BACKING_LAYER = 1,
+    SAO_UI_COMPOSITOR_OVERLAY_BACKING_DESTROYED = 2,
+} SaoUiCompositorOverlayBackingState;
+
 // ── CompositorOverlayWindow (drop-in for GpuOverlayWindow) ───
 
 // Same config as `SaoGpuOverlayWindowConfig` — deliberately alias-able.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_create(
-    sao_ui_compositor_handle_t compositor,
-    const SaoGpuOverlayWindowConfig* config,
+    sao_ui_compositor_handle_t compositor, const SaoGpuOverlayWindowConfig* config,
     sao_ui_compositor_overlay_window_handle_t* out_handle);
 
-SAO_UI_API void SAO_UI_CALL sao_ui_compositor_overlay_window_destroy(
-    sao_ui_compositor_overlay_window_handle_t handle);
+SAO_UI_API void SAO_UI_CALL
+sao_ui_compositor_overlay_window_destroy(sao_ui_compositor_overlay_window_handle_t handle);
+
+// Borrowed layer handle for production-backed windows; NULL for explicit
+// compatibility fixtures created with a NULL compositor.
+SAO_UI_API sao_ui_layer_handle_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_layer(sao_ui_compositor_overlay_window_handle_t handle);
+
+SAO_UI_API SaoUiCompositorOverlayBackingState SAO_UI_CALL
+sao_ui_compositor_overlay_window_backing_state(sao_ui_compositor_overlay_window_handle_t handle);
 
 // All GpuOverlayWindow methods delegated:
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_show(
-    sao_ui_compositor_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_show(sao_ui_compositor_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_hide(
-    sao_ui_compositor_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_hide(sao_ui_compositor_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_geometry(
-    sao_ui_compositor_overlay_window_handle_t handle,
-    int32_t x, int32_t y, int32_t width, int32_t height);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_set_geometry(sao_ui_compositor_overlay_window_handle_t handle,
+                                              int32_t x, int32_t y, int32_t width, int32_t height);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_move(
-    sao_ui_compositor_overlay_window_handle_t handle,
-    int32_t x, int32_t y);
+    sao_ui_compositor_overlay_window_handle_t handle, int32_t x, int32_t y);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_click_through(
     sao_ui_compositor_overlay_window_handle_t handle, bool click_through);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_input_callbacks(
+    sao_ui_compositor_overlay_window_handle_t handle, sao_ui_layer_cursor_pos_fn_t cursor_pos_fn,
+    sao_ui_layer_cursor_leave_fn_t cursor_leave_fn, sao_ui_layer_button_fn_t button_fn,
+    sao_ui_layer_scroll_fn_t scroll_fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_alpha(
     sao_ui_compositor_overlay_window_handle_t handle, float alpha);
@@ -76,47 +93,43 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_alpha(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_enable_input_proxy(
     sao_ui_compositor_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_raise_to_top(
-    sao_ui_compositor_overlay_window_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_raise_to_top(sao_ui_compositor_overlay_window_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_z(
-    sao_ui_compositor_overlay_window_handle_t handle, int32_t z);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_overlay_window_set_z(sao_ui_compositor_overlay_window_handle_t handle, int32_t z);
 
 // ── CompositorBgraPresenter (drop-in for BgraPresenter) ──────
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_bgra_presenter_create(
-    sao_ui_layer_handle_t layer,
-    sao_ui_compositor_bgra_presenter_handle_t* out_handle);
+    sao_ui_layer_handle_t layer, sao_ui_compositor_bgra_presenter_handle_t* out_handle);
 
-SAO_UI_API void SAO_UI_CALL sao_ui_compositor_bgra_presenter_destroy(
-    sao_ui_compositor_bgra_presenter_handle_t handle);
+SAO_UI_API void SAO_UI_CALL
+sao_ui_compositor_bgra_presenter_destroy(sao_ui_compositor_bgra_presenter_handle_t handle);
 
 // Stage a new BGRA frame + optional position update.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_bgra_presenter_set_frame(
-    sao_ui_compositor_bgra_presenter_handle_t handle,
-    const uint8_t* bgra, uint32_t width, uint32_t height,
-    int32_t x, int32_t y);
+    sao_ui_compositor_bgra_presenter_handle_t handle, const uint8_t* bgra, uint32_t width,
+    uint32_t height, int32_t x, int32_t y);
 
 // Animate alpha towards a target.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_bgra_presenter_start_fade(
-    sao_ui_compositor_bgra_presenter_handle_t handle,
-    float target_alpha, float duration_sec);
+    sao_ui_compositor_bgra_presenter_handle_t handle, float target_alpha, float duration_sec);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_bgra_presenter_set_alpha(
     sao_ui_compositor_bgra_presenter_handle_t handle, float alpha);
 
-SAO_UI_API float SAO_UI_CALL sao_ui_compositor_bgra_presenter_get_alpha(
-    sao_ui_compositor_bgra_presenter_handle_t handle);
+SAO_UI_API float SAO_UI_CALL
+sao_ui_compositor_bgra_presenter_get_alpha(sao_ui_compositor_bgra_presenter_handle_t handle);
 
 // ── Factory (matches Python create_overlay_window) ────────
 
 // One-line create — chooses unified compositor (only mode in C++).
 // Kept for source-parity with plugin code that imports the factory.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_create_overlay_window(
-    sao_ui_compositor_handle_t compositor,
-    const SaoGpuOverlayWindowConfig* config,
+    sao_ui_compositor_handle_t compositor, const SaoGpuOverlayWindowConfig* config,
     sao_ui_compositor_overlay_window_handle_t* out_handle);
 
 #ifdef __cplusplus
-}  // extern "C"
+} // extern "C"
 #endif

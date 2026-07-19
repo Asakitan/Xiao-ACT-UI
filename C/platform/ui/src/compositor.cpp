@@ -1690,6 +1690,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_enforce_z_order(
     return sao_ui_z_order_enforce(compositor->z_order, nullptr, false, false);
 }
 
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_require_owner_thread(sao_ui_compositor_handle_t compositor) {
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    return std::this_thread::get_id() == compositor->render_thread
+               ? SAO_STATUS_OK
+               : SAO_STATUS_ERR_ACCESS_DENIED;
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
     sao_ui_compositor_handle_t compositor) {
     if (compositor == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;

@@ -5,12 +5,10 @@
 // the returned panel/body handles via panel_layout.h + this file's
 // batched body-mutation API.
 //
-// This slice is the SDK-facing registry + descriptor cache — it is
-// intentionally decoupled from the compositor D3D11 back-end so unit
-// tests can drive the full lifecycle on a headless CI runner (see
-// tests/test_panel_sdk_wave4.cpp).  The `compositor` argument is stored
-// for downstream integration but not required for correctness of the
-// registry itself.
+// The SDK registry owns a classic runtime panel, so body replacement,
+// layer state, actions, and geometry events use the same production
+// path.  Headless tests use a software compositor rather than a
+// synthetic registry-only result.
 //
 // Python source alignment (memory `别造额外UI入口`,
 // `面板组件库支持颜色覆盖`, `ACT扁平化机制`):
@@ -22,17 +20,34 @@
 #include "sao/ui/panel_sdk.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <climits>
+#include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_generic_backing_get_kind(sao_ui_widget_handle_t handle, int32_t* out_kind);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_input_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_widget_chart_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
+
 namespace {
+
+using json = nlohmann::json;
 
 // ─── Internal panel record ──────────────────────────────────────────
 //
@@ -43,13 +58,201 @@ namespace {
 //   2. iteration surface for the launcher lifecycle sweep.
 
 struct BodyRecord {
+    struct Node {
+        uint64_t id{};
+        uint64_t parent_id{};
+        int32_t sibling_order{};
+        int32_t layout_mode{SAO_UI_LAYOUT_VERTICAL};
+        SaoUiLayoutSpec spec{};
+        sao_ui_widget_handle_t widget{};
+        json props{json::object()};
+        json committed_props{json::object()};
+    };
+
     sao_ui_layout_tree_handle_t tree = nullptr;
     sao_ui_layout_node_handle_t root = nullptr;
-    std::vector<int> mutation_log;  // records mutation kinds in order
-    uint64_t         mutation_count_total = 0;
+    std::vector<Node> model;
+    std::vector<std::pair<sao_ui_layout_node_handle_t, uint64_t>> actual_to_model;
+    uint64_t next_node_id{2};
+    std::vector<int> mutation_log; // records mutation kinds in order
+    uint64_t mutation_count_total = 0;
 };
 
+struct BodyHandleShell {
+    uint64_t generation{};
+};
+
+struct GeometryPersistence {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::thread worker;
+    std::string panel_id;
+    sao_ui_panel_handle_t runtime_panel{};
+    sao_ui_panel_geometry_cb_t callback{};
+    void* user_data{};
+    SaoPanelState pending{};
+    uint64_t generation{};
+    uint64_t callback_generation{1};
+    bool remember{};
+    bool has_pending{};
+    bool stopping{};
+    std::shared_ptr<std::atomic_bool> deferred_completion{
+        std::make_shared<std::atomic_bool>(false)};
+    std::unordered_map<uint64_t, size_t> callbacks_in_flight;
+    std::function<void()> deferred_cleanup;
+
+    struct Active {
+        GeometryPersistence* owner{};
+        uint64_t generation{};
+        Active* previous{};
+    };
+
+    static thread_local Active* active;
+
+    ~GeometryPersistence() {
+        try {
+            stop();
+        } catch (...) {
+        }
+    }
+
+    sao_status_t start() noexcept {
+        try {
+            worker = std::thread([this] {
+                std::unique_lock lock(mutex);
+                while (!stopping) {
+                    cv.wait(lock, [this] { return stopping || has_pending; });
+                    if (stopping)
+                        break;
+                    const uint64_t observed = generation;
+                    const auto deadline =
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+                    if (cv.wait_until(lock, deadline, [this, observed] {
+                            return stopping || generation != observed;
+                        })) {
+                        continue;
+                    }
+                    const SaoPanelState geometry = pending;
+                    const auto fn = callback;
+                    void* const data = user_data;
+                    const uint64_t callback_version = callback_generation;
+                    has_pending = false;
+                    if (fn != nullptr)
+                        ++callbacks_in_flight[callback_version];
+                    lock.unlock();
+                    if (fn != nullptr) {
+                        Active marker{this, callback_version, active};
+                        active = &marker;
+                        try {
+                            fn(panel_id.c_str(), geometry.x, geometry.y, geometry.width,
+                               geometry.height, data);
+                        } catch (...) {
+                        }
+                        active = marker.previous;
+                    }
+                    lock.lock();
+                    if (fn != nullptr) {
+                        auto found = callbacks_in_flight.find(callback_version);
+                        if (found != callbacks_in_flight.end() && --found->second == 0)
+                            callbacks_in_flight.erase(found);
+                        cv.notify_all();
+                    }
+                    if (stopping && deferred_cleanup) {
+                        auto cleanup = std::move(deferred_cleanup);
+                        const auto completion = deferred_completion;
+                        lock.unlock();
+                        if (worker.joinable())
+                            worker.detach();
+                        cleanup();
+                        completion->store(true, std::memory_order_release);
+                        return;
+                    }
+                }
+            });
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        return SAO_STATUS_OK;
+    }
+
+    void schedule(const SaoPanelState& geometry) {
+        std::lock_guard lock(mutex);
+        if (!remember || callback == nullptr || stopping)
+            return;
+        pending = geometry;
+        has_pending = true;
+        ++generation;
+        cv.notify_all();
+    }
+
+    void set_handler(sao_ui_panel_geometry_cb_t fn, void* data) {
+        uint64_t previous = 0;
+        {
+            std::lock_guard lock(mutex);
+            if (stopping)
+                return;
+            previous = callback_generation++;
+            callback = fn;
+            user_data = data;
+            if (fn == nullptr)
+                has_pending = false;
+            ++generation;
+        }
+        cv.notify_all();
+        if (is_active(previous))
+            return;
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return !callbacks_in_flight.contains(previous); });
+    }
+
+    bool is_worker_thread() {
+        std::lock_guard lock(mutex);
+        return worker.joinable() && worker.get_id() == std::this_thread::get_id();
+    }
+
+    bool deferred_stop_complete() {
+        return deferred_completion->load(std::memory_order_acquire);
+    }
+
+    bool is_active(uint64_t callback_version) const noexcept {
+        for (const Active* current = active; current != nullptr; current = current->previous) {
+            if (current->owner == this && current->generation == callback_version)
+                return true;
+        }
+        return false;
+    }
+
+    void defer_stop(std::function<void()> cleanup) {
+        {
+            std::lock_guard lock(mutex);
+            stopping = true;
+            has_pending = false;
+            deferred_cleanup = std::move(cleanup);
+            ++generation;
+        }
+        cv.notify_all();
+    }
+
+    void stop() {
+        {
+            std::lock_guard lock(mutex);
+            stopping = true;
+            has_pending = false;
+            ++generation;
+        }
+        cv.notify_all();
+        if (worker.joinable())
+            worker.join();
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [this] { return callbacks_in_flight.empty(); });
+    }
+};
+
+thread_local GeometryPersistence::Active* GeometryPersistence::active = nullptr;
+
 struct PanelRecord {
+    std::recursive_mutex mutex;
+    bool active{true};
     // Persistent copy of the descriptor.  All const char* fields are
     // deep-copied into the strings below so plugins may free their
     // input immediately after register().
@@ -57,6 +260,7 @@ struct PanelRecord {
     std::string title;
     std::string follow_panel_id;
     std::string theme_override_json;
+    std::vector<uint8_t> icon_pixels;
 
     // Descriptor cache (rebuilt on read so we never hand out dangling
     // pointers).  Kept as raw copy of the numeric fields.
@@ -64,33 +268,41 @@ struct PanelRecord {
 
     // Compositor + geometry state.
     sao_ui_compositor_handle_t compositor = nullptr;
+    sao_ui_panel_handle_t runtime_panel = nullptr;
 
     // Runtime state.
-    bool  visible          = true;
-    float opacity_0_to_1   = 1.0f;
-    int32_t z_class        = 0;
+    bool visible = true;
+    float opacity_0_to_1 = 1.0f;
+    int32_t z_class = 0;
     int32_t z_within_class = 0;
 
     // Body sub-record.
     std::unique_ptr<BodyRecord> body;
+    sao_ui_panel_body_handle_t body_handle{};
+    uint64_t body_generation{};
+    GeometryPersistence geometry_persistence;
 
     // Handle bookkeeping.
-    uint64_t id_num = 0;  // monotonic id assigned at register-time
+    uint64_t id_num = 0; // monotonic id assigned at register-time
 };
 
 // ─── Global registry ────────────────────────────────────────────────
 struct Registry {
-    std::mutex                                                  mu;
+    std::mutex mu;
     // Keyed by the opaque panel handle we hand out.  We use a raw
     // pointer-as-integer scheme: the handle IS the record pointer,
     // so lookup is O(1) via reinterpret_cast (bounded by an alive-set
     // guard below).
-    std::unordered_map<PanelRecord*, std::unique_ptr<PanelRecord>> panels;
-    // Body → panel back-pointer, so body handles can be looked up.
-    std::unordered_map<BodyRecord*, PanelRecord*> body_index;
+    std::unordered_map<sao_ui_panel_handle_t, std::shared_ptr<PanelRecord>> panels;
+    // Body shell → panel back-pointer. Shell storage is permanent so an old
+    // opaque address can never alias a later panel body.
+    std::unordered_map<sao_ui_panel_body_handle_t, std::weak_ptr<PanelRecord>> body_index;
+    std::vector<std::unique_ptr<BodyHandleShell>> body_shells;
     // panel_id → panel*, for duplicate-id detection.
-    std::unordered_map<std::string, PanelRecord*> by_id;
+    std::unordered_map<std::string, sao_ui_panel_handle_t> by_id;
+    std::vector<std::shared_ptr<PanelRecord>> retired;
     uint64_t next_id = 1;
+    uint64_t next_body_generation = 1;
 };
 
 Registry& registry() {
@@ -98,449 +310,952 @@ Registry& registry() {
     return instance;
 }
 
-PanelRecord* lookup(sao_ui_panel_handle_t handle) {
-    if (handle == nullptr) return nullptr;
-    // Cast handle → record*; guard by presence in the alive map.
-    auto* rec = reinterpret_cast<PanelRecord*>(handle);
-    auto& reg = registry();
-    // Caller must already hold reg.mu when using the returned pointer.
-    auto it = reg.panels.find(rec);
-    return (it == reg.panels.end()) ? nullptr : rec;
+std::mutex& z_order_mutex() {
+    static std::mutex mutex;
+    return mutex;
 }
 
-BodyRecord* lookup_body(sao_ui_panel_body_handle_t handle) {
-    if (handle == nullptr) return nullptr;
-    auto* body = reinterpret_cast<BodyRecord*>(handle);
+std::shared_ptr<PanelRecord> lookup(sao_ui_panel_handle_t handle) {
+    if (handle == nullptr)
+        return {};
     auto& reg = registry();
-    auto it = reg.body_index.find(body);
-    return (it == reg.body_index.end()) ? nullptr : body;
+    auto it = reg.panels.find(handle);
+    return (it == reg.panels.end()) ? std::shared_ptr<PanelRecord>() : it->second;
+}
+
+std::shared_ptr<PanelRecord> lookup_body_owner(sao_ui_panel_body_handle_t handle) {
+    if (handle == nullptr)
+        return {};
+    auto& reg = registry();
+    const auto it = reg.body_index.find(handle);
+    if (it == reg.body_index.end())
+        return {};
+    const auto owner = it->second.lock();
+    if (owner == nullptr || owner->body_handle != handle)
+        return {};
+    const auto* shell = reinterpret_cast<const BodyHandleShell*>(handle);
+    return shell->generation == owner->body_generation ? owner : std::shared_ptr<PanelRecord>();
+}
+
+void reap_retired_panels() {
+    auto& reg = registry();
+    std::lock_guard lock(reg.mu);
+    std::erase_if(reg.retired, [](const std::shared_ptr<PanelRecord>& record) {
+        return record->geometry_persistence.deferred_stop_complete();
+    });
+}
+
+std::shared_ptr<PanelRecord> registered_panel(sao_ui_panel_handle_t handle) {
+    auto& reg = registry();
+    std::lock_guard lock(reg.mu);
+    return lookup(handle);
+}
+
+std::shared_ptr<PanelRecord> registered_body_owner(sao_ui_panel_body_handle_t handle) {
+    auto& reg = registry();
+    std::lock_guard lock(reg.mu);
+    return lookup_body_owner(handle);
+}
+
+void SAO_UI_CALL runtime_panel_event(int32_t event_kind, void* user_data) {
+    if (event_kind != SAO_UI_PANEL_EVENT_MOVE && event_kind != SAO_UI_PANEL_EVENT_RESIZE)
+        return;
+    auto* persistence = static_cast<GeometryPersistence*>(user_data);
+    if (persistence == nullptr)
+        return;
+    SaoPanelState state{};
+    if (sao_ui_panel_get_state(persistence->runtime_panel, &state) == SAO_STATUS_OK) {
+        persistence->schedule(state);
+    }
 }
 
 void rebuild_descriptor_cache(PanelRecord& rec) {
     // Rewire the pointer fields to point into the record's owned
     // strings — this is the shape the caller sees from get_descriptor.
-    rec.descriptor_cache.panel_id_utf8 =
-        rec.panel_id.empty() ? nullptr : rec.panel_id.c_str();
-    rec.descriptor_cache.title_utf8 =
-        rec.title.empty() ? nullptr : rec.title.c_str();
+    rec.descriptor_cache.panel_id_utf8 = rec.panel_id.empty() ? nullptr : rec.panel_id.c_str();
+    rec.descriptor_cache.title_utf8 = rec.title.empty() ? nullptr : rec.title.c_str();
     rec.descriptor_cache.follow_panel_id_utf8 =
         rec.follow_panel_id.empty() ? nullptr : rec.follow_panel_id.c_str();
     rec.descriptor_cache.theme_override_json_utf8 =
-        rec.theme_override_json.empty() ? nullptr
-                                        : rec.theme_override_json.c_str();
+        rec.theme_override_json.empty() ? nullptr : rec.theme_override_json.c_str();
+    rec.descriptor_cache.icon_bgra_pixels =
+        rec.icon_pixels.empty() ? nullptr : rec.icon_pixels.data();
 }
 
-}  // namespace
+int32_t global_z_key(int32_t z_class, int32_t z_within_class) {
+    constexpr int32_t kBandCenter = 1'000'000'000;
+    constexpr int32_t kLocalLimit = 250'000'000;
+    const int32_t local = std::clamp(z_within_class, -kLocalLimit, kLocalLimit);
+    if (z_class == SAO_UI_PANEL_Z_BOTTOM)
+        return -kBandCenter + local;
+    if (z_class == SAO_UI_PANEL_Z_TOPMOST)
+        return kBandCenter + local;
+    return local;
+}
+
+sao_status_t validate_body_widget(sao_ui_widget_handle_t widget) {
+    if (widget == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    int32_t kind = -1;
+    if (sao_ui_widget_generic_backing_get_kind(widget, &kind) == SAO_STATUS_OK)
+        return SAO_STATUS_OK;
+    if (sao_ui_widget_input_get_generation(widget, nullptr) == SAO_STATUS_OK ||
+        sao_ui_widget_chart_get_generation(widget, nullptr) == SAO_STATUS_OK) {
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+    return SAO_STATUS_ERR_HANDLE_INVALID;
+}
+
+void initialize_body_model(BodyRecord& body) {
+    BodyRecord::Node root{};
+    root.id = 1;
+    root.layout_mode = SAO_UI_LAYOUT_VERTICAL;
+    sao_ui_layout_spec_defaults(&root.spec);
+    root.spec.gap_px = 2;
+    body.model.push_back(std::move(root));
+    body.actual_to_model.emplace_back(body.root, 1);
+}
+
+BodyRecord::Node* model_node(std::vector<BodyRecord::Node>& model, uint64_t id) {
+    const auto found =
+        std::ranges::find_if(model, [id](const BodyRecord::Node& node) { return node.id == id; });
+    return found == model.end() ? nullptr : &*found;
+}
+
+const BodyRecord::Node* model_node(const std::vector<BodyRecord::Node>& model, uint64_t id) {
+    const auto found =
+        std::ranges::find_if(model, [id](const BodyRecord::Node& node) { return node.id == id; });
+    return found == model.end() ? nullptr : &*found;
+}
+
+int32_t next_sibling_order(const std::vector<BodyRecord::Node>& model, uint64_t parent_id) {
+    int32_t next = 0;
+    for (const auto& node : model) {
+        if (node.parent_id == parent_id)
+            next = std::max(next, node.sibling_order + 1);
+    }
+    return next;
+}
+
+void remove_model_subtree(std::vector<BodyRecord::Node>& model, uint64_t root_id) {
+    std::vector<uint64_t> removed{root_id};
+    for (size_t index = 0; index < removed.size(); ++index) {
+        for (const auto& node : model) {
+            if (node.parent_id == removed[index])
+                removed.push_back(node.id);
+        }
+    }
+    std::erase_if(model, [&](const BodyRecord::Node& node) {
+        return std::ranges::find(removed, node.id) != removed.end();
+    });
+}
+
+sao_status_t reorder_model_node(std::vector<BodyRecord::Node>& model, uint64_t id,
+                                int32_t new_index) {
+    BodyRecord::Node* target = model_node(model, id);
+    if (target == nullptr || target->parent_id == 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const uint64_t parent_id = target->parent_id;
+    std::vector<BodyRecord::Node*> siblings;
+    for (auto& node : model) {
+        if (node.parent_id == parent_id)
+            siblings.push_back(&node);
+    }
+    std::ranges::sort(siblings, {}, &BodyRecord::Node::sibling_order);
+    const auto found = std::ranges::find(siblings, target);
+    if (found == siblings.end())
+        return SAO_STATUS_ERR_NOT_FOUND;
+    siblings.erase(found);
+    const size_t clamped =
+        static_cast<size_t>(std::clamp(new_index, 0, static_cast<int32_t>(siblings.size())));
+    siblings.insert(siblings.begin() + static_cast<std::ptrdiff_t>(clamped), target);
+    for (size_t index = 0; index < siblings.size(); ++index)
+        siblings[index]->sibling_order = static_cast<int32_t>(index);
+    return SAO_STATUS_OK;
+}
+
+sao_status_t order_model(const std::vector<BodyRecord::Node>& model,
+                         std::vector<const BodyRecord::Node*>* out) {
+    if (model.empty() || model_node(model, 1) == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    out->clear();
+    out->reserve(model.size());
+    std::function<void(uint64_t)> append_children = [&](uint64_t parent_id) {
+        std::vector<const BodyRecord::Node*> children;
+        for (const auto& node : model) {
+            if (node.parent_id == parent_id)
+                children.push_back(&node);
+        }
+        std::ranges::sort(children, {}, &BodyRecord::Node::sibling_order);
+        for (const BodyRecord::Node* child : children) {
+            out->push_back(child);
+            append_children(child->id);
+        }
+    };
+    out->push_back(model_node(model, 1));
+    append_children(1);
+    return out->size() == model.size() ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
+}
+
+} // namespace
 
 // ─── Registration ────────────────────────────────────────────────────
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(
-    sao_ui_compositor_handle_t compositor,
-    const SaoPanelDescriptor* descriptor,
-    sao_ui_panel_handle_t* out_panel,
-    sao_ui_panel_body_handle_t* out_body) {
-
-    if (out_panel != nullptr) *out_panel = nullptr;
-    if (out_body  != nullptr) *out_body  = nullptr;
-    if (descriptor == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (descriptor->panel_id_utf8 == nullptr ||
-        descriptor->panel_id_utf8[0] == '\0') {
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(sao_ui_compositor_handle_t compositor,
+                                                          const SaoPanelDescriptor* descriptor,
+                                                          sao_ui_panel_handle_t* out_panel,
+                                                          sao_ui_panel_body_handle_t* out_body) {
+    if (out_panel != nullptr)
+        *out_panel = nullptr;
+    if (out_body != nullptr)
+        *out_body = nullptr;
+    if (descriptor == nullptr || descriptor->panel_id_utf8 == nullptr ||
+        descriptor->panel_id_utf8[0] == '\0' || !std::isfinite(descriptor->initial_opacity) ||
+        (descriptor->z_class != SAO_UI_PANEL_Z_BOTTOM &&
+         descriptor->z_class != SAO_UI_PANEL_Z_NORMAL &&
+         descriptor->z_class != SAO_UI_PANEL_Z_TOPMOST)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    try {
+        reap_retired_panels();
+        const bool has_icon = descriptor->icon_bgra_pixels != nullptr ||
+                              descriptor->icon_width != 0 || descriptor->icon_height != 0 ||
+                              descriptor->icon_stride != 0;
+        if (has_icon &&
+            (descriptor->icon_bgra_pixels == nullptr || descriptor->icon_width == 0 ||
+             descriptor->icon_height == 0 || descriptor->icon_width > UINT32_MAX / 4U ||
+             descriptor->icon_stride < descriptor->icon_width * 4U ||
+             static_cast<size_t>(descriptor->icon_stride) > SIZE_MAX / descriptor->icon_height)) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
 
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
+        auto& reg = registry();
+        const std::string id_str(descriptor->panel_id_utf8);
+        {
+            std::lock_guard guard(reg.mu);
+            if (reg.by_id.contains(id_str))
+                return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
 
-    // Duplicate-id guard (memory `别造额外UI入口`).
-    const std::string id_str(descriptor->panel_id_utf8);
-    if (reg.by_id.find(id_str) != reg.by_id.end()) {
-        return SAO_STATUS_ERR_ALREADY_EXISTS;
-    }
+        auto rec = std::make_shared<PanelRecord>();
+        rec->panel_id = id_str;
+        rec->title = descriptor->title_utf8 == nullptr ? "" : descriptor->title_utf8;
+        rec->follow_panel_id =
+            descriptor->follow_panel_id_utf8 == nullptr ? "" : descriptor->follow_panel_id_utf8;
+        rec->theme_override_json = descriptor->theme_override_json_utf8 == nullptr
+                                       ? ""
+                                       : descriptor->theme_override_json_utf8;
+        if (has_icon) {
+            const auto* pixels = static_cast<const uint8_t*>(descriptor->icon_bgra_pixels);
+            const size_t bytes =
+                static_cast<size_t>(descriptor->icon_stride) * descriptor->icon_height;
+            rec->icon_pixels.assign(pixels, pixels + bytes);
+        }
+        rec->descriptor_cache = *descriptor;
+        rec->compositor = compositor;
+        rec->visible = descriptor->visible;
+        rec->opacity_0_to_1 = std::clamp(descriptor->initial_opacity, 0.0F, 1.0F);
+        rec->z_class = descriptor->z_class;
+        rec->z_within_class = descriptor->z_within_class;
+        rec->body = std::make_unique<BodyRecord>();
+        rebuild_descriptor_cache(*rec);
 
-    auto rec = std::make_unique<PanelRecord>();
-    rec->panel_id  = id_str;
-    if (descriptor->title_utf8 != nullptr) {
-        rec->title = descriptor->title_utf8;
-    }
-    if (descriptor->follow_panel_id_utf8 != nullptr) {
-        rec->follow_panel_id = descriptor->follow_panel_id_utf8;
-    }
-    if (descriptor->theme_override_json_utf8 != nullptr) {
-        rec->theme_override_json = descriptor->theme_override_json_utf8;
-    }
+        SaoPanelConfig runtime_config{};
+        runtime_config.panel_id_utf8 = descriptor->panel_id_utf8;
+        runtime_config.title_utf8 = descriptor->title_utf8;
+        runtime_config.default_x = descriptor->default_x_px;
+        runtime_config.default_y = descriptor->default_y_px;
+        runtime_config.default_width = descriptor->default_width_px;
+        runtime_config.default_height = descriptor->default_height_px;
+        runtime_config.min_width = descriptor->min_width_px;
+        runtime_config.min_height = descriptor->min_height_px;
+        runtime_config.max_width = descriptor->max_width_px;
+        runtime_config.max_height = descriptor->max_height_px;
+        runtime_config.resizable = descriptor->resizable;
+        runtime_config.movable = descriptor->movable;
+        runtime_config.show_titlebar = descriptor->show_titlebar;
+        runtime_config.show_close_button = descriptor->show_close_button;
+        runtime_config.remember_geometry = descriptor->remember_geometry;
+        runtime_config.rendering_mode = SAO_UI_PANEL_RENDER_NATIVE;
+        runtime_config.flat_mode = SAO_UI_PANEL_FLAT_INHERIT;
 
-    // Copy the descriptor bit-for-bit, then re-wire the char* fields
-    // to point into our owned strings.
-    rec->descriptor_cache = *descriptor;
-    rebuild_descriptor_cache(*rec);
+        sao_status_t status = sao_ui_panel_create(compositor, &runtime_config, &rec->runtime_panel);
+        if (status != SAO_STATUS_OK)
+            return status;
+        status =
+            sao_ui_panel_get_layout_tree(rec->runtime_panel, &rec->body->tree, &rec->body->root);
+        rec->geometry_persistence.runtime_panel = rec->runtime_panel;
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_set_event_handler(rec->runtime_panel, &runtime_panel_event,
+                                                    &rec->geometry_persistence);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_set_visible(rec->runtime_panel, rec->visible);
+        const sao_ui_layer_handle_t layer = sao_ui_panel_layer(rec->runtime_panel);
+        if (status == SAO_STATUS_OK && layer != nullptr)
+            status =
+                sao_ui_layer_set_z_order(layer, global_z_key(rec->z_class, rec->z_within_class));
+        if (status == SAO_STATUS_OK && layer != nullptr)
+            status = sao_ui_layer_set_alpha(layer, rec->opacity_0_to_1);
+        if (status != SAO_STATUS_OK) {
+            sao_ui_panel_destroy(rec->runtime_panel);
+            return status;
+        }
+        initialize_body_model(*rec->body);
+        rec->geometry_persistence.panel_id = id_str;
+        rec->geometry_persistence.remember = descriptor->remember_geometry;
+        status = rec->geometry_persistence.start();
+        if (status != SAO_STATUS_OK) {
+            (void)sao_ui_panel_set_event_handler(rec->runtime_panel, nullptr, nullptr);
+            sao_ui_panel_destroy(rec->runtime_panel);
+            return status;
+        }
 
-    rec->compositor      = compositor;
-    rec->visible         = descriptor->visible;
-    rec->opacity_0_to_1  = (descriptor->initial_opacity <= 0.0f)
-                             ? 1.0f
-                             : std::min(1.0f, descriptor->initial_opacity);
-    rec->z_class         = descriptor->z_class;
-    rec->z_within_class  = descriptor->z_within_class;
-
-    rec->body     = std::make_unique<BodyRecord>();
-    SaoUiLayoutSpec body_spec{};
-    sao_ui_layout_spec_defaults(&body_spec);
-    body_spec.fixed_width_px = descriptor->default_width_px;
-    body_spec.fixed_height_px = descriptor->default_height_px;
-    if (sao_ui_layout_tree_create(&rec->body->tree) != SAO_STATUS_OK ||
-        sao_ui_layout_tree_set_root(rec->body->tree, SAO_UI_LAYOUT_VERTICAL,
-                                    &body_spec, &rec->body->root) != SAO_STATUS_OK) {
-        sao_ui_layout_tree_destroy(rec->body->tree);
+        const sao_ui_panel_handle_t runtime_panel = rec->runtime_panel;
+        bool duplicate = false;
+        {
+            std::lock_guard guard(reg.mu);
+            if (reg.by_id.contains(id_str)) {
+                duplicate = true;
+            } else {
+                auto shell = std::make_unique<BodyHandleShell>();
+                shell->generation = reg.next_body_generation++;
+                if (shell->generation == 0)
+                    shell->generation = reg.next_body_generation++;
+                rec->body_handle = reinterpret_cast<sao_ui_panel_body_handle_t>(shell.get());
+                rec->body_generation = shell->generation;
+                reg.body_shells.push_back(std::move(shell));
+                rec->id_num = reg.next_id++;
+                try {
+                    reg.panels.emplace(runtime_panel, rec);
+                    reg.body_index.emplace(rec->body_handle, rec);
+                    reg.by_id.emplace(id_str, runtime_panel);
+                } catch (...) {
+                    reg.panels.erase(runtime_panel);
+                    reg.body_index.erase(rec->body_handle);
+                    reg.by_id.erase(id_str);
+                    throw;
+                }
+            }
+        }
+        if (duplicate) {
+            (void)sao_ui_panel_set_event_handler(rec->runtime_panel, nullptr, nullptr);
+            rec->geometry_persistence.stop();
+            sao_ui_panel_destroy(rec->runtime_panel);
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        if (out_panel != nullptr)
+            *out_panel = runtime_panel;
+        if (out_body != nullptr)
+            *out_body = rec->body_handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    rec->id_num   = reg.next_id++;
-
-    PanelRecord* raw     = rec.get();
-    BodyRecord*  raw_body = rec->body.get();
-
-    reg.panels.emplace(raw, std::move(rec));
-    reg.body_index.emplace(raw_body, raw);
-    reg.by_id.emplace(id_str, raw);
-
-    if (out_panel != nullptr) {
-        *out_panel = reinterpret_cast<sao_ui_panel_handle_t>(raw);
-    }
-    if (out_body != nullptr) {
-        *out_body = reinterpret_cast<sao_ui_panel_body_handle_t>(raw_body);
-    }
-    return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_unregister(
-    sao_ui_panel_handle_t panel) {
-
-    if (panel == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = reinterpret_cast<PanelRecord*>(panel);
-    auto it = reg.panels.find(rec);
-    if (it == reg.panels.end()) return SAO_STATUS_ERR_NOT_FOUND;
-
-    sao_ui_layout_tree_destroy(rec->body->tree);
-    reg.body_index.erase(rec->body.get());
-    reg.by_id.erase(rec->panel_id);
-    reg.panels.erase(it);  // unique_ptr auto-frees
-    return SAO_STATUS_OK;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_unregister(sao_ui_panel_handle_t panel) {
+    if (panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        auto& reg = registry();
+        std::shared_ptr<PanelRecord> rec;
+        {
+            std::lock_guard lock(reg.mu);
+            auto it = reg.panels.find(panel);
+            if (it == reg.panels.end())
+                return SAO_STATUS_ERR_NOT_FOUND;
+            rec = it->second;
+            reg.by_id.erase(rec->panel_id);
+            reg.body_index.erase(rec->body_handle);
+            reg.panels.erase(it);
+        }
+        {
+            std::lock_guard lock(rec->mutex);
+            rec->active = false;
+        }
+        (void)sao_ui_panel_set_event_handler(rec->runtime_panel, nullptr, nullptr);
+        if (rec->geometry_persistence.is_worker_thread()) {
+            {
+                std::lock_guard lock(reg.mu);
+                reg.retired.push_back(rec);
+            }
+            rec->geometry_persistence.defer_stop(
+                [rec] { sao_ui_panel_destroy(rec->runtime_panel); });
+            return SAO_STATUS_OK;
+        }
+        rec->geometry_persistence.stop();
+        sao_ui_panel_destroy(rec->runtime_panel);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ─── Body mutations (batched) ────────────────────────────────────────
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_body(
-    sao_ui_panel_body_handle_t body,
-    const SaoUiBodyMutation* mutations,
-    size_t mutation_count) {
-
-    if (body == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (mutation_count == 0) return SAO_STATUS_OK;
-    if (mutations == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    if (rec == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-
-    // Apply all mutations against the real body tree while holding the
-    // registry lock, so callers observe one coherent mutation batch.
-    rec->mutation_log.reserve(rec->mutation_log.size() + mutation_count);
-    for (size_t i = 0; i < mutation_count; ++i) {
-        const SaoUiBodyMutation& mutation = mutations[i];
-        sao_status_t status = SAO_STATUS_OK;
-        sao_ui_layout_node_handle_t created = nullptr;
-        sao_ui_layout_node_handle_t target = mutation.target == nullptr ? rec->root : mutation.target;
-        switch (mutation.kind) {
-        case SAO_UI_BODY_ADD_WIDGET:
-            if (mutation.spec != nullptr || mutation.widget != nullptr) {
-                if (mutation.spec == nullptr || mutation.widget == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                status = sao_ui_layout_node_add_widget(target, mutation.widget, mutation.spec, &created);
-            }
-            break;
-        case SAO_UI_BODY_ADD_CONTAINER:
-            if (mutation.spec != nullptr) {
-                status = sao_ui_layout_node_add_container(target, mutation.layout_mode, mutation.spec, &created);
-            }
-            break;
-        case SAO_UI_BODY_REMOVE_NODE:
-            if (mutation.target != nullptr) status = sao_ui_layout_node_remove(target);
-            break;
-        case SAO_UI_BODY_UPDATE_SPEC:
-            if (mutation.spec != nullptr) status = sao_ui_layout_node_set_spec(target, mutation.spec);
-            break;
-        case SAO_UI_BODY_REORDER_NODE:
-            if (mutation.target != nullptr) status = sao_ui_layout_node_reorder(target, mutation.new_index);
-            break;
-        case SAO_UI_BODY_UPDATE_WIDGET_PROPS:
-            // SDK widget families apply their typed update before asking the
-            // panel body to record its dirty mutation.  A null widget marks
-            // that bookkeeping-only path; a concrete generic widget still
-            // accepts its JSON property update here.
-            if (mutation.widget != nullptr) {
-                status = sao_ui_widget_apply_props(
-                    mutation.widget, mutation.props_json_utf8, mutation.props_len);
-            }
-            break;
-        default:
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_body(sao_ui_panel_body_handle_t body,
+                                                             const SaoUiBodyMutation* mutations,
+                                                             size_t mutation_count) {
+    if (body == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (mutation_count == 0)
+        return SAO_STATUS_OK;
+    if (mutations == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        auto& reg = registry();
+        std::shared_ptr<PanelRecord> owner;
+        {
+            std::lock_guard registry_lock(reg.mu);
+            owner = lookup_body_owner(body);
         }
-        if (status != SAO_STATUS_OK) return status;
-        rec->mutation_log.push_back(mutations[i].kind);
-        if (mutation.out_new_node != nullptr) *mutation.out_new_node = created;
+        if (owner == nullptr)
+            return SAO_STATUS_ERR_NOT_FOUND;
+
+        std::lock_guard owner_lock(owner->mutex);
+        if (!owner->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        BodyRecord& current = *owner->body;
+        std::vector<BodyRecord::Node> staged = current.model;
+        uint64_t next_id = current.next_node_id;
+        std::vector<uint64_t> created_by_mutation(mutation_count, 0);
+
+        const auto target_id = [&](sao_ui_layout_node_handle_t target) -> uint64_t {
+            if (target == nullptr)
+                return 1;
+            const auto found =
+                std::ranges::find_if(current.actual_to_model,
+                                     [target](const auto& entry) { return entry.first == target; });
+            return found == current.actual_to_model.end() ? 0 : found->second;
+        };
+
+        for (size_t index = 0; index < mutation_count; ++index) {
+            const SaoUiBodyMutation& mutation = mutations[index];
+            const uint64_t target = target_id(mutation.target);
+            BodyRecord::Node* target_node = model_node(staged, target);
+            switch (mutation.kind) {
+            case SAO_UI_BODY_ADD_WIDGET:
+            case SAO_UI_BODY_ADD_CONTAINER: {
+                const bool widget_node = mutation.kind == SAO_UI_BODY_ADD_WIDGET;
+                if (target_node == nullptr || target_node->widget != nullptr ||
+                    mutation.spec == nullptr || (widget_node && mutation.widget == nullptr) ||
+                    (!widget_node && mutation.widget != nullptr)) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                if (widget_node) {
+                    const sao_status_t widget_status = validate_body_widget(mutation.widget);
+                    if (widget_status != SAO_STATUS_OK)
+                        return widget_status;
+                }
+                BodyRecord::Node added{};
+                added.id = next_id++;
+                added.parent_id = target;
+                added.sibling_order = next_sibling_order(staged, target);
+                added.layout_mode = mutation.layout_mode;
+                added.spec = *mutation.spec;
+                added.widget = mutation.widget;
+                staged.push_back(std::move(added));
+                created_by_mutation[index] = staged.back().id;
+                break;
+            }
+            case SAO_UI_BODY_REMOVE_NODE:
+                if (mutation.target == nullptr || target_node == nullptr || target == 1)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                remove_model_subtree(staged, target);
+                break;
+            case SAO_UI_BODY_UPDATE_SPEC:
+                if (target_node == nullptr || mutation.spec == nullptr)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                target_node->spec = *mutation.spec;
+                break;
+            case SAO_UI_BODY_REORDER_NODE: {
+                if (mutation.target == nullptr || target_node == nullptr)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const sao_status_t status = reorder_model_node(staged, target, mutation.new_index);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                break;
+            }
+            case SAO_UI_BODY_UPDATE_WIDGET_PROPS: {
+                if (mutation.widget == nullptr)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                if (mutation.props_json_utf8 == nullptr && mutation.props_len != 0)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                BodyRecord::Node* widget_node = nullptr;
+                if (target_node != nullptr && target_node->widget == mutation.widget) {
+                    widget_node = target_node;
+                } else {
+                    const auto found =
+                        std::ranges::find_if(staged, [&](const BodyRecord::Node& node) {
+                            return node.widget == mutation.widget;
+                        });
+                    if (found != staged.end())
+                        widget_node = &*found;
+                }
+                if (widget_node == nullptr)
+                    return SAO_STATUS_ERR_NOT_FOUND;
+                const sao_status_t widget_status = validate_body_widget(widget_node->widget);
+                if (widget_status != SAO_STATUS_OK)
+                    return widget_status;
+                const json patch = mutation.props_len == 0
+                                       ? json::object()
+                                       : json::parse(mutation.props_json_utf8,
+                                                     mutation.props_json_utf8 + mutation.props_len);
+                if (!patch.is_object())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                for (auto property = patch.begin(); property != patch.end(); ++property)
+                    widget_node->props[property.key()] = property.value();
+                break;
+            }
+            default:
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+        }
+
+        std::vector<const BodyRecord::Node*> ordered;
+        sao_status_t status = order_model(staged, &ordered);
+        if (status != SAO_STATUS_OK)
+            return status;
+        std::vector<std::string> props(ordered.size());
+        std::vector<std::string> rollback_props(ordered.size());
+        std::vector<SaoUiPanelBodyModelNode> runtime_model(ordered.size());
+        std::vector<std::pair<sao_ui_layout_node_handle_t, uint64_t>> next_actual_to_model(
+            ordered.size());
+        if (mutation_count > UINT64_MAX - current.mutation_count_total)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (mutation_count > current.mutation_log.max_size() - current.mutation_log.size())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        current.mutation_log.reserve(current.mutation_log.size() + mutation_count);
+        for (size_t index = 0; index < ordered.size(); ++index) {
+            const BodyRecord::Node& node = *ordered[index];
+            props[index] = node.props.dump();
+            rollback_props[index] = node.committed_props.dump();
+            runtime_model[index] = {node.id,
+                                    node.parent_id,
+                                    node.layout_mode,
+                                    node.spec,
+                                    node.widget,
+                                    reinterpret_cast<const uint8_t*>(props[index].data()),
+                                    props[index].size(),
+                                    reinterpret_cast<const uint8_t*>(rollback_props[index].data()),
+                                    rollback_props[index].size()};
+        }
+        for (auto& node : staged)
+            node.committed_props = node.props;
+        std::vector<sao_ui_layout_node_handle_t> actual(ordered.size());
+        sao_ui_layout_tree_handle_t replacement_tree = nullptr;
+        status = sao_ui_panel_replace_body_model(owner->runtime_panel, runtime_model.data(),
+                                                 runtime_model.size(), actual.data(), actual.size(),
+                                                 &replacement_tree);
+        if (status != SAO_STATUS_OK)
+            return status;
+
+        for (size_t index = 0; index < ordered.size(); ++index) {
+            next_actual_to_model[index] = {actual[index], ordered[index]->id};
+        }
+        current.actual_to_model = std::move(next_actual_to_model);
+        current.model = std::move(staged);
+        current.next_node_id = next_id;
+        current.tree = replacement_tree;
+        current.root = actual.front();
+        for (size_t index = 0; index < mutation_count; ++index) {
+            current.mutation_log.push_back(mutations[index].kind);
+            if (mutations[index].out_new_node == nullptr || created_by_mutation[index] == 0)
+                continue;
+            const auto found = std::ranges::find_if(ordered, [&](const BodyRecord::Node* node) {
+                return node->id == created_by_mutation[index];
+            });
+            if (found != ordered.end()) {
+                *mutations[index].out_new_node =
+                    actual[static_cast<size_t>(found - ordered.begin())];
+            }
+        }
+        current.mutation_count_total += mutation_count;
+        return SAO_STATUS_OK;
+    } catch (const json::exception&) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    rec->mutation_count_total += mutation_count;
-    return SAO_STATUS_OK;
 }
 
 // ─── Show / hide / z-order / opacity ─────────────────────────────────
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_show(
-    sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    rec->visible = true;
-    rec->descriptor_cache.visible = true;
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_hide(
-    sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    rec->visible = false;
-    rec->descriptor_cache.visible = false;
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_bring_to_front(
-    sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-
-    // Bump z_within_class above any current sibling in the same
-    // z_class.  Never crosses classes (see z_order.h manager rule
-    // in memory `input proxy逐像素+防焦点偷`).
-    int32_t highest = rec->z_within_class;
-    for (auto& kv : reg.panels) {
-        if (kv.first == rec) continue;
-        if (kv.first->z_class != rec->z_class) continue;
-        if (kv.first->z_within_class > highest) {
-            highest = kv.first->z_within_class;
-        }
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_show(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const sao_status_t status = sao_ui_panel_set_visible(rec->runtime_panel, true);
+        if (status != SAO_STATUS_OK)
+            return status;
+        rec->visible = true;
+        rec->descriptor_cache.visible = true;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    if (highest >= INT32_MAX - 1) {
-        // Renormalize the whole class to stay well below the cap.
-        int32_t base = 0;
-        for (auto& kv : reg.panels) {
-            if (kv.first->z_class == rec->z_class) {
-                kv.first->z_within_class = base++;
-                kv.first->descriptor_cache.z_within_class =
-                    kv.first->z_within_class;
-            }
-        }
-        rec->z_within_class = base;  // one above the compact range
-    } else {
-        rec->z_within_class = highest + 1;
-    }
-    rec->descriptor_cache.z_within_class = rec->z_within_class;
-    return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_send_to_back(
-    sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    int32_t lowest = rec->z_within_class;
-    for (auto& kv : reg.panels) {
-        if (kv.first == rec) continue;
-        if (kv.first->z_class != rec->z_class) continue;
-        if (kv.first->z_within_class < lowest) {
-            lowest = kv.first->z_within_class;
-        }
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_hide(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const sao_status_t status = sao_ui_panel_set_visible(rec->runtime_panel, false);
+        if (status != SAO_STATUS_OK)
+            return status;
+        rec->visible = false;
+        rec->descriptor_cache.visible = false;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    rec->z_within_class = (lowest > INT32_MIN + 1) ? (lowest - 1) : lowest;
-    rec->descriptor_cache.z_within_class = rec->z_within_class;
-    return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_opacity(
-    sao_ui_panel_handle_t panel, float opacity_0_to_1) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    if (opacity_0_to_1 < 0.0f) opacity_0_to_1 = 0.0f;
-    if (opacity_0_to_1 > 1.0f) opacity_0_to_1 = 1.0f;
-    rec->opacity_0_to_1 = opacity_0_to_1;
-    rec->descriptor_cache.initial_opacity = opacity_0_to_1;
-    return SAO_STATUS_OK;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_bring_to_front(sao_ui_panel_handle_t panel) {
+    try {
+        std::lock_guard z_lock(z_order_mutex());
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::vector<std::shared_ptr<PanelRecord>> snapshot;
+        {
+            auto& reg = registry();
+            std::lock_guard registry_lock(reg.mu);
+            snapshot.reserve(reg.panels.size());
+            for (const auto& [unused, candidate] : reg.panels)
+                snapshot.push_back(candidate);
+        }
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        int32_t highest = rec->z_within_class;
+        for (const auto& candidate : snapshot) {
+            if (candidate.get() == rec.get())
+                continue;
+            std::lock_guard candidate_lock(candidate->mutex);
+            if (candidate->active && candidate->z_class == rec->z_class)
+                highest = std::max(highest, candidate->z_within_class);
+        }
+        if (highest >= 250'000'000)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        const int32_t replacement = highest + 1;
+        const sao_ui_layer_handle_t layer = sao_ui_panel_layer(rec->runtime_panel);
+        if (layer != nullptr) {
+            const sao_status_t status =
+                sao_ui_layer_set_z_order(layer, global_z_key(rec->z_class, replacement));
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        rec->z_within_class = replacement;
+        rec->descriptor_cache.z_within_class = replacement;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_send_to_back(sao_ui_panel_handle_t panel) {
+    try {
+        std::lock_guard z_lock(z_order_mutex());
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::vector<std::shared_ptr<PanelRecord>> snapshot;
+        {
+            auto& reg = registry();
+            std::lock_guard registry_lock(reg.mu);
+            snapshot.reserve(reg.panels.size());
+            for (const auto& [unused, candidate] : reg.panels)
+                snapshot.push_back(candidate);
+        }
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        int32_t lowest = rec->z_within_class;
+        for (const auto& candidate : snapshot) {
+            if (candidate.get() == rec.get())
+                continue;
+            std::lock_guard candidate_lock(candidate->mutex);
+            if (candidate->active && candidate->z_class == rec->z_class)
+                lowest = std::min(lowest, candidate->z_within_class);
+        }
+        if (lowest <= -250'000'000)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        const int32_t replacement = lowest - 1;
+        const sao_ui_layer_handle_t layer = sao_ui_panel_layer(rec->runtime_panel);
+        if (layer != nullptr) {
+            const sao_status_t status =
+                sao_ui_layer_set_z_order(layer, global_z_key(rec->z_class, replacement));
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        rec->z_within_class = replacement;
+        rec->descriptor_cache.z_within_class = replacement;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_opacity(sao_ui_panel_handle_t panel,
+                                                             float opacity_0_to_1) {
+    if (!std::isfinite(opacity_0_to_1))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        opacity_0_to_1 = std::clamp(opacity_0_to_1, 0.0F, 1.0F);
+        const sao_ui_layer_handle_t layer = sao_ui_panel_layer(rec->runtime_panel);
+        if (layer != nullptr) {
+            const sao_status_t status = sao_ui_layer_set_alpha(layer, opacity_0_to_1);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        rec->opacity_0_to_1 = opacity_0_to_1;
+        rec->descriptor_cache.initial_opacity = opacity_0_to_1;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ─── Descriptor readback + registry iteration ────────────────────────
 
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_get_descriptor(
-    sao_ui_panel_handle_t panel,
-    SaoPanelDescriptor* descriptor_out) {
-
-    if (descriptor_out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    rebuild_descriptor_cache(*rec);
-    *descriptor_out = rec->descriptor_cache;
-    return SAO_STATUS_OK;
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_get_descriptor(sao_ui_panel_handle_t panel, SaoPanelDescriptor* descriptor_out) {
+    if (descriptor_out == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        rebuild_descriptor_cache(*rec);
+        *descriptor_out = rec->descriptor_cache;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
-// Callback signature for registry_iterate — matches the header banner
-// intent even though the header itself declares the API stub below.
-typedef void (SAO_UI_CALL* sao_ui_panel_registry_iterate_cb_t)(
-    sao_ui_panel_handle_t panel,
-    const SaoPanelDescriptor* descriptor,
-    void* user_data);
-
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
-sao_ui_panel_registry_iterate(
-    sao_ui_panel_registry_iterate_cb_t callback, void* user_data) {
-
-    if (callback == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& reg = registry();
-
-    // Copy the (handle, descriptor) pairs under the lock so the
-    // callback can mutate the registry (e.g. unregister) without
-    // corrupting the iteration.  Same pattern the Python side uses
-    // in `plugin_manager.enumerate_panels`.
-    struct Item {
-        sao_ui_panel_handle_t handle;
-        SaoPanelDescriptor    descriptor;
-    };
-    std::vector<Item> snapshot;
-    {
-        std::lock_guard<std::mutex> guard(reg.mu);
-        snapshot.reserve(reg.panels.size());
-        for (auto& kv : reg.panels) {
-            rebuild_descriptor_cache(*kv.first);
-            Item it{};
-            it.handle     = reinterpret_cast<sao_ui_panel_handle_t>(kv.first);
-            it.descriptor = kv.first->descriptor_cache;
-            snapshot.push_back(it);
+sao_ui_panel_registry_iterate(sao_ui_panel_registry_iterate_cb_t callback, void* user_data) {
+    if (callback == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        struct Item {
+            sao_ui_panel_handle_t handle{};
+            SaoPanelDescriptor descriptor{};
+            std::string panel_id;
+            std::string title;
+            std::string follow_panel_id;
+            std::string theme_override;
+            std::vector<uint8_t> icon;
+        };
+        std::vector<std::pair<sao_ui_panel_handle_t, std::shared_ptr<PanelRecord>>> records;
+        {
+            auto& reg = registry();
+            std::lock_guard guard(reg.mu);
+            records.reserve(reg.panels.size());
+            for (const auto& [handle, rec] : reg.panels)
+                records.emplace_back(handle, rec);
         }
+        std::vector<Item> snapshot;
+        snapshot.reserve(records.size());
+        for (const auto& [handle, rec] : records) {
+            std::lock_guard lock(rec->mutex);
+            if (!rec->active)
+                continue;
+            snapshot.emplace_back();
+            Item& item = snapshot.back();
+            item.handle = handle;
+            item.descriptor = rec->descriptor_cache;
+            item.panel_id = rec->panel_id;
+            item.title = rec->title;
+            item.follow_panel_id = rec->follow_panel_id;
+            item.theme_override = rec->theme_override_json;
+            item.icon = rec->icon_pixels;
+            item.descriptor.panel_id_utf8 = item.panel_id.empty() ? nullptr : item.panel_id.c_str();
+            item.descriptor.title_utf8 = item.title.empty() ? nullptr : item.title.c_str();
+            item.descriptor.follow_panel_id_utf8 =
+                item.follow_panel_id.empty() ? nullptr : item.follow_panel_id.c_str();
+            item.descriptor.theme_override_json_utf8 =
+                item.theme_override.empty() ? nullptr : item.theme_override.c_str();
+            item.descriptor.icon_bgra_pixels = item.icon.empty() ? nullptr : item.icon.data();
+        }
+        for (auto& item : snapshot) {
+            try {
+                callback(item.handle, &item.descriptor, user_data);
+            } catch (...) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    for (auto& it : snapshot) {
-        callback(it.handle, &it.descriptor, user_data);
-    }
-    return SAO_STATUS_OK;
 }
 
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
-sao_ui_panel_registry_count(size_t* count_out) {
-    if (count_out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    *count_out = reg.panels.size();
-    return SAO_STATUS_OK;
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_registry_count(size_t* count_out) {
+    if (count_out == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        reap_retired_panels();
+        auto& reg = registry();
+        std::lock_guard<std::mutex> guard(reg.mu);
+        *count_out = reg.panels.size();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_panel_retired_geometry_count_() {
+    try {
+        reap_retired_panels();
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        return reg.retired.size();
+    } catch (...) {
+        return 0;
+    }
 }
 
 // ─── Body inspection (test rig + downstream layout wire-up) ──────────
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_body_get_root(
-    sao_ui_panel_body_handle_t body,
-    sao_ui_layout_node_handle_t* out_root) {
-
-    if (out_root == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    *out_root = nullptr;
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    *out_root = rec->root;
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_body_get_tree(
-    sao_ui_panel_body_handle_t body,
-    sao_ui_layout_tree_handle_t* out_tree) {
-
-    if (out_tree == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    *out_tree = nullptr;
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    *out_tree = rec->tree;
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_body_set_spec(
-    sao_ui_panel_body_handle_t body,
-    const uint8_t* spec_json_utf8,
-    size_t spec_len) {
-
-    if (body == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (spec_json_utf8 == nullptr && spec_len != 0) {
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_body_get_root(sao_ui_panel_body_handle_t body, sao_ui_layout_node_handle_t* out_root) {
+    if (out_root == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_root = nullptr;
+    try {
+        const auto owner = registered_body_owner(body);
+        if (owner == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(owner->mutex);
+        if (!owner->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        *out_root = owner->body->root;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    // Full-body replacement equals REMOVE_NODE(root) followed by
-    // whatever add mutations the caller would emit — we just record
-    // one synthetic UPDATE_SPEC event so the mutation log is coherent.
-    rec->mutation_log.push_back(SAO_UI_BODY_UPDATE_SPEC);
-    rec->mutation_count_total += 1;
-    (void)spec_len;
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_theme_override(
-    sao_ui_panel_handle_t panel,
-    const uint8_t* override_json_utf8, size_t override_len) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    if (rec == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    if (override_json_utf8 == nullptr || override_len == 0) {
-        rec->theme_override_json.clear();
-    } else {
-        rec->theme_override_json.assign(
-            reinterpret_cast<const char*>(override_json_utf8), override_len);
-    }
-    rebuild_descriptor_cache(*rec);
-    return SAO_STATUS_OK;
-}
-
-extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_clear_theme_override(
-    sao_ui_panel_handle_t panel) {
-    return sao_ui_panel_set_theme_override(panel, nullptr, 0);
 }
 
 extern "C" sao_status_t SAO_UI_CALL
-sao_ui_panel_set_geometry_persist_handler(
-    sao_ui_panel_handle_t panel,
-    sao_ui_panel_geometry_cb_t callback,
-    void* user_data) {
+sao_ui_panel_body_get_tree(sao_ui_panel_body_handle_t body, sao_ui_layout_tree_handle_t* out_tree) {
 
-    // Handler stored on the record, dispatched by the geometry
-    // observer in a follow-up slice (see the ~500ms debounce note in
-    // panel_sdk.h).  For now we accept + validate the handle.
-    (void)callback;
-    (void)user_data;
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    if (lookup(panel) == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    return SAO_STATUS_OK;
+    if (out_tree == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_tree = nullptr;
+    try {
+        const auto owner = registered_body_owner(body);
+        if (owner == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(owner->mutex);
+        if (!owner->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        *out_tree = owner->body->tree;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_body_set_spec(sao_ui_panel_body_handle_t body,
+                                                               const uint8_t* spec_json_utf8,
+                                                               size_t spec_len) {
+
+    if (body == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (spec_json_utf8 == nullptr && spec_len != 0) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto owner = registered_body_owner(body);
+        if (owner == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(owner->mutex);
+        if (!owner->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        sao_status_t status = sao_ui_panel_set_spec(owner->runtime_panel, spec_json_utf8, spec_len);
+        if (status != SAO_STATUS_OK)
+            return status;
+        status = sao_ui_panel_get_layout_tree(owner->runtime_panel, &owner->body->tree,
+                                              &owner->body->root);
+        if (status != SAO_STATUS_OK)
+            return status;
+        owner->body->model.clear();
+        owner->body->actual_to_model.clear();
+        owner->body->next_node_id = 2;
+        initialize_body_model(*owner->body);
+        owner->body->mutation_log.push_back(SAO_UI_BODY_UPDATE_SPEC);
+        owner->body->mutation_count_total += 1;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_theme_override(
+    sao_ui_panel_handle_t panel, const uint8_t* override_json_utf8, size_t override_len) {
+    if (override_json_utf8 == nullptr && override_len != 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(rec->mutex);
+        if (!rec->active)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (override_json_utf8 == nullptr || override_len == 0) {
+            rec->theme_override_json.clear();
+        } else {
+            rec->theme_override_json.assign(reinterpret_cast<const char*>(override_json_utf8),
+                                            override_len);
+        }
+        rebuild_descriptor_cache(*rec);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_clear_theme_override(sao_ui_panel_handle_t panel) {
+    return sao_ui_panel_set_theme_override(panel, nullptr, 0);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_geometry_persist_handler(
+    sao_ui_panel_handle_t panel, sao_ui_panel_geometry_cb_t callback, void* user_data) {
+
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        {
+            std::lock_guard lock(rec->mutex);
+            if (!rec->active)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        rec->geometry_persistence.set_handler(callback, user_data);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ─── Test-only introspection (not exported outside the DLL) ──────────
@@ -551,42 +1266,76 @@ sao_ui_panel_set_geometry_persist_handler(
 
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_panel_body_mutation_count(sao_ui_panel_body_handle_t body) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    return (rec == nullptr) ? 0u : rec->mutation_count_total;
+    try {
+        const auto owner = registered_body_owner(body);
+        if (owner == nullptr)
+            return 0;
+        std::lock_guard lock(owner->mutex);
+        return owner->active ? owner->body->mutation_count_total : 0;
+    } catch (...) {
+        return 0;
+    }
 }
 
 extern "C" SAO_UI_API int32_t SAO_UI_CALL
 sao_ui_panel_body_mutation_at(sao_ui_panel_body_handle_t body, size_t idx) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup_body(body);
-    if (rec == nullptr) return -1;
-    if (idx >= rec->mutation_log.size()) return -1;
-    return rec->mutation_log[idx];
+    try {
+        const auto owner = registered_body_owner(body);
+        if (owner == nullptr)
+            return -1;
+        std::lock_guard lock(owner->mutex);
+        if (!owner->active || idx >= owner->body->mutation_log.size())
+            return -1;
+        return owner->body->mutation_log[idx];
+    } catch (...) {
+        return -1;
+    }
 }
 
-extern "C" SAO_UI_API int32_t SAO_UI_CALL
-sao_ui_panel_z_within_class(sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    return (rec == nullptr) ? INT32_MIN : rec->z_within_class;
+extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_panel_z_within_class(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return INT32_MIN;
+        std::lock_guard lock(rec->mutex);
+        return rec->active ? rec->z_within_class : INT32_MIN;
+    } catch (...) {
+        return INT32_MIN;
+    }
 }
 
-extern "C" SAO_UI_API bool SAO_UI_CALL
-sao_ui_panel_is_visible(sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    return (rec == nullptr) ? false : rec->visible;
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_panel_is_visible(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return false;
+        std::lock_guard lock(rec->mutex);
+        return rec->active && rec->visible;
+    } catch (...) {
+        return false;
+    }
 }
 
-extern "C" SAO_UI_API float SAO_UI_CALL
-sao_ui_panel_get_opacity_(sao_ui_panel_handle_t panel) {
-    auto& reg = registry();
-    std::lock_guard<std::mutex> guard(reg.mu);
-    auto* rec = lookup(panel);
-    return (rec == nullptr) ? -1.0f : rec->opacity_0_to_1;
+extern "C" SAO_UI_API float SAO_UI_CALL sao_ui_panel_get_opacity_(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return -1.0F;
+        std::lock_guard lock(rec->mutex);
+        return rec->active ? rec->opacity_0_to_1 : -1.0F;
+    } catch (...) {
+        return -1.0F;
+    }
+}
+
+extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_panel_global_z_key_(sao_ui_panel_handle_t panel) {
+    try {
+        const auto rec = registered_panel(panel);
+        if (rec == nullptr)
+            return INT32_MIN;
+        std::lock_guard lock(rec->mutex);
+        return rec->active ? global_z_key(rec->z_class, rec->z_within_class) : INT32_MIN;
+    } catch (...) {
+        return INT32_MIN;
+    }
 }

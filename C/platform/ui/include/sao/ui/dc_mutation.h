@@ -7,7 +7,8 @@
 // HWNDs.  The compositor and Tk threads submit work here instead of
 // blocking on the rt_io pipe.  Calls with the same (hwnd, generation,
 // operation) key are coalesced while an earlier call is in flight.
-// No helper/backend import occurs until work is actually submitted.
+// The shipping executor validates and applies supported mutations on its
+// dedicated worker. Unsupported operation/method pairs fail before enqueue.
 //
 // ── Why serialization matters ────────────────────────────────
 //   Every kernel-side tagWND write (exstyle bits, rcWindow) goes
@@ -51,11 +52,14 @@ extern "C" {
 typedef struct sao_ui_dc_mutation_coordinator_s* sao_ui_dc_mutation_coordinator_handle_t;
 typedef struct sao_ui_dc_mutation_barrier_s* sao_ui_dc_mutation_barrier_handle_t;
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create(
-    sao_ui_dc_mutation_coordinator_handle_t* out_handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle);
 
-SAO_UI_API void SAO_UI_CALL sao_ui_dc_mutation_coordinator_destroy(
-    sao_ui_dc_mutation_coordinator_handle_t handle);
+// Stops new admission, cancels queued/coalesced work, and joins the worker.
+// Only the single currently executing owner-thread transaction is allowed to
+// finish, bounded by the coordinator's OS dispatch timeout.
+SAO_UI_API void SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_destroy(sao_ui_dc_mutation_coordinator_handle_t handle);
 
 // Register an HWND for coordinated mutations.  Returns a "token" —
 // an opaque value used to detect stale registrations after an
@@ -63,49 +67,43 @@ SAO_UI_API void SAO_UI_CALL sao_ui_dc_mutation_coordinator_destroy(
 // is already invalidating, or if a stale-failure identity block is
 // active on this HWND value.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_register(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    void* hwnd,
-    void** out_token);
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, void** out_token);
 
 // Submit a display-context mutation.  operation is a short symbolic
 // key ("host-exstyle", "host-rect", "proxy-exstyle") used for
-// coalescing.  method_name selects the coordinator's backend method
-// ("hide_exstyle", "hide_window_rect", ...) — same as
-// `mem_probe._dc.hide_exstyle` in the Python code.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_dc(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    void* hwnd,
-    const char* operation_utf8,
-    const char* method_name_utf8,
-    const uint8_t* args_json_utf8,       // NULL / empty → no args
-    size_t args_len);
+// coalescing. Supported production methods are:
+//   host-rect + set_window_rect/set_bounds, with x/y/width/height JSON;
+//   host-exstyle/proxy-exstyle + hide_exstyle, with mask JSON.
+// Unknown pairs return SAO_STATUS_ERR_NOT_IMPLEMENTED and are never queued.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
+                                         const char* operation_utf8, const char* method_name_utf8,
+                                         const uint8_t* args_json_utf8, // NULL / empty → no args
+                                         size_t args_len);
 
 // Invalidate an HWND — teardown barrier.  Marks the HWND as
 // invalidating, drains any inflight mutation on the HWND, and
 // signals a completion barrier when drain succeeds.  Returns false
 // on timeout — caller MUST NOT clear its HWND handle (see above).
 SAO_UI_API bool SAO_UI_CALL sao_ui_dc_mutation_coordinator_invalidate(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    void* hwnd,
-    double timeout_sec);
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, double timeout_sec);
 
-// Explicit stale-failure clear.  Caller knows this HWND value was
-// reassigned to a new window; clear the block and reset the epoch
-// so register() succeeds from a clean slate.  Returns true if
-// something was actually cleared.
+// Explicit stale-failure clear. Caller knows this HWND value was reassigned to
+// a new window; clear the block and reset the epoch so register() succeeds from
+// a clean slate. An invalidate timeout creates a generation tombstone:
+// clear_failed() returns false and register() remains blocked until every
+// admitted operation from that generation has exited. Returns true only when a
+// quiescent tombstone was actually cleared.
 SAO_UI_API bool SAO_UI_CALL sao_ui_dc_mutation_coordinator_clear_failed(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    void* hwnd);
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd);
 
 // Barrier polling (used by `invalidate` callers that don't want to
 // block indefinitely).  wait_ms=0 → non-blocking check.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_barrier_wait(
-    sao_ui_dc_mutation_barrier_handle_t barrier,
-    uint32_t wait_ms,
-    bool* out_confirmed);
+    sao_ui_dc_mutation_barrier_handle_t barrier, uint32_t wait_ms, bool* out_confirmed);
 
-SAO_UI_API bool SAO_UI_CALL sao_ui_dc_mutation_barrier_done(
-    sao_ui_dc_mutation_barrier_handle_t barrier);
+SAO_UI_API bool SAO_UI_CALL
+sao_ui_dc_mutation_barrier_done(sao_ui_dc_mutation_barrier_handle_t barrier);
 
 // Diagnostic snapshot.
 struct SaoDcMutationStats {
@@ -118,9 +116,8 @@ struct SaoDcMutationStats {
 };
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_stats(
-    sao_ui_dc_mutation_coordinator_handle_t handle,
-    SaoDcMutationStats* out_stats);
+    sao_ui_dc_mutation_coordinator_handle_t handle, SaoDcMutationStats* out_stats);
 
 #ifdef __cplusplus
-}  // extern "C"
+} // extern "C"
 #endif

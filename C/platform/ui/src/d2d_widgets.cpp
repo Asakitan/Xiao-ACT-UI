@@ -12,6 +12,7 @@
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct BgraPixel {
@@ -54,6 +55,32 @@ struct sao_ui_widget_s {
     std::unordered_map<std::string, uint32_t> colors;
     std::mutex mutex;
 };
+
+namespace {
+
+struct GenericWidgetRegistry {
+    std::mutex mutex;
+    std::unordered_set<sao_ui_widget_handle_t> active;
+    std::unordered_set<sao_ui_widget_handle_t> known;
+    std::vector<std::unique_ptr<sao_ui_widget_s>> storage;
+};
+
+GenericWidgetRegistry& generic_widget_registry() {
+    static GenericWidgetRegistry registry;
+    return registry;
+}
+
+bool generic_widget_known(sao_ui_widget_handle_t handle) noexcept {
+    try {
+        auto& registry = generic_widget_registry();
+        std::lock_guard lock(registry.mutex);
+        return registry.known.contains(handle);
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
 
 extern "C" void SAO_UI_CALL sao_ui_widget_text_family_destroy(
     sao_ui_widget_handle_t handle);
@@ -260,23 +287,79 @@ bool json_number(const std::string& json, const char* key, float* result) {
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_create(
     int32_t widget_kind, void*, sao_ui_widget_handle_t* out_handle) {
     if (out_handle == nullptr || widget_kind < SAO_UI_WIDGET_ROUNDED_PANEL || widget_kind > SAO_UI_WIDGET_ICON) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto* widget = new (std::nothrow) sao_ui_widget_s();
-    if (widget == nullptr) {
-        *out_handle = nullptr;
+    *out_handle = nullptr;
+    try {
+        auto widget = std::make_unique<sao_ui_widget_s>();
+        widget->kind = widget_kind;
+        sao_ui_widget_handle_t handle = widget.get();
+        auto& registry = generic_widget_registry();
+        std::lock_guard lock(registry.mutex);
+        registry.active.insert(handle);
+        try {
+            registry.known.insert(handle);
+            registry.storage.push_back(std::move(widget));
+        } catch (...) {
+            registry.active.erase(handle);
+            registry.known.erase(handle);
+            throw;
+        }
+        *out_handle = handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    widget->kind = widget_kind;
-    *out_handle = widget;
-    return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_generic_backing_get_kind(sao_ui_widget_handle_t handle, int32_t* out_kind) {
+    if (out_kind != nullptr)
+        *out_kind = -1;
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        auto& registry = generic_widget_registry();
+        std::lock_guard registry_lock(registry.mutex);
+        if (!registry.active.contains(handle)) {
+            if (registry.known.contains(handle))
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        std::lock_guard state_lock(handle->mutex);
+        if (out_kind != nullptr)
+            *out_kind = handle->kind;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle) {
     if (handle == nullptr) return;
-    uint32_t removed = 0;
-    (void)sao_ui_widget_release_event_handlers(handle, &removed);
+    try {
+        auto& registry = generic_widget_registry();
+        bool generic = false;
+        {
+            std::lock_guard registry_lock(registry.mutex);
+            if (registry.known.contains(handle)) {
+                if (!registry.active.erase(handle))
+                    return;
+                generic = true;
+            }
+        }
+        if (generic) {
+            uint32_t removed = 0;
+            (void)sao_ui_widget_release_event_handlers(handle, &removed);
+            std::lock_guard state_lock(handle->mutex);
+            handle->text.clear();
+            handle->colors.clear();
+            return;
+        }
+    } catch (...) {
+        return;
+    }
     const int32_t kind = *reinterpret_cast<const int32_t*>(handle);
     if (kind >= SAO_UI_WIDGET_ROUNDED_PANEL && kind <= SAO_UI_WIDGET_ICON) {
-        delete handle;
+        return;
     } else if (kind >= SAO_UI_WIDGET_LABEL &&
                kind <= SAO_UI_WIDGET_DURATION_LABEL) {
         sao_ui_widget_text_family_destroy(handle);
@@ -303,8 +386,20 @@ extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle)
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
     sao_ui_widget_handle_t handle, const uint8_t* props_json_utf8, size_t props_len) {
     if (handle == nullptr || (props_json_utf8 == nullptr && props_len != 0U)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const sao_status_t backing_status = sao_ui_widget_generic_backing_get_kind(handle, nullptr);
+    if (backing_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (backing_status != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     const std::string json(reinterpret_cast<const char*>(props_json_utf8), props_len);
     std::scoped_lock lock(handle->mutex);
+    handle->active = false;
+    handle->enabled = true;
+    handle->value = 0.0F;
+    handle->radius = 6.0F;
+    handle->border_width = 1.0F;
+    handle->text.clear();
+    handle->colors.clear();
     for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg"}) {
         std::string text;
         uint32_t color = 0U;
@@ -369,6 +464,25 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_active(
     std::scoped_lock lock(handle->mutex);
     handle->active = active;
     return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(
+    sao_ui_widget_handle_t handle, const char* color_key, uint32_t* out_color,
+    char* out_text, size_t out_text_capacity) {
+    if (handle == nullptr || color_key == nullptr || out_color == nullptr || out_text == nullptr ||
+        out_text_capacity == 0 ||
+        sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK) {
+        return false;
+    }
+    std::lock_guard lock(handle->mutex);
+    const auto color = handle->colors.find(color_key);
+    if (color == handle->colors.end())
+        return false;
+    *out_color = color->second;
+    const size_t count = std::min(handle->text.size(), out_text_capacity - 1);
+    std::memcpy(out_text, handle->text.data(), count);
+    out_text[count] = '\0';
+    return true;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create(
