@@ -21,6 +21,37 @@
 
 namespace sao::plugins::loader {
 
+#define SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION_MAJOR 1u
+#define SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION_MINOR 0u
+#define SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION                                            \
+    ((SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION_MAJOR << 16u) |                              \
+     SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION_MINOR)
+
+typedef struct deps_session_s* deps_session_t;
+
+struct deps_session_spec {
+    uint32_t struct_size;
+    const char* plugin_id_utf8;
+    const wchar_t* plugin_dir;
+};
+
+struct deps_provider {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    void* user_data;
+
+    void(SAO_PLUGINS_CALL* retain)(void* user_data);
+    void(SAO_PLUGINS_CALL* release)(void* user_data);
+    int32_t(SAO_PLUGINS_CALL* create_session)(void* user_data,
+                                              const deps_session_spec* spec,
+                                              void** out_provider_session);
+    int32_t(SAO_PLUGINS_CALL* attach_path)(void* user_data, void* provider_session,
+                                          const wchar_t* absolute_dir);
+    int32_t(SAO_PLUGINS_CALL* restore_path)(void* user_data, void* provider_session,
+                                           const wchar_t* absolute_dir);
+    int32_t(SAO_PLUGINS_CALL* close_session)(void* user_data, void* provider_session);
+};
+
 // 依赖引导记录 (对齐 python plugin_deps 返回的 rec 字段)
 struct deps_bootstrap_record {
     // 前插到语言侧搜索路径的绝对目录 (卸载时逆序还原)
@@ -40,6 +71,23 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_deps_ensure(const wchar_t* plugin_dir,
                         bool allow_pip_install,
                         deps_bootstrap_record* out_record);
+
+// Exactly one host dependency owner may be registered. The loader copies the
+// provider prefix and retains it once per attached session.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_deps_register_provider(const deps_provider* provider);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_deps_unregister_provider();
+
+// Attaches a discovery record transactionally. A failed restore or close
+// returns an owned out_session so the caller can retry teardown.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_deps_attach(
+    const char* plugin_id_utf8, const wchar_t* plugin_dir,
+    const deps_bootstrap_record* record, deps_session_t* out_session);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_deps_session_restore(deps_session_t session);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_deps_session_close(deps_session_t session);
 
 // 卸载时还原路径 (调用 setter 的对偶 —— 由宿主提供 remove_fn)。
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL

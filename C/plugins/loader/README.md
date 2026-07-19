@@ -41,6 +41,24 @@ UI panel / hotkey / data source 全部通过 SDK ABI 反向注册 (见
 ``sao_plugins_lifecycle_register_host_adapter(language, vtable)`` 注册自己
 的适配器。loader 里没有任何 ``if (language == python) …`` 分支。
 
+## Entity provider/root ABI（W21-B3c-D2）
+
+``entity_provider.h`` 提供 adapter-neutral ``context_entity_provider_descriptor``，可携带
+一个 descriptor-owned ``entity_root_contribution_descriptor``。脚本 host 只能在 canonical
+``plugin_context_t`` 上登记 snapshot/action callbacks；loader 负责：
+
+1. 用 owner plugin ID canonicalize provider ID，并分配单调 generation；
+2. 在 enable/disable/unload 中统一 activate、quiesce、rundown 和 destroy；
+3. 深拷贝 callback rows，在同一 catalog revision 中发布 provider 与由其 rows 派生的 root
+  action refs；
+4. 对 UTF-8、数量、字段/快照字节、重复 provider/root/contribution identity 和 generation
+  执行 fail-closed 校验；
+5. stale/disabled invocation 分别返回 invalid-handle/busy，不把 host callback 生命周期泄漏给
+  launcher。
+
+launcher token、D1 root registry 与 Entity complete-tree publication 不属于该 C ABI。Python
+adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
+
 ## plugin.json Schema (1:1 对齐 Python 平台)
 
 | 字段 | 类型 | 必填 | 老别名 | 说明 |

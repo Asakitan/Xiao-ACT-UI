@@ -116,7 +116,8 @@ sao_plugins_registry_remove(registry_handle_t reg, plugin_handle_t handle) {
             const bool failed_without_runtime =
                 retained->state == lifecycle_state::failed &&
                 retained->context == nullptr &&
-                retained->native_module == nullptr;
+                retained->native_module == nullptr &&
+                retained->dependency_session == nullptr;
             if (retained->state != lifecycle_state::discovered &&
                 retained->state != lifecycle_state::unloaded &&
                 !failed_without_runtime) {

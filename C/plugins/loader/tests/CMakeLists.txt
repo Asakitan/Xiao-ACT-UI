@@ -10,7 +10,17 @@ set_target_properties(sao_loader_native_fixture PROPERTIES
 	PREFIX ""
 	OUTPUT_NAME "sao_loader_native_fixture")
 
-add_executable(test_plugins_loader test_loader.cpp)
+set(sao_plugins_loader_test_sources test_loader.cpp)
+foreach(local_test IN ITEMS
+		plugin_context_capability_test.cpp
+		plugin_context_compositor_test.cpp
+		plugin_deps_session_test.cpp)
+	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${local_test}")
+		list(APPEND sao_plugins_loader_test_sources "${local_test}")
+	endif()
+endforeach()
+
+add_executable(test_plugins_loader ${sao_plugins_loader_test_sources})
 target_link_libraries(test_plugins_loader PRIVATE
 	sao_plugins_loader
 	Catch2::Catch2WithMain)

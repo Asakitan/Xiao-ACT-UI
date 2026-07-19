@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "sao/plugins/loader/plugin_deps.h"
 #include "sao/plugins/loader/plugin_isolation.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 
@@ -32,6 +33,7 @@ struct plugin_handle_s {
     native_simple_fn native_on_disable = nullptr;
     native_simple_fn native_on_unload = nullptr;
     plugin_context_s* context = nullptr;
+    deps_session_t dependency_session = nullptr;
     bool unload_hook_completed = false;
     bool host_adapter_unloaded = false;
     uint32_t failure_count = 0;
@@ -52,11 +54,11 @@ bool plugin_is_user_owned(plugin_handle_t plugin) noexcept;
 void plugin_remove_extensions(plugin_handle_t plugin) noexcept;
 void plugin_context_request_stop(plugin_context_t* ctx) noexcept;
 void plugin_context_clear_stop(plugin_context_t* ctx) noexcept;
-int32_t plugin_context_register_entity_providers(
-    plugin_context_t* ctx, const native_entity_provider_descriptor* providers,
-    size_t count) noexcept;
-bool plugin_context_entity_provider_is_current_thread(
-    plugin_context_t* ctx) noexcept;
+int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
+                                                 const native_entity_provider_descriptor* providers,
+                                                 size_t count) noexcept;
+bool plugin_context_entity_provider_is_current_thread(plugin_context_t* ctx) noexcept;
+bool plugin_context_platform_is_current_thread(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_quiesce_entity_providers(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_quiesce_platform(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_resume_entity_providers(plugin_context_t* ctx) noexcept;
