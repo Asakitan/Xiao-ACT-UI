@@ -17,6 +17,8 @@ add_library(sao_platform_sdk SHARED
     src/sdk_hotkey_wire.cpp   # input_router_deep hotkey register/unregister
     src/sdk_gpu_hunt_wire.cpp # DX12 upload-heap tracker (view/proj + bones + W2S)
     src/sdk_provider.cpp      # provider implementation
+    src/sdk_net_provider.cpp  # independent per-context capture/parse provider
+    src/sdk_process_provider.cpp  # process owners for automatic per-context sessions
 )
 add_library(sao::sdk ALIAS sao_platform_sdk)
 

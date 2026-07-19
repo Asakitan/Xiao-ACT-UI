@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -31,17 +32,25 @@ struct ProviderFixture {
     sao_sdk_render_hook_callback_t render_callback = nullptr;
     void* render_user_data = nullptr;
     size_t live_gpu_sessions = 0;
+    bool fail_timer_unregister = false;
+    bool fire_timer_synchronously = false;
+    sao_sdk_status_t gpu_close_status = SAO_SDK_OK;
+    sao_sdk_status_t gpu_detach_status = SAO_SDK_OK;
+    bool throw_gpu_enum = false;
+    bool throw_retain = false;
+    bool throw_release = false;
+    bool throw_tts = false;
+    SaoSdkContext* gpu_reentry_context = nullptr;
+    sao_sdk_status_t gpu_destroy_status = SAO_SDK_OK;
 
     uint64_t allocate(const char* kind) {
         const uint64_t token = next_token++;
-        events.push_back(std::string("register:") + kind + ":" +
-                         std::to_string(token));
+        events.push_back(std::string("register:") + kind + ":" + std::to_string(token));
         return token;
     }
 
     void unregister(const char* kind, uint64_t token) {
-        events.push_back(std::string("unregister:") + kind + ":" +
-                         std::to_string(token));
+        events.push_back(std::string("unregister:") + kind + ":" + std::to_string(token));
     }
 };
 
@@ -50,22 +59,36 @@ struct GpuSessionFixture {
     uint32_t pid = 0;
 };
 
+struct PlatformGpuHuntProviderReset {
+    ~PlatformGpuHuntProviderReset() {
+        (void)sao_sdk_platform_gpu_hunt_configure_provider(nullptr);
+    }
+};
+
 ProviderFixture* fixture(void* user_data) {
     return static_cast<ProviderFixture*>(user_data);
 }
 
 void SAO_SDK_CALL provider_retain(void* user_data) {
-    fixture(user_data)->events.emplace_back("retain");
+    auto* state = fixture(user_data);
+    if (state->throw_retain)
+        throw std::runtime_error("provider retain fixture");
+    state->events.emplace_back("retain");
 }
 
 void SAO_SDK_CALL provider_release(void* user_data) {
-    fixture(user_data)->events.emplace_back("release");
+    auto* state = fixture(user_data);
+    state->events.emplace_back("release");
+    if (state->throw_release)
+        throw std::runtime_error("provider release fixture");
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_tts_speak(
-    void* user_data, const char* text_utf8, float, float) {
-    fixture(user_data)->events.push_back(
-        std::string("tts:speak:") + (text_utf8 == nullptr ? "" : text_utf8));
+sao_sdk_status_t SAO_SDK_CALL provider_tts_speak(void* user_data, const char* text_utf8, float,
+                                                 float) {
+    auto* state = fixture(user_data);
+    if (state->throw_tts)
+        throw std::runtime_error("provider TTS fixture");
+    state->events.push_back(std::string("tts:speak:") + (text_utf8 == nullptr ? "" : text_utf8));
     return SAO_SDK_OK;
 }
 
@@ -74,10 +97,11 @@ sao_sdk_status_t SAO_SDK_CALL provider_tts_stop(void* user_data) {
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_register_render(
-    void* user_data, const char* plugin_id_utf8, int32_t,
-    sao_sdk_render_hook_callback_t callback, void* callback_user_data,
-    uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_register_render(void* user_data, const char* plugin_id_utf8,
+                                                       int32_t,
+                                                       sao_sdk_render_hook_callback_t callback,
+                                                       void* callback_user_data,
+                                                       uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->last_plugin_id = plugin_id_utf8;
     state->render_callback = callback;
@@ -86,32 +110,35 @@ sao_sdk_status_t SAO_SDK_CALL provider_register_render(
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_unregister_render(
-    void* user_data, uint64_t provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_unregister_render(void* user_data, uint64_t provider_token) {
     fixture(user_data)->unregister("render", provider_token);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_register_timer(
-    void* user_data, uint32_t, sao_sdk_timer_callback_t callback,
-    void* callback_user_data, uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_register_timer(void* user_data, uint32_t,
+                                                      sao_sdk_timer_callback_t callback,
+                                                      void* callback_user_data,
+                                                      uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->timer_callback = callback;
     state->timer_user_data = callback_user_data;
     *out_provider_token = state->allocate("timer");
+    if (state->fire_timer_synchronously)
+        callback(*out_provider_token, callback_user_data);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_unregister_timer(
-    void* user_data, uint64_t provider_token) {
-    fixture(user_data)->unregister("timer", provider_token);
-    return SAO_SDK_OK;
+sao_sdk_status_t SAO_SDK_CALL provider_unregister_timer(void* user_data, uint64_t provider_token) {
+    auto* state = fixture(user_data);
+    state->unregister("timer", provider_token);
+    return state->fail_timer_unregister ? SAO_SDK_ERR_INTERNAL : SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_register_hotkey(
-    void* user_data, const char* plugin_id_utf8, const char*, uint32_t,
-    uint32_t, sao_sdk_hotkey_callback_t callback, void* callback_user_data,
-    uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_register_hotkey(void* user_data, const char* plugin_id_utf8,
+                                                       const char*, uint32_t, uint32_t,
+                                                       sao_sdk_hotkey_callback_t callback,
+                                                       void* callback_user_data,
+                                                       uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->last_plugin_id = plugin_id_utf8;
     state->hotkey_callback = callback;
@@ -120,16 +147,16 @@ sao_sdk_status_t SAO_SDK_CALL provider_register_hotkey(
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_unregister_hotkey(
-    void* user_data, uint64_t provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_unregister_hotkey(void* user_data, uint64_t provider_token) {
     fixture(user_data)->unregister("hotkey", provider_token);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_show_dialog(
-    void* user_data, const char* plugin_id_utf8, const SaoSdkDialogSpec*,
-    sao_sdk_dialog_callback_t callback, void* callback_user_data,
-    uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_show_dialog(void* user_data, const char* plugin_id_utf8,
+                                                   const SaoSdkDialogSpec*,
+                                                   sao_sdk_dialog_callback_t callback,
+                                                   void* callback_user_data,
+                                                   uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->last_plugin_id = plugin_id_utf8;
     state->dialog_callback = callback;
@@ -138,45 +165,43 @@ sao_sdk_status_t SAO_SDK_CALL provider_show_dialog(
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_dismiss_dialog(
-    void* user_data, uint64_t provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_dismiss_dialog(void* user_data, uint64_t provider_token) {
     fixture(user_data)->unregister("dialog", provider_token);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_show_notify(
-    void* user_data, const char* plugin_id_utf8, const SaoSdkNotifySpec*,
-    uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_show_notify(void* user_data, const char* plugin_id_utf8,
+                                                   const SaoSdkNotifySpec*,
+                                                   uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->last_plugin_id = plugin_id_utf8;
     *out_provider_token = state->allocate("notify");
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_dismiss_notify(
-    void* user_data, uint64_t provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_dismiss_notify(void* user_data, uint64_t provider_token) {
     fixture(user_data)->unregister("notify", provider_token);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_set_overlay(
-    void* user_data, const char* plugin_id_utf8, const SaoSdkOverlaySpec*,
-    uint64_t* out_provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_set_overlay(void* user_data, const char* plugin_id_utf8,
+                                                   const SaoSdkOverlaySpec*,
+                                                   uint64_t* out_provider_token) {
     auto* state = fixture(user_data);
     state->last_plugin_id = plugin_id_utf8;
     *out_provider_token = state->allocate("overlay");
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_clear_overlay(
-    void* user_data, uint64_t provider_token) {
+sao_sdk_status_t SAO_SDK_CALL provider_clear_overlay(void* user_data, uint64_t provider_token) {
     fixture(user_data)->unregister("overlay", provider_token);
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_open(
-    void* user_data, const char* plugin_id_utf8, void** out_session) {
-    if (out_session == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_open(void* user_data, const char* plugin_id_utf8,
+                                                void** out_session) {
+    if (out_session == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_session = nullptr;
     auto* state = fixture(user_data);
     auto* session = new GpuSessionFixture{state, 0};
@@ -186,51 +211,72 @@ sao_sdk_status_t SAO_SDK_CALL provider_gpu_open(
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_close(
-    void*, void* session_value) {
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_close(void*, void* session_value) {
     auto* session = static_cast<GpuSessionFixture*>(session_value);
-    if (session == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (session == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     session->owner->events.emplace_back("gpu:close");
+    if (session->owner->gpu_close_status != SAO_SDK_OK)
+        return session->owner->gpu_close_status;
     --session->owner->live_gpu_sessions;
     delete session;
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_attach(
-    void*, void* session_value, uint32_t pid) {
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_open_failed_with_session(void* user_data,
+                                                                    const char* plugin_id_utf8,
+                                                                    void** out_session) {
+    const auto status = provider_gpu_open(user_data, plugin_id_utf8, out_session);
+    return status == SAO_SDK_OK ? SAO_SDK_ERR_NOT_INITIALIZED : status;
+}
+
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_close_then_throw(void* user_data, void* session_value) {
+    (void)provider_gpu_close(user_data, session_value);
+    throw std::runtime_error("GPU close fixture failure");
+}
+
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_attach(void*, void* session_value, uint32_t pid) {
     auto* session = static_cast<GpuSessionFixture*>(session_value);
-    if (session == nullptr || pid == 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (session == nullptr || pid == 0)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     session->pid = pid;
     session->owner->events.push_back("gpu:attach:" + std::to_string(pid));
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_detach(
-    void*, void* session_value) {
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_detach(void*, void* session_value) {
     auto* session = static_cast<GpuSessionFixture*>(session_value);
-    if (session == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (session == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     session->owner->events.emplace_back("gpu:detach");
+    if (session->owner->gpu_detach_status != SAO_SDK_OK)
+        return session->owner->gpu_detach_status;
     session->pid = 0;
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_enum_regions(
-    void*, void* session_value, SaoSdkGpuHuntRegion* out_regions,
-    size_t capacity, size_t* out_count) {
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_enum_regions(void*, void* session_value,
+                                                        SaoSdkGpuHuntRegion* out_regions,
+                                                        size_t capacity, size_t* out_count) {
     auto* session = static_cast<GpuSessionFixture*>(session_value);
     if (session == nullptr || out_count == nullptr || session->pid == 0) {
         return SAO_SDK_ERR_NOT_INITIALIZED;
     }
-    session->owner->events.emplace_back(
-        out_regions == nullptr ? "gpu:enum:size" : "gpu:enum:fill");
+    if (session->owner->throw_gpu_enum)
+        throw std::runtime_error("GPU enumerate fixture failure");
+    if (session->owner->gpu_reentry_context != nullptr) {
+        session->owner->gpu_destroy_status =
+            sao_sdk_context_try_destroy(session->owner->gpu_reentry_context);
+    }
+    session->owner->events.emplace_back(out_regions == nullptr ? "gpu:enum:size" : "gpu:enum:fill");
     *out_count = 0;
     (void)capacity;
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t SAO_SDK_CALL provider_gpu_read(
-    void*, void* session_value, uint64_t, uint8_t* out_buffer,
-    size_t buffer_size, size_t* out_bytes_read) {
+sao_sdk_status_t SAO_SDK_CALL provider_gpu_read(void*, void* session_value, uint64_t,
+                                                uint8_t* out_buffer, size_t buffer_size,
+                                                size_t* out_bytes_read) {
     auto* session = static_cast<GpuSessionFixture*>(session_value);
     if (session == nullptr || out_bytes_read == nullptr || session->pid == 0 ||
         (buffer_size != 0 && out_buffer == nullptr)) {
@@ -282,32 +328,46 @@ void SAO_SDK_CALL hotkey_probe(sao_sdk_hotkey_id_t hotkey, void* user_data) {
     static_cast<CallbackProbe*>(user_data)->hotkey = hotkey;
 }
 
-void SAO_SDK_CALL dialog_probe(
-    sao_sdk_dialog_token_t dialog, int32_t button,
-    const char* input_text_utf8, size_t input_text_len, void* user_data) {
+void SAO_SDK_CALL dialog_probe(sao_sdk_dialog_token_t dialog, int32_t button,
+                               const char* input_text_utf8, size_t input_text_len,
+                               void* user_data) {
     auto* probe = static_cast<CallbackProbe*>(user_data);
     probe->dialog = dialog;
     probe->dialog_button = button;
     probe->dialog_input.assign(input_text_utf8, input_text_len);
 }
 
-sao_sdk_status_t SAO_SDK_CALL render_probe(
-    int32_t, const SaoSdkRenderHookPayload*, void* user_data) {
+sao_sdk_status_t SAO_SDK_CALL render_probe(int32_t, const SaoSdkRenderHookPayload*,
+                                           void* user_data) {
     ++static_cast<CallbackProbe*>(user_data)->render_calls;
     return SAO_SDK_OK;
 }
 
-}  // namespace
+struct ReentryProbe {
+    SaoSdkContext* context = nullptr;
+    sao_sdk_status_t destroy_status = SAO_SDK_OK;
+    sao_sdk_status_t clear_status = SAO_SDK_OK;
+    int callback_count = 0;
+};
 
-TEST_CASE("SDK context ABI remains stable while provider is versioned",
-          "[sdk][provider][abi]") {
-    STATIC_REQUIRE(sizeof(SaoSdkContext) ==
-                   (sizeof(void*) == 8u ? 104u : 56u));
+void SAO_SDK_CALL timer_reentry_probe(sao_sdk_timer_token_t, void* user_data) {
+    auto* probe = static_cast<ReentryProbe*>(user_data);
+    ++probe->callback_count;
+    probe->destroy_status = sao_sdk_context_try_destroy(probe->context);
+    probe->clear_status = sao_sdk_context_bind_provider(probe->context, nullptr);
+}
+
+void SAO_SDK_CALL throwing_timer_probe(sao_sdk_timer_token_t, void*) {
+    throw std::runtime_error("timer callback fixture");
+}
+
+} // namespace
+
+TEST_CASE("SDK context ABI remains stable while provider is versioned", "[sdk][provider][abi]") {
+    STATIC_REQUIRE(sizeof(SaoSdkContext) == (sizeof(void*) == 8u ? 104u : 56u));
     STATIC_REQUIRE(offsetof(SaoSdkContext, ctx_impl) == 8u);
-    STATIC_REQUIRE(offsetof(SaoSdkContext, banner) ==
-                   (sizeof(void*) == 8u ? 88u : 48u));
-    STATIC_REQUIRE(offsetof(SaoSdkContext, gpu_hunt) ==
-                   (sizeof(void*) == 8u ? 96u : 52u));
+    STATIC_REQUIRE(offsetof(SaoSdkContext, banner) == (sizeof(void*) == 8u ? 88u : 48u));
+    STATIC_REQUIRE(offsetof(SaoSdkContext, gpu_hunt) == (sizeof(void*) == 8u ? 96u : 52u));
 
     SaoSdkContext ctx{};
     REQUIRE(sao_sdk_bind_context("provider.abi", "1.0", &ctx) == SAO_SDK_OK);
@@ -316,63 +376,56 @@ TEST_CASE("SDK context ABI remains stable while provider is versioned",
     SaoSdkProviderVTable bad{};
     bad.abi_version = 2u << 16;
     bad.struct_size = sizeof(bad);
-    REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) ==
-            SAO_SDK_ERR_ABI_MISMATCH);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) == SAO_SDK_ERR_ABI_MISMATCH);
 
     bad.abi_version = SAO_SDK_PROVIDER_ABI_VERSION;
     bad.struct_size = static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, retain) - 1u);
-    REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) ==
-            SAO_SDK_ERR_ABI_MISMATCH);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) == SAO_SDK_ERR_ABI_MISMATCH);
 
     sao_sdk_timer_token_t timer = 0;
     REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) ==
             SAO_SDK_ERR_UNSUPPORTED);
     REQUIRE(sao_sdk_timer_unregister(&ctx, 1) == SAO_SDK_ERR_UNSUPPORTED);
-    REQUIRE(ctx.tts->speak(ctx.ctx_impl, "text", 1.0f, 0.0f) ==
-            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(ctx.tts->speak(ctx.ctx_impl, "text", 1.0f, 0.0f) == SAO_SDK_ERR_UNSUPPORTED);
     REQUIRE(ctx.tts->stop(ctx.ctx_impl) == SAO_SDK_ERR_UNSUPPORTED);
 
     sao_sdk_hook_token_t hook = 0;
-    REQUIRE(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT,
-                                         render_probe, nullptr, &hook) ==
-            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT, render_probe, nullptr,
+                                         &hook) == SAO_SDK_ERR_UNSUPPORTED);
 
     SaoSdkHotkeySpec hotkey{};
     hotkey.binding_id_utf8 = "provider_test";
     hotkey.virtual_key = 0x41;
     sao_sdk_hotkey_id_t hotkey_id = 0;
-    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey, hotkey_probe, nullptr,
-                                    &hotkey_id) == SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey, hotkey_probe, nullptr, &hotkey_id) ==
+            SAO_SDK_ERR_UNSUPPORTED);
 
     SaoSdkDialogSpec dialog{};
     dialog.title_utf8 = "title";
     dialog.message_utf8 = "message";
     sao_sdk_dialog_token_t dialog_token = 0;
-    REQUIRE(sao_sdk_dialog_show(&ctx, &dialog, dialog_probe, nullptr,
-                                &dialog_token) == SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(sao_sdk_dialog_show(&ctx, &dialog, dialog_probe, nullptr, &dialog_token) ==
+            SAO_SDK_ERR_UNSUPPORTED);
 
     SaoSdkNotifySpec notify{"text", 10, 0xff00ff00u};
     sao_sdk_notify_token_t notify_token = 0;
-    REQUIRE(sao_sdk_notify_show(&ctx, &notify, &notify_token) ==
-            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(sao_sdk_notify_show(&ctx, &notify, &notify_token) == SAO_SDK_ERR_UNSUPPORTED);
 
     const uint8_t json[] = {'{', '}'};
     SaoSdkOverlaySpec overlay{"surface", json, sizeof(json)};
     sao_sdk_overlay_token_t overlay_token = 0;
-    REQUIRE(sao_sdk_overlay_set(&ctx, &overlay, &overlay_token) ==
-            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(sao_sdk_overlay_set(&ctx, &overlay, &overlay_token) == SAO_SDK_ERR_UNSUPPORTED);
 
-        ProviderFixture partial_state;
-        auto partial = make_provider(&partial_state);
-        partial.register_timer = nullptr;
-        REQUIRE(sao_sdk_context_bind_provider(&ctx, &partial) == SAO_SDK_OK);
-        REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) ==
+    ProviderFixture partial_state;
+    auto partial = make_provider(&partial_state);
+    partial.register_timer = nullptr;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &partial) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) ==
             SAO_SDK_ERR_UNSUPPORTED);
-        REQUIRE(ctx.tts->stop(ctx.ctx_impl) == SAO_SDK_OK);
+    REQUIRE(ctx.tts->stop(ctx.ctx_impl) == SAO_SDK_OK);
 
     sao_sdk_context_destroy(&ctx);
-        REQUIRE(partial_state.events ==
-            std::vector<std::string>{"retain", "tts:stop", "release"});
+    REQUIRE(partial_state.events == std::vector<std::string>{"retain", "tts:stop", "release"});
 }
 
 TEST_CASE("provider translates callback tokens and tears down in reverse order",
@@ -380,8 +433,7 @@ TEST_CASE("provider translates callback tokens and tears down in reverse order",
     ProviderFixture provider_state;
     auto provider = make_provider(&provider_state);
     SaoSdkContext ctx{};
-    REQUIRE(sao_sdk_bind_context("provider.lifecycle", "1.0", &ctx) ==
-            SAO_SDK_OK);
+    REQUIRE(sao_sdk_bind_context("provider.lifecycle", "1.0", &ctx) == SAO_SDK_OK);
     REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
     REQUIRE(sao_sdk_context_provider_status(&ctx) == SAO_SDK_OK);
 
@@ -390,28 +442,25 @@ TEST_CASE("provider translates callback tokens and tears down in reverse order",
     REQUIRE(ctx.tts->stop(ctx.ctx_impl) == SAO_SDK_OK);
 
     sao_sdk_timer_token_t timer = 0;
-    REQUIRE(sao_sdk_timer_register(&ctx, 25, timer_probe, &probe, &timer) ==
-            SAO_SDK_OK);
+    REQUIRE(sao_sdk_timer_register(&ctx, 25, timer_probe, &probe, &timer) == SAO_SDK_OK);
 
     SaoSdkHotkeySpec hotkey_spec{};
     hotkey_spec.binding_id_utf8 = "toggle";
     hotkey_spec.virtual_key = 0x54;
     sao_sdk_hotkey_id_t hotkey = 0;
-    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, &probe,
-                                    &hotkey) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, &probe, &hotkey) ==
+            SAO_SDK_OK);
 
     sao_sdk_hook_token_t render = 0;
-    REQUIRE(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT,
-                                         render_probe, &probe, &render) ==
-            SAO_SDK_OK);
+    REQUIRE(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT, render_probe, &probe,
+                                         &render) == SAO_SDK_OK);
 
     SaoSdkDialogSpec dialog_spec{};
     dialog_spec.kind = SAO_SDK_DIALOG_INPUT;
     dialog_spec.title_utf8 = "title";
     dialog_spec.message_utf8 = "message";
     sao_sdk_dialog_token_t dialog = 0;
-    REQUIRE(sao_sdk_dialog_show(&ctx, &dialog_spec, dialog_probe, &probe,
-                                &dialog) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_dialog_show(&ctx, &dialog_spec, dialog_probe, &probe, &dialog) == SAO_SDK_OK);
 
     SaoSdkNotifySpec notify_spec{"notice", 50, 0xffffffffu};
     sao_sdk_notify_token_t notify = 0;
@@ -433,13 +482,11 @@ TEST_CASE("provider translates callback tokens and tears down in reverse order",
     provider_state.timer_callback(999, provider_state.timer_user_data);
     provider_state.hotkey_callback(999, provider_state.hotkey_user_data);
     constexpr char input[] = "value";
-    provider_state.dialog_callback(999, SAO_SDK_DIALOG_BUTTON_OK, input,
-                                   sizeof(input) - 1,
+    provider_state.dialog_callback(999, SAO_SDK_DIALOG_BUTTON_OK, input, sizeof(input) - 1,
                                    provider_state.dialog_user_data);
     SaoSdkRenderHookPayload payload{};
-    REQUIRE(provider_state.render_callback(
-                SAO_SDK_HOOK_BEFORE_PRESENT, &payload,
-                provider_state.render_user_data) == SAO_SDK_OK);
+    REQUIRE(provider_state.render_callback(SAO_SDK_HOOK_BEFORE_PRESENT, &payload,
+                                           provider_state.render_user_data) == SAO_SDK_OK);
 
     REQUIRE(probe.timer == timer);
     REQUIRE(probe.hotkey == hotkey);
@@ -473,59 +520,306 @@ TEST_CASE("provider translates callback tokens and tears down in reverse order",
     REQUIRE(provider_state.events == expected);
 }
 
-    TEST_CASE("GPU provider sessions require attach and retain tracker lifetime",
+TEST_CASE("provider unregister failure preserves token and callback bridge for retry",
+          "[sdk][provider][cleanup][retry]") {
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.unregister.retry", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+    CallbackProbe probe;
+    sao_sdk_timer_token_t timer = 0;
+    REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, &probe, &timer) == SAO_SDK_OK);
+
+    provider_state.fail_timer_unregister = true;
+    CHECK(sao_sdk_timer_unregister(&ctx, timer) == SAO_SDK_ERR_INTERNAL);
+    provider_state.timer_callback(777, provider_state.timer_user_data);
+    CHECK(probe.timer == timer);
+    CHECK(sao_sdk_context_provider_status(&ctx) == SAO_SDK_OK);
+
+    provider_state.fail_timer_unregister = false;
+    REQUIRE(sao_sdk_timer_unregister(&ctx, timer) == SAO_SDK_OK);
+    CHECK(sao_sdk_timer_unregister(&ctx, timer) == SAO_SDK_ERR_NOT_FOUND);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("provider replacement cleanup is transactional and synchronous callbacks reenter busy",
+          "[sdk][provider][replacement][reentry]") {
+    ProviderFixture original;
+    original.fire_timer_synchronously = true;
+    auto original_provider = make_provider(&original);
+    ProviderFixture replacement;
+    auto replacement_provider = make_provider(&replacement);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.replacement.retry", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &original_provider) == SAO_SDK_OK);
+
+    ReentryProbe probe{&ctx};
+    sao_sdk_timer_token_t timer = 0;
+    REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_reentry_probe, &probe, &timer) == SAO_SDK_OK);
+    CHECK(probe.callback_count == 1);
+    CHECK(probe.destroy_status == SAO_SDK_ERR_BUSY);
+    CHECK(probe.clear_status == SAO_SDK_ERR_BUSY);
+
+    original.fail_timer_unregister = true;
+    CHECK(sao_sdk_context_bind_provider(&ctx, &replacement_provider) == SAO_SDK_ERR_INTERNAL);
+    CHECK(sao_sdk_context_provider_status(&ctx) == SAO_SDK_ERR_INTERNAL);
+    CHECK(replacement.events == std::vector<std::string>{"retain", "release"});
+    original.timer_callback(0, original.timer_user_data);
+    CHECK(probe.callback_count == 2);
+
+    original.fail_timer_unregister = false;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &replacement_provider) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("plugin timer exceptions stop at the SDK callback barrier",
+          "[sdk][provider][callback][exception]") {
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.callback.exception", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+    sao_sdk_timer_token_t timer = 0;
+    REQUIRE(sao_sdk_timer_register(&ctx, 10, throwing_timer_probe, nullptr, &timer) == SAO_SDK_OK);
+    CHECK_NOTHROW(provider_state.timer_callback(0, provider_state.timer_user_data));
+    REQUIRE(sao_sdk_timer_unregister(&ctx, timer) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("general provider retain release and TTS exceptions stay behind the ABI barrier",
+          "[sdk][provider][abi_barrier][exception][retry]") {
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.abi.exception", "1.0", &ctx) == SAO_SDK_OK);
+
+    provider_state.throw_retain = true;
+    CHECK(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_ERR_INTERNAL);
+    CHECK(sao_sdk_context_provider_status(&ctx) == SAO_SDK_ERR_UNSUPPORTED);
+    provider_state.throw_retain = false;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+
+    provider_state.throw_tts = true;
+    CHECK(ctx.tts->speak(ctx.ctx_impl, "barrier", 1.0F, 0.0F) == SAO_SDK_ERR_INTERNAL);
+    provider_state.throw_tts = false;
+
+    provider_state.throw_release = true;
+    CHECK(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_ERR_INTERNAL);
+    CHECK(ctx.ctx_impl != nullptr);
+    CHECK(sao_sdk_context_provider_status(&ctx) == SAO_SDK_ERR_INTERNAL);
+    provider_state.throw_release = false;
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    CHECK(ctx.ctx_impl == nullptr);
+}
+
+TEST_CASE("GPU provider sessions require attach and retain tracker lifetime",
           "[sdk][provider][gpu_hunt]") {
-        ProviderFixture provider_state;
-        auto provider = make_provider(&provider_state);
-        SaoSdkContext owner{};
-        SaoSdkContext sibling{};
-        REQUIRE(sao_sdk_bind_context("provider.gpu", "1.0", &owner) ==
-            SAO_SDK_OK);
-        REQUIRE(sao_sdk_bind_context("provider.gpu.sibling", "1.0", &sibling) ==
-            SAO_SDK_OK);
-        REQUIRE(sao_sdk_context_bind_provider(&owner, &provider) == SAO_SDK_OK);
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext owner{};
+    SaoSdkContext sibling{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu", "1.0", &owner) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_bind_context("provider.gpu.sibling", "1.0", &sibling) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&owner, &provider) == SAO_SDK_OK);
 
-        sao_sdk_gpu_tracker_t tracker = 0;
-        REQUIRE(owner.gpu_hunt->create_tracker(owner.ctx_impl, &tracker) ==
-            SAO_SDK_OK);
-        REQUIRE(tracker != 0);
-        REQUIRE(provider_state.live_gpu_sessions == 1);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(owner.gpu_hunt->create_tracker(owner.ctx_impl, &tracker) == SAO_SDK_OK);
+    REQUIRE(tracker != 0);
+    REQUIRE(provider_state.live_gpu_sessions == 1);
 
-        REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) ==
-            SAO_SDK_ERR_NOT_INITIALIZED);
-        REQUIRE(sibling.gpu_hunt->attach_tracker(sibling.ctx_impl, tracker, 77) ==
+    REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) == SAO_SDK_ERR_NOT_INITIALIZED);
+    REQUIRE(sibling.gpu_hunt->attach_tracker(sibling.ctx_impl, tracker, 77) ==
             SAO_SDK_ERR_INVALID_ARGUMENT);
-        REQUIRE(sibling.gpu_hunt->detach_tracker(sibling.ctx_impl, tracker) ==
+    REQUIRE(sibling.gpu_hunt->detach_tracker(sibling.ctx_impl, tracker) ==
             SAO_SDK_ERR_INVALID_ARGUMENT);
-        REQUIRE(sibling.gpu_hunt->destroy_tracker(sibling.ctx_impl, tracker) ==
+    REQUIRE(sibling.gpu_hunt->destroy_tracker(sibling.ctx_impl, tracker) ==
             SAO_SDK_ERR_INVALID_ARGUMENT);
 
-        REQUIRE(owner.gpu_hunt->attach_tracker(owner.ctx_impl, tracker, 4242) ==
-            SAO_SDK_OK);
-        REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) == SAO_SDK_OK);
-        REQUIRE(owner.gpu_hunt->detach_tracker(owner.ctx_impl, tracker) ==
-            SAO_SDK_OK);
-        REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) ==
-            SAO_SDK_ERR_NOT_INITIALIZED);
+    REQUIRE(owner.gpu_hunt->attach_tracker(owner.ctx_impl, tracker, 4242) == SAO_SDK_OK);
+    REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) == SAO_SDK_OK);
+    REQUIRE(owner.gpu_hunt->detach_tracker(owner.ctx_impl, tracker) == SAO_SDK_OK);
+    REQUIRE(owner.gpu_hunt->tick(owner.ctx_impl, tracker) == SAO_SDK_ERR_NOT_INITIALIZED);
 
-        REQUIRE(owner.gpu_hunt->attach_tracker(owner.ctx_impl, tracker, 4243) ==
-            SAO_SDK_OK);
-        sao_sdk_context_destroy(&owner);
-        REQUIRE(provider_state.live_gpu_sessions == 0);
-        sao_sdk_context_destroy(&sibling);
+    REQUIRE(owner.gpu_hunt->attach_tracker(owner.ctx_impl, tracker, 4243) == SAO_SDK_OK);
+    sao_sdk_context_destroy(&owner);
+    REQUIRE(provider_state.live_gpu_sessions == 0);
+    sao_sdk_context_destroy(&sibling);
 
-        const std::vector<std::string> expected{
-        "retain",
-        "retain",
-        "gpu:open:provider.gpu",
-        "gpu:attach:4242",
-        "gpu:enum:size",
-        "gpu:detach",
-        "gpu:attach:4243",
-        "release",
-        "gpu:detach",
-        "gpu:close",
-        "release",
-        };
-        REQUIRE(provider_state.events == expected);
-    }
+    const std::vector<std::string> expected{
+        "retain",          "retain",        "gpu:open:provider.gpu",
+        "gpu:attach:4242", "gpu:enum:size", "gpu:detach",
+        "gpu:attach:4243", "release",       "gpu:detach",
+        "gpu:close",       "release",
+    };
+    REQUIRE(provider_state.events == expected);
+}
+
+TEST_CASE("platform GPU provider owns configured sessions and clears fail closed",
+          "[sdk][provider][gpu_hunt][platform]") {
+    PlatformGpuHuntProviderReset reset;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.platform", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(tracker == 0);
+
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(&provider) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_OK);
+    REQUIRE(tracker != 0);
+    REQUIRE(provider_state.live_gpu_sessions == 1);
+    REQUIRE(ctx.gpu_hunt->attach_tracker(ctx.ctx_impl, tracker, 5150) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->tick(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t unbound_tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &unbound_tracker) ==
+            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(unbound_tracker == 0);
+    REQUIRE(provider_state.live_gpu_sessions == 1);
+
+    REQUIRE(ctx.gpu_hunt->detach_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    REQUIRE(provider_state.live_gpu_sessions == 0);
+    sao_sdk_context_destroy(&ctx);
+
+    const std::vector<std::string> expected{
+        "retain",          "retain",        "gpu:open:provider.gpu.platform",
+        "gpu:attach:5150", "gpu:enum:size", "gpu:detach",
+        "gpu:close",       "release",       "release",
+    };
+    REQUIRE(provider_state.events == expected);
+}
+
+TEST_CASE("platform GPU provider rejects incomplete owners without replacement",
+          "[sdk][provider][gpu_hunt][platform][validation]") {
+    PlatformGpuHuntProviderReset reset;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(&provider) == SAO_SDK_OK);
+
+    ProviderFixture incomplete_state;
+    auto incomplete = make_provider(&incomplete_state);
+    incomplete.gpu_hunt_read = nullptr;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(&incomplete) == SAO_SDK_ERR_UNSUPPORTED);
+
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.validation", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    sao_sdk_context_destroy(&ctx);
+
+    REQUIRE(incomplete_state.events.empty());
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+    const std::vector<std::string> expected{
+        "retain", "retain", "gpu:open:provider.gpu.validation", "gpu:close", "release", "release",
+    };
+    REQUIRE(provider_state.events == expected);
+}
+
+TEST_CASE("platform GPU failed open closes a returned session once",
+          "[sdk][provider][gpu_hunt][platform][exception]") {
+    PlatformGpuHuntProviderReset reset;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    provider.gpu_hunt_open_session = provider_gpu_open_failed_with_session;
+    provider.gpu_hunt_close_session = provider_gpu_close_then_throw;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(&provider) == SAO_SDK_OK);
+
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.exception", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_ERR_NOT_INITIALIZED);
+    REQUIRE(tracker == 0);
+    REQUIRE(provider_state.live_gpu_sessions == 0);
+    sao_sdk_context_destroy(&ctx);
+
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+    const std::vector<std::string> expected{
+        "retain", "retain", "gpu:open:provider.gpu.exception", "gpu:close", "release", "release",
+    };
+    REQUIRE(provider_state.events == expected);
+}
+
+TEST_CASE("GPU tracker destroy preserves handle and session across detach and close retries",
+          "[sdk][provider][gpu_hunt][destroy][retry]") {
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.destroy.retry", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->attach_tracker(ctx.ctx_impl, tracker, 6060) == SAO_SDK_OK);
+
+    provider_state.gpu_detach_status = SAO_SDK_ERR_INTERNAL;
+    CHECK(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_ERR_INTERNAL);
+    CHECK(provider_state.live_gpu_sessions == 1);
+    provider_state.gpu_detach_status = SAO_SDK_OK;
+    provider_state.gpu_close_status = SAO_SDK_ERR_INTERNAL;
+    CHECK(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_ERR_INTERNAL);
+    CHECK(provider_state.live_gpu_sessions == 1);
+    provider_state.gpu_close_status = SAO_SDK_OK;
+    REQUIRE(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    CHECK(provider_state.live_gpu_sessions == 0);
+    CHECK(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("platform GPU close failure keeps the adapter session retryable",
+          "[sdk][provider][gpu_hunt][platform][destroy][retry]") {
+    PlatformGpuHuntProviderReset reset;
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(&provider) == SAO_SDK_OK);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.platform.retry", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_OK);
+
+    provider_state.gpu_close_status = SAO_SDK_ERR_INTERNAL;
+    CHECK(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_ERR_INTERNAL);
+    CHECK(provider_state.live_gpu_sessions == 1);
+    provider_state.gpu_close_status = SAO_SDK_OK;
+    REQUIRE(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    CHECK(provider_state.live_gpu_sessions == 0);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_platform_gpu_hunt_configure_provider(nullptr) == SAO_SDK_OK);
+}
+
+TEST_CASE("GPU tick contains provider exceptions at the wire boundary",
+          "[sdk][provider][gpu_hunt][tick][exception]") {
+    ProviderFixture provider_state;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.gpu.tick.exception", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt->attach_tracker(ctx.ctx_impl, tracker, 6061) == SAO_SDK_OK);
+    provider_state.gpu_reentry_context = &ctx;
+    CHECK(ctx.gpu_hunt->tick(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    CHECK(provider_state.gpu_destroy_status == SAO_SDK_ERR_BUSY);
+    CHECK(provider_state.live_gpu_sessions == 1);
+    provider_state.gpu_reentry_context = nullptr;
+    provider_state.throw_gpu_enum = true;
+    CHECK(ctx.gpu_hunt->tick(ctx.ctx_impl, tracker) == SAO_SDK_ERR_INTERNAL);
+    provider_state.throw_gpu_enum = false;
+    REQUIRE(ctx.gpu_hunt->destroy_tracker(ctx.ctx_impl, tracker) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}

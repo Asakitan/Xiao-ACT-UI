@@ -12,9 +12,12 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <array>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -23,25 +26,27 @@
 #include <variant>
 #include <vector>
 
-#include "sao/sdk/sao_sdk.h"
 #include "sao/core/status.h"
 #include "sao/engine/event_bus.h"
 #include "sao/engine/render_hook.h"
+#include "sao/sdk/sao_sdk.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
-#include "sao/ui/panel_sdk.h"
 #include "sao/ui/panel_layout.h"
+#include "sao/ui/panel_sdk.h"
 #include "sao/ui/sao_ui_scriptable_canvas.h"
 
 namespace sao_sdk_internal {
 
+struct ContextState;
+
 // Per-widget entry inside a panel — the SDK stores the widget handle
 // alongside its spec id so update/remove can re-target it.
 struct WidgetEntry {
-    sao_sdk_ui_widget_t sdk_handle = nullptr;   // opaque token handed to plugin
+    sao_sdk_ui_widget_t sdk_handle = nullptr; // opaque token handed to plugin
     sao_ui_widget_handle_t ui_widget = nullptr;
-    std::string         widget_id;              // caller-defined id (unique per panel)
-    int32_t             kind = 0;
+    std::string widget_id; // caller-defined id (unique per panel)
+    int32_t kind = 0;
     // A synthetic layout-node handle produced by
     // sao_ui_panel_update_body().  Kept so remove/update mutations know
     // which node to touch.
@@ -50,32 +55,33 @@ struct WidgetEntry {
 
 // Per-panel entry.
 struct PanelEntry {
-    sao_sdk_ui_panel_t         sdk_handle = nullptr;
-    sao_ui_panel_handle_t      ui_panel   = nullptr;
-    sao_ui_panel_body_handle_t ui_body    = nullptr;
-    std::string                panel_id;
+    sao_sdk_ui_panel_t sdk_handle = nullptr;
+    sao_ui_panel_handle_t ui_panel = nullptr;
+    sao_ui_panel_body_handle_t ui_body = nullptr;
+    std::string panel_id;
     // Widgets in insertion order (also z_order-sorted on add).
-    std::vector<WidgetEntry>   widgets;
+    std::vector<WidgetEntry> widgets;
     // Next widget-handle counter for stable synthesis.
-    uint64_t                   next_widget_id = 1;
+    uint64_t next_widget_id = 1;
     // Redraw request counter — tests inspect via getters.
-    uint64_t                   redraw_count = 0;
+    uint64_t redraw_count = 0;
     sao_sdk_panel_action_callback_t legacy_action_cb = nullptr;
-    void*                      legacy_action_user_data = nullptr;
+    void* legacy_action_user_data = nullptr;
     std::vector<sao_ui_script_canvas_handle_t> canvases;
+    std::vector<sao_ui_widget_handle_t> canvas_placeholders;
 };
 
 // Render-hook registration owned by this context.  Fires when the
 // context's owner drives the clock via
 // `sao_sdk_internal::fire_render_hook`.
 struct RenderHookEntry {
-    sao_sdk_hook_token_t           token = 0;
-    int32_t                        hook_point = 0;
+    sao_sdk_hook_token_t token = 0;
+    int32_t hook_point = 0;
     sao_sdk_render_hook_callback_t callback = nullptr;
-    void*                          user_data = nullptr;
-    std::string                    surface_id;
-    float                          priority = 0.0f;
-    void*                          legacy_callback = nullptr;
+    void* user_data = nullptr;
+    std::string surface_id;
+    float priority = 0.0f;
+    void* legacy_callback = nullptr;
 };
 
 // Wave7 SDK subscription — owned by the context so unloading a plugin
@@ -86,21 +92,22 @@ struct RenderHookEntry {
 // bridge lookup); ``heap_owner`` is that pointer, which must be freed
 // with `delete` at unsubscribe or destroy.
 struct EventSubscription {
-    sao_sdk_subscription_t     sdk_token = 0;
-    sao_engine_subscription_t  bus_token = 0;   // wave5 token
-    sao_sdk_event_callback_t   plugin_cb = nullptr;
-    void*                      plugin_ud = nullptr;
-    EventSubscription*         heap_owner = nullptr;   // matches the wave5 user_data slot
+    ContextState* owner = nullptr;
+    sao_sdk_subscription_t sdk_token = 0;
+    sao_engine_subscription_t bus_token = 0; // wave5 token
+    sao_sdk_event_callback_t plugin_cb = nullptr;
+    void* plugin_ud = nullptr;
+    EventSubscription* heap_owner = nullptr; // matches the wave5 user_data slot
 };
 
 // Hotkey registration.
 struct HotkeyEntry {
-    sao_sdk_hotkey_id_t         sdk_id = 0;
-    sao_ui_hotkey_binding_t     router_binding = 0;
-    sao_sdk_hotkey_callback_t   plugin_cb = nullptr;
-    void*                       plugin_ud = nullptr;
-    std::string                 binding_id;
-    void*                       bridge = nullptr;
+    sao_sdk_hotkey_id_t sdk_id = 0;
+    sao_ui_hotkey_binding_t router_binding = 0;
+    sao_sdk_hotkey_callback_t plugin_cb = nullptr;
+    void* plugin_ud = nullptr;
+    std::string binding_id;
+    void* bridge = nullptr;
 };
 
 enum class CapabilityKind : uint8_t {
@@ -118,6 +125,23 @@ struct CapabilityRegistration {
     uint64_t provider_token = 0;
     void* bridge = nullptr;
     void (*destroy_bridge)(void*) = nullptr;
+    bool unregistering = false;
+};
+
+struct NetProviderSession;
+
+struct MemoryProviderSession {
+    ContextState* owner = nullptr;
+    SaoSdkMemoryProviderVTable provider{};
+    void* session = nullptr;
+    std::mutex mutex;
+    std::mutex operation_mutex;
+    std::condition_variable idle;
+    size_t active_calls = 0;
+    bool accepting = true;
+    bool attached = false;
+    bool retained = false;
+    sao_sdk_status_t cleanup_status = SAO_SDK_OK;
 };
 
 // Shared runtime bag — a single instance per process.  Contexts point
@@ -125,11 +149,11 @@ struct CapabilityRegistration {
 // lazily on the first context_create; never destroyed (mirrors process
 // lifetime of a real plugin host).
 struct SharedRuntime {
-    sao_ui_compositor_handle_t         compositor = nullptr;
-    sao_engine_event_bus_handle_t      event_bus  = nullptr;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    sao_engine_event_bus_handle_t event_bus = nullptr;
     sao_engine_render_hook_registry_handle_t render_registry = nullptr;
-    sao_ui_input_router_deep_handle_t  input_router = nullptr;
-    std::mutex                         mu;
+    sao_ui_input_router_deep_handle_t input_router = nullptr;
+    std::mutex mu;
 
     static SharedRuntime& instance();
     // Idempotent; safe under concurrent context_create calls.
@@ -165,27 +189,92 @@ struct ContextState {
 
     SaoSdkProviderVTable provider{};
     bool provider_bound = false;
+    bool provider_accepting = false;
+    bool provider_retained = false;
+    sao_sdk_status_t provider_cleanup_status = SAO_SDK_OK;
+    size_t provider_active_calls = 0;
     std::vector<CapabilityRegistration> capability_registrations;
+    std::vector<SaoSdkProviderVTable> provider_release_quarantine;
     uint64_t next_capability_token = 1;
+    std::mutex provider_mutex;
+    std::condition_variable provider_idle;
+    std::recursive_mutex provider_lifecycle_mutex;
+
+    std::shared_ptr<MemoryProviderSession> memory_provider;
+    std::vector<std::shared_ptr<MemoryProviderSession>> memory_quarantine;
+    std::mutex memory_lifecycle_mutex;
+
+    std::shared_ptr<NetProviderSession> net_provider;
+    std::vector<std::shared_ptr<NetProviderSession>> net_quarantine;
+    std::mutex net_lifecycle_mutex;
 
     // Public struct fields for plugins to peek at.
     SaoSdkContext public_ctx{};
     SaoSdkContext* bound_public_ctx = nullptr;
 
+    std::mutex callback_mutex;
+    std::condition_variable callback_idle;
+    size_t active_plugin_callbacks = 0;
+    bool callback_accepting = true;
+    std::atomic_bool destroy_quarantined = false;
+    std::atomic_bool destroying = false;
+    std::mutex destroy_mutex;
+
     std::mutex mu;
 };
 
+inline thread_local ContextState* g_plugin_callback_owner = nullptr;
+inline thread_local ContextState* g_context_destroy_owner = nullptr;
+
+class PluginCallbackLease {
+  public:
+    explicit PluginCallbackLease(ContextState* state) noexcept
+        : state_(state), previous_owner_(g_plugin_callback_owner) {
+        if (state_ == nullptr)
+            return;
+        std::lock_guard<std::mutex> lock(state_->callback_mutex);
+        if (!state_->callback_accepting)
+            return;
+        ++state_->active_plugin_callbacks;
+        active_ = true;
+        g_plugin_callback_owner = state_;
+    }
+
+    ~PluginCallbackLease() {
+        if (!active_)
+            return;
+        g_plugin_callback_owner = previous_owner_;
+        std::lock_guard<std::mutex> lock(state_->callback_mutex);
+        --state_->active_plugin_callbacks;
+        if (state_->active_plugin_callbacks == 0)
+            state_->callback_idle.notify_all();
+    }
+
+    PluginCallbackLease(const PluginCallbackLease&) = delete;
+    PluginCallbackLease& operator=(const PluginCallbackLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return active_;
+    }
+
+  private:
+    ContextState* state_ = nullptr;
+    ContextState* previous_owner_ = nullptr;
+    bool active_ = false;
+};
+
 // Vtable factories — declared here, defined in sdk_context.cpp.
-const SaoSdkUiTable*     make_ui_table();
-const SaoSdkEventTable*  make_event_table();
+const SaoSdkUiTable* make_ui_table();
+const SaoSdkEventTable* make_event_table();
 const SaoSdkHotkeyTable* make_hotkey_table();
-const SaoSdkMemTable*    make_mem_table_fail_closed();
-const SaoSdkNetTable*    make_net_table_fail_closed();
+const SaoSdkMemTable* make_mem_table();
+const SaoSdkNetTable* make_net_table();
 const SaoSdkConfigTable* make_config_table();
-const SaoSdkTtsTable*    make_tts_table();
+const SaoSdkTtsTable* make_tts_table();
 const SaoSdkBannerTable* make_banner_table();
 const SaoSdkGpuHuntTable* make_gpu_hunt_table();
-void sdk_gpu_hunt_sweep_owner(ContextState* owner);
+sao_sdk_status_t sdk_gpu_hunt_sweep_owner(ContextState* owner);
+bool gpu_callback_reentered(ContextState* owner) noexcept;
 
 void destroy_hotkey_bridge(void* bridge);
 void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget);
@@ -199,50 +288,83 @@ inline ContextState* cast_ctx(void* ctx_impl) {
 // clock during tests.  Fires every hook registered against the given
 // point across every context alive.  Real production drives this from
 // the compositor.
-void fire_render_hook_test(int32_t hook_point,
-                           const SaoSdkRenderHookPayload& payload);
+void fire_render_hook_test(int32_t hook_point, const SaoSdkRenderHookPayload& payload);
 
 // Register/unregister a context with the process-wide registry so the
 // test driver above can iterate every live context.
 void register_context(ContextState* state);
 void unregister_context(ContextState* state);
-void populate_context(ContextState* state, SaoSdkContext* out_ctx,
-                      const char* plugin_version_utf8);
+void populate_context(ContextState* state, SaoSdkContext* out_ctx, const char* plugin_version_utf8);
 
-sao_sdk_status_t bind_provider(ContextState* state,
-                               const SaoSdkProviderVTable* provider);
+sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* provider);
 sao_sdk_status_t bind_platform_provider(ContextState* state);
 sao_sdk_status_t provider_status(const ContextState* state);
-void provider_cleanup(ContextState* state);
+sao_sdk_status_t provider_cleanup(ContextState* state);
+bool provider_callback_reentered(ContextState* state) noexcept;
+sao_sdk_status_t normalize_provider_status(sao_sdk_status_t status);
 
-sao_sdk_status_t provider_tts_speak(ContextState* state,
-                                    const char* text_utf8,
-                                    float volume,
+sao_sdk_status_t configure_memory_provider(ContextState* state,
+                                           const SaoSdkMemoryProviderVTable* provider);
+sao_sdk_status_t memory_provider_status(const ContextState* state);
+sao_sdk_status_t memory_attachment_status(ContextState* state);
+sao_sdk_status_t memory_provider_cleanup(ContextState* state);
+bool memory_callback_reentered(ContextState* state) noexcept;
+sao_sdk_status_t memory_attach(ContextState* state, const SaoSdkMemoryTargetIdentity* identity);
+sao_sdk_status_t memory_detach(ContextState* state);
+sao_sdk_status_t memory_read(ContextState* state, uint64_t address, void* out_buffer,
+                             size_t buffer_size, size_t* out_bytes_read);
+sao_sdk_status_t memory_enumerate_modules(ContextState* state, SaoSdkMemoryModule* out_modules,
+                                          size_t capacity, size_t element_stride,
+                                          size_t* out_count);
+
+sao_sdk_status_t configure_net_provider(ContextState* state,
+                                        const SaoSdkNetProviderVTable* provider);
+sao_sdk_status_t net_provider_status(const ContextState* state);
+sao_sdk_status_t net_provider_cleanup(ContextState* state);
+bool net_callback_reentered(ContextState* state) noexcept;
+sao_sdk_status_t net_capture_start(ContextState* state, const SaoSdkNetCaptureConfig* config,
+                                   sao_sdk_net_packet_callback_t callback, void* user_data);
+sao_sdk_status_t net_capture_stop(ContextState* state);
+sao_sdk_status_t net_parse_packet(ContextState* state, const SaoSdkNetPacketView* packet,
+                                  SaoSdkNetParsedResult* out_results, size_t capacity,
+                                  size_t element_stride, size_t* out_count);
+
+sao_sdk_status_t provider_tts_speak(ContextState* state, const char* text_utf8, float volume,
                                     float rate);
 sao_sdk_status_t provider_tts_stop(ContextState* state);
-sao_sdk_status_t provider_render_register(
-    ContextState* state, int32_t hook_point,
-    sao_sdk_render_hook_callback_t callback, void* user_data,
-    sao_sdk_hook_token_t* out_token);
-sao_sdk_status_t provider_render_register_ex(
-    ContextState* state, const SaoSdkRenderHookSpec* spec,
-    sao_sdk_render_hook_callback_t callback, void* user_data,
-    sao_sdk_hook_token_t* out_token);
-sao_sdk_status_t provider_render_unregister(ContextState* state,
-                                            sao_sdk_hook_token_t token);
-sao_sdk_status_t provider_request_redraw(ContextState* state,
-                                         const char* surface_id_utf8);
-sao_sdk_status_t provider_hotkey_register(
-    ContextState* state, const char* binding_id_utf8,
-    uint32_t virtual_key, uint32_t modifiers,
-    sao_sdk_hotkey_callback_t callback, void* user_data,
-    sao_sdk_hotkey_id_t* out_id);
-sao_sdk_status_t provider_hotkey_unregister(ContextState* state,
-                                            sao_sdk_hotkey_id_t id);
-sao_sdk_status_t provider_overlay_set(
-    ContextState* state, const SaoSdkOverlaySpec* spec,
-    sao_sdk_overlay_token_t* out_overlay);
-sao_sdk_status_t provider_overlay_clear(ContextState* state,
-                                        sao_sdk_overlay_token_t overlay);
+sao_sdk_status_t provider_render_register(ContextState* state, int32_t hook_point,
+                                          sao_sdk_render_hook_callback_t callback, void* user_data,
+                                          sao_sdk_hook_token_t* out_token);
+sao_sdk_status_t provider_render_register_ex(ContextState* state, const SaoSdkRenderHookSpec* spec,
+                                             sao_sdk_render_hook_callback_t callback,
+                                             void* user_data, sao_sdk_hook_token_t* out_token);
+sao_sdk_status_t provider_render_unregister(ContextState* state, sao_sdk_hook_token_t token);
+sao_sdk_status_t provider_request_redraw(ContextState* state, const char* surface_id_utf8);
+sao_sdk_status_t provider_hotkey_register(ContextState* state, const char* binding_id_utf8,
+                                          uint32_t virtual_key, uint32_t modifiers,
+                                          sao_sdk_hotkey_callback_t callback, void* user_data,
+                                          sao_sdk_hotkey_id_t* out_id);
+sao_sdk_status_t provider_hotkey_unregister(ContextState* state, sao_sdk_hotkey_id_t id);
+sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySpec* spec,
+                                      sao_sdk_overlay_token_t* out_overlay);
+sao_sdk_status_t provider_overlay_clear(ContextState* state, sao_sdk_overlay_token_t overlay);
+sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* out_provider,
+                                     std::string* out_plugin_id);
 
-}  // namespace sao_sdk_internal
+sao_sdk_status_t configure_process_memory_provider(const SaoSdkMemoryProviderVTable* provider);
+sao_sdk_status_t configure_process_net_provider(const SaoSdkNetProviderVTable* provider);
+sao_sdk_status_t bind_process_providers(ContextState* state);
+
+inline bool plugin_callback_reentered(ContextState* state) noexcept {
+    return state != nullptr && g_plugin_callback_owner == state;
+}
+
+inline bool context_destroy_on_current_thread(ContextState* state) noexcept {
+    return state != nullptr && g_context_destroy_owner == state;
+}
+sao_sdk_status_t begin_context_shutdown(ContextState* state);
+void cancel_context_shutdown(ContextState* state) noexcept;
+void quarantine_context(ContextState* state);
+void unquarantine_context(ContextState* state);
+
+} // namespace sao_sdk_internal

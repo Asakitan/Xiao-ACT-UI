@@ -9,18 +9,17 @@
 #include <cstdint>
 
 #define SAO_SDK_ABI_VERSION_MAJOR 1u
-#define SAO_SDK_ABI_VERSION_MINOR 4u
-#define SAO_SDK_ABI_VERSION \
-    ((SAO_SDK_ABI_VERSION_MAJOR << 16) | SAO_SDK_ABI_VERSION_MINOR)
+#define SAO_SDK_ABI_VERSION_MINOR 5u
+#define SAO_SDK_ABI_VERSION ((SAO_SDK_ABI_VERSION_MAJOR << 16) | SAO_SDK_ABI_VERSION_MINOR)
 
 #if defined(_WIN32)
-#  if defined(SAO_SDK_BUILDING_DLL)
-#    define SAO_SDK_API __declspec(dllexport)
-#  else
-#    define SAO_SDK_API __declspec(dllimport)
-#  endif
+#if defined(SAO_SDK_BUILDING_DLL)
+#define SAO_SDK_API __declspec(dllexport)
 #else
-#  define SAO_SDK_API
+#define SAO_SDK_API __declspec(dllimport)
+#endif
+#else
+#define SAO_SDK_API
 #endif
 
 #define SAO_SDK_CALL __cdecl
