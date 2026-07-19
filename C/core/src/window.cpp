@@ -1,5 +1,7 @@
 #include "sao_core/window.h"
 
+#include "logging.h"
+
 #include <windows.h>
 
 #include <cstring>
@@ -8,6 +10,19 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"SaoLegacyCoreLayeredWindow";
+constexpr char kComponent[] = "core.window";
+
+int32_t finish(int32_t status, const char* message) noexcept {
+    sao::legacy_core::emit_log(status == SAO_OK ? sao::legacy_core::kLogLevelInfo
+                                                : sao::legacy_core::kLogLevelError,
+                               kComponent, status, message);
+    return status;
+}
+
+int32_t fail(int32_t status, const char* message) noexcept {
+    sao::legacy_core::emit_log(sao::legacy_core::kLogLevelError, kComponent, status, message);
+    return status;
+}
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCHITTEST) {
@@ -65,76 +80,72 @@ bool get_window_long_checked(HWND hwnd, int index, uint32_t* out_value) noexcept
     return true;
 }
 
-}  // namespace
+} // namespace
 
-extern "C" int32_t SAO_CORE_CALL sao_core_window_create_layered_topmost(
+extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_window_create_layered_topmost(
     const wchar_t* title, int32_t x, int32_t y, int32_t w, int32_t h, void** out_hwnd) {
     if (out_hwnd != nullptr) {
         *out_hwnd = nullptr;
     }
     if (out_hwnd == nullptr || title == nullptr || w <= 0 || h <= 0) {
-        return SAO_ERR_INVALID_ARGUMENT;
+        return fail(SAO_ERR_INVALID_ARGUMENT,
+                    "window_create_layered_topmost received invalid arguments");
     }
 
     HINSTANCE instance = GetModuleHandleW(nullptr);
     if (instance == nullptr || !ensure_window_class(instance)) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED,
+                    "window_create_layered_topmost failed to register its class");
     }
 
     HWND hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-        kWindowClassName,
-        title,
-        WS_POPUP,
-        x,
-        y,
-        w,
-        h,
-        nullptr,
-        nullptr,
-        instance,
-        nullptr);
+        kWindowClassName, title, WS_POPUP, x, y, w, h, nullptr, nullptr, instance, nullptr);
     if (hwnd == nullptr) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED,
+                    "window_create_layered_topmost failed to create the window");
     }
 
     *out_hwnd = hwnd;
-    return SAO_OK;
+    return finish(SAO_OK, "window_create_layered_topmost completed");
 }
 
-extern "C" int32_t SAO_CORE_CALL sao_core_window_destroy(void* hwnd) {
+extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_window_destroy(void* hwnd) {
     if (hwnd == nullptr || IsWindow(static_cast<HWND>(hwnd)) == FALSE) {
-        return SAO_ERR_HANDLE_INVALID;
+        return fail(SAO_ERR_HANDLE_INVALID, "window_destroy received an invalid window handle");
     }
-    return DestroyWindow(static_cast<HWND>(hwnd)) != FALSE ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+    const int32_t status =
+        DestroyWindow(static_cast<HWND>(hwnd)) != FALSE ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+    return finish(status, status == SAO_OK ? "window_destroy completed" : "window_destroy failed");
 }
 
-extern "C" int32_t SAO_CORE_CALL sao_core_window_enumerate(
-    void** out_hwnds, size_t max_hwnds, size_t* out_hwnd_count) {
+extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_window_enumerate(void** out_hwnds,
+                                                                         size_t max_hwnds,
+                                                                         size_t* out_hwnd_count) {
     if (out_hwnd_count != nullptr) {
         *out_hwnd_count = 0;
     }
     if (max_hwnds > std::numeric_limits<size_t>::max() / sizeof(*out_hwnds)) {
-        return SAO_ERR_INVALID_ARGUMENT;
+        return fail(SAO_ERR_INVALID_ARGUMENT, "window_enumerate output capacity overflows");
     }
     if (out_hwnds != nullptr && max_hwnds != 0) {
         std::memset(out_hwnds, 0, max_hwnds * sizeof(*out_hwnds));
     }
     if (out_hwnd_count == nullptr || (out_hwnds == nullptr && max_hwnds != 0)) {
-        return SAO_ERR_INVALID_ARGUMENT;
+        return fail(SAO_ERR_INVALID_ARGUMENT, "window_enumerate received invalid output arguments");
     }
 
     EnumContext count_context{nullptr, 0, 0, false};
     SetLastError(ERROR_SUCCESS);
     if (EnumWindows(enum_window_callback, reinterpret_cast<LPARAM>(&count_context)) == FALSE) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_enumerate failed while counting windows");
     }
     *out_hwnd_count = count_context.count;
     if (out_hwnds == nullptr) {
         return SAO_OK;
     }
     if (max_hwnds < count_context.count) {
-        return SAO_ERR_BUFFER_TOO_SMALL;
+        return fail(SAO_ERR_BUFFER_TOO_SMALL, "window_enumerate output buffer is too small");
     }
 
     EnumContext fill_context{out_hwnds, max_hwnds, 0, false};
@@ -143,73 +154,70 @@ extern "C" int32_t SAO_CORE_CALL sao_core_window_enumerate(
     if (enum_ok == FALSE || fill_context.overflow) {
         std::memset(out_hwnds, 0, max_hwnds * sizeof(*out_hwnds));
         *out_hwnd_count = fill_context.overflow ? fill_context.count + 1 : 0;
-        return fill_context.overflow ? SAO_ERR_BUFFER_TOO_SMALL : SAO_ERR_OS_CALL_FAILED;
+        return fail(fill_context.overflow ? SAO_ERR_BUFFER_TOO_SMALL : SAO_ERR_OS_CALL_FAILED,
+                    "window_enumerate failed while filling the output buffer");
     }
 
     *out_hwnd_count = fill_context.count;
     return SAO_OK;
 }
 
-extern "C" int32_t SAO_CORE_CALL sao_core_window_get_info(
-    void* opaque_hwnd, SaoCoreWindowInfo* out_info) {
+extern "C" int32_t SAO_LEGACY_CORE_CALL
+sao_legacy_core_window_get_info(void* opaque_hwnd, SaoLegacyCoreWindowInfo* out_info) {
     if (out_info != nullptr) {
         *out_info = {};
     }
     if (out_info == nullptr) {
-        return SAO_ERR_INVALID_ARGUMENT;
+        return fail(SAO_ERR_INVALID_ARGUMENT, "window_get_info requires an output structure");
     }
     HWND hwnd = static_cast<HWND>(opaque_hwnd);
     if (hwnd == nullptr || IsWindow(hwnd) == FALSE) {
-        return SAO_ERR_HANDLE_INVALID;
+        return fail(SAO_ERR_HANDLE_INVALID, "window_get_info received an invalid window handle");
     }
 
     RECT window_rect{};
     RECT client_rect{};
     if (GetWindowRect(hwnd, &window_rect) == FALSE || GetClientRect(hwnd, &client_rect) == FALSE) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to read window rectangles");
     }
     POINT client_points[2]{
         {client_rect.left, client_rect.top},
         {client_rect.right, client_rect.bottom},
     };
     SetLastError(ERROR_SUCCESS);
-    if (MapWindowPoints(hwnd, nullptr, client_points, 2) == 0 &&
-        GetLastError() != ERROR_SUCCESS) {
-        return SAO_ERR_OS_CALL_FAILED;
+    if (MapWindowPoints(hwnd, nullptr, client_points, 2) == 0 && GetLastError() != ERROR_SUCCESS) {
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to map client coordinates");
     }
 
-    SaoCoreWindowInfo info{};
+    SaoLegacyCoreWindowInfo info{};
     DWORD pid = 0;
     info.thread_id = GetWindowThreadProcessId(hwnd, &pid);
     if (info.thread_id == 0) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to resolve the owning thread");
     }
     info.pid = pid;
     info.hwnd = hwnd;
-    info.window_rect = SaoCoreRect{
-        window_rect.left, window_rect.top, window_rect.right, window_rect.bottom};
-    info.client_rect_screen = SaoCoreRect{
-        client_points[0].x, client_points[0].y, client_points[1].x, client_points[1].y};
+    info.window_rect =
+        SaoLegacyCoreRect{window_rect.left, window_rect.top, window_rect.right, window_rect.bottom};
+    info.client_rect_screen = SaoLegacyCoreRect{client_points[0].x, client_points[0].y,
+                                                client_points[1].x, client_points[1].y};
     if (!get_window_long_checked(hwnd, GWL_STYLE, &info.style) ||
         !get_window_long_checked(hwnd, GWL_EXSTYLE, &info.extended_style)) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to read window styles");
     }
     info.visible = IsWindowVisible(hwnd) != FALSE ? 1u : 0u;
     info.minimized = IsIconic(hwnd) != FALSE ? 1u : 0u;
 
     SetLastError(ERROR_SUCCESS);
-        if (GetWindowTextW(
-            hwnd,
-            info.title,
-            static_cast<int>(sizeof(info.title) / sizeof(info.title[0]))) == 0 &&
+    if (GetWindowTextW(hwnd, info.title,
+                       static_cast<int>(sizeof(info.title) / sizeof(info.title[0]))) == 0 &&
         GetLastError() != ERROR_SUCCESS) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to read the title");
     }
-        if (GetClassNameW(
-            hwnd,
-            info.class_name,
-            static_cast<int>(sizeof(info.class_name) / sizeof(info.class_name[0]))) == 0) {
-        return SAO_ERR_OS_CALL_FAILED;
+    if (GetClassNameW(hwnd, info.class_name,
+                      static_cast<int>(sizeof(info.class_name) / sizeof(info.class_name[0]))) ==
+        0) {
+        return fail(SAO_ERR_OS_CALL_FAILED, "window_get_info failed to read the class name");
     }
 
     *out_info = info;

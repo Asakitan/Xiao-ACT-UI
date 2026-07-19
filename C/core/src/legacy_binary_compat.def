@@ -1,0 +1,24 @@
+EXPORTS
+    sao_core_abi_version PRIVATE
+    sao_core_process_open PRIVATE
+    sao_core_process_close PRIVATE
+    sao_core_process_get_info PRIVATE
+    sao_core_read_bytes PRIVATE
+    sao_core_class_index_resolve PRIVATE
+    sao_core_class_index_resolve_field_offset PRIVATE
+    sao_core_class_index_register PRIVATE
+    sao_core_class_index_find PRIVATE
+    sao_core_class_index_get_name PRIVATE
+    sao_core_class_index_count PRIVATE
+    sao_core_scan_find_pattern PRIVATE
+    sao_core_scan_find_aligned_u64 PRIVATE
+    sao_core_pixels_premultiply_blend PRIVATE
+    sao_core_pixels_find_alpha_spans PRIVATE
+    sao_core_pixels_validate_region PRIVATE
+    sao_core_pixels_sample_bgra PRIVATE
+    sao_core_window_create_layered_topmost PRIVATE
+    sao_core_window_destroy PRIVATE
+    sao_core_window_enumerate PRIVATE
+    sao_core_window_get_info PRIVATE
+    sao_core_set_log_callback PRIVATE
+    sao_core_set_structured_log_callback PRIVATE
