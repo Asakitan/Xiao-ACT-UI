@@ -14,11 +14,22 @@
 #include "sao/ui/render_worker.h"
 #include "sao/core/status.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <thread>
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
 
 // Fan-out API (see src/render_worker.cpp).
 using sao_ui_render_worker_task_fn_t = void(SAO_UI_CALL*)(void*);
@@ -207,3 +218,60 @@ TEST_CASE("render_worker_premultiply_helper_round_trip",
 
     std::free(out);
 }
+
+#if defined(_WIN32)
+
+TEST_CASE("render_worker_ulw_commit_updates_a_real_layered_window",
+          "[ui][render_worker][wave4][ulw]") {
+    constexpr std::array<uint8_t, 16> pixels{
+        0x00, 0x00, 0xFF, 0xFF, 0x00, 0x80, 0x00, 0x80,
+        0x40, 0x00, 0x00, 0x40, 0xFF, 0xFF, 0xFF, 0xFF,
+    };
+    sao_ui_frame_buffer_handle_t frame = nullptr;
+    REQUIRE(sao_ui_frame_buffer_create_bgra(pixels.data(), pixels.size(), 2, 2, 40, 50,
+                                             &frame) == SAO_STATUS_OK);
+    REQUIRE(frame != nullptr);
+
+    const HWND layered = ::CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                            L"STATIC", L"ULW commit fixture", WS_POPUP,
+                                            0, 0, 1, 1, nullptr, nullptr,
+                                            ::GetModuleHandleW(nullptr), nullptr);
+    REQUIRE(layered != nullptr);
+    REQUIRE(sao_ui_render_worker_ulw_commit(layered, frame) == SAO_STATUS_OK);
+
+    RECT rect{};
+    REQUIRE(::GetWindowRect(layered, &rect) != FALSE);
+    CHECK(rect.left == 40);
+    CHECK(rect.top == 50);
+    CHECK(rect.right - rect.left == 2);
+    CHECK(rect.bottom - rect.top == 2);
+
+    REQUIRE(::DestroyWindow(layered) != FALSE);
+    sao_ui_frame_buffer_release(frame);
+}
+
+TEST_CASE("render_worker_ulw_commit_rejects_missing_or_nonlayered_targets",
+          "[ui][render_worker][wave4][ulw][failure]") {
+    constexpr std::array<uint8_t, 4> pixel{0x20, 0x10, 0x08, 0x40};
+    sao_ui_frame_buffer_handle_t frame = nullptr;
+    REQUIRE(sao_ui_frame_buffer_create_bgra(pixel.data(), pixel.size(), 1, 1, 0, 0,
+                                             &frame) == SAO_STATUS_OK);
+    REQUIRE(frame != nullptr);
+    CHECK(sao_ui_render_worker_ulw_commit(nullptr, frame) == SAO_STATUS_ERR_HANDLE_INVALID);
+
+    const HWND nonlayered = ::CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"ULW failure fixture",
+                                               WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                                               ::GetModuleHandleW(nullptr), nullptr);
+    REQUIRE(nonlayered != nullptr);
+    CHECK(sao_ui_render_worker_ulw_commit(nonlayered, frame) ==
+          SAO_STATUS_ERR_SURFACE_INVALID);
+    REQUIRE(::DestroyWindow(nonlayered) != FALSE);
+    sao_ui_frame_buffer_release(frame);
+
+    sao_ui_frame_buffer_handle_t invalid = reinterpret_cast<sao_ui_frame_buffer_handle_t>(1);
+    CHECK(sao_ui_frame_buffer_create_bgra(pixel.data(), pixel.size() - 1, 1, 1, 0, 0,
+                                          &invalid) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(invalid == nullptr);
+}
+
+#endif

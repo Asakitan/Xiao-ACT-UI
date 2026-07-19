@@ -254,6 +254,25 @@ bool append_rect(HRGN destination, const SaoOverlayHostInputRect& rect) {
     return result != ERROR;
 }
 
+class OwnedRegion {
+public:
+    explicit OwnedRegion(HRGN region) noexcept : region_(region) {}
+
+    ~OwnedRegion() {
+        if (region_ != nullptr) ::DeleteObject(region_);
+    }
+
+    OwnedRegion(const OwnedRegion&) = delete;
+    OwnedRegion& operator=(const OwnedRegion&) = delete;
+
+    HRGN get() const noexcept { return region_; }
+
+    void release() noexcept { region_ = nullptr; }
+
+private:
+    HRGN region_ = nullptr;
+};
+
 void dispatch_mouse(sao_ui_overlay_host_s* host, UINT message, WPARAM wparam, LPARAM lparam) {
     sao_ui_mouse_fn_t callback = nullptr;
     void* user_data = nullptr;
@@ -507,13 +526,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     ::DwmExtendFrameIntoClientArea(host->hwnd, &margins);
     host->client_rect = {x, y, width > 0 ? width : 1920, height > 0 ? height : 1080};
     host->current_dpi = query_window_dpi(host->hwnd);
-    HRGN empty = ::CreateRectRgn(0, 0, 0, 0);
-    if (empty == nullptr || !::SetWindowRgn(host->hwnd, empty, FALSE)) {
-        if (empty != nullptr) ::DeleteObject(empty);
+    OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
+    if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
         destroy_created_host(host);
         release_single_instance_lock();
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+    empty.release();
     host->dc_mutation = config == nullptr
         ? nullptr
         : static_cast<sao_ui_dc_mutation_coordinator_handle_t>(
@@ -656,53 +675,41 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
         if (rects[index].width <= 0 || rects[index].height <= 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         current.push_back(rects[index]);
     }
-    HRGN region = ::CreateRectRgn(0, 0, 0, 0);
-    if (region == nullptr) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    OwnedRegion region(::CreateRectRgn(0, 0, 0, 0));
+    if (region.get() == nullptr) return SAO_STATUS_ERR_OS_CALL_FAILED;
     std::vector<SaoOverlayHostInputRect> previous;
     {
         std::lock_guard<std::mutex> lock(handle->state_mu);
         previous = handle->previous_input_rects;
     }
     for (const auto& rect : current) {
-        if (!append_rect(region, rect)) {
-            ::DeleteObject(region);
-            return SAO_STATUS_ERR_OS_CALL_FAILED;
-        }
+        if (!append_rect(region.get(), rect)) return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     for (const auto& rect : previous) {
-        if (!append_rect(region, rect)) {
-            ::DeleteObject(region);
-            return SAO_STATUS_ERR_OS_CALL_FAILED;
-        }
+        if (!append_rect(region.get(), rect)) return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    HRGN rollback_region = ::CreateRectRgn(0, 0, 0, 0);
-    if (rollback_region == nullptr) {
-        ::DeleteObject(region);
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
+    OwnedRegion rollback_region(::CreateRectRgn(0, 0, 0, 0));
+    if (rollback_region.get() == nullptr) return SAO_STATUS_ERR_OS_CALL_FAILED;
     const auto& api = win32_api();
-    if (api.get_window_rgn(handle->hwnd, rollback_region) == ERROR) {
-        ::DeleteObject(rollback_region);
-        ::DeleteObject(region);
+    if (api.get_window_rgn(handle->hwnd, rollback_region.get()) == ERROR) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    if (!api.set_window_rgn(handle->hwnd, region, TRUE)) {
-        ::DeleteObject(rollback_region);
-        ::DeleteObject(region);
+    if (!api.set_window_rgn(handle->hwnd, region.get(), TRUE)) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+    region.release();
 
     const bool passthrough = current.empty() && previous.empty();
     const sao_status_t passthrough_status = apply_passthrough_unlocked(handle, passthrough);
     if (passthrough_status != SAO_STATUS_OK) {
-        if (!api.set_window_rgn(handle->hwnd, rollback_region, TRUE)) {
-            ::DeleteObject(rollback_region);
+        if (!api.set_window_rgn(handle->hwnd, rollback_region.get(), TRUE)) {
             mark_input_partial(handle);
+        } else {
+            rollback_region.release();
         }
         return passthrough_status;
     }
 
-    ::DeleteObject(rollback_region);
     {
         std::lock_guard<std::mutex> lock(handle->state_mu);
         handle->previous_input_rects = std::move(current);

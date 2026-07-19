@@ -129,6 +129,17 @@ struct SaoFrameBufferView {
     int32_t        y;
 };
 
+// Copies one tightly packed premultiplied BGRA frame into an owned buffer.
+// bgra_size must equal width * height * 4 exactly.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_frame_buffer_create_bgra(
+    const uint8_t* bgra_bytes,
+    size_t bgra_size,
+    uint32_t width,
+    uint32_t height,
+    int32_t x,
+    int32_t y,
+    sao_ui_frame_buffer_handle_t* out_frame);
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_frame_buffer_view(
     sao_ui_frame_buffer_handle_t handle,
     SaoFrameBufferView* out_view);

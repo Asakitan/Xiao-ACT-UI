@@ -25,6 +25,7 @@ struct FakeWin32State {
     int set_window_pos_failures = 0;
     uint32_t set_window_rgn_calls = 0;
     uint32_t set_window_pos_calls = 0;
+    HRGN last_transferred_region = nullptr;
 };
 
 FakeWin32State* g_fake = nullptr;
@@ -35,7 +36,9 @@ int WINAPI fake_set_window_rgn(HWND hwnd, HRGN region, BOOL redraw) {
         ::SetLastError(ERROR_ACCESS_DENIED);
         return FALSE;
     }
-    return ::SetWindowRgn(hwnd, region, redraw);
+    const int result = ::SetWindowRgn(hwnd, region, redraw);
+    if (result != FALSE) g_fake->last_transferred_region = region;
+    return result;
 }
 
 int WINAPI fake_get_window_rgn(HWND hwnd, HRGN region) {
@@ -183,6 +186,9 @@ TEST_CASE("overlay region rolls back SetWindowRgn when style commit fails",
             SAO_STATUS_ERR_OS_CALL_FAILED);
     CHECK(fixture.fake.set_window_rgn_calls == 2);
     CHECK(fixture.fake.set_window_pos_calls == 2);
+    REQUIRE(fixture.fake.last_transferred_region != nullptr);
+    CHECK(::GetObjectType(fixture.fake.last_transferred_region) == OBJ_REGION);
+    CHECK(::PtInRegion(fixture.fake.last_transferred_region, 20, 30) == FALSE);
     CHECK_FALSE(region_contains(fixture.hwnd, 20, 30));
     CHECK(transparent_style(fixture.hwnd));
     CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
@@ -190,9 +196,9 @@ TEST_CASE("overlay region rolls back SetWindowRgn when style commit fails",
     CHECK(sao_ui_overlay_host_input_sync_state(fixture.host) ==
           SAO_UI_OVERLAY_INPUT_SYNCHRONIZED);
 
-        REQUIRE(sao_ui_overlay_host_set_input_region(fixture.host, nullptr, 0) ==
+    REQUIRE(sao_ui_overlay_host_set_input_region(fixture.host, nullptr, 0) ==
             SAO_STATUS_OK);
-        CHECK_FALSE(region_contains(fixture.hwnd, 20, 30));
+    CHECK_FALSE(region_contains(fixture.hwnd, 20, 30));
 
     REQUIRE(sao_ui_overlay_host_set_input_region(fixture.host, &region_a, 1) ==
             SAO_STATUS_OK);
@@ -210,8 +216,8 @@ TEST_CASE("overlay region exposes failed transactional rollback",
 
     REQUIRE(sao_ui_overlay_host_set_input_region(fixture.host, &region_a, 1) ==
             SAO_STATUS_ERR_OS_CALL_FAILED);
-        CHECK(fixture.fake.set_window_rgn_calls == 2);
-        CHECK(fixture.fake.set_window_pos_calls == 2);
+    CHECK(fixture.fake.set_window_rgn_calls == 2);
+    CHECK(fixture.fake.set_window_pos_calls == 2);
     CHECK(region_contains(fixture.hwnd, 20, 30));
     CHECK(transparent_style(fixture.hwnd));
     CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));

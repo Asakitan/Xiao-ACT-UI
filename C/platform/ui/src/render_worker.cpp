@@ -21,6 +21,7 @@
 
 #include "sao/ui/render_worker.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -28,11 +29,22 @@
 #include <cstdlib>
 #include <deque>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
 
 // Fan-out submit task signature (added in Wave 4; not part of the fixed
 // header per the plan, but exported by the DLL so tests can call it
@@ -51,6 +63,22 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
 namespace {
 
 constexpr int32_t kDefaultPoolSize = 4;
+
+bool frame_byte_size(uint32_t width, uint32_t height, size_t& out_size) noexcept {
+    out_size = 0;
+    if (width == 0 || height == 0 || width > SIZE_MAX / 4u) return false;
+    const size_t stride = static_cast<size_t>(width) * 4u;
+    if (height > SIZE_MAX / stride) return false;
+    out_size = stride * static_cast<size_t>(height);
+    return true;
+}
+
+#if defined(_WIN32)
+sao_status_t win32_failure_status(DWORD error) noexcept {
+    return error == ERROR_ACCESS_DENIED ? SAO_STATUS_ERR_ACCESS_DENIED
+                                        : SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+#endif
 
 int32_t auto_lane_count() {
     const unsigned int hw = std::thread::hardware_concurrency();
@@ -299,6 +327,30 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_lane_try_take_frame(
     return SAO_STATUS_OK;
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_frame_buffer_create_bgra(
+    const uint8_t* bgra_bytes, size_t bgra_size, uint32_t width, uint32_t height,
+    int32_t x, int32_t y, sao_ui_frame_buffer_handle_t* out_frame) {
+    if (out_frame == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_frame = nullptr;
+    size_t expected_size = 0;
+    if (bgra_bytes == nullptr || !frame_byte_size(width, height, expected_size) ||
+        bgra_size != expected_size) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        auto frame = std::make_unique<sao_ui_frame_buffer_s>();
+        frame->bgra_bytes.assign(bgra_bytes, bgra_bytes + bgra_size);
+        frame->width = width;
+        frame->height = height;
+        frame->x = x;
+        frame->y = y;
+        *out_frame = frame.release();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_frame_buffer_view(
     sao_ui_frame_buffer_handle_t handle, SaoFrameBufferView* out_view) {
     if (out_view == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -318,12 +370,90 @@ extern "C" void SAO_UI_CALL sao_ui_frame_buffer_release(
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_ulw_commit(
-    void* /*hwnd*/, sao_ui_frame_buffer_handle_t frame) {
+    void* hwnd, sao_ui_frame_buffer_handle_t frame) {
     if (frame == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    // The full UpdateLayeredWindowIndirect commit lives in a later slice
-    // (needs D2D_widgets + subpixel).  For Wave 4 we just validate the
-    // frame buffer contents are addressable so callers can round-trip.
-    return SAO_STATUS_OK;
+    if (hwnd == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    size_t expected_size = 0;
+    if (!frame_byte_size(frame->width, frame->height, expected_size) ||
+        frame->bgra_bytes.size() != expected_size) {
+        return SAO_STATUS_ERR_SURFACE_INVALID;
+    }
+#if defined(_WIN32)
+    if (frame->width > static_cast<uint32_t>(std::numeric_limits<LONG>::max()) ||
+        frame->height > static_cast<uint32_t>(std::numeric_limits<LONG>::max())) {
+        return SAO_STATUS_ERR_SURFACE_INVALID;
+    }
+    const HWND target = static_cast<HWND>(hwnd);
+    if (!::IsWindow(target)) return SAO_STATUS_ERR_HANDLE_INVALID;
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR ex_style = ::GetWindowLongPtrW(target, GWL_EXSTYLE);
+    if (ex_style == 0 && ::GetLastError() != ERROR_SUCCESS) {
+        return win32_failure_status(::GetLastError());
+    }
+    if ((ex_style & WS_EX_LAYERED) == 0) return SAO_STATUS_ERR_SURFACE_INVALID;
+
+    HDC screen_dc = ::GetDC(nullptr);
+    if (screen_dc == nullptr) return win32_failure_status(::GetLastError());
+    HDC memory_dc = ::CreateCompatibleDC(screen_dc);
+    if (memory_dc == nullptr) {
+        const DWORD error = ::GetLastError();
+        ::ReleaseDC(nullptr, screen_dc);
+        return win32_failure_status(error);
+    }
+
+    BITMAPINFO bitmap_info{};
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = static_cast<LONG>(frame->width);
+    bitmap_info.bmiHeader.biHeight = -static_cast<LONG>(frame->height);
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = ::CreateDIBSection(memory_dc, &bitmap_info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bitmap == nullptr || bits == nullptr) {
+        const DWORD error = ::GetLastError();
+        if (bitmap != nullptr) ::DeleteObject(bitmap);
+        ::DeleteDC(memory_dc);
+        ::ReleaseDC(nullptr, screen_dc);
+        return win32_failure_status(error);
+    }
+    const HGDIOBJ previous_bitmap = ::SelectObject(memory_dc, bitmap);
+    if (previous_bitmap == nullptr || previous_bitmap == HGDI_ERROR) {
+        const DWORD error = ::GetLastError();
+        ::DeleteObject(bitmap);
+        ::DeleteDC(memory_dc);
+        ::ReleaseDC(nullptr, screen_dc);
+        return win32_failure_status(error);
+    }
+
+    std::memcpy(bits, frame->bgra_bytes.data(), expected_size);
+    POINT destination{frame->x, frame->y};
+    SIZE size{static_cast<LONG>(frame->width), static_cast<LONG>(frame->height)};
+    POINT source{};
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UPDATELAYEREDWINDOWINFO update{};
+    update.cbSize = sizeof(update);
+    update.hdcDst = screen_dc;
+    update.pptDst = &destination;
+    update.psize = &size;
+    update.hdcSrc = memory_dc;
+    update.pptSrc = &source;
+    update.pblend = &blend;
+    update.dwFlags = ULW_ALPHA;
+    const BOOL committed = ::UpdateLayeredWindowIndirect(target, &update);
+    const DWORD commit_error = committed ? ERROR_SUCCESS : ::GetLastError();
+
+    const bool selection_restored = ::SelectObject(memory_dc, previous_bitmap) != nullptr;
+    const bool bitmap_deleted = ::DeleteObject(bitmap) != FALSE;
+    const bool memory_dc_deleted = ::DeleteDC(memory_dc) != FALSE;
+    const bool screen_dc_released = ::ReleaseDC(nullptr, screen_dc) != 0;
+    if (!committed) return win32_failure_status(commit_error);
+    return selection_restored && bitmap_deleted && memory_dc_deleted && screen_dc_released
+               ? SAO_STATUS_OK
+               : SAO_STATUS_ERR_OS_CALL_FAILED;
+#else
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+#endif
 }
 
 extern "C" double SAO_UI_CALL sao_ui_render_worker_peak_wall_ms(
