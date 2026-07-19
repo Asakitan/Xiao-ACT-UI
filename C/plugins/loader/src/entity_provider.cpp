@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -61,6 +62,8 @@ constexpr size_t kMaximumSnapshotStringBytes = 8 * 1024 * 1024;
 constexpr size_t kMaximumCatalogRows = 16384;
 constexpr size_t kMaximumCatalogStringBytes = 32 * 1024 * 1024;
 constexpr size_t kMaximumInvokePayloadBytes = 1024 * 1024;
+constexpr size_t kMaximumJsonNestingDepth = 64;
+constexpr size_t kMaximumJsonNodes = 16384;
 constexpr auto kRundownTimeout = std::chrono::seconds(5);
 constexpr uint32_t kMaximumSnapshotAttempts = 3;
 
@@ -278,11 +281,94 @@ int32_t copy_external_struct(const T* source, size_t required_prefix_size, T& ou
 #endif
 }
 
+class bounded_json_sax final : public nlohmann::json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_node();
+    }
+    bool number_float(number_float_t, const string_t&) override {
+        return consume_node();
+    }
+    bool string(string_t&) override {
+        return consume_node();
+    }
+    bool binary(binary_t&) override {
+        return consume_node();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t&) override {
+        return true;
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumJsonNodes)
+            return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumJsonNestingDepth || !consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0)
+            return false;
+        --depth_;
+        return true;
+    }
+
+    size_t depth_ = 0;
+    size_t nodes_ = 0;
+};
+
 bool valid_json_syntax(std::string_view value) noexcept {
     try {
-        return nlohmann::json::accept(value);
+        bounded_json_sax sax;
+        return nlohmann::json::sax_parse(value.begin(), value.end(), &sax);
     } catch (...) {
         return false;
+    }
+}
+
+bool allocate_generation(uint64_t& out_generation) noexcept {
+    auto current = g_next_generation.load(std::memory_order_relaxed);
+    for (;;) {
+        if (current == 0 || current == (std::numeric_limits<uint64_t>::max)())
+            return false;
+        const uint64_t next = current + 1;
+        if (g_next_generation.compare_exchange_weak(current, next, std::memory_order_relaxed,
+                                                    std::memory_order_relaxed)) {
+            out_generation = current;
+            return true;
+        }
     }
 }
 
@@ -436,6 +522,8 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         }
 
         if (required_count == 0) {
+            if (status != SAO_OK)
+                return SAO_ERR_INVALID_ARGUMENT;
             owned_provider_snapshot candidate;
             candidate.provider_id = state->provider_id;
             candidate.owner_plugin_id = state->owner_plugin_id;
@@ -468,13 +556,12 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         uint64_t second_revision = 0;
         status = call_snapshot(state->snapshot, rows.empty() ? nullptr : rows.data(),
                                required_count, &written_count, &second_revision, state->user_data);
-        if (status == SAO_ERR_BUFFER_TOO_SMALL || written_count > required_count) {
+        if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
+            return status;
+        if (status == SAO_ERR_BUFFER_TOO_SMALL || written_count != required_count ||
+            first_revision != second_revision) {
             continue;
         }
-        if (status != SAO_OK)
-            return status;
-        if (first_revision != second_revision)
-            continue;
         rows.resize(written_count);
 
         owned_provider_snapshot candidate;
@@ -514,6 +601,19 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
 
 } // namespace
 
+#if defined(SAO_PLUGINS_LOADER_TESTING)
+entity_provider_test_counters entity_provider_get_counters_for_testing() noexcept {
+    std::lock_guard lock(g_catalog_mutex);
+    return {g_next_generation.load(std::memory_order_relaxed), g_catalog_revision};
+}
+
+void entity_provider_set_counters_for_testing(entity_provider_test_counters counters) noexcept {
+    std::lock_guard lock(g_catalog_mutex);
+    g_next_generation.store(counters.next_generation, std::memory_order_relaxed);
+    g_catalog_revision = counters.catalog_revision;
+}
+#endif
+
 int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
                                  const std::string& owner_plugin_id, const char* provider_id_utf8,
                                  entity_snapshot_callback_fn snapshot,
@@ -537,8 +637,7 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
         state->owner = owner;
         state->owner_plugin_id = owner_plugin_id;
         state->provider_id = owner_plugin_id + "/" + local_provider_id;
-        state->generation = g_next_generation.fetch_add(1, std::memory_order_relaxed);
-        if (state->generation == 0)
+        if (!allocate_generation(state->generation))
             return SAO_ERR_OS_CALL_FAILED;
         state->snapshot = snapshot;
         state->action_handler = action_handler;
@@ -690,6 +789,8 @@ int32_t activate_entity_providers(
                 inserted = true;
             }
         }
+        if (inserted && g_catalog_revision == (std::numeric_limits<uint64_t>::max)())
+            return SAO_ERR_OS_CALL_FAILED;
         for (const auto& provider : ordered) {
             provider->accepting = true;
             provider->published = true;
@@ -705,12 +806,16 @@ int32_t activate_entity_providers(
 
 int32_t deactivate_entity_providers(
     const std::vector<std::shared_ptr<entity_provider_state>>& providers) noexcept {
+    std::vector<std::shared_ptr<entity_provider_state>> ordered;
+    std::vector<uint8_t> accepting_states;
+    std::vector<std::unique_lock<std::mutex>> provider_locks;
+    bool accepting_changed = false;
     try {
         if (entity_provider_is_current_thread(providers)) {
             return SAO_PLUGINS_ERR_BUSY;
         }
 
-        std::vector<std::shared_ptr<entity_provider_state>> ordered = providers;
+        ordered = providers;
         if (std::any_of(ordered.begin(), ordered.end(),
                         [](const auto& provider) { return provider == nullptr; })) {
             return SAO_ERR_INVALID_ARGUMENT;
@@ -724,34 +829,35 @@ int32_t deactivate_entity_providers(
                                   }),
                       ordered.end());
 
-        {
-            std::vector<std::unique_lock<std::mutex>> provider_locks;
-            provider_locks.reserve(ordered.size());
-            for (const auto& provider : ordered)
-                provider_locks.emplace_back(provider->mutex);
-            for (const auto& provider : ordered)
-                provider->accepting = false;
+        accepting_states.reserve(ordered.size());
+        provider_locks.reserve(ordered.size());
+
+        for (const auto& provider : ordered)
+            provider_locks.emplace_back(provider->mutex);
+        for (const auto& provider : ordered) {
+            accepting_states.push_back(static_cast<uint8_t>(provider->accepting));
+            provider->accepting = false;
         }
+        accepting_changed = true;
+        for (auto& lock : provider_locks)
+            lock.unlock();
         const auto rundown_deadline = std::chrono::steady_clock::now() + kRundownTimeout;
         for (const auto& provider : ordered) {
             std::unique_lock provider_lock(provider->mutex);
             if (!provider->idle.wait_until(provider_lock, rundown_deadline,
                                            [&provider] { return provider->in_flight == 0; })) {
                 provider_lock.unlock();
-                std::vector<std::unique_lock<std::mutex>> provider_locks;
-                provider_locks.reserve(ordered.size());
-                for (const auto& item : ordered)
-                    provider_locks.emplace_back(item->mutex);
-                for (const auto& item : ordered)
-                    item->accepting = true;
+                for (auto& lock : provider_locks)
+                    lock.lock();
+                for (size_t index = 0; index < ordered.size(); ++index)
+                    ordered[index]->accepting = accepting_states[index] != 0;
+                accepting_changed = false;
                 return SAO_PLUGINS_ERR_BUSY;
             }
         }
         {
-            std::vector<std::unique_lock<std::mutex>> provider_locks;
-            provider_locks.reserve(ordered.size());
-            for (const auto& provider : ordered)
-                provider_locks.emplace_back(provider->mutex);
+            for (auto& lock : provider_locks)
+                lock.lock();
 
             std::lock_guard catalog_lock(g_catalog_mutex);
             auto candidate = g_catalog;
@@ -762,14 +868,35 @@ int32_t deactivate_entity_providers(
                     candidate.erase(found);
                     removed = true;
                 }
-                provider->published = false;
             }
+            if (removed && g_catalog_revision == (std::numeric_limits<uint64_t>::max)()) {
+                for (size_t index = 0; index < ordered.size(); ++index)
+                    ordered[index]->accepting = accepting_states[index] != 0;
+                accepting_changed = false;
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            for (const auto& provider : ordered)
+                provider->published = false;
             g_catalog.swap(candidate);
             if (removed)
                 ++g_catalog_revision;
         }
+        accepting_changed = false;
         return SAO_OK;
     } catch (...) {
+        if (accepting_changed && ordered.size() == accepting_states.size()) {
+            try {
+                for (auto& lock : provider_locks) {
+                    if (!lock.owns_lock())
+                        lock.lock();
+                }
+                for (size_t index = 0; index < ordered.size(); ++index)
+                    ordered[index]->accepting = accepting_states[index] != 0;
+            } catch (...) {
+                OutputDebugStringA(
+                    "SAO loader: failed to restore Entity provider accepting state\n");
+            }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

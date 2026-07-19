@@ -21,6 +21,9 @@ target_include_directories(sao_plugins_loader PUBLIC
 
 target_compile_features(sao_plugins_loader PUBLIC cxx_std_20)
 target_compile_definitions(sao_plugins_loader PRIVATE SAO_PLUGINS_BUILDING_DLL)
+if (SAO_BUILD_TESTS)
+    target_compile_definitions(sao_plugins_loader PRIVATE SAO_PLUGINS_LOADER_TESTING)
+endif()
 if (MSVC)
     target_compile_definitions(sao_plugins_loader PRIVATE
         _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)

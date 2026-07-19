@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,6 +11,16 @@ namespace sao::plugins::loader {
 
 struct entity_provider_state;
 struct plugin_handle_s;
+
+#if defined(SAO_PLUGINS_LOADER_TESTING)
+struct entity_provider_test_counters {
+    uint64_t next_generation;
+    uint64_t catalog_revision;
+};
+
+entity_provider_test_counters entity_provider_get_counters_for_testing() noexcept;
+void entity_provider_set_counters_for_testing(entity_provider_test_counters counters) noexcept;
+#endif
 
 int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
                                  const std::string& owner_plugin_id, const char* provider_id_utf8,

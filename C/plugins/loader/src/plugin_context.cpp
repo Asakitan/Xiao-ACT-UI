@@ -1834,13 +1834,20 @@ int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
         }
         ctx->entity_providers.reserve(ctx->entity_providers.size() + count);
         registered.reserve(count);
+        uintptr_t descriptor_address = reinterpret_cast<uintptr_t>(providers);
         for (size_t index = 0; index < count; ++index) {
             native_entity_provider_descriptor descriptor{};
             const int32_t descriptor_status = copy_external_entity_struct(
-                &providers[index], kNativeEntityProviderDescriptorRequiredPrefixSize, descriptor);
+                reinterpret_cast<const native_entity_provider_descriptor*>(descriptor_address),
+                kNativeEntityProviderDescriptorRequiredPrefixSize, descriptor);
             if (descriptor_status != SAO_OK) {
                 (void)destroy_entity_providers(registered);
                 return descriptor_status;
+            }
+            if (descriptor.struct_size >
+                (std::numeric_limits<uintptr_t>::max)() - descriptor_address) {
+                (void)destroy_entity_providers(registered);
+                return SAO_ERR_INVALID_ARGUMENT;
             }
             std::shared_ptr<entity_provider_state> provider;
             const int32_t status = register_entity_provider(
@@ -1851,6 +1858,7 @@ int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
                 return status;
             }
             registered.push_back(std::move(provider));
+            descriptor_address += descriptor.struct_size;
         }
         ctx->entity_providers.insert(ctx->entity_providers.end(), registered.begin(),
                                      registered.end());

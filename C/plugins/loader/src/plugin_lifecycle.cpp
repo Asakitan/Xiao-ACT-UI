@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -167,8 +168,10 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
     if (provider_count > kMaximumEntityProvidersPerContext) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    uintptr_t provider_address = reinterpret_cast<uintptr_t>(descriptor.entity_providers);
     for (uint32_t index = 0; index < provider_count; ++index) {
-        const auto* provider = &descriptor.entity_providers[index];
+        const auto* provider =
+            reinterpret_cast<const native_entity_provider_descriptor*>(provider_address);
         if (provider->struct_size < kNativeEntityProviderDescriptorRequiredPrefixSize)
             return SAO_PLUGINS_ERR_ABI_MISMATCH;
         native_entity_provider_descriptor current{};
@@ -178,6 +181,10 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
             current.action_handler == nullptr) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
+        if (current.struct_size > (std::numeric_limits<uintptr_t>::max)() - provider_address) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        provider_address += current.struct_size;
     }
     for (const auto& required : manifest.capabilities) {
         bool found = false;

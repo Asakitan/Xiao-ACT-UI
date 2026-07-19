@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "entity_provider_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_deps.h"
@@ -13,12 +14,14 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -26,6 +29,12 @@
 
 using namespace sao::plugins::loader;
 namespace fs = std::filesystem;
+
+namespace sao::plugins::loader {
+int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
+                                                 const native_entity_provider_descriptor* providers,
+                                                 size_t count) noexcept;
+}
 
 #ifndef SAO_TEST_NATIVE_PLUGIN_PATH
 #define SAO_TEST_NATIVE_PLUGIN_PATH L""
@@ -382,6 +391,114 @@ struct context_provider_probe {
     std::atomic_bool registration_started{false};
 };
 
+enum class snapshot_protocol_mode {
+    stable,
+    zero_buffer_too_small,
+    shrink_fill,
+    grow_fill,
+    revision_mismatch,
+    fill_buffer_too_small,
+    invalid_fill_with_overflow_count,
+};
+
+struct snapshot_protocol_probe {
+    snapshot_protocol_mode mode = snapshot_protocol_mode::stable;
+    std::atomic_int calls{0};
+};
+
+void set_protocol_row(entity_menu_row& row, const char* action_id) {
+    row = {sizeof(entity_menu_row),
+           "protocol",
+           "Protocol",
+           "",
+           0.0,
+           "Run",
+           "",
+           action_id,
+           "{}",
+           1,
+           0,
+           0,
+           {}};
+}
+
+int32_t SAO_PLUGINS_CALL snapshot_protocol_callback(entity_menu_row* rows, uint32_t capacity,
+                                                    uint32_t* out_count, uint64_t* out_revision,
+                                                    void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& probe = *static_cast<snapshot_protocol_probe*>(user_data);
+    ++probe.calls;
+    *out_revision =
+        rows != nullptr && probe.mode == snapshot_protocol_mode::revision_mismatch ? 10 : 9;
+    if (rows == nullptr && capacity == 0) {
+        if (probe.mode == snapshot_protocol_mode::zero_buffer_too_small) {
+            *out_count = 0;
+            return SAO_ERR_BUFFER_TOO_SMALL;
+        }
+        *out_count = probe.mode == snapshot_protocol_mode::shrink_fill ? 2 : 1;
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    }
+    if (probe.mode == snapshot_protocol_mode::invalid_fill_with_overflow_count) {
+        *out_count = capacity + 1;
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (probe.mode == snapshot_protocol_mode::grow_fill) {
+        *out_count = capacity + 1;
+        return SAO_OK;
+    }
+    if (probe.mode == snapshot_protocol_mode::fill_buffer_too_small) {
+        *out_count = capacity;
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    }
+    if (probe.mode == snapshot_protocol_mode::shrink_fill) {
+        *out_count = 1;
+        if (capacity > 0 && rows != nullptr)
+            set_protocol_row(rows[0], "one");
+        return SAO_OK;
+    }
+    *out_count = 1;
+    if (capacity < 1 || rows == nullptr)
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    set_protocol_row(rows[0], "one");
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL snapshot_protocol_action(const char*, const char*, void*) {
+    return SAO_OK;
+}
+
+std::string nested_array_json(size_t depth) {
+    return std::string(depth, '[') + "0" + std::string(depth, ']');
+}
+
+std::string flat_array_json(size_t scalar_count) {
+    std::string value;
+    value.reserve(scalar_count * 2 + 1);
+    value.push_back('[');
+    for (size_t index = 0; index < scalar_count; ++index) {
+        if (index != 0)
+            value.push_back(',');
+        value.push_back('0');
+    }
+    value.push_back(']');
+    return value;
+}
+
+class entity_provider_counter_guard final {
+  public:
+    entity_provider_counter_guard() : saved_(entity_provider_get_counters_for_testing()) {}
+    ~entity_provider_counter_guard() {
+        entity_provider_set_counters_for_testing(saved_);
+    }
+
+    entity_provider_counter_guard(const entity_provider_counter_guard&) = delete;
+    entity_provider_counter_guard& operator=(const entity_provider_counter_guard&) = delete;
+
+  private:
+    entity_provider_test_counters saved_;
+};
+
 struct old_context_entity_provider_descriptor {
     uint32_t struct_size;
     const char* provider_id_utf8;
@@ -392,6 +509,11 @@ struct old_context_entity_provider_descriptor {
 
 struct future_context_entity_provider_descriptor {
     context_entity_provider_descriptor current{};
+    uint64_t future_tail = 0;
+};
+
+struct future_native_entity_provider_descriptor {
+    native_entity_provider_descriptor current{};
     uint64_t future_tail = 0;
 };
 
@@ -1075,10 +1197,28 @@ TEST_CASE("context entity provider ABI accepts required prefixes and future tail
     future.future_tail = 0xabcdef0123456789ULL;
     REQUIRE(sao_plugins_ctx_register_entity_provider(context, &future.current) == SAO_OK);
 
+    std::array<future_native_entity_provider_descriptor, 2> native_future{};
+    native_future[0].current.struct_size = sizeof(future_native_entity_provider_descriptor);
+    native_future[0].current.provider_id_utf8 = "native-future-0";
+    native_future[0].current.snapshot = context_provider_snapshot;
+    native_future[0].current.action_handler = context_provider_action;
+    native_future[0].current.user_data = &probe;
+    native_future[0].future_tail = 0x1111111111111111ULL;
+    native_future[1].current.struct_size = sizeof(future_native_entity_provider_descriptor);
+    native_future[1].current.provider_id_utf8 = "native-future-1";
+    native_future[1].current.snapshot = context_provider_snapshot;
+    native_future[1].current.action_handler = context_provider_action;
+    native_future[1].current.user_data = &probe;
+    native_future[1].future_tail = 0x2222222222222222ULL;
+    REQUIRE(plugin_context_register_entity_providers(
+                context,
+                reinterpret_cast<const native_entity_provider_descriptor*>(native_future.data()),
+                native_future.size()) == SAO_OK);
+
     REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
     entity_provider_catalog_snapshot catalog;
     REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
-    CHECK(catalog.providers.size() == 3);
+    CHECK(catalog.providers.size() == 5);
     CHECK(catalog.roots.empty());
     CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
         return item.provider_id == "context_provider_abi_prefix/old-prefix";
@@ -1088,6 +1228,12 @@ TEST_CASE("context entity provider ABI accepts required prefixes and future tail
     }));
     CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
         return item.provider_id == "context_provider_abi_prefix/future-prefix";
+    }));
+    CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+        return item.provider_id == "context_provider_abi_prefix/native-future-0";
+    }));
+    CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+        return item.provider_id == "context_provider_abi_prefix/native-future-1";
     }));
 
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
@@ -1153,6 +1299,264 @@ TEST_CASE("entity provider rows enforce mandatory flags and JSON atomically",
     CHECK(sao_plugins_entity_provider_invoke("context_provider_row_abi/tools-provider", generation,
                                              "run", "{invalid") == SAO_ERR_INVALID_ARGUMENT);
     CHECK(probe.actions.load() == action_calls);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider JSON complexity is bounded before publication and invoke",
+          "[plugins][loader][entity-provider][json][complexity][d6][focused]") {
+    TempDirectory temp(L"context_provider_json_complexity");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_json_complexity", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    const std::string maximum_depth = nested_array_json(64);
+    probe.row_payload_json = maximum_depth.c_str();
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK(catalog.providers[0].rows[0].payload_json == maximum_depth);
+    const uint64_t generation = catalog.providers[0].generation;
+
+    const std::string raw_payload = R"({ "text": "\u0041", "number": 1.0, "items": [ 1, 2 ] })";
+    probe.row_payload_json = raw_payload.c_str();
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers[0].rows[0].payload_json == raw_payload);
+    REQUIRE(sao_plugins_entity_provider_invoke("context_provider_json_complexity/tools-provider",
+                                               generation, "run", raw_payload.c_str()) == SAO_OK);
+    CHECK(probe.last_payload == raw_payload);
+
+    const std::string excessive_depth = nested_array_json(65);
+    probe.row_payload_json = excessive_depth.c_str();
+    entity_provider_catalog_snapshot sentinel;
+    sentinel.revision = 0xd600;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sentinel.revision == 0xd600);
+    CHECK(sentinel.providers.empty());
+
+    const std::string maximum_nodes = flat_array_json(16383);
+    REQUIRE(sao_plugins_entity_provider_invoke("context_provider_json_complexity/tools-provider",
+                                               generation, "run", maximum_nodes.c_str()) == SAO_OK);
+    CHECK(probe.last_payload == maximum_nodes);
+    const int action_calls = probe.actions.load();
+    const std::string excessive_nodes = flat_array_json(16384);
+    CHECK(sao_plugins_entity_provider_invoke("context_provider_json_complexity/tools-provider",
+                                             generation, "run",
+                                             excessive_nodes.c_str()) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.actions.load() == action_calls);
+
+    const std::string maximum_row_bytes = "\"" + std::string(16382, 'x') + "\"";
+    probe.row_payload_json = maximum_row_bytes.c_str();
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers[0].rows[0].payload_json == maximum_row_bytes);
+    const std::string excessive_row_bytes = "\"" + std::string(16383, 'x') + "\"";
+    probe.row_payload_json = excessive_row_bytes.c_str();
+    sentinel.revision = 0xd602;
+    sentinel.providers.clear();
+    CHECK(snapshot_entity_providers(sentinel) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sentinel.revision == 0xd602);
+    CHECK(sentinel.providers.empty());
+
+    const std::string maximum_invoke_bytes = "\"" + std::string(1048574, 'x') + "\"";
+    REQUIRE(sao_plugins_entity_provider_invoke("context_provider_json_complexity/tools-provider",
+                                               generation, "run",
+                                               maximum_invoke_bytes.c_str()) == SAO_OK);
+    CHECK(probe.last_payload == maximum_invoke_bytes);
+    const int bounded_action_calls = probe.actions.load();
+    const std::string excessive_invoke_bytes = "\"" + std::string(1048575, 'x') + "\"";
+    CHECK(sao_plugins_entity_provider_invoke("context_provider_json_complexity/tools-provider",
+                                             generation, "run", excessive_invoke_bytes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.actions.load() == bounded_action_calls);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider snapshot rejects contradictory probe and fill results",
+          "[plugins][loader][entity-provider][snapshot][protocol][d6][focused]") {
+    TempDirectory temp(L"context_provider_snapshot_protocol");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_snapshot_protocol", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    snapshot_protocol_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    context_entity_provider_descriptor descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "protocol-provider";
+    descriptor.snapshot = snapshot_protocol_callback;
+    descriptor.action_handler = snapshot_protocol_action;
+    descriptor.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+
+    entity_provider_catalog_snapshot sentinel;
+    sentinel.revision = 0xd601;
+    probe.mode = snapshot_protocol_mode::zero_buffer_too_small;
+    probe.calls = 0;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.calls == 1);
+    CHECK(sentinel.revision == 0xd601);
+
+    probe.mode = snapshot_protocol_mode::shrink_fill;
+    probe.calls = 0;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(probe.calls == 18);
+    CHECK(sentinel.revision == 0xd601);
+
+    probe.mode = snapshot_protocol_mode::invalid_fill_with_overflow_count;
+    probe.calls = 0;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.calls == 2);
+    CHECK(sentinel.revision == 0xd601);
+
+    for (const auto mode :
+         {snapshot_protocol_mode::grow_fill, snapshot_protocol_mode::revision_mismatch,
+          snapshot_protocol_mode::fill_buffer_too_small}) {
+        probe.mode = mode;
+        probe.calls = 0;
+        CHECK(snapshot_entity_providers(sentinel) == SAO_PLUGINS_ERR_BUSY);
+        CHECK(probe.calls == 18);
+        CHECK(sentinel.revision == 0xd601);
+    }
+
+    probe.mode = snapshot_protocol_mode::stable;
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider generation allocation exhausts without wrapping",
+          "[plugins][loader][entity-provider][generation][overflow][d6][focused]") {
+    entity_provider_counter_guard counter_guard;
+    TempDirectory temp(L"context_provider_generation_overflow");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_generation_overflow", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = empty_context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+
+    auto counters = entity_provider_get_counters_for_testing();
+    counters.next_generation = (std::numeric_limits<uint64_t>::max)() - 1;
+    entity_provider_set_counters_for_testing(counters);
+    context_entity_provider_descriptor descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.snapshot = context_provider_snapshot;
+    descriptor.action_handler = context_provider_action;
+    descriptor.user_data = &probe;
+    descriptor.provider_id_utf8 = "last-generation";
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_OK);
+    descriptor.provider_id_utf8 = "exhausted-generation";
+    CHECK(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_ERR_OS_CALL_FAILED);
+    descriptor.provider_id_utf8 = "still-exhausted-generation";
+    CHECK(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_ERR_OS_CALL_FAILED);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers.size() == 1);
+    const auto last_generation =
+        std::find_if(catalog.providers.begin(), catalog.providers.end(), [](const auto& provider) {
+            return provider.provider_id == "context_provider_generation_overflow/last-generation";
+        });
+    REQUIRE(last_generation != catalog.providers.end());
+    CHECK(last_generation->generation == (std::numeric_limits<uint64_t>::max)() - 1);
+    CHECK(entity_provider_get_counters_for_testing().next_generation ==
+          (std::numeric_limits<uint64_t>::max)());
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity catalog revision exhaustion preserves publication and invoke",
+          "[plugins][loader][entity-provider][revision][overflow][d6][focused]") {
+    entity_provider_counter_guard counter_guard;
+    TempDirectory temp(L"context_provider_catalog_revision_overflow");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_catalog_revision_overflow", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+
+    auto counters = entity_provider_get_counters_for_testing();
+    counters.catalog_revision = (std::numeric_limits<uint64_t>::max)() - 1;
+    entity_provider_set_counters_for_testing(counters);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.revision == (std::numeric_limits<uint64_t>::max)());
+    const uint64_t generation = catalog.providers[0].generation;
+
+    context_entity_provider_descriptor extra{};
+    extra.struct_size = sizeof(extra);
+    extra.provider_id_utf8 = "revision-overflow";
+    extra.snapshot = context_provider_snapshot;
+    extra.action_handler = context_provider_action;
+    extra.user_data = &probe;
+    CHECK(sao_plugins_ctx_register_entity_provider(context, &extra) == SAO_ERR_OS_CALL_FAILED);
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers.size() == 1);
+    CHECK(catalog.revision == (std::numeric_limits<uint64_t>::max)());
+
+    const char* provider_ids[] = {"context_provider_catalog_revision_overflow/tools-provider"};
+    CHECK(plugin_context_unregister_entity_providers(context, provider_ids, 1) ==
+          SAO_ERR_OS_CALL_FAILED);
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(sao_plugins_entity_provider_invoke(provider_ids[0], generation, "run", "{}") == SAO_OK);
+
+    counters = entity_provider_get_counters_for_testing();
+    counters.catalog_revision = (std::numeric_limits<uint64_t>::max)() - 1;
+    entity_provider_set_counters_for_testing(counters);
+    REQUIRE(plugin_context_unregister_entity_providers(context, provider_ids, 1) == SAO_OK);
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.revision == (std::numeric_limits<uint64_t>::max)());
 
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
