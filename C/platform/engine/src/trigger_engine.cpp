@@ -9,13 +9,16 @@
 // plugin that registered the trigger — the engine only pattern-matches
 // on the fields declared per family above.
 //
-// Threading: a single mutex serialises register/unregister/evaluate/tick.
+// Threading: a mutex protects the registry.  Dispatch keeps shared snapshots
+// alive while callbacks run outside the mutex.
 
 #include "sao/engine/trigger_engine.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -67,6 +70,7 @@ struct TriggerEntry {
     std::unique_ptr<Condition> root;
     sao_engine_trigger_callback_t callback = nullptr;
     void* user_data                        = nullptr;
+    std::atomic<bool> active{true};
     // Insertion sequence so evaluate/tick reports action_ids in
     // register order deterministically.
     uint64_t insertion_seq = 0;
@@ -123,9 +127,24 @@ sao_status_t populateTimer(const json& params, Condition& out) {
     if (iv_it == params.end() || !iv_it->is_number()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    const double interval_raw = iv_it->get<double>();
-    if (interval_raw <= 0.0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    out.interval_ms = static_cast<uint64_t>(interval_raw);
+
+    if (iv_it->is_number_unsigned()) {
+        out.interval_ms = iv_it->get<uint64_t>();
+        if (out.interval_ms == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } else if (iv_it->is_number_integer()) {
+        const auto interval_raw = iv_it->get<int64_t>();
+        if (interval_raw <= 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        out.interval_ms = static_cast<uint64_t>(interval_raw);
+    } else {
+        constexpr double kUint64UpperBound = 18446744073709551616.0;
+        const double interval_raw = iv_it->get<double>();
+        if (!std::isfinite(interval_raw) || interval_raw < 1.0
+            || std::trunc(interval_raw) != interval_raw
+            || interval_raw >= kUint64UpperBound) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        out.interval_ms = static_cast<uint64_t>(interval_raw);
+    }
     auto one_it = params.find("one_shot");
     if (one_it != params.end()) {
         if (!one_it->is_boolean()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -326,7 +345,7 @@ bool advanceTimers(Condition& c, uint64_t dt_ms) {
 
 struct sao_engine_trigger_engine_s {
     mutable std::mutex mtx;
-    std::vector<std::unique_ptr<TriggerEntry>> triggers;
+    std::vector<std::shared_ptr<TriggerEntry>> triggers;
     std::atomic<sao_engine_trigger_handle_t> next_handle{1};
     std::atomic<uint64_t> next_seq{1};
 };
@@ -359,7 +378,7 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_register(
     }
     *out_trigger = 0;
 
-    auto entry = std::make_unique<TriggerEntry>();
+    auto entry = std::make_shared<TriggerEntry>();
     entry->root = std::make_unique<Condition>();
     entry->callback = callback;
     entry->user_data = user_data;
@@ -374,7 +393,7 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_register(
         try {
             spec_obj["condition_params"] =
                 json::parse(spec->condition_params_json);
-        } catch (const json::parse_error&) {
+        } catch (const json::exception&) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
     } else {
@@ -401,10 +420,11 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_unregister(
     if (handle == nullptr || trigger == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(handle->mtx);
     auto it = std::find_if(handle->triggers.begin(), handle->triggers.end(),
-                           [trigger](const std::unique_ptr<TriggerEntry>& e) {
+                           [trigger](const std::shared_ptr<TriggerEntry>& e) {
                                return e && e->handle == trigger;
                            });
     if (it == handle->triggers.end()) return SAO_STATUS_ERR_NOT_FOUND;
+    (*it)->active.store(false, std::memory_order_release);
     handle->triggers.erase(it);
     return SAO_STATUS_OK;
 }
@@ -420,36 +440,26 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_evaluate(
     }
     *out_count = 0;
 
-    // Take a shallow copy of the trigger list so callbacks that mutate
-    // the engine (register/unregister from inside the callback) don't
-    // trip iterator invalidation.  The unique_ptr<Condition> is not
-    // moved — we only clone the raw pointer via the underlying pointer.
-    std::vector<TriggerEntry*> snapshot;
+    // Keep every snapshotted entry alive while callbacks execute outside
+    // the registry lock.  This closes the unregister-after-check lifetime
+    // race while still allowing callbacks to mutate the registry.
+    std::vector<std::shared_ptr<TriggerEntry>> snapshot;
     {
         std::lock_guard<std::mutex> lk(handle->mtx);
         snapshot.reserve(handle->triggers.size());
-        for (auto& t : handle->triggers) snapshot.push_back(t.get());
+        for (const auto& t : handle->triggers) snapshot.push_back(t);
     }
     // Preserve registration order — evaluate walks the snapshot in
     // registration order (insertion_seq ascending) for deterministic
     // action-id emission.
     std::sort(snapshot.begin(), snapshot.end(),
-              [](const TriggerEntry* a, const TriggerEntry* b) {
+              [](const auto& a, const auto& b) {
                   return a->insertion_seq < b->insertion_seq;
               });
 
     uint32_t matched = 0;
-    for (auto* t : snapshot) {
-        // ``t`` may already have been unregistered while we walk the
-        // snapshot — verify it still lives under the lock.
-        bool still_live = false;
-        {
-            std::lock_guard<std::mutex> lk(handle->mtx);
-            for (auto& e : handle->triggers) {
-                if (e.get() == t) { still_live = true; break; }
-            }
-        }
-        if (!still_live) continue;
+    for (const auto& t : snapshot) {
+        if (!t->active.load(std::memory_order_acquire)) continue;
 
         if (!evalCondition(*t->root, *event)) continue;
 
@@ -480,27 +490,20 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_tick(
     }
     *out_count = 0;
 
-    std::vector<TriggerEntry*> snapshot;
+    std::vector<std::shared_ptr<TriggerEntry>> snapshot;
     {
         std::lock_guard<std::mutex> lk(handle->mtx);
         snapshot.reserve(handle->triggers.size());
-        for (auto& t : handle->triggers) snapshot.push_back(t.get());
+        for (const auto& t : handle->triggers) snapshot.push_back(t);
     }
     std::sort(snapshot.begin(), snapshot.end(),
-              [](const TriggerEntry* a, const TriggerEntry* b) {
+              [](const auto& a, const auto& b) {
                   return a->insertion_seq < b->insertion_seq;
               });
 
     uint32_t matched = 0;
-    for (auto* t : snapshot) {
-        bool still_live = false;
-        {
-            std::lock_guard<std::mutex> lk(handle->mtx);
-            for (auto& e : handle->triggers) {
-                if (e.get() == t) { still_live = true; break; }
-            }
-        }
-        if (!still_live) continue;
+    for (const auto& t : snapshot) {
+        if (!t->active.load(std::memory_order_acquire)) continue;
         if (!advanceTimers(*t->root, dt_ms)) continue;
 
         matched += 1;
