@@ -2,12 +2,18 @@
 //
 // Wave 6 / Phase 5 — game-agnostic trigger engine coverage.
 //
-// Six scenarios exercise the built-in condition families without
+// Twelve scenarios exercise the built-in condition families without
 // referring to any specific game concept:
 //   * event_match with payload substring filter
 //   * timer tick fires periodically until unregistered
 //   * combo of event_match AND state_enter
 //   * register / unregister lifecycle round trip
+//   * concurrent unregister while a callback is in flight
+//   * callback-triggered unregister during timer dispatch
+//   * timer interval validation at numeric boundaries
+//   * concurrent tick serialization for one trigger
+//   * throwing callback isolation and continued dispatch
+//   * UINT64_MAX tick advancement in constant time
 //   * evaluate() reports action ids in registration order
 //   * tick() one_shot latches after firing once
 //
@@ -16,12 +22,17 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstring>
 #include <future>
+#include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +59,22 @@ struct UnregisteringCallbackState {
     uint32_t calls = 0;
 };
 
+struct CountingCallbackState {
+    std::atomic_uint32_t calls{0};
+};
+
+struct DispatchResult {
+    sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+    uint64_t action_id = 0;
+    uint32_t count = 0;
+};
+
+struct CallbackDispatchResult {
+    sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+    std::array<uint64_t, 2> action_ids{};
+    uint32_t count = 0;
+};
+
 void SAO_ENGINE_CALL captureCallback(uint64_t action_id,
                                      const SaoEngineTriggerEvent* /*event*/,
                                      void* user_data) {
@@ -72,6 +99,19 @@ void SAO_ENGINE_CALL unregisteringCallback(uint64_t,
     ++state->calls;
     state->unregister_status =
         sao_engine_trigger_unregister(state->engine, state->trigger);
+}
+
+void SAO_ENGINE_CALL countingCallback(uint64_t,
+                                      const SaoEngineTriggerEvent*,
+                                      void* user_data) {
+    auto* state = static_cast<CountingCallbackState*>(user_data);
+    state->calls.fetch_add(1, std::memory_order_relaxed);
+}
+
+void SAO_ENGINE_CALL throwingCallback(uint64_t,
+                                      const SaoEngineTriggerEvent*,
+                                      void*) {
+    throw std::runtime_error("trigger callback fixture");
 }
 
 SaoEngineTriggerSpec makeSpec(int32_t type, const char* params_json,
@@ -170,6 +210,116 @@ TEST_CASE("trigger_timer_rejects_non_integer_non_finite_and_out_of_range_interva
                 SAO_STATUS_ERR_INVALID_ARGUMENT);
         REQUIRE(trigger == 0);
     }
+
+    sao_engine_trigger_destroy(eng);
+}
+
+TEST_CASE("trigger_concurrent_ticks_serialize_condition_state",
+          "[engine][trigger][wave6][timer][concurrency]") {
+    sao_engine_trigger_engine_handle_t eng = nullptr;
+    REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
+
+    CountingCallbackState state;
+    auto spec = makeSpec(SAO_ENGINE_TRIGGER_TIMER,
+                         R"({"interval_ms": 2})", 2100);
+    sao_engine_trigger_handle_t trigger = 0;
+    REQUIRE(sao_engine_trigger_register(
+                eng, &spec, &countingCallback, &state, &trigger) ==
+            SAO_STATUS_OK);
+
+    std::barrier start{3};
+    const auto tick = [&] {
+        start.arrive_and_wait();
+        DispatchResult result;
+        result.status = sao_engine_trigger_tick(
+            eng, 1, &result.action_id, 1, &result.count);
+        return result;
+    };
+    auto first = std::async(std::launch::async, tick);
+    auto second = std::async(std::launch::async, tick);
+    start.arrive_and_wait();
+
+    const auto first_result = first.get();
+    const auto second_result = second.get();
+    REQUIRE(first_result.status == SAO_STATUS_OK);
+    REQUIRE(second_result.status == SAO_STATUS_OK);
+    CHECK(first_result.count + second_result.count == 1);
+    if (first_result.count == 1) CHECK(first_result.action_id == 2100);
+    if (second_result.count == 1) CHECK(second_result.action_id == 2100);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+
+    sao_engine_trigger_destroy(eng);
+}
+
+TEST_CASE("trigger_throwing_callback_is_contained_and_dispatch_continues",
+          "[engine][trigger][wave6][callback][exception]") {
+    sao_engine_trigger_engine_handle_t eng = nullptr;
+    REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
+
+    auto throwing_spec = makeSpec(
+        SAO_ENGINE_TRIGGER_EVENT_MATCH,
+        R"({"event_type": "topic.throwing"})", 2200);
+    auto continuing_spec = makeSpec(
+        SAO_ENGINE_TRIGGER_EVENT_MATCH,
+        R"({"event_type": "topic.throwing"})", 2201);
+    sao_engine_trigger_handle_t throwing_trigger = 0;
+    sao_engine_trigger_handle_t continuing_trigger = 0;
+    CountingCallbackState continuing_state;
+    REQUIRE(sao_engine_trigger_register(
+                eng, &throwing_spec, &throwingCallback, nullptr,
+                &throwing_trigger) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_trigger_register(
+                eng, &continuing_spec, &countingCallback, &continuing_state,
+                &continuing_trigger) == SAO_STATUS_OK);
+
+    auto evaluation = std::async(std::launch::async, [eng] {
+        SaoEngineTriggerEvent event{};
+        event.event_type_utf8 = "topic.throwing";
+        CallbackDispatchResult result;
+        result.status = sao_engine_trigger_evaluate(
+            eng, &event, result.action_ids.data(),
+            static_cast<uint32_t>(result.action_ids.size()), &result.count);
+        return result;
+    });
+    CallbackDispatchResult result;
+    REQUIRE_NOTHROW(result = evaluation.get());
+    CHECK(result.status == SAO_STATUS_ERR_UNKNOWN);
+    CHECK(result.count == 2);
+    CHECK((result.action_ids == std::array<uint64_t, 2>{2200, 2201}));
+    CHECK(continuing_state.calls.load(std::memory_order_relaxed) == 1);
+
+    sao_engine_trigger_destroy(eng);
+}
+
+TEST_CASE("trigger_timer_handles_uint64_max_tick_without_loop_or_wrap",
+          "[engine][trigger][wave6][timer][overflow]") {
+    sao_engine_trigger_engine_handle_t eng = nullptr;
+    REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
+
+    CountingCallbackState state;
+    auto spec = makeSpec(SAO_ENGINE_TRIGGER_TIMER,
+                         R"({"interval_ms": 3})", 2300);
+    sao_engine_trigger_handle_t trigger = 0;
+    REQUIRE(sao_engine_trigger_register(
+                eng, &spec, &countingCallback, &state, &trigger) ==
+            SAO_STATUS_OK);
+
+    uint64_t action_id = 0;
+    uint32_t count = 0;
+    REQUIRE(sao_engine_trigger_tick(
+                eng, (std::numeric_limits<uint64_t>::max)(), &action_id, 1,
+                &count) == SAO_STATUS_OK);
+    REQUIRE(count == 1);
+    CHECK(action_id == 2300);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+
+    REQUIRE(sao_engine_trigger_tick(eng, 2, &action_id, 1, &count) ==
+            SAO_STATUS_OK);
+    CHECK(count == 0);
+    REQUIRE(sao_engine_trigger_tick(eng, 1, &action_id, 1, &count) ==
+            SAO_STATUS_OK);
+    CHECK(count == 1);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 2);
 
     sao_engine_trigger_destroy(eng);
 }
@@ -273,14 +423,15 @@ TEST_CASE("trigger_unregister_keeps_in_flight_callback_storage_alive",
     auto unregister = std::async(std::launch::async, [eng, trigger] {
         return sao_engine_trigger_unregister(eng, trigger);
     });
-    REQUIRE(unregister.wait_for(1s) == std::future_status::ready);
-    REQUIRE(unregister.get() == SAO_STATUS_OK);
+    const auto unregister_wait = unregister.wait_for(1s);
 
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         state.released = true;
         state.condition.notify_all();
     }
+    REQUIRE(unregister_wait == std::future_status::ready);
+    REQUIRE(unregister.get() == SAO_STATUS_OK);
     const auto [status, count] = evaluator.get();
     REQUIRE(status == SAO_STATUS_OK);
     REQUIRE(count == 1);
@@ -295,33 +446,30 @@ TEST_CASE("trigger_unregister_keeps_in_flight_callback_storage_alive",
     sao_engine_trigger_destroy(eng);
 }
 
-TEST_CASE("trigger_callback_can_unregister_itself",
-          "[engine][trigger][wave6][lifecycle]") {
+TEST_CASE("trigger_timer_callback_can_unregister_itself",
+          "[engine][trigger][wave6][timer][lifecycle]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
     UnregisteringCallbackState state;
     state.engine = eng;
-    auto spec = makeSpec(SAO_ENGINE_TRIGGER_EVENT_MATCH,
-                         R"({"event_type": "topic.self_unregister"})",
-                         4200);
+    auto spec = makeSpec(SAO_ENGINE_TRIGGER_TIMER,
+                         R"({"interval_ms": 1})", 4200);
     REQUIRE(sao_engine_trigger_register(
                 eng, &spec, &unregisteringCallback, &state, &state.trigger) ==
             SAO_STATUS_OK);
 
-    SaoEngineTriggerEvent event{};
-    event.event_type_utf8 = "topic.self_unregister";
     uint64_t action_id = 0;
     uint32_t count = 0;
-    REQUIRE(sao_engine_trigger_evaluate(
-                eng, &event, &action_id, 1, &count) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_trigger_tick(eng, 1, &action_id, 1, &count) ==
+            SAO_STATUS_OK);
     REQUIRE(count == 1);
     REQUIRE(action_id == 4200);
     REQUIRE(state.calls == 1);
     REQUIRE(state.unregister_status == SAO_STATUS_OK);
 
-    REQUIRE(sao_engine_trigger_evaluate(
-                eng, &event, &action_id, 1, &count) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_trigger_tick(eng, 1, &action_id, 1, &count) ==
+            SAO_STATUS_OK);
     REQUIRE(count == 0);
     REQUIRE(state.calls == 1);
 

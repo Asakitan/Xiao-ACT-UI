@@ -9,8 +9,9 @@
 // plugin that registered the trigger — the engine only pattern-matches
 // on the fields declared per family above.
 //
-// Threading: a mutex protects the registry.  Dispatch keeps shared snapshots
-// alive while callbacks run outside the mutex.
+// Threading: one mutex protects the registry and each entry has a state mutex
+// for its recursive condition tree.  Dispatch keeps shared snapshots alive
+// while callbacks run outside both mutexes.
 
 #include "sao/engine/trigger_engine.h"
 
@@ -18,7 +19,6 @@
 #include <atomic>
 #include <cmath>
 #include <deque>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +26,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(_MSC_VER) && defined(_WIN32)
+#include <excpt.h>
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -71,10 +75,52 @@ struct TriggerEntry {
     sao_engine_trigger_callback_t callback = nullptr;
     void* user_data                        = nullptr;
     std::atomic<bool> active{true};
+    // Serializes every mutation of the recursive condition tree.
+    std::mutex state_mutex;
     // Insertion sequence so evaluate/tick reports action_ids in
     // register order deterministically.
     uint64_t insertion_seq = 0;
 };
+
+struct CallbackInvocation {
+    sao_engine_trigger_callback_t callback = nullptr;
+    uint64_t action_id = 0;
+    const SaoEngineTriggerEvent* event = nullptr;
+    void* user_data = nullptr;
+};
+
+using CallbackInvokeFn = sao_status_t (*)(void*) noexcept;
+
+sao_status_t invokeCallbackCpp(void* context) noexcept {
+    try {
+        const auto& invocation = *static_cast<CallbackInvocation*>(context);
+        invocation.callback(invocation.action_id, invocation.event,
+                            invocation.user_data);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t invokeCallbackBarrier(CallbackInvokeFn callback,
+                                   void* context) noexcept {
+#if defined(_MSC_VER) && defined(_WIN32)
+    __try {
+        return callback(context);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#else
+    return callback(context);
+#endif
+}
+
+sao_status_t invokeTriggerCallback(
+    sao_engine_trigger_callback_t callback, uint64_t action_id,
+    const SaoEngineTriggerEvent* event, void* user_data) noexcept {
+    CallbackInvocation invocation{callback, action_id, event, user_data};
+    return invokeCallbackBarrier(&invokeCallbackCpp, &invocation);
+}
 
 sao_status_t parseCondition(const json& spec, Condition& out);
 
@@ -284,21 +330,21 @@ bool evalCondition(Condition& c, const SaoEngineTriggerEvent& evt) {
 // Timer advance.  Returns true when the timer fired during this tick.
 // A timer with ``one_shot`` fires at most once, then latches.
 bool advanceTimers(Condition& c, uint64_t dt_ms) {
-    bool fired = false;
     switch (c.kind) {
         case SAO_ENGINE_TRIGGER_TIMER: {
             if (c.one_shot && c.fired) return false;
-            c.elapsed_ms += dt_ms;
-            while (c.elapsed_ms >= c.interval_ms) {
-                fired = true;
-                if (c.one_shot) {
-                    c.fired = true;
-                    c.elapsed_ms = 0;
-                    break;
-                }
-                c.elapsed_ms -= c.interval_ms;
+            const uint64_t until_next_fire = c.interval_ms - c.elapsed_ms;
+            if (dt_ms < until_next_fire) {
+                c.elapsed_ms += dt_ms;
+                return false;
             }
-            return fired;
+            if (c.one_shot) {
+                c.fired = true;
+                c.elapsed_ms = 0;
+            } else {
+                c.elapsed_ms = (dt_ms - until_next_fire) % c.interval_ms;
+            }
+            return true;
         }
         case SAO_ENGINE_TRIGGER_COMBO: {
             // A combo's tick fires only when every child (including
@@ -378,40 +424,44 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_register(
     }
     *out_trigger = 0;
 
-    auto entry = std::make_shared<TriggerEntry>();
-    entry->root = std::make_unique<Condition>();
-    entry->callback = callback;
-    entry->user_data = user_data;
-    entry->action_id = spec->action_id;
+    try {
+        auto entry = std::make_shared<TriggerEntry>();
+        entry->root = std::make_unique<Condition>();
+        entry->callback = callback;
+        entry->user_data = user_data;
+        entry->action_id = spec->action_id;
 
-    // Build a synthetic spec object so the recursive parser can also
-    // consume combo children uniformly.
-    json spec_obj;
-    spec_obj["condition_type"] = spec->condition_type;
-    if (spec->condition_params_json != nullptr
-        && *spec->condition_params_json != '\0') {
-        try {
+        // Build a synthetic spec object so the recursive parser can also
+        // consume combo children uniformly.
+        json spec_obj;
+        spec_obj["condition_type"] = spec->condition_type;
+        if (spec->condition_params_json != nullptr
+            && *spec->condition_params_json != '\0') {
             spec_obj["condition_params"] =
                 json::parse(spec->condition_params_json);
-        } catch (const json::exception&) {
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        } else {
+            spec_obj["condition_params"] = json::object();
         }
-    } else {
-        spec_obj["condition_params"] = json::object();
+
+        const auto rc = parseCondition(spec_obj, *entry->root);
+        if (rc != SAO_STATUS_OK) return rc;
+
+        entry->handle =
+            handle->next_handle.fetch_add(1, std::memory_order_relaxed);
+        entry->insertion_seq =
+            handle->next_seq.fetch_add(1, std::memory_order_relaxed);
+
+        {
+            std::lock_guard<std::mutex> lk(handle->mtx);
+            handle->triggers.push_back(std::move(entry));
+            *out_trigger = handle->triggers.back()->handle;
+        }
+        return SAO_STATUS_OK;
+    } catch (const json::exception&) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-
-    auto rc = parseCondition(spec_obj, *entry->root);
-    if (rc != SAO_STATUS_OK) return rc;
-
-    entry->handle       = handle->next_handle.fetch_add(1, std::memory_order_relaxed);
-    entry->insertion_seq = handle->next_seq.fetch_add(1, std::memory_order_relaxed);
-
-    {
-        std::lock_guard<std::mutex> lk(handle->mtx);
-        handle->triggers.push_back(std::move(entry));
-        *out_trigger = handle->triggers.back()->handle;
-    }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_unregister(
@@ -440,43 +490,58 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_evaluate(
     }
     *out_count = 0;
 
-    // Keep every snapshotted entry alive while callbacks execute outside
-    // the registry lock.  This closes the unregister-after-check lifetime
-    // race while still allowing callbacks to mutate the registry.
-    std::vector<std::shared_ptr<TriggerEntry>> snapshot;
-    {
-        std::lock_guard<std::mutex> lk(handle->mtx);
-        snapshot.reserve(handle->triggers.size());
-        for (const auto& t : handle->triggers) snapshot.push_back(t);
-    }
-    // Preserve registration order — evaluate walks the snapshot in
-    // registration order (insertion_seq ascending) for deterministic
-    // action-id emission.
-    std::sort(snapshot.begin(), snapshot.end(),
-              [](const auto& a, const auto& b) {
-                  return a->insertion_seq < b->insertion_seq;
-              });
-
-    uint32_t matched = 0;
-    for (const auto& t : snapshot) {
-        if (!t->active.load(std::memory_order_acquire)) continue;
-
-        if (!evalCondition(*t->root, *event)) continue;
-
-        matched += 1;
-        if (out_action_ids != nullptr && matched <= capacity) {
-            out_action_ids[matched - 1] = t->action_id;
+    try {
+        // Keep every snapshotted entry alive while callbacks execute outside
+        // the registry lock.  This closes the unregister-after-check lifetime
+        // race while still allowing callbacks to mutate the registry.
+        std::vector<std::shared_ptr<TriggerEntry>> snapshot;
+        {
+            std::lock_guard<std::mutex> lk(handle->mtx);
+            snapshot.reserve(handle->triggers.size());
+            for (const auto& t : handle->triggers) snapshot.push_back(t);
         }
-        if (t->callback != nullptr) {
-            t->callback(t->action_id, event, t->user_data);
-        }
-    }
+        // Preserve registration order — evaluate walks the snapshot in
+        // registration order (insertion_seq ascending) for deterministic
+        // action-id emission.
+        std::sort(snapshot.begin(), snapshot.end(),
+                  [](const auto& a, const auto& b) {
+                      return a->insertion_seq < b->insertion_seq;
+                  });
 
-    *out_count = matched;
-    if (out_action_ids != nullptr && matched > capacity) {
-        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        uint32_t matched = 0;
+        sao_status_t callback_status = SAO_STATUS_OK;
+        for (const auto& t : snapshot) {
+            sao_engine_trigger_callback_t callback = nullptr;
+            void* callback_user_data = nullptr;
+            {
+                std::lock_guard<std::mutex> state_lock(t->state_mutex);
+                if (!t->active.load(std::memory_order_acquire) ||
+                    !evalCondition(*t->root, *event)) {
+                    continue;
+                }
+                callback = t->callback;
+                callback_user_data = t->user_data;
+            }
+
+            matched += 1;
+            if (out_action_ids != nullptr && matched <= capacity) {
+                out_action_ids[matched - 1] = t->action_id;
+            }
+            if (callback != nullptr &&
+                invokeTriggerCallback(callback, t->action_id, event,
+                                      callback_user_data) != SAO_STATUS_OK) {
+                callback_status = SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+
+        *out_count = matched;
+        if (out_action_ids != nullptr && matched > capacity) {
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
+        return callback_status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_tick(
@@ -490,36 +555,53 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_trigger_tick(
     }
     *out_count = 0;
 
-    std::vector<std::shared_ptr<TriggerEntry>> snapshot;
-    {
-        std::lock_guard<std::mutex> lk(handle->mtx);
-        snapshot.reserve(handle->triggers.size());
-        for (const auto& t : handle->triggers) snapshot.push_back(t);
-    }
-    std::sort(snapshot.begin(), snapshot.end(),
-              [](const auto& a, const auto& b) {
-                  return a->insertion_seq < b->insertion_seq;
-              });
-
-    uint32_t matched = 0;
-    for (const auto& t : snapshot) {
-        if (!t->active.load(std::memory_order_acquire)) continue;
-        if (!advanceTimers(*t->root, dt_ms)) continue;
-
-        matched += 1;
-        if (out_action_ids != nullptr && matched <= capacity) {
-            out_action_ids[matched - 1] = t->action_id;
+    try {
+        std::vector<std::shared_ptr<TriggerEntry>> snapshot;
+        {
+            std::lock_guard<std::mutex> lk(handle->mtx);
+            snapshot.reserve(handle->triggers.size());
+            for (const auto& t : handle->triggers) snapshot.push_back(t);
         }
-        if (t->callback != nullptr) {
-            SaoEngineTriggerEvent tick_evt{};
-            tick_evt.event_type_utf8 = "__tick__";
-            tick_evt.timestamp_ms    = dt_ms;
-            t->callback(t->action_id, &tick_evt, t->user_data);
+        std::sort(snapshot.begin(), snapshot.end(),
+                  [](const auto& a, const auto& b) {
+                      return a->insertion_seq < b->insertion_seq;
+                  });
+
+        uint32_t matched = 0;
+        sao_status_t callback_status = SAO_STATUS_OK;
+        for (const auto& t : snapshot) {
+            sao_engine_trigger_callback_t callback = nullptr;
+            void* callback_user_data = nullptr;
+            {
+                std::lock_guard<std::mutex> state_lock(t->state_mutex);
+                if (!t->active.load(std::memory_order_acquire) ||
+                    !advanceTimers(*t->root, dt_ms)) {
+                    continue;
+                }
+                callback = t->callback;
+                callback_user_data = t->user_data;
+            }
+
+            matched += 1;
+            if (out_action_ids != nullptr && matched <= capacity) {
+                out_action_ids[matched - 1] = t->action_id;
+            }
+            if (callback != nullptr) {
+                SaoEngineTriggerEvent tick_evt{};
+                tick_evt.event_type_utf8 = "__tick__";
+                tick_evt.timestamp_ms = dt_ms;
+                if (invokeTriggerCallback(callback, t->action_id, &tick_evt,
+                                          callback_user_data) != SAO_STATUS_OK) {
+                    callback_status = SAO_STATUS_ERR_UNKNOWN;
+                }
+            }
         }
+        *out_count = matched;
+        if (out_action_ids != nullptr && matched > capacity) {
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
+        return callback_status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    *out_count = matched;
-    if (out_action_ids != nullptr && matched > capacity) {
-        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
-    }
-    return SAO_STATUS_OK;
 }
