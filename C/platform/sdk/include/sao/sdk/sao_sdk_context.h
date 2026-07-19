@@ -516,6 +516,32 @@ struct SaoSdkGpuHuntTable {
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         size_t index, float* out_positions_xyz, size_t max_bones,
         size_t* out_bone_count);
+
+    // Append-only ABI 1.8 extension: hot-heap fingerprint list.
+    //
+    // Each hot heap = 4 x uint64 flat: (size, protect, region_type,
+    // header_8b).  protect and region_type are promoted to 64-bit for
+    // flat ABI simplicity (Windows values are 32-bit, high bits stay
+    // 0).  Callers persist this list to disk keyed on game and feed
+    // it back on the next attach so the tracker jumps straight onto
+    // known-good upload heaps by size + protect + region_type +
+    // heap-header 8B fingerprint.
+    //
+    // get: writes up to max_entries * 4 u64 into out_flat and always
+    // sets *out_entry_count to the true length.  Pass out_flat=NULL
+    // to probe length.
+    sao_sdk_status_t(SAO_SDK_CALL* get_prior_hot_heaps)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t* out_flat, size_t max_entries, size_t* out_entry_count);
+
+    // set: replace the prior_hint.hot_heaps list with the caller's
+    // array.  entry_count is entries (each 4 x u64).  Pass count=0
+    // (or flat=NULL) to clear just the hot_heaps slice.  Existing
+    // heap_size / offset / fingerprint parts of the hint are
+    // preserved (read-modify-write).
+    sao_sdk_status_t(SAO_SDK_CALL* set_prior_hot_heaps)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        const uint64_t* flat, size_t entry_count);
 };
 
 // The main context struct.  ctx_impl is an opaque pointer to the
