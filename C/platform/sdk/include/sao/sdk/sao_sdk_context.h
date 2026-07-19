@@ -611,6 +611,11 @@ struct SaoSdkGpuHuntTable {
 #define SAO_SDK_GPU_HUNT_TOGGLE_INVALIDATE_ON_LOCKED_LOST    (1ULL << 6)
 #define SAO_SDK_GPU_HUNT_TOGGLE_HEAP_CHURN_CHECK_ENABLED     (1ULL << 7)
 #define SAO_SDK_GPU_HUNT_TOGGLE_HOT_HEAPS_LRU_ENABLED        (1ULL << 8)
+// Optim 26: anti-cheat trap-page defense.  When set, tracker probes
+// backend->probe_page_valid() on every 4 KiB page and skips pages
+// with Valid=0 (WSL_PAGE_VALID clear) so external RPM never faults
+// AC-planted trap pages into the target's working set.
+#define SAO_SDK_GPU_HUNT_TOGGLE_SKIP_INVALID_WS_PAGES        (1ULL << 9)
 
 // The main context struct.  ctx_impl is an opaque pointer to the
 // platform's per-plugin state; every function pointer takes it as
