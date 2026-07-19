@@ -38,16 +38,14 @@ constexpr const char* kActPlatformShimName = "act_platform.plugins";
 // 内部实现: PyImport_AppendInittab("sao_sdk", PyInit_sao_sdk_bridge)。
 // PyInit_sao_sdk_bridge 内部创建 PyModuleDef, 用 sdk_binding/binding_python.h
 // 里的 sao_plugins_binding_python_method_defs() 拿到所有 PyMethodDef 表。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_pyhost_register_native_module(void);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_native_module(void);
 
 // 手写 shim 模块 act_platform.plugins — 让旧插件直接
 // ``from act_platform.plugins import PluginContext`` 就拿到一个和 native ctx
 // 无缝互操作的 Python 类。
 //
 // 内部实现: 创建虚 module, 把 PluginContext 类符号指到 sao_sdk 里同名类的别名。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_pyhost_register_shim_module(void);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_shim_module(void);
 
 // 每插件在 sao_sdk 模块层面 wrap 一个 ctx handle 成 PyObject。
 // out_pyobject 归属调用方 (用 PyDECREF 释放)。
@@ -64,13 +62,26 @@ sao_plugins_pyhost_free_wrapped_ctx(void* pyobject);
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_teardown_native(void* pyobject);
 
+// Status-returning teardown used by hosts that must preserve the context when
+// teardown is re-entered from one of its own callbacks. The legacy void entry
+// point remains ABI-compatible and leaves deferred work attached to the
+// context when this function reports BUSY.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject);
+
+// Binds the loader-owned canonical plugin_context_t to an already-created
+// Python PluginContext.  The binding is borrowed and remains valid until the
+// loader calls the host adapter's unload callback.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context);
+
 // 已知的 SDK 方法数 (调 binding_python 侧的 method_defs 拿到)。
-extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL
-sao_plugins_pyhost_sdk_method_count(void);
+extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL sao_plugins_pyhost_sdk_method_count(void);
 
 // 内省 PluginContext 记账 (Wave 7 新增, 单测和内部使用)。
 // record_kind ∈ {"panels","hotkeys","subscriptions","published","logs",
-//                "timers","notifications","settings","menus"}。
+//                "timers","timer_tokens","callback_refs","notifications","settings",
+//                "menus"}。
 // 返回借用引用? 不, 返回**新引用** (调用方拿到后 Py_DECREF 释放)。
 // 无 Python 时返回 nullptr。声明为 void* 避免 include Python.h。
 extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL

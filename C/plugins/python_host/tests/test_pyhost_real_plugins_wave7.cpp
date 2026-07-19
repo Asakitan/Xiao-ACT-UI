@@ -15,18 +15,18 @@
 // 编译 gating: Catch2_FOUND && SAO_HAS_PYTHON_EMBED. 缺任一时本 .cpp 不编 (由
 // CMakeLists gate); 若 CMakeLists 强编但 SAO_HAS_PYTHON_EMBED 未定义, 全部 SKIP.
 
-#include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_session.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #if defined(SAO_HAS_PYTHON_EMBED)
-#  define PY_SSIZE_T_CLEAN
-#  include "sao/plugins/python_host/py_release_abi.h"
+#define PY_SSIZE_T_CLEAN
+#include "sao/plugins/python_host/py_release_abi.h"
 #endif
 
-#include "sao/plugins/python_host/py_host.h"
-#include "sao/plugins/python_host/py_module_bridge.h"
 #include "sao/plugins/compat/py_v1_manifest.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/python_host/py_host.h"
+#include "sao/plugins/python_host/py_module_bridge.h"
 #include "sao/sdk/sao_sdk.h"
 
 #include <atomic>
@@ -36,37 +36,34 @@
 #include <string>
 
 #ifndef SAO_TEST_PLUGIN_STAR_RESONANCE
-#  define SAO_TEST_PLUGIN_STAR_RESONANCE ""
+#define SAO_TEST_PLUGIN_STAR_RESONANCE ""
 #endif
 #ifndef SAO_TEST_PYTHON_HOME
-#  define SAO_TEST_PYTHON_HOME L""
+#define SAO_TEST_PYTHON_HOME L""
 #endif
 #ifndef SAO_TEST_PLUGIN_HIDE_SEEK
-#  define SAO_TEST_PLUGIN_HIDE_SEEK ""
+#define SAO_TEST_PLUGIN_HIDE_SEEK ""
 #endif
 #ifndef SAO_TEST_PLUGIN_MIDI_PIANO
-#  define SAO_TEST_PLUGIN_MIDI_PIANO ""
+#define SAO_TEST_PLUGIN_MIDI_PIANO ""
 #endif
 
 using namespace sao::plugins::python_host;
 
 #if defined(SAO_HAS_PYTHON_EMBED)
 
-extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_route_hotkey(
-    uint32_t virtual_key, uint32_t modifiers);
-extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
-sao_sdk_test_panel_invoke_action(const SaoSdkContext* ctx,
-                                 sao_sdk_ui_panel_t panel,
-                                 const char* action_key_utf8);
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_route_hotkey(uint32_t virtual_key,
+                                                                     uint32_t modifiers);
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_panel_invoke_action(
+    const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, const char* action_key_utf8);
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_live_context_count(void);
-extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fire_render_hook(
-    int32_t hook_point, const SaoSdkRenderHookPayload* payload);
-extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_render_hook_count(
-    const SaoSdkContext* ctx);
-extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_panel_widget_count(
-    const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
-extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_panel_canvas_count(
-    const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_fire_render_hook(int32_t hook_point, const SaoSdkRenderHookPayload* payload);
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_render_hook_count(const SaoSdkContext* ctx);
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL
+sao_sdk_test_panel_widget_count(const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL
+sao_sdk_test_panel_canvas_count(const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
 
 namespace {
 
@@ -75,7 +72,8 @@ py_host_handle_t g_host = nullptr;
 bool g_host_ready = false;
 
 py_host_handle_t ensure_host() {
-    if (g_host != nullptr && g_host_ready) return g_host;
+    if (g_host != nullptr && g_host_ready)
+        return g_host;
     py_host_config cfg{};
     cfg.python_home = SAO_TEST_PYTHON_HOME;
     cfg.register_sao_sdk = true;
@@ -93,7 +91,8 @@ py_host_handle_t ensure_host() {
 // utf-8 → std::wstring (仅 ASCII 输入即可, 单测用的路径都是纯 ASCII)
 std::wstring to_wide(const char* s) {
     std::wstring w;
-    if (s == nullptr) return w;
+    if (s == nullptr)
+        return w;
     while (*s) {
         w.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*s)));
         ++s;
@@ -104,28 +103,25 @@ std::wstring to_wide(const char* s) {
 // 尝试加载一个插件, 返 handle (可能 == nullptr). ctx 传 fake ptr.
 py_plugin_handle_t try_load(const char* dir_utf8, const char* plugin_id) {
     py_host_handle_t h = ensure_host();
-    if (h == nullptr) return nullptr;
+    if (h == nullptr)
+        return nullptr;
     std::wstring dir_w = to_wide(dir_utf8);
     void* fake_ctx = reinterpret_cast<void*>(static_cast<intptr_t>(0xDEADBEEF));
     py_plugin_handle_t plugin = nullptr;
-    int32_t rc = sao_plugins_pyhost_load_plugin(
-        h, dir_w.c_str(), /*entry=*/nullptr, plugin_id, fake_ctx, &plugin);
+    int32_t rc = sao_plugins_pyhost_load_plugin(h, dir_w.c_str(), /*entry=*/nullptr, plugin_id,
+                                                fake_ctx, &plugin);
     if (rc != SAO_OK) {
         // dump last_error for diagnostics
         if (plugin != nullptr) {
             char* err = nullptr;
-            if (sao_plugins_pyhost_get_last_error(plugin, &err) == SAO_OK &&
-                err != nullptr) {
-                std::fprintf(stderr, "load(%s) rc=%d, last_error:\n%s\n",
-                             plugin_id, rc, err);
+            if (sao_plugins_pyhost_get_last_error(plugin, &err) == SAO_OK && err != nullptr) {
+                std::fprintf(stderr, "load(%s) rc=%d, last_error:\n%s\n", plugin_id, rc, err);
                 std::free(err);
             } else {
-                std::fprintf(stderr, "load(%s) rc=%d, no last_error\n",
-                             plugin_id, rc);
+                std::fprintf(stderr, "load(%s) rc=%d, no last_error\n", plugin_id, rc);
             }
         } else {
-            std::fprintf(stderr, "load(%s) rc=%d, no plugin handle\n",
-                         plugin_id, rc);
+            std::fprintf(stderr, "load(%s) rc=%d, no plugin handle\n", plugin_id, rc);
         }
     }
     return plugin;
@@ -139,37 +135,47 @@ py_plugin_handle_t try_load(const char* dir_utf8, const char* plugin_id) {
 enum class LoadOutcome { OK, TOP_LEVEL_FAILED, MODULE_MISSING };
 
 LoadOutcome outcome_of(py_plugin_handle_t plugin) {
-    if (plugin == nullptr) return LoadOutcome::MODULE_MISSING;
+    if (plugin == nullptr)
+        return LoadOutcome::MODULE_MISSING;
     void* mod = sao_plugins_pyhost_get_module_pyobject(plugin);
-    if (mod == nullptr) return LoadOutcome::MODULE_MISSING;
+    if (mod == nullptr)
+        return LoadOutcome::MODULE_MISSING;
     // 判 top-level 完成: last_error 空表 exec_module 无异常.
     char* err = nullptr;
     LoadOutcome oc = LoadOutcome::OK;
     if (sao_plugins_pyhost_get_last_error(plugin, &err) == SAO_OK && err != nullptr) {
-        if (*err != '\0') oc = LoadOutcome::TOP_LEVEL_FAILED;
+        if (*err != '\0')
+            oc = LoadOutcome::TOP_LEVEL_FAILED;
         std::free(err);
     }
     return oc;
 }
 
 void safe_unload(py_plugin_handle_t plugin) {
-    if (plugin == nullptr) return;
+    if (plugin == nullptr)
+        return;
     (void)sao_plugins_pyhost_unload_plugin(plugin);
 }
 
 // 判断路径是否存在 (ASCII 简化)
 bool path_exists(const char* p) {
-    if (p == nullptr || *p == '\0') return false;
+    if (p == nullptr || *p == '\0')
+        return false;
     std::FILE* f = std::fopen(p, "rb");
-    if (f != nullptr) { std::fclose(f); return true; }
+    if (f != nullptr) {
+        std::fclose(f);
+        return true;
+    }
     return false;
 }
 
 // 判断插件 dir 是否存在 (查 plugin.json)
 bool plugin_dir_ok(const char* dir_utf8) {
-    if (dir_utf8 == nullptr || *dir_utf8 == '\0') return false;
+    if (dir_utf8 == nullptr || *dir_utf8 == '\0')
+        return false;
     std::string p = dir_utf8;
-    if (!p.empty() && p.back() != '/' && p.back() != '\\') p.push_back('/');
+    if (!p.empty() && p.back() != '/' && p.back() != '\\')
+        p.push_back('/');
     p += "plugin.json";
     return path_exists(p.c_str());
 }
@@ -228,7 +234,8 @@ mp_audio.MidiAudition = _Audition
 sys.modules["mp_audio"] = mp_audio
 )PY";
     }
-    if (code == nullptr) return;
+    if (code == nullptr)
+        return;
     PyObject* main = PyImport_AddModule("__main__");
     REQUIRE(main != nullptr);
     PyObject* globals = PyModule_GetDict(main);
@@ -276,10 +283,8 @@ PyObject* eval_callback(const char* expression) {
     return callback;
 }
 
-sao_sdk_ui_panel_t register_controlled_canvas_panel(void* ctx,
-                                                    const char* panel_id,
-                                                    PyObject* render,
-                                                    PyObject* action) {
+sao_sdk_ui_panel_t register_controlled_canvas_panel(void* ctx, const char* panel_id,
+                                                    PyObject* render, PyObject* action) {
     PyObject* meta = PyDict_New();
     REQUIRE(meta != nullptr);
     PyObject* title = PyUnicode_FromString("Controlled native canvas");
@@ -288,8 +293,8 @@ sao_sdk_ui_panel_t register_controlled_canvas_panel(void* ctx,
     Py_DECREF(title);
     REQUIRE(PyDict_SetItemString(meta, "canvas", Py_True) == 0);
 
-    PyObject* method = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx),
-                                               "register_ui_panel");
+    PyObject* method =
+        PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx), "register_ui_panel");
     REQUIRE(method != nullptr);
     PyObject* args = Py_BuildValue("(sO)", panel_id, meta);
     Py_DECREF(meta);
@@ -314,22 +319,20 @@ sao_sdk_ui_panel_t register_controlled_canvas_panel(void* ctx,
     REQUIRE(PyDict_Check(record));
     PyObject* native_handle = PyDict_GetItemString(record, "native_handle");
     REQUIRE(native_handle != nullptr);
-    const auto panel = reinterpret_cast<sao_sdk_ui_panel_t>(
-        PyLong_AsVoidPtr(native_handle));
+    const auto panel = reinterpret_cast<sao_sdk_ui_panel_t>(PyLong_AsVoidPtr(native_handle));
     Py_DECREF(panels);
     REQUIRE(panel != nullptr);
     return panel;
 }
 
-void register_controlled_hotkey_and_event(void* ctx, PyObject* hotkey,
-                                          PyObject* event) {
-    PyObject* hotkey_method = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx),
-                                                      "add_hotkey");
+void register_controlled_hotkey_and_event(void* ctx, PyObject* hotkey, PyObject* event) {
+    PyObject* hotkey_method =
+        PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx), "add_hotkey");
     REQUIRE(hotkey_method != nullptr);
     PyObject* hotkey_args = Py_BuildValue("(sO)", "controlled_lifecycle", hotkey);
     REQUIRE(hotkey_args != nullptr);
-    PyObject* hotkey_kwargs = Py_BuildValue("{s:s,s:s}", "default_key", "CTRL+F7",
-                                             "label", "Controlled lifecycle");
+    PyObject* hotkey_kwargs =
+        Py_BuildValue("{s:s,s:s}", "default_key", "CTRL+F7", "label", "Controlled lifecycle");
     REQUIRE(hotkey_kwargs != nullptr);
     PyObject* hotkey_result = PyObject_Call(hotkey_method, hotkey_args, hotkey_kwargs);
     Py_DECREF(hotkey_kwargs);
@@ -338,11 +341,10 @@ void register_controlled_hotkey_and_event(void* ctx, PyObject* hotkey,
     REQUIRE(hotkey_result != nullptr);
     Py_DECREF(hotkey_result);
 
-    PyObject* subscribe = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx),
-                                                  "subscribe");
+    PyObject* subscribe = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx), "subscribe");
     REQUIRE(subscribe != nullptr);
-    PyObject* event_result = PyObject_CallFunction(subscribe, "sO",
-                                                    "controlled.lifecycle.event", event);
+    PyObject* event_result =
+        PyObject_CallFunction(subscribe, "sO", "controlled.lifecycle.event", event);
     Py_DECREF(subscribe);
     REQUIRE(event_result != nullptr);
     Py_DECREF(event_result);
@@ -350,8 +352,8 @@ void register_controlled_hotkey_and_event(void* ctx, PyObject* hotkey,
 
 std::atomic<int> g_render_ticks{0};
 
-sao_sdk_status_t SAO_SDK_CALL controlled_render_tick(
-    int32_t hook_point, const SaoSdkRenderHookPayload*, void*) {
+sao_sdk_status_t SAO_SDK_CALL controlled_render_tick(int32_t hook_point,
+                                                     const SaoSdkRenderHookPayload*, void*) {
     if (hook_point == SAO_SDK_HOOK_AFTER_COMPOSITOR) {
         g_render_ticks.fetch_add(1);
     }
@@ -369,8 +371,7 @@ void require_no_python_object_leak(PyObject* weakref, const char* plugin_id) {
     Py_DECREF(weakref);
 }
 
-void require_controlled_native_lifecycle(const char* directory,
-                                         const char* plugin_id,
+void require_controlled_native_lifecycle(const char* directory, const char* plugin_id,
                                          bool expects_panels) {
     const size_t contexts_before = sao_sdk_test_live_context_count();
     install_controlled_shims(plugin_id);
@@ -382,8 +383,7 @@ void require_controlled_native_lifecycle(const char* directory,
     void* ctx = sao_plugins_pyhost_get_ctx_pyobject(plugin);
     REQUIRE(ctx != nullptr);
     REQUIRE(sao_plugins_pyhost_get_sdk_context(plugin) != nullptr);
-    const auto* sdk = static_cast<const SaoSdkContext*>(
-        sao_plugins_pyhost_get_sdk_context(plugin));
+    const auto* sdk = static_cast<const SaoSdkContext*>(sao_plugins_pyhost_get_sdk_context(plugin));
     REQUIRE(sao_sdk_test_live_context_count() == contexts_before + 1u);
     REQUIRE(record_count(ctx, expects_panels ? "panels" : "menus") > 0u);
 
@@ -391,17 +391,15 @@ void require_controlled_native_lifecycle(const char* directory,
     set_main_counter("__sao_lifecycle_hotkey_hits", 0);
     set_main_counter("__sao_lifecycle_event_hits", 0);
     PyObject* render = eval_callback("lambda _payload=None: {'frame': 'idle'}");
-    const char* callback_code =
-        "def __sao_lifecycle_action(_action, _payload=None):\n"
-        "    globals()['__sao_lifecycle_action_hits'] += 1\n"
-        "def __sao_lifecycle_hotkey():\n"
-        "    globals()['__sao_lifecycle_hotkey_hits'] += 1\n"
-        "def __sao_lifecycle_event(_topic, _payload):\n"
-        "    globals()['__sao_lifecycle_event_hits'] += 1\n";
+    const char* callback_code = "def __sao_lifecycle_action(_action, _payload=None):\n"
+                                "    globals()['__sao_lifecycle_action_hits'] += 1\n"
+                                "def __sao_lifecycle_hotkey():\n"
+                                "    globals()['__sao_lifecycle_hotkey_hits'] += 1\n"
+                                "def __sao_lifecycle_event(_event):\n"
+                                "    globals()['__sao_lifecycle_event_hits'] += 1\n";
     PyObject* globals = PyModule_GetDict(PyImport_AddModule("__main__"));
     REQUIRE(globals != nullptr);
-    PyObject* callback_result = PyRun_String(callback_code, Py_file_input,
-                                              globals, globals);
+    PyObject* callback_result = PyRun_String(callback_code, Py_file_input, globals, globals);
     REQUIRE(callback_result != nullptr);
     Py_DECREF(callback_result);
     PyObject* action = eval_callback("__sao_lifecycle_action");
@@ -409,8 +407,8 @@ void require_controlled_native_lifecycle(const char* directory,
     PyObject* event = eval_callback("__sao_lifecycle_event");
 
     const std::string panel_id = std::string("controlled.") + plugin_id + ".canvas";
-    const sao_sdk_ui_panel_t panel = register_controlled_canvas_panel(
-        ctx, panel_id.c_str(), render, action);
+    const sao_sdk_ui_panel_t panel =
+        register_controlled_canvas_panel(ctx, panel_id.c_str(), render, action);
     register_controlled_hotkey_and_event(ctx, hotkey, event);
     Py_DECREF(event);
     Py_DECREF(hotkey);
@@ -424,9 +422,8 @@ void require_controlled_native_lifecycle(const char* directory,
 
     sao_sdk_hook_token_t render_hook = 0;
     g_render_ticks.store(0);
-    REQUIRE(sao_sdk_register_render_hook(sdk, SAO_SDK_HOOK_AFTER_COMPOSITOR,
-                                          controlled_render_tick, nullptr,
-                                          &render_hook) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_register_render_hook(sdk, SAO_SDK_HOOK_AFTER_COMPOSITOR, controlled_render_tick,
+                                         nullptr, &render_hook) == SAO_SDK_OK);
     REQUIRE(render_hook != 0);
     REQUIRE(sao_sdk_test_render_hook_count(sdk) == 1u);
     SaoSdkRenderHookPayload frame{};
@@ -436,11 +433,10 @@ void require_controlled_native_lifecycle(const char* directory,
     sao_sdk_test_fire_render_hook(SAO_SDK_HOOK_AFTER_COMPOSITOR, &frame);
     REQUIRE(g_render_ticks.load() == 1);
 
-    REQUIRE(sao_sdk_test_route_hotkey(0x76u, 1u << 0) == 1u);  // CTRL+F7
+    REQUIRE(sao_sdk_test_route_hotkey(0x76u, 1u << 0) == 1u); // CTRL+F7
     REQUIRE(main_counter("__sao_lifecycle_hotkey_hits") == 1L);
 
-    PyObject* publish = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx),
-                                                "publish");
+    PyObject* publish = PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx), "publish");
     REQUIRE(publish != nullptr);
     PyObject* event_data = PyDict_New();
     REQUIRE(event_data != nullptr);
@@ -448,8 +444,8 @@ void require_controlled_native_lifecycle(const char* directory,
     REQUIRE(idle != nullptr);
     REQUIRE(PyDict_SetItemString(event_data, "state", idle) == 0);
     Py_DECREF(idle);
-    PyObject* publish_result = PyObject_CallFunction(
-        publish, "sO", "controlled.lifecycle.event", event_data);
+    PyObject* publish_result =
+        PyObject_CallFunction(publish, "sO", "controlled.lifecycle.event", event_data);
     Py_DECREF(event_data);
     Py_DECREF(publish);
     REQUIRE(publish_result != nullptr);
@@ -475,8 +471,7 @@ void require_controlled_native_lifecycle(const char* directory,
     require_no_python_object_leak(weakref, plugin_id);
 }
 
-void require_full_lifecycle(const char* directory, const char* plugin_id,
-                            bool expects_panels) {
+void require_full_lifecycle(const char* directory, const char* plugin_id, bool expects_panels) {
     install_controlled_shims(plugin_id);
     py_plugin_handle_t plugin = try_load(directory, plugin_id);
     REQUIRE(plugin != nullptr);
@@ -486,8 +481,7 @@ void require_full_lifecycle(const char* directory, const char* plugin_id,
     std::string load_error;
     if (load_status != SAO_OK) {
         char* error = nullptr;
-        if (sao_plugins_pyhost_get_last_error(plugin, &error) == SAO_OK &&
-            error != nullptr) {
+        if (sao_plugins_pyhost_get_last_error(plugin, &error) == SAO_OK && error != nullptr) {
             load_error = error;
             std::free(error);
         }
@@ -522,8 +516,7 @@ TEST_CASE("pyhost_controlled_shim_executes_legacy_plugin_lifecycles",
     REQUIRE(ensure_host() != nullptr);
     install_controlled_shims("star_resonance");
     if (!plugin_dir_ok(SAO_TEST_PLUGIN_STAR_RESONANCE) ||
-        !plugin_dir_ok(SAO_TEST_PLUGIN_HIDE_SEEK) ||
-        !plugin_dir_ok(SAO_TEST_PLUGIN_MIDI_PIANO)) {
+        !plugin_dir_ok(SAO_TEST_PLUGIN_HIDE_SEEK) || !plugin_dir_ok(SAO_TEST_PLUGIN_MIDI_PIANO)) {
         FAIL("the three legacy plugin directories are required for lifecycle validation");
     }
 
@@ -536,23 +529,17 @@ TEST_CASE("pyhost_real_plugins_complete_controlled_native_lifecycle_and_reload",
           "[pyhost][lifecycle][native][reload]") {
     REQUIRE(ensure_host() != nullptr);
     if (!plugin_dir_ok(SAO_TEST_PLUGIN_STAR_RESONANCE) ||
-        !plugin_dir_ok(SAO_TEST_PLUGIN_HIDE_SEEK) ||
-        !plugin_dir_ok(SAO_TEST_PLUGIN_MIDI_PIANO)) {
+        !plugin_dir_ok(SAO_TEST_PLUGIN_HIDE_SEEK) || !plugin_dir_ok(SAO_TEST_PLUGIN_MIDI_PIANO)) {
         FAIL("the three legacy plugin directories are required for lifecycle validation");
     }
 
-    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_STAR_RESONANCE,
-                                        "star_resonance", false);
-    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_HIDE_SEEK,
-                                        "hide_seek_plugin", true);
-    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_MIDI_PIANO,
-                                        "midi_piano_plugin", true);
-    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_STAR_RESONANCE,
-                                        "star_resonance", false);
+    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_STAR_RESONANCE, "star_resonance", false);
+    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_HIDE_SEEK, "hide_seek_plugin", true);
+    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_MIDI_PIANO, "midi_piano_plugin", true);
+    require_controlled_native_lifecycle(SAO_TEST_PLUGIN_STAR_RESONANCE, "star_resonance", false);
 }
 
-TEST_CASE("pyhost_uses_isolated_no_site_configuration",
-          "[pyhost][isolated]") {
+TEST_CASE("pyhost_uses_isolated_no_site_configuration", "[pyhost][isolated]") {
     REQUIRE(ensure_host() != nullptr);
     PyObject* flags = PySys_GetObject("flags");
     REQUIRE(flags != nullptr);
@@ -569,8 +556,7 @@ TEST_CASE("pyhost_uses_isolated_no_site_configuration",
 // ══════════════════════════════════════════════════════════
 // CASE 1: star_resonance 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged",
-          "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
     const char* dir = SAO_TEST_PLUGIN_STAR_RESONANCE;
     if (!plugin_dir_ok(dir)) {
         SKIP("star_resonance_plugin dir not present");
@@ -598,7 +584,8 @@ TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged",
         REQUIRE(rc == SAO_OK);
         char* err = nullptr;
         if (sao_plugins_pyhost_get_last_error(plugin, &err) == SAO_OK) {
-            if (err != nullptr) std::free(err);
+            if (err != nullptr)
+                std::free(err);
         }
     }
 
@@ -608,8 +595,7 @@ TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged",
 // ══════════════════════════════════════════════════════════
 // CASE 2: hide_seek 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged",
-          "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
     const char* dir = SAO_TEST_PLUGIN_HIDE_SEEK;
     if (!plugin_dir_ok(dir)) {
         SKIP("hide_seek_plugin dir not present");
@@ -663,8 +649,7 @@ TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged",
 // ══════════════════════════════════════════════════════════
 // CASE 3: midi_piano 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged",
-          "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
     const char* dir = SAO_TEST_PLUGIN_MIDI_PIANO;
     if (!plugin_dir_ok(dir)) {
         SKIP("midi_piano_plugin dir not present");
@@ -689,8 +674,7 @@ TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged",
 // ══════════════════════════════════════════════════════════
 // CASE 4: 反复 4 次 load/unload star_resonance 无泄漏
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_unload_reload_star_resonance",
-          "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_unload_reload_star_resonance", "[pyhost][wave7][real_plugins]") {
     const char* dir = SAO_TEST_PLUGIN_STAR_RESONANCE;
     if (!plugin_dir_ok(dir)) {
         SKIP("star_resonance_plugin dir not present");
@@ -700,7 +684,8 @@ TEST_CASE("pyhost_unload_reload_star_resonance",
     // 记录 sys.modules 里 act_plugin_ 前缀的 module 数, 循环前后应相等.
     auto count_act_plugin_modules = []() -> Py_ssize_t {
         PyObject* mods = PyImport_GetModuleDict();
-        if (mods == nullptr) return -1;
+        if (mods == nullptr)
+            return -1;
         Py_ssize_t count = 0;
         PyObject* key = nullptr;
         PyObject* val = nullptr;
@@ -708,7 +693,8 @@ TEST_CASE("pyhost_unload_reload_star_resonance",
         while (PyDict_Next(mods, &pos, &key, &val)) {
             if (PyUnicode_Check(key)) {
                 const char* s = PyUnicode_AsUTF8(key);
-                if (s != nullptr && std::strncmp(s, "act_plugin_", 11) == 0) ++count;
+                if (s != nullptr && std::strncmp(s, "act_plugin_", 11) == 0)
+                    ++count;
             }
         }
         return count;
@@ -729,8 +715,7 @@ TEST_CASE("pyhost_unload_reload_star_resonance",
 // ══════════════════════════════════════════════════════════
 // CASE 5: plugin.py 里 `import sao_sdk` 能拿到 module
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin",
-          "[pyhost][wave7]") {
+TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin", "[pyhost][wave7]") {
     REQUIRE(ensure_host() != nullptr);
 
     // 直接 PyImport_ImportModule (相当于插件里的 `import sao_sdk`).
@@ -764,8 +749,7 @@ TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin",
 // ══════════════════════════════════════════════════════════
 // CASE 6: ctx.log_info(msg) → host 记账
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_ctx_log_info_reaches_platform_log",
-          "[pyhost][wave7]") {
+TEST_CASE("pyhost_ctx_log_info_reaches_platform_log", "[pyhost][wave7]") {
     REQUIRE(ensure_host() != nullptr);
 
     // 建一个 PluginContext 直接调 (不需要加载 real plugin).
@@ -811,8 +795,7 @@ TEST_CASE("pyhost_ctx_log_info_reaches_platform_log",
 // ══════════════════════════════════════════════════════════
 // CASE 7: ctx.register_ui_panel → 得 panel_id handle
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle",
-          "[pyhost][wave7]") {
+TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle", "[pyhost][wave7]") {
     REQUIRE(ensure_host() != nullptr);
 
     PyObject* mod = PyImport_ImportModule("sao_sdk");
@@ -859,8 +842,7 @@ TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle",
 // ══════════════════════════════════════════════════════════
 // CASE 8: ctx.add_hotkey → 记账
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key",
-          "[pyhost][wave7]") {
+TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key", "[pyhost][wave7]") {
     REQUIRE(ensure_host() != nullptr);
 
     PyObject* mod = PyImport_ImportModule("sao_sdk");
@@ -876,7 +858,7 @@ TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key",
     REQUIRE(ctx != nullptr);
 
     // 定义一个 python callable (lambda 不方便; 用 eval 编一个).
-    PyObject* main_dict = PyModule_GetDict(PyImport_AddModule("__main__"));  // borrowed
+    PyObject* main_dict = PyModule_GetDict(PyImport_AddModule("__main__")); // borrowed
     PyObject* cb = PyRun_String("(lambda: 42)", Py_eval_input, main_dict, main_dict);
     REQUIRE(cb != nullptr);
     REQUIRE(PyCallable_Check(cb));
@@ -916,7 +898,7 @@ TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key",
     CHECK(std::string(PyUnicode_AsUTF8(hid)) == "test_hk");
     CHECK(std::string(PyUnicode_AsUTF8(dk2)) == "CTRL+F5");
     CHECK(std::string(PyUnicode_AsUTF8(lbl2)) == "Test");
-    CHECK(saved_cb == cb);  // callable 存进记账
+    CHECK(saved_cb == cb); // callable 存进记账
 
     // 直接调 saved_cb 验证真的存下来了 (对应 spec 里的 "fires_on_key" 语义:
     // 主平台之后可以从记账里取回来触发).
@@ -944,8 +926,7 @@ TeardownSentinel g_teardown{};
 
 #else // !SAO_HAS_PYTHON_EMBED
 
-TEST_CASE("pyhost_wave7_skipped_no_python_embed",
-          "[pyhost][wave7][.skip]") {
+TEST_CASE("pyhost_wave7_skipped_no_python_embed", "[pyhost][wave7][.skip]") {
     SKIP("Python3 embed not found — Wave 7 real-plugin tests require CPython 3.11+");
 }
 

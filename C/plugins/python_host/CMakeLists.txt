@@ -13,6 +13,14 @@ add_library(sao_plugins_python_host STATIC
 )
 add_library(sao::plugins::python_host ALIAS sao_plugins_python_host)
 
+if (NOT TARGET sao_plugins_loader)
+    message(FATAL_ERROR
+        "sao_plugins_python_host requires the canonical loader target")
+endif()
+target_compile_definitions(sao_plugins_python_host PUBLIC
+    SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER
+)
+
 target_include_directories(sao_plugins_python_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
