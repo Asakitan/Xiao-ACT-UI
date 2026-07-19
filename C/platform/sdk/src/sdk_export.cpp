@@ -29,18 +29,34 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_bind_context(
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
 
-    sao_sdk_internal::SharedRuntime::instance().ensure_started();
-    auto* state = new (std::nothrow) sao_sdk_internal::ContextState();
-    if (state == nullptr)
-        return SAO_SDK_ERR_NOT_INITIALIZED;
-    state->plugin_id = plugin_id_utf8;
-    sao_sdk_internal::populate_context(state, out_ctx, plugin_version_utf8);
-    sao_sdk_internal::register_context(state);
-    const auto provider_status = sao_sdk_internal::bind_process_providers(state);
-    if (provider_status != SAO_SDK_OK) {
-        if (sao_sdk_context_try_destroy(out_ctx) != SAO_SDK_OK)
-            sao_sdk_internal::quarantine_context(state);
-        return provider_status;
+    sao_sdk_internal::ContextState* state = nullptr;
+    bool registered = false;
+    try {
+        sao_sdk_internal::SharedRuntime::instance().ensure_started();
+        state = new (std::nothrow) sao_sdk_internal::ContextState();
+        if (state == nullptr)
+            return SAO_SDK_ERR_NOT_INITIALIZED;
+        state->plugin_id = plugin_id_utf8;
+        sao_sdk_internal::populate_context(state, out_ctx, plugin_version_utf8);
+        sao_sdk_internal::register_context(state);
+        registered = true;
+        const auto provider_status = sao_sdk_internal::bind_process_providers(state);
+        if (provider_status != SAO_SDK_OK) {
+            if (sao_sdk_context_try_destroy(out_ctx) != SAO_SDK_OK)
+                sao_sdk_internal::quarantine_context(state);
+            return provider_status;
+        }
+        return SAO_SDK_OK;
+    } catch (...) {
+        if (state != nullptr) {
+            if (registered) {
+                if (sao_sdk_context_try_destroy(out_ctx) != SAO_SDK_OK)
+                    sao_sdk_internal::quarantine_context(state);
+            } else {
+                delete state;
+                std::memset(out_ctx, 0, sizeof(*out_ctx));
+            }
+        }
+        return SAO_SDK_ERR_INTERNAL;
     }
-    return SAO_SDK_OK;
 }

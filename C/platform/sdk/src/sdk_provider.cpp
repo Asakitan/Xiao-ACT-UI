@@ -5,6 +5,7 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -380,8 +381,12 @@ void SAO_SDK_CALL dialog_callback_bridge(sao_sdk_dialog_token_t, int32_t pressed
 }
 
 uint64_t allocate_capability_token(ContextState* state) {
-    std::lock_guard<std::mutex> lock(state->mu);
-    return state->next_capability_token++;
+    try {
+        std::lock_guard<std::mutex> lock(state->mu);
+        return state->next_capability_token++;
+    } catch (...) {
+        return 0;
+    }
 }
 
 sao_sdk_status_t add_registration(ContextState* state, CapabilityRegistration registration) {
@@ -478,8 +483,9 @@ sao_sdk_status_t unregister_provider_token(ContextState* state,
 
 void finish_registration(ContextState* state, const CapabilityRegistration& registration) {
     {
-        std::unique_lock<std::mutex> lock(state->callback_mutex);
-        state->callback_idle.wait(lock, [state] { return state->active_plugin_callbacks == 0; });
+        std::unique_lock<std::mutex> lock(state->callback_gate->mutex);
+        state->callback_gate->idle.wait(lock,
+                                        [state] { return state->callback_gate->active == 0; });
     }
     {
         std::lock_guard<std::mutex> lock(state->mu);
@@ -513,6 +519,20 @@ void finish_registration(ContextState* state, const CapabilityRegistration& regi
     }
     if (registration.destroy_bridge != nullptr)
         registration.destroy_bridge(registration.bridge);
+}
+
+sao_sdk_status_t normalize_unregister_status(sao_sdk_status_t status);
+
+sao_sdk_status_t rollback_added_registration(ContextState* state,
+                                             const SaoSdkProviderVTable& provider,
+                                             const CapabilityRegistration& registration,
+                                             sao_sdk_status_t insertion_status) {
+    const auto unregister_status = normalize_unregister_status(
+        unregister_provider_token(state, provider, registration));
+    if (unregister_status != SAO_SDK_OK)
+        return unregister_status;
+    finish_registration(state, registration);
+    return insertion_status;
 }
 
 sao_sdk_status_t normalize_unregister_status(sao_sdk_status_t status) {
@@ -595,17 +615,50 @@ struct PlatformProviderState {
     std::atomic<uint64_t> next_token{1};
 };
 
+std::atomic_bool g_fail_next_platform_timer_insertion{false};
+std::atomic_bool g_fail_next_platform_hotkey_insertion{false};
+std::atomic_bool g_fail_next_platform_dialog_insertion{false};
+std::atomic_bool g_fail_next_platform_overlay_insertion{false};
+std::atomic_bool g_fail_next_render_state_insertion{false};
+std::atomic_bool g_fail_next_hotkey_state_insertion{false};
+std::atomic_bool g_fail_next_notify_state_insertion{false};
+std::atomic_bool g_fail_next_overlay_state_insertion{false};
+
 PlatformProviderState& platform_provider_state() {
     static PlatformProviderState state;
     return state;
 }
 
 std::mutex g_platform_hotkey_owner_mutex;
-std::vector<std::shared_ptr<PlatformHotkeyEntry>> g_platform_hotkey_owners;
+constexpr size_t kMaxPlatformHotkeyOwnerQuarantine = 4096;
+std::array<std::shared_ptr<PlatformHotkeyEntry>, kMaxPlatformHotkeyOwnerQuarantine>
+    g_platform_hotkey_owner_slots;
+size_t g_platform_hotkey_owner_slot_count = 0;
 
-void preserve_platform_hotkey_owner(const std::shared_ptr<PlatformHotkeyEntry>& entry) {
+bool preserve_platform_hotkey_owner(const std::shared_ptr<PlatformHotkeyEntry>& entry) {
     std::lock_guard<std::mutex> lock(g_platform_hotkey_owner_mutex);
-    g_platform_hotkey_owners.push_back(entry);
+    if (g_platform_hotkey_owner_slot_count == g_platform_hotkey_owner_slots.size())
+        return false;
+    for (auto& slot : g_platform_hotkey_owner_slots) {
+        if (slot == nullptr) {
+            slot = entry;
+            ++g_platform_hotkey_owner_slot_count;
+            return true;
+        }
+    }
+    return false;
+}
+
+void release_unpublished_platform_hotkey_owner(
+    const std::shared_ptr<PlatformHotkeyEntry>& entry) {
+    std::lock_guard<std::mutex> lock(g_platform_hotkey_owner_mutex);
+    for (auto& slot : g_platform_hotkey_owner_slots) {
+        if (slot == entry) {
+            slot.reset();
+            --g_platform_hotkey_owner_slot_count;
+            return;
+        }
+    }
 }
 
 void SAO_SDK_CALL platform_provider_retain(void*) {}
@@ -838,7 +891,8 @@ sao_status_t SAO_ENGINE_CALL platform_render_bridge_callback(
     sdk_payload.viewport_width_px = payload->viewport_width_px;
     sdk_payload.viewport_height_px = payload->viewport_height_px;
     sdk_payload.dispatch_flags = payload->flags;
-    return static_cast<sao_status_t>(bridge->callback(hook_point, &sdk_payload, bridge->user_data));
+    return static_cast<sao_status_t>(invoke_callback_barrier(
+        [&] { return bridge->callback(hook_point, &sdk_payload, bridge->user_data); }));
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_render_register_ex(void*, const char* plugin_id_utf8,
@@ -907,7 +961,7 @@ sao_sdk_status_t SAO_SDK_CALL platform_render_request_redraw(void*, const char* 
 void SAO_CORE_CALL platform_timer_callback(void* user_data) {
     auto* entry = static_cast<PlatformTimerEntry*>(user_data);
     if (entry != nullptr && entry->callback != nullptr) {
-        entry->callback(0, entry->user_data);
+        (void)invoke_void_callback_barrier([&] { entry->callback(0, entry->user_data); });
     }
 }
 
@@ -929,9 +983,19 @@ sao_sdk_status_t SAO_SDK_CALL platform_timer_register(void* user_data, uint32_t 
         sao_core_timer_create(interval_ms, platform_timer_callback, entry.get(), &entry->timer);
     if (status != SAO_STATUS_OK)
         return static_cast<sao_sdk_status_t>(status);
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->timers.emplace(token, entry);
+        if (g_fail_next_platform_timer_insertion.exchange(false))
+            throw std::bad_alloc{};
+        const auto [it, inserted] = state->timers.emplace(token, entry);
+        (void)it;
+        if (!inserted) {
+            sao_core_timer_destroy(entry->timer);
+            return SAO_SDK_ERR_ALREADY_EXISTS;
+        }
+    } catch (...) {
+        sao_core_timer_destroy(entry->timer);
+        return SAO_SDK_ERR_INTERNAL;
     }
     *out_provider_token = token;
     return SAO_SDK_OK;
@@ -960,7 +1024,7 @@ void SAO_UI_CALL platform_hotkey_callback(const char*, const SaoUiInputEvent*, v
     CallbackActivityLease callback_lease(&entry->callback_activity);
     if (!callback_lease || entry->callback == nullptr)
         return;
-    entry->callback(0, entry->user_data);
+    (void)invoke_void_callback_barrier([&] { entry->callback(0, entry->user_data); });
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const char* plugin_id_utf8,
@@ -984,7 +1048,8 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
     entry->callback = callback;
     entry->user_data = callback_user_data;
     try {
-        preserve_platform_hotkey_owner(entry);
+        if (!preserve_platform_hotkey_owner(entry))
+            return SAO_SDK_ERR_BUSY;
     } catch (...) {
         return SAO_SDK_ERR_NOT_INITIALIZED;
     }
@@ -998,10 +1063,14 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
     const sao_status_t status =
         sao_ui_input_router_register_hotkey(runtime.input_router, plugin_id_utf8, &spec,
                                             platform_hotkey_callback, entry.get(), &entry->binding);
-    if (status != SAO_STATUS_OK)
+    if (status != SAO_STATUS_OK) {
+        release_unpublished_platform_hotkey_owner(entry);
         return static_cast<sao_sdk_status_t>(status);
+    }
     try {
         std::lock_guard<std::mutex> lock(state->mutex);
+        if (g_fail_next_platform_hotkey_insertion.exchange(false))
+            throw std::bad_alloc{};
         state->hotkeys.emplace(token, entry);
     } catch (...) {
         (void)sao_ui_input_router_unregister_hotkey(runtime.input_router, entry->binding);
@@ -1038,8 +1107,10 @@ void SAO_UI_CALL platform_dialog_callback(SaoUiDialogButton pressed, const char*
                                           size_t input_text_len, void* user_data) {
     auto* entry = static_cast<PlatformDialogEntry*>(user_data);
     if (entry != nullptr && entry->callback != nullptr) {
-        entry->callback(0, static_cast<int32_t>(pressed), input_text_utf8, input_text_len,
-                        entry->user_data);
+        (void)invoke_void_callback_barrier([&] {
+            entry->callback(0, static_cast<int32_t>(pressed), input_text_utf8, input_text_len,
+                            entry->user_data);
+        });
     }
 }
 
@@ -1077,8 +1148,18 @@ sao_sdk_status_t SAO_SDK_CALL platform_dialog_show(void* user_data, const char*,
         return static_cast<sao_sdk_status_t>(status);
     }
     {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->dialogs.emplace(token, entry);
+        try {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            if (g_fail_next_platform_dialog_insertion.exchange(false))
+                throw std::bad_alloc{};
+            const auto [it, inserted] = state->dialogs.emplace(token, entry);
+            (void)it;
+            if (!inserted)
+                throw std::bad_alloc{};
+        } catch (...) {
+            sao_ui_dialog_destroy(entry->dialog);
+            return SAO_SDK_ERR_INTERNAL;
+        }
     }
     *out_provider_token = token;
     return SAO_SDK_OK;
@@ -1138,9 +1219,20 @@ sao_sdk_status_t SAO_SDK_CALL platform_overlay_set(void* user_data, const char* 
         return static_cast<sao_sdk_status_t>(status);
     auto* state = static_cast<PlatformProviderState*>(user_data);
     const uint64_t token = state->next_token.fetch_add(1);
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->overlays.emplace(token, PlatformOverlayEntry{plugin_id_utf8, spec->surface_id_utf8});
+        if (g_fail_next_platform_overlay_insertion.exchange(false))
+            throw std::bad_alloc{};
+        const auto [it, inserted] = state->overlays.emplace(
+            token, PlatformOverlayEntry{plugin_id_utf8, spec->surface_id_utf8});
+        if (!inserted)
+            throw std::bad_alloc{};
+        (void)it;
+    } catch (...) {
+        const auto rollback_status = static_cast<sao_sdk_status_t>(
+            sao_engine_render_hook_clear_overlay(SharedRuntime::instance().render_registry,
+                                                 plugin_id_utf8, spec->surface_id_utf8));
+        return rollback_status == SAO_SDK_OK ? SAO_SDK_ERR_INTERNAL : rollback_status;
     }
     *out_provider_token = token;
     return SAO_SDK_OK;
@@ -1204,6 +1296,40 @@ const SaoSdkProviderVTable* platform_provider() {
 bool provider_callback_reentered(ContextState* state) noexcept {
     return state != nullptr && g_provider_callback_owner == state;
 }
+
+#if defined(SAO_SDK_TESTING)
+void test_fail_next_platform_timer_insertion() noexcept {
+    g_fail_next_platform_timer_insertion.store(true);
+}
+
+void test_fail_next_platform_hotkey_insertion() noexcept {
+    g_fail_next_platform_hotkey_insertion.store(true);
+}
+
+void test_fail_next_platform_dialog_insertion() noexcept {
+    g_fail_next_platform_dialog_insertion.store(true);
+}
+
+void test_fail_next_platform_overlay_insertion() noexcept {
+    g_fail_next_platform_overlay_insertion.store(true);
+}
+
+void test_fail_next_render_state_insertion() noexcept {
+    g_fail_next_render_state_insertion.store(true);
+}
+
+void test_fail_next_hotkey_state_insertion() noexcept {
+    g_fail_next_hotkey_state_insertion.store(true);
+}
+
+void test_fail_next_notify_state_insertion() noexcept {
+    g_fail_next_notify_state_insertion.store(true);
+}
+
+void test_fail_next_overlay_state_insertion() noexcept {
+    g_fail_next_overlay_state_insertion.store(true);
+}
+#endif
 
 sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* provider) {
     if (state == nullptr)
@@ -1758,17 +1884,18 @@ sao_sdk_status_t provider_render_register_ex(ContextState* state, const SaoSdkRe
                                         bridge, destroy_render_bridge};
     const auto add_status = add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)invoke_provider_callback(state, [&] {
-            return provider.unregister_render_hook(provider.user_data, provider_token);
-        });
-        delete bridge;
-        return add_status;
+        return rollback_added_registration(state, provider, registration, add_status);
     }
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mu);
+        if (g_fail_next_render_state_insertion.exchange(false))
+            throw std::bad_alloc{};
         state->render_hooks.push_back(RenderHookEntry{sdk_token, spec->hook_point, callback,
                                                       user_data, spec->surface_id_utf8,
                                                       spec->priority});
+    } catch (...) {
+        return rollback_added_registration(state, provider, registration,
+                                          SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_token = sdk_token;
     return SAO_SDK_OK;
@@ -1860,13 +1987,12 @@ sao_sdk_status_t provider_hotkey_register(ContextState* state, const char* bindi
                                         destroy_hotkey_provider_bridge};
     const auto add_status = add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)invoke_provider_callback(
-            state, [&] { return provider.unregister_hotkey(provider.user_data, provider_token); });
-        delete bridge;
-        return add_status;
+        return rollback_added_registration(state, provider, registration, add_status);
     }
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mu);
+        if (g_fail_next_hotkey_state_insertion.exchange(false))
+            throw std::bad_alloc{};
         HotkeyEntry entry{};
         entry.sdk_id = sdk_token;
         entry.plugin_cb = callback;
@@ -1874,6 +2000,9 @@ sao_sdk_status_t provider_hotkey_register(ContextState* state, const char* bindi
         entry.binding_id = binding_id_utf8;
         entry.bridge = bridge;
         state->hotkeys.push_back(std::move(entry));
+    } catch (...) {
+        return rollback_added_registration(state, provider, registration,
+                                          SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_id = sdk_token;
     return SAO_SDK_OK;
@@ -1937,13 +2066,16 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
                                         nullptr};
     const auto add_status = add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)invoke_provider_callback(
-            state, [&] { return provider.clear_overlay(provider.user_data, provider_token); });
-        return add_status;
+        return rollback_added_registration(state, provider, registration, add_status);
     }
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mu);
+        if (g_fail_next_overlay_state_insertion.exchange(false))
+            throw std::bad_alloc{};
         state->overlays[spec->surface_id_utf8] = reinterpret_cast<sao_sdk_ui_panel_t>(sdk_token);
+    } catch (...) {
+        return rollback_added_registration(state, provider, registration,
+                                          SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_overlay = sdk_token;
     return SAO_SDK_OK;
@@ -2005,13 +2137,13 @@ sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* 
     return SAO_SDK_OK;
 }
 
+#if defined(SAO_SDK_TESTING)
 extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(
     const SaoSdkContext* ctx, sao_sdk_hotkey_id_t hotkey) {
-    if (ctx == nullptr)
+    ContextApiLease lease(ctx);
+    if (!lease)
         return nullptr;
-    auto* state = cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return nullptr;
+    auto* state = lease.state();
     uint64_t provider_token = 0;
     {
         std::lock_guard<std::mutex> lock(state->mu);
@@ -2039,25 +2171,64 @@ sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data) {
     event.kind = SAO_UI_INPUT_KEY_DOWN;
     platform_hotkey_callback(nullptr, &event, snapshot_user_data);
 }
+#endif
 
 } // namespace sao_sdk_internal
 
+#if defined(SAO_SDK_TESTING)
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_timer_insertion(void) {
+    sao_sdk_internal::test_fail_next_platform_timer_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_hotkey_insertion(void) {
+    sao_sdk_internal::test_fail_next_platform_hotkey_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_dialog_insertion(void) {
+    sao_sdk_internal::test_fail_next_platform_dialog_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_overlay_insertion(void) {
+    sao_sdk_internal::test_fail_next_platform_overlay_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_render_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_render_state_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_hotkey_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_hotkey_state_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_notify_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_notify_state_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_overlay_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_overlay_state_insertion();
+}
+#endif
+
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_bind_provider(SaoSdkContext* ctx, const SaoSdkProviderVTable* provider) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::bind_provider(sao_sdk_internal::cast_ctx(ctx->ctx_impl), provider);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::bind_provider(lease.state(), provider); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_bind_platform_services(SaoSdkContext* ctx) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    const auto bind_status = sao_sdk_internal::bind_platform_provider(state);
-    if (bind_status != SAO_SDK_OK)
-        return bind_status;
-    return sao_sdk_internal::bind_process_providers(state);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier([&] {
+        const auto bind_status = sao_sdk_internal::bind_platform_provider(lease.state());
+        if (bind_status != SAO_SDK_OK)
+            return bind_status;
+        return sao_sdk_internal::bind_process_providers(lease.state());
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
@@ -2067,37 +2238,43 @@ sao_sdk_platform_gpu_hunt_configure_provider(const SaoSdkProviderVTable* provide
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_memory_provider(
     SaoSdkContext* ctx, const SaoSdkMemoryProviderVTable* provider) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::configure_memory_provider(sao_sdk_internal::cast_ctx(ctx->ctx_impl),
-                                                       provider);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::configure_memory_provider(lease.state(), provider); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_memory_provider_status(const SaoSdkContext* ctx) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::memory_provider_status(sao_sdk_internal::cast_ctx(ctx->ctx_impl));
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::memory_provider_status(lease.state()); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_provider_status(const SaoSdkContext* ctx) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::provider_status(sao_sdk_internal::cast_ctx(ctx->ctx_impl));
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::provider_status(lease.state()); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_timer_register(
     const SaoSdkContext* ctx, uint32_t interval_ms, sao_sdk_timer_callback_t callback,
     void* user_data, sao_sdk_timer_token_t* out_timer) {
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
     if (out_timer != nullptr)
         *out_timer = 0;
-    if (ctx == nullptr || callback == nullptr || out_timer == nullptr || interval_ms == 0) {
+    if (callback == nullptr || out_timer == nullptr || interval_ms == 0) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     sao_sdk_internal::ProviderCallLease lease(state);
     if (!lease)
         return lease.status();
@@ -2129,10 +2306,8 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_timer_register(
                                                           sao_sdk_internal::destroy_timer_bridge};
     const auto add_status = sao_sdk_internal::add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)sao_sdk_internal::invoke_provider_callback(
-            state, [&] { return provider.unregister_timer(provider.user_data, provider_token); });
-        delete bridge;
-        return add_status;
+        return sao_sdk_internal::rollback_added_registration(state, provider, registration,
+                                                             add_status);
     }
     *out_timer = sdk_token;
     return SAO_SDK_OK;
@@ -2140,11 +2315,12 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_timer_register(
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_timer_unregister(const SaoSdkContext* ctx, sao_sdk_timer_token_t timer) {
-    if (ctx == nullptr || timer == 0)
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
+    if (timer == 0)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     if (sao_sdk_internal::provider_callback_reentered(state) ||
         sao_sdk_internal::plugin_callback_reentered(state))
         return SAO_SDK_ERR_BUSY;
@@ -2170,14 +2346,15 @@ sao_sdk_timer_unregister(const SaoSdkContext* ctx, sao_sdk_timer_token_t timer) 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_dialog_show(
     const SaoSdkContext* ctx, const SaoSdkDialogSpec* spec, sao_sdk_dialog_callback_t callback,
     void* user_data, sao_sdk_dialog_token_t* out_dialog) {
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
     if (out_dialog != nullptr)
         *out_dialog = 0;
-    if (ctx == nullptr || spec == nullptr || out_dialog == nullptr) {
+    if (spec == nullptr || out_dialog == nullptr) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     sao_sdk_internal::ProviderCallLease lease(state);
     if (!lease)
         return lease.status();
@@ -2209,10 +2386,8 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_dialog_show(
                                                           sao_sdk_internal::destroy_dialog_bridge};
     const auto add_status = sao_sdk_internal::add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)sao_sdk_internal::invoke_provider_callback(
-            state, [&] { return provider.dismiss_dialog(provider.user_data, provider_token); });
-        delete bridge;
-        return add_status;
+        return sao_sdk_internal::rollback_added_registration(state, provider, registration,
+                                                             add_status);
     }
     *out_dialog = sdk_token;
     return SAO_SDK_OK;
@@ -2220,11 +2395,12 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_dialog_show(
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_dialog_dismiss(const SaoSdkContext* ctx, sao_sdk_dialog_token_t dialog) {
-    if (ctx == nullptr || dialog == 0)
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
+    if (dialog == 0)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     if (sao_sdk_internal::provider_callback_reentered(state) ||
         sao_sdk_internal::plugin_callback_reentered(state))
         return SAO_SDK_ERR_BUSY;
@@ -2249,14 +2425,15 @@ sao_sdk_dialog_dismiss(const SaoSdkContext* ctx, sao_sdk_dialog_token_t dialog) 
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_notify_show(
     const SaoSdkContext* ctx, const SaoSdkNotifySpec* spec, sao_sdk_notify_token_t* out_notify) {
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
     if (out_notify != nullptr)
         *out_notify = 0;
-    if (ctx == nullptr || spec == nullptr || spec->text_utf8 == nullptr || out_notify == nullptr) {
+    if (spec == nullptr || spec->text_utf8 == nullptr || out_notify == nullptr) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     sao_sdk_internal::ProviderCallLease lease(state);
     if (!lease)
         return lease.status();
@@ -2278,13 +2455,17 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_notify_show(
         sao_sdk_internal::CapabilityKind::notify, sdk_token, provider_token, nullptr, nullptr};
     const auto add_status = sao_sdk_internal::add_registration(state, registration);
     if (add_status != SAO_SDK_OK) {
-        (void)sao_sdk_internal::invoke_provider_callback(
-            state, [&] { return provider.dismiss_notify(provider.user_data, provider_token); });
-        return add_status;
+        return sao_sdk_internal::rollback_added_registration(state, provider, registration,
+                                                             add_status);
     }
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mu);
+        if (sao_sdk_internal::g_fail_next_notify_state_insertion.exchange(false))
+            throw std::bad_alloc{};
         state->banner_ids.push_back(sdk_token);
+    } catch (...) {
+        return sao_sdk_internal::rollback_added_registration(
+            state, provider, registration, SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_notify = sdk_token;
     return SAO_SDK_OK;
@@ -2292,11 +2473,12 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_notify_show(
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_notify_dismiss(const SaoSdkContext* ctx, sao_sdk_notify_token_t notify) {
-    if (ctx == nullptr || notify == 0)
+    sao_sdk_internal::ContextApiLease context_lease(ctx);
+    if (!context_lease)
+        return context_lease.status();
+    if (notify == 0)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
+    auto* state = context_lease.state();
     if (sao_sdk_internal::provider_callback_reentered(state) ||
         sao_sdk_internal::plugin_callback_reentered(state))
         return SAO_SDK_ERR_BUSY;
@@ -2323,18 +2505,20 @@ sao_sdk_notify_dismiss(const SaoSdkContext* ctx, sao_sdk_notify_token_t notify) 
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_overlay_set(
     const SaoSdkContext* ctx, const SaoSdkOverlaySpec* spec, sao_sdk_overlay_token_t* out_overlay) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::provider_overlay_set(sao_sdk_internal::cast_ctx(ctx->ctx_impl), spec,
-                                                  out_overlay);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::provider_overlay_set(lease.state(), spec, out_overlay); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_overlay_clear(const SaoSdkContext* ctx, sao_sdk_overlay_token_t overlay) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::provider_overlay_clear(sao_sdk_internal::cast_ctx(ctx->ctx_impl),
-                                                    overlay);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::provider_overlay_clear(lease.state(), overlay); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_platform_render_dispatch(

@@ -43,6 +43,14 @@ namespace sao_sdk_internal {
 
 struct ContextState;
 
+struct ContextCallbackGate {
+    std::mutex mutex;
+    std::condition_variable idle;
+    ContextState* state = nullptr;
+    size_t active = 0;
+    bool accepting = true;
+};
+
 // Per-widget entry inside a panel — the SDK stores the widget handle
 // alongside its spec id so update/remove can re-target it.
 struct WidgetEntry {
@@ -93,7 +101,7 @@ struct RenderHookEntry {
 // so plugins can register `sao_sdk_event_callback_t` (void return).
 //
 struct EventSubscriptionOwner {
-    ContextState* context = nullptr;
+    std::shared_ptr<ContextCallbackGate> callback_gate;
     sao_sdk_event_callback_t plugin_cb = nullptr;
     void* plugin_ud = nullptr;
     CallbackActivity callback_activity;
@@ -104,7 +112,6 @@ struct EventSubscription {
 
     EventSubscription(EventSubscription&& other) noexcept
                 : sdk_token(other.sdk_token), bus_token(other.bus_token), owner(std::move(other.owner)),
-                    heap_owner(std::exchange(other.heap_owner, nullptr)),
                     unregistering(other.unregistering) {}
 
     EventSubscription& operator=(EventSubscription&& other) noexcept {
@@ -114,7 +121,6 @@ struct EventSubscription {
         sdk_token = other.sdk_token;
         bus_token = other.bus_token;
         owner = std::move(other.owner);
-        heap_owner = std::exchange(other.heap_owner, nullptr);
         unregistering = other.unregistering;
         return *this;
     }
@@ -134,7 +140,6 @@ struct EventSubscription {
     sao_sdk_subscription_t sdk_token = 0;
     sao_engine_subscription_t bus_token = 0; // wave5 token
     std::shared_ptr<EventSubscriptionOwner> owner;
-    EventSubscription* heap_owner = nullptr; // retained for sdk_context cleanup compatibility
     bool unregistering = false;
 };
 
@@ -200,6 +205,8 @@ struct SharedRuntime {
 
 // Per-context private state — `ctx_impl` in SaoSdkContext points here.
 struct ContextState {
+    ContextState() : callback_gate(std::make_shared<ContextCallbackGate>()) {}
+
     std::string plugin_id;
     std::string plugin_version;
     std::string base_dir;
@@ -251,10 +258,7 @@ struct ContextState {
     SaoSdkContext public_ctx{};
     SaoSdkContext* bound_public_ctx = nullptr;
 
-    std::mutex callback_mutex;
-    std::condition_variable callback_idle;
-    size_t active_plugin_callbacks = 0;
-    bool callback_accepting = true;
+    std::shared_ptr<ContextCallbackGate> callback_gate;
     std::atomic_bool destroy_quarantined = false;
     std::atomic_bool destroying = false;
     std::mutex destroy_mutex;
@@ -274,6 +278,7 @@ inline thread_local ContextState* g_context_api_owner = nullptr;
 class ContextApiLease {
   public:
     explicit ContextApiLease(const SaoSdkContext* context) noexcept;
+        explicit ContextApiLease(ContextState* state) noexcept;
     ~ContextApiLease();
 
     ContextApiLease(const ContextApiLease&) = delete;
@@ -299,18 +304,23 @@ class ContextApiLease {
     ContextState* state_ = nullptr;
     ContextState* previous_owner_ = nullptr;
     sao_sdk_status_t status_ = SAO_SDK_ERR_HANDLE_INVALID;
+    bool owns_lease_ = false;
 };
 
 class PluginCallbackLease {
   public:
     explicit PluginCallbackLease(ContextState* state) noexcept
-        : state_(state), previous_owner_(g_plugin_callback_owner) {
-        if (state_ == nullptr)
+        : PluginCallbackLease(state == nullptr ? nullptr : state->callback_gate) {}
+
+    explicit PluginCallbackLease(std::shared_ptr<ContextCallbackGate> callback_gate) noexcept
+        : callback_gate_(std::move(callback_gate)), previous_owner_(g_plugin_callback_owner) {
+        if (callback_gate_ == nullptr)
             return;
-        std::lock_guard<std::mutex> lock(state_->callback_mutex);
-        if (!state_->callback_accepting)
+        std::lock_guard<std::mutex> lock(callback_gate_->mutex);
+        if (!callback_gate_->accepting || callback_gate_->state == nullptr)
             return;
-        ++state_->active_plugin_callbacks;
+        state_ = callback_gate_->state;
+        ++callback_gate_->active;
         active_ = true;
         g_plugin_callback_owner = state_;
     }
@@ -319,10 +329,10 @@ class PluginCallbackLease {
         if (!active_)
             return;
         g_plugin_callback_owner = previous_owner_;
-        std::lock_guard<std::mutex> lock(state_->callback_mutex);
-        --state_->active_plugin_callbacks;
-        if (state_->active_plugin_callbacks == 0)
-            state_->callback_idle.notify_all();
+        std::lock_guard<std::mutex> lock(callback_gate_->mutex);
+        --callback_gate_->active;
+        if (callback_gate_->active == 0)
+            callback_gate_->idle.notify_all();
     }
 
     PluginCallbackLease(const PluginCallbackLease&) = delete;
@@ -333,6 +343,7 @@ class PluginCallbackLease {
     }
 
   private:
+        std::shared_ptr<ContextCallbackGate> callback_gate_;
     ContextState* state_ = nullptr;
     ContextState* previous_owner_ = nullptr;
     bool active_ = false;

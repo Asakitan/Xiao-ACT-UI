@@ -84,23 +84,31 @@ bool g_api_test_pause_released = false;
 
 void register_context(ContextState* state) {
     std::lock_guard<std::mutex> guard(g_ctx_registry_mu);
+    state->callback_gate->state = state;
     g_ctx_registry.insert(state);
     g_ctx_snapshot_leases.try_emplace(state, 0);
     g_ctx_by_public_context[state->bound_public_ctx] = state;
 }
 
 void unregister_context(ContextState* state) {
-    std::unique_lock<std::mutex> guard(g_ctx_registry_mu);
-    state->api_accepting = false;
-    g_ctx_registry.erase(state);
-    g_destroy_quarantine.erase(state);
-    g_ctx_by_public_context.erase(state->bound_public_ctx);
-    g_ctx_registry_idle.wait(guard, [state] {
-        const auto found = g_ctx_snapshot_leases.find(state);
-        return state->active_api_calls == 0 &&
-               (found == g_ctx_snapshot_leases.end() || found->second == 0);
-    });
-    g_ctx_snapshot_leases.erase(state);
+    {
+        std::unique_lock<std::mutex> guard(g_ctx_registry_mu);
+        state->api_accepting = false;
+        g_ctx_registry.erase(state);
+        g_destroy_quarantine.erase(state);
+        g_ctx_by_public_context.erase(state->bound_public_ctx);
+        g_ctx_registry_idle.wait(guard, [state] {
+            const auto found = g_ctx_snapshot_leases.find(state);
+            return state->active_api_calls == 0 &&
+                   (found == g_ctx_snapshot_leases.end() || found->second == 0);
+        });
+        g_ctx_snapshot_leases.erase(state);
+    }
+    {
+        std::lock_guard<std::mutex> callback_lock(state->callback_gate->mutex);
+        state->callback_gate->state = nullptr;
+        state->callback_gate->accepting = false;
+    }
 }
 
 ContextApiLease::ContextApiLease(const SaoSdkContext* context) noexcept {
@@ -116,6 +124,16 @@ ContextApiLease::ContextApiLease(const SaoSdkContext* context) noexcept {
             return;
         }
         auto* state = found->second;
+        if (g_context_api_owner == state) {
+            if (state->destroy_quarantined.load(std::memory_order_acquire)) {
+                status_ = SAO_SDK_ERR_BUSY;
+                return;
+            }
+            state_ = state;
+            previous_owner_ = g_context_api_owner;
+            status_ = SAO_SDK_OK;
+            return;
+        }
         if (!state->api_accepting || state->destroying.load(std::memory_order_acquire)) {
             status_ = SAO_SDK_ERR_BUSY;
             return;
@@ -124,6 +142,44 @@ ContextApiLease::ContextApiLease(const SaoSdkContext* context) noexcept {
         state_ = state;
         previous_owner_ = g_context_api_owner;
         g_context_api_owner = state;
+        owns_lease_ = true;
+        status_ = SAO_SDK_OK;
+    } catch (...) {
+        state_ = nullptr;
+        status_ = SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+ContextApiLease::ContextApiLease(ContextState* state) noexcept {
+    if (state == nullptr) {
+        status_ = SAO_SDK_ERR_HANDLE_INVALID;
+        return;
+    }
+    if (g_context_api_owner == state) {
+        if (state->destroy_quarantined.load(std::memory_order_acquire)) {
+            status_ = SAO_SDK_ERR_BUSY;
+            return;
+        }
+        state_ = state;
+        previous_owner_ = g_context_api_owner;
+        status_ = SAO_SDK_OK;
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> guard(g_ctx_registry_mu);
+        if (!g_ctx_registry.contains(state)) {
+            status_ = SAO_SDK_ERR_HANDLE_INVALID;
+            return;
+        }
+        if (!state->api_accepting || state->destroying.load(std::memory_order_acquire)) {
+            status_ = SAO_SDK_ERR_BUSY;
+            return;
+        }
+        ++state->active_api_calls;
+        state_ = state;
+        previous_owner_ = g_context_api_owner;
+        g_context_api_owner = state;
+        owns_lease_ = true;
         status_ = SAO_SDK_OK;
     } catch (...) {
         state_ = nullptr;
@@ -135,6 +191,8 @@ ContextApiLease::~ContextApiLease() {
     if (state_ == nullptr)
         return;
     g_context_api_owner = previous_owner_;
+    if (!owns_lease_)
+        return;
     try {
         std::lock_guard<std::mutex> guard(g_ctx_registry_mu);
         if (state_->active_api_calls != 0)
@@ -148,32 +206,48 @@ ContextApiLease::~ContextApiLease() {
 void quarantine_context(ContextState* state) {
     if (state == nullptr)
         return;
-    {
-        std::lock_guard<std::mutex> guard(g_ctx_registry_mu);
-        state->api_accepting = false;
-        state->destroy_quarantined.store(true, std::memory_order_release);
-        g_ctx_registry.insert(state);
-        g_destroy_quarantine.insert(state);
-        g_ctx_snapshot_leases.try_emplace(state, 0);
-        g_ctx_by_public_context[state->bound_public_ctx] = state;
+    try {
+        {
+            std::lock_guard<std::mutex> callback_lock(state->callback_gate->mutex);
+            state->callback_gate->accepting = false;
+        }
+        {
+            std::lock_guard<std::mutex> guard(g_ctx_registry_mu);
+            state->api_accepting = false;
+            state->destroying.store(true, std::memory_order_release);
+            state->destroy_quarantined.store(true, std::memory_order_release);
+            g_ctx_registry.insert(state);
+            g_destroy_quarantine.insert(state);
+            g_ctx_snapshot_leases.try_emplace(state, 0);
+            g_ctx_by_public_context[state->bound_public_ctx] = state;
+        }
+    } catch (...) {
     }
-    std::lock_guard<std::mutex> callback_lock(state->callback_mutex);
-    state->callback_accepting = false;
 }
 
 void quarantine_public_context(const SaoSdkContext* context) {
     if (context == nullptr)
         return;
-    std::lock_guard<std::mutex> registry_lock(g_ctx_registry_mu);
-    const auto found = g_ctx_by_public_context.find(context);
-    if (found == g_ctx_by_public_context.end())
-        return;
-    auto* state = found->second;
-    state->api_accepting = false;
-    state->destroy_quarantined.store(true, std::memory_order_release);
-    g_destroy_quarantine.insert(state);
-    std::lock_guard<std::mutex> callback_lock(state->callback_mutex);
-    state->callback_accepting = false;
+    try {
+        ContextState* state = nullptr;
+        {
+            std::lock_guard<std::mutex> registry_lock(g_ctx_registry_mu);
+            const auto found = g_ctx_by_public_context.find(context);
+            if (found == g_ctx_by_public_context.end())
+                return;
+            state = found->second;
+            state->destroying.store(true, std::memory_order_release);
+            state->api_accepting = false;
+            state->destroy_quarantined.store(true, std::memory_order_release);
+        }
+        {
+            std::lock_guard<std::mutex> callback_lock(state->callback_gate->mutex);
+            state->callback_gate->accepting = false;
+        }
+        std::lock_guard<std::mutex> registry_lock(g_ctx_registry_mu);
+        g_destroy_quarantine.insert(state);
+    } catch (...) {
+    }
 }
 
 void unquarantine_context(ContextState* state) {
@@ -185,8 +259,8 @@ void unquarantine_context(ContextState* state) {
         state->api_accepting = !state->destroying.load(std::memory_order_acquire);
         g_destroy_quarantine.erase(state);
     }
-    std::lock_guard<std::mutex> callback_lock(state->callback_mutex);
-    state->callback_accepting = !state->destroying.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> callback_lock(state->callback_gate->mutex);
+    state->callback_gate->accepting = !state->destroying.load(std::memory_order_acquire);
 }
 
 size_t live_context_count() {
@@ -234,22 +308,22 @@ sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextSta
             net_callback_reentered(state) || gpu_callback_reentered(state)) {
             return SAO_SDK_ERR_BUSY;
         }
-        if (state->destroying.load(std::memory_order_acquire))
+        if (state->destroying.load(std::memory_order_acquire) &&
+            !state->destroy_quarantined.load(std::memory_order_acquire))
             return SAO_SDK_ERR_BUSY;
         state->destroying.store(true, std::memory_order_release);
         state->api_accepting = false;
         g_ctx_registry_idle.notify_all();
-        {
-            std::lock_guard<std::mutex> callback_lock(state->callback_mutex);
-            state->callback_accepting = false;
-        }
         g_context_destroy_owner = state;
         g_ctx_registry_idle.wait(registry_lock,
                                  [state] { return state->active_api_calls == 0; });
     }
 
-    std::unique_lock<std::mutex> lock(state->callback_mutex);
-    state->callback_idle.wait(lock, [state] { return state->active_plugin_callbacks == 0; });
+    {
+        std::unique_lock<std::mutex> lock(state->callback_gate->mutex);
+        state->callback_gate->accepting = false;
+        state->callback_gate->idle.wait(lock, [state] { return state->callback_gate->active == 0; });
+    }
     *out_state = state;
     return SAO_SDK_OK;
 }
@@ -265,11 +339,15 @@ void cancel_context_shutdown(ContextState* state) noexcept {
         state->destroying.store(false, std::memory_order_release);
         state->api_accepting = !quarantined;
     }
-    std::lock_guard<std::mutex> callback_lock(state->callback_mutex);
-    state->callback_accepting = !quarantined;
+    std::lock_guard<std::mutex> callback_lock(state->callback_gate->mutex);
+    state->callback_gate->accepting = !quarantined;
 }
 
 void pause_context_api_test_point(ContextApiTestPoint point) {
+#if !defined(SAO_SDK_TESTING)
+    (void)point;
+    return;
+#else
     std::unique_lock<std::mutex> lock(g_api_test_pause_mutex);
     if (!g_api_test_pause_armed || g_api_test_pause_point != point)
         return;
@@ -279,6 +357,7 @@ void pause_context_api_test_point(ContextApiTestPoint point) {
     g_api_test_pause_armed = false;
     g_api_test_pause_entered = false;
     g_api_test_pause_released = false;
+#endif
 }
 
 void arm_context_api_test_pause(ContextApiTestPoint point) {
@@ -379,10 +458,16 @@ bool equal_module_name(const char* left, const char* right) {
 
 sao_sdk_status_t SAO_SDK_CALL mem_read(void* ctx_impl, uint64_t address, void* out_buffer,
                                        size_t buffer_size, size_t* out_bytes_read) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return memory_read(cast_ctx(ctx_impl), address, out_buffer, buffer_size, out_bytes_read);
 }
 
 sao_sdk_status_t SAO_SDK_CALL mem_read_u32(void* ctx_impl, uint64_t address, uint32_t* out_value) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_value == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_value = 0;
@@ -398,6 +483,9 @@ sao_sdk_status_t SAO_SDK_CALL mem_read_u32(void* ctx_impl, uint64_t address, uin
 }
 
 sao_sdk_status_t SAO_SDK_CALL mem_read_u64(void* ctx_impl, uint64_t address, uint64_t* out_value) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_value == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_value = 0;
@@ -415,6 +503,9 @@ sao_sdk_status_t SAO_SDK_CALL mem_read_u64(void* ctx_impl, uint64_t address, uin
 sao_sdk_status_t SAO_SDK_CALL mem_read_ptr_chain(void* ctx_impl, uint64_t base_address,
                                                  const int32_t* offsets, size_t offset_count,
                                                  uint64_t* out_final_address) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_final_address == nullptr || (offset_count != 0 && offsets == nullptr))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_final_address = 0;
@@ -461,6 +552,9 @@ struct ModuleLookup {
 
 sao_sdk_status_t SAO_SDK_CALL mem_module_base(void* ctx_impl, const char* module_name_utf8,
                                               uint64_t* out_base) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_base == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_base = 0;
@@ -507,34 +601,95 @@ sao_sdk_status_t SAO_SDK_CALL mem_module_base(void* ctx_impl, const char* module
 
 sao_sdk_status_t SAO_SDK_CALL mem_attach(void* ctx_impl,
                                          const SaoSdkMemoryTargetIdentity* identity) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return memory_attach(cast_ctx(ctx_impl), identity);
 }
 
 sao_sdk_status_t SAO_SDK_CALL mem_detach(void* ctx_impl) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return memory_detach(cast_ctx(ctx_impl));
 }
 
 sao_sdk_status_t SAO_SDK_CALL mem_enumerate_modules(void* ctx_impl, SaoSdkMemoryModule* out_modules,
                                                     size_t capacity, size_t element_stride,
                                                     size_t* out_count) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return memory_enumerate_modules(cast_ctx(ctx_impl), out_modules, capacity, element_stride,
                                     out_count);
 }
 
+sao_sdk_status_t SAO_SDK_CALL mem_read_boundary(void* ctx_impl, uint64_t address,
+                                                void* out_buffer, size_t buffer_size,
+                                                size_t* out_bytes_read) noexcept {
+    return invoke_callback_barrier(
+        [&] { return mem_read(ctx_impl, address, out_buffer, buffer_size, out_bytes_read); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_read_u32_boundary(void* ctx_impl, uint64_t address,
+                                                    uint32_t* out_value) noexcept {
+    return invoke_callback_barrier([&] { return mem_read_u32(ctx_impl, address, out_value); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_read_u64_boundary(void* ctx_impl, uint64_t address,
+                                                    uint64_t* out_value) noexcept {
+    return invoke_callback_barrier([&] { return mem_read_u64(ctx_impl, address, out_value); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_read_ptr_chain_boundary(
+    void* ctx_impl, uint64_t base_address, const int32_t* offsets, size_t offset_count,
+    uint64_t* out_final_address) noexcept {
+    return invoke_callback_barrier([&] {
+        return mem_read_ptr_chain(ctx_impl, base_address, offsets, offset_count,
+                                  out_final_address);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_module_base_boundary(void* ctx_impl, const char* module_name_utf8,
+                                                       uint64_t* out_base) noexcept {
+    return invoke_callback_barrier(
+        [&] { return mem_module_base(ctx_impl, module_name_utf8, out_base); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_attach_boundary(
+    void* ctx_impl, const SaoSdkMemoryTargetIdentity* identity) noexcept {
+    return invoke_callback_barrier([&] { return mem_attach(ctx_impl, identity); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_detach_boundary(void* ctx_impl) noexcept {
+    return invoke_callback_barrier([&] { return mem_detach(ctx_impl); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL mem_enumerate_modules_boundary(
+    void* ctx_impl, SaoSdkMemoryModule* out_modules, size_t capacity, size_t element_stride,
+    size_t* out_count) noexcept {
+    return invoke_callback_barrier([&] {
+        return mem_enumerate_modules(ctx_impl, out_modules, capacity, element_stride, out_count);
+    });
+}
+
 const SaoSdkMemTable kMemTable = {
-    mem_read,
-    mem_read_u32,
-    mem_read_u64,
-    mem_read_ptr_chain,
-    mem_module_base,
+    mem_read_boundary,
+    mem_read_u32_boundary,
+    mem_read_u64_boundary,
+    mem_read_ptr_chain_boundary,
+    mem_module_base_boundary,
     SAO_SDK_MEM_TABLE_ABI_VERSION,
     sizeof(SaoSdkMemTable),
-    mem_attach,
-    mem_detach,
-    mem_enumerate_modules,
+    mem_attach_boundary,
+    mem_detach_boundary,
+    mem_enumerate_modules_boundary,
 };
 
 template <typename T> sao_sdk_status_t cfg_get(void* ctx_impl, const char* key_utf8, T* out_value) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_value != nullptr)
         *out_value = T{};
     auto* state = cast_ctx(ctx_impl);
@@ -555,6 +710,9 @@ template <typename T> sao_sdk_status_t cfg_get(void* ctx_impl, const char* key_u
 }
 
 template <typename T> sao_sdk_status_t cfg_set(void* ctx_impl, const char* key_utf8, T value) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -576,6 +734,9 @@ sao_sdk_status_t SAO_SDK_CALL cfg_get_double(void* ctx_impl, const char* key, do
 }
 sao_sdk_status_t SAO_SDK_CALL cfg_get_string(void* ctx_impl, const char* key, char* out_buffer,
                                              size_t buffer_len, size_t* out_bytes_needed) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_bytes_needed != nullptr)
         *out_bytes_needed = 0;
     auto* state = cast_ctx(ctx_impl);
@@ -612,22 +773,66 @@ sao_sdk_status_t SAO_SDK_CALL cfg_set_string(void* ctx_impl, const char* key, co
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     return cfg_set(ctx_impl, key, std::string(value));
 }
+
+sao_sdk_status_t SAO_SDK_CALL cfg_get_bool_boundary(void* ctx_impl, const char* key, bool* value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_get_bool(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_get_int_boundary(void* ctx_impl, const char* key, int64_t* value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_get_int(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_get_double_boundary(void* ctx_impl, const char* key, double* value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_get_double(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_get_string_boundary(void* ctx_impl, const char* key, char* buffer,
+                                                      size_t buffer_len, size_t* bytes_needed) noexcept {
+    return invoke_callback_barrier(
+        [&] { return cfg_get_string(ctx_impl, key, buffer, buffer_len, bytes_needed); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_set_bool_boundary(void* ctx_impl, const char* key, bool value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_set_bool(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_set_int_boundary(void* ctx_impl, const char* key, int64_t value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_set_int(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_set_double_boundary(void* ctx_impl, const char* key, double value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_set_double(ctx_impl, key, value); });
+}
+sao_sdk_status_t SAO_SDK_CALL cfg_set_string_boundary(void* ctx_impl, const char* key,
+                                                      const char* value) noexcept {
+    return invoke_callback_barrier([&] { return cfg_set_string(ctx_impl, key, value); });
+}
 const SaoSdkConfigTable kConfigTable = {
-    cfg_get_bool, cfg_get_int, cfg_get_double, cfg_get_string,
-    cfg_set_bool, cfg_set_int, cfg_set_double, cfg_set_string,
+    cfg_get_bool_boundary, cfg_get_int_boundary, cfg_get_double_boundary, cfg_get_string_boundary,
+    cfg_set_bool_boundary, cfg_set_int_boundary, cfg_set_double_boundary, cfg_set_string_boundary,
 };
 
 sao_sdk_status_t SAO_SDK_CALL tts_speak(void* ctx_impl, const char* text_utf8, float volume,
                                         float rate) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return provider_tts_speak(cast_ctx(ctx_impl), text_utf8, volume, rate);
 }
 sao_sdk_status_t SAO_SDK_CALL tts_stop(void* ctx_impl) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return provider_tts_stop(cast_ctx(ctx_impl));
 }
-const SaoSdkTtsTable kTtsTable = {tts_speak, tts_stop};
+sao_sdk_status_t SAO_SDK_CALL tts_speak_boundary(void* ctx_impl, const char* text_utf8,
+                                                  float volume, float rate) noexcept {
+    return invoke_callback_barrier([&] { return tts_speak(ctx_impl, text_utf8, volume, rate); });
+}
+sao_sdk_status_t SAO_SDK_CALL tts_stop_boundary(void* ctx_impl) noexcept {
+    return invoke_callback_barrier([&] { return tts_stop(ctx_impl); });
+}
+const SaoSdkTtsTable kTtsTable = {tts_speak_boundary, tts_stop_boundary};
 
 sao_sdk_status_t SAO_SDK_CALL banner_show(void* ctx_impl, const char* text_utf8,
                                           uint32_t duration_ms, uint32_t argb_color) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -641,7 +846,13 @@ sao_sdk_status_t SAO_SDK_CALL banner_show(void* ctx_impl, const char* text_utf8,
     sao_sdk_notify_token_t token = 0;
     return sao_sdk_notify_show(state->bound_public_ctx, &spec, &token);
 }
-const SaoSdkBannerTable kBannerTable = {banner_show};
+sao_sdk_status_t SAO_SDK_CALL banner_show_boundary(void* ctx_impl, const char* text_utf8,
+                                                   uint32_t duration_ms,
+                                                   uint32_t argb_color) noexcept {
+    return invoke_callback_barrier(
+        [&] { return banner_show(ctx_impl, text_utf8, duration_ms, argb_color); });
+}
+const SaoSdkBannerTable kBannerTable = {banner_show_boundary};
 
 } // namespace
 
@@ -691,77 +902,104 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
 
-    // Bring up the shared runtime lazily so tests don't need a fixture.
-    sao_sdk_internal::SharedRuntime::instance().ensure_started();
+    sao_sdk_internal::ContextState* state = nullptr;
+    bool registered = false;
+    try {
+        // Bring up the shared runtime lazily so tests don't need a fixture.
+        sao_sdk_internal::SharedRuntime::instance().ensure_started();
 
-    auto* state = new (std::nothrow) sao_sdk_internal::ContextState();
-    if (state == nullptr)
-        return SAO_SDK_ERR_NOT_INITIALIZED;
-    state->plugin_id = plugin_id_utf8;
-    state->base_dir = (base_dir_utf8 == nullptr) ? "" : base_dir_utf8;
+        state = new (std::nothrow) sao_sdk_internal::ContextState();
+        if (state == nullptr)
+            return SAO_SDK_ERR_NOT_INITIALIZED;
+        state->plugin_id = plugin_id_utf8;
+        state->base_dir = (base_dir_utf8 == nullptr) ? "" : base_dir_utf8;
 
-    SaoSdkContext& pub = state->public_ctx;
-    sao_sdk_internal::populate_context(state, &pub, "0.0.0");
+        SaoSdkContext& pub = state->public_ctx;
+        sao_sdk_internal::populate_context(state, &pub, "0.0.0");
 
-    sao_sdk_internal::register_context(state);
-    const auto provider_status = sao_sdk_internal::bind_process_providers(state);
-    if (provider_status != SAO_SDK_OK) {
-        if (sao_sdk_context_try_destroy(&state->public_ctx) != SAO_SDK_OK)
-            sao_sdk_internal::quarantine_context(state);
-        return provider_status;
+        sao_sdk_internal::register_context(state);
+        registered = true;
+        const auto provider_status = sao_sdk_internal::bind_process_providers(state);
+        if (provider_status != SAO_SDK_OK) {
+            if (sao_sdk_context_try_destroy(&state->public_ctx) != SAO_SDK_OK)
+                sao_sdk_internal::quarantine_context(state);
+            return provider_status;
+        }
+        *out_ctx = &state->public_ctx;
+        return SAO_SDK_OK;
+    } catch (...) {
+        if (state != nullptr) {
+            if (registered) {
+                if (sao_sdk_context_try_destroy(&state->public_ctx) != SAO_SDK_OK)
+                    sao_sdk_internal::quarantine_context(state);
+            } else {
+                delete state;
+            }
+        }
+        return SAO_SDK_ERR_INTERNAL;
     }
-    *out_ctx = &state->public_ctx;
-    return SAO_SDK_OK;
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_try_destroy(struct SaoSdkContext* ctx) {
     sao_sdk_internal::ContextState* state = nullptr;
-    const auto preflight_status = sao_sdk_internal::begin_context_shutdown(ctx, &state);
-    if (preflight_status != SAO_SDK_OK)
-        return preflight_status;
-    const bool caller_owns_context = ctx != &state->public_ctx;
+    try {
+        const auto preflight_status = sao_sdk_internal::begin_context_shutdown(ctx, &state);
+        if (preflight_status != SAO_SDK_OK)
+            return preflight_status;
+        const bool caller_owns_context = ctx != &state->public_ctx;
 
-    const auto fail = [state](sao_sdk_status_t status) {
-        sao_sdk_internal::cancel_context_shutdown(state);
-        return status;
-    };
+        const auto fail = [state](sao_sdk_status_t status) {
+            sao_sdk_internal::cancel_context_shutdown(state);
+            return status;
+        };
 
-    // Provider-owned registrations are swept in exact reverse registration
-    // order before local event/panel state is released.
-    const auto net_status = sao_sdk_internal::net_provider_cleanup(state);
-    if (net_status != SAO_SDK_OK)
-        return fail(net_status);
-    const auto memory_status = sao_sdk_internal::memory_provider_cleanup(state);
-    if (memory_status != SAO_SDK_OK)
-        return fail(memory_status);
-    const auto provider_status = sao_sdk_internal::provider_cleanup(state);
-    if (provider_status != SAO_SDK_OK)
-        return fail(provider_status);
-    const auto gpu_status = sao_sdk_internal::sdk_gpu_hunt_sweep_owner(state);
-    if (gpu_status != SAO_SDK_OK)
-        return fail(gpu_status);
+        // Provider-owned registrations are swept in exact reverse registration
+        // order before local event/panel state is released.
+        const auto net_status = sao_sdk_internal::net_provider_cleanup(state);
+        if (net_status != SAO_SDK_OK)
+            return fail(net_status);
+        const auto memory_status = sao_sdk_internal::memory_provider_cleanup(state);
+        if (memory_status != SAO_SDK_OK)
+            return fail(memory_status);
+        const auto provider_status = sao_sdk_internal::provider_cleanup(state);
+        if (provider_status != SAO_SDK_OK)
+            return fail(provider_status);
+        const auto gpu_status = sao_sdk_internal::sdk_gpu_hunt_sweep_owner(state);
+        if (gpu_status != SAO_SDK_OK)
+            return fail(gpu_status);
 
-    sao_sdk_internal::cleanup_event_subscriptions(state);
-    const auto panel_status = sao_sdk_internal::cleanup_ui_panels(state);
-    if (panel_status != SAO_SDK_OK)
-        return fail(panel_status);
+        sao_sdk_internal::cleanup_event_subscriptions(state);
+        const auto panel_status = sao_sdk_internal::cleanup_ui_panels(state);
+        if (panel_status != SAO_SDK_OK)
+            return fail(panel_status);
 
-    sao_sdk_internal::unregister_context(state);
-    if (caller_owns_context) {
-        std::memset(ctx, 0, sizeof(*ctx));
+        sao_sdk_internal::unregister_context(state);
+        if (caller_owns_context) {
+            std::memset(ctx, 0, sizeof(*ctx));
+        }
+        sao_sdk_internal::g_context_destroy_owner = nullptr;
+        delete state;
+        return SAO_SDK_OK;
+    } catch (...) {
+        if (state != nullptr) {
+            sao_sdk_internal::cancel_context_shutdown(state);
+            sao_sdk_internal::quarantine_context(state);
+        }
+        return SAO_SDK_ERR_INTERNAL;
     }
-    sao_sdk_internal::g_context_destroy_owner = nullptr;
-    delete state;
-    return SAO_SDK_OK;
 }
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_context_destroy(struct SaoSdkContext* ctx) {
     if (ctx == nullptr)
         return;
-    const auto status = sao_sdk_context_try_destroy(ctx);
-    if (status != SAO_SDK_OK)
+    try {
+        const auto status = sao_sdk_context_try_destroy(ctx);
+        if (status != SAO_SDK_OK)
+            sao_sdk_internal::quarantine_public_context(ctx);
+    } catch (...) {
         sao_sdk_internal::quarantine_public_context(ctx);
+    }
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
@@ -788,6 +1026,7 @@ sao_sdk_context_get_base_dir(const struct SaoSdkContext* ctx, const char** out_b
     return SAO_SDK_OK;
 }
 
+#if defined(SAO_SDK_TESTING)
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_live_context_count(void) {
     return sao_sdk_internal::live_context_count();
 }
@@ -812,3 +1051,4 @@ extern "C" SAO_SDK_API bool SAO_SDK_CALL
 sao_sdk_test_wait_for_context_shutdown(const struct SaoSdkContext* ctx) {
     return sao_sdk_internal::wait_for_context_shutdown(ctx);
 }
+#endif

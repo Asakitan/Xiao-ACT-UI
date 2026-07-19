@@ -27,6 +27,14 @@ extern "C" SAO_SDK_API bool SAO_SDK_CALL sao_sdk_test_wait_for_context_api_pause
 extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_resume_context_api_pause(uint32_t point);
 extern "C" SAO_SDK_API bool SAO_SDK_CALL
 sao_sdk_test_wait_for_context_shutdown(const SaoSdkContext* ctx);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_render_state_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_hotkey_state_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_notify_state_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_overlay_state_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_timer_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_hotkey_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_dialog_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_platform_overlay_insertion(void);
 
 namespace {
 
@@ -432,6 +440,17 @@ struct EventReentryProbe {
     int calls = 0;
 };
 
+struct VoidDestroyProbe {
+    SaoSdkContext* context = nullptr;
+    std::atomic_int calls{0};
+};
+
+void SAO_SDK_CALL void_destroy_event_probe(const char*, const uint8_t*, size_t, void* user_data) {
+    auto* probe = static_cast<VoidDestroyProbe*>(user_data);
+    ++probe->calls;
+    sao_sdk_context_destroy(probe->context);
+}
+
 void SAO_SDK_CALL event_reentry_probe(const char*, const uint8_t*, size_t, void* user_data) {
     auto* probe = static_cast<EventReentryProbe*>(user_data);
     ++probe->calls;
@@ -739,6 +758,110 @@ TEST_CASE("general provider retain release and TTS exceptions stay behind the AB
     CHECK(ctx.ctx_impl == nullptr);
 }
 
+TEST_CASE("provider capability insertion failures roll back native ownership",
+          "[sdk][provider][capability][rollback][insertion]") {
+    ProviderFixture provider_state;
+    const auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.capability.rollback", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+
+    sao_sdk_hook_token_t render = 123;
+    sao_sdk_test_fail_next_render_state_insertion();
+    CHECK(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT, render_probe, nullptr,
+                                       &render) == SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(render == 0);
+    REQUIRE(provider_state.events.size() == 3);
+    CHECK(provider_state.events[1] == "register:render:101");
+    CHECK(provider_state.events[2] == "unregister:render:101");
+
+    REQUIRE(sao_sdk_register_render_hook(&ctx, SAO_SDK_HOOK_BEFORE_PRESENT, render_probe, nullptr,
+                                         &render) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_unregister_render_hook(&ctx, render) == SAO_SDK_OK);
+
+    SaoSdkHotkeySpec hotkey_spec{};
+    hotkey_spec.binding_id_utf8 = "capability.rollback.hotkey";
+    hotkey_spec.virtual_key = 0x43;
+    sao_sdk_hotkey_id_t hotkey = 123;
+    sao_sdk_test_fail_next_hotkey_state_insertion();
+    CHECK(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, nullptr, &hotkey) ==
+          SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(hotkey == 0);
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, nullptr, &hotkey) ==
+            SAO_SDK_OK);
+    REQUIRE(sao_sdk_unregister_hotkey(&ctx, hotkey) == SAO_SDK_OK);
+
+    SaoSdkNotifySpec notify_spec{"rollback", 10, 0xff00ff00u};
+    sao_sdk_notify_token_t notify = 123;
+    sao_sdk_test_fail_next_notify_state_insertion();
+    CHECK(sao_sdk_notify_show(&ctx, &notify_spec, &notify) == SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(notify == 0);
+    REQUIRE(sao_sdk_notify_show(&ctx, &notify_spec, &notify) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_notify_dismiss(&ctx, notify) == SAO_SDK_OK);
+
+    constexpr uint8_t kOverlayJson[] = {'{', '}'};
+    SaoSdkOverlaySpec overlay_spec{"rollback", kOverlayJson, sizeof(kOverlayJson)};
+    sao_sdk_overlay_token_t overlay = 123;
+    sao_sdk_test_fail_next_overlay_state_insertion();
+    CHECK(sao_sdk_overlay_set(&ctx, &overlay_spec, &overlay) == SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(overlay == 0);
+    REQUIRE(sao_sdk_overlay_set(&ctx, &overlay_spec, &overlay) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_overlay_clear(&ctx, overlay) == SAO_SDK_OK);
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    CHECK(provider_state.events.back() == "release");
+}
+
+TEST_CASE("platform capability insertion failures roll back native resources",
+          "[sdk][provider][platform][rollback][insertion]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.platform.rollback", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+
+    sao_sdk_timer_token_t timer = 123;
+    sao_sdk_test_fail_next_platform_timer_insertion();
+    CHECK(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) ==
+          SAO_SDK_ERR_INTERNAL);
+    CHECK(timer == 0);
+    REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_timer_unregister(&ctx, timer) == SAO_SDK_OK);
+
+    SaoSdkHotkeySpec hotkey_spec{};
+    hotkey_spec.binding_id_utf8 = "platform.rollback.hotkey";
+    hotkey_spec.virtual_key = 0x44;
+    sao_sdk_hotkey_id_t hotkey = 123;
+    sao_sdk_test_fail_next_platform_hotkey_insertion();
+    CHECK(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, nullptr, &hotkey) ==
+          SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(hotkey == 0);
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, nullptr, &hotkey) ==
+            SAO_SDK_OK);
+    REQUIRE(sao_sdk_unregister_hotkey(&ctx, hotkey) == SAO_SDK_OK);
+
+    SaoSdkDialogSpec dialog_spec{};
+    dialog_spec.kind = SAO_SDK_DIALOG_INFO;
+    dialog_spec.title_utf8 = "rollback";
+    dialog_spec.message_utf8 = "rollback";
+    sao_sdk_dialog_token_t dialog = 123;
+    sao_sdk_test_fail_next_platform_dialog_insertion();
+    CHECK(sao_sdk_dialog_show(&ctx, &dialog_spec, nullptr, nullptr, &dialog) ==
+          SAO_SDK_ERR_INTERNAL);
+    CHECK(dialog == 0);
+    REQUIRE(sao_sdk_dialog_show(&ctx, &dialog_spec, nullptr, nullptr, &dialog) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_dialog_dismiss(&ctx, dialog) == SAO_SDK_OK);
+
+    constexpr uint8_t kOverlayJson[] = {'{', '}'};
+    SaoSdkOverlaySpec overlay_spec{"platform.rollback", kOverlayJson, sizeof(kOverlayJson)};
+    sao_sdk_overlay_token_t overlay = 123;
+    sao_sdk_test_fail_next_platform_overlay_insertion();
+    CHECK(sao_sdk_overlay_set(&ctx, &overlay_spec, &overlay) == SAO_SDK_ERR_INTERNAL);
+    CHECK(overlay == 0);
+    REQUIRE(sao_sdk_overlay_set(&ctx, &overlay_spec, &overlay) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_overlay_clear(&ctx, overlay) == SAO_SDK_OK);
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
 TEST_CASE("context destroy drains ordinary event and UI API leases",
           "[sdk][context][api-lease][destroy][concurrency]") {
     SECTION("subscribe registration") {
@@ -917,6 +1040,74 @@ TEST_CASE("context destroy retires event snapshots before releasing subscription
 
     sao_sdk_test_invoke_event_snapshot(snapshot);
     CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+}
+
+TEST_CASE("void context destroy from a plugin callback quarantines for later retry",
+          "[sdk][context][destroy][quarantine][callback][reentry]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("context.callback.destroy", "1.0", &ctx) == SAO_SDK_OK);
+
+    VoidDestroyProbe probe{&ctx};
+    sao_sdk_subscription_t subscription = 0;
+    REQUIRE(sao_sdk_subscribe_event(&ctx, "context.callback.destroy", void_destroy_event_probe,
+                                    &probe, &subscription) == SAO_SDK_OK);
+
+    const auto start = std::chrono::steady_clock::now();
+    REQUIRE(sao_sdk_publish_event(&ctx, "context.callback.destroy", nullptr, 0) == SAO_SDK_OK);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    CHECK(elapsed < std::chrono::seconds(1));
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+    CHECK(ctx.ctx_impl != nullptr);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    CHECK(ctx.ctx_impl == nullptr);
+}
+
+TEST_CASE("direct vtable paths pin context state while destroy races",
+          "[sdk][context][api-lease][vtable][concurrency]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("context.vtable.race", "1.0", &ctx) == SAO_SDK_OK);
+
+    void* const ctx_impl = ctx.ctx_impl;
+    const SaoSdkConfigTable* const config = ctx.config;
+    const SaoSdkMemTable* const mem = ctx.mem;
+    const SaoSdkNetTable* const net = ctx.net;
+    const SaoSdkUiTable* const ui = ctx.ui;
+    const SaoSdkEventTable* const event = ctx.event;
+    const SaoSdkHotkeyTable* const hotkey = ctx.hotkey;
+    const SaoSdkGpuHuntTable* const gpu = ctx.gpu_hunt;
+    std::atomic_bool stop{false};
+    std::atomic_int ready{0};
+    constexpr int kWorkerCount = 4;
+    std::vector<std::thread> workers;
+    workers.reserve(kWorkerCount);
+    for (int index = 0; index < kWorkerCount; ++index) {
+        workers.emplace_back([&, index] {
+            (void)index;
+            ready.fetch_add(1, std::memory_order_release);
+            while (!stop.load(std::memory_order_acquire)) {
+                bool enabled = false;
+                size_t bytes_read = 0;
+                size_t result_count = 0;
+                sao_sdk_gpu_tracker_t tracker = 0;
+                (void)config->get_bool(ctx_impl, "race", &enabled);
+                (void)mem->read(ctx_impl, 0, nullptr, 0, &bytes_read);
+                (void)net->parse_packet(ctx_impl, nullptr, nullptr, 0,
+                                        sizeof(SaoSdkNetParsedResult), &result_count);
+                (void)ui->request_redraw(ctx_impl, nullptr);
+                (void)event->publish(ctx_impl, "race", nullptr, 0);
+                (void)hotkey->unregister_hotkey(ctx_impl, 0);
+                (void)gpu->create_tracker(ctx_impl, &tracker);
+            }
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != kWorkerCount)
+        std::this_thread::yield();
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    stop.store(true, std::memory_order_release);
+    for (auto& worker : workers)
+        worker.join();
+    CHECK(ctx.ctx_impl == nullptr);
 }
 
 TEST_CASE("platform hotkey snapshots keep their bridge alive and drain on unregister",

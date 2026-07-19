@@ -40,7 +40,8 @@ void SAO_UI_CALL router_hotkey_bridge(const char* /*binding_id_utf8*/,
                                       const SaoUiInputEvent* /*event*/, void* user_data) {
     auto* bridge = static_cast<HotkeyBridge*>(user_data);
     if (bridge != nullptr && bridge->plugin_cb != nullptr) {
-        bridge->plugin_cb(bridge->sdk_id, bridge->plugin_ud);
+        (void)invoke_void_callback_barrier(
+            [&] { bridge->plugin_cb(bridge->sdk_id, bridge->plugin_ud); });
     }
 }
 
@@ -48,13 +49,33 @@ sao_sdk_status_t SAO_SDK_CALL hotkey_register(void* ctx_impl, const char* hotkey
                                               uint32_t virtual_key, uint32_t modifier_mask,
                                               sao_sdk_hotkey_callback_t callback, void* user_data,
                                               sao_sdk_hotkey_id_t* out_id) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     return provider_hotkey_register(state, hotkey_name_utf8, virtual_key, modifier_mask, callback,
                                     user_data, out_id);
 }
 
 sao_sdk_status_t SAO_SDK_CALL hotkey_unregister(void* ctx_impl, sao_sdk_hotkey_id_t id) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return provider_hotkey_unregister(cast_ctx(ctx_impl), id);
+}
+
+sao_sdk_status_t SAO_SDK_CALL hotkey_register_boundary(
+    void* ctx_impl, const char* hotkey_name_utf8, uint32_t virtual_key, uint32_t modifier_mask,
+    sao_sdk_hotkey_callback_t callback, void* user_data, sao_sdk_hotkey_id_t* out_id) noexcept {
+    return invoke_callback_barrier([&] {
+        return hotkey_register(ctx_impl, hotkey_name_utf8, virtual_key, modifier_mask, callback,
+                               user_data, out_id);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL hotkey_unregister_boundary(
+    void* ctx_impl, sao_sdk_hotkey_id_t id) noexcept {
+    return invoke_callback_barrier([&] { return hotkey_unregister(ctx_impl, id); });
 }
 
 } // namespace
@@ -65,8 +86,8 @@ void destroy_hotkey_bridge(void* bridge) {
 
 const SaoSdkHotkeyTable* make_hotkey_table() {
     static const SaoSdkHotkeyTable table = {
-        hotkey_register,
-        hotkey_unregister,
+        hotkey_register_boundary,
+        hotkey_unregister_boundary,
     };
     return &table;
 }
@@ -108,42 +129,53 @@ size_t fire_hotkey_by_binding_id(ContextState* state, const char* binding_id_utf
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_register_hotkey(
     const struct SaoSdkContext* ctx, const struct SaoSdkHotkeySpec* spec,
     sao_sdk_hotkey_callback_t callback, void* user_data, sao_sdk_hotkey_id_t* out_handle) {
-    if (ctx == nullptr || spec == nullptr || ctx->hotkey == nullptr ||
-        ctx->hotkey->register_hotkey == nullptr) {
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    if (spec == nullptr || public_context->hotkey == nullptr ||
+        public_context->hotkey->register_hotkey == nullptr) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
-    return ctx->hotkey->register_hotkey(ctx->ctx_impl, spec->binding_id_utf8, spec->virtual_key,
-                                        spec->modifiers, callback, user_data, out_handle);
+    return sao_sdk_internal::invoke_callback_barrier([&] {
+        return public_context->hotkey->register_hotkey(
+            lease.state(), spec->binding_id_utf8, spec->virtual_key, spec->modifiers, callback,
+            user_data, out_handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_unregister_hotkey(const struct SaoSdkContext* ctx, sao_sdk_hotkey_id_t handle) {
-    if (ctx == nullptr || ctx->hotkey == nullptr || ctx->hotkey->unregister_hotkey == nullptr) {
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    if (public_context->hotkey == nullptr || public_context->hotkey->unregister_hotkey == nullptr) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     }
-    return ctx->hotkey->unregister_hotkey(ctx->ctx_impl, handle);
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return public_context->hotkey->unregister_hotkey(lease.state(), handle); });
 }
 
 // ─── Test-only observability ────────────────────────────────────────
 
+#if defined(SAO_SDK_TESTING)
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_hotkey_count(const struct SaoSdkContext* ctx) {
-    if (ctx == nullptr)
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return 0;
+    auto* state = lease.state();
     std::lock_guard<std::mutex> lk(state->mu);
     return state->hotkeys.size();
 }
 
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_hotkey_fire_by_id(const struct SaoSdkContext* ctx, const char* binding_id_utf8) {
-    if (ctx == nullptr)
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return 0;
+    auto* state = lease.state();
     return sao_sdk_internal::fire_hotkey_by_binding_id(state, binding_id_utf8);
 }
 
@@ -160,3 +192,4 @@ extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_route_hotkey(uint32_t vi
     const sao_status_t rc = sao_ui_input_router_match_hotkey(rt.input_router, &event, &binding);
     return rc == SAO_STATUS_OK && binding != 0 ? 1u : 0u;
 }
+#endif

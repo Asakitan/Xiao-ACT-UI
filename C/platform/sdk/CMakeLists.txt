@@ -3,23 +3,19 @@
 # SHARED because plugins LoadLibrary/GetProcAddress against sao_sdk.dll
 # to discover the ABI probe function.
 
-add_library(sao_platform_sdk SHARED
-    src/sdk_export.cpp
-
-    # Wave 7 — context lifecycle + capability wires.  Every source below
-    # forwards from ``SaoSdkContext::*->*`` (or the free-function
-    # wrappers in ``sao_sdk.h``) into the corresponding platform
-    # module.  Nothing here imports plugins — plugins only see the SDK
-    # umbrella header.
-    src/sdk_context.cpp       # sao_sdk_context_create/destroy + accessors
-    src/sdk_ui_wire.cpp       # panel register + widget CRUD + render hook + redraw
-    src/sdk_event_wire.cpp    # event bus subscribe/unsubscribe/publish (wave5)
-    src/sdk_hotkey_wire.cpp   # input_router_deep hotkey register/unregister
-    src/sdk_gpu_hunt_wire.cpp # DX12 upload-heap tracker (view/proj + bones + W2S)
-    src/sdk_provider.cpp      # provider implementation
-    src/sdk_net_provider.cpp  # independent per-context capture/parse provider
-    src/sdk_process_provider.cpp  # process owners for automatic per-context sessions
+set(SAO_PLATFORM_SDK_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_export.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_ui_wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_event_wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_hotkey_wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_gpu_hunt_wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_net_provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_process_provider.cpp
 )
+
+add_library(sao_platform_sdk SHARED ${SAO_PLATFORM_SDK_SOURCES})
 add_library(sao::sdk ALIAS sao_platform_sdk)
 
 # NOTE: SAO_SDK_BUILDING_DLL is #defined at the top of sdk_export.cpp
@@ -40,5 +36,8 @@ target_link_libraries(sao_platform_sdk
 )
 
 if (SAO_BUILD_TESTS)
+    target_compile_definitions(sao_platform_sdk PRIVATE
+        SAO_SDK_TESTING=1
+    )
     add_subdirectory(tests)
 endif()

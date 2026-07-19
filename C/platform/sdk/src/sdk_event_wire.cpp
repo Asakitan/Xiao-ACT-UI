@@ -15,6 +15,7 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -23,11 +24,33 @@ namespace sao_sdk_internal {
 namespace {
 
 std::mutex g_event_owner_mutex;
-std::vector<std::shared_ptr<EventSubscriptionOwner>> g_event_owners;
+constexpr size_t kMaxEventOwnerQuarantine = 4096;
+std::array<std::shared_ptr<EventSubscriptionOwner>, kMaxEventOwnerQuarantine> g_event_owner_slots;
+size_t g_event_owner_slot_count = 0;
 
-void preserve_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
+bool preserve_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
     std::lock_guard<std::mutex> lock(g_event_owner_mutex);
-    g_event_owners.push_back(owner);
+    if (g_event_owner_slot_count == g_event_owner_slots.size())
+        return false;
+    for (auto& slot : g_event_owner_slots) {
+        if (slot == nullptr) {
+            slot = owner;
+            ++g_event_owner_slot_count;
+            return true;
+        }
+    }
+    return false;
+}
+
+void release_unpublished_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
+    std::lock_guard<std::mutex> lock(g_event_owner_mutex);
+    for (auto& slot : g_event_owner_slots) {
+        if (slot == owner) {
+            slot.reset();
+            --g_event_owner_slot_count;
+            return;
+        }
+    }
 }
 
 // Bridge — invoked by the Wave 5 bus.  user_data is the
@@ -40,7 +63,7 @@ int SAO_ENGINE_CALL wave5_bridge(const char* topic_utf8, const uint8_t* data_ptr
         CallbackActivityLease subscription_lease(&owner->callback_activity);
         if (!subscription_lease)
             return SAO_ENGINE_EVENT_CONTINUE;
-        PluginCallbackLease callback_lease(owner->context);
+        PluginCallbackLease callback_lease(owner->callback_gate);
         if (callback_lease) {
             const auto callback = owner->plugin_cb;
             if (callback != nullptr) {
@@ -55,6 +78,9 @@ int SAO_ENGINE_CALL wave5_bridge(const char* topic_utf8, const uint8_t* data_ptr
 sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_utf8,
                                               sao_sdk_event_callback_t callback, void* user_data,
                                               sao_sdk_subscription_t* out_subscription) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_subscription != nullptr)
         *out_subscription = 0;
     auto* state = cast_ctx(ctx_impl);
@@ -72,10 +98,11 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
     std::shared_ptr<EventSubscriptionOwner> owner;
     try {
         owner = std::make_shared<EventSubscriptionOwner>();
-        owner->context = state;
+        owner->callback_gate = state->callback_gate;
         owner->plugin_cb = callback;
         owner->plugin_ud = user_data;
-        preserve_event_owner(owner);
+        if (!preserve_event_owner(owner))
+            return SAO_SDK_ERR_BUSY;
     } catch (...) {
         return SAO_SDK_ERR_NOT_INITIALIZED;
     }
@@ -85,6 +112,7 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
         rt.event_bus, topic_utf8, /*priority=*/0, wave5_bridge, owner.get(), &bus_token);
     if (rc != SAO_STATUS_OK) {
         owner->callback_activity.retire_and_wait();
+        release_unpublished_event_owner(owner);
         return static_cast<sao_sdk_status_t>(rc);
     }
 
@@ -108,6 +136,9 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
 
 sao_sdk_status_t SAO_SDK_CALL event_unsubscribe(void* ctx_impl,
                                                 sao_sdk_subscription_t subscription) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -162,6 +193,9 @@ sao_sdk_status_t SAO_SDK_CALL event_unsubscribe(void* ctx_impl,
 
 sao_sdk_status_t SAO_SDK_CALL event_publish(void* ctx_impl, const char* topic_utf8,
                                             const uint8_t* json_payload_utf8, size_t payload_len) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -178,13 +212,35 @@ sao_sdk_status_t SAO_SDK_CALL event_publish(void* ctx_impl, const char* topic_ut
     return SAO_SDK_OK;
 }
 
+sao_sdk_status_t SAO_SDK_CALL event_subscribe_boundary(
+    void* ctx_impl, const char* topic_utf8, sao_sdk_event_callback_t callback, void* user_data,
+    sao_sdk_subscription_t* out_subscription) noexcept {
+    return invoke_callback_barrier([&] {
+        return event_subscribe(ctx_impl, topic_utf8, callback, user_data, out_subscription);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL event_unsubscribe_boundary(
+    void* ctx_impl, sao_sdk_subscription_t subscription) noexcept {
+    return invoke_callback_barrier(
+        [&] { return event_unsubscribe(ctx_impl, subscription); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL event_publish_boundary(
+    void* ctx_impl, const char* topic_utf8, const uint8_t* json_payload_utf8,
+    size_t payload_len) noexcept {
+    return invoke_callback_barrier([&] {
+        return event_publish(ctx_impl, topic_utf8, json_payload_utf8, payload_len);
+    });
+}
+
 } // namespace
 
 const SaoSdkEventTable* make_event_table() {
     static const SaoSdkEventTable table = {
-        event_subscribe,
-        event_unsubscribe,
-        event_publish,
+        event_subscribe_boundary,
+        event_unsubscribe_boundary,
+        event_publish_boundary,
     };
     return &table;
 }
@@ -199,10 +255,10 @@ void cleanup_event_subscriptions(ContextState* state) {
     for (auto& subscription : subscriptions) {
         (void)sao_engine_event_bus_unsubscribe(runtime.event_bus, subscription.bus_token);
         subscription.retire();
-        delete std::exchange(subscription.heap_owner, nullptr);
     }
 }
 
+#if defined(SAO_SDK_TESTING)
 extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
     const SaoSdkContext* ctx, sao_sdk_subscription_t subscription) {
     ContextApiLease lease(ctx);
@@ -222,6 +278,7 @@ sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data) {
     static constexpr char kTopic[] = "sdk.test.snapshot";
     (void)wave5_bridge(kTopic, nullptr, 0, snapshot_user_data);
 }
+#endif
 
 } // namespace sao_sdk_internal
 

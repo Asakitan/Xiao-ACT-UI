@@ -290,6 +290,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_panel(void* ctx_impl, const char* pane
                                                 sao_sdk_panel_action_callback_t action_cb,
                                                 void* action_user_data,
                                                 sao_sdk_ui_panel_t* out_panel) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_panel == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_panel = nullptr;
@@ -356,6 +359,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_panel(void* ctx_impl, const char* pane
 
 sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                 const uint8_t* spec_json_utf8, size_t spec_len) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -387,6 +393,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel
 
 sao_sdk_status_t SAO_SDK_CALL ui_set_overlay(void* ctx_impl, const char* surface_id_utf8,
                                              const uint8_t* spec_json_utf8, size_t spec_len) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -421,6 +430,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_legacy(void* ctx_impl,
                                                              float priority, void* hook_fn,
                                                              void* hook_user_data,
                                                              sao_sdk_hook_token_t* out_token) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_token != nullptr)
         *out_token = 0;
     auto* state = cast_ctx(ctx_impl);
@@ -436,10 +448,16 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_legacy(void* ctx_impl,
 
 sao_sdk_status_t SAO_SDK_CALL ui_unregister_render_hook_legacy(void* ctx_impl,
                                                                sao_sdk_hook_token_t token) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     return provider_render_unregister(cast_ctx(ctx_impl), token);
 }
 
 sao_sdk_status_t SAO_SDK_CALL ui_request_redraw(void* ctx_impl, const char* surface_id_utf8) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -462,6 +480,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_request_redraw(void* ctx_impl, const char* surf
 sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel(void* ctx_impl,
                                                    const SaoSdkPanelDescriptor* descriptor,
                                                    sao_sdk_ui_panel_t* out_panel) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_panel == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_panel = nullptr;
@@ -571,6 +592,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel(void* ctx_impl,
 }
 
 sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_panel_t panel) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -621,6 +645,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_
 sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                   const SaoSdkWidgetSpec* widget_spec,
                                                   sao_sdk_ui_widget_t* out_widget) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_widget != nullptr)
         *out_widget = nullptr;
     auto* state = cast_ctx(ctx_impl);
@@ -703,6 +730,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
 sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                      sao_sdk_ui_widget_t widget,
                                                      const SaoSdkWidgetSpec* widget_spec) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -750,6 +780,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
 
 sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                      sao_sdk_ui_widget_t widget) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
@@ -786,6 +819,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_clock(void* ctx_impl, int3
                                                             sao_sdk_render_hook_callback_t callback,
                                                             void* user_data,
                                                             sao_sdk_hook_token_t* out_token) {
+    ContextApiLease lease(cast_ctx(ctx_impl));
+    if (!lease)
+        return lease.status();
     if (out_token != nullptr)
         *out_token = 0;
     auto* state = cast_ctx(ctx_impl);
@@ -795,6 +831,93 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_clock(void* ctx_impl, int3
         return SAO_SDK_ERR_INVALID_ARGUMENT;
 
     return provider_render_register(state, hook_point, callback, user_data, out_token);
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_register_panel_boundary(
+    void* ctx_impl, const char* panel_id_utf8, const char* title_utf8,
+    const uint8_t* initial_spec_json_utf8, size_t spec_len,
+    sao_sdk_panel_action_callback_t action_cb, void* action_user_data,
+    sao_sdk_ui_panel_t* out_panel) noexcept {
+    return invoke_callback_barrier([&] {
+        return ui_register_panel(ctx_impl, panel_id_utf8, title_utf8, initial_spec_json_utf8,
+                                 spec_len, action_cb, action_user_data, out_panel);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec_boundary(
+    void* ctx_impl, sao_sdk_ui_panel_t panel, const uint8_t* spec_json_utf8,
+    size_t spec_len) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_set_panel_spec(ctx_impl, panel, spec_json_utf8, spec_len); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_set_overlay_boundary(
+    void* ctx_impl, const char* surface_id_utf8, const uint8_t* spec_json_utf8,
+    size_t spec_len) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_set_overlay(ctx_impl, surface_id_utf8, spec_json_utf8, spec_len); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_legacy_boundary(
+    void* ctx_impl, const char* surface_id_utf8, float priority, void* hook_fn,
+    void* hook_user_data, sao_sdk_hook_token_t* out_token) noexcept {
+    return invoke_callback_barrier([&] {
+        return ui_register_render_hook_legacy(ctx_impl, surface_id_utf8, priority, hook_fn,
+                                              hook_user_data, out_token);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_unregister_render_hook_legacy_boundary(
+    void* ctx_impl, sao_sdk_hook_token_t token) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_unregister_render_hook_legacy(ctx_impl, token); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_register_render_hook_clock_boundary(
+    void* ctx_impl, int32_t hook_point, sao_sdk_render_hook_callback_t callback, void* user_data,
+    sao_sdk_hook_token_t* out_token) noexcept {
+    return invoke_callback_barrier([&] {
+        return ui_register_render_hook_clock(ctx_impl, hook_point, callback, user_data, out_token);
+    });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_request_redraw_boundary(
+    void* ctx_impl, const char* surface_id_utf8) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_request_redraw(ctx_impl, surface_id_utf8); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel_boundary(
+    void* ctx_impl, const SaoSdkPanelDescriptor* descriptor,
+    sao_sdk_ui_panel_t* out_panel) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_register_ui_panel(ctx_impl, descriptor, out_panel); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel_boundary(
+    void* ctx_impl, sao_sdk_ui_panel_t panel) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_unregister_ui_panel(ctx_impl, panel); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget_boundary(
+    void* ctx_impl, sao_sdk_ui_panel_t panel, const SaoSdkWidgetSpec* widget_spec,
+    sao_sdk_ui_widget_t* out_widget) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_panel_add_widget(ctx_impl, panel, widget_spec, out_widget); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget_boundary(
+    void* ctx_impl, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget,
+    const SaoSdkWidgetSpec* widget_spec) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_panel_update_widget(ctx_impl, panel, widget, widget_spec); });
+}
+
+sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget_boundary(
+    void* ctx_impl, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget) noexcept {
+    return invoke_callback_barrier(
+        [&] { return ui_panel_remove_widget(ctx_impl, panel, widget); });
 }
 
 } // namespace
@@ -845,20 +968,20 @@ sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
 const SaoSdkUiTable* make_ui_table() {
     static const SaoSdkUiTable table = {
         // Legacy JSON path (Wave 6 will populate the JSON normalizer).
-        ui_register_panel,
-        ui_set_panel_spec,
-        ui_set_overlay,
-        ui_register_render_hook_legacy,
-        ui_unregister_render_hook_legacy,
+        ui_register_panel_boundary,
+        ui_set_panel_spec_boundary,
+        ui_set_overlay_boundary,
+        ui_register_render_hook_legacy_boundary,
+        ui_unregister_render_hook_legacy_boundary,
         // Wave 7 typed render-clock hook.
-        ui_register_render_hook_clock,
-        ui_request_redraw,
+        ui_register_render_hook_clock_boundary,
+        ui_request_redraw_boundary,
         // Wave 7 descriptor + widget CRUD.
-        ui_register_ui_panel,
-        ui_unregister_ui_panel,
-        ui_panel_add_widget,
-        ui_panel_update_widget,
-        ui_panel_remove_widget,
+        ui_register_ui_panel_boundary,
+        ui_unregister_ui_panel_boundary,
+        ui_panel_add_widget_boundary,
+        ui_panel_update_widget_boundary,
+        ui_panel_remove_widget_boundary,
     };
     return &table;
 }
@@ -1028,6 +1151,7 @@ sao_sdk_request_redraw_surface(const struct SaoSdkContext* ctx, const char* surf
 // grubbing through the ctx_impl.  Only linked in tests — production
 // builds strip these via the linker's dead-code elimination.
 
+#if defined(SAO_SDK_TESTING)
 extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_panel_state_insertion(void) {
     sao_sdk_internal::test_fail_next_panel_state_insertion();
 }
@@ -1162,3 +1286,4 @@ sao_sdk_test_fire_render_hook(int32_t hook_point, const struct SaoSdkRenderHookP
     } catch (...) {
     }
 }
+#endif

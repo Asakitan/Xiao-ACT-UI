@@ -287,6 +287,9 @@ sao_sdk_status_t SAO_SDK_CALL net_table_capture_start(void* ctx_impl,
                                                       sao_sdk_net_packet_callback_t callback,
                                                       void* user_data) noexcept {
     try {
+        ContextApiLease lease(cast_ctx(ctx_impl));
+        if (!lease)
+            return lease.status();
         return net_capture_start(cast_ctx(ctx_impl), config, callback, user_data);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
@@ -295,6 +298,9 @@ sao_sdk_status_t SAO_SDK_CALL net_table_capture_start(void* ctx_impl,
 
 sao_sdk_status_t SAO_SDK_CALL net_table_capture_stop(void* ctx_impl) noexcept {
     try {
+        ContextApiLease lease(cast_ctx(ctx_impl));
+        if (!lease)
+            return lease.status();
         return net_capture_stop(cast_ctx(ctx_impl));
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
@@ -307,6 +313,9 @@ sao_sdk_status_t SAO_SDK_CALL net_table_parse_packet(void* ctx_impl,
                                                      size_t capacity, size_t element_stride,
                                                      size_t* out_count) noexcept {
     try {
+        ContextApiLease lease(cast_ctx(ctx_impl));
+        if (!lease)
+            return lease.status();
         return net_parse_packet(cast_ctx(ctx_impl), packet, out_results, capacity, element_stride,
                                 out_count);
     } catch (...) {
@@ -619,11 +628,11 @@ sao_sdk_status_t net_parse_packet(ContextState* state, const SaoSdkNetPacketView
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_net_provider(
     SaoSdkContext* ctx, const SaoSdkNetProviderVTable* provider) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
     try {
-        return sao_sdk_internal::configure_net_provider(sao_sdk_internal::cast_ctx(ctx->ctx_impl),
-                                                        provider);
+        return sao_sdk_internal::configure_net_provider(lease.state(), provider);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
@@ -631,10 +640,11 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_n
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_net_provider_status(const SaoSdkContext* ctx) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
     try {
-        return sao_sdk_internal::net_provider_status(sao_sdk_internal::cast_ctx(ctx->ctx_impl));
+        return sao_sdk_internal::net_provider_status(lease.state());
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }

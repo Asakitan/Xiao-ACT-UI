@@ -15,6 +15,8 @@
 #if defined(_WIN32)
 #if defined(SAO_SDK_BUILDING_DLL)
 #define SAO_SDK_API __declspec(dllexport)
+#elif defined(SAO_SDK_TESTING)
+#define SAO_SDK_API
 #else
 #define SAO_SDK_API __declspec(dllimport)
 #endif
