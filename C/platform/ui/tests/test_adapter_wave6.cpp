@@ -29,6 +29,16 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 // Wave 6 test-only helpers.  SAO_UI_API forward-decls match the DLL
 // import macro used by SAO_UI_USING_DLL callers so the symbols
 // resolve against the shared library's export table.
@@ -50,6 +60,12 @@ extern "C" SAO_UI_API int32_t SAO_UI_CALL
 sao_ui_adapter_test_target_fps(sao_ui_compositor_overlay_window_handle_t handle);
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_adapter_test_dispatch_button(sao_ui_compositor_overlay_window_handle_t handle);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_adapter_test_fail_next_host_sync(
+    sao_ui_compositor_overlay_window_handle_t handle, int32_t phase, sao_status_t status);
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_adapter_test_policy_snapshot(
+    sao_ui_compositor_overlay_window_handle_t handle, bool* layer_visible,
+    bool* layer_click_through, bool* layer_input_enabled, bool* degraded,
+    sao_status_t* degraded_status);
 
 namespace {
 
@@ -129,6 +145,82 @@ void SAO_UI_CALL destroy_window_from_button(int32_t, int32_t, int32_t, float, fl
     ++state->count;
     sao_ui_compositor_overlay_window_destroy(state->window);
 }
+
+#if defined(_WIN32)
+constexpr int32_t kAdapterHostSyncRegion = 0;
+constexpr int32_t kAdapterHostSyncInput = 1;
+constexpr int32_t kAdapterHostSyncWindow = 2;
+
+LRESULT host_hit_test(sao_ui_overlay_host_handle_t host, int32_t x, int32_t y) {
+    const auto hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(host));
+    RECT rect{};
+    REQUIRE(hwnd != nullptr);
+    REQUIRE(GetWindowRect(hwnd, &rect));
+    const int32_t screen_x = rect.left + x;
+    const int32_t screen_y = rect.top + y;
+    const LPARAM point =
+        static_cast<LPARAM>(static_cast<uint16_t>(screen_x)) |
+        (static_cast<LPARAM>(static_cast<uint16_t>(screen_y)) << 16);
+    return SendMessageW(hwnd, WM_NCHITTEST, 0, point);
+}
+
+struct HostedAdapterWindow {
+    sao_ui_overlay_host_handle_t host{};
+    sao_ui_compositor_handle_t compositor{};
+    sao_ui_compositor_overlay_window_handle_t window{};
+
+    explicit HostedAdapterWindow(const char* title, bool click_through = true) {
+        SaoOverlayHostConfig host_config{};
+        host_config.width = 96;
+        host_config.height = 64;
+        REQUIRE(sao_ui_overlay_host_create(&host_config, &host) == SAO_STATUS_OK);
+
+        SaoCompositorConfig compositor_config{};
+        REQUIRE(sao_ui_compositor_create(host, &compositor_config, &compositor) ==
+                SAO_STATUS_OK);
+
+        auto config = make_cfg(title, 0, 0, 32, 24);
+        config.click_through = click_through;
+        REQUIRE(sao_ui_compositor_overlay_window_create(compositor, &config, &window) ==
+                SAO_STATUS_OK);
+    }
+
+    ~HostedAdapterWindow() {
+        sao_ui_compositor_overlay_window_destroy(window);
+        sao_ui_compositor_destroy(compositor);
+        (void)sao_ui_overlay_host_destroy(host);
+    }
+
+    HostedAdapterWindow(const HostedAdapterWindow&) = delete;
+    HostedAdapterWindow& operator=(const HostedAdapterWindow&) = delete;
+};
+
+void check_adapter_policy(sao_ui_compositor_overlay_window_handle_t window,
+                          bool expected_visible, bool expected_click_through,
+                          bool expected_layer_input, bool expected_degraded,
+                          sao_status_t expected_degraded_status) {
+    bool local_visible = false;
+    bool local_click_through = false;
+    REQUIRE(sao_ui_adapter_test_snapshot(window, nullptr, nullptr, nullptr, nullptr,
+                                         &local_visible, nullptr, &local_click_through, nullptr,
+                                         nullptr, nullptr));
+    bool layer_visible = false;
+    bool layer_click_through = false;
+    bool layer_input_enabled = false;
+    bool degraded = false;
+    sao_status_t degraded_status = SAO_STATUS_ERR_UNKNOWN;
+    REQUIRE(sao_ui_adapter_test_policy_snapshot(
+        window, &layer_visible, &layer_click_through, &layer_input_enabled, &degraded,
+        &degraded_status));
+    CHECK(local_visible == expected_visible);
+    CHECK(local_click_through == expected_click_through);
+    CHECK(layer_visible == expected_visible);
+    CHECK(layer_click_through == expected_click_through);
+    CHECK(layer_input_enabled == expected_layer_input);
+    CHECK(degraded == expected_degraded);
+    CHECK(degraded_status == expected_degraded_status);
+}
+#endif
 
 } // namespace
 
@@ -405,6 +497,113 @@ TEST_CASE("adapter_input_callback_can_destroy_its_window", "[ui][adapter][callba
 }
 
 #if defined(_WIN32)
+TEST_CASE("adapter click-through toggles compositor hit-test true false true",
+      "[ui][adapter][click_through][hit_test]") {
+    SaoOverlayHostConfig host_config{};
+    host_config.width = 96;
+    host_config.height = 64;
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&host_config, &host) == SAO_STATUS_OK);
+
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(host, &compositor_config, &compositor) ==
+        SAO_STATUS_OK);
+
+    const auto config = make_cfg("adapter_click_policy", 0, 0, 32, 24);
+    sao_ui_compositor_overlay_window_handle_t window = nullptr;
+    REQUIRE(sao_ui_compositor_overlay_window_create(
+        compositor, &config, &window) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_overlay_window_show(window) == SAO_STATUS_OK);
+
+    CHECK(sao_ui_overlay_host_input_passthrough(host));
+    CHECK(host_hit_test(host, 8, 8) == HTTRANSPARENT);
+
+    REQUIRE(sao_ui_compositor_overlay_window_set_click_through(window, false) ==
+        SAO_STATUS_OK);
+    CHECK_FALSE(sao_ui_overlay_host_input_passthrough(host));
+    CHECK(host_hit_test(host, 8, 8) == HTCLIENT);
+
+    REQUIRE(sao_ui_compositor_overlay_window_set_click_through(window, true) ==
+        SAO_STATUS_OK);
+    CHECK(sao_ui_overlay_host_input_passthrough(host));
+    CHECK(host_hit_test(host, 8, 8) == HTTRANSPARENT);
+
+    sao_ui_compositor_overlay_window_destroy(window);
+    sao_ui_compositor_destroy(compositor);
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+}
+
+    TEST_CASE("adapter show rolls layer and local state back when host region sync fails",
+            "[ui][adapter][transaction][rollback][region]") {
+        HostedAdapterWindow fixture("adapter_show_region_rollback");
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                fixture.window, kAdapterHostSyncRegion, SAO_STATUS_ERR_OS_CALL_FAILED) ==
+            SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_show(fixture.window) ==
+            SAO_STATUS_ERR_OS_CALL_FAILED);
+        check_adapter_policy(fixture.window, false, true, false, false, SAO_STATUS_OK);
+        CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
+        CHECK(host_hit_test(fixture.host, 8, 8) == HTTRANSPARENT);
+
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        check_adapter_policy(fixture.window, true, true, false, false, SAO_STATUS_OK);
+    }
+
+    TEST_CASE("adapter hide restores interactive host state when input sync fails",
+            "[ui][adapter][transaction][rollback][input]") {
+        HostedAdapterWindow fixture("adapter_hide_input_rollback", false);
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        REQUIRE_FALSE(sao_ui_overlay_host_input_passthrough(fixture.host));
+        REQUIRE(host_hit_test(fixture.host, 8, 8) == HTCLIENT);
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                fixture.window, kAdapterHostSyncInput, SAO_STATUS_ERR_OS_CALL_FAILED) ==
+            SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_hide(fixture.window) ==
+            SAO_STATUS_ERR_OS_CALL_FAILED);
+        check_adapter_policy(fixture.window, true, false, true, false, SAO_STATUS_OK);
+        CHECK_FALSE(sao_ui_overlay_host_input_passthrough(fixture.host));
+        CHECK(host_hit_test(fixture.host, 8, 8) == HTCLIENT);
+    }
+
+    TEST_CASE("adapter click-through restores policy when host window sync fails",
+            "[ui][adapter][transaction][rollback][window]") {
+        HostedAdapterWindow fixture("adapter_click_window_rollback");
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_compositor_overlay_window_enable_input_proxy(fixture.window) ==
+            SAO_STATUS_OK);
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                fixture.window, kAdapterHostSyncWindow, SAO_STATUS_ERR_OS_CALL_FAILED) ==
+            SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_set_click_through(fixture.window, false) ==
+            SAO_STATUS_ERR_OS_CALL_FAILED);
+        check_adapter_policy(fixture.window, true, true, true, false, SAO_STATUS_OK);
+        CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
+        CHECK(host_hit_test(fixture.host, 8, 8) == HTTRANSPARENT);
+    }
+
+    TEST_CASE("adapter exposes degraded state when host rollback sync also fails",
+            "[ui][adapter][transaction][rollback][degraded]") {
+        HostedAdapterWindow fixture("adapter_degraded_rollback");
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                fixture.window, kAdapterHostSyncRegion, SAO_STATUS_ERR_OS_CALL_FAILED) ==
+            SAO_STATUS_OK);
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                fixture.window, kAdapterHostSyncRegion, SAO_STATUS_ERR_ACCESS_DENIED) ==
+            SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_show(fixture.window) ==
+            SAO_STATUS_ERR_SURFACE_INVALID);
+        check_adapter_policy(fixture.window, false, true, false, true,
+                     SAO_STATUS_ERR_ACCESS_DENIED);
+
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        check_adapter_policy(fixture.window, true, true, false, false, SAO_STATUS_OK);
+    }
+
 TEST_CASE("adapter host synchronization enforces the real owner thread",
           "[ui][adapter][owner_thread]") {
     SaoOverlayHostConfig host_config{};

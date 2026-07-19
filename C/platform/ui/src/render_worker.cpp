@@ -6,18 +6,10 @@
 //
 // Design:
 //   * A worker is `pool_size` std::threads sharing one MPMC job queue.
-//   * `submit_compose` posts a job to the shared queue (fan-out mode).
-//   * Per-overlay lanes still exist for thread-affine GL contexts; each
-//     lane is one dedicated thread with its own queue, so a compose job
-//     for lane X always runs on the same OS thread.
-//   * `flush` waits for all in-flight (queue + running) jobs.
-//
-// The fan-out submit API used by tests is `sao_ui_render_worker_submit`
-// (from the Wave 4 task).  Since the header is fixed and only exports
-// per-lane submit, we mirror the fan-out contract with a stable-C ABI
-// export declared in this .cpp -- the header prototype is added at the
-// end of this file's local `extern "C"` block so the shared library
-// exports it too.
+//   * Per-overlay lanes own dedicated threads for thread-affine work.
+//   * Public handles are stable shells looked up in active registries.
+//   * Destroy retires handles, drains API leases, then joins threads.
+//   * Flush uses completion conditions rather than polling lane state.
 
 #include "sao/ui/render_worker.h"
 
@@ -28,8 +20,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <deque>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -45,20 +37,6 @@
 #  endif
 #  include <windows.h>
 #endif
-
-// Fan-out submit task signature (added in Wave 4; not part of the fixed
-// header per the plan, but exported by the DLL so tests can call it
-// directly through GetProcAddress-style linkage.  The header could grow
-// this as `sao_ui_render_worker_submit` in a follow-up.)
-using sao_ui_render_worker_task_fn_t = void(SAO_UI_CALL*)(void* user_data);
-
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_submit(
-    sao_ui_render_worker_handle_t handle,
-    sao_ui_render_worker_task_fn_t task_fn,
-    void* user_data);
-
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
-    sao_ui_render_worker_handle_t handle);
 
 namespace {
 
@@ -101,6 +79,71 @@ struct LaneJob {
     double now_sec;
 };
 
+extern thread_local sao_ui_render_worker_s* g_callback_worker;
+
+class ApiActivity {
+  public:
+    bool try_acquire() noexcept {
+        try {
+            std::lock_guard lock(mutex_);
+            if (!accepting_) return false;
+            ++active_;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void release() noexcept {
+        try {
+            std::lock_guard lock(mutex_);
+            if (active_ != 0) --active_;
+            if (active_ == 0) idle_.notify_all();
+        } catch (...) {
+        }
+    }
+
+    void retire() noexcept {
+        try {
+            std::lock_guard lock(mutex_);
+            accepting_ = false;
+        } catch (...) {
+        }
+    }
+
+    void wait() noexcept {
+        try {
+            std::unique_lock lock(mutex_);
+            idle_.wait(lock, [this] { return active_ == 0; });
+        } catch (...) {
+        }
+    }
+
+  private:
+    std::mutex mutex_;
+    std::condition_variable idle_;
+    size_t active_ = 0;
+    bool accepting_ = true;
+};
+
+template <typename Callback> class ScopeExit {
+  public:
+    explicit ScopeExit(Callback callback) noexcept : callback_(std::move(callback)) {}
+
+    ~ScopeExit() noexcept {
+        try {
+            callback_();
+        } catch (...) {
+        }
+    }
+
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+
+  private:
+    Callback callback_;
+};
+
 }  // namespace
 
 struct sao_ui_frame_buffer_s {
@@ -113,85 +156,222 @@ struct sao_ui_frame_buffer_s {
 
 struct sao_ui_render_lane_s {
     std::string overlay_id;
-    // The lane owns one dedicated thread that pulls jobs from its queue.
     std::thread thread;
     std::mutex mtx;
     std::condition_variable cv;
+    std::condition_variable idle_cv;
     std::deque<LaneJob> queue;
-    std::atomic<bool> stopped{false};
-    std::atomic<bool> busy{false};
+    size_t in_flight = 0;
+    bool stopped = false;
+    bool busy = false;
+    ApiActivity api_activity;
 
-    // Completed frame drop-slot (single-buffered).
     std::mutex frame_mtx;
     std::unique_ptr<sao_ui_frame_buffer_s> pending_frame;
 
-    // Peak wall ms.
     std::atomic<double> peak_wall_ms_recent{0.0};
 
-    // Backpointer to worker for stats/config.
     struct sao_ui_render_worker_s* worker = nullptr;
 
     void thread_main();
 };
 
 struct sao_ui_render_worker_s {
-    // Fan-out pool: workers pull from shared queue.
     int32_t pool_size = kDefaultPoolSize;
     std::vector<std::thread> pool;
     std::mutex fan_mtx;
     std::condition_variable fan_cv;
     std::condition_variable idle_cv;
     std::deque<FanTask> fan_queue;
-    std::atomic<int32_t> in_flight{0};
-    std::atomic<bool> stop_requested{false};
+    size_t fan_in_flight = 0;
+    bool stop_requested = false;
+    ApiActivity api_activity;
 
-    // Per-lane state.
     std::mutex lanes_mtx;
-    std::unordered_map<std::string, std::unique_ptr<sao_ui_render_lane_s>> lanes;
+    std::unordered_map<std::string, std::shared_ptr<sao_ui_render_lane_s>> lanes;
 
-    // Config
     bool queue_pending = true;
-
-    // Peak sampling.
     std::atomic<double> peak_wall_ms_recent{0.0};
 
     void fan_thread_main() {
         while (true) {
             FanTask task{};
             {
-                std::unique_lock<std::mutex> lk(fan_mtx);
-                fan_cv.wait(lk, [this] { return stop_requested.load() || !fan_queue.empty(); });
-                if (stop_requested.load() && fan_queue.empty()) return;
+                std::unique_lock lock(fan_mtx);
+                fan_cv.wait(lock, [this] { return stop_requested || !fan_queue.empty(); });
+                if (stop_requested && fan_queue.empty()) return;
                 task = fan_queue.front();
                 fan_queue.pop_front();
             }
-            if (task.fn) {
-                task.fn(task.user_data);
-            }
-            const int32_t left = in_flight.fetch_sub(1) - 1;
-            if (left == 0) {
-                std::lock_guard<std::mutex> lk(fan_mtx);
-                idle_cv.notify_all();
+            ScopeExit complete([this] {
+                std::lock_guard lock(fan_mtx);
+                if (fan_in_flight != 0) --fan_in_flight;
+                if (fan_in_flight == 0) idle_cv.notify_all();
+            });
+            auto* previous = g_callback_worker;
+            g_callback_worker = this;
+            ScopeExit restore_callback([previous] { g_callback_worker = previous; });
+            try {
+                if (task.fn != nullptr) task.fn(task.user_data);
+            } catch (...) {
             }
         }
     }
 };
 
+namespace {
+
+thread_local sao_ui_render_worker_s* g_callback_worker = nullptr;
+
+struct WorkerRegistry {
+    std::mutex mutex;
+    std::unordered_map<sao_ui_render_worker_handle_t,
+                       std::shared_ptr<sao_ui_render_worker_s>> active;
+    std::vector<std::shared_ptr<sao_ui_render_worker_s>> all;
+};
+
+struct LaneRegistry {
+    std::mutex mutex;
+    std::unordered_map<sao_ui_render_lane_handle_t,
+                       std::shared_ptr<sao_ui_render_lane_s>> active;
+    std::vector<std::shared_ptr<sao_ui_render_lane_s>> all;
+};
+
+WorkerRegistry& worker_registry() {
+    static WorkerRegistry registry;
+    return registry;
+}
+
+LaneRegistry& lane_registry() {
+    static LaneRegistry registry;
+    return registry;
+}
+
+class WorkerOperationLease {
+  public:
+    explicit WorkerOperationLease(sao_ui_render_worker_handle_t handle) noexcept {
+        try {
+            auto& registry = worker_registry();
+            std::lock_guard lock(registry.mutex);
+            const auto found = registry.active.find(handle);
+            if (found == registry.active.end() ||
+                !found->second->api_activity.try_acquire()) {
+                return;
+            }
+            worker_ = found->second;
+        } catch (...) {
+        }
+    }
+
+    ~WorkerOperationLease() {
+        if (worker_ != nullptr) worker_->api_activity.release();
+    }
+
+    WorkerOperationLease(const WorkerOperationLease&) = delete;
+    WorkerOperationLease& operator=(const WorkerOperationLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return worker_ != nullptr;
+    }
+
+    sao_ui_render_worker_s* get() const noexcept {
+        return worker_.get();
+    }
+
+  private:
+    std::shared_ptr<sao_ui_render_worker_s> worker_;
+};
+
+class LaneOperationLease {
+  public:
+    explicit LaneOperationLease(sao_ui_render_lane_handle_t handle) noexcept {
+        try {
+            auto& registry = lane_registry();
+            std::lock_guard lock(registry.mutex);
+            const auto found = registry.active.find(handle);
+            if (found == registry.active.end() ||
+                !found->second->api_activity.try_acquire()) {
+                return;
+            }
+            lane_ = found->second;
+        } catch (...) {
+        }
+    }
+
+    ~LaneOperationLease() {
+        if (lane_ != nullptr) lane_->api_activity.release();
+    }
+
+    LaneOperationLease(const LaneOperationLease&) = delete;
+    LaneOperationLease& operator=(const LaneOperationLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return lane_ != nullptr;
+    }
+
+    sao_ui_render_lane_s* get() const noexcept {
+        return lane_.get();
+    }
+
+  private:
+    std::shared_ptr<sao_ui_render_lane_s> lane_;
+};
+
+void stop_and_join_lane(const std::shared_ptr<sao_ui_render_lane_s>& lane) noexcept {
+    if (lane == nullptr) return;
+    try {
+        {
+            std::lock_guard lock(lane->mtx);
+            lane->stopped = true;
+        }
+        lane->cv.notify_all();
+        if (lane->thread.joinable()) lane->thread.join();
+        std::lock_guard frame_lock(lane->frame_mtx);
+        lane->pending_frame.reset();
+    } catch (...) {
+    }
+}
+
+void retire_worker_lanes(sao_ui_render_worker_s& worker) noexcept {
+    try {
+        std::lock_guard lanes_lock(worker.lanes_mtx);
+        auto& registry = lane_registry();
+        std::lock_guard registry_lock(registry.mutex);
+        for (const auto& [_, lane] : worker.lanes) {
+            lane->api_activity.retire();
+            registry.active.erase(lane.get());
+        }
+    } catch (...) {
+    }
+}
+
+}  // namespace
+
 void sao_ui_render_lane_s::thread_main() {
     while (true) {
         LaneJob job{};
         {
-            std::unique_lock<std::mutex> lk(mtx);
-            cv.wait(lk, [this] { return stopped.load() || !queue.empty(); });
-            if (stopped.load() && queue.empty()) return;
+            std::unique_lock lock(mtx);
+            cv.wait(lock, [this] { return stopped || !queue.empty(); });
+            if (stopped && queue.empty()) return;
             job = queue.front();
             queue.pop_front();
+            busy = true;
         }
-        busy.store(true);
+        ScopeExit complete([this] {
+            std::lock_guard lock(mtx);
+            busy = false;
+            if (in_flight != 0) --in_flight;
+            if (in_flight == 0) idle_cv.notify_all();
+        });
+        auto* previous = g_callback_worker;
+        g_callback_worker = worker;
+        ScopeExit restore_callback([previous] { g_callback_worker = previous; });
         const auto t0 = std::chrono::steady_clock::now();
         sao_ui_frame_buffer_handle_t frame = nullptr;
-        if (job.fn) {
-            frame = job.fn(job.now_sec, job.user_data);
+        try {
+            if (job.fn != nullptr) frame = job.fn(job.now_sec, job.user_data);
+        } catch (...) {
         }
         const auto t1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -202,10 +382,9 @@ void sao_ui_render_lane_s::thread_main() {
             if (ms > gprev) worker->peak_wall_ms_recent.store(ms);
         }
         if (frame != nullptr) {
-            std::lock_guard<std::mutex> flk(frame_mtx);
+            std::lock_guard frame_lock(frame_mtx);
             pending_frame.reset(frame);
         }
-        busy.store(false);
     }
 }
 
@@ -213,103 +392,158 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_create(
     const SaoRenderWorkerConfig* config, sao_ui_render_worker_handle_t* out_handle) {
     if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
-    auto* w = new (std::nothrow) sao_ui_render_worker_s();
-    if (w == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<sao_ui_render_worker_s> worker;
+    try {
+        worker = std::make_shared<sao_ui_render_worker_s>();
+        int32_t pool_size = 0;
+        if (config != nullptr) {
+            pool_size = config->task_pool_size > 0 ? config->task_pool_size : 0;
+            worker->queue_pending = config->queue_pending;
+        }
+        if (pool_size <= 0) {
+            const int32_t lanes = auto_lane_count();
+            pool_size = std::max<int32_t>(2, lanes);
+        }
+        worker->pool_size = pool_size;
+        worker->pool.reserve(static_cast<size_t>(pool_size));
 
-    int32_t pool_size = 0;
-    if (config != nullptr) {
-        pool_size = config->task_pool_size > 0 ? config->task_pool_size : 0;
-        w->queue_pending = config->queue_pending;
-    }
-    if (pool_size <= 0) {
-        // Auto lane sizing heuristic doubles for fan-out pool (min 2).
-        const int32_t lanes = auto_lane_count();
-        pool_size = std::max<int32_t>(2, lanes);
-    }
-    w->pool_size = pool_size;
+        auto& registry = worker_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            registry.all.push_back(worker);
+        }
+        for (int32_t index = 0; index < pool_size; ++index) {
+            worker->pool.emplace_back(&sao_ui_render_worker_s::fan_thread_main, worker.get());
+        }
 
-    for (int32_t i = 0; i < pool_size; ++i) {
-        w->pool.emplace_back(&sao_ui_render_worker_s::fan_thread_main, w);
+        std::lock_guard lock(registry.mutex);
+        const auto handle = worker.get();
+        registry.active.emplace(handle, worker);
+        *out_handle = handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (worker != nullptr) {
+            {
+                std::lock_guard lock(worker->fan_mtx);
+                worker->stop_requested = true;
+            }
+            worker->fan_cv.notify_all();
+            for (auto& thread : worker->pool) {
+                if (thread.joinable()) thread.join();
+            }
+            worker->pool.clear();
+        }
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-
-    *out_handle = w;
-    return SAO_STATUS_OK;
 }
 
-extern "C" void SAO_UI_CALL sao_ui_render_worker_destroy(
+extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_destroy(
     sao_ui_render_worker_handle_t handle) {
-    if (handle == nullptr) return;
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (g_callback_worker == handle) return SAO_UI_STATUS_ERR_BUSY;
 
-    // Stop fan-out pool.
+    std::shared_ptr<sao_ui_render_worker_s> worker;
     {
-        std::lock_guard<std::mutex> lk(handle->fan_mtx);
-        handle->stop_requested.store(true);
+        auto& registry = worker_registry();
+        std::lock_guard lock(registry.mutex);
+        const auto found = registry.active.find(handle);
+        if (found == registry.active.end()) return SAO_STATUS_ERR_HANDLE_INVALID;
+        worker = found->second;
+        worker->api_activity.retire();
+        registry.active.erase(found);
     }
-    handle->fan_cv.notify_all();
-    for (auto& t : handle->pool) {
-        if (t.joinable()) t.join();
-    }
-    handle->pool.clear();
 
-    // Stop lanes.
+    retire_worker_lanes(*worker);
+    worker->api_activity.wait();
+    retire_worker_lanes(*worker);
+
+    for (const auto& [_, lane] : worker->lanes) lane->api_activity.wait();
+
     {
-        std::lock_guard<std::mutex> lk(handle->lanes_mtx);
-        for (auto& kv : handle->lanes) {
-            auto& lane = *kv.second;
-            {
-                std::lock_guard<std::mutex> llk(lane.mtx);
-                lane.stopped.store(true);
-            }
-            lane.cv.notify_all();
-        }
-        for (auto& kv : handle->lanes) {
-            auto& lane = *kv.second;
-            if (lane.thread.joinable()) lane.thread.join();
-        }
-        handle->lanes.clear();
+        std::lock_guard lock(worker->fan_mtx);
+        worker->stop_requested = true;
     }
+    worker->fan_cv.notify_all();
+    for (auto& thread : worker->pool) {
+        if (thread.joinable()) thread.join();
+    }
+    worker->pool.clear();
 
-    delete handle;
+    for (const auto& [_, lane] : worker->lanes) stop_and_join_lane(lane);
+    {
+        std::lock_guard lock(worker->lanes_mtx);
+        worker->lanes.clear();
+    }
+    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_get_lane(
     sao_ui_render_worker_handle_t handle, const char* overlay_id_utf8,
     sao_ui_render_lane_handle_t* out_lane) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (overlay_id_utf8 == nullptr || out_lane == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_lane = nullptr;
+    WorkerOperationLease operation(handle);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
 
-    std::lock_guard<std::mutex> lk(handle->lanes_mtx);
-    const std::string key = overlay_id_utf8;
-    auto it = handle->lanes.find(key);
-    if (it != handle->lanes.end()) {
-        *out_lane = it->second.get();
+    try {
+        auto* worker = operation.get();
+        std::lock_guard lock(worker->lanes_mtx);
+        const std::string key = overlay_id_utf8;
+        const auto found = worker->lanes.find(key);
+        if (found != worker->lanes.end()) {
+            *out_lane = found->second.get();
+            return SAO_STATUS_OK;
+        }
+        auto lane = std::make_shared<sao_ui_render_lane_s>();
+        lane->overlay_id = key;
+        lane->worker = worker;
+        {
+            auto& registry = lane_registry();
+            std::lock_guard registry_lock(registry.mutex);
+            registry.all.push_back(lane);
+        }
+        worker->lanes.emplace(key, lane);
+        try {
+            lane->thread = std::thread(&sao_ui_render_lane_s::thread_main, lane.get());
+            auto& registry = lane_registry();
+            std::lock_guard registry_lock(registry.mutex);
+            registry.active.emplace(lane.get(), lane);
+        } catch (...) {
+            stop_and_join_lane(lane);
+            auto& registry = lane_registry();
+            std::lock_guard registry_lock(registry.mutex);
+            registry.active.erase(lane.get());
+            worker->lanes.erase(key);
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        *out_lane = lane.get();
         return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    auto lane = std::make_unique<sao_ui_render_lane_s>();
-    lane->overlay_id = key;
-    lane->worker = handle;
-    lane->thread = std::thread(&sao_ui_render_lane_s::thread_main, lane.get());
-    *out_lane = lane.get();
-    handle->lanes.emplace(key, std::move(lane));
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_lane_submit_compose(
     sao_ui_render_lane_handle_t lane, sao_ui_compose_fn_t fn,
     void* user_data, double now_sec) {
-    if (lane == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (fn == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    LaneOperationLease operation(lane);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* active_lane = operation.get();
 
-    {
-        std::lock_guard<std::mutex> lk(lane->mtx);
-        if (lane->stopped.load()) return SAO_STATUS_ERR_CANCELLED;
-        if (!lane->queue.empty() && lane->worker != nullptr && !lane->worker->queue_pending) {
+    try {
+        std::lock_guard lock(active_lane->mtx);
+        if (active_lane->stopped) return SAO_STATUS_ERR_CANCELLED;
+        if (active_lane->in_flight != 0 && active_lane->worker != nullptr &&
+            !active_lane->worker->queue_pending) {
             return SAO_STATUS_ERR_ALREADY_EXISTS;
         }
-        lane->queue.push_back(LaneJob{fn, user_data, now_sec});
+        active_lane->queue.push_back(LaneJob{fn, user_data, now_sec});
+        ++active_lane->in_flight;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    lane->cv.notify_one();
+    active_lane->cv.notify_one();
     return SAO_STATUS_OK;
 }
 
@@ -317,13 +551,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_lane_try_take_frame(
     sao_ui_render_lane_handle_t lane, sao_ui_frame_buffer_handle_t* out_frame) {
     if (out_frame == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_frame = nullptr;
-    if (lane == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    LaneOperationLease operation(lane);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
 
-    std::lock_guard<std::mutex> flk(lane->frame_mtx);
-    if (lane->pending_frame == nullptr) {
+    std::lock_guard frame_lock(operation.get()->frame_mtx);
+    if (operation.get()->pending_frame == nullptr) {
         return SAO_STATUS_ERR_NOT_FOUND;
     }
-    *out_frame = lane->pending_frame.release();
+    *out_frame = operation.get()->pending_frame.release();
     return SAO_STATUS_OK;
 }
 
@@ -458,8 +693,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_ulw_commit(
 
 extern "C" double SAO_UI_CALL sao_ui_render_worker_peak_wall_ms(
     sao_ui_render_worker_handle_t handle, double /*window_sec*/) {
-    if (handle == nullptr) return 0.0;
-    return handle->peak_wall_ms_recent.load();
+    WorkerOperationLease operation(handle);
+    return operation ? operation.get()->peak_wall_ms_recent.load() : 0.0;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_premultiply_rgba_to_bgra(
@@ -493,46 +728,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_premultiply_rgba_to_bgr
     return SAO_STATUS_OK;
 }
 
-// ── Wave 4 fan-out API (not yet in header; exported for tests) ─────────
-
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_submit(
     sao_ui_render_worker_handle_t handle,
     sao_ui_render_worker_task_fn_t task_fn,
     void* user_data) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (task_fn == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (handle->stop_requested.load()) return SAO_STATUS_ERR_CANCELLED;
-    {
-        std::lock_guard<std::mutex> lk(handle->fan_mtx);
-        handle->in_flight.fetch_add(1);
-        handle->fan_queue.push_back(FanTask{task_fn, user_data});
+    WorkerOperationLease operation(handle);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* worker = operation.get();
+    try {
+        std::lock_guard lock(worker->fan_mtx);
+        if (worker->stop_requested) return SAO_STATUS_ERR_CANCELLED;
+        worker->fan_queue.push_back(FanTask{task_fn, user_data});
+        ++worker->fan_in_flight;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    handle->fan_cv.notify_one();
+    worker->fan_cv.notify_one();
     return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
     sao_ui_render_worker_handle_t handle) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    std::unique_lock<std::mutex> lk(handle->fan_mtx);
-    handle->idle_cv.wait(lk, [handle] {
-        return handle->in_flight.load() == 0 && handle->fan_queue.empty();
-    });
-
-    // Also wait for all lanes to drain.
-    lk.unlock();
-    {
-        std::lock_guard<std::mutex> llk(handle->lanes_mtx);
-        for (auto& kv : handle->lanes) {
-            auto& lane = *kv.second;
-            while (true) {
-                {
-                    std::lock_guard<std::mutex> lqk(lane.mtx);
-                    if (lane.queue.empty() && !lane.busy.load()) break;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
-            }
+    if (g_callback_worker == handle) return SAO_UI_STATUS_ERR_BUSY;
+    WorkerOperationLease operation(handle);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* worker = operation.get();
+    try {
+        {
+            std::unique_lock lock(worker->fan_mtx);
+            worker->idle_cv.wait(lock, [worker] { return worker->fan_in_flight == 0; });
         }
+
+        std::vector<std::shared_ptr<sao_ui_render_lane_s>> lanes;
+        {
+            std::lock_guard lock(worker->lanes_mtx);
+            lanes.reserve(worker->lanes.size());
+            for (const auto& [_, lane] : worker->lanes) lanes.push_back(lane);
+        }
+        for (const auto& lane : lanes) {
+            std::unique_lock lock(lane->mtx);
+            lane->idle_cv.wait(lock, [&lane] { return lane->in_flight == 0; });
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }

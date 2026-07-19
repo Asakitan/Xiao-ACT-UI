@@ -65,6 +65,10 @@ typedef struct sao_ui_render_worker_s* sao_ui_render_worker_handle_t;
 typedef struct sao_ui_render_lane_s* sao_ui_render_lane_handle_t;
 typedef struct sao_ui_frame_buffer_s* sao_ui_frame_buffer_handle_t;
 
+#ifndef SAO_UI_STATUS_ERR_BUSY
+#define SAO_UI_STATUS_ERR_BUSY ((sao_status_t) - 102)
+#endif
+
 struct SaoRenderWorkerConfig {
     // 0 → auto per the heuristic above.  Non-zero override.
     int32_t     lane_count;
@@ -86,7 +90,23 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_create(
     const SaoRenderWorkerConfig* config,
     sao_ui_render_worker_handle_t* out_handle);
 
-SAO_UI_API void SAO_UI_CALL sao_ui_render_worker_destroy(
+// Retires the public handle before draining accepted API operations and jobs.
+// A callback running on this worker receives SAO_UI_STATUS_ERR_BUSY rather
+// than waiting for or joining its own thread.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_destroy(
+    sao_ui_render_worker_handle_t handle);
+
+typedef void (SAO_UI_CALL* sao_ui_render_worker_task_fn_t)(void* user_data);
+
+// Submits non-thread-affine CPU work to the shared fan-out pool.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_submit(
+    sao_ui_render_worker_handle_t handle,
+    sao_ui_render_worker_task_fn_t task_fn,
+    void* user_data);
+
+// Waits until every fan-out and lane job accepted before quiescence has
+// completed.  A callback running on this worker returns BUSY.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
     sao_ui_render_worker_handle_t handle);
 
 // Get / create a lane for a specific overlay id.  Lanes are pinned

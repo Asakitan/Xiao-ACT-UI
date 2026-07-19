@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/ui/widget_data.h"
+#include "sao/ui/widget_chart.h"
+#include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
+#include "sao/ui/widget_table.h"
+#include "sao/ui/widget_text.h"
 
 #include <array>
 #include <atomic>
@@ -144,6 +148,94 @@ struct ProviderGuard {
 };
 
 }  // namespace
+
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_widget_text_family_destroy(sao_ui_widget_handle_t handle);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_widget_input_family_destroy(sao_ui_widget_handle_t handle);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_widget_data_family_destroy(sao_ui_widget_handle_t handle);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_widget_chart_family_destroy(sao_ui_widget_handle_t handle);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle);
+
+TEST_CASE("unified widget ABI rejects cross-family and stale handles",
+        "[ui][widget_extension][abi][lifetime]") {
+    SaoUiLabelSpec label_spec{};
+    label_spec.text_utf8 = "label";
+    sao_ui_widget_handle_t text = nullptr;
+    REQUIRE(sao_ui_label_create(nullptr, &label_spec, &text) == SAO_STATUS_OK);
+
+    SaoUiButtonSpec button_spec{};
+    button_spec.text_utf8 = "button";
+    button_spec.kind = SAO_UI_BTN_NORMAL;
+    sao_ui_widget_handle_t input = nullptr;
+    REQUIRE(sao_ui_button_create(nullptr, &button_spec, &input) == SAO_STATUS_OK);
+
+    SaoUiGaugeSpec gauge_spec{};
+    gauge_spec.max_value = 100.0F;
+    sao_ui_widget_handle_t data = nullptr;
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &data) == SAO_STATUS_OK);
+
+    SaoUiTreeViewSpec tree_spec{};
+    sao_ui_widget_handle_t table = nullptr;
+    REQUIRE(sao_ui_tree_view_create(nullptr, &tree_spec, &table) == SAO_STATUS_OK);
+
+    SaoUiSparklineSpec sparkline_spec{};
+    sparkline_spec.max_points = 8;
+    sparkline_spec.line_width_px = 1.0F;
+    sao_ui_widget_handle_t chart = nullptr;
+    REQUIRE(sao_ui_sparkline_create(nullptr, &sparkline_spec, &chart) == SAO_STATUS_OK);
+
+    using FamilyDestroy = void(SAO_UI_CALL*)(sao_ui_widget_handle_t);
+    const std::array<FamilyDestroy, 5> family_destroys{
+        sao_ui_widget_text_family_destroy,
+        sao_ui_widget_input_family_destroy,
+        sao_ui_widget_data_family_destroy,
+        sao_ui_widget_table_family_destroy,
+        sao_ui_widget_chart_family_destroy};
+    const std::array<sao_ui_widget_handle_t, 5> handles{
+        text, input, data, table, chart};
+    for (size_t owner = 0; owner < handles.size(); ++owner) {
+        for (size_t family = 0; family < family_destroys.size(); ++family) {
+            if (family != owner) family_destroys[family](handles[owner]);
+        }
+        int32_t kind = -1;
+        CHECK(sao_ui_widget_get_kind(handles[owner], &kind) == SAO_STATUS_OK);
+    }
+
+    CHECK(sao_ui_label_set_text(text, "still-live") == SAO_STATUS_OK);
+    CHECK(sao_ui_gauge_set_value(data, 25.0F) == SAO_STATUS_OK);
+    size_t visible_count = 1;
+    CHECK(sao_ui_tree_view_get_visible_count(table, &visible_count) == SAO_STATUS_OK);
+    CHECK(sao_ui_button_set_text(input, "still-live") == SAO_STATUS_OK);
+    CHECK(sao_ui_sparkline_append(chart, 1.0) == SAO_STATUS_OK);
+
+    for (const auto handle : handles) {
+      int32_t kind = -1;
+      REQUIRE(sao_ui_widget_get_kind(handle, &kind) == SAO_STATUS_OK);
+      sao_ui_widget_destroy(handle);
+      sao_ui_widget_destroy(handle);
+      CHECK(sao_ui_widget_get_kind(handle, &kind) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    }
+
+    CHECK(sao_ui_label_set_text(text, "stale") ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_button_set_text(input, "stale") ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_gauge_set_value(data, 1.0F) ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_tree_view_get_visible_count(table, &visible_count) ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_sparkline_append(chart, 2.0) ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+
+    for (const auto handle : handles) {
+        for (const auto destroy : family_destroys) destroy(handle);
+    }
+}
 
 TEST_CASE("generic widget event handlers retain registration order",
           "[ui][widget_extension][events]") {

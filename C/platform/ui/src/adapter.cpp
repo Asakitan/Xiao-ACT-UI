@@ -47,6 +47,8 @@
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_compositor_require_owner_thread(sao_ui_compositor_handle_t compositor);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_policy(
+    sao_ui_layer_handle_t layer, bool click_through, bool input_enabled);
 
 namespace {
 
@@ -56,6 +58,13 @@ namespace {
 std::atomic<uint64_t> g_next_layer_id{0};
 std::atomic<int32_t> g_next_raised_z{1'000'000};
 constexpr sao_status_t kStatusBusy = -102;
+
+enum class HostSyncPhase : size_t {
+    region = 0,
+    input = 1,
+    window = 2,
+    count = 3,
+};
 
 std::string gen_layer_name(const char* title_utf8) {
     const uint64_t n = g_next_layer_id.fetch_add(1u) + 1u;
@@ -89,6 +98,11 @@ struct OverlayWindow {
     bool visible = false;
     bool destroyed = false;
     bool input_proxy_attached = false;
+    bool layer_visible = false;
+    bool layer_click_through = true;
+    bool layer_input_enabled = false;
+    bool degraded = false;
+    sao_status_t degraded_status = SAO_STATUS_OK;
     sao_ui_layer_render_fn_t render_fn{};
     void* render_user_data{};
     sao_ui_layer_cursor_pos_fn_t cursor_pos_fn{};
@@ -97,6 +111,8 @@ struct OverlayWindow {
     sao_ui_layer_scroll_fn_t scroll_fn{};
     void* input_user_data{};
     uint64_t input_generation{1};
+    std::array<std::deque<sao_status_t>, static_cast<size_t>(HostSyncPhase::count)>
+        host_sync_failures;
 
     // Diagnostic call log — one entry per public setter invocation.
     // Preserves the Python "did we actually call sync_host_input_mode"
@@ -188,16 +204,134 @@ sao_status_t require_host_owner(OverlayWindow* window) noexcept {
     return sao_ui_compositor_require_owner_thread(window->compositor);
 }
 
+sao_status_t consume_host_sync_failure(OverlayWindow* window, HostSyncPhase phase) noexcept {
+    try {
+        std::lock_guard lock(window->mu);
+        auto& failures = window->host_sync_failures[static_cast<size_t>(phase)];
+        if (failures.empty())
+            return SAO_STATUS_OK;
+        const sao_status_t status = failures.front();
+        failures.pop_front();
+        return status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 sao_status_t sync_host(OverlayWindow* window, bool region, bool input, bool lift) noexcept {
     if (window->compositor == nullptr || sao_ui_compositor_host_hwnd(window->compositor) == nullptr)
         return SAO_STATUS_OK;
     sao_status_t status = SAO_STATUS_OK;
-    if (region)
-        status = sao_ui_compositor_sync_host_rgn(window->compositor);
-    if (status == SAO_STATUS_OK && input)
-        status = sao_ui_compositor_sync_host_input_mode(window->compositor);
-    if (status == SAO_STATUS_OK && lift)
-        status = sao_ui_compositor_lift_input_proxies(window->compositor);
+    if (region) {
+        status = consume_host_sync_failure(window, HostSyncPhase::region);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_compositor_sync_host_rgn(window->compositor);
+    }
+    if (status == SAO_STATUS_OK && input) {
+        status = consume_host_sync_failure(window, HostSyncPhase::input);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_compositor_sync_host_input_mode(window->compositor);
+    }
+    if (status == SAO_STATUS_OK && lift) {
+        status = consume_host_sync_failure(window, HostSyncPhase::window);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_compositor_lift_input_proxies(window->compositor);
+    }
+    return status;
+}
+
+struct OverlayPolicyState {
+    bool local_visible{};
+    bool local_click_through{true};
+    bool layer_visible{};
+    bool layer_click_through{true};
+    bool layer_input_enabled{};
+    bool lift{};
+};
+
+OverlayPolicyState snapshot_policy(OverlayWindow* window) {
+    std::lock_guard lock(window->mu);
+    return {
+        window->visible,
+        window->click_through,
+        window->layer_visible,
+        window->layer_click_through,
+        window->layer_input_enabled,
+        window->input_proxy_attached,
+    };
+}
+
+sao_status_t apply_layer_policy(OverlayWindow* window, const OverlayPolicyState& policy) {
+    sao_ui_layer_handle_t layer = nullptr;
+    {
+        std::lock_guard lock(window->mu);
+        layer = window->layer;
+    }
+    if (layer == nullptr) {
+        std::lock_guard lock(window->mu);
+        window->layer_visible = policy.layer_visible;
+        window->layer_click_through = policy.layer_click_through;
+        window->layer_input_enabled = policy.layer_input_enabled;
+        return SAO_STATUS_OK;
+    }
+
+    sao_status_t status = sao_ui_layer_set_input_policy(
+        layer, policy.layer_click_through, policy.layer_input_enabled);
+    if (status != SAO_STATUS_OK)
+        return status;
+    {
+        std::lock_guard lock(window->mu);
+        window->layer_click_through = policy.layer_click_through;
+        window->layer_input_enabled = policy.layer_input_enabled;
+    }
+    status = sao_ui_layer_set_visible(layer, policy.layer_visible);
+    if (status != SAO_STATUS_OK)
+        return status;
+    {
+        std::lock_guard lock(window->mu);
+        window->layer_visible = policy.layer_visible;
+    }
+    return SAO_STATUS_OK;
+}
+
+void apply_local_policy(OverlayWindow* window, const OverlayPolicyState& policy) {
+    std::lock_guard lock(window->mu);
+    window->visible = policy.local_visible;
+    window->click_through = policy.local_click_through;
+}
+
+void set_degraded(OverlayWindow* window, sao_status_t status) noexcept {
+    try {
+        std::lock_guard lock(window->mu);
+        window->degraded = status != SAO_STATUS_OK;
+        window->degraded_status = status;
+    } catch (...) {
+    }
+}
+
+sao_status_t apply_policy_transaction(OverlayWindow* window, const OverlayPolicyState& previous,
+                                      const OverlayPolicyState& target) {
+    sao_status_t status = apply_layer_policy(window, target);
+    if (status == SAO_STATUS_OK) {
+        apply_local_policy(window, target);
+        status = sync_host(window, true, true, target.lift);
+    }
+    if (status == SAO_STATUS_OK) {
+        set_degraded(window, SAO_STATUS_OK);
+        return SAO_STATUS_OK;
+    }
+
+    sao_status_t rollback_status = apply_layer_policy(window, previous);
+    apply_local_policy(window, previous);
+    const sao_status_t host_rollback_status =
+        sync_host(window, true, true, previous.lift);
+    if (rollback_status == SAO_STATUS_OK)
+        rollback_status = host_rollback_status;
+    if (rollback_status != SAO_STATUS_OK) {
+        set_degraded(window, rollback_status);
+        return SAO_STATUS_ERR_SURFACE_INVALID;
+    }
+    set_degraded(window, SAO_STATUS_OK);
     return status;
 }
 
@@ -499,6 +633,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_create(
         win->width = config->width;
         win->height = config->height;
         win->click_through = config->click_through;
+        win->layer_click_through = config->click_through;
         win->vsync = config->vsync;
         win->z_order = config->z_order;
         win->render_fn = reinterpret_cast<sao_ui_layer_render_fn_t>(config->render_fn);
@@ -528,7 +663,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_create(
                 status = sao_ui_layer_set_visible(win->layer, false);
             }
             if (status == SAO_STATUS_OK) {
-                status = sao_ui_layer_set_input_enabled(win->layer, false);
+                status = sao_ui_layer_set_input_policy(
+                    win->layer, win->click_through, false);
             }
             if (status != SAO_STATUS_OK)
                 return status;
@@ -628,24 +764,15 @@ sao_ui_compositor_overlay_window_show(sao_ui_compositor_overlay_window_handle_t 
         const sao_status_t owner_status = require_host_owner(win);
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        bool lift = false;
-        {
-            std::lock_guard lock(win->mu);
-            if (win->layer != nullptr) {
-                sao_status_t status = sao_ui_layer_set_visible(win->layer, true);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_layer_set_input_enabled(win->layer, !win->click_through);
-                if (status != SAO_STATUS_OK) {
-                    (void)sao_ui_layer_set_visible(win->layer, win->visible);
-                    return status;
-                }
-            }
-            win->visible = true;
-            lift = win->input_proxy_attached;
-        }
-        const sao_status_t sync_status = sync_host(win, true, true, lift);
-        if (sync_status != SAO_STATUS_OK)
-            return sync_status;
+        const OverlayPolicyState previous = snapshot_policy(win);
+        OverlayPolicyState target = previous;
+        target.local_visible = true;
+        target.layer_visible = true;
+        target.layer_click_through = previous.local_click_through;
+        target.layer_input_enabled = !previous.local_click_through;
+        const sao_status_t status = apply_policy_transaction(win, previous, target);
+        if (status != SAO_STATUS_OK)
+            return status;
         win->log("show");
         return SAO_STATUS_OK;
     } catch (...) {
@@ -665,23 +792,16 @@ sao_ui_compositor_overlay_window_hide(sao_ui_compositor_overlay_window_handle_t 
         const sao_status_t owner_status = require_host_owner(win);
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        {
-            std::lock_guard lock(win->mu);
-            if (win->layer != nullptr) {
-                sao_status_t status = sao_ui_layer_set_input_enabled(win->layer, false);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_layer_set_visible(win->layer, false);
-                if (status != SAO_STATUS_OK) {
-                    (void)sao_ui_layer_set_input_enabled(win->layer,
-                                                         win->visible && !win->click_through);
-                    return status;
-                }
-            }
-            win->visible = false;
-        }
-        const sao_status_t sync_status = sync_host(win, true, true, false);
-        if (sync_status != SAO_STATUS_OK)
-            return sync_status;
+        const OverlayPolicyState previous = snapshot_policy(win);
+        OverlayPolicyState target = previous;
+        target.local_visible = false;
+        target.layer_visible = false;
+        target.layer_click_through = previous.local_click_through;
+        target.layer_input_enabled = false;
+        target.lift = false;
+        const sao_status_t status = apply_policy_transaction(win, previous, target);
+        if (status != SAO_STATUS_OK)
+            return status;
         win->log("hide");
         return SAO_STATUS_OK;
     } catch (...) {
@@ -775,21 +895,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_click_t
         const sao_status_t owner_status = require_host_owner(win);
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        bool lift = false;
-        {
-            std::lock_guard lock(win->mu);
-            if (win->layer != nullptr) {
-                const sao_status_t status =
-                    sao_ui_layer_set_input_enabled(win->layer, win->visible && !click_through);
-                if (status != SAO_STATUS_OK)
-                    return status;
-            }
-            win->click_through = click_through;
-            lift = win->input_proxy_attached;
-        }
-        const sao_status_t sync_status = sync_host(win, true, true, lift);
-        if (sync_status != SAO_STATUS_OK)
-            return sync_status;
+        const OverlayPolicyState previous = snapshot_policy(win);
+        OverlayPolicyState target = previous;
+        target.local_click_through = click_through;
+        target.layer_click_through = click_through;
+        target.layer_input_enabled = previous.local_visible && !click_through;
+        const sao_status_t status = apply_policy_transaction(win, previous, target);
+        if (status != SAO_STATUS_OK)
+            return status;
         win->log("set_click_through");
         return SAO_STATUS_OK;
     } catch (...) {
@@ -906,6 +1019,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_enable_inpu
                     return status;
             }
             win->input_proxy_attached = true;
+            win->layer_input_enabled = true;
         }
         const sao_status_t sync_status = sync_host(win, true, true, true);
         if (sync_status != SAO_STATUS_OK)
@@ -1302,4 +1416,51 @@ sao_ui_adapter_test_dispatch_button(sao_ui_compositor_overlay_window_handle_t ha
         return SAO_STATUS_ERR_HANDLE_INVALID;
     adapter_button_callback(0, 1, 0, 1.0F, 1.0F, window);
     return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_adapter_test_fail_next_host_sync(
+    sao_ui_compositor_overlay_window_handle_t handle, int32_t phase, sao_status_t status) {
+    if (handle == nullptr || phase < 0 ||
+        phase >= static_cast<int32_t>(HostSyncPhase::count) || status == SAO_STATUS_OK) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    auto* window = reinterpret_cast<OverlayWindow*>(handle);
+    WindowOperation operation(window);
+    if (!operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        std::lock_guard lock(window->mu);
+        window->host_sync_failures[static_cast<size_t>(phase)].push_back(status);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_adapter_test_policy_snapshot(
+    sao_ui_compositor_overlay_window_handle_t handle, bool* layer_visible,
+    bool* layer_click_through, bool* layer_input_enabled, bool* degraded,
+    sao_status_t* degraded_status) {
+    if (handle == nullptr)
+        return false;
+    auto* window = reinterpret_cast<OverlayWindow*>(handle);
+    WindowOperation operation(window);
+    if (!operation)
+        return false;
+    try {
+        std::lock_guard lock(window->mu);
+        if (layer_visible != nullptr)
+            *layer_visible = window->layer_visible;
+        if (layer_click_through != nullptr)
+            *layer_click_through = window->layer_click_through;
+        if (layer_input_enabled != nullptr)
+            *layer_input_enabled = window->layer_input_enabled;
+        if (degraded != nullptr)
+            *degraded = window->degraded;
+        if (degraded_status != nullptr)
+            *degraded_status = window->degraded_status;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }

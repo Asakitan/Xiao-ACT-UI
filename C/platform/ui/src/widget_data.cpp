@@ -105,19 +105,28 @@ struct EmptyState {
     mutable std::mutex mtx;
 };
 
-int32_t peek_tag(sao_ui_widget_handle_t h) {
-    if (h == nullptr) return -1;
-    return *reinterpret_cast<const int32_t*>(h);
+template <typename State>
+std::shared_ptr<State> as_tagged(
+    sao_ui_widget_handle_t handle, int32_t kind) {
+    return std::static_pointer_cast<State>(
+        sao::ui::detail::acquire_widget_handle(
+            handle, sao::ui::detail::WidgetHandleFamily::data, kind));
 }
 
-ProgressState* as_progress(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kProgressTag) return nullptr;
-    return reinterpret_cast<ProgressState*>(h);
+std::shared_ptr<ProgressState> as_progress(
+    sao_ui_widget_handle_t handle) {
+    return as_tagged<ProgressState>(handle, kProgressTag);
 }
 
-template <typename T>
-T* as_tagged(sao_ui_widget_handle_t handle, int32_t tag) {
-    return peek_tag(handle) == tag ? reinterpret_cast<T*>(handle) : nullptr;
+template <typename State>
+sao_status_t publish_data_state(
+    int32_t kind, std::shared_ptr<State> state,
+    sao_ui_widget_handle_t* out_handle) {
+    void* const handle = sao::ui::detail::register_widget_handle(
+        sao::ui::detail::WidgetHandleFamily::data, kind, std::move(state));
+    if (handle == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(handle);
+    return SAO_STATUS_OK;
 }
 
 sao_status_t copy_string_to_caller(
@@ -168,16 +177,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_progress_bar_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new ProgressState();
-    apply_progress_spec_no_lock(*s, spec);
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    *out_handle = nullptr;
+    try {
+        auto state = std::make_shared<ProgressState>();
+        apply_progress_spec_no_lock(*state, spec);
+        return publish_data_state(kProgressTag, std::move(state), out_handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_progress_bar_set_value(
     sao_ui_widget_handle_t handle,
     float value) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     // Kick off an animation if animate_duration_ms > 0; otherwise
@@ -204,7 +217,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_progress_bar_set_value(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_progress_bar_set_max(
     sao_ui_widget_handle_t handle,
     float max_value) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->spec.max_value = max_value;
@@ -215,17 +228,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gauge_create(
     void*, const SaoUiGaugeSpec* spec, sao_ui_widget_handle_t* out) {
     if (spec == nullptr || out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* state = new (std::nothrow) GaugeState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<GaugeState> state;
+    try {
+        state = std::make_shared<GaugeState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->spec = *spec;
     if (state->spec.max_value < 0.0f) state->spec.max_value = 0.0f;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kGaugeTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_gauge_set_value(
     sao_ui_widget_handle_t handle, float value) {
-    GaugeState* state = as_tagged<GaugeState>(handle, kGaugeTag);
+    auto state = as_tagged<GaugeState>(handle, kGaugeTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (!std::isfinite(value)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -235,7 +251,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gauge_set_value(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_gauge_get_ratio(
     sao_ui_widget_handle_t handle, float* out_ratio) {
-    GaugeState* state = as_tagged<GaugeState>(handle, kGaugeTag);
+    auto state = as_tagged<GaugeState>(handle, kGaugeTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_ratio == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -249,18 +265,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_status_badge_create(
     void*, const SaoUiStatusBadgeSpec* spec, sao_ui_widget_handle_t* out) {
     if (spec == nullptr || out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* state = new (std::nothrow) BadgeState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<BadgeState> state;
+    try {
+        state = std::make_shared<BadgeState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->spec = *spec;
     state->text = spec->text_utf8 == nullptr ? "" : spec->text_utf8;
     state->spec.text_utf8 = nullptr;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kBadgeTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_status_badge_set_text(
     sao_ui_widget_handle_t handle, const char* text) {
-    BadgeState* state = as_tagged<BadgeState>(handle, kBadgeTag);
+    auto state = as_tagged<BadgeState>(handle, kBadgeTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (text == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -271,7 +290,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_status_badge_set_text(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_status_badge_get_text(
     sao_ui_widget_handle_t handle, char* out_utf8, size_t capacity,
     size_t* out_bytes_written) {
-    BadgeState* state = as_tagged<BadgeState>(handle, kBadgeTag);
+    auto state = as_tagged<BadgeState>(handle, kBadgeTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
     return copy_string_to_caller(state->text, out_utf8, capacity, out_bytes_written);
@@ -284,19 +303,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tooltip_attach(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out = nullptr;
-    auto* state = new (std::nothrow) TooltipState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<TooltipState> state;
+    try {
+        state = std::make_shared<TooltipState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->target = target;
     state->spec = *spec;
     state->text = spec->text_utf8 == nullptr ? "" : spec->text_utf8;
     state->spec.text_utf8 = nullptr;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kTooltipTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tooltip_set_text(
     sao_ui_widget_handle_t handle, const char* text) {
-    TooltipState* state = as_tagged<TooltipState>(handle, kTooltipTag);
+    auto state = as_tagged<TooltipState>(handle, kTooltipTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (text == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -308,19 +330,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_more_indicator_create(
     void*, const SaoUiMoreIndicatorSpec* spec, sao_ui_widget_handle_t* out) {
     if (spec == nullptr || out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* state = new (std::nothrow) MoreState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<MoreState> state;
+    try {
+        state = std::make_shared<MoreState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->spec = *spec;
     state->spec.hidden_count = std::max(0, spec->hidden_count);
     state->noun = spec->noun_utf8 == nullptr ? "条" : spec->noun_utf8;
     state->spec.noun_utf8 = nullptr;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kMoreTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_more_indicator_set_count(
     sao_ui_widget_handle_t handle, int32_t hidden_count) {
-    MoreState* state = as_tagged<MoreState>(handle, kMoreTag);
+    auto state = as_tagged<MoreState>(handle, kMoreTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (hidden_count < 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -330,7 +355,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_more_indicator_set_count(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_more_indicator_get_count(
     sao_ui_widget_handle_t handle, int32_t* out_hidden_count) {
-    MoreState* state = as_tagged<MoreState>(handle, kMoreTag);
+    auto state = as_tagged<MoreState>(handle, kMoreTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_hidden_count == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -342,8 +367,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_metric_create(
     void*, const SaoUiMetricSpec* spec, sao_ui_widget_handle_t* out) {
     if (spec == nullptr || out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* state = new (std::nothrow) MetricState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<MetricState> state;
+    try {
+        state = std::make_shared<MetricState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->spec = *spec;
     state->label = spec->label_utf8 == nullptr ? "" : spec->label_utf8;
     state->value = spec->value_utf8 == nullptr ? "" : spec->value_utf8;
@@ -351,13 +380,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_metric_create(
     state->spec.label_utf8 = nullptr;
     state->spec.value_utf8 = nullptr;
     state->spec.unit_utf8 = nullptr;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kMetricTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_metric_set_value(
     sao_ui_widget_handle_t handle, const char* value) {
-    MetricState* state = as_tagged<MetricState>(handle, kMetricTag);
+    auto state = as_tagged<MetricState>(handle, kMetricTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (value == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -368,7 +396,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_metric_set_value(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_metric_get_value(
     sao_ui_widget_handle_t handle, char* out_utf8, size_t capacity,
     size_t* out_bytes_written) {
-    MetricState* state = as_tagged<MetricState>(handle, kMetricTag);
+    auto state = as_tagged<MetricState>(handle, kMetricTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
     return copy_string_to_caller(state->value, out_utf8, capacity, out_bytes_written);
@@ -378,8 +406,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_create(
     void*, const SaoUiEmptyStateSpec* spec, sao_ui_widget_handle_t* out) {
     if (spec == nullptr || out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* state = new (std::nothrow) EmptyState();
-    if (state == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<EmptyState> state;
+    try {
+        state = std::make_shared<EmptyState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     state->spec = *spec;
     state->title = spec->title_utf8 == nullptr ? "" : spec->title_utf8;
     state->detail = spec->detail_utf8 == nullptr ? "" : spec->detail_utf8;
@@ -387,13 +419,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_create(
     state->spec.title_utf8 = nullptr;
     state->spec.detail_utf8 = nullptr;
     state->spec.action_utf8 = nullptr;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(state);
-    return SAO_STATUS_OK;
+    return publish_data_state(kEmptyStateTag, std::move(state), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_set_detail(
     sao_ui_widget_handle_t handle, const char* detail) {
-    EmptyState* state = as_tagged<EmptyState>(handle, kEmptyStateTag);
+    auto state = as_tagged<EmptyState>(handle, kEmptyStateTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (detail == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(state->mtx);
@@ -404,7 +435,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_set_detail(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_get_detail(
     sao_ui_widget_handle_t handle, char* out_utf8, size_t capacity,
     size_t* out_bytes_written) {
-    EmptyState* state = as_tagged<EmptyState>(handle, kEmptyStateTag);
+    auto state = as_tagged<EmptyState>(handle, kEmptyStateTag);
     if (state == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
     return copy_string_to_caller(state->detail, out_utf8, capacity, out_bytes_written);
@@ -421,7 +452,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_progress_get_fill_ratio(
     sao_ui_widget_handle_t handle,
     float* out_ratio) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     const float max_v = s->spec.max_value;
@@ -438,7 +469,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_progress_get_trail_ratio(
     sao_ui_widget_handle_t handle,
     float* out_ratio) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     const float max_v = s->spec.max_value;
@@ -459,7 +490,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_progress_resolve_fill_argb(
     sao_ui_widget_handle_t handle,
     uint32_t* out_argb) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     const float max_v = s->spec.max_value;
@@ -487,7 +518,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_progress_tick(
     sao_ui_widget_handle_t handle,
     int32_t dt_ms) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (dt_ms <= 0) return SAO_STATUS_OK;
     std::lock_guard<std::mutex> lk(s->mtx);
@@ -532,7 +563,7 @@ sao_ui_widget_progress_get_segment(
     sao_ui_widget_handle_t handle,
     size_t index,
     SaoUiProgressSegment* out_segment) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (index >= s->segments.size()) {
@@ -545,7 +576,7 @@ sao_ui_widget_progress_get_segment(
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_widget_progress_get_segment_count(
     sao_ui_widget_handle_t handle) {
-    ProgressState* s = as_progress(handle);
+    auto s = as_progress(handle);
     if (s == nullptr) return 0;
     std::lock_guard<std::mutex> lk(s->mtx);
     return s->segments.size();
@@ -555,21 +586,9 @@ sao_ui_widget_progress_get_segment_count(
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_data_family_destroy(sao_ui_widget_handle_t handle) {
     if (handle == nullptr) return;
+    auto state = sao::ui::detail::retire_widget_handle(
+        handle, sao::ui::detail::WidgetHandleFamily::data);
+    if (state == nullptr) return;
     uint32_t removed = 0;
     (void)sao_ui_widget_release_event_handlers(handle, &removed);
-    if (peek_tag(handle) == kProgressTag) {
-        delete reinterpret_cast<ProgressState*>(handle);
-    } else if (peek_tag(handle) == kGaugeTag) {
-        delete reinterpret_cast<GaugeState*>(handle);
-    } else if (peek_tag(handle) == kBadgeTag) {
-        delete reinterpret_cast<BadgeState*>(handle);
-    } else if (peek_tag(handle) == kTooltipTag) {
-        delete reinterpret_cast<TooltipState*>(handle);
-    } else if (peek_tag(handle) == kMoreTag) {
-        delete reinterpret_cast<MoreState*>(handle);
-    } else if (peek_tag(handle) == kMetricTag) {
-        delete reinterpret_cast<MetricState*>(handle);
-    } else if (peek_tag(handle) == kEmptyStateTag) {
-        delete reinterpret_cast<EmptyState*>(handle);
-    }
 }

@@ -50,6 +50,7 @@ using GetWindowRgnFn = int(WINAPI*)(HWND, HRGN);
 using GetWindowLongPtrWFn = LONG_PTR(WINAPI*)(HWND, int);
 using SetWindowLongPtrWFn = LONG_PTR(WINAPI*)(HWND, int, LONG_PTR);
 using SetWindowPosFn = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
+using DeleteObjectFn = BOOL(WINAPI*)(HGDIOBJ);
 
 struct Win32Api {
     SetWindowRgnFn set_window_rgn;
@@ -57,6 +58,7 @@ struct Win32Api {
     GetWindowLongPtrWFn get_window_long_ptr_w;
     SetWindowLongPtrWFn set_window_long_ptr_w;
     SetWindowPosFn set_window_pos;
+    DeleteObjectFn delete_object;
 };
 
 #if defined(SAO_UI_OVERLAY_HOST_TESTING)

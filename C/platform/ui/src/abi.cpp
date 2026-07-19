@@ -48,8 +48,31 @@ struct WidgetExtensionRegistry {
     std::atomic<uint64_t> next_token{1};
 };
 
+struct WidgetHandleShell {
+    int32_t kind{-1};
+    uint32_t reserved{};
+    uint64_t generation{};
+};
+
+struct WidgetHandleRecord {
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    std::shared_ptr<void> state;
+};
+
+struct WidgetHandleRegistry {
+    std::mutex mutex;
+    std::unordered_map<void*, WidgetHandleRecord> active;
+    std::vector<std::unique_ptr<WidgetHandleShell>> shells;
+    std::atomic<uint64_t> next_generation{1};
+};
+
 WidgetExtensionRegistry& extension_registry() {
     static WidgetExtensionRegistry registry;
+    return registry;
+}
+
+WidgetHandleRegistry& widget_handle_registry() {
+    static WidgetHandleRegistry registry;
     return registry;
 }
 
@@ -198,6 +221,97 @@ void set_size_hint(
 
 }  // namespace
 
+void* sao::ui::detail::register_widget_handle(
+    WidgetHandleFamily family, int32_t kind,
+    std::shared_ptr<void> state) noexcept {
+    if (state == nullptr || !valid_widget_kind(kind)) return nullptr;
+    try {
+        auto shell = std::make_unique<WidgetHandleShell>();
+        auto& registry = widget_handle_registry();
+        uint64_t generation = registry.next_generation.fetch_add(
+            1, std::memory_order_relaxed);
+        if (generation == 0) {
+            generation = registry.next_generation.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        shell->kind = kind;
+        shell->generation = generation;
+        void* const handle = shell.get();
+        WidgetHandleRecord record{{family, kind, generation}, std::move(state)};
+        std::lock_guard lock(registry.mutex);
+        registry.shells.push_back(std::move(shell));
+        try {
+            registry.active.emplace(handle, std::move(record));
+        } catch (...) {
+            return nullptr;
+        }
+        return handle;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+std::shared_ptr<void> sao::ui::detail::acquire_widget_handle(
+    void* handle, WidgetHandleFamily expected_family,
+    int32_t expected_kind) noexcept {
+    if (handle == nullptr) return {};
+    try {
+        auto& registry = widget_handle_registry();
+        std::lock_guard lock(registry.mutex);
+        const auto found = registry.active.find(handle);
+        if (found == registry.active.end() ||
+            found->second.metadata.family != expected_family ||
+            found->second.metadata.kind != expected_kind) {
+            return {};
+        }
+        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+        if (shell->generation != found->second.metadata.generation) return {};
+        return found->second.state;
+    } catch (...) {
+        return {};
+    }
+}
+
+std::shared_ptr<void> sao::ui::detail::retire_widget_handle(
+    void* handle, WidgetHandleFamily expected_family,
+    WidgetHandleMetadata* out_metadata) noexcept {
+    if (handle == nullptr) return {};
+    try {
+        auto& registry = widget_handle_registry();
+        std::lock_guard lock(registry.mutex);
+        const auto found = registry.active.find(handle);
+        if (found == registry.active.end() ||
+            found->second.metadata.family != expected_family) {
+            return {};
+        }
+        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+        if (shell->generation != found->second.metadata.generation) return {};
+        if (out_metadata != nullptr) *out_metadata = found->second.metadata;
+        auto state = std::move(found->second.state);
+        registry.active.erase(found);
+        return state;
+    } catch (...) {
+        return {};
+    }
+}
+
+bool sao::ui::detail::inspect_widget_handle(
+    void* handle, WidgetHandleMetadata* out_metadata) noexcept {
+    if (handle == nullptr || out_metadata == nullptr) return false;
+    try {
+        auto& registry = widget_handle_registry();
+        std::lock_guard lock(registry.mutex);
+        const auto found = registry.active.find(handle);
+        if (found == registry.active.end()) return false;
+        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+        if (shell->generation != found->second.metadata.generation) return false;
+        *out_metadata = found->second.metadata;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 extern "C" uint32_t SAO_UI_CALL sao_ui_abi_version(void) {
     return SAO_UI_ABI_VERSION;
 }
@@ -215,15 +329,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_kind(
         return SAO_STATUS_OK;
     if (generic_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
         return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    if (sao::ui::detail::inspect_widget_handle(handle, &metadata)) {
+        *out_kind = metadata.kind;
+        return SAO_STATUS_OK;
+    }
     if (sao_ui_widget_input_get_generation(handle, nullptr) == SAO_STATUS_OK ||
         sao_ui_widget_chart_get_generation(handle, nullptr) == SAO_STATUS_OK) {
         *out_kind = *reinterpret_cast<const int32_t*>(handle);
         return valid_widget_kind(*out_kind) ? SAO_STATUS_OK : SAO_STATUS_ERR_HANDLE_INVALID;
     }
-    const int32_t kind = *reinterpret_cast<const int32_t*>(handle);
-    if (!valid_widget_kind(kind)) return SAO_STATUS_ERR_HANDLE_INVALID;
-    *out_kind = kind;
-    return SAO_STATUS_OK;
+    return SAO_STATUS_ERR_HANDLE_INVALID;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_add_event_handler(

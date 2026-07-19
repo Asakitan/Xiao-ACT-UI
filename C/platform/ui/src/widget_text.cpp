@@ -316,33 +316,47 @@ void fmt_signed_into(int32_t delta_seconds, char* buf, size_t buf_size) {
 }
 
 // ---------------------------------------------------------------------------
-// Handle box helpers.  We use the same trick as menu.cpp: the handle
-// is a pointer to a tag-prefixed struct so we can multi-dispatch.
+// Registry-backed handle helpers.  The opaque handle points to a retained
+// generation shell, never to widget state.  Registry/family/kind validation
+// therefore completes before state memory can be accessed.
 // ---------------------------------------------------------------------------
 
-int32_t peek_tag(sao_ui_widget_handle_t h) {
-    if (h == nullptr) return -1;
-    return *reinterpret_cast<const int32_t*>(h);
+template <typename State>
+std::shared_ptr<State> acquire_text_state(
+    sao_ui_widget_handle_t handle, int32_t kind) {
+    return std::static_pointer_cast<State>(
+        sao::ui::detail::acquire_widget_handle(
+            handle, sao::ui::detail::WidgetHandleFamily::text, kind));
 }
 
-LabelState* as_label(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTagLabel) return nullptr;
-    return reinterpret_cast<LabelState*>(h);
+std::shared_ptr<LabelState> as_label(sao_ui_widget_handle_t handle) {
+    return acquire_text_state<LabelState>(handle, kTagLabel);
 }
 
-ClockLabelState* as_clock(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTagClockLabel) return nullptr;
-    return reinterpret_cast<ClockLabelState*>(h);
+std::shared_ptr<ClockLabelState> as_clock(sao_ui_widget_handle_t handle) {
+    return acquire_text_state<ClockLabelState>(handle, kTagClockLabel);
 }
 
-RelativeTimeLabelState* as_reltime(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTagRelativeTimeLabel) return nullptr;
-    return reinterpret_cast<RelativeTimeLabelState*>(h);
+std::shared_ptr<RelativeTimeLabelState> as_reltime(
+    sao_ui_widget_handle_t handle) {
+    return acquire_text_state<RelativeTimeLabelState>(
+        handle, kTagRelativeTimeLabel);
 }
 
-DurationLabelState* as_duration(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTagDurationLabel) return nullptr;
-    return reinterpret_cast<DurationLabelState*>(h);
+std::shared_ptr<DurationLabelState> as_duration(
+    sao_ui_widget_handle_t handle) {
+    return acquire_text_state<DurationLabelState>(handle, kTagDurationLabel);
+}
+
+template <typename State>
+sao_status_t publish_text_state(
+    int32_t kind, std::shared_ptr<State> state,
+    sao_ui_widget_handle_t* out_handle) {
+    void* const handle = sao::ui::detail::register_widget_handle(
+        sao::ui::detail::WidgetHandleFamily::text, kind, std::move(state));
+    if (handle == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(handle);
+    return SAO_STATUS_OK;
 }
 
 void apply_label_spec_no_lock(LabelState& s, const SaoUiLabelSpec* spec) {
@@ -368,19 +382,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_label_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new LabelState();
-    apply_label_spec_no_lock(*s, spec);
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    *out_handle = nullptr;
+    try {
+        auto state = std::make_shared<LabelState>();
+        apply_label_spec_no_lock(*state, spec);
+        return publish_text_state(kTagLabel, std::move(state), out_handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_label_update(
     sao_ui_widget_handle_t handle,
     const SaoUiLabelSpec* spec) {
-    LabelState* s = as_label(handle);
-    if (s == nullptr || spec == nullptr) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
+    auto s = as_label(handle);
+    if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (spec == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(s->mtx);
     apply_label_spec_no_lock(*s, spec);
     return SAO_STATUS_OK;
@@ -389,7 +406,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_label_update(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_label_set_text(
     sao_ui_widget_handle_t handle,
     const char* text_utf8) {
-    LabelState* s = as_label(handle);
+    auto s = as_label(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->text = text_utf8 ? text_utf8 : "";
@@ -403,7 +420,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_label_measure(
     int32_t max_width,
     int32_t* out_width,
     int32_t* out_height) {
-    LabelState* s = as_label(handle);
+    auto s = as_label(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (!s->measure_dirty && s->cached_max_width == max_width) {
@@ -426,24 +443,25 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_clock_label_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new ClockLabelState();
-    s->spec = *spec;
-    s->last_epoch_ms = spec->epoch_ms;
-    apply_label_spec_no_lock(s->label, &spec->label);
-    // Render the initial text via fmt_clock and inject as label text.
-    char buf[32] = {0};
-    fmt_clock_into(s->last_epoch_ms, spec->with_seconds, buf, sizeof(buf));
-    s->label.text = buf;
-    s->label.tag = kTagLabel;   // sub-state remains a Label
-    s->tag = kTagClockLabel;    // outer tag is what dispatch checks
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    *out_handle = nullptr;
+    try {
+        auto state = std::make_shared<ClockLabelState>();
+        state->spec = *spec;
+        state->last_epoch_ms = spec->epoch_ms;
+        apply_label_spec_no_lock(state->label, &spec->label);
+        char buf[32] = {0};
+        fmt_clock_into(state->last_epoch_ms, spec->with_seconds, buf, sizeof(buf));
+        state->label.text = buf;
+        return publish_text_state(kTagClockLabel, std::move(state), out_handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_clock_label_update(
     sao_ui_widget_handle_t handle,
     int64_t epoch_ms) {
-    ClockLabelState* s = as_clock(handle);
+    auto s = as_clock(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->last_epoch_ms = epoch_ms;
@@ -467,25 +485,27 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_relative_time_label_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new RelativeTimeLabelState();
-    s->spec = *spec;
-    s->last_epoch_ms = spec->epoch_ms;
-    s->last_base_epoch_ms = spec->base_epoch_ms;
-    apply_label_spec_no_lock(s->label, &spec->label);
-    char buf[32] = {0};
-    fmt_rel_into(s->last_epoch_ms, s->last_base_epoch_ms, buf, sizeof(buf));
-    s->label.text = buf;
-    s->label.tag = kTagLabel;
-    s->tag = kTagRelativeTimeLabel;
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    *out_handle = nullptr;
+    try {
+        auto state = std::make_shared<RelativeTimeLabelState>();
+        state->spec = *spec;
+        state->last_epoch_ms = spec->epoch_ms;
+        state->last_base_epoch_ms = spec->base_epoch_ms;
+        apply_label_spec_no_lock(state->label, &spec->label);
+        char buf[32] = {0};
+        fmt_rel_into(state->last_epoch_ms, state->last_base_epoch_ms, buf, sizeof(buf));
+        state->label.text = buf;
+        return publish_text_state(kTagRelativeTimeLabel, std::move(state), out_handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_relative_time_label_update(
     sao_ui_widget_handle_t handle,
     int64_t epoch_ms,
     int64_t base_epoch_ms) {
-    RelativeTimeLabelState* s = as_reltime(handle);
+    auto s = as_reltime(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->last_epoch_ms = epoch_ms;
@@ -510,25 +530,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_duration_label_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new DurationLabelState();
-    s->spec = *spec;
-    // Negatives clamp to 0 per header contract.
-    const int64_t clamped = spec->duration_ms < 0 ? 0 : spec->duration_ms;
-    s->last_duration_ms = clamped;
-    apply_label_spec_no_lock(s->label, &spec->label);
-    char buf[32] = {0};
-    fmt_dur_into(static_cast<uint64_t>(clamped), buf, sizeof(buf));
-    s->label.text = buf;
-    s->label.tag = kTagLabel;
-    s->tag = kTagDurationLabel;
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    *out_handle = nullptr;
+    try {
+        auto state = std::make_shared<DurationLabelState>();
+        state->spec = *spec;
+        const int64_t clamped = spec->duration_ms < 0 ? 0 : spec->duration_ms;
+        state->last_duration_ms = clamped;
+        apply_label_spec_no_lock(state->label, &spec->label);
+        char buf[32] = {0};
+        fmt_dur_into(static_cast<uint64_t>(clamped), buf, sizeof(buf));
+        state->label.text = buf;
+        return publish_text_state(kTagDurationLabel, std::move(state), out_handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_duration_label_update(
     sao_ui_widget_handle_t handle,
     int64_t duration_ms) {
-    DurationLabelState* s = as_duration(handle);
+    auto s = as_duration(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     const int64_t clamped = duration_ms < 0 ? 0 : duration_ms;
@@ -564,7 +585,7 @@ sao_ui_widget_clock_label_format(
     sao_ui_widget_handle_t handle,
     char* buf,
     size_t buf_size) {
-    ClockLabelState* s = as_clock(handle);
+    auto s = as_clock(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (buf == nullptr || buf_size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(s->mtx);
@@ -577,7 +598,7 @@ sao_ui_widget_relative_time_label_format(
     sao_ui_widget_handle_t handle,
     char* buf,
     size_t buf_size) {
-    RelativeTimeLabelState* s = as_reltime(handle);
+    auto s = as_reltime(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (buf == nullptr || buf_size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(s->mtx);
@@ -590,7 +611,7 @@ sao_ui_widget_duration_label_format(
     sao_ui_widget_handle_t handle,
     char* buf,
     size_t buf_size) {
-    DurationLabelState* s = as_duration(handle);
+    auto s = as_duration(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (buf == nullptr || buf_size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(s->mtx);
@@ -637,24 +658,9 @@ sao_ui_widget_format_duration_strict(
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_text_family_destroy(sao_ui_widget_handle_t handle) {
     if (handle == nullptr) return;
+    auto state = sao::ui::detail::retire_widget_handle(
+        handle, sao::ui::detail::WidgetHandleFamily::text);
+    if (state == nullptr) return;
     uint32_t removed = 0;
     (void)sao_ui_widget_release_event_handlers(handle, &removed);
-    const int32_t tag = peek_tag(handle);
-    switch (tag) {
-        case kTagLabel:
-            delete reinterpret_cast<LabelState*>(handle);
-            break;
-        case kTagClockLabel:
-            delete reinterpret_cast<ClockLabelState*>(handle);
-            break;
-        case kTagRelativeTimeLabel:
-            delete reinterpret_cast<RelativeTimeLabelState*>(handle);
-            break;
-        case kTagDurationLabel:
-            delete reinterpret_cast<DurationLabelState*>(handle);
-            break;
-        default:
-            // Unknown tag — do nothing rather than free the wrong thing.
-            break;
-    }
 }

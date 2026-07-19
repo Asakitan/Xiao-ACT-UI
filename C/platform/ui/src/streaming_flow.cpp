@@ -45,8 +45,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 
@@ -72,11 +72,12 @@ struct SaoStreamingFlowState {
     // ── Mode side-effect lock (Python `_streaming_lock`) ──────
     // timed_mutex so `try_lock_for` gives us the 250 ms teardown bound
     // matching Python L2668.
-    std::timed_mutex        mode_lock;
+    std::timed_mutex mode_lock;
     // Owner thread id of `mode_lock` when held via the ABI acquire.
-    // Only used for a sanity assert (release from wrong thread would
-    // corrupt `std::timed_mutex`); we don't expose ownership publicly.
-    std::atomic<std::size_t> mode_lock_owner{0};
+    // `optional<thread::id>` keeps the unlocked state distinct without
+    // relying on a hash value that may legitimately be zero.
+    std::mutex                     mode_lock_owner_mutex;
+    std::optional<std::thread::id> mode_lock_owner;
 
     // ── Worker set lock (Python `_streaming_threads_lock`) ────
     // recursive_mutex so a caller can nest reads inside a transaction,
@@ -317,10 +318,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_streaming_flow_mode_lock_acquire(
     // is a non-blocking try; mirror that with `try_lock`.
     if (!(timeout_sec > 0.0)) {
         if (s.mode_lock.try_lock()) {
-            s.mode_lock_owner.store(
-                static_cast<std::size_t>(
-                    std::hash<std::thread::id>{}(std::this_thread::get_id())),
-                std::memory_order_release);
+            std::lock_guard<std::mutex> owner_lock(s.mode_lock_owner_mutex);
+            s.mode_lock_owner = std::this_thread::get_id();
             return SAO_STATUS_OK;
         }
         return SAO_STATUS_ERR_TIMEOUT;
@@ -329,24 +328,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_streaming_flow_mode_lock_acquire(
     if (!s.mode_lock.try_lock_for(us)) {
         return SAO_STATUS_ERR_TIMEOUT;
     }
-    s.mode_lock_owner.store(
-        static_cast<std::size_t>(
-            std::hash<std::thread::id>{}(std::this_thread::get_id())),
-        std::memory_order_release);
+    std::lock_guard<std::mutex> owner_lock(s.mode_lock_owner_mutex);
+    s.mode_lock_owner = std::this_thread::get_id();
     return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_streaming_flow_mode_lock_release(void) {
     auto& s = state();
-    // Non-owner release would be UB on `std::timed_mutex`; guard with
-    // the owner-id snapshot.  Empty owner means "not held" — caller
-    // bug.
-    const auto owner = s.mode_lock_owner.load(std::memory_order_acquire);
-    if (owner == 0u) {
+    std::lock_guard<std::mutex> owner_lock(s.mode_lock_owner_mutex);
+    if (!s.mode_lock_owner.has_value()) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    s.mode_lock_owner.store(0u, std::memory_order_release);
+    if (*s.mode_lock_owner != std::this_thread::get_id()) {
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    }
     s.mode_lock.unlock();
+    s.mode_lock_owner.reset();
     return SAO_STATUS_OK;
 }
 

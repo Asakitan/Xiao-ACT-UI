@@ -3,9 +3,11 @@
 #include "sao/ui/abi.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/dcomp_bridge.h"
+#include "sao/ui/streaming_flow.h"
 #include "sao/ui/z_order.h"
 
 #include <cstddef>
+#include <thread>
 
 TEST_CASE("ui ABI and interop layouts are exact", "[ui][abi][interop]") {
     REQUIRE(SAO_UI_ABI_VERSION_MAJOR == 1u);
@@ -43,4 +45,31 @@ TEST_CASE("z_order_status zeroes the struct on an invalid handle", "[ui][z_order
     REQUIRE(rc == SAO_STATUS_ERR_HANDLE_INVALID);
     REQUIRE(status.policy == 0);
     REQUIRE(status.is_topmost == false);
+}
+
+TEST_CASE("streaming mode lock enforces release ownership and lifecycle",
+          "[ui][streaming_flow][mode_lock]") {
+    REQUIRE(sao_streaming_flow_reset_for_tests() == SAO_STATUS_OK);
+
+    SECTION("normal release") {
+        REQUIRE(sao_streaming_flow_mode_lock_acquire(0.0) == SAO_STATUS_OK);
+        CHECK(sao_streaming_flow_mode_lock_release() == SAO_STATUS_OK);
+    }
+
+    SECTION("wrong thread release") {
+        REQUIRE(sao_streaming_flow_mode_lock_acquire(0.0) == SAO_STATUS_OK);
+        sao_status_t wrong_thread_status = SAO_STATUS_OK;
+        std::thread wrong_thread([&] {
+            wrong_thread_status = sao_streaming_flow_mode_lock_release();
+        });
+        wrong_thread.join();
+        CHECK(wrong_thread_status == SAO_STATUS_ERR_ACCESS_DENIED);
+        CHECK(sao_streaming_flow_mode_lock_release() == SAO_STATUS_OK);
+    }
+
+    SECTION("double release") {
+        REQUIRE(sao_streaming_flow_mode_lock_acquire(0.0) == SAO_STATUS_OK);
+        REQUIRE(sao_streaming_flow_mode_lock_release() == SAO_STATUS_OK);
+        CHECK(sao_streaming_flow_mode_lock_release() == SAO_STATUS_ERR_NOT_INITIALIZED);
+    }
 }

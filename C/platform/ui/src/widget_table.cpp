@@ -146,19 +146,31 @@ struct TreeState {
     mutable std::mutex mtx;
 };
 
-int32_t peek_tag(sao_ui_widget_handle_t h) {
-    if (h == nullptr) return -1;
-    return *reinterpret_cast<const int32_t*>(h);
+template <typename State>
+std::shared_ptr<State> acquire_table_state(
+    sao_ui_widget_handle_t handle, int32_t kind) {
+    return std::static_pointer_cast<State>(
+        sao::ui::detail::acquire_widget_handle(
+            handle, sao::ui::detail::WidgetHandleFamily::table, kind));
 }
 
-TableState* as_table(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTableTag) return nullptr;
-    return reinterpret_cast<TableState*>(h);
+std::shared_ptr<TableState> as_table(sao_ui_widget_handle_t handle) {
+    return acquire_table_state<TableState>(handle, kTableTag);
 }
 
-TreeState* as_tree(sao_ui_widget_handle_t h) {
-    if (peek_tag(h) != kTreeTag) return nullptr;
-    return reinterpret_cast<TreeState*>(h);
+std::shared_ptr<TreeState> as_tree(sao_ui_widget_handle_t handle) {
+    return acquire_table_state<TreeState>(handle, kTreeTag);
+}
+
+template <typename State>
+sao_status_t publish_table_state(
+    int32_t kind, std::shared_ptr<State> state,
+    sao_ui_widget_handle_t* out_handle) {
+    void* const handle = sao::ui::detail::register_widget_handle(
+        sao::ui::detail::WidgetHandleFamily::table, kind, std::move(state));
+    if (handle == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(handle);
+    return SAO_STATUS_OK;
 }
 
 size_t find_tree_node_no_lock(const TreeState& tree, int64_t node_id) {
@@ -347,7 +359,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_create(
     if (spec == nullptr || out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* s = new TableState();
+    *out_handle = nullptr;
+    std::shared_ptr<TableState> s;
+    try {
+        s = std::make_shared<TableState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     s->spec = *spec;
     // Sever borrowed pointers on the stored spec.
     s->spec.columns = nullptr;
@@ -372,15 +390,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_create(
     }
     if (s->spec.row_height_px    <= 0) s->spec.row_height_px    = kDefaultRowHeight;
     if (s->spec.header_height_px <= 0) s->spec.header_height_px = kDefaultHeaderHeight;
-    *out_handle = reinterpret_cast<sao_ui_widget_handle_t>(s);
-    return SAO_STATUS_OK;
+    return publish_table_state(kTableTag, std::move(s), out_handle);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_rows(
     sao_ui_widget_handle_t handle,
     const SaoUiTableRow* rows,
     size_t row_count) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (rows == nullptr && row_count > 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -400,7 +417,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_rows(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_table_upsert_row(
     sao_ui_widget_handle_t handle,
     const SaoUiTableRow* row) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr || row == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -420,7 +437,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_upsert_row(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_table_remove_row(
     sao_ui_widget_handle_t handle,
     int64_t row_id) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     auto it = find_row_by_id_no_lock(*s, row_id);
@@ -432,7 +449,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_remove_row(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_table_clear_rows(
     sao_ui_widget_handle_t handle) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->rows_all.clear();
@@ -444,7 +461,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_sort(
     sao_ui_widget_handle_t handle,
     const char* column_key_utf8,
     bool descending) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (column_key_utf8 == nullptr || column_key_utf8[0] == '\0') {
@@ -463,7 +480,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_sort(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_filter(
     sao_ui_widget_handle_t handle,
     const char* filter_utf8) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->filter_text = (filter_utf8 && filter_utf8[0] != '\0') ? filter_utf8 : "";
@@ -475,7 +492,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_row_click_handler(
     sao_ui_widget_handle_t handle,
     sao_ui_table_row_click_cb_t callback,
     void* user_data) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->row_click_cb = callback;
@@ -487,7 +504,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_cell_action_handler(
     sao_ui_widget_handle_t handle,
     sao_ui_table_cell_action_cb_t callback,
     void* user_data) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     s->cell_action_cb = callback;
@@ -499,19 +516,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_create(
     void*, const SaoUiTreeViewSpec* spec, sao_ui_widget_handle_t* out) {
     if (out == nullptr || spec == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = nullptr;
-    auto* tree = new (std::nothrow) TreeState();
-    if (tree == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<TreeState> tree;
+    try {
+        tree = std::make_shared<TreeState>();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
     tree->spec = *spec;
     if (tree->spec.row_height_px <= 0) tree->spec.row_height_px = kDefaultRowHeight;
     if (tree->spec.indent_px <= 0) tree->spec.indent_px = 14;
     if (tree->spec.caret_width_px <= 0) tree->spec.caret_width_px = 10;
-    *out = reinterpret_cast<sao_ui_widget_handle_t>(tree);
-    return SAO_STATUS_OK;
+    return publish_table_state(kTreeTag, std::move(tree), out);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_set_nodes(
     sao_ui_widget_handle_t handle, const SaoUiTreeNode* nodes, size_t node_count) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (nodes == nullptr && node_count != 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::vector<OwnedTreeNode> next;
@@ -557,7 +577,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_set_nodes(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_expand_node(
     sao_ui_widget_handle_t handle, int64_t node_id, bool expanded) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(tree->mtx);
     const size_t index = find_tree_node_no_lock(*tree, node_id);
@@ -569,7 +589,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_expand_node(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_set_select_handler(
     sao_ui_widget_handle_t handle, sao_ui_tree_select_cb_t callback, void* user_data) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(tree->mtx);
     tree->select_cb = callback;
@@ -579,7 +599,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_set_select_handler(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_select_node(
     sao_ui_widget_handle_t handle, int64_t node_id) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     sao_ui_tree_select_cb_t callback = nullptr;
     void* user_data = nullptr;
@@ -601,7 +621,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_select_node(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_get_visible_count(
     sao_ui_widget_handle_t handle, size_t* out_count) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_count == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(tree->mtx);
@@ -612,7 +632,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_get_visible_count(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_get_visible_node(
     sao_ui_widget_handle_t handle, size_t visible_index,
     int64_t* out_node_id, int32_t* out_depth) {
-    TreeState* tree = as_tree(handle);
+    auto tree = as_tree(handle);
     if (tree == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_node_id == nullptr || out_depth == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(tree->mtx);
@@ -638,7 +658,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_table_get_visible_row_count(
     sao_ui_widget_handle_t handle,
     size_t* out_count) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (out_count) *out_count = s->rows_view.size();
@@ -651,7 +671,7 @@ sao_ui_widget_table_get_row_id_at_view_index(
     sao_ui_widget_handle_t handle,
     size_t view_index,
     int64_t* out_row_id) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (view_index >= s->rows_view.size()) {
@@ -672,7 +692,7 @@ sao_ui_widget_table_get_visible_range(
     int32_t scroll_offset_px,
     size_t* first_row_out,
     size_t* last_row_out) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (viewport_h_px <= 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lk(s->mtx);
@@ -711,7 +731,7 @@ sao_ui_widget_table_hit_test(
     int32_t scroll_offset_px,
     size_t* out_row_view_index,
     int32_t* out_col_index) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lk(s->mtx);
     if (out_row_view_index) *out_row_view_index = std::numeric_limits<size_t>::max();
@@ -772,7 +792,7 @@ sao_ui_widget_table_sort_by_index(
     sao_ui_widget_handle_t handle,
     int32_t col_index,
     bool ascending) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (col_index < 0 ||
         static_cast<size_t>(col_index) >= s->columns.size()) {
@@ -791,7 +811,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_table_fire_row_click(
     sao_ui_widget_handle_t handle,
     size_t view_index) {
-    TableState* s = as_table(handle);
+    auto s = as_table(handle);
     if (s == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     sao_ui_table_row_click_cb_t cb = nullptr;
     void* user = nullptr;
@@ -813,11 +833,9 @@ sao_ui_widget_table_fire_row_click(
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle) {
     if (handle == nullptr) return;
+    auto state = sao::ui::detail::retire_widget_handle(
+        handle, sao::ui::detail::WidgetHandleFamily::table);
+    if (state == nullptr) return;
     uint32_t removed = 0;
     (void)sao_ui_widget_release_event_handlers(handle, &removed);
-    if (peek_tag(handle) == kTableTag) {
-        delete reinterpret_cast<TableState*>(handle);
-    } else if (peek_tag(handle) == kTreeTag) {
-        delete reinterpret_cast<TreeState*>(handle);
-    }
 }

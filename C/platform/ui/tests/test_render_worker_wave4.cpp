@@ -6,9 +6,6 @@
 //   * render_worker_flush_waits_for_all       - flush blocks until in_flight==0.
 //   * render_worker_lane_compose_produces_frame — per-lane compose round trip.
 //
-// The fan-out submit + flush API is not in the fixed header (added in
-// this Wave 4 file's src) so it's declared here as an extern "C" import.
-
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/ui/render_worker.h"
@@ -17,8 +14,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <cstdlib>
+#include <future>
+#include <mutex>
+#include <stdexcept>
 #include <thread>
 
 #if defined(_WIN32)
@@ -30,15 +31,6 @@
 #  endif
 #  include <windows.h>
 #endif
-
-// Fan-out API (see src/render_worker.cpp).
-using sao_ui_render_worker_task_fn_t = void(SAO_UI_CALL*)(void*);
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_submit(
-    sao_ui_render_worker_handle_t handle,
-    sao_ui_render_worker_task_fn_t task_fn,
-    void* user_data);
-extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
-    sao_ui_render_worker_handle_t handle);
 
 namespace {
 
@@ -62,6 +54,80 @@ SaoRenderWorkerConfig make_worker_config(int pool_size) {
     return cfg;
 }
 
+struct BlockingProbe {
+    std::mutex mutex;
+    std::condition_variable condition;
+    int entered = 0;
+    int completed = 0;
+    bool released = false;
+};
+
+void wait_in_probe(BlockingProbe& probe) {
+    std::unique_lock lock(probe.mutex);
+    ++probe.entered;
+    probe.condition.notify_all();
+    probe.condition.wait(lock, [&probe] { return probe.released; });
+    ++probe.completed;
+}
+
+void SAO_UI_CALL blocking_task(void* user_data) {
+    wait_in_probe(*static_cast<BlockingProbe*>(user_data));
+}
+
+sao_ui_frame_buffer_handle_t SAO_UI_CALL blocking_compose(double, void* user_data) {
+    wait_in_probe(*static_cast<BlockingProbe*>(user_data));
+    return nullptr;
+}
+
+void wait_for_entries(BlockingProbe& probe, int expected) {
+    std::unique_lock lock(probe.mutex);
+    REQUIRE(probe.condition.wait_for(lock, std::chrono::seconds(2),
+                                     [&probe, expected] { return probe.entered == expected; }));
+}
+
+void release_probe(BlockingProbe& probe) {
+    {
+        std::lock_guard lock(probe.mutex);
+        probe.released = true;
+    }
+    probe.condition.notify_all();
+}
+
+void SAO_UI_CALL throwing_task(void*) {
+    throw std::runtime_error("fan task fixture");
+}
+
+sao_ui_frame_buffer_handle_t SAO_UI_CALL throwing_compose(double, void*) {
+    throw std::runtime_error("lane compose fixture");
+}
+
+sao_ui_frame_buffer_handle_t SAO_UI_CALL bump_compose(double, void* user_data) {
+    bump_counter(user_data);
+    return nullptr;
+}
+
+struct ReentryProbe {
+    sao_ui_render_worker_handle_t worker = nullptr;
+    std::atomic<sao_status_t> flush_status{SAO_STATUS_OK};
+    std::atomic<sao_status_t> destroy_status{SAO_STATUS_OK};
+    std::atomic_int calls{0};
+};
+
+void invoke_reentry(ReentryProbe& probe) {
+    probe.flush_status.store(sao_ui_render_worker_flush(probe.worker));
+    probe.destroy_status.store(sao_ui_render_worker_destroy(probe.worker));
+    probe.calls.fetch_add(1);
+}
+
+void SAO_UI_CALL reentrant_task(void* user_data) {
+    invoke_reentry(*static_cast<ReentryProbe*>(user_data));
+}
+
+sao_ui_frame_buffer_handle_t SAO_UI_CALL reentrant_compose(double, void* user_data) {
+    invoke_reentry(*static_cast<ReentryProbe*>(user_data));
+    return nullptr;
+}
+
 }  // namespace
 
 TEST_CASE("render_worker_submit_runs_task",
@@ -79,7 +145,7 @@ TEST_CASE("render_worker_submit_runs_task",
     REQUIRE(sao_ui_render_worker_flush(w) == SAO_STATUS_OK);
     CHECK(counter.load() == 3);
 
-    sao_ui_render_worker_destroy(w);
+    REQUIRE(sao_ui_render_worker_destroy(w) == SAO_STATUS_OK);
 }
 
 TEST_CASE("render_worker_pool_size_2_runs_in_parallel",
@@ -104,7 +170,7 @@ TEST_CASE("render_worker_pool_size_2_runs_in_parallel",
     CHECK(elapsed_ms < 180.0);
     CHECK(counter.load() == 2);
 
-    sao_ui_render_worker_destroy(w);
+    REQUIRE(sao_ui_render_worker_destroy(w) == SAO_STATUS_OK);
 }
 
 TEST_CASE("render_worker_flush_waits_for_all",
@@ -125,7 +191,169 @@ TEST_CASE("render_worker_flush_waits_for_all",
     // Second flush on an empty queue must be a no-op.
     REQUIRE(sao_ui_render_worker_flush(w) == SAO_STATUS_OK);
 
-    sao_ui_render_worker_destroy(w);
+    REQUIRE(sao_ui_render_worker_destroy(w) == SAO_STATUS_OK);
+}
+
+TEST_CASE("render_worker_destroy_retires_handles_and_drains_every_accepted_job",
+          "[ui][render_worker][wave4][destroy][concurrency]") {
+    const SaoRenderWorkerConfig cfg = make_worker_config(2);
+    sao_ui_render_worker_handle_t worker = nullptr;
+    REQUIRE(sao_ui_render_worker_create(&cfg, &worker) == SAO_STATUS_OK);
+
+    sao_ui_render_lane_handle_t lane = nullptr;
+    REQUIRE(sao_ui_render_worker_get_lane(worker, "destroy-race", &lane) == SAO_STATUS_OK);
+
+    BlockingProbe fan_probe;
+    BlockingProbe lane_probe;
+    int accepted_fan = 2;
+    int accepted_lane = 1;
+    REQUIRE(sao_ui_render_worker_submit(worker, blocking_task, &fan_probe) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_worker_submit(worker, blocking_task, &fan_probe) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_lane_submit_compose(lane, blocking_compose, &lane_probe, 0.0) ==
+            SAO_STATUS_OK);
+    wait_for_entries(fan_probe, 2);
+    wait_for_entries(lane_probe, 1);
+
+    std::atomic_bool lane_lookup_started{false};
+    auto lane_lookup = std::async(std::launch::async, [&]() -> sao_status_t {
+        lane_lookup_started.store(true);
+        for (;;) {
+            sao_ui_render_lane_handle_t current = nullptr;
+            const auto status =
+                sao_ui_render_worker_get_lane(worker, "destroy-race", &current);
+            if (status != SAO_STATUS_OK) return status;
+            if (current != lane) return SAO_STATUS_ERR_UNKNOWN;
+            std::this_thread::yield();
+        }
+    });
+    std::atomic_bool take_started{false};
+    auto take = std::async(std::launch::async, [&]() -> sao_status_t {
+        take_started.store(true);
+        for (;;) {
+            sao_ui_frame_buffer_handle_t frame = nullptr;
+            const auto status = sao_ui_render_lane_try_take_frame(lane, &frame);
+            if (status == SAO_STATUS_ERR_HANDLE_INVALID) return status;
+            if (status != SAO_STATUS_ERR_NOT_FOUND || frame != nullptr) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+            std::this_thread::yield();
+        }
+    });
+    while (!lane_lookup_started.load() || !take_started.load()) std::this_thread::yield();
+
+    auto flush = std::async(std::launch::async,
+                            [worker] { return sao_ui_render_worker_flush(worker); });
+    REQUIRE(flush.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+    auto destroy = std::async(std::launch::async,
+                              [worker] { return sao_ui_render_worker_destroy(worker); });
+
+    for (;;) {
+        const auto status = sao_ui_render_worker_submit(worker, blocking_task, &fan_probe);
+        if (status == SAO_STATUS_OK) {
+            ++accepted_fan;
+            std::this_thread::yield();
+            continue;
+        }
+        REQUIRE(status == SAO_STATUS_ERR_HANDLE_INVALID);
+        break;
+    }
+    for (;;) {
+        const auto status =
+            sao_ui_render_lane_submit_compose(lane, blocking_compose, &lane_probe, 0.0);
+        if (status == SAO_STATUS_OK) {
+            ++accepted_lane;
+            std::this_thread::yield();
+            continue;
+        }
+        REQUIRE(status == SAO_STATUS_ERR_HANDLE_INVALID);
+        break;
+    }
+    CHECK(lane_lookup.get() == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(take.get() == SAO_STATUS_ERR_HANDLE_INVALID);
+
+    sao_ui_render_lane_handle_t stale_lane = reinterpret_cast<sao_ui_render_lane_handle_t>(1);
+    CHECK(sao_ui_render_worker_get_lane(worker, "retired", &stale_lane) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(stale_lane == nullptr);
+    sao_ui_frame_buffer_handle_t stale_frame = reinterpret_cast<sao_ui_frame_buffer_handle_t>(1);
+    CHECK(sao_ui_render_lane_try_take_frame(lane, &stale_frame) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(stale_frame == nullptr);
+    CHECK(sao_ui_render_worker_flush(worker) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(destroy.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+
+    release_probe(fan_probe);
+    release_probe(lane_probe);
+    REQUIRE(flush.get() == SAO_STATUS_OK);
+    REQUIRE(destroy.get() == SAO_STATUS_OK);
+    {
+        std::lock_guard lock(fan_probe.mutex);
+        CHECK(fan_probe.completed == accepted_fan);
+    }
+    {
+        std::lock_guard lock(lane_probe.mutex);
+        CHECK(lane_probe.completed == accepted_lane);
+    }
+    CHECK(sao_ui_render_worker_destroy(worker) == SAO_STATUS_ERR_HANDLE_INVALID);
+}
+
+TEST_CASE("render_worker_callback_exceptions_restore_completion_state",
+          "[ui][render_worker][wave4][exception]") {
+    const SaoRenderWorkerConfig cfg = make_worker_config(2);
+    sao_ui_render_worker_handle_t worker = nullptr;
+    REQUIRE(sao_ui_render_worker_create(&cfg, &worker) == SAO_STATUS_OK);
+    sao_ui_render_lane_handle_t lane = nullptr;
+    REQUIRE(sao_ui_render_worker_get_lane(worker, "throwing-lane", &lane) == SAO_STATUS_OK);
+
+    std::atomic_int fan_completed{0};
+    std::atomic_int lane_completed{0};
+    REQUIRE(sao_ui_render_worker_submit(worker, throwing_task, nullptr) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_worker_submit(worker, bump_counter, &fan_completed) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_lane_submit_compose(lane, throwing_compose, nullptr, 0.0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_lane_submit_compose(lane, bump_compose, &lane_completed, 0.0) ==
+            SAO_STATUS_OK);
+
+    REQUIRE(sao_ui_render_worker_flush(worker) == SAO_STATUS_OK);
+    CHECK(fan_completed.load() == 1);
+    CHECK(lane_completed.load() == 1);
+    REQUIRE(sao_ui_render_worker_destroy(worker) == SAO_STATUS_OK);
+}
+
+TEST_CASE("render_worker_callbacks_do_not_wait_or_join_their_own_worker",
+          "[ui][render_worker][wave4][reentry]") {
+    SECTION("fan-out callback") {
+        const SaoRenderWorkerConfig cfg = make_worker_config(2);
+        sao_ui_render_worker_handle_t worker = nullptr;
+        REQUIRE(sao_ui_render_worker_create(&cfg, &worker) == SAO_STATUS_OK);
+        ReentryProbe probe;
+        probe.worker = worker;
+
+        REQUIRE(sao_ui_render_worker_submit(worker, reentrant_task, &probe) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_render_worker_flush(worker) == SAO_STATUS_OK);
+        CHECK(probe.calls.load() == 1);
+        CHECK(probe.flush_status.load() == SAO_UI_STATUS_ERR_BUSY);
+        CHECK(probe.destroy_status.load() == SAO_UI_STATUS_ERR_BUSY);
+        REQUIRE(sao_ui_render_worker_destroy(worker) == SAO_STATUS_OK);
+    }
+
+    SECTION("lane callback") {
+        const SaoRenderWorkerConfig cfg = make_worker_config(2);
+        sao_ui_render_worker_handle_t worker = nullptr;
+        REQUIRE(sao_ui_render_worker_create(&cfg, &worker) == SAO_STATUS_OK);
+        sao_ui_render_lane_handle_t lane = nullptr;
+        REQUIRE(sao_ui_render_worker_get_lane(worker, "reentrant-lane", &lane) == SAO_STATUS_OK);
+        ReentryProbe probe;
+        probe.worker = worker;
+
+        REQUIRE(sao_ui_render_lane_submit_compose(lane, reentrant_compose, &probe, 0.0) ==
+                SAO_STATUS_OK);
+        REQUIRE(sao_ui_render_worker_flush(worker) == SAO_STATUS_OK);
+        CHECK(probe.calls.load() == 1);
+        CHECK(probe.flush_status.load() == SAO_UI_STATUS_ERR_BUSY);
+        CHECK(probe.destroy_status.load() == SAO_UI_STATUS_ERR_BUSY);
+        REQUIRE(sao_ui_render_worker_destroy(worker) == SAO_STATUS_OK);
+    }
 }
 
 namespace {
@@ -133,15 +361,7 @@ namespace {
 sao_ui_frame_buffer_handle_t SAO_UI_CALL make_16x16_frame(double now_sec, void* user_data) {
     auto* run_marker = reinterpret_cast<std::atomic<int>*>(user_data);
     run_marker->fetch_add(1);
-    // Allocate a frame buffer via the API's own release path — the
-    // header hands out an opaque handle; leverage the premultiply
-    // helper's malloc/free contract for parity but return the frame
-    // via `new` so `sao_ui_frame_buffer_release` (delete) matches.
-    // The internal type is `sao_ui_frame_buffer_s`; we don't have it
-    // here.  Use the premultiply helper to synthesize a valid frame.
     (void)now_sec;
-    // Instead we allocate a valid frame buffer via a small heap round
-    // trip: emit a 16x16 RGBA of pure red, premultiplied.
     constexpr uint32_t W = 16;
     constexpr uint32_t H = 16;
     uint8_t rgba[W * H * 4];
@@ -156,18 +376,16 @@ sao_ui_frame_buffer_handle_t SAO_UI_CALL make_16x16_frame(double now_sec, void* 
     if (sao_ui_render_worker_premultiply_rgba_to_bgra(rgba, W, H, &out, &out_size) != SAO_STATUS_OK) {
         return nullptr;
     }
-    // We can't build sao_ui_frame_buffer_s directly here because it's
-    // opaque; the lane compose path is verified via the counter marker
-    // and the frame buffer path is verified in a separate premultiply
-    // round-trip test below.  Free the temp buffer and return null so
-    // the lane path only exercises "compose ran" semantics.
+    sao_ui_frame_buffer_handle_t frame = nullptr;
+    const auto status = sao_ui_frame_buffer_create_bgra(
+        out, out_size, W, H, 11, 22, &frame);
     std::free(out);
-    return nullptr;
+    return status == SAO_STATUS_OK ? frame : nullptr;
 }
 
 }  // namespace
 
-TEST_CASE("render_worker_lane_compose_runs",
+TEST_CASE("render_worker_lane_compose_produces_frame",
           "[ui][render_worker][wave4]") {
     const SaoRenderWorkerConfig cfg = make_worker_config(2);
     sao_ui_render_worker_handle_t w = nullptr;
@@ -183,7 +401,19 @@ TEST_CASE("render_worker_lane_compose_runs",
     REQUIRE(sao_ui_render_worker_flush(w) == SAO_STATUS_OK);
     CHECK(run_marker.load() == 1);
 
-    sao_ui_render_worker_destroy(w);
+    sao_ui_frame_buffer_handle_t frame = nullptr;
+    REQUIRE(sao_ui_render_lane_try_take_frame(lane, &frame) == SAO_STATUS_OK);
+    REQUIRE(frame != nullptr);
+    SaoFrameBufferView view{};
+    REQUIRE(sao_ui_frame_buffer_view(frame, &view) == SAO_STATUS_OK);
+    CHECK(view.width == 16);
+    CHECK(view.height == 16);
+    CHECK(view.x == 11);
+    CHECK(view.y == 22);
+    sao_ui_frame_buffer_release(frame);
+    CHECK(sao_ui_render_lane_try_take_frame(lane, &frame) == SAO_STATUS_ERR_NOT_FOUND);
+
+    REQUIRE(sao_ui_render_worker_destroy(w) == SAO_STATUS_OK);
 }
 
 TEST_CASE("render_worker_premultiply_helper_round_trip",

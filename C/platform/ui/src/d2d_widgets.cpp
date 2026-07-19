@@ -357,7 +357,9 @@ extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle)
     } catch (...) {
         return;
     }
-    const int32_t kind = *reinterpret_cast<const int32_t*>(handle);
+    int32_t kind = -1;
+    if (sao_ui_widget_get_kind(handle, &kind) != SAO_STATUS_OK)
+        return;
     if (kind >= SAO_UI_WIDGET_ROUNDED_PANEL && kind <= SAO_UI_WIDGET_ICON) {
         return;
     } else if (kind >= SAO_UI_WIDGET_LABEL &&

@@ -93,6 +93,7 @@ const OverlayHostWin32Api& system_win32_api() {
         &::GetWindowLongPtrW,
         &::SetWindowLongPtrW,
         &::SetWindowPos,
+        &::DeleteObject,
     };
     return api;
 }
@@ -259,7 +260,7 @@ public:
     explicit OwnedRegion(HRGN region) noexcept : region_(region) {}
 
     ~OwnedRegion() {
-        if (region_ != nullptr) ::DeleteObject(region_);
+        if (region_ != nullptr) win32_api().delete_object(region_);
     }
 
     OwnedRegion(const OwnedRegion&) = delete;

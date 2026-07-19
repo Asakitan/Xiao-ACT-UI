@@ -156,6 +156,9 @@ SAO_UI_API uint32_t SAO_UI_CALL sao_streaming_flow_prune_dead_workers(void);
 SAO_UI_API sao_status_t SAO_UI_CALL sao_streaming_flow_mode_lock_acquire(
     double timeout_sec);
 
+// Must be called by the thread that acquired the mode lock.  Returns
+// ERR_ACCESS_DENIED for a non-owner and ERR_NOT_INITIALIZED after the
+// lock has already been released; neither error unlocks the mutex.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_streaming_flow_mode_lock_release(
     void);
 

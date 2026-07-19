@@ -1406,6 +1406,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_enabled(
         });
 }
 
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_layer_set_input_policy(
+    sao_ui_layer_handle_t layer, bool click_through,
+    bool input_enabled) {
+    return with_active_layer_locked(
+        layer, [click_through, input_enabled](
+                   sao_ui_compositor_s*, sao_ui_layer_s* active) {
+            active->click_through = click_through;
+            active->input_enabled = input_enabled;
+            return SAO_STATUS_OK;
+        });
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_rects(
     sao_ui_layer_handle_t layer,
     const SaoUiLayerInputRect* rects,

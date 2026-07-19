@@ -26,6 +26,7 @@ struct FakeWin32State {
     uint32_t set_window_rgn_calls = 0;
     uint32_t set_window_pos_calls = 0;
     HRGN last_transferred_region = nullptr;
+    bool deleted_transferred_region = false;
 };
 
 FakeWin32State* g_fake = nullptr;
@@ -64,12 +65,20 @@ BOOL WINAPI fake_set_window_pos(HWND hwnd, HWND insert_after, int x, int y, int 
     return ::SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
 }
 
+BOOL WINAPI fake_delete_object(HGDIOBJ object) {
+    if (object == g_fake->last_transferred_region) {
+        g_fake->deleted_transferred_region = true;
+    }
+    return ::DeleteObject(object);
+}
+
 const OverlayHostWin32Api kFakeApi{
     &fake_set_window_rgn,
     &fake_get_window_rgn,
     &fake_get_window_long_ptr_w,
     &fake_set_window_long_ptr_w,
     &fake_set_window_pos,
+    &fake_delete_object,
 };
 
 SaoOverlayHostConfig test_config() {
@@ -187,8 +196,7 @@ TEST_CASE("overlay region rolls back SetWindowRgn when style commit fails",
     CHECK(fixture.fake.set_window_rgn_calls == 2);
     CHECK(fixture.fake.set_window_pos_calls == 2);
     REQUIRE(fixture.fake.last_transferred_region != nullptr);
-    CHECK(::GetObjectType(fixture.fake.last_transferred_region) == OBJ_REGION);
-    CHECK(::PtInRegion(fixture.fake.last_transferred_region, 20, 30) == FALSE);
+    CHECK_FALSE(fixture.fake.deleted_transferred_region);
     CHECK_FALSE(region_contains(fixture.hwnd, 20, 30));
     CHECK(transparent_style(fixture.hwnd));
     CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
