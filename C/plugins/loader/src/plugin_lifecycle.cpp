@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -144,7 +145,6 @@ uint32_t expected_native_abi(const plugin_manifest& manifest) {
 
 int32_t validate_native_descriptor(const plugin_manifest& manifest,
                                    const native_plugin_descriptor& descriptor) {
-    constexpr uint32_t kMaximumProvidersPerPlugin = 256;
     constexpr size_t kBaseDescriptorSize =
         offsetof(native_plugin_descriptor, entity_provider_count);
     const bool has_entity_providers = descriptor.struct_size >= sizeof(native_plugin_descriptor);
@@ -164,14 +164,18 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
         return SAO_ERR_INVALID_ARGUMENT;
     }
     const uint32_t provider_count = has_entity_providers ? descriptor.entity_provider_count : 0;
-    if (provider_count > kMaximumProvidersPerPlugin) {
+    if (provider_count > kMaximumEntityProvidersPerContext) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     for (uint32_t index = 0; index < provider_count; ++index) {
-        const auto& provider = descriptor.entity_providers[index];
-        if (provider.struct_size < sizeof(native_entity_provider_descriptor) ||
-            provider.provider_id_utf8 == nullptr || provider.snapshot == nullptr ||
-            provider.action_handler == nullptr) {
+        const auto* provider = &descriptor.entity_providers[index];
+        if (provider->struct_size < kNativeEntityProviderDescriptorRequiredPrefixSize)
+            return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        native_entity_provider_descriptor current{};
+        std::memcpy(&current, provider,
+                    (std::min)(static_cast<size_t>(provider->struct_size), sizeof(current)));
+        if (current.provider_id_utf8 == nullptr || current.snapshot == nullptr ||
+            current.action_handler == nullptr) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
     }

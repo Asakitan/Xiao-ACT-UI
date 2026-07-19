@@ -373,9 +373,29 @@ struct context_provider_probe {
     std::string last_payload;
     uint64_t revision = 4;
     bool zero_rows = false;
+    uint32_t row_struct_size = sizeof(entity_menu_row);
+    const char* row_payload_json = R"({"value":7})";
+    uint8_t row_can_activate = 1;
+    uint8_t row_keep_menu_open = 1;
+    uint8_t row_close_menu_before = 0;
     std::atomic_bool enable_entered{false};
     std::atomic_bool registration_started{false};
 };
+
+struct old_context_entity_provider_descriptor {
+    uint32_t struct_size;
+    const char* provider_id_utf8;
+    entity_snapshot_callback_fn snapshot;
+    entity_action_handler_fn action_handler;
+    void* user_data;
+};
+
+struct future_context_entity_provider_descriptor {
+    context_entity_provider_descriptor current{};
+    uint64_t future_tail = 0;
+};
+
+static_assert(sizeof(old_context_entity_provider_descriptor) == 40);
 
 int32_t SAO_PLUGINS_CALL context_provider_snapshot(entity_menu_row* rows, uint32_t capacity,
                                                    uint32_t* out_count, uint64_t* out_revision,
@@ -395,8 +415,19 @@ int32_t SAO_PLUGINS_CALL context_provider_snapshot(entity_menu_row* rows, uint32
         return SAO_ERR_BUFFER_TOO_SMALL;
     if (rows == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    rows[0] = {sizeof(entity_menu_row), "tools", "工具", "🔧", 12.5, "执行", "▶", "run",
-               R"({"value":7})",        1,       1,      0,    {}};
+    rows[0] = {probe.row_struct_size,
+               "tools",
+               "工具",
+               "🔧",
+               12.5,
+               "执行",
+               "▶",
+               "run",
+               probe.row_payload_json,
+               probe.row_can_activate,
+               probe.row_keep_menu_open,
+               probe.row_close_menu_before,
+               {}};
     return SAO_OK;
 }
 
@@ -983,6 +1014,207 @@ TEST_CASE("context provider publishes owner-scoped roots with loader lifecycle",
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     CHECK(sao_plugins_entity_provider_invoke("context_provider_root/tools-provider", generation,
                                              "run", "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("context entity provider ABI accepts required prefixes and future tails",
+          "[plugins][loader][entity-provider][abi][focused]") {
+    TempDirectory temp(L"context_provider_abi_prefix");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_abi_prefix", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = empty_context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    old_context_entity_provider_descriptor old_descriptor{
+        sizeof(old_context_entity_provider_descriptor),
+        "old-prefix",
+        context_provider_snapshot,
+        context_provider_action,
+        &probe,
+    };
+    REQUIRE(sao_plugins_ctx_register_entity_provider(
+                context, reinterpret_cast<const context_entity_provider_descriptor*>(
+                             &old_descriptor)) == SAO_OK);
+
+    old_context_entity_provider_descriptor short_descriptor{
+        sizeof(old_context_entity_provider_descriptor) - 1,
+        "short-prefix",
+        context_provider_snapshot,
+        context_provider_action,
+        &probe,
+    };
+    CHECK(sao_plugins_ctx_register_entity_provider(
+              context, reinterpret_cast<const context_entity_provider_descriptor*>(
+                           &short_descriptor)) == SAO_PLUGINS_ERR_ABI_MISMATCH);
+
+    context_entity_provider_descriptor recovered{};
+    recovered.struct_size = sizeof(recovered);
+    recovered.provider_id_utf8 = "short-prefix";
+    recovered.snapshot = context_provider_snapshot;
+    recovered.action_handler = context_provider_action;
+    recovered.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &recovered) == SAO_OK);
+
+    future_context_entity_provider_descriptor future{};
+    future.current.struct_size = sizeof(future);
+    future.current.provider_id_utf8 = "future-prefix";
+    future.current.snapshot = context_provider_snapshot;
+    future.current.action_handler = context_provider_action;
+    future.current.user_data = &probe;
+    future.future_tail = 0xabcdef0123456789ULL;
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &future.current) == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers.size() == 3);
+    CHECK(catalog.roots.empty());
+    CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+        return item.provider_id == "context_provider_abi_prefix/old-prefix";
+    }));
+    CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+        return item.provider_id == "context_provider_abi_prefix/short-prefix";
+    }));
+    CHECK(std::any_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+        return item.provider_id == "context_provider_abi_prefix/future-prefix";
+    }));
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider rows enforce mandatory flags and JSON atomically",
+          "[plugins][loader][entity-provider][abi][json][focused]") {
+    TempDirectory temp(L"context_provider_row_abi");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_row_abi", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    probe.row_struct_size = 75;
+    probe.row_can_activate = 0;
+    probe.row_keep_menu_open = 1;
+    probe.row_close_menu_before = 1;
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK_FALSE(catalog.providers[0].rows[0].can_activate);
+    CHECK(catalog.providers[0].rows[0].keep_menu_open);
+    CHECK(catalog.providers[0].rows[0].close_menu_before);
+    const uint64_t generation = catalog.providers[0].generation;
+
+    probe.row_struct_size = 74;
+    entity_provider_catalog_snapshot sentinel;
+    sentinel.revision = 0xfeed;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_PLUGINS_ERR_ABI_MISMATCH);
+    CHECK(sentinel.revision == 0xfeed);
+    CHECK(sentinel.providers.empty());
+
+    probe.row_struct_size = sizeof(entity_menu_row) + 32;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.providers[0].rows[0].close_menu_before);
+
+    probe.row_payload_json = nullptr;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK(catalog.providers[0].rows[0].payload_json == "{}");
+
+    probe.row_payload_json = "{invalid";
+    sentinel = {};
+    sentinel.revision = 0xbeef;
+    CHECK(snapshot_entity_providers(sentinel) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sentinel.revision == 0xbeef);
+    CHECK(sentinel.providers.empty());
+
+    const int action_calls = probe.actions.load();
+    CHECK(sao_plugins_entity_provider_invoke("context_provider_row_abi/tools-provider", generation,
+                                             "run", "{invalid") == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.actions.load() == action_calls);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider context and unregister admissions enforce count budgets",
+          "[plugins][loader][entity-provider][budget][focused]") {
+    TempDirectory temp(L"context_provider_budget");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("context_provider_budget", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe probe;
+    const auto adapter = empty_context_provider_adapter(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    std::vector<std::string> local_ids;
+    local_ids.reserve(257);
+    for (size_t index = 0; index < 257; ++index)
+        local_ids.push_back("budget-provider-" + std::to_string(index));
+    for (size_t index = 0; index < 256; ++index) {
+        context_entity_provider_descriptor descriptor{};
+        descriptor.struct_size = sizeof(descriptor);
+        descriptor.provider_id_utf8 = local_ids[index].c_str();
+        descriptor.snapshot = context_provider_snapshot;
+        descriptor.action_handler = context_provider_action;
+        descriptor.user_data = &probe;
+        REQUIRE(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_OK);
+    }
+    context_entity_provider_descriptor overflow{};
+    overflow.struct_size = sizeof(overflow);
+    overflow.provider_id_utf8 = local_ids.back().c_str();
+    overflow.snapshot = context_provider_snapshot;
+    overflow.action_handler = context_provider_action;
+    overflow.user_data = &probe;
+    CHECK(sao_plugins_ctx_register_entity_provider(context, &overflow) == SAO_ERR_INVALID_ARGUMENT);
+
+    std::vector<std::string> qualified_ids;
+    std::vector<const char*> unregister_ids;
+    qualified_ids.reserve(local_ids.size());
+    unregister_ids.reserve(local_ids.size());
+    for (const auto& local_id : local_ids)
+        qualified_ids.push_back("context_provider_budget/" + local_id);
+    for (const auto& qualified_id : qualified_ids)
+        unregister_ids.push_back(qualified_id.c_str());
+    CHECK(plugin_context_unregister_entity_providers(
+              context, unregister_ids.data(), unregister_ids.size()) == SAO_ERR_INVALID_ARGUMENT);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(catalog.providers.size() == 256);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
     remove_plugin(handle);
 }

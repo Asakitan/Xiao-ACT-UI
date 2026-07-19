@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 namespace sao::plugins::loader {
 
 struct entity_provider_state {
@@ -56,7 +58,6 @@ constexpr size_t kMaximumProviderIdBytes = 1024;
 constexpr size_t kMaximumRootIdBytes = 63;
 constexpr size_t kMaximumStringBytes = 16384;
 constexpr size_t kMaximumSnapshotStringBytes = 8 * 1024 * 1024;
-constexpr size_t kMaximumCatalogProviders = 4096;
 constexpr size_t kMaximumCatalogRows = 16384;
 constexpr size_t kMaximumCatalogStringBytes = 32 * 1024 * 1024;
 constexpr size_t kMaximumInvokePayloadBytes = 1024 * 1024;
@@ -257,6 +258,42 @@ bool copy_bytes(char* destination, const char* source, size_t size) noexcept {
 #endif
 }
 
+template <typename T>
+int32_t copy_external_struct(const T* source, size_t required_prefix_size, T& out) noexcept {
+    if (source == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+#if defined(_MSC_VER)
+    __try {
+#endif
+        const size_t struct_size = source->struct_size;
+        if (struct_size < required_prefix_size)
+            return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        out = {};
+        std::memcpy(&out, source, (std::min)(struct_size, sizeof(out)));
+        return SAO_OK;
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+#endif
+}
+
+bool valid_json_syntax(std::string_view value) noexcept {
+    try {
+        return nlohmann::json::accept(value);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool add_snapshot_string_bytes(size_t& total, size_t amount) noexcept {
+    if (total > kMaximumSnapshotStringBytes || amount > kMaximumSnapshotStringBytes - total) {
+        return false;
+    }
+    total += amount;
+    return true;
+}
+
 bool valid_utf8(std::string_view value) noexcept {
     size_t offset = 0;
     while (offset < value.size()) {
@@ -322,51 +359,60 @@ int32_t copy_bounded_string(const char* value, bool required, size_t maximum_byt
 }
 
 int32_t copy_row(const entity_menu_row& row, size_t& total_bytes, owned_entity_row& out) {
-    if (row.struct_size < sizeof(entity_menu_row) || !std::isfinite(row.category_priority)) {
+    entity_menu_row current{};
+    const int32_t copy_status =
+        copy_external_struct(&row, kEntityMenuRowRequiredPrefixSize, current);
+    if (copy_status != SAO_OK)
+        return copy_status;
+    if (!std::isfinite(current.category_priority)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     owned_entity_row candidate;
-    int32_t status = copy_bounded_string(row.category_id_utf8, true, kMaximumStringBytes,
-                                         total_bytes, candidate.category_id);
+    size_t candidate_total_bytes = total_bytes;
+    int32_t status = copy_bounded_string(current.category_id_utf8, true, kMaximumStringBytes,
+                                         candidate_total_bytes, candidate.category_id);
     if (status == SAO_OK) {
-        status = copy_bounded_string(row.category_label_utf8, false, kMaximumStringBytes,
-                                     total_bytes, candidate.category_label);
+        status = copy_bounded_string(current.category_label_utf8, false, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.category_label);
     }
     if (status == SAO_OK) {
-        status = copy_bounded_string(row.category_icon_utf8, false, kMaximumStringBytes,
-                                     total_bytes, candidate.category_icon);
+        status = copy_bounded_string(current.category_icon_utf8, false, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.category_icon);
     }
     if (status == SAO_OK) {
-        status = copy_bounded_string(row.row_label_utf8, true, kMaximumStringBytes, total_bytes,
-                                     candidate.row_label);
+        status = copy_bounded_string(current.row_label_utf8, true, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.row_label);
     }
     if (status == SAO_OK) {
-        status = copy_bounded_string(row.row_icon_utf8, false, kMaximumStringBytes, total_bytes,
-                                     candidate.row_icon);
+        status = copy_bounded_string(current.row_icon_utf8, false, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.row_icon);
     }
     if (status == SAO_OK) {
-        status = copy_bounded_string(row.action_id_utf8, true, kMaximumStringBytes, total_bytes,
-                                     candidate.action_id);
+        status = copy_bounded_string(current.action_id_utf8, true, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.action_id);
     }
-    if (status == SAO_OK && row.payload_json_utf8 == nullptr) {
+    if (status == SAO_OK && current.payload_json_utf8 == nullptr) {
         constexpr std::string_view kDefaultPayload = "{}";
-        if (total_bytes > kMaximumSnapshotStringBytes ||
-            kDefaultPayload.size() > kMaximumSnapshotStringBytes - total_bytes) {
+        if (!add_snapshot_string_bytes(candidate_total_bytes, kDefaultPayload.size())) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
         candidate.payload_json = kDefaultPayload;
-        total_bytes += candidate.payload_json.size();
     } else if (status == SAO_OK) {
-        status = copy_bounded_string(row.payload_json_utf8, false, kMaximumStringBytes, total_bytes,
-                                     candidate.payload_json);
+        status = copy_bounded_string(current.payload_json_utf8, false, kMaximumStringBytes,
+                                     candidate_total_bytes, candidate.payload_json);
     }
-    if (status != SAO_OK)
-        return status;
-    candidate.category_priority = row.category_priority;
-    candidate.can_activate = row.can_activate != 0;
-    candidate.keep_menu_open = row.keep_menu_open != 0;
-    candidate.close_menu_before = row.close_menu_before != 0;
-    out = std::move(candidate);
+    if (status != SAO_OK || !valid_json_syntax(candidate.payload_json))
+        return SAO_ERR_INVALID_ARGUMENT;
+    candidate.category_priority = current.category_priority;
+    candidate.can_activate = current.can_activate != 0;
+    candidate.keep_menu_open = current.keep_menu_open != 0;
+    candidate.close_menu_before = current.close_menu_before != 0;
+    try {
+        out = std::move(candidate);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    total_bytes = candidate_total_bytes;
     return SAO_OK;
 }
 
@@ -401,13 +447,16 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
             candidate.root_name = state->root_name;
             candidate.root_icon = state->root_icon;
             candidate.root_priority = state->root_priority;
-            candidate.string_bytes = candidate.provider_id.size() +
-                                     candidate.owner_plugin_id.size() +
-                                     candidate.contribution_id.size() + candidate.root_id.size() +
-                                     candidate.root_name.size() + candidate.root_icon.size();
-            if (candidate.string_bytes > kMaximumSnapshotStringBytes) {
+            size_t total_bytes = 0;
+            if (!add_snapshot_string_bytes(total_bytes, candidate.provider_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.owner_plugin_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.contribution_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_name.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_icon.size())) {
                 return SAO_ERR_INVALID_ARGUMENT;
             }
+            candidate.string_bytes = total_bytes;
             out = std::move(candidate);
             return SAO_OK;
         }
@@ -440,14 +489,15 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         candidate.root_icon = state->root_icon;
         candidate.root_priority = state->root_priority;
         candidate.rows.reserve(rows.size());
-        if (candidate.provider_id.size() > kMaximumSnapshotStringBytes ||
-            candidate.owner_plugin_id.size() >
-                kMaximumSnapshotStringBytes - candidate.provider_id.size()) {
+        size_t total_bytes = 0;
+        if (!add_snapshot_string_bytes(total_bytes, candidate.provider_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.owner_plugin_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.contribution_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_name.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_icon.size())) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
-        size_t total_bytes = candidate.provider_id.size() + candidate.owner_plugin_id.size() +
-                             candidate.contribution_id.size() + candidate.root_id.size() +
-                             candidate.root_name.size() + candidate.root_icon.size();
         for (const auto& row : rows) {
             owned_entity_row copied;
             status = copy_row(row, total_bytes, copied);
@@ -494,25 +544,30 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
         state->action_handler = action_handler;
         state->user_data = user_data;
         if (root_contribution != nullptr) {
-            if (root_contribution->struct_size < sizeof(entity_root_contribution_descriptor) ||
-                !std::isfinite(root_contribution->priority)) {
+            entity_root_contribution_descriptor current_root{};
+            status = copy_external_struct(root_contribution,
+                                          kEntityRootContributionDescriptorRequiredPrefixSize,
+                                          current_root);
+            if (status != SAO_OK)
+                return status;
+            if (!std::isfinite(current_root.priority)) {
                 return SAO_ERR_INVALID_ARGUMENT;
             }
             size_t root_bytes = 0;
             status =
-                copy_bounded_string(root_contribution->contribution_id_utf8, true,
+                copy_bounded_string(current_root.contribution_id_utf8, true,
                                     kMaximumProviderIdBytes, root_bytes, state->contribution_id);
             if (status == SAO_OK) {
-                status = copy_bounded_string(root_contribution->root_id_utf8, true,
-                                             kMaximumRootIdBytes, root_bytes, state->root_id);
+                status = copy_bounded_string(current_root.root_id_utf8, true, kMaximumRootIdBytes,
+                                             root_bytes, state->root_id);
             }
             if (status == SAO_OK) {
-                status = copy_bounded_string(root_contribution->name_utf8, true,
-                                             kMaximumStringBytes, root_bytes, state->root_name);
+                status = copy_bounded_string(current_root.name_utf8, true, kMaximumStringBytes,
+                                             root_bytes, state->root_name);
             }
             if (status == SAO_OK) {
-                status = copy_bounded_string(root_contribution->icon_utf8, false,
-                                             kMaximumStringBytes, root_bytes, state->root_icon);
+                status = copy_bounded_string(current_root.icon_utf8, false, kMaximumStringBytes,
+                                             root_bytes, state->root_icon);
             }
             if (status != SAO_OK)
                 return status;
@@ -524,14 +579,17 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
                     std::end(kReservedRoots)) {
                 return SAO_PLUGINS_ERR_ALREADY_EXISTS;
             }
-            state->root_priority = root_contribution->priority;
+            state->root_priority = current_root.priority;
             state->has_root_contribution = true;
         }
         {
             std::lock_guard catalog_lock(g_catalog_mutex);
-            if (!g_attached.emplace(state->provider_id, state).second) {
+            if (g_attached.contains(state->provider_id)) {
                 return SAO_PLUGINS_ERR_ALREADY_EXISTS;
             }
+            if (g_attached.size() >= kMaximumAttachedEntityProviders)
+                return SAO_ERR_INVALID_ARGUMENT;
+            g_attached.emplace(state->provider_id, state);
         }
         out = std::move(state);
         return SAO_OK;
@@ -613,8 +671,18 @@ int32_t activate_entity_providers(
             }
         }
 
+        size_t additions = 0;
+        for (const auto& provider : ordered) {
+            if (!g_catalog.contains(provider->provider_id))
+                ++additions;
+        }
+        if (g_catalog.size() > kMaximumEntityProvidersPerCatalog ||
+            additions > kMaximumEntityProvidersPerCatalog - g_catalog.size()) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+
         auto candidate = g_catalog;
-        candidate.reserve(candidate.size() + ordered.size());
+        candidate.reserve(candidate.size() + additions);
         bool inserted = false;
         for (const auto& provider : ordered) {
             if (!candidate.contains(provider->provider_id)) {
@@ -753,7 +821,7 @@ sao_plugins_entity_provider_snapshot(entity_provider_catalog_callback callback, 
             std::vector<std::shared_ptr<entity_provider_state>> providers;
             {
                 std::lock_guard lock(g_catalog_mutex);
-                if (g_catalog.size() > kMaximumCatalogProviders) {
+                if (g_catalog.size() > kMaximumEntityProvidersPerCatalog) {
                     return SAO_ERR_INVALID_ARGUMENT;
                 }
                 catalog_revision = g_catalog_revision;
@@ -907,6 +975,8 @@ sao_plugins_entity_provider_invoke(const char* provider_id_utf8, uint64_t expect
         }
         if (status != SAO_OK)
             return status;
+        if (!valid_json_syntax(payload_json))
+            return SAO_ERR_INVALID_ARGUMENT;
 
         std::shared_ptr<entity_provider_state> provider;
         {

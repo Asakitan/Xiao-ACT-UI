@@ -63,6 +63,38 @@ struct context_entity_provider_descriptor {
     const entity_root_contribution_descriptor* root_contribution;
 };
 
+inline constexpr size_t kEntityMenuRowRequiredPrefixSize =
+    offsetof(entity_menu_row, close_menu_before) +
+    sizeof(static_cast<entity_menu_row*>(nullptr)->close_menu_before);
+inline constexpr size_t kNativeEntityProviderDescriptorRequiredPrefixSize =
+    offsetof(native_entity_provider_descriptor, user_data) +
+    sizeof(static_cast<native_entity_provider_descriptor*>(nullptr)->user_data);
+inline constexpr size_t kEntityRootContributionDescriptorRequiredPrefixSize =
+    offsetof(entity_root_contribution_descriptor, priority) +
+    sizeof(static_cast<entity_root_contribution_descriptor*>(nullptr)->priority);
+inline constexpr size_t kContextEntityProviderDescriptorRequiredPrefixSize =
+    offsetof(context_entity_provider_descriptor, user_data) +
+    sizeof(static_cast<context_entity_provider_descriptor*>(nullptr)->user_data);
+
+inline constexpr size_t kMaximumEntityProvidersPerContext = 256;
+inline constexpr size_t kMaximumAttachedEntityProviders = 4096;
+inline constexpr size_t kMaximumEntityProvidersPerCatalog = 4096;
+
+static_assert(kEntityMenuRowRequiredPrefixSize <= sizeof(entity_menu_row));
+static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize <=
+              sizeof(native_entity_provider_descriptor));
+static_assert(kEntityRootContributionDescriptorRequiredPrefixSize <=
+              sizeof(entity_root_contribution_descriptor));
+static_assert(kContextEntityProviderDescriptorRequiredPrefixSize <=
+              sizeof(context_entity_provider_descriptor));
+
+#if INTPTR_MAX == INT64_MAX
+static_assert(kEntityMenuRowRequiredPrefixSize == 75);
+static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize == 40);
+static_assert(kEntityRootContributionDescriptorRequiredPrefixSize == 48);
+static_assert(kContextEntityProviderDescriptorRequiredPrefixSize == 40);
+#endif
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider(
     plugin_context_t* context, const context_entity_provider_descriptor* descriptor);
 
