@@ -542,7 +542,51 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* set_prior_hot_heaps)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         const uint64_t* flat, size_t entry_count);
+
+    // Append-only ABI 1.9 extension: interactive user pin + runtime
+    // toggles.
+    //
+    // set_pinned_heap: force the tracker to prioritize `heap_base` on
+    // every candidate scan.  heap_size is stored for diagnostics.
+    // pinned_only != 0 collapses the per-tick sweep to just the pinned
+    // heap.  Passing heap_base = 0 clears the pin (pinned_only ignored).
+    sao_sdk_status_t(SAO_SDK_CALL* set_pinned_heap)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t heap_base, uint64_t heap_size, uint8_t pinned_only);
+
+    // get_pinned_heap: report the current user pin.  *out_active = 1
+    // when a pin is set, 0 otherwise (in which case the other outputs
+    // are 0).  Any output pointer may be NULL to skip that field.
+    sao_sdk_status_t(SAO_SDK_CALL* get_pinned_heap)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t* out_heap_base, uint64_t* out_heap_size,
+        uint8_t* out_pinned_only, uint8_t* out_active);
+
+    // Runtime toggle bits.  See SAO_SDK_GPU_HUNT_TOGGLE_* below.  The
+    // caller reads the current mask with get_runtime_toggles, twiddles
+    // some bits, and writes back with set_runtime_toggles(mask, changed
+    // _mask).  Bits absent from changed_mask are left alone so a stale
+    // read never overwrites a concurrent flip.
+    sao_sdk_status_t(SAO_SDK_CALL* get_runtime_toggles)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t* out_mask);
+
+    sao_sdk_status_t(SAO_SDK_CALL* set_runtime_toggles)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t mask, uint64_t changed_mask);
 };
+
+// Runtime toggle bit definitions (ABI 1.9).  Append-only; existing
+// bits never move.
+#define SAO_SDK_GPU_HUNT_TOGGLE_BONE_REFRESH_PER_TICK        (1ULL << 0)
+#define SAO_SDK_GPU_HUNT_TOGGLE_BONE_RESCAN_ONLY_LOCKED_HEAP (1ULL << 1)
+#define SAO_SDK_GPU_HUNT_TOGGLE_BONE_PERSISTENCE_BIAS        (1ULL << 2)
+#define SAO_SDK_GPU_HUNT_TOGGLE_RESTRICT_PRIMARY_TO_ACTOR    (1ULL << 3)
+#define SAO_SDK_GPU_HUNT_TOGGLE_PROBE_HEAP_HEADER_8B         (1ULL << 4)
+#define SAO_SDK_GPU_HUNT_TOGGLE_BONE_RESCAN_ON_HEAP_CHURN    (1ULL << 5)
+#define SAO_SDK_GPU_HUNT_TOGGLE_INVALIDATE_ON_LOCKED_LOST    (1ULL << 6)
+#define SAO_SDK_GPU_HUNT_TOGGLE_HEAP_CHURN_CHECK_ENABLED     (1ULL << 7)
+#define SAO_SDK_GPU_HUNT_TOGGLE_HOT_HEAPS_LRU_ENABLED        (1ULL << 8)
 
 // The main context struct.  ctx_impl is an opaque pointer to the
 // platform's per-plugin state; every function pointer takes it as
