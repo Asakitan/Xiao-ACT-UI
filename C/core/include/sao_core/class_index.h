@@ -28,6 +28,8 @@ sao_legacy_core_class_index_get_name(uint32_t index, char* out_class_name_utf8,
 extern "C" SAO_LEGACY_CORE_API int32_t SAO_LEGACY_CORE_CALL
 sao_legacy_core_class_index_count(size_t* out_count);
 
+// This provider-table ABI is independent from the legacy core export ABI in abi.h. Version 1.0
+// describes the current retain/release and process-bound token lifecycle contract.
 #define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MAJOR 1u
 #define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MINOR 0u
 #define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION                                \

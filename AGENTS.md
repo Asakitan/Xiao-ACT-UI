@@ -11,6 +11,13 @@
 - Keep concise. No rollout logs, task transcripts, or debugging history.
 - Repository-specific history belongs in `/memories/repo/`.
 
+## Active Platform And Legacy Freeze
+
+- The active platform is native C++ under `C/`.
+- Python under `python/` is legacy and temporarily frozen. Do not update, maintain, refactor, or add features to it unless the user explicitly requests work on the legacy Python implementation.
+- Default all new platform work, fixes, tests, and documentation to the C++ implementation.
+- This freeze overrides the historical Python maintenance guidance below wherever the two conflict.
+
 ## Architecture — Platform vs Plugin
 
 SAO ACT UI is a **game-agnostic platform**. All game-specific logic lives in plugins.

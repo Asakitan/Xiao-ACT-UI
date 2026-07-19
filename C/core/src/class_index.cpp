@@ -22,11 +22,6 @@ namespace {
 constexpr size_t kMaximumClassNameBytes = 255;
 constexpr char kComponent[] = "core.class_index";
 
-int32_t fail(int32_t status, const char* message) noexcept {
-    sao::legacy_core::emit_log(sao::legacy_core::kLogLevelError, kComponent, status, message);
-    return status;
-}
-
 struct ClassRegistry {
     std::mutex mutex;
     std::vector<std::string> names;
@@ -65,6 +60,13 @@ struct MetadataRegistry {
 };
 
 thread_local ProviderState* g_callback_provider = nullptr;
+
+int32_t fail(int32_t status, const char* message) noexcept {
+    if (g_callback_provider == nullptr) {
+        sao::legacy_core::emit_log(sao::legacy_core::kLogLevelError, kComponent, status, message);
+    }
+    return status;
+}
 
 ClassRegistry& registry() {
     static ClassRegistry value;
@@ -235,19 +237,18 @@ template <typename Callback> int32_t invoke_void_cpp(void* context) noexcept {
     }
 }
 
-template <typename Callback> int32_t invoke_status_callback(ProviderState* provider,
-                                                            Callback&& callback) noexcept {
+template <typename Callback>
+int32_t invoke_status_callback(ProviderState* provider, Callback&& callback) noexcept {
     using StoredCallback = std::remove_reference_t<Callback>;
     ProviderState* previous = g_callback_provider;
     g_callback_provider = provider;
-    const int32_t status =
-        invoke_callback_barrier(&invoke_status_cpp<StoredCallback>, &callback);
+    const int32_t status = invoke_callback_barrier(&invoke_status_cpp<StoredCallback>, &callback);
     g_callback_provider = previous;
     return status;
 }
 
-template <typename Callback> int32_t invoke_void_callback(ProviderState* provider,
-                                                          Callback&& callback) noexcept {
+template <typename Callback>
+int32_t invoke_void_callback(ProviderState* provider, Callback&& callback) noexcept {
     using StoredCallback = std::remove_reference_t<Callback>;
     ProviderState* previous = g_callback_provider;
     g_callback_provider = provider;
@@ -413,8 +414,7 @@ int32_t cleanup_candidate_quarantine() noexcept {
     }
 }
 
-int32_t release_candidate_or_quarantine(
-    const std::shared_ptr<ProviderState>& candidate) noexcept {
+int32_t release_candidate_or_quarantine(const std::shared_ptr<ProviderState>& candidate) noexcept {
     const int32_t status = release_provider_owner(candidate);
     if (status == SAO_OK || candidate == nullptr) {
         return status;
@@ -429,9 +429,9 @@ int32_t release_candidate_or_quarantine(
     return status;
 }
 
-int32_t quarantine_and_release_provider_token(
-    sao_legacy_core_process_handle_t process, const std::shared_ptr<ProviderState>& provider,
-    uint64_t provider_token) noexcept {
+int32_t quarantine_and_release_provider_token(sao_legacy_core_process_handle_t process,
+                                              const std::shared_ptr<ProviderState>& provider,
+                                              uint64_t provider_token) noexcept {
     try {
         auto token = std::make_shared<TokenRecord>();
         token->process = process;
@@ -457,18 +457,21 @@ int32_t cleanup_current_provider() noexcept {
             if (previous == nullptr) {
                 return SAO_OK;
             }
-            {
-                std::lock_guard provider_lock(previous->mutex);
-                previous->accepting = false;
-            }
+        }
+        {
+            std::lock_guard provider_lock(previous->mutex);
+            previous->accepting = false;
+        }
+        {
+            std::lock_guard registry_lock(state.mutex);
             for (const auto& [_, token] : state.tokens) {
                 if (token->owner == previous) {
                     std::lock_guard token_lock(token->mutex);
                     token->accepting = false;
                 }
             }
-              for (auto token = state.quarantined_tokens; token != nullptr;
-                  token = token->quarantine_next) {
+            for (auto token = state.quarantined_tokens; token != nullptr;
+                 token = token->quarantine_next) {
                 if (token->owner == previous) {
                     std::lock_guard token_lock(token->mutex);
                     token->accepting = false;
@@ -491,8 +494,8 @@ int32_t cleanup_current_provider() noexcept {
                     public_tokens.emplace_back(class_token, token);
                 }
             }
-              for (auto token = state.quarantined_tokens; token != nullptr;
-                  token = token->quarantine_next) {
+            for (auto token = state.quarantined_tokens; token != nullptr;
+                 token = token->quarantine_next) {
                 if (token->owner == previous) {
                     quarantined_tokens.push_back(token);
                 }
@@ -610,71 +613,89 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_resolve(
         return fail(SAO_ERR_HANDLE_INVALID, "class_index_resolve received an invalid process");
     }
 
+    std::unique_lock<std::mutex> lifecycle_lock;
     try {
+        auto& state = metadata_registry();
+        lifecycle_lock = std::unique_lock<std::mutex>(state.lifecycle_mutex);
         std::shared_ptr<ProviderState> provider;
         {
-            auto& state = metadata_registry();
             std::lock_guard lock(state.mutex);
             provider = state.provider;
         }
-        if (provider == nullptr) {
-            return fail(SAO_ERR_NOT_INITIALIZED,
-                        "class_index_resolve has no metadata provider");
-        }
 
-        ProviderCallLease lease(provider);
-        if (!lease) {
-            return fail(SAO_ERR_NOT_INITIALIZED,
-                        "class_index_resolve metadata provider is retiring");
-        }
-
+        int32_t failure_status = SAO_OK;
+        const char* failure_message = nullptr;
         uint64_t provider_token = 0;
-        int32_t status = invoke_status_callback(lease.get(), [&] {
-            return provider->provider.resolve_class(provider->provider.user_data, handle,
-                                                     class_name_utf8, &provider_token);
-        });
-        if (status != SAO_OK || provider_token == 0) {
-            if (provider_token != 0) {
-                status = first_failure(status, quarantine_and_release_provider_token(
-                                                   handle, provider, provider_token));
+        sao_legacy_core_class_token_t class_token = 0;
+        if (provider == nullptr) {
+            failure_status = SAO_ERR_NOT_INITIALIZED;
+            failure_message = "class_index_resolve has no metadata provider";
+        } else {
+            ProviderCallLease lease(provider);
+            if (!lease) {
+                failure_status = SAO_ERR_NOT_INITIALIZED;
+                failure_message = "class_index_resolve metadata provider is retiring";
+            } else {
+                int32_t status = invoke_status_callback(lease.get(), [&] {
+                    return provider->provider.resolve_class(provider->provider.user_data, handle,
+                                                            class_name_utf8, &provider_token);
+                });
+                if (status != SAO_OK || provider_token == 0) {
+                    if (provider_token != 0) {
+                        status = first_failure(status, quarantine_and_release_provider_token(
+                                                           handle, provider, provider_token));
+                    }
+                    if (status == SAO_OK) {
+                        status = SAO_ERR_HANDLE_INVALID;
+                    }
+                    failure_status = status;
+                    failure_message = "class_index_resolve provider failed";
+                }
             }
-            if (status == SAO_OK) {
-                status = SAO_ERR_HANDLE_INVALID;
+            if (failure_message == nullptr) {
+                bool provider_retired = false;
+                bool ownership_failed = false;
+                try {
+                    std::lock_guard registry_lock(state.mutex);
+                    std::lock_guard provider_lock(provider->mutex);
+                    provider_retired = !provider->accepting || state.provider != provider;
+                    if (!provider_retired) {
+                        class_token = next_token_locked(state);
+                        auto token = std::make_shared<TokenRecord>();
+                        token->process = handle;
+                        token->provider_token = provider_token;
+                        token->owner = provider;
+                        state.tokens.emplace(class_token, std::move(token));
+                    }
+                } catch (...) {
+                    ownership_failed = true;
+                }
+
+                if (ownership_failed || provider_retired) {
+                    const int32_t release_status =
+                        quarantine_and_release_provider_token(handle, provider, provider_token);
+                    failure_status =
+                        release_status == SAO_OK
+                            ? (ownership_failed ? SAO_ERR_UNKNOWN : SAO_ERR_NOT_INITIALIZED)
+                            : release_status;
+                    failure_message =
+                        ownership_failed ? "class_index_resolve failed to own the provider token"
+                                         : "class_index_resolve provider retired during resolution";
+                }
             }
-            return fail(status, "class_index_resolve provider failed");
         }
 
-        sao_legacy_core_class_token_t class_token = 0;
-        bool provider_retired = false;
-        try {
-            auto& state = metadata_registry();
-            std::lock_guard registry_lock(state.mutex);
-            std::lock_guard provider_lock(provider->mutex);
-            provider_retired = !provider->accepting || state.provider != provider;
-            if (!provider_retired) {
-                class_token = next_token_locked(state);
-                auto token = std::make_shared<TokenRecord>();
-                token->process = handle;
-                token->provider_token = provider_token;
-                token->owner = provider;
-                state.tokens.emplace(class_token, std::move(token));
-            }
-        } catch (...) {
-            const int32_t release_status =
-                quarantine_and_release_provider_token(handle, provider, provider_token);
-            return fail(release_status == SAO_OK ? SAO_ERR_UNKNOWN : release_status,
-                        "class_index_resolve failed to own the provider token");
-        }
-        if (provider_retired) {
-            const int32_t release_status =
-                quarantine_and_release_provider_token(handle, provider, provider_token);
-            return fail(release_status == SAO_OK ? SAO_ERR_NOT_INITIALIZED : release_status,
-                        "class_index_resolve provider retired during resolution");
+        lifecycle_lock.unlock();
+        if (failure_message != nullptr) {
+            return fail(failure_status, failure_message);
         }
 
         *out_class_ptr = class_token;
         return SAO_OK;
     } catch (...) {
+        if (lifecycle_lock.owns_lock()) {
+            lifecycle_lock.unlock();
+        }
         return fail(SAO_ERR_UNKNOWN, "class_index_resolve failed unexpectedly");
     }
 }
@@ -696,110 +717,141 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_resolve_fiel
 
     try {
         std::shared_ptr<TokenRecord> token;
-        ProviderCallLease provider_lease;
-        TokenCallLease token_lease;
+        int32_t failure_status = SAO_OK;
+        const char* failure_message = nullptr;
         {
             auto& state = metadata_registry();
             std::lock_guard lock(state.mutex);
             const auto found = state.tokens.find(class_ptr);
             if (found == state.tokens.end() || found->second->process != handle) {
-                return fail(SAO_ERR_HANDLE_INVALID,
-                            "class_index_resolve_field_offset received a stale or foreign token");
-            }
-            token = found->second;
-            if (!token_lease.acquire(token) || !provider_lease.acquire(token->owner)) {
-                return fail(SAO_ERR_HANDLE_INVALID,
-                            "class_index_resolve_field_offset token is retiring");
+                failure_status = SAO_ERR_HANDLE_INVALID;
+                failure_message =
+                    "class_index_resolve_field_offset received a stale or foreign token";
+            } else {
+                token = found->second;
             }
         }
 
-        const int32_t status = invoke_status_callback(provider_lease.get(), [&] {
-            return token->owner->provider.resolve_field_offset(
-                token->owner->provider.user_data, handle, token->provider_token, field_name_utf8,
-                out_offset);
-        });
-        if (status != SAO_OK) {
+        if (failure_message == nullptr) {
+            {
+                ProviderCallLease provider_lease;
+                TokenCallLease token_lease;
+                if (!provider_lease.acquire(token->owner) || !token_lease.acquire(token)) {
+                    failure_status = SAO_ERR_HANDLE_INVALID;
+                    failure_message = "class_index_resolve_field_offset token is retiring";
+                } else {
+                    failure_status = invoke_status_callback(provider_lease.get(), [&] {
+                        return token->owner->provider.resolve_field_offset(
+                            token->owner->provider.user_data, handle, token->provider_token,
+                            field_name_utf8, out_offset);
+                    });
+                    if (failure_status != SAO_OK) {
+                        failure_message = "class_index_resolve_field_offset provider failed";
+                    }
+                }
+            }
+        }
+
+        if (failure_message != nullptr) {
             *out_offset = 0;
-            return fail(status, "class_index_resolve_field_offset provider failed");
+            return fail(failure_status, failure_message);
         }
         return SAO_OK;
     } catch (...) {
         *out_offset = 0;
-        return fail(SAO_ERR_UNKNOWN,
-                    "class_index_resolve_field_offset failed unexpectedly");
+        return fail(SAO_ERR_UNKNOWN, "class_index_resolve_field_offset failed unexpectedly");
     }
 }
 
-extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_configure_provider(
-    const SaoLegacyCoreClassMetadataProvider* provider) {
+extern "C" int32_t SAO_LEGACY_CORE_CALL
+sao_legacy_core_class_index_configure_provider(const SaoLegacyCoreClassMetadataProvider* provider) {
     if (g_callback_provider != nullptr) {
-        return fail(SAO_ERR_OS_CALL_FAILED,
-                    "class_index_configure_provider cannot reenter a provider callback");
+        return SAO_ERR_OS_CALL_FAILED;
     }
 
     auto& state = metadata_registry();
-    std::unique_lock lifecycle_lock(state.lifecycle_mutex);
-    const int32_t quarantine_status = cleanup_candidate_quarantine();
-    if (quarantine_status != SAO_OK) {
-        return fail(quarantine_status,
-                    "class_index_configure_provider candidate cleanup remains quarantined");
-    }
-
-    std::shared_ptr<ProviderState> candidate;
-    if (provider != nullptr) {
-        if (!valid_provider(provider)) {
-            return fail(SAO_ERR_INVALID_ARGUMENT,
-                        "class_index_configure_provider received an invalid provider");
-        }
-        try {
-            candidate = std::make_shared<ProviderState>();
-            std::memcpy(&candidate->provider, provider,
-                        std::min<size_t>(provider->struct_size, sizeof(candidate->provider)));
-        } catch (...) {
-            return fail(SAO_ERR_UNKNOWN,
-                        "class_index_configure_provider failed to copy the provider");
-        }
-        const int32_t retain_status = invoke_void_callback(
-            candidate.get(), [&] { candidate->provider.retain(candidate->provider.user_data); });
-        if (retain_status != SAO_OK) {
-            return fail(retain_status, "class_index_configure_provider retain failed");
-        }
-        candidate->retained.store(true, std::memory_order_release);
-    }
-
-    const int32_t cleanup_status = cleanup_current_provider();
-    if (cleanup_status != SAO_OK) {
-        const int32_t rollback_status = release_candidate_or_quarantine(candidate);
-        return fail(first_failure(cleanup_status, rollback_status),
-                    "class_index_configure_provider cleanup failed; ownership quarantined");
-    }
-
-    bool install_collision = false;
+    std::unique_lock<std::mutex> lifecycle_lock;
     try {
-        std::lock_guard registry_lock(state.mutex);
-        if (state.provider != nullptr) {
-            install_collision = true;
-        } else {
-            state.provider = candidate;
+        lifecycle_lock = std::unique_lock<std::mutex>(state.lifecycle_mutex);
+        const int32_t quarantine_status = cleanup_candidate_quarantine();
+        if (quarantine_status != SAO_OK) {
+            lifecycle_lock.unlock();
+            return fail(quarantine_status,
+                        "class_index_configure_provider candidate cleanup remains quarantined");
         }
+
+        std::shared_ptr<ProviderState> candidate;
+        if (provider != nullptr) {
+            if (!valid_provider(provider)) {
+                lifecycle_lock.unlock();
+                return fail(SAO_ERR_INVALID_ARGUMENT,
+                            "class_index_configure_provider received an invalid provider");
+            }
+            try {
+                candidate = std::make_shared<ProviderState>();
+                std::memcpy(&candidate->provider, provider,
+                            std::min<size_t>(provider->struct_size, sizeof(candidate->provider)));
+            } catch (...) {
+                lifecycle_lock.unlock();
+                return fail(SAO_ERR_UNKNOWN,
+                            "class_index_configure_provider failed to copy the provider");
+            }
+            candidate->retained.store(true, std::memory_order_release);
+            const int32_t retain_status = invoke_void_callback(candidate.get(), [&] {
+                candidate->provider.retain(candidate->provider.user_data);
+            });
+            if (retain_status != SAO_OK) {
+                const int32_t rollback_status = release_candidate_or_quarantine(candidate);
+                const int32_t status = first_failure(retain_status, rollback_status);
+                lifecycle_lock.unlock();
+                return fail(status,
+                            "class_index_configure_provider retain failed; rollback attempted");
+            }
+        }
+
+        const int32_t cleanup_status = cleanup_current_provider();
+        if (cleanup_status != SAO_OK) {
+            const int32_t rollback_status = release_candidate_or_quarantine(candidate);
+            const int32_t status = first_failure(cleanup_status, rollback_status);
+            lifecycle_lock.unlock();
+            return fail(status,
+                        "class_index_configure_provider cleanup failed; ownership quarantined");
+        }
+
+        bool install_collision = false;
+        try {
+            std::lock_guard registry_lock(state.mutex);
+            if (state.provider != nullptr) {
+                install_collision = true;
+            } else {
+                state.provider = candidate;
+            }
+        } catch (...) {
+            const int32_t rollback_status = release_candidate_or_quarantine(candidate);
+            const int32_t status = rollback_status == SAO_OK ? SAO_ERR_UNKNOWN : rollback_status;
+            lifecycle_lock.unlock();
+            return fail(status, "class_index_configure_provider failed to install the provider");
+        }
+        if (install_collision) {
+            const int32_t rollback_status = release_candidate_or_quarantine(candidate);
+            const int32_t status = rollback_status == SAO_OK ? SAO_ERR_UNKNOWN : rollback_status;
+            lifecycle_lock.unlock();
+            return fail(status,
+                        "class_index_configure_provider cleanup did not retire the provider");
+        }
+        return SAO_OK;
     } catch (...) {
-        const int32_t rollback_status = release_candidate_or_quarantine(candidate);
-        return fail(rollback_status == SAO_OK ? SAO_ERR_UNKNOWN : rollback_status,
-                    "class_index_configure_provider failed to install the provider");
+        if (lifecycle_lock.owns_lock()) {
+            lifecycle_lock.unlock();
+        }
+        return fail(SAO_ERR_UNKNOWN, "class_index_configure_provider failed unexpectedly");
     }
-    if (install_collision) {
-        const int32_t rollback_status = release_candidate_or_quarantine(candidate);
-        return fail(rollback_status == SAO_OK ? SAO_ERR_UNKNOWN : rollback_status,
-                    "class_index_configure_provider cleanup did not retire the provider");
-    }
-    return SAO_OK;
 }
 
 extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_release(
     sao_legacy_core_process_handle_t handle, sao_legacy_core_class_token_t class_token) {
     if (g_callback_provider != nullptr) {
-        return fail(SAO_ERR_OS_CALL_FAILED,
-                    "class_index_release cannot reenter a provider callback");
+        return SAO_ERR_OS_CALL_FAILED;
     }
     if (class_token == 0) {
         return fail(SAO_ERR_INVALID_ARGUMENT, "class_index_release received invalid arguments");
@@ -808,28 +860,39 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_release(
         return fail(SAO_ERR_HANDLE_INVALID, "class_index_release received an invalid process");
     }
 
+    std::unique_lock<std::mutex> lifecycle_lock;
     try {
         auto& state = metadata_registry();
-        std::unique_lock lifecycle_lock(state.lifecycle_mutex);
+        lifecycle_lock = std::unique_lock<std::mutex>(state.lifecycle_mutex);
         std::shared_ptr<TokenRecord> token;
+        int32_t failure_status = SAO_OK;
+        const char* failure_message = nullptr;
         {
             std::lock_guard registry_lock(state.mutex);
             const auto found = state.tokens.find(class_token);
             if (found == state.tokens.end() || found->second->process != handle) {
-                return fail(SAO_ERR_HANDLE_INVALID,
-                            "class_index_release received a stale or foreign token");
-            }
-            token = found->second;
-            {
-                std::lock_guard token_lock(token->mutex);
-                token->accepting = false;
+                failure_status = SAO_ERR_HANDLE_INVALID;
+                failure_message = "class_index_release received a stale or foreign token";
+            } else {
+                token = found->second;
+                {
+                    std::lock_guard token_lock(token->mutex);
+                    token->accepting = false;
+                }
             }
         }
 
-        const int32_t status = release_token_record(token);
-        if (status != SAO_OK) {
-            return fail(status,
-                        "class_index_release provider failed; ownership quarantined for retry");
+        if (failure_message == nullptr) {
+            failure_status = release_token_record(token);
+            if (failure_status != SAO_OK) {
+                failure_message =
+                    "class_index_release provider failed; ownership quarantined for retry";
+            }
+        }
+
+        if (failure_message != nullptr) {
+            lifecycle_lock.unlock();
+            return fail(failure_status, failure_message);
         }
         {
             std::lock_guard registry_lock(state.mutex);
@@ -840,6 +903,9 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_release(
         }
         return SAO_OK;
     } catch (...) {
+        if (lifecycle_lock.owns_lock()) {
+            lifecycle_lock.unlock();
+        }
         return fail(SAO_ERR_UNKNOWN, "class_index_release failed unexpectedly");
     }
 }

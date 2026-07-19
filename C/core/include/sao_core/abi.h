@@ -12,6 +12,8 @@
 
 #define SAO_LEGACY_CORE_CALL __cdecl
 
+// Legacy core export ABI is currently 1.2. The class metadata provider table has an independent
+// ABI version declared in class_index.h; this version must not be used to validate that table.
 #define SAO_LEGACY_CORE_ABI_VERSION_MAJOR 1u
 #define SAO_LEGACY_CORE_ABI_VERSION_MINOR 2u
 #define SAO_LEGACY_CORE_ABI_VERSION                                                                \

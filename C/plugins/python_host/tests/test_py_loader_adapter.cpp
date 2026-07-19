@@ -7,6 +7,7 @@
 
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_deps.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/loader/plugin_registry.h"
 #include "sao/plugins/python_host/py_host.h"
@@ -16,10 +17,12 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -41,6 +44,91 @@ using json = nlohmann::json;
 #if defined(SAO_HAS_PYTHON_EMBED)
 
 namespace {
+
+struct test_dependency_provider_state {
+    std::atomic_int retain_calls{0};
+    std::atomic_int release_calls{0};
+};
+
+struct test_dependency_session {
+    std::mutex mutex;
+    std::vector<std::wstring> paths;
+};
+
+void SAO_PLUGINS_CALL test_dependency_retain(void* user_data) {
+    ++static_cast<test_dependency_provider_state*>(user_data)->retain_calls;
+}
+
+void SAO_PLUGINS_CALL test_dependency_release(void* user_data) {
+    ++static_cast<test_dependency_provider_state*>(user_data)->release_calls;
+}
+
+int32_t SAO_PLUGINS_CALL test_dependency_create(void*, const deps_session_spec* spec,
+                                                void** out_provider_session) {
+    if (spec == nullptr || out_provider_session == nullptr ||
+        spec->struct_size < sizeof(deps_session_spec) || spec->plugin_id_utf8 == nullptr ||
+        spec->plugin_dir == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto session = std::make_unique<test_dependency_session>();
+    *out_provider_session = session.release();
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL test_dependency_attach(void*, void* provider_session,
+                                                const wchar_t* absolute_dir) {
+    if (provider_session == nullptr || absolute_dir == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& session = *static_cast<test_dependency_session*>(provider_session);
+    const fs::path path(absolute_dir);
+    std::error_code error;
+    if (!path.is_absolute() || !fs::is_directory(path, error) || error)
+        return SAO_ERR_INVALID_ARGUMENT;
+    std::lock_guard lock(session.mutex);
+    session.paths.push_back(path.lexically_normal().wstring());
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL test_dependency_restore(void*, void* provider_session,
+                                                 const wchar_t* absolute_dir) {
+    if (provider_session == nullptr || absolute_dir == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& session = *static_cast<test_dependency_session*>(provider_session);
+    const std::wstring normalized = fs::path(absolute_dir).lexically_normal().wstring();
+    std::lock_guard lock(session.mutex);
+    const auto found = std::find(session.paths.rbegin(), session.paths.rend(), normalized);
+    if (found == session.paths.rend())
+        return SAO_ERR_HANDLE_INVALID;
+    session.paths.erase(std::prev(found.base()));
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL test_dependency_close(void*, void* provider_session) {
+    if (provider_session == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    std::unique_ptr<test_dependency_session> session(
+        static_cast<test_dependency_session*>(provider_session));
+    std::lock_guard lock(session->mutex);
+    if (!session->paths.empty()) {
+        session.release();
+        return SAO_PLUGINS_ERR_BUSY;
+    }
+    return SAO_OK;
+}
+
+deps_provider test_dependency_provider(test_dependency_provider_state& state) {
+    deps_provider provider{};
+    provider.abi_version = SAO_PLUGIN_DEPS_PROVIDER_ABI_VERSION;
+    provider.struct_size = sizeof(provider);
+    provider.user_data = &state;
+    provider.retain = test_dependency_retain;
+    provider.release = test_dependency_release;
+    provider.create_session = test_dependency_create;
+    provider.attach_path = test_dependency_attach;
+    provider.restore_path = test_dependency_restore;
+    provider.close_session = test_dependency_close;
+    return provider;
+}
 
 class GilGuard {
   public:
@@ -587,6 +675,9 @@ TEST_CASE("production Python loader adapter owns lifecycle and cleans failures",
     CapabilityProbe capability_probe;
     auto platform_provider = capability_provider(capability_probe);
     REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
 
     py_loader_adapter_owner_t owner = nullptr;
     REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
@@ -1494,7 +1585,9 @@ def on_load(ctx):
     REQUIRE(owner != nullptr);
     REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
     REQUIRE(sao_plugins_pyhost_shutdown(direct_host) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
     REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+    CHECK(dependency_state.retain_calls == dependency_state.release_calls);
     CHECK(capability_probe.create_session_calls == capability_probe.destroy_session_calls);
     CHECK(capability_probe.retain_calls == capability_probe.release_calls);
 }
