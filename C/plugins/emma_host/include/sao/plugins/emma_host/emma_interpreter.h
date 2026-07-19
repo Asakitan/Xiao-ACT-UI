@@ -15,9 +15,10 @@
 #include <variant>
 #include <vector>
 
+#include "sao/plugins/emma_host/emma_error.h"
+#include "sao/plugins/emma_host/emma_parser.h"
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
-#include "sao/plugins/emma_host/emma_parser.h"
 
 namespace sao::plugins::emma_host {
 
@@ -34,16 +35,15 @@ struct callable;
 struct emma_list;
 struct emma_dict;
 
-using emma_value = std::variant<
-    std::nullptr_t,                                   // nil
-    bool,                                             // 布尔
-    int64_t,                                          // 整数
-    double,                                           // 浮点数
-    std::string,                                      // 字符串
-    std::shared_ptr<emma_list>,                       // 数组 wrapper
-    std::shared_ptr<emma_dict>,                       // 字典 wrapper
-    std::shared_ptr<callable>                         // 函数 / lambda
->;
+using emma_value = std::variant<std::nullptr_t,             // nil
+                                bool,                       // 布尔
+                                int64_t,                    // 整数
+                                double,                     // 浮点数
+                                std::string,                // 字符串
+                                std::shared_ptr<emma_list>, // 数组 wrapper
+                                std::shared_ptr<emma_dict>, // 字典 wrapper
+                                std::shared_ptr<callable>   // 函数 / lambda
+                                >;
 
 // wrapper 完整定义 (依赖 emma_value 已 alias 完成, 所以放在 alias 之后)
 struct emma_list {
@@ -60,30 +60,31 @@ struct emma_dict {
 
 // 作用域链 (对齐 Python _EmmaScope)
 class scope {
-public:
+  public:
     explicit scope(std::shared_ptr<scope> parent = nullptr);
     emma_value get(const std::string& name) const;
     void set(const std::string& name, emma_value value);
     void define(const std::string& name, emma_value value);
     bool has(const std::string& name) const;
-private:
+
+  private:
     std::unordered_map<std::string, emma_value> vars_;
     std::shared_ptr<scope> parent_;
 };
 
 // 可调用体 (Emma fn 或注入的 host 回调)
 struct callable {
-    std::string name;                                 // "" for lambda
+    std::string name; // "" for lambda
     std::vector<std::string> params;
-    std::vector<node_id> body;                        // AST id 序列
-    std::shared_ptr<scope> closure;                   // 定义时作用域
+    std::vector<node_id> body;                                    // AST id 序列
+    std::shared_ptr<scope> closure;                               // 定义时作用域
     std::function<emma_value(std::vector<emma_value>)> host_impl; // 非 null → 走 native
     interpreter* interp = nullptr;
 };
 
 // 解释器 (对齐 Python _EmmaInterpreter)
 class interpreter {
-public:
+  public:
     interpreter();
     ~interpreter();
 
@@ -96,6 +97,8 @@ public:
 
     // 解释一个 AST 程序。
     int32_t execute(const std::vector<node_id>& stmts, std::string& out_error);
+    int32_t execute(const std::vector<node_id>& stmts, std::string& out_error,
+                    emma_error* out_structured_error);
 
     // 按名字取一个已定义函数, 用于宿主查 on_load / on_enable / on_unload。
     std::shared_ptr<callable> get_function(const std::string& name);
@@ -104,15 +107,17 @@ public:
     emma_value get_global(const std::string& name) const;
 
     // 由 host 侧调 Emma 函数 (Emma 的 on_load(ctx) 等)。
-    emma_value call_function(const std::shared_ptr<callable>& fn,
-                             std::vector<emma_value> args,
+    emma_value call_function(const std::shared_ptr<callable>& fn, std::vector<emma_value> args,
                              std::string& out_error);
+    emma_value call_function(const std::shared_ptr<callable>& fn, std::vector<emma_value> args,
+                             std::string& out_error, emma_error* out_structured_error);
 
     // AST 池
     const ast_pool* pool() const;
-    void set_pool(const ast_pool* pool);
+    ast_pool* mutable_pool() const;
+    void set_pool(ast_pool* pool);
 
-private:
+  private:
     struct impl;
     std::unique_ptr<impl> pimpl_;
 };

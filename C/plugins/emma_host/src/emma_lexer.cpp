@@ -16,6 +16,7 @@
 // 字符串支持双/单引号 + \n \t \\ \" \' 转义 (对齐 Python _unescape)
 
 #include "sao/plugins/emma_host/emma_lexer.h"
+#include "sao/plugins/emma_host/emma_error.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -44,20 +45,20 @@ bool is_hex_digit(char c) {
 
 // 对齐 python _KEYWORDS
 bool is_keyword(const std::string& s) {
-    static const char* const KW[] = {
-        "let", "fn", "end", "if", "elif", "else", "while", "for", "in",
-        "return", "and", "or", "not", "true", "false", "nil",
-        "break", "continue"
-    };
+    static const char* const KW[] = {"let",   "fn",   "end",   "if",     "elif",  "else",
+                                     "while", "for",  "in",    "return", "and",   "or",
+                                     "not",   "true", "false", "nil",    "break", "continue"};
     for (const char* kw : KW) {
-        if (s == kw) return true;
+        if (s == kw)
+            return true;
     }
     return false;
 }
 
 // 从字符串字面量剥掉外层引号 + 反转义 (对齐 python _unescape)
 std::string unescape(const std::string& raw_with_quotes) {
-    if (raw_with_quotes.size() < 2) return raw_with_quotes;
+    if (raw_with_quotes.size() < 2)
+        return raw_with_quotes;
     // 去掉外层引号
     std::string s = raw_with_quotes.substr(1, raw_with_quotes.size() - 2);
     std::string out;
@@ -67,14 +68,30 @@ std::string unescape(const std::string& raw_with_quotes) {
         if (c == '\\' && i + 1 < s.size()) {
             char n = s[i + 1];
             switch (n) {
-                case 'n':  out.push_back('\n'); break;
-                case 't':  out.push_back('\t'); break;
-                case 'r':  out.push_back('\r'); break;
-                case '\\': out.push_back('\\'); break;
-                case '"':  out.push_back('"'); break;
-                case '\'': out.push_back('\''); break;
-                case '0':  out.push_back('\0'); break;
-                default:   out.push_back(n); break;   // 未知转义原样保留 (对齐 python)
+            case 'n':
+                out.push_back('\n');
+                break;
+            case 't':
+                out.push_back('\t');
+                break;
+            case 'r':
+                out.push_back('\r');
+                break;
+            case '\\':
+                out.push_back('\\');
+                break;
+            case '"':
+                out.push_back('"');
+                break;
+            case '\'':
+                out.push_back('\'');
+                break;
+            case '0':
+                out.push_back('\0');
+                break;
+            default:
+                out.push_back(n);
+                break; // 未知转义原样保留 (对齐 python)
             }
             ++i;
         } else {
@@ -87,26 +104,56 @@ std::string unescape(const std::string& raw_with_quotes) {
 // 尝试匹配二字符运算符; 未命中返 0
 int try_match_two_char_op(char c, char n) {
     // .. == != <= >= =>
-    if (c == '.' && n == '.') return 2;
-    if (c == '=' && n == '=') return 2;
-    if (c == '!' && n == '=') return 2;
-    if (c == '<' && n == '=') return 2;
-    if (c == '>' && n == '=') return 2;
-    if (c == '=' && n == '>') return 2;
+    if (c == '.' && n == '.')
+        return 2;
+    if (c == '=' && n == '=')
+        return 2;
+    if (c == '!' && n == '=')
+        return 2;
+    if (c == '<' && n == '=')
+        return 2;
+    if (c == '>' && n == '=')
+        return 2;
+    if (c == '=' && n == '>')
+        return 2;
     return 0;
 }
 
 // 判断单字符是否是我们支持的运算符 / 分隔符
 bool is_single_char_op(char c) {
     switch (c) {
-        case '+': case '-': case '*': case '/': case '%':
-        case '=': case '<': case '>': case '!':
-        case '(': case ')': case '[': case ']': case '{': case '}':
-        case ',': case '.': case ':': case ';':
-            return true;
-        default:
-            return false;
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case '%':
+    case '=':
+    case '<':
+    case '>':
+    case '!':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case ',':
+    case '.':
+    case ':':
+    case ';':
+        return true;
+    default:
+        return false;
     }
+}
+
+[[noreturn]] void throw_lex_error(std::string message, uint32_t line, uint32_t column) {
+    emma_error error;
+    error.kind = error_kind::lex_error;
+    error.message = std::move(message);
+    error.line = line;
+    error.column = column;
+    throw emma_exception(std::move(error));
 }
 
 } // namespace
@@ -125,13 +172,16 @@ std::vector<token> tokenize_source(std::string_view source) {
 
         // ── 空白 (非 \n) ──
         if (c == ' ' || c == '\t' || c == '\r') {
-            ++i; ++col;
+            ++i;
+            ++col;
             continue;
         }
 
         // ── 换行 (Emma 里 newline 只是分隔符, 但语义上不产 token; 对齐 python) ──
         if (c == '\n') {
-            ++i; ++line; col = 1;
+            ++i;
+            ++line;
+            col = 1;
             continue;
         }
 
@@ -139,11 +189,17 @@ std::vector<token> tokenize_source(std::string_view source) {
         // Python 权威用 `--`. Task 明说要 `#`. 两种都支持。
         if (c == '-' && i + 1 < n && source[i + 1] == '-') {
             // 吞到行尾
-            while (i < n && source[i] != '\n') { ++i; ++col; }
+            while (i < n && source[i] != '\n') {
+                ++i;
+                ++col;
+            }
             continue;
         }
         if (c == '#') {
-            while (i < n && source[i] != '\n') { ++i; ++col; }
+            while (i < n && source[i] != '\n') {
+                ++i;
+                ++col;
+            }
             continue;
         }
 
@@ -153,19 +209,36 @@ std::vector<token> tokenize_source(std::string_view source) {
             uint32_t start_line = line;
             uint32_t start_col = col;
             size_t start = i;
-            ++i; ++col;    // 吞开引号
+            bool closed = false;
+            ++i;
+            ++col; // 吞开引号
             while (i < n) {
                 char sc = source[i];
                 if (sc == '\\' && i + 1 < n) {
-                    if (source[i + 1] == '\n') { ++line; col = 1; }
-                    else ++col;
-                    i += 2; col += 1;
+                    if (source[i + 1] == '\n') {
+                        ++line;
+                        col = 1;
+                    } else
+                        ++col;
+                    i += 2;
+                    col += 1;
                     continue;
                 }
-                if (sc == quote) { ++i; ++col; break; }
-                if (sc == '\n') { ++line; col = 1; }
-                else ++col;
+                if (sc == quote) {
+                    ++i;
+                    ++col;
+                    closed = true;
+                    break;
+                }
+                if (sc == '\n') {
+                    ++line;
+                    col = 1;
+                } else
+                    ++col;
                 ++i;
+            }
+            if (!closed) {
+                throw_lex_error("unterminated string literal", start_line, start_col);
             }
             token t;
             t.kind = token_kind::string;
@@ -183,20 +256,47 @@ std::vector<token> tokenize_source(std::string_view source) {
             size_t start = i;
             // 0x 前缀?
             if (c == '0' && i + 1 < n && (source[i + 1] == 'x' || source[i + 1] == 'X')) {
-                i += 2; col += 2;
-                while (i < n && is_hex_digit(source[i])) { ++i; ++col; }
+                i += 2;
+                col += 2;
+                const size_t digit_start = i;
+                while (i < n && is_hex_digit(source[i])) {
+                    ++i;
+                    ++col;
+                }
+                if (i == digit_start) {
+                    throw_lex_error("hex literal requires at least one digit", start_line,
+                                    start_col);
+                }
             } else {
-                while (i < n && is_digit(source[i])) { ++i; ++col; }
+                while (i < n && is_digit(source[i])) {
+                    ++i;
+                    ++col;
+                }
                 // 小数点
                 if (i < n && source[i] == '.' && i + 1 < n && is_digit(source[i + 1])) {
-                    ++i; ++col;
-                    while (i < n && is_digit(source[i])) { ++i; ++col; }
+                    ++i;
+                    ++col;
+                    while (i < n && is_digit(source[i])) {
+                        ++i;
+                        ++col;
+                    }
                 }
                 // 指数
                 if (i < n && (source[i] == 'e' || source[i] == 'E')) {
-                    ++i; ++col;
-                    if (i < n && (source[i] == '+' || source[i] == '-')) { ++i; ++col; }
-                    while (i < n && is_digit(source[i])) { ++i; ++col; }
+                    ++i;
+                    ++col;
+                    if (i < n && (source[i] == '+' || source[i] == '-')) {
+                        ++i;
+                        ++col;
+                    }
+                    const size_t exponent_start = i;
+                    while (i < n && is_digit(source[i])) {
+                        ++i;
+                        ++col;
+                    }
+                    if (i == exponent_start) {
+                        throw_lex_error("numeric exponent requires a digit", start_line, start_col);
+                    }
                 }
             }
             token t;
@@ -213,8 +313,12 @@ std::vector<token> tokenize_source(std::string_view source) {
             uint32_t start_line = line;
             uint32_t start_col = col;
             size_t start = i;
-            ++i; ++col;
-            while (i < n && is_ident_cont(source[i])) { ++i; ++col; }
+            ++i;
+            ++col;
+            while (i < n && is_ident_cont(source[i])) {
+                ++i;
+                ++col;
+            }
             std::string v(source.substr(start, i - start));
             token t;
             t.kind = is_keyword(v) ? token_kind::keyword : token_kind::ident;
@@ -235,7 +339,8 @@ std::vector<token> tokenize_source(std::string_view source) {
                 t.line = line;
                 t.column = col;
                 out.push_back(std::move(t));
-                i += 2; col += 2;
+                i += 2;
+                col += 2;
                 continue;
             }
         }
@@ -248,19 +353,21 @@ std::vector<token> tokenize_source(std::string_view source) {
             t.line = line;
             t.column = col;
             out.push_back(std::move(t));
-            ++i; ++col;
+            ++i;
+            ++col;
             continue;
         }
 
-        // ── 未知字符: 报个 op token 让 parser 报错; 不 hard fail ──
-        // (对齐 python 里 _tokenize 未匹配就跳过, 但我们至少留个痕迹方便定位)
-        token t;
-        t.kind = token_kind::op;
-        t.value = std::string(1, c);
-        t.line = line;
-        t.column = col;
-        out.push_back(std::move(t));
-        ++i; ++col;
+        throw_lex_error(
+            "invalid character 0x" +
+                [](unsigned char value) {
+                    constexpr char digits[] = "0123456789ABCDEF";
+                    std::string text(2, '0');
+                    text[0] = digits[value >> 4u];
+                    text[1] = digits[value & 0x0fu];
+                    return text;
+                }(static_cast<unsigned char>(c)),
+            line, col);
     }
 
     // EOF
@@ -273,29 +380,36 @@ std::vector<token> tokenize_source(std::string_view source) {
     return out;
 }
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_emma_tokenize(const char* utf8_source,
-                          size_t source_len,
-                          token** out_tokens,
-                          size_t* out_count) {
-    if (utf8_source == nullptr || out_tokens == nullptr || out_count == nullptr) {
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_emma_tokenize(
+    const char* utf8_source, size_t source_len, token** out_tokens, size_t* out_count) {
+    if (out_tokens != nullptr)
+        *out_tokens = nullptr;
+    if (out_count != nullptr)
+        *out_count = 0;
+    if (utf8_source == nullptr || out_tokens == nullptr || out_count == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        std::vector<token> toks = tokenize_source(std::string_view(utf8_source, source_len));
+        token* buf = static_cast<token*>(std::malloc(sizeof(token) * toks.size()));
+        if (buf == nullptr)
+            return SAO_ERR_OS_CALL_FAILED;
+        for (size_t k = 0; k < toks.size(); ++k) {
+            new (&buf[k]) token(std::move(toks[k]));
+        }
+        *out_tokens = buf;
+        *out_count = toks.size();
+        return SAO_OK;
+    } catch (const emma_exception& error) {
+        return sao_plugins_emma_error_status(&error.error());
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    std::vector<token> toks = tokenize_source(std::string_view(utf8_source, source_len));
-    token* buf = static_cast<token*>(std::malloc(sizeof(token) * toks.size()));
-    if (buf == nullptr) return SAO_ERR_OS_CALL_FAILED;
-    // token 含 std::string, 用 placement new
-    for (size_t k = 0; k < toks.size(); ++k) {
-        new (&buf[k]) token(std::move(toks[k]));
-    }
-    *out_tokens = buf;
-    *out_count = toks.size();
-    return SAO_OK;
 }
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_emma_tokens_free(token* tokens, size_t count) {
-    if (tokens == nullptr) return;
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_emma_tokens_free(token* tokens,
+                                                                              size_t count) {
+    if (tokens == nullptr)
+        return;
     for (size_t k = 0; k < count; ++k) {
         tokens[k].~token();
     }

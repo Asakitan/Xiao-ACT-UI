@@ -34,7 +34,7 @@
 //   - load_script(path)     — 加载 sibling .emma 文件到本 interp
 //   - import(path)          — load_script 别名
 //
-// SDK (由 sdk_binding/binding_emma 注入, 需要 ctx):
+// Context (由 emma_call 的 native loader shim 注入):
 //   - ctx                    — PluginContext 对象 (SDK 方法族入口)
 //   - log(*args)            — ctx.log 简化别名
 #pragma once
@@ -48,6 +48,8 @@ namespace sao::plugins::emma_host {
 
 class interpreter;
 
+void release_stdlib_state(interpreter* interp) noexcept;
+
 // 装标准内置到 interp 的全局作用域: print/str/int/float/len/type/tostring/
 // tonumber/pairs/ipairs/range/abs/min/max/floor/ceil/round/sqrt/sin/cos/tan。
 // 对齐 python _builtins + 加数学扩展。
@@ -57,26 +59,21 @@ sao_plugins_emma_install_stdlib(interpreter* interp);
 // 装 IO 相关内置: json_encode/json_decode/time/sleep + load_script/import。
 // plugin_base_dir 用于 load_script 的沙箱约束 (拒 .. 逃逸)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_emma_install_io_stdlib(interpreter* interp,
-                                   const wchar_t* plugin_base_dir);
+sao_plugins_emma_install_io_stdlib(interpreter* interp, const wchar_t* plugin_base_dir);
 
 // 装数学扩展 (可选, 默认由 install_stdlib 自动装)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_emma_install_math_stdlib(interpreter* interp);
 
 // 装 host log 桥 (让 print / log 内置直接调 host 回调, 不进 stdout)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_emma_install_log_bridge(interpreter* interp,
-                                    void (*log_fn)(const char* utf8, void* ud),
-                                    void* user_data);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_emma_install_log_bridge(
+    interpreter* interp, void (*log_fn)(const char* utf8, void* ud), void* user_data);
 
 // 列出所有已安装的内置名 (供调试 / 文档生成)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_emma_list_builtins(interpreter* interp,
-                               const char*** out_names,
-                               size_t* out_count);
+sao_plugins_emma_list_builtins(interpreter* interp, const char*** out_names, size_t* out_count);
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_emma_free_names(const char** names, size_t count);
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_emma_free_names(const char** names,
+                                                                             size_t count);
 
 } // namespace sao::plugins::emma_host

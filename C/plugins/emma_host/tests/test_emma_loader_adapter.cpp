@@ -33,12 +33,11 @@ using json = nlohmann::json;
 namespace {
 
 class temp_tree final {
-public:
+  public:
     explicit temp_tree(const wchar_t* suffix) {
         static std::atomic_uint64_t sequence{0};
         root = fs::temp_directory_path() /
-               (L"sao_emma_adapter_" +
-                std::to_wstring(GetCurrentProcessId()) + L"_" + suffix +
+               (L"sao_emma_adapter_" + std::to_wstring(GetCurrentProcessId()) + L"_" + suffix +
                 L"_" + std::to_wstring(sequence.fetch_add(1)));
         std::error_code error;
         fs::remove_all(root, error);
@@ -55,29 +54,26 @@ public:
 
 std::string path_utf8(const fs::path& path) {
     const std::wstring wide = path.native();
-    const int required = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
-        static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    const int required =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
+                            static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
     REQUIRE(required > 0);
     std::string result(static_cast<size_t>(required), '\0');
-    REQUIRE(WideCharToMultiByte(
-                CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
-                static_cast<int>(wide.size()), result.data(), required, nullptr,
-                nullptr) == required);
+    REQUIRE(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
+                                static_cast<int>(wide.size()), result.data(), required, nullptr,
+                                nullptr) == required);
     return result;
 }
 
 void write_text(const fs::path& path, const std::string& text) {
-    REQUIRE((fs::create_directories(path.parent_path()) ||
-             fs::is_directory(path.parent_path())));
+    REQUIRE((fs::create_directories(path.parent_path()) || fs::is_directory(path.parent_path())));
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     REQUIRE(output.good());
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(output.good());
 }
 
-plugin_manifest make_manifest(const temp_tree& tree,
-                              const char* plugin_id,
+plugin_manifest make_manifest(const temp_tree& tree, const char* plugin_id,
                               const char* entry = "nested/plugin.emma") {
     plugin_manifest manifest;
     manifest.plugin_id = plugin_id;
@@ -92,29 +88,28 @@ plugin_manifest make_manifest(const temp_tree& tree,
 
 plugin_handle_t add_plugin(const plugin_manifest& manifest) {
     plugin_handle_t plugin = nullptr;
-    REQUIRE(sao_plugins_registry_add_plugin(
-                sao_plugins_registry_instance(), &manifest, &plugin) ==
+    REQUIRE(sao_plugins_registry_add_plugin(sao_plugins_registry_instance(), &manifest, &plugin) ==
             SAO_OK);
     REQUIRE(plugin != nullptr);
     return plugin;
 }
 
 void remove_plugin(plugin_handle_t plugin) {
-    REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(),
-                                        plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(), plugin) == SAO_OK);
 }
 
 bool has_panel(const char* plugin_id, const char* panel_id) {
-    const auto panels = snapshot_extensions(sao_plugins_registry_instance(),
-                                            extension_kind::ui_panel);
+    const auto panels =
+        snapshot_extensions(sao_plugins_registry_instance(), extension_kind::ui_panel);
     for (const auto& panel : panels) {
-        if (panel.plugin_id == plugin_id && panel.id == panel_id) return true;
+        if (panel.plugin_id == plugin_id && panel.id == panel_id)
+            return true;
     }
     return false;
 }
 
 class direct_hook_gate final {
-public:
+  public:
     emma_value wait(std::vector<emma_value>) {
         std::unique_lock lock(mutex_);
         entered_ = true;
@@ -125,8 +120,7 @@ public:
 
     bool wait_until_entered(std::chrono::milliseconds timeout) {
         std::unique_lock lock(mutex_);
-        return condition_.wait_for(lock, timeout,
-                                   [this] { return entered_; });
+        return condition_.wait_for(lock, timeout, [this] { return entered_; });
     }
 
     void release() {
@@ -135,15 +129,14 @@ public:
         condition_.notify_all();
     }
 
-private:
+  private:
     std::mutex mutex_;
     std::condition_variable condition_;
     bool entered_ = false;
     bool released_ = false;
 };
 
-int32_t SAO_PLUGINS_CALL install_direct_hook_gate(interpreter* interp,
-                                                  void* user_data) {
+int32_t SAO_PLUGINS_CALL install_direct_hook_gate(interpreter* interp, void* user_data) {
     if (interp == nullptr || user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
@@ -155,6 +148,11 @@ int32_t SAO_PLUGINS_CALL install_direct_hook_gate(interpreter* interp,
     };
     interp->register_global("wait_for_unload", std::move(callable));
     return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL reenter_direct_plugin(interpreter*, void* user_data) {
+    auto plugin = *static_cast<emma_plugin_handle_t*>(user_data);
+    return sao_plugins_emma_call_hook(plugin, "quick_hook", "[]", nullptr);
 }
 
 } // namespace
@@ -176,29 +174,26 @@ end
     REQUIRE(context != nullptr);
 
     emma_plugin_handle_t plugin = nullptr;
-    REQUIRE(sao_plugins_emma_load_script(
-                tree.root.c_str(), manifest.entry.c_str(),
-                manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), manifest.entry.c_str(),
+                                         manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
     REQUIRE(plugin != nullptr);
 
     direct_hook_gate gate;
-    REQUIRE(sao_plugins_emma_with_interpreter(
-                plugin, install_direct_hook_gate, &gate) == SAO_OK);
+    REQUIRE(sao_plugins_emma_with_interpreter(plugin, install_direct_hook_gate, &gate) == SAO_OK);
+    CHECK(sao_plugins_emma_with_interpreter(plugin, reenter_direct_plugin, &plugin) ==
+          SAO_PLUGINS_ERR_BUSY);
 
     std::atomic_int hook_status{SAO_ERR_OS_CALL_FAILED};
     std::jthread hook_thread([&] {
-        hook_status.store(sao_plugins_emma_call_hook(
-            plugin, "blocking_hook", "[]", nullptr));
+        hook_status.store(sao_plugins_emma_call_hook(plugin, "blocking_hook", "[]", nullptr));
     });
     REQUIRE(gate.wait_until_entered(std::chrono::seconds(2)));
 
     CHECK(sao_plugins_emma_unload_script(plugin) == SAO_PLUGINS_ERR_BUSY);
-    CHECK(sao_plugins_emma_call_hook(plugin, "quick_hook", "[]", nullptr) ==
-          SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_emma_call_hook(plugin, "quick_hook", "[]", nullptr) == SAO_PLUGINS_ERR_BUSY);
     CHECK(sao_plugins_emma_call_on_enable(plugin) == SAO_PLUGINS_ERR_BUSY);
     CHECK_FALSE(sao_plugins_emma_has_hook(plugin, "quick_hook"));
-    CHECK(sao_plugins_emma_with_interpreter(
-              plugin, install_direct_hook_gate, &gate) ==
+    CHECK(sao_plugins_emma_with_interpreter(plugin, install_direct_hook_gate, &gate) ==
           SAO_PLUGINS_ERR_BUSY);
 
     gate.release();
@@ -223,12 +218,11 @@ end
     const int32_t first_status = first_unload.load();
     const int32_t second_status = second_unload.load();
     CHECK(((first_status == SAO_OK &&
-            second_status == SAO_ERR_HANDLE_INVALID) ||
-           (first_status == SAO_ERR_HANDLE_INVALID &&
-            second_status == SAO_OK)));
+            (second_status == SAO_ERR_HANDLE_INVALID || second_status == SAO_PLUGINS_ERR_BUSY)) ||
+           (second_status == SAO_OK &&
+            (first_status == SAO_ERR_HANDLE_INVALID || first_status == SAO_PLUGINS_ERR_BUSY))));
     CHECK(sao_plugins_emma_unload_script(plugin) == SAO_ERR_HANDLE_INVALID);
-    CHECK(sao_plugins_emma_call_on_disable(plugin) ==
-          SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_emma_call_on_disable(plugin) == SAO_ERR_HANDLE_INVALID);
 
     sao_plugins_ctx_destroy(context);
     remove_plugin(loader_plugin);
@@ -241,13 +235,10 @@ TEST_CASE("Emma generic loader adapter closes lifecycle, context and JSON",
     REQUIRE(owner != nullptr);
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
 
-    emma_loader_adapter_owner_t duplicate =
-        reinterpret_cast<emma_loader_adapter_owner_t>(1);
-    CHECK(sao_plugins_emma_register_loader_adapter(&duplicate) ==
-          SAO_PLUGINS_ERR_ALREADY_EXISTS);
+    emma_loader_adapter_owner_t duplicate = reinterpret_cast<emma_loader_adapter_owner_t>(1);
+    CHECK(sao_plugins_emma_register_loader_adapter(&duplicate) == SAO_PLUGINS_ERR_ALREADY_EXISTS);
     CHECK(duplicate == nullptr);
-    CHECK(sao_plugins_emma_unregister_loader_adapter(nullptr) ==
-          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_emma_unregister_loader_adapter(nullptr) == SAO_ERR_INVALID_ARGUMENT);
 
     temp_tree lifecycle_tree(L"lifecycle");
     write_text(lifecycle_tree.root / L"nested" / L"actual-entry.emma", R"EMMA(
@@ -265,17 +256,15 @@ fn on_unload()
     return true
 end
 )EMMA");
-    auto lifecycle_manifest = make_manifest(
-        lifecycle_tree, "emma.adapter.lifecycle", "nested/actual-entry.emma");
+    auto lifecycle_manifest =
+        make_manifest(lifecycle_tree, "emma.adapter.lifecycle", "nested/actual-entry.emma");
     plugin_handle_t lifecycle_plugin = add_plugin(lifecycle_manifest);
 
     REQUIRE(sao_plugins_lifecycle_load(lifecycle_plugin) == SAO_OK);
-    CHECK(sao_plugins_lifecycle_state(lifecycle_plugin) ==
-          lifecycle_state::loaded_disabled);
+    CHECK(sao_plugins_lifecycle_state(lifecycle_plugin) == lifecycle_state::loaded_disabled);
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 1);
     CHECK(has_panel("emma.adapter.lifecycle", "main"));
-    CHECK(sao_plugins_emma_unregister_loader_adapter(owner) ==
-          SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_lifecycle_enable(lifecycle_plugin) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_disable(lifecycle_plugin) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(lifecycle_plugin) == SAO_OK);
@@ -298,8 +287,7 @@ end
     plugin_handle_t veto_plugin = add_plugin(veto_manifest);
     REQUIRE(sao_plugins_lifecycle_load(veto_plugin) == SAO_OK);
     CHECK(sao_plugins_lifecycle_unload(veto_plugin) == SAO_PLUGINS_ERR_BUSY);
-    CHECK(sao_plugins_lifecycle_state(veto_plugin) ==
-          lifecycle_state::loaded_disabled);
+    CHECK(sao_plugins_lifecycle_state(veto_plugin) == lifecycle_state::loaded_disabled);
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 1);
     REQUIRE(sao_plugins_lifecycle_unload(veto_plugin) == SAO_OK);
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
@@ -312,19 +300,23 @@ fn on_load(ctx)
     missing_function()
 end
 )EMMA");
-    const auto failed_manifest = make_manifest(
-        failed_tree, "emma.adapter.failed");
+    const auto failed_manifest = make_manifest(failed_tree, "emma.adapter.failed");
     plugin_handle_t failed_plugin = add_plugin(failed_manifest);
-    CHECK(sao_plugins_lifecycle_load(failed_plugin) ==
-          SAO_ERR_OS_CALL_FAILED);
-    CHECK(sao_plugins_lifecycle_state(failed_plugin) ==
-          lifecycle_state::failed);
+    CHECK(sao_plugins_lifecycle_load(failed_plugin) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(failed_plugin) == lifecycle_state::failed);
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
     CHECK_FALSE(has_panel("emma.adapter.failed", "rollback"));
     plugin_context_t* failed_context = reinterpret_cast<plugin_context_t*>(1);
     CHECK(sao_plugins_lifecycle_get_context(failed_plugin, &failed_context) ==
           SAO_ERR_NOT_INITIALIZED);
     CHECK(failed_context == nullptr);
+    char* adapter_error = nullptr;
+    REQUIRE(sao_plugins_emma_loader_adapter_get_last_error(owner, failed_plugin, &adapter_error) ==
+            SAO_OK);
+    REQUIRE(adapter_error != nullptr);
+    INFO(adapter_error);
+    CHECK(std::string(adapter_error).find("[runtime]") != std::string::npos);
+    sao_plugins_emma_free_string(adapter_error);
     remove_plugin(failed_plugin);
 
     temp_tree json_tree(L"json");
@@ -339,41 +331,35 @@ fn unsupported_result()
     return unsupported_result
 end
 )EMMA");
-    const auto json_manifest = make_manifest(
-        json_tree, "emma.adapter.json", "nested/json.emma");
+    const auto json_manifest = make_manifest(json_tree, "emma.adapter.json", "nested/json.emma");
     plugin_handle_t json_loader_plugin = add_plugin(json_manifest);
-    plugin_context_t* direct_context =
-        sao_plugins_ctx_create(json_loader_plugin);
+    plugin_context_t* direct_context = sao_plugins_ctx_create(json_loader_plugin);
     REQUIRE(direct_context != nullptr);
     emma_plugin_handle_t direct_plugin = nullptr;
-    REQUIRE(sao_plugins_emma_load_script(
-                json_tree.root.c_str(), "nested/json.emma",
-                json_manifest.plugin_id.c_str(), direct_context,
-                &direct_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_emma_load_script(json_tree.root.c_str(), "nested/json.emma",
+                                         json_manifest.plugin_id.c_str(), direct_context,
+                                         &direct_plugin) == SAO_OK);
     REQUIRE(direct_plugin != nullptr);
     REQUIRE(sao_plugins_emma_call_on_load(direct_plugin) == SAO_OK);
 
     char* result = nullptr;
-    REQUIRE(sao_plugins_emma_call_hook(
-                direct_plugin, "echo",
-                R"([7,{"name":"Aldina"},[true,null,2.5]])", &result) ==
-            SAO_OK);
+    REQUIRE(sao_plugins_emma_call_hook(direct_plugin, "echo",
+                                       R"([7,{"name":"Aldina"},[true,null,2.5]])",
+                                       &result) == SAO_OK);
     REQUIRE(result != nullptr);
     const json parsed = json::parse(result);
     sao_plugins_emma_free_string(result);
     result = nullptr;
-    CHECK(parsed == json{{"number", 7},
-                         {"object", {{"name", "Aldina"}}},
-                         {"items", {true, nullptr, 2.5}}});
-    CHECK(sao_plugins_emma_call_hook(direct_plugin, "echo", "{bad",
-                                     &result) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(parsed ==
+          json{{"number", 7}, {"object", {{"name", "Aldina"}}}, {"items", {true, nullptr, 2.5}}});
+    CHECK(sao_plugins_emma_call_hook(direct_plugin, "echo", "{bad", &result) ==
+          SAO_ERR_INVALID_ARGUMENT);
     CHECK(result == nullptr);
     CHECK(sao_plugins_emma_call_hook(direct_plugin, "echo", "{}", &result) ==
           SAO_ERR_INVALID_ARGUMENT);
     CHECK(sao_plugins_emma_call_hook(direct_plugin, "missing", "[]", &result) ==
           SAO_ERR_HANDLE_INVALID);
-    CHECK(sao_plugins_emma_call_hook(direct_plugin, "unsupported_result", "[]",
-                                     &result) ==
+    CHECK(sao_plugins_emma_call_hook(direct_plugin, "unsupported_result", "[]", &result) ==
           SAO_PLUGINS_ERR_UNSUPPORTED);
     CHECK(result == nullptr);
     REQUIRE(sao_plugins_emma_unload_script(direct_plugin) == SAO_OK);
@@ -393,8 +379,7 @@ fn on_enable()
     end
 end
 )EMMA");
-    const auto concurrent_manifest = make_manifest(
-        concurrent_tree, "emma.adapter.concurrent");
+    const auto concurrent_manifest = make_manifest(concurrent_tree, "emma.adapter.concurrent");
     plugin_handle_t concurrent_plugin = add_plugin(concurrent_manifest);
     REQUIRE(sao_plugins_lifecycle_load(concurrent_plugin) == SAO_OK);
 
@@ -412,24 +397,18 @@ end
     REQUIRE(sao_plugins_lifecycle_load(quick_plugin) == SAO_OK);
 
     std::atomic_int concurrent_status{SAO_ERR_OS_CALL_FAILED};
-    std::jthread concurrent_call([&] {
-        concurrent_status.store(
-            sao_plugins_lifecycle_enable(concurrent_plugin));
-    });
-    const auto state_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    std::jthread concurrent_call(
+        [&] { concurrent_status.store(sao_plugins_lifecycle_enable(concurrent_plugin)); });
+    const auto state_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!has_panel("emma.adapter.concurrent", "slow_started") &&
            std::chrono::steady_clock::now() < state_deadline) {
         std::this_thread::yield();
     }
     REQUIRE(has_panel("emma.adapter.concurrent", "slow_started"));
-    REQUIRE(sao_plugins_lifecycle_state(concurrent_plugin) ==
-            lifecycle_state::enabling);
-    CHECK(sao_plugins_lifecycle_unload(concurrent_plugin) ==
-          SAO_PLUGINS_ERR_BUSY);
+    REQUIRE(sao_plugins_lifecycle_state(concurrent_plugin) == lifecycle_state::enabling);
+    CHECK(sao_plugins_lifecycle_unload(concurrent_plugin) == SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_lifecycle_enable(quick_plugin) == SAO_OK);
-    CHECK(sao_plugins_lifecycle_state(concurrent_plugin) ==
-          lifecycle_state::enabling);
+    CHECK(sao_plugins_lifecycle_state(concurrent_plugin) == lifecycle_state::enabling);
     concurrent_call.join();
     CHECK(concurrent_status.load() == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(quick_plugin) == SAO_OK);
@@ -439,6 +418,5 @@ end
 
     CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
     REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
-    CHECK(sao_plugins_emma_unregister_loader_adapter(owner) ==
-          SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_ERR_HANDLE_INVALID);
 }

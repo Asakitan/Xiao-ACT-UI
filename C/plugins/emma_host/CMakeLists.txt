@@ -8,6 +8,7 @@ add_library(sao_plugins_emma_host STATIC
     src/emma_parser.cpp
     src/emma_interpreter.cpp
     src/emma_stdlib.cpp
+    src/emma_source_io.cpp
     src/emma_call.cpp
     src/emma_loader_adapter.cpp
     src/emma_error.cpp

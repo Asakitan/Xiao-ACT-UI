@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
 #include <string>
 
 #include "sao_plugins/abi.h"
@@ -26,11 +27,26 @@ enum class error_kind : uint8_t {
 
 struct emma_error {
     error_kind kind = error_kind::none;
+    int32_t status = SAO_OK;
     std::string message;
     uint32_t line = 0;
     uint32_t column = 0;
-    std::string call_stack;   // runtime_error 时的 emma-side stack trace
+    std::string call_stack; // runtime_error 时的 emma-side stack trace
 };
+
+class emma_exception final : public std::exception {
+  public:
+    explicit emma_exception(emma_error error);
+
+    const char* what() const noexcept override;
+    const emma_error& error() const noexcept;
+
+  private:
+    emma_error error_;
+};
+
+bool is_valid_error_kind(error_kind kind) noexcept;
+void set_error_location_from_message(emma_error& error) noexcept;
 
 // 把 emma_error 转成 SAO_STATUS。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

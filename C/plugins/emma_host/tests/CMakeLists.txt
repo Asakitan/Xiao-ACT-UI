@@ -40,6 +40,21 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     endif()
     add_test(NAME plugins_emma_loader_adapter
         COMMAND test_plugins_emma_loader_adapter)
+
+    add_executable(test_plugins_emma_context_stdlib
+        test_emma_context_stdlib.cpp)
+    target_link_libraries(test_plugins_emma_context_stdlib PRIVATE
+        sao_plugins_emma_host
+        Catch2::Catch2WithMain
+    )
+    target_compile_features(test_plugins_emma_context_stdlib PRIVATE cxx_std_20)
+    target_compile_definitions(test_plugins_emma_context_stdlib PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (MSVC)
+        target_compile_options(test_plugins_emma_context_stdlib PRIVATE /GR)
+    endif()
+    add_test(NAME plugins_emma_context_stdlib
+        COMMAND test_plugins_emma_context_stdlib)
 else()
     message(STATUS "plugins/emma_host: Catch2 未找到, 跳过 wave3 单测")
 endif()
