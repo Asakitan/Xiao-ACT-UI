@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "sao/core/status.h"
+
 #ifdef __cplusplus
 #  include <memory>
 #endif
@@ -42,6 +44,10 @@ enum class WidgetHandleFamily : uint8_t {
     text,
     data,
     table,
+    input,
+    chart,
+    script_canvas,
+    generic,
 };
 
 struct WidgetHandleMetadata {
@@ -54,6 +60,10 @@ void* register_widget_handle(
     WidgetHandleFamily family, int32_t kind,
     std::shared_ptr<void> state) noexcept;
 
+bool register_external_widget_handle(
+    void* handle, WidgetHandleFamily family, int32_t kind,
+    uint64_t* out_generation = nullptr) noexcept;
+
 std::shared_ptr<void> acquire_widget_handle(
     void* handle, WidgetHandleFamily expected_family,
     int32_t expected_kind) noexcept;
@@ -64,6 +74,17 @@ std::shared_ptr<void> retire_widget_handle(
 
 bool inspect_widget_handle(
     void* handle, WidgetHandleMetadata* out_metadata) noexcept;
+
+bool register_widget_lifecycle(
+    void* handle, WidgetHandleFamily family, int32_t kind,
+    uint64_t generation = 0) noexcept;
+
+bool acquire_widget_lifecycle(void* handle) noexcept;
+void release_widget_lifecycle(void* handle) noexcept;
+bool retire_widget_lifecycle(void* handle) noexcept;
+
+sao_status_t release_widget_event_handlers(
+    void* handle, uint32_t* out_removed_count) noexcept;
 
 }  // namespace sao::ui::detail
 #endif

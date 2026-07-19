@@ -1495,6 +1495,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
         });
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_disable_input_proxy(
+    sao_ui_layer_handle_t layer) {
+    return with_active_layer_locked(
+        layer, [](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+            active->input_proxy_enabled = false;
+            active->input_enabled = false;
+            return SAO_STATUS_OK;
+        });
+}
+
 sao_status_t compositor_present_impl(
     sao_ui_compositor_handle_t compositor) {
     if (compositor == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;

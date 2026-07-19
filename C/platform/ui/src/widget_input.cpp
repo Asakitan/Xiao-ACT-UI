@@ -339,23 +339,44 @@ sao_ui_widget_handle_t register_input_state(int32_t tag, const std::shared_ptr<S
     record->generation = generation;
     record->state = state;
 
-    std::lock_guard<std::mutex> lock(registry.mtx);
-    registry.active.emplace(handle, record);
-    struct RegistrationRollback {
-        InputHandleRegistry& registry;
-        sao_ui_widget_handle_t handle;
-        bool committed{false};
-        ~RegistrationRollback() {
-            if (!committed) {
-                registry.active.erase(handle);
-                registry.known.erase(handle);
-            }
+    if (!sao::ui::detail::register_widget_lifecycle(
+            handle, sao::ui::detail::WidgetHandleFamily::input, tag, generation)) {
+        return nullptr;
+    }
+
+    try {
+        std::lock_guard<std::mutex> lock(registry.mtx);
+        auto [active_it, active_inserted] = registry.active.emplace(handle, record);
+        if (!active_inserted) {
+            (void)active_it;
+            (void)sao::ui::detail::retire_widget_lifecycle(handle);
+            return nullptr;
         }
-    } rollback{registry, handle};
-    registry.known.emplace(handle, std::make_pair(tag, generation));
-    registry.shells.push_back(std::move(shell));
-    rollback.committed = true;
-    return handle;
+        struct RegistrationRollback {
+            InputHandleRegistry& registry;
+            sao_ui_widget_handle_t handle;
+            bool committed{false};
+            ~RegistrationRollback() {
+                if (!committed) {
+                    registry.active.erase(handle);
+                    registry.known.erase(handle);
+                    (void)sao::ui::detail::retire_widget_lifecycle(handle);
+                }
+            }
+        } rollback{registry, handle};
+        const auto [known_it, known_inserted] = registry.known.emplace(
+            handle, std::make_pair(tag, generation));
+        if (!known_inserted) {
+            (void)known_it;
+            throw std::bad_alloc();
+        }
+        registry.shells.push_back(std::move(shell));
+        rollback.committed = true;
+        return handle;
+    } catch (...) {
+        (void)sao::ui::detail::retire_widget_lifecycle(handle);
+        throw;
+    }
 }
 
 int32_t known_input_tag(sao_ui_widget_handle_t handle) noexcept {
@@ -1391,8 +1412,9 @@ sao_ui_widget_input_family_destroy(sao_ui_widget_handle_t handle) {
             registry.active.erase(found);
         }
 
+        (void)sao::ui::detail::retire_widget_lifecycle(handle);
         uint32_t removed = 0;
-        (void)sao_ui_widget_release_event_handlers(handle, &removed);
+        (void)sao::ui::detail::release_widget_event_handlers(handle, &removed);
         if (callback_owns_handle(handle))
             return;
 

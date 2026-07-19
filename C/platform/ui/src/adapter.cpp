@@ -49,6 +49,8 @@ extern "C" sao_status_t SAO_UI_CALL
 sao_ui_compositor_require_owner_thread(sao_ui_compositor_handle_t compositor);
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_policy(
     sao_ui_layer_handle_t layer, bool click_through, bool input_enabled);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_disable_input_proxy(
+    sao_ui_layer_handle_t layer);
 
 namespace {
 
@@ -246,6 +248,7 @@ struct OverlayPolicyState {
     bool layer_visible{};
     bool layer_click_through{true};
     bool layer_input_enabled{};
+    bool input_proxy_attached{};
     bool lift{};
 };
 
@@ -257,6 +260,7 @@ OverlayPolicyState snapshot_policy(OverlayWindow* window) {
         window->layer_visible,
         window->layer_click_through,
         window->layer_input_enabled,
+        window->input_proxy_attached,
         window->input_proxy_attached,
     };
 }
@@ -272,17 +276,24 @@ sao_status_t apply_layer_policy(OverlayWindow* window, const OverlayPolicyState&
         window->layer_visible = policy.layer_visible;
         window->layer_click_through = policy.layer_click_through;
         window->layer_input_enabled = policy.layer_input_enabled;
+        window->input_proxy_attached = policy.input_proxy_attached;
         return SAO_STATUS_OK;
     }
 
-    sao_status_t status = sao_ui_layer_set_input_policy(
-        layer, policy.layer_click_through, policy.layer_input_enabled);
+    sao_status_t status = policy.input_proxy_attached
+        ? sao_ui_layer_enable_input_proxy(layer)
+        : sao_ui_layer_disable_input_proxy(layer);
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_layer_set_input_policy(
+            layer, policy.layer_click_through, policy.layer_input_enabled);
+    }
     if (status != SAO_STATUS_OK)
         return status;
     {
         std::lock_guard lock(window->mu);
         window->layer_click_through = policy.layer_click_through;
         window->layer_input_enabled = policy.layer_input_enabled;
+        window->input_proxy_attached = policy.input_proxy_attached;
     }
     status = sao_ui_layer_set_visible(layer, policy.layer_visible);
     if (status != SAO_STATUS_OK)
@@ -770,6 +781,7 @@ sao_ui_compositor_overlay_window_show(sao_ui_compositor_overlay_window_handle_t 
         target.layer_visible = true;
         target.layer_click_through = previous.local_click_through;
         target.layer_input_enabled = !previous.local_click_through;
+        target.input_proxy_attached = previous.input_proxy_attached;
         const sao_status_t status = apply_policy_transaction(win, previous, target);
         if (status != SAO_STATUS_OK)
             return status;
@@ -798,6 +810,7 @@ sao_ui_compositor_overlay_window_hide(sao_ui_compositor_overlay_window_handle_t 
         target.layer_visible = false;
         target.layer_click_through = previous.local_click_through;
         target.layer_input_enabled = false;
+        target.input_proxy_attached = previous.input_proxy_attached;
         target.lift = false;
         const sao_status_t status = apply_policy_transaction(win, previous, target);
         if (status != SAO_STATUS_OK)
@@ -900,6 +913,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_click_t
         target.local_click_through = click_through;
         target.layer_click_through = click_through;
         target.layer_input_enabled = previous.local_visible && !click_through;
+        target.input_proxy_attached = previous.input_proxy_attached;
         const sao_status_t status = apply_policy_transaction(win, previous, target);
         if (status != SAO_STATUS_OK)
             return status;
@@ -980,18 +994,53 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_set_alpha(
     if (alpha > 1.0f)
         alpha = 1.0f;
     try {
+        const sao_status_t owner_status = require_host_owner(win);
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        sao_ui_layer_handle_t layer = nullptr;
+        float previous_alpha = 1.0f;
+        bool lift = false;
         {
             std::lock_guard lock(win->mu);
-            if (win->layer != nullptr) {
-                sao_status_t status =
-                    sao_ui_layer_start_fade(win->layer, alpha, 0.0F, nullptr, nullptr);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_layer_set_alpha(win->layer, alpha);
-                if (status != SAO_STATUS_OK)
-                    return status;
-            }
+            layer = win->layer;
+            previous_alpha = win->alpha;
+            lift = win->input_proxy_attached;
+        }
+        sao_status_t status = SAO_STATUS_OK;
+        if (layer != nullptr) {
+            status = sao_ui_layer_start_fade(layer, alpha, 0.0F, nullptr, nullptr);
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_layer_set_alpha(layer, alpha);
+        }
+        if (status == SAO_STATUS_OK) {
+            std::lock_guard lock(win->mu);
             win->alpha = alpha;
         }
+        if (status == SAO_STATUS_OK)
+            status = sync_host(win, true, true, lift);
+        if (status != SAO_STATUS_OK) {
+            sao_status_t rollback_status = SAO_STATUS_OK;
+            if (layer != nullptr) {
+                rollback_status = sao_ui_layer_start_fade(
+                    layer, previous_alpha, 0.0F, nullptr, nullptr);
+                if (rollback_status == SAO_STATUS_OK)
+                    rollback_status = sao_ui_layer_set_alpha(layer, previous_alpha);
+            }
+            {
+                std::lock_guard lock(win->mu);
+                win->alpha = previous_alpha;
+            }
+            const sao_status_t host_rollback_status = sync_host(win, true, true, lift);
+            if (rollback_status == SAO_STATUS_OK)
+                rollback_status = host_rollback_status;
+            if (rollback_status != SAO_STATUS_OK) {
+                set_degraded(win, rollback_status);
+                return SAO_STATUS_ERR_SURFACE_INVALID;
+            }
+            set_degraded(win, SAO_STATUS_OK);
+            return status;
+        }
+        set_degraded(win, SAO_STATUS_OK);
         win->log("set_alpha");
         return SAO_STATUS_OK;
     } catch (...) {
@@ -1011,19 +1060,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_enable_inpu
         const sao_status_t owner_status = require_host_owner(win);
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        {
-            std::lock_guard lock(win->mu);
-            if (win->layer != nullptr) {
-                const sao_status_t status = sao_ui_layer_enable_input_proxy(win->layer);
-                if (status != SAO_STATUS_OK)
-                    return status;
-            }
-            win->input_proxy_attached = true;
-            win->layer_input_enabled = true;
-        }
-        const sao_status_t sync_status = sync_host(win, true, true, true);
-        if (sync_status != SAO_STATUS_OK)
-            return sync_status;
+        const OverlayPolicyState previous = snapshot_policy(win);
+        OverlayPolicyState target = previous;
+        target.input_proxy_attached = true;
+        target.layer_input_enabled = true;
+        target.lift = true;
+        const sao_status_t status = apply_policy_transaction(win, previous, target);
+        if (status != SAO_STATUS_OK)
+            return status;
         win->log("enable_input_proxy");
         return SAO_STATUS_OK;
     } catch (...) {

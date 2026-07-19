@@ -159,6 +159,8 @@ extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_chart_family_destroy(sao_ui_widget_handle_t handle);
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_test_fail_next_renderer_kind_insertion();
 
 TEST_CASE("unified widget ABI rejects cross-family and stale handles",
         "[ui][widget_extension][abi][lifetime]") {
@@ -481,6 +483,65 @@ TEST_CASE("generic widget self removal and callback exceptions stay inside the C
     sao_ui_widget_destroy(widget);
 }
 
+    TEST_CASE("generic legacy widget APIs reject a retired handle",
+            "[ui][widget_extension][abi][lifetime][stale]") {
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_widget_create(
+                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+
+        uint64_t token = 0;
+        REQUIRE(sao_ui_widget_add_event_handler(
+                widget, SAO_UI_EVT_CLICK, append_one, nullptr, &token) ==
+            SAO_STATUS_OK);
+        constexpr char props[] = "{\"active\":true}";
+        REQUIRE(sao_ui_widget_apply_props(
+                    widget, reinterpret_cast<const uint8_t*>(props), sizeof(props) - 1U) ==
+            SAO_STATUS_OK);
+        REQUIRE(sao_ui_widget_set_theme_token(widget, "fill", 0xffff0000U) ==
+            SAO_STATUS_OK);
+        REQUIRE(sao_ui_widget_clear_theme_token(widget, "fill") == SAO_STATUS_OK);
+        REQUIRE(sao_ui_widget_set_active(widget, true) == SAO_STATUS_OK);
+        bool hit = false;
+        REQUIRE(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) == SAO_STATUS_OK);
+        SaoUiWidgetSizeHint hint{};
+        REQUIRE(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) == SAO_STATUS_OK);
+
+        SaoUiOffscreenRasterDesc desc{8, 8, 0x00000000U};
+        sao_ui_offscreen_raster_handle_t raster = nullptr;
+        sao_ui_paint_ctx_handle_t context = nullptr;
+        REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) == SAO_STATUS_OK);
+
+        sao_ui_widget_destroy(widget);
+        int32_t kind = -1;
+        uint32_t removed = 0;
+        CHECK(sao_ui_widget_get_kind(widget, &kind) == SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_apply_props(widget, nullptr, 0) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_set_theme_token(widget, "fill", 0xff00ff00U) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_clear_theme_token(widget, "fill") ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_set_active(widget, false) == SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_release_event_handlers(widget, &removed) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+        CHECK(sao_ui_widget_remove_event_handler(widget, token) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+
+        sao_ui_paint_ctx_destroy(context);
+        sao_ui_offscreen_raster_destroy(raster);
+        sao_ui_widget_destroy(widget);
+    }
+
 TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
           "[ui][widget_extension][paint][opacity]") {
     SaoUiGaugeSpec gauge_spec{};
@@ -495,6 +556,11 @@ TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
     REQUIRE(sao_ui_widget_register_renderer_provider(
                 SAO_UI_WIDGET_GAUGE, render_red, &probe, &provider.token) ==
             SAO_STATUS_OK);
+    uint64_t duplicate_token = 99;
+    CHECK(sao_ui_widget_register_renderer_provider(
+              SAO_UI_WIDGET_GAUGE, render_red, &probe, &duplicate_token) ==
+          SAO_STATUS_ERR_ALREADY_EXISTS);
+    CHECK(duplicate_token == 0);
 
     SaoUiOffscreenRasterDesc raster_desc{8, 8, 0x00000000U};
     sao_ui_offscreen_raster_handle_t raster = nullptr;
@@ -523,6 +589,31 @@ TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
 
     sao_ui_paint_ctx_destroy(context);
     sao_ui_offscreen_raster_destroy(raster);
+    sao_ui_widget_destroy(gauge);
+}
+
+TEST_CASE("renderer provider registration rolls back the first map insertion",
+          "[ui][widget_extension][provider][rollback]") {
+    SaoUiGaugeSpec gauge_spec{};
+    gauge_spec.value = 25.0F;
+    gauge_spec.max_value = 100.0F;
+    sao_ui_widget_handle_t gauge = nullptr;
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) == SAO_STATUS_OK);
+
+    RendererProbe probe{gauge};
+    REQUIRE(sao_ui_widget_test_fail_next_renderer_kind_insertion() == SAO_STATUS_OK);
+    uint64_t failed_token = 99;
+    CHECK(sao_ui_widget_register_renderer_provider(
+              SAO_UI_WIDGET_GAUGE, render_red, &probe, &failed_token) ==
+          SAO_STATUS_ERR_UNKNOWN);
+    CHECK(failed_token == 0);
+
+    ProviderGuard provider;
+    REQUIRE(sao_ui_widget_register_renderer_provider(
+                SAO_UI_WIDGET_GAUGE, render_red, &probe, &provider.token) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_unregister_renderer_provider(provider.token) == SAO_STATUS_OK);
+    provider.token = 0;
     sao_ui_widget_destroy(gauge);
 }
 

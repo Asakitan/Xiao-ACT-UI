@@ -230,16 +230,36 @@ sao_ui_widget_handle_t publish_chart_handle(int32_t tag, const std::shared_ptr<S
     auto shell = std::make_unique<ChartHandleShell>();
     auto record = std::make_shared<ChartHandleRecord>();
     auto& registry = chart_handle_registry();
-    std::lock_guard<std::mutex> registry_lock(registry.mtx);
     shell->tag = tag;
-    shell->generation = registry.next_generation++;
+    {
+        std::lock_guard<std::mutex> registry_lock(registry.mtx);
+        shell->generation = registry.next_generation++;
+    }
     record->tag = tag;
     record->generation = shell->generation;
     record->state = state;
     auto handle = reinterpret_cast<sao_ui_widget_handle_t>(shell.get());
-    registry.shells.push_back(std::move(shell));
-    registry.active.emplace(handle, record);
-    return handle;
+    if (!sao::ui::detail::register_widget_lifecycle(
+            handle, sao::ui::detail::WidgetHandleFamily::chart, tag,
+            record->generation)) {
+        return nullptr;
+    }
+    try {
+        std::lock_guard<std::mutex> registry_lock(registry.mtx);
+        const auto [active_it, active_inserted] = registry.active.emplace(handle, record);
+        if (!active_inserted) {
+            (void)active_it;
+            (void)sao::ui::detail::retire_widget_lifecycle(handle);
+            return nullptr;
+        }
+        registry.shells.push_back(std::move(shell));
+        return handle;
+    } catch (...) {
+        std::lock_guard<std::mutex> registry_lock(registry.mtx);
+        registry.active.erase(handle);
+        (void)sao::ui::detail::retire_widget_lifecycle(handle);
+        return nullptr;
+    }
 }
 
 bool valid_axis(const SaoUiAxisSpec& axis) {
@@ -1115,8 +1135,9 @@ sao_ui_widget_chart_family_destroy(sao_ui_widget_handle_t handle) {
             }
             registry.active.erase(found);
         }
+            (void)sao::ui::detail::retire_widget_lifecycle(handle);
         uint32_t removed = 0;
-        (void)sao_ui_widget_release_event_handlers(handle, &removed);
+        (void)sao::ui::detail::release_widget_event_handlers(handle, &removed);
 
         bool finalize = false;
         std::unique_lock<std::mutex> lifecycle_lock(record->lifecycle_mtx);

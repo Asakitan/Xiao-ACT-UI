@@ -17,7 +17,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "sao/ui/d2d_widgets.h"
 #include "sao/ui/sao_ui_scriptable_canvas.h"
+#include "sao/ui/widget_kit.h"
 
 // Test-only introspection surface from scriptable_canvas.cpp.
 extern "C" SAO_UI_API size_t SAO_UI_CALL
@@ -300,5 +302,65 @@ TEST_CASE("canvas_push_pop_clip_stack",
             == SAO_STATUS_ERR_BUFFER_TOO_SMALL);
     REQUIRE(tiny_written == 4);   // total written back regardless
 
+    sao_ui_script_canvas_destroy(canvas);
+}
+
+TEST_CASE("canvas_uses_unified_widget_kind_paint_and_destroy",
+          "[ui][scriptable_canvas][wave4][lifecycle]") {
+    const auto spec = default_spec();
+    sao_ui_widget_handle_t widget = nullptr;
+    sao_ui_script_canvas_handle_t canvas = nullptr;
+    REQUIRE(sao_ui_script_canvas_create(nullptr, &spec, &widget, &canvas) ==
+            SAO_STATUS_OK);
+    REQUIRE(widget == reinterpret_cast<sao_ui_widget_handle_t>(canvas));
+
+    int32_t kind = -1;
+    REQUIRE(sao_ui_widget_get_kind(widget, &kind) == SAO_STATUS_OK);
+    CHECK(kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS);
+
+    REQUIRE(sao_ui_script_canvas_begin_draw(canvas) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_set_fill_color(canvas, 0xffff0000U) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_draw_rect(canvas, 0, 0, 16, 16) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_end_draw(canvas) == SAO_STATUS_OK);
+
+    SaoUiOffscreenRasterDesc desc{32, 32, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint_at(widget, context, 0, 0, 32, 32, 1.0F) ==
+            SAO_STATUS_OK);
+
+    size_t bytes = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t stride = 0;
+    REQUIRE(sao_ui_offscreen_raster_snapshot(
+                raster, nullptr, 0, &bytes, &width, &height, &stride) ==
+            SAO_STATUS_ERR_BUFFER_TOO_SMALL);
+    std::vector<uint8_t> pixels(bytes);
+    REQUIRE(sao_ui_offscreen_raster_snapshot(
+                raster, pixels.data(), pixels.size(), &bytes, &width, &height,
+                &stride) == SAO_STATUS_OK);
+    REQUIRE(width == 32);
+    REQUIRE(height == 32);
+    CHECK(pixels[0] == 0);
+    CHECK(pixels[1] == 0);
+    CHECK(pixels[2] == 255);
+    CHECK(pixels[3] == 255);
+
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+
+    sao_ui_widget_destroy(widget);
+    CHECK(sao_ui_widget_get_kind(widget, &kind) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_apply_props(widget, nullptr, 0) ==
+            SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_paint(widget, nullptr, 0, 0, 1, 1) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_script_canvas_begin_draw(canvas) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_script_canvas_bitmap_count(canvas) == 0);
     sao_ui_script_canvas_destroy(canvas);
 }

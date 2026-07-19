@@ -34,6 +34,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -97,9 +98,40 @@ struct sao_ui_script_canvas_s {
     // verify routing; we synthesize a unique per-canvas value so the
     // pointer never collides with a real widget record.
     sao_ui_widget_handle_t widget = nullptr;
+    uint64_t generation = 0;
 };
 
 namespace {
+
+struct ScriptCanvasRegistry {
+    std::mutex mutex;
+    std::vector<std::unique_ptr<sao_ui_script_canvas_s>> storage;
+};
+
+ScriptCanvasRegistry& script_canvas_registry() {
+    static ScriptCanvasRegistry registry;
+    return registry;
+}
+
+class CanvasLifecycleLease {
+  public:
+    explicit CanvasLifecycleLease(sao_ui_script_canvas_handle_t canvas) noexcept
+        : canvas_(canvas) {
+        acquired_ = canvas_ != nullptr &&
+            sao::ui::detail::acquire_widget_lifecycle(canvas_->widget);
+    }
+
+    ~CanvasLifecycleLease() {
+        if (acquired_)
+            sao::ui::detail::release_widget_lifecycle(canvas_->widget);
+    }
+
+    explicit operator bool() const noexcept { return acquired_; }
+
+  private:
+    sao_ui_script_canvas_handle_t canvas_{};
+    bool acquired_{};
+};
 
 // Reserve op capacity in the pending buffer, respecting the per-frame
 // cap (mirrors Python MAX_CANVAS_OPS silent-drop semantics).
@@ -185,27 +217,54 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_create(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
-    auto* canvas = new sao_ui_script_canvas_s();
-    canvas->spec = *spec;
-    if (canvas->spec.max_ops_per_frame <= 0) {
-        canvas->spec.max_ops_per_frame = 4000;  // parity with Python cap
+    sao_ui_widget_handle_t registered_widget = nullptr;
+    try {
+        auto canvas = std::make_unique<sao_ui_script_canvas_s>();
+        canvas->spec = *spec;
+        if (canvas->spec.max_ops_per_frame <= 0) {
+            canvas->spec.max_ops_per_frame = 4000;
+        }
+        canvas->widget = reinterpret_cast<sao_ui_widget_handle_t>(canvas.get());
+        registered_widget = canvas->widget;
+        if (!sao::ui::detail::register_external_widget_handle(
+                canvas->widget,
+                sao::ui::detail::WidgetHandleFamily::script_canvas,
+                SAO_UI_WIDGET_SCRIPTABLE_CANVAS, &canvas->generation)) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        auto* const raw = canvas.get();
+        auto& registry = script_canvas_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            registry.storage.push_back(std::move(canvas));
+        }
+        *out_canvas = raw;
+        if (out_widget != nullptr) *out_widget = raw->widget;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (registered_widget != nullptr)
+            (void)sao::ui::detail::retire_widget_lifecycle(registered_widget);
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    // Synthetic widget handle — reinterpret-cast of the canvas
-    // pointer, guaranteed unique per canvas.
-    canvas->widget = reinterpret_cast<sao_ui_widget_handle_t>(canvas);
-
-    *out_canvas = canvas;
-    if (out_widget != nullptr) *out_widget = canvas->widget;
-    return SAO_STATUS_OK;
 }
 
 extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(
     sao_ui_script_canvas_handle_t canvas) {
-    if (canvas != nullptr) {
-        uint32_t removed = 0;
-        (void)sao_ui_widget_release_event_handlers(canvas->widget, &removed);
+    if (canvas == nullptr ||
+        !sao::ui::detail::retire_widget_lifecycle(canvas->widget)) {
+        return;
     }
-    delete canvas;  // nullptr-safe
+    uint32_t removed = 0;
+    (void)sao::ui::detail::release_widget_event_handlers(canvas->widget, &removed);
+    {
+        std::lock_guard lock(canvas->mu);
+        canvas->pending_ops.clear();
+        canvas->committed_ops.clear();
+        canvas->bitmaps.clear();
+        canvas->pointer_cb = nullptr;
+        canvas->pointer_ud = nullptr;
+        canvas->draw_open = false;
+    }
 }
 
 // ─── Draw session ──────────────────────────────────────────────────
@@ -213,6 +272,8 @@ extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_begin_draw(
     sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     canvas->pending_ops.clear();
     canvas->draw_open = true;
@@ -225,6 +286,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_submit_ops(
     const SaoUiCanvasOp* ops, size_t op_count) {
 
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (op_count == 0) return SAO_STATUS_OK;
     if (ops == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> guard(canvas->mu);
@@ -271,6 +334,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_submit_ops(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_end_draw(
     sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     if (!canvas->draw_open) return SAO_STATUS_ERR_NOT_INITIALIZED;
     if (canvas->spec.retain_ops_between_frames) {
@@ -293,6 +358,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_end_draw(
 
 #define BEGIN_APPEND()                                                    \
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;        \
+    CanvasLifecycleLease lifecycle(canvas);                               \
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;                  \
     std::lock_guard<std::mutex> guard(canvas->mu);                        \
     if (!canvas->draw_open) return SAO_STATUS_ERR_NOT_INITIALIZED;        \
     if (!can_append_op(canvas)) return SAO_STATUS_OK;                     \
@@ -339,6 +406,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_draw_polygon(
     sao_ui_script_canvas_handle_t canvas,
     const int32_t* verts_xy_pairs, size_t point_count) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return append_polygon(canvas, verts_xy_pairs, point_count);
 }
@@ -348,6 +417,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_draw_text(
     int32_t x, int32_t y,
     const char* text_utf8, int32_t font_slot, int32_t font_size_px) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return append_text(canvas, x, y, text_utf8, font_slot, font_size_px);
 }
@@ -488,6 +559,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_register_bitmap(
         width == 0 || height == 0 || stride < width * 4) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     BitmapRecord rec{};
     rec.width  = width;
@@ -512,6 +585,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_update_bitmap(
         width == 0 || height == 0 || stride < width * 4) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     auto it = canvas->bitmaps.find(bitmap_id);
     if (it == canvas->bitmaps.end()) return SAO_STATUS_ERR_NOT_FOUND;
@@ -529,6 +604,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_update_bitmap(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_unregister_bitmap(
     sao_ui_script_canvas_handle_t canvas, int32_t bitmap_id) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     auto it = canvas->bitmaps.find(bitmap_id);
     if (it == canvas->bitmaps.end()) return SAO_STATUS_ERR_NOT_FOUND;
@@ -543,6 +620,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_set_pointer_handler(
     sao_ui_script_canvas_pointer_cb_t callback, void* user_data) {
 
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     canvas->pointer_cb = callback;
     canvas->pointer_ud = user_data;
@@ -552,6 +631,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_set_pointer_handler(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_invalidate(
     sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
     canvas->invalidation_seq += 1;
     return SAO_STATUS_OK;
@@ -565,6 +646,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_snapshot_ops(
 
     if (out_written != nullptr) *out_written = 0;
     if (canvas == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> guard(canvas->mu);
 
     // Snapshot from committed if not in a draw session; else from
@@ -586,6 +669,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_snapshot_ops(
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_script_canvas_bitmap_count(sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return 0;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return 0;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->bitmaps.size();
 }
@@ -594,6 +679,8 @@ extern "C" SAO_UI_API bool SAO_UI_CALL
 sao_ui_script_canvas_has_bitmap(sao_ui_script_canvas_handle_t canvas,
                                 int32_t bitmap_id) {
     if (canvas == nullptr) return false;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return false;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->bitmaps.find(bitmap_id) != canvas->bitmaps.end();
 }
@@ -601,6 +688,8 @@ sao_ui_script_canvas_has_bitmap(sao_ui_script_canvas_handle_t canvas,
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_script_canvas_pending_op_count(sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return 0;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return 0;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->pending_ops.size();
 }
@@ -609,6 +698,8 @@ extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_script_canvas_committed_op_count(
     sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return 0;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return 0;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->committed_ops.size();
 }
@@ -617,6 +708,8 @@ extern "C" SAO_UI_API uint64_t SAO_UI_CALL
 sao_ui_script_canvas_invalidation_seq(
     sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return 0;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return 0;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->invalidation_seq;
 }
@@ -624,6 +717,8 @@ sao_ui_script_canvas_invalidation_seq(
 extern "C" SAO_UI_API bool SAO_UI_CALL
 sao_ui_script_canvas_draw_open(sao_ui_script_canvas_handle_t canvas) {
     if (canvas == nullptr) return false;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return false;
     std::lock_guard<std::mutex> guard(canvas->mu);
     return canvas->draw_open;
 }
@@ -632,6 +727,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
     sao_ui_script_canvas_handle_t canvas, sao_ui_offscreen_raster_handle_t raster,
     int32_t offset_x_px, int32_t offset_y_px) {
     if (canvas == nullptr || raster == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
 
     struct PaintState {
         float translate_x{};
@@ -776,4 +873,69 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
     if (has_clip) sao_ui_paint_ctx_pop_clip(context);
     sao_ui_paint_ctx_destroy(context);
     return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_script_canvas_paint_widget(
+    sao_ui_widget_handle_t widget, sao_ui_paint_ctx_handle_t context,
+    float x, float y, float width, float height) {
+    if (widget == nullptr || context == nullptr || !std::isfinite(x) ||
+        !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||
+        width <= 0 || height <= 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    if (!sao::ui::detail::inspect_widget_handle(widget, &metadata) ||
+        metadata.family != sao::ui::detail::WidgetHandleFamily::script_canvas ||
+        metadata.kind != SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    auto* const canvas = reinterpret_cast<sao_ui_script_canvas_s*>(widget);
+    CanvasLifecycleLease lifecycle(canvas);
+    if (!lifecycle) return SAO_STATUS_ERR_HANDLE_INVALID;
+
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    try {
+        SaoUiScriptCanvasSpec spec{};
+        {
+            std::lock_guard lock(canvas->mu);
+            spec = canvas->spec;
+        }
+        const uint32_t raster_width = spec.width_px > 0
+            ? static_cast<uint32_t>(spec.width_px)
+            : static_cast<uint32_t>(width);
+        const uint32_t raster_height = spec.height_px > 0
+            ? static_cast<uint32_t>(spec.height_px)
+            : static_cast<uint32_t>(height);
+        SaoUiOffscreenRasterDesc desc{
+            raster_width, raster_height, spec.bg_argb};
+        sao_status_t status = sao_ui_offscreen_raster_create(&desc, &raster);
+        if (status != SAO_STATUS_OK) return status;
+        status = sao_ui_script_canvas_rasterize(canvas, raster, 0, 0);
+        if (status == SAO_STATUS_OK) {
+            size_t bytes = 0;
+            uint32_t snapshot_width = 0;
+            uint32_t snapshot_height = 0;
+            uint32_t snapshot_stride = 0;
+            status = sao_ui_offscreen_raster_snapshot(
+                raster, nullptr, 0, &bytes, &snapshot_width,
+                &snapshot_height, &snapshot_stride);
+            if (status == SAO_STATUS_ERR_BUFFER_TOO_SMALL) {
+                std::vector<uint8_t> pixels(bytes);
+                status = sao_ui_offscreen_raster_snapshot(
+                    raster, pixels.data(), pixels.size(), &bytes,
+                    &snapshot_width, &snapshot_height, &snapshot_stride);
+                if (status == SAO_STATUS_OK) {
+                    status = sao_ui_paint_ctx_blit_premultiplied_bgra(
+                        context, pixels.data(), snapshot_width, snapshot_height,
+                        snapshot_stride, static_cast<float>(x), static_cast<float>(y),
+                        static_cast<float>(width), static_cast<float>(height));
+                }
+            }
+        }
+        sao_ui_offscreen_raster_destroy(raster);
+        return status;
+    } catch (...) {
+        sao_ui_offscreen_raster_destroy(raster);
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }

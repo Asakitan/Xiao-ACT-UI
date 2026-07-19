@@ -590,5 +590,5 @@ sao_ui_widget_data_family_destroy(sao_ui_widget_handle_t handle) {
         handle, sao::ui::detail::WidgetHandleFamily::data);
     if (state == nullptr) return;
     uint32_t removed = 0;
-    (void)sao_ui_widget_release_event_handlers(handle, &removed);
+    (void)sao::ui::detail::release_widget_event_handlers(handle, &removed);
 }

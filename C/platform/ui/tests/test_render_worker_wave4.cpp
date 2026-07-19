@@ -34,6 +34,8 @@
 
 namespace {
 
+using namespace std::chrono_literals;
+
 void SAO_UI_CALL bump_counter(void* user_data) {
     auto* c = reinterpret_cast<std::atomic<int>*>(user_data);
     c->fetch_add(1);
@@ -72,6 +74,22 @@ void wait_in_probe(BlockingProbe& probe) {
 
 void SAO_UI_CALL blocking_task(void* user_data) {
     wait_in_probe(*static_cast<BlockingProbe*>(user_data));
+}
+
+struct DerivedFanoutProbe {
+    sao_ui_render_worker_handle_t worker{};
+    BlockingProbe parent;
+    BlockingProbe child;
+    std::atomic<sao_status_t> submit_status{SAO_STATUS_ERR_UNKNOWN};
+};
+
+sao_ui_frame_buffer_handle_t SAO_UI_CALL submit_derived_fanout(
+    double, void* user_data) {
+    auto* probe = static_cast<DerivedFanoutProbe*>(user_data);
+    wait_in_probe(probe->parent);
+    probe->submit_status.store(sao_ui_render_worker_submit(
+        probe->worker, &blocking_task, &probe->child));
+    return nullptr;
 }
 
 sao_ui_frame_buffer_handle_t SAO_UI_CALL blocking_compose(double, void* user_data) {
@@ -192,6 +210,41 @@ TEST_CASE("render_worker_flush_waits_for_all",
     REQUIRE(sao_ui_render_worker_flush(w) == SAO_STATUS_OK);
 
     REQUIRE(sao_ui_render_worker_destroy(w) == SAO_STATUS_OK);
+}
+
+TEST_CASE("render_worker_flush_waits_for_lane_derived_fanout",
+          "[ui][render_worker][wave4][generation][concurrency]") {
+    const SaoRenderWorkerConfig cfg = make_worker_config(2);
+    sao_ui_render_worker_handle_t worker = nullptr;
+    REQUIRE(sao_ui_render_worker_create(&cfg, &worker) == SAO_STATUS_OK);
+    sao_ui_render_lane_handle_t lane = nullptr;
+    REQUIRE(sao_ui_render_worker_get_lane(worker, "derived-fanout", &lane) ==
+            SAO_STATUS_OK);
+
+    BlockingProbe cutoff_probe;
+    REQUIRE(sao_ui_render_worker_submit(
+                worker, &blocking_task, &cutoff_probe) == SAO_STATUS_OK);
+    wait_for_entries(cutoff_probe, 1);
+
+    DerivedFanoutProbe probe{worker};
+    REQUIRE(sao_ui_render_lane_submit_compose(
+                lane, &submit_derived_fanout, &probe, 0.0) == SAO_STATUS_OK);
+    wait_for_entries(probe.parent, 1);
+
+    auto flush = std::async(std::launch::async, [worker] {
+        return sao_ui_render_worker_flush(worker);
+    });
+    REQUIRE(flush.wait_for(20ms) == std::future_status::timeout);
+
+    release_probe(cutoff_probe);
+    release_probe(probe.parent);
+    wait_for_entries(probe.child, 1);
+    CHECK(flush.wait_for(50ms) == std::future_status::timeout);
+    CHECK(probe.submit_status.load() == SAO_STATUS_OK);
+
+    release_probe(probe.child);
+    REQUIRE(flush.get() == SAO_STATUS_OK);
+    REQUIRE(sao_ui_render_worker_destroy(worker) == SAO_STATUS_OK);
 }
 
 TEST_CASE("render_worker_destroy_retires_handles_and_drains_every_accepted_job",

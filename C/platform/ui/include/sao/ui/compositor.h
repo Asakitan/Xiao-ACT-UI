@@ -374,6 +374,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_input_callbacks(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
     sao_ui_layer_handle_t layer);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_disable_input_proxy(
+    sao_ui_layer_handle_t layer);
+
 // ── Compositor-level operations ────────────────────────────────
 
 // Composite + present. Drops frames when the host is minimised. Render and

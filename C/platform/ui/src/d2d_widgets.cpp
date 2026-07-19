@@ -56,6 +56,10 @@ struct sao_ui_widget_s {
     std::mutex mutex;
 };
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_paint_widget(
+    sao_ui_widget_handle_t widget, sao_ui_paint_ctx_handle_t context,
+    float x, float y, float width, float height);
+
 namespace {
 
 struct GenericWidgetRegistry {
@@ -79,6 +83,24 @@ bool generic_widget_known(sao_ui_widget_handle_t handle) noexcept {
         return false;
     }
 }
+
+class GenericLifecycleLease {
+    public:
+        explicit GenericLifecycleLease(void* handle) noexcept : handle_(handle) {
+                acquired_ = sao::ui::detail::acquire_widget_lifecycle(handle_);
+        }
+
+        ~GenericLifecycleLease() {
+                if (acquired_)
+                        sao::ui::detail::release_widget_lifecycle(handle_);
+        }
+
+        explicit operator bool() const noexcept { return acquired_; }
+
+    private:
+        void* handle_{};
+        bool acquired_{};
+};
 
 } // namespace
 
@@ -298,6 +320,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_create(
         try {
             registry.known.insert(handle);
             registry.storage.push_back(std::move(widget));
+            if (!sao::ui::detail::register_external_widget_handle(
+                    handle, sao::ui::detail::WidgetHandleFamily::generic,
+                    widget_kind, nullptr)) {
+                registry.storage.pop_back();
+                throw std::bad_alloc();
+            }
         } catch (...) {
             registry.active.erase(handle);
             registry.known.erase(handle);
@@ -347,8 +375,9 @@ extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle)
             }
         }
         if (generic) {
+            (void)sao::ui::detail::retire_widget_lifecycle(handle);
             uint32_t removed = 0;
-            (void)sao_ui_widget_release_event_handlers(handle, &removed);
+            (void)sao::ui::detail::release_widget_event_handlers(handle, &removed);
             std::lock_guard state_lock(handle->mutex);
             handle->text.clear();
             handle->colors.clear();
@@ -388,6 +417,9 @@ extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle)
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
     sao_ui_widget_handle_t handle, const uint8_t* props_json_utf8, size_t props_len) {
     if (handle == nullptr || (props_json_utf8 == nullptr && props_len != 0U)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     const sao_status_t backing_status = sao_ui_widget_generic_backing_get_kind(handle, nullptr);
     if (backing_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -430,6 +462,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_theme_token(
     sao_ui_widget_handle_t handle, const char* token_key_utf8, uint32_t argb_value) {
     if (handle == nullptr || token_key_utf8 == nullptr || token_key_utf8[0] == '\0') return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
     handle->colors[token_key_utf8] = argb_value;
     return SAO_STATUS_OK;
@@ -438,6 +473,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_theme_token(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_clear_theme_token(
     sao_ui_widget_handle_t handle, const char* token_key_utf8) {
     if (handle == nullptr || token_key_utf8 == nullptr || token_key_utf8[0] == '\0') return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
     handle->colors.erase(token_key_utf8);
     return SAO_STATUS_OK;
@@ -447,6 +485,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint(
     sao_ui_widget_handle_t handle, sao_ui_paint_ctx_handle_t context,
     float x, float y, float width, float height) {
     if (handle == nullptr || context == nullptr || context->raster == nullptr || !valid_rect(width, height)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    if (sao::ui::detail::inspect_widget_handle(handle, &metadata) &&
+        metadata.family == sao::ui::detail::WidgetHandleFamily::script_canvas &&
+        metadata.kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
+        return sao_ui_script_canvas_paint_widget(
+            handle, context, x, y, width, height);
+    }
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex, context->raster->mutex);
     paint_widget(*handle, *context, {x, y, width, height});
     return SAO_STATUS_OK;
@@ -455,6 +503,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_hit_test(
     sao_ui_widget_handle_t handle, float local_x, float local_y, bool* out_hit) {
     if (handle == nullptr || out_hit == nullptr || !std::isfinite(local_x) || !std::isfinite(local_y)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
     *out_hit = handle->enabled && local_x >= 0.0F && local_y >= 0.0F && local_x < handle->bounds.width && local_y < handle->bounds.height;
     return SAO_STATUS_OK;
@@ -463,6 +514,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_hit_test(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_active(
     sao_ui_widget_handle_t handle, bool active) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
     handle->active = active;
     return SAO_STATUS_OK;
@@ -472,10 +526,12 @@ extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(
     sao_ui_widget_handle_t handle, const char* color_key, uint32_t* out_color,
     char* out_text, size_t out_text_capacity) {
     if (handle == nullptr || color_key == nullptr || out_color == nullptr || out_text == nullptr ||
-        out_text_capacity == 0 ||
-        sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK) {
+        out_text_capacity == 0) {
         return false;
     }
+    GenericLifecycleLease lifecycle(handle);
+    if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
+        return false;
     std::lock_guard lock(handle->mutex);
     const auto color = handle->colors.find(color_key);
     if (color == handle->colors.end())

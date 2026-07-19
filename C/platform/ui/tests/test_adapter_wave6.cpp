@@ -604,6 +604,72 @@ TEST_CASE("adapter click-through toggles compositor hit-test true false true",
         check_adapter_policy(fixture.window, true, true, false, false, SAO_STATUS_OK);
     }
 
+    TEST_CASE("adapter input proxy rolls layer and host state back on lift failure",
+            "[ui][adapter][transaction][rollback][proxy]") {
+        HostedAdapterWindow fixture("adapter_proxy_rollback");
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                    fixture.window, kAdapterHostSyncWindow,
+                    SAO_STATUS_ERR_OS_CALL_FAILED) == SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_enable_input_proxy(fixture.window) ==
+              SAO_STATUS_ERR_OS_CALL_FAILED);
+        check_adapter_policy(fixture.window, true, true, false, false, SAO_STATUS_OK);
+        bool proxy_attached = true;
+        REQUIRE(sao_ui_adapter_test_snapshot(
+                    fixture.window, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    nullptr, nullptr, &proxy_attached, nullptr, nullptr));
+        CHECK_FALSE(proxy_attached);
+        CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
+
+        REQUIRE(sao_ui_compositor_overlay_window_enable_input_proxy(fixture.window) ==
+                SAO_STATUS_OK);
+        check_adapter_policy(fixture.window, true, true, true, false, SAO_STATUS_OK);
+        proxy_attached = false;
+        REQUIRE(sao_ui_adapter_test_snapshot(
+                    fixture.window, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    nullptr, nullptr, &proxy_attached, nullptr, nullptr));
+        CHECK(proxy_attached);
+        CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
+    }
+
+    TEST_CASE("adapter alpha rolls the real layer and host back on region failure",
+            "[ui][adapter][transaction][rollback][alpha]") {
+        HostedAdapterWindow fixture("adapter_alpha_rollback");
+        const sao_ui_layer_handle_t layer =
+            sao_ui_compositor_overlay_window_layer(fixture.window);
+        REQUIRE(layer != nullptr);
+        sao_ui_compositor_bgra_presenter_handle_t presenter = nullptr;
+        REQUIRE(sao_ui_compositor_bgra_presenter_create(layer, &presenter) ==
+                SAO_STATUS_OK);
+        const std::vector<uint8_t> frame(32u * 24u * 4u, 0xffu);
+        REQUIRE(sao_ui_compositor_bgra_presenter_set_frame(
+                    presenter, frame.data(), 32, 24, 0, 0) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_compositor_overlay_window_show(fixture.window) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_adapter_test_fail_next_host_sync(
+                    fixture.window, kAdapterHostSyncRegion,
+                    SAO_STATUS_ERR_OS_CALL_FAILED) == SAO_STATUS_OK);
+
+        CHECK(sao_ui_compositor_overlay_window_set_alpha(fixture.window, 0.25f) ==
+              SAO_STATUS_ERR_OS_CALL_FAILED);
+        float alpha = 0.0f;
+        REQUIRE(sao_ui_adapter_test_snapshot(
+                    fixture.window, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    nullptr, nullptr, nullptr, nullptr, &alpha));
+        CHECK(alpha == 1.0f);
+        CHECK(sao_ui_overlay_host_input_passthrough(fixture.host));
+
+        uint32_t width = 0;
+        uint32_t height = 0;
+        const auto pixels = compositor_snapshot(fixture.compositor, &width, &height);
+        REQUIRE(width == 32u);
+        REQUIRE(height == 24u);
+        REQUIRE(pixels.size() == 32u * 24u * 4u);
+        CHECK(pixels[3] == 255u);
+
+        sao_ui_compositor_bgra_presenter_destroy(presenter);
+    }
+
 TEST_CASE("adapter host synchronization enforces the real owner thread",
           "[ui][adapter][owner_thread]") {
     SaoOverlayHostConfig host_config{};

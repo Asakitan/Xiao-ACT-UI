@@ -22,6 +22,7 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -71,15 +72,22 @@ int32_t auto_lane_count() {
 struct FanTask {
     sao_ui_render_worker_task_fn_t fn;
     void* user_data;
+    uint64_t completion_generation{};
 };
 
 struct LaneJob {
     sao_ui_compose_fn_t fn;
     void* user_data;
     double now_sec;
+    uint64_t completion_generation{};
 };
 
 extern thread_local sao_ui_render_worker_s* g_callback_worker;
+extern thread_local uint64_t g_callback_completion_generation;
+
+uint64_t allocate_completion_generation(sao_ui_render_worker_s* worker);
+void complete_completion_generation(sao_ui_render_worker_s* worker,
+                                    uint64_t generation) noexcept;
 
 class ApiActivity {
   public:
@@ -187,6 +195,11 @@ struct sao_ui_render_worker_s {
     bool stop_requested = false;
     ApiActivity api_activity;
 
+    std::mutex completion_mtx;
+    std::condition_variable completion_cv;
+    uint64_t next_completion_generation{1};
+    std::map<uint64_t, size_t> completion_pending;
+
     std::mutex lanes_mtx;
     std::unordered_map<std::string, std::shared_ptr<sao_ui_render_lane_s>> lanes;
 
@@ -208,9 +221,17 @@ struct sao_ui_render_worker_s {
                 if (fan_in_flight != 0) --fan_in_flight;
                 if (fan_in_flight == 0) idle_cv.notify_all();
             });
+            ScopeExit complete_generation([this, generation = task.completion_generation] {
+                complete_completion_generation(this, generation);
+            });
             auto* previous = g_callback_worker;
+            const uint64_t previous_generation = g_callback_completion_generation;
             g_callback_worker = this;
-            ScopeExit restore_callback([previous] { g_callback_worker = previous; });
+            g_callback_completion_generation = task.completion_generation;
+            ScopeExit restore_callback([previous, previous_generation] {
+                g_callback_worker = previous;
+                g_callback_completion_generation = previous_generation;
+            });
             try {
                 if (task.fn != nullptr) task.fn(task.user_data);
             } catch (...) {
@@ -222,6 +243,37 @@ struct sao_ui_render_worker_s {
 namespace {
 
 thread_local sao_ui_render_worker_s* g_callback_worker = nullptr;
+thread_local uint64_t g_callback_completion_generation = 0;
+
+uint64_t allocate_completion_generation(sao_ui_render_worker_s* worker) {
+    std::lock_guard lock(worker->completion_mtx);
+    uint64_t generation = g_callback_worker == worker &&
+            g_callback_completion_generation != 0
+        ? g_callback_completion_generation
+        : worker->next_completion_generation++;
+    if (generation == 0) {
+        generation = worker->next_completion_generation++;
+    }
+    ++worker->completion_pending[generation];
+    return generation;
+}
+
+void complete_completion_generation(sao_ui_render_worker_s* worker,
+                                     uint64_t generation) noexcept {
+    if (worker == nullptr || generation == 0) return;
+    try {
+        std::lock_guard lock(worker->completion_mtx);
+        const auto found = worker->completion_pending.find(generation);
+        if (found == worker->completion_pending.end()) return;
+        if (found->second > 1) {
+            --found->second;
+        } else {
+            worker->completion_pending.erase(found);
+        }
+        worker->completion_cv.notify_all();
+    } catch (...) {
+    }
+}
 
 struct WorkerRegistry {
     std::mutex mutex;
@@ -364,9 +416,17 @@ void sao_ui_render_lane_s::thread_main() {
             if (in_flight != 0) --in_flight;
             if (in_flight == 0) idle_cv.notify_all();
         });
+        ScopeExit complete_generation([this, generation = job.completion_generation] {
+            complete_completion_generation(worker, generation);
+        });
         auto* previous = g_callback_worker;
+        const uint64_t previous_generation = g_callback_completion_generation;
         g_callback_worker = worker;
-        ScopeExit restore_callback([previous] { g_callback_worker = previous; });
+        g_callback_completion_generation = job.completion_generation;
+        ScopeExit restore_callback([previous, previous_generation] {
+            g_callback_worker = previous;
+            g_callback_completion_generation = previous_generation;
+        });
         const auto t0 = std::chrono::steady_clock::now();
         sao_ui_frame_buffer_handle_t frame = nullptr;
         try {
@@ -538,7 +598,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_lane_submit_compose(
             !active_lane->worker->queue_pending) {
             return SAO_STATUS_ERR_ALREADY_EXISTS;
         }
-        active_lane->queue.push_back(LaneJob{fn, user_data, now_sec});
+        const uint64_t completion_generation = allocate_completion_generation(
+            active_lane->worker);
+        try {
+            active_lane->queue.push_back(
+                LaneJob{fn, user_data, now_sec, completion_generation});
+        } catch (...) {
+            complete_completion_generation(active_lane->worker, completion_generation);
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
         ++active_lane->in_flight;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -739,7 +807,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_submit(
     try {
         std::lock_guard lock(worker->fan_mtx);
         if (worker->stop_requested) return SAO_STATUS_ERR_CANCELLED;
-        worker->fan_queue.push_back(FanTask{task_fn, user_data});
+        const uint64_t completion_generation = allocate_completion_generation(worker);
+        try {
+            worker->fan_queue.push_back(
+                FanTask{task_fn, user_data, completion_generation});
+        } catch (...) {
+            complete_completion_generation(worker, completion_generation);
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
         ++worker->fan_in_flight;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -755,21 +830,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_render_worker_flush(
     if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
     auto* worker = operation.get();
     try {
-        {
-            std::unique_lock lock(worker->fan_mtx);
-            worker->idle_cv.wait(lock, [worker] { return worker->fan_in_flight == 0; });
-        }
-
-        std::vector<std::shared_ptr<sao_ui_render_lane_s>> lanes;
-        {
-            std::lock_guard lock(worker->lanes_mtx);
-            lanes.reserve(worker->lanes.size());
-            for (const auto& [_, lane] : worker->lanes) lanes.push_back(lane);
-        }
-        for (const auto& lane : lanes) {
-            std::unique_lock lock(lane->mtx);
-            lane->idle_cv.wait(lock, [&lane] { return lane->in_flight == 0; });
-        }
+        std::unique_lock lock(worker->completion_mtx);
+        const uint64_t cutoff = worker->next_completion_generation == 0
+            ? std::numeric_limits<uint64_t>::max()
+            : worker->next_completion_generation - 1;
+        worker->completion_cv.wait(lock, [worker, cutoff] {
+            const auto first = worker->completion_pending.begin();
+            return first == worker->completion_pending.end() ||
+                   first->first > cutoff;
+        });
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;

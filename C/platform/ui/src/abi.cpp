@@ -16,6 +16,9 @@ extern "C" sao_status_t SAO_UI_CALL
 sao_ui_widget_input_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_widget_chart_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_generation);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_paint_widget(
+    sao_ui_widget_handle_t widget, sao_ui_paint_ctx_handle_t context,
+    float x, float y, float width, float height);
 
 namespace {
 
@@ -46,6 +49,7 @@ struct WidgetExtensionRegistry {
     std::unordered_map<int32_t, WidgetRendererProvider> renderers;
     std::unordered_map<uint64_t, int32_t> renderer_kinds;
     std::atomic<uint64_t> next_token{1};
+    std::atomic_bool fail_next_renderer_kind_insertion{false};
 };
 
 struct WidgetHandleShell {
@@ -57,11 +61,17 @@ struct WidgetHandleShell {
 struct WidgetHandleRecord {
     sao::ui::detail::WidgetHandleMetadata metadata{};
     std::shared_ptr<void> state;
+    std::mutex lifecycle_mutex;
+    std::condition_variable lifecycle_cv;
+    size_t in_flight{};
+    bool accepting{true};
+    bool retired{};
+    bool uses_shell{true};
 };
 
 struct WidgetHandleRegistry {
     std::mutex mutex;
-    std::unordered_map<void*, WidgetHandleRecord> active;
+    std::unordered_map<void*, std::shared_ptr<WidgetHandleRecord>> active;
     std::vector<std::unique_ptr<WidgetHandleShell>> shells;
     std::atomic<uint64_t> next_generation{1};
 };
@@ -82,6 +92,35 @@ struct ActiveEventHandler {
 };
 
 thread_local ActiveEventHandler* active_event_handler = nullptr;
+
+thread_local std::vector<void*> active_widget_lifecycles;
+
+bool widget_lifecycle_is_active(void* handle) {
+        return std::find(active_widget_lifecycles.begin(),
+                                         active_widget_lifecycles.end(), handle) !=
+                     active_widget_lifecycles.end();
+}
+
+class WidgetLifecycleLease {
+    public:
+        explicit WidgetLifecycleLease(void* handle) noexcept : handle_(handle) {
+                acquired_ = sao::ui::detail::acquire_widget_lifecycle(handle_);
+        }
+
+        ~WidgetLifecycleLease() {
+                if (acquired_)
+                        sao::ui::detail::release_widget_lifecycle(handle_);
+        }
+
+        WidgetLifecycleLease(const WidgetLifecycleLease&) = delete;
+        WidgetLifecycleLease& operator=(const WidgetLifecycleLease&) = delete;
+
+        explicit operator bool() const noexcept { return acquired_; }
+
+    private:
+        void* handle_{};
+        bool acquired_{};
+};
 
 bool event_handler_is_active(const WidgetEventHandler* handler) {
     for (const ActiveEventHandler* active = active_event_handler; active != nullptr;
@@ -237,17 +276,140 @@ void* sao::ui::detail::register_widget_handle(
         shell->kind = kind;
         shell->generation = generation;
         void* const handle = shell.get();
-        WidgetHandleRecord record{{family, kind, generation}, std::move(state)};
         std::lock_guard lock(registry.mutex);
         registry.shells.push_back(std::move(shell));
-        try {
-            registry.active.emplace(handle, std::move(record));
-        } catch (...) {
-            return nullptr;
-        }
+        auto record = std::make_shared<WidgetHandleRecord>();
+        const bool inserted = registry.active.emplace(handle, record).second;
+        if (!inserted) return nullptr;
+        record->metadata = {family, kind, generation};
+        record->state = std::move(state);
+        record->uses_shell = true;
         return handle;
     } catch (...) {
         return nullptr;
+    }
+}
+
+bool sao::ui::detail::register_external_widget_handle(
+    void* handle, WidgetHandleFamily family, int32_t kind,
+    uint64_t* out_generation) noexcept {
+    if (handle == nullptr) return false;
+    try {
+        auto& registry = widget_handle_registry();
+        uint64_t generation = registry.next_generation.fetch_add(
+            1, std::memory_order_relaxed);
+        if (generation == 0) {
+            generation = registry.next_generation.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        std::lock_guard lock(registry.mutex);
+        auto record = std::make_shared<WidgetHandleRecord>();
+        const bool inserted = registry.active.emplace(handle, record).second;
+        if (!inserted) return false;
+        record->metadata = {family, kind, generation};
+        record->state.reset();
+        record->uses_shell = false;
+        if (out_generation != nullptr) *out_generation = generation;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool sao::ui::detail::register_widget_lifecycle(
+    void* handle, WidgetHandleFamily family, int32_t kind,
+    uint64_t generation) noexcept {
+    if (handle == nullptr) return false;
+    if (generation == 0)
+        return register_external_widget_handle(handle, family, kind, nullptr);
+    try {
+        auto& registry = widget_handle_registry();
+        std::lock_guard lock(registry.mutex);
+        auto record = std::make_shared<WidgetHandleRecord>();
+        const bool inserted = registry.active.emplace(handle, record).second;
+        if (!inserted) return false;
+        record->metadata = {family, kind, generation};
+        record->state.reset();
+        record->uses_shell = false;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool sao::ui::detail::acquire_widget_lifecycle(void* handle) noexcept {
+    if (handle == nullptr) return false;
+    try {
+        WidgetHandleRecord* record = nullptr;
+        {
+            auto& registry = widget_handle_registry();
+            std::lock_guard registry_lock(registry.mutex);
+            const auto found = registry.active.find(handle);
+            if (found == registry.active.end()) return false;
+            record = found->second.get();
+            std::lock_guard lifecycle_lock(record->lifecycle_mutex);
+            if (!record->accepting || record->retired) return false;
+            ++record->in_flight;
+        }
+        try {
+            active_widget_lifecycles.push_back(handle);
+        } catch (...) {
+            std::lock_guard lifecycle_lock(record->lifecycle_mutex);
+            --record->in_flight;
+            record->lifecycle_cv.notify_all();
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void sao::ui::detail::release_widget_lifecycle(void* handle) noexcept {
+    if (handle == nullptr) return;
+    try {
+        const auto found = std::find(active_widget_lifecycles.rbegin(),
+                                     active_widget_lifecycles.rend(), handle);
+        if (found != active_widget_lifecycles.rend())
+            active_widget_lifecycles.erase(std::next(found).base());
+
+        WidgetHandleRecord* record = nullptr;
+        auto& registry = widget_handle_registry();
+        std::lock_guard registry_lock(registry.mutex);
+        const auto record_it = registry.active.find(handle);
+        if (record_it == registry.active.end()) return;
+        record = record_it->second.get();
+        std::lock_guard lifecycle_lock(record->lifecycle_mutex);
+        if (record->in_flight != 0) --record->in_flight;
+        if (record->in_flight == 0) record->lifecycle_cv.notify_all();
+    } catch (...) {
+    }
+}
+
+bool sao::ui::detail::retire_widget_lifecycle(void* handle) noexcept {
+    if (handle == nullptr) return false;
+    try {
+        std::shared_ptr<WidgetHandleRecord> record;
+        {
+            auto& registry = widget_handle_registry();
+            std::lock_guard registry_lock(registry.mutex);
+            const auto found = registry.active.find(handle);
+            if (found == registry.active.end()) return false;
+            record = found->second;
+            std::lock_guard lifecycle_lock(record->lifecycle_mutex);
+            if (record->retired) return false;
+            record->accepting = false;
+            record->retired = true;
+        }
+        const size_t own_leases = static_cast<size_t>(std::count(
+            active_widget_lifecycles.begin(), active_widget_lifecycles.end(), handle));
+        std::unique_lock lifecycle_lock(record->lifecycle_mutex);
+        record->lifecycle_cv.wait(lifecycle_lock, [record, own_leases] {
+            return record->in_flight <= own_leases;
+        });
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -260,13 +422,17 @@ std::shared_ptr<void> sao::ui::detail::acquire_widget_handle(
         std::lock_guard lock(registry.mutex);
         const auto found = registry.active.find(handle);
         if (found == registry.active.end() ||
-            found->second.metadata.family != expected_family ||
-            found->second.metadata.kind != expected_kind) {
+            found->second->metadata.family != expected_family ||
+            found->second->metadata.kind != expected_kind) {
             return {};
         }
-        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
-        if (shell->generation != found->second.metadata.generation) return {};
-        return found->second.state;
+        std::lock_guard lifecycle_lock(found->second->lifecycle_mutex);
+        if (!found->second->accepting || found->second->retired) return {};
+        if (found->second->uses_shell) {
+            const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+            if (shell->generation != found->second->metadata.generation) return {};
+        }
+        return found->second->state;
     } catch (...) {
         return {};
     }
@@ -278,17 +444,28 @@ std::shared_ptr<void> sao::ui::detail::retire_widget_handle(
     if (handle == nullptr) return {};
     try {
         auto& registry = widget_handle_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            const auto found = registry.active.find(handle);
+            if (found == registry.active.end() ||
+                found->second->metadata.family != expected_family) {
+                return {};
+            }
+            std::lock_guard lifecycle_lock(found->second->lifecycle_mutex);
+            if (found->second->retired || !found->second->accepting) return {};
+            if (found->second->uses_shell) {
+                const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+                if (shell->generation != found->second->metadata.generation) return {};
+            }
+            if (out_metadata != nullptr) *out_metadata = found->second->metadata;
+        }
+        if (!sao::ui::detail::retire_widget_lifecycle(handle)) return {};
         std::lock_guard lock(registry.mutex);
         const auto found = registry.active.find(handle);
-        if (found == registry.active.end() ||
-            found->second.metadata.family != expected_family) {
-            return {};
-        }
-        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
-        if (shell->generation != found->second.metadata.generation) return {};
-        if (out_metadata != nullptr) *out_metadata = found->second.metadata;
-        auto state = std::move(found->second.state);
-        registry.active.erase(found);
+        if (found == registry.active.end()) return {};
+        std::lock_guard lifecycle_lock(found->second->lifecycle_mutex);
+        std::shared_ptr<void> state = std::move(found->second->state);
+        found->second->state.reset();
         return state;
     } catch (...) {
         return {};
@@ -303,9 +480,13 @@ bool sao::ui::detail::inspect_widget_handle(
         std::lock_guard lock(registry.mutex);
         const auto found = registry.active.find(handle);
         if (found == registry.active.end()) return false;
-        const auto* shell = static_cast<const WidgetHandleShell*>(handle);
-        if (shell->generation != found->second.metadata.generation) return false;
-        *out_metadata = found->second.metadata;
+        std::lock_guard lifecycle_lock(found->second->lifecycle_mutex);
+        if (!found->second->accepting || found->second->retired) return false;
+        if (found->second->uses_shell) {
+            const auto* shell = static_cast<const WidgetHandleShell*>(handle);
+            if (shell->generation != found->second->metadata.generation) return false;
+        }
+        *out_metadata = found->second->metadata;
         return true;
     } catch (...) {
         return false;
@@ -324,6 +505,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_kind(
     sao_ui_widget_handle_t handle, int32_t* out_kind) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_kind == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     const sao_status_t generic_status = sao_ui_widget_generic_backing_get_kind(handle, out_kind);
     if (generic_status == SAO_STATUS_OK)
         return SAO_STATUS_OK;
@@ -352,6 +536,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_add_event_handler(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_subscription_token = 0;
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     int32_t kind = -1;
     if (sao_ui_widget_get_kind(handle, &kind) != SAO_STATUS_OK) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -378,12 +565,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_remove_event_handler(
     sao_ui_widget_handle_t handle, uint64_t subscription_token) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (subscription_token == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
         std::shared_ptr<WidgetEventHandler> removed;
         auto& registry = extension_registry();
         {
             std::lock_guard lock(registry.mutex);
-            const auto owner = registry.handlers.find(handle);
+            const auto owner = registry.handlers.find(
+                static_cast<sao_ui_widget_handle_t>(handle));
             if (owner == registry.handlers.end())
                 return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
             auto& handlers = owner->second;
@@ -415,6 +606,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+
     std::vector<std::shared_ptr<WidgetEventHandler>> dispatch_order;
     try {
         auto& registry = extension_registry();
@@ -445,15 +640,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_dispatch_event(
     return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_release_event_handlers(
-    sao_ui_widget_handle_t handle, uint32_t* out_removed_count) {
+sao_status_t sao::ui::detail::release_widget_event_handlers(
+    void* handle, uint32_t* out_removed_count) noexcept {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
         std::vector<std::shared_ptr<WidgetEventHandler>> removed;
         auto& registry = extension_registry();
         {
             std::lock_guard lock(registry.mutex);
-            const auto owner = registry.handlers.find(handle);
+            const auto owner = registry.handlers.find(
+                reinterpret_cast<sao_ui_widget_handle_t>(handle));
             if (owner != registry.handlers.end()) {
                 removed = std::move(owner->second);
                 registry.handlers.erase(owner);
@@ -471,6 +667,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_release_event_handlers(
     }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_release_event_handlers(
+    sao_ui_widget_handle_t handle, uint32_t* out_removed_count) {
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    return sao::ui::detail::release_widget_event_handlers(handle, out_removed_count);
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
     sao_ui_widget_handle_t handle, sao_ui_paint_ctx_handle_t ctx,
     int32_t x, int32_t y, int32_t width, int32_t height,
@@ -481,6 +686,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
         opacity_0_to_1 > 1.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     int32_t kind = -1;
     const sao_status_t status = sao_ui_widget_get_kind(handle, &kind);
     if (status != SAO_STATUS_OK) return status;
@@ -496,6 +704,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
 
     if (kind <= SAO_UI_WIDGET_ICON) {
         paint_status = sao_ui_widget_paint(
+            handle, ctx, static_cast<float>(x), static_cast<float>(y),
+            static_cast<float>(width), static_cast<float>(height));
+    } else if (kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
+        paint_status = sao_ui_script_canvas_paint_widget(
             handle, ctx, static_cast<float>(x), static_cast<float>(y),
             static_cast<float>(width), static_cast<float>(height));
     } else {
@@ -535,14 +747,35 @@ sao_ui_widget_register_renderer_provider(
         if (registry.renderers.contains(widget_kind)) {
             return SAO_STATUS_ERR_ALREADY_EXISTS;
         }
-        registry.renderers.emplace(
+        const auto [renderer_it, renderer_inserted] = registry.renderers.emplace(
             widget_kind,
             WidgetRendererProvider{token, widget_kind, callback, user_data});
-        registry.renderer_kinds.emplace(token, widget_kind);
+        if (!renderer_inserted)
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        try {
+            if (registry.fail_next_renderer_kind_insertion.exchange(false))
+                throw std::bad_alloc{};
+            const auto [token_it, token_inserted] = registry.renderer_kinds.emplace(
+                token, widget_kind);
+            if (!token_inserted) {
+                (void)token_it;
+                registry.renderers.erase(renderer_it);
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+        } catch (...) {
+            registry.renderers.erase(renderer_it);
+            throw;
+        }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
     *out_provider_token = token;
+    return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_test_fail_next_renderer_kind_insertion() {
+    extension_registry().fail_next_renderer_kind_insertion.store(true);
     return SAO_STATUS_OK;
 }
 
@@ -567,6 +800,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_size_hint(
     if (out_hint == nullptr || available_width_px < 0 || available_height_px < 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    WidgetLifecycleLease lifecycle(handle);
+    if (!lifecycle)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     int32_t kind = -1;
     const sao_status_t status = sao_ui_widget_get_kind(handle, &kind);
     if (status != SAO_STATUS_OK) return status;
