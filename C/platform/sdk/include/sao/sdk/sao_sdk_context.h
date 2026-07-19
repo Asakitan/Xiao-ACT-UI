@@ -471,6 +471,30 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* set_prior_lock_hint)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         uint64_t hint_heap_size, uint32_t hint_offset);
+
+    // Append-only ABI 1.6 extension: cross-session skeleton identity.
+    //
+    // Snapshot the currently-locked primary skeleton's fingerprint
+    // (sorted top-N adjacent bone distances, see optim 11).  Writes
+    // up to max_count floats into out_floats and always sets
+    // *out_count to the true fingerprint length.  Pass out_floats=NULL
+    // to query the length without copying.  Returns SAO_SDK_OK with
+    // *out_count=0 when there is no in-session fingerprint yet.
+    sao_sdk_status_t(SAO_SDK_CALL* get_skeleton_fingerprint)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float* out_floats, size_t max_count, size_t* out_count);
+
+    // Feed a previously-saved skeleton fingerprint back into the
+    // prior-lock hint.  Merges with any existing hint size / offset
+    // set via set_prior_lock_hint.  Effect: on the next attach's
+    // first rescan_bones the tracker will fuzzy-match candidate
+    // clusters against this fingerprint and prefer the closest one
+    // (see prior_fingerprint_match_max_diff in GpuTrackerConfig).
+    // Passing count=0 (or floats=NULL) clears just the fingerprint
+    // slice of the hint without touching heap_size / offset.
+    sao_sdk_status_t(SAO_SDK_CALL* set_skeleton_fingerprint_hint)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        const float* floats, size_t count);
 };
 
 // The main context struct.  ctx_impl is an opaque pointer to the
