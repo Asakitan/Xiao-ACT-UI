@@ -1,4 +1,6 @@
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 add_executable(sao_platform_net_tests
     test_net.cpp

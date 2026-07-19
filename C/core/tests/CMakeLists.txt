@@ -1,4 +1,6 @@
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 list(APPEND CMAKE_MODULE_PATH ${Catch2_DIR})
 
 set(sao_core_test_sources test_core.cpp)

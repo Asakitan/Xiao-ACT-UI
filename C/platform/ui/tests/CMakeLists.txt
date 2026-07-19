@@ -2,7 +2,9 @@
 # FIND_PACKAGE_ARGS integration when tests are enabled, so a plain
 # find_package succeeds here whether Catch2 came from vcpkg, a system
 # package, or the FetchContent fallback.
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 add_executable(sao_platform_ui_tests
     test_ui.cpp

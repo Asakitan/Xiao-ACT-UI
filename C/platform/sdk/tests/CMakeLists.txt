@@ -1,4 +1,6 @@
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 add_executable(sao_platform_sdk_tests
     test_sdk.cpp
@@ -9,8 +11,22 @@ add_executable(sao_platform_sdk_tests
     test_sdk_register_demo_wave7.cpp
 )
 
+target_sources(sao_platform_sdk_tests PRIVATE ${SAO_PLATFORM_SDK_SOURCES})
+
+target_include_directories(sao_platform_sdk_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_compile_definitions(sao_platform_sdk_tests PRIVATE
+    SAO_SDK_TESTING=1
+)
+
 target_link_libraries(sao_platform_sdk_tests PRIVATE
-    sao::sdk
+    sao::core
+    sao::engine
+    sao::ui
+    sao::net
+    sao::gpu_hunt
     Catch2::Catch2WithMain
 )
 

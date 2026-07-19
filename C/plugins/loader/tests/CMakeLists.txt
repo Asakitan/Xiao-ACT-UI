@@ -1,4 +1,6 @@
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 add_library(sao_loader_native_fixture SHARED native_plugin_fixture.cpp)
 target_include_directories(sao_loader_native_fixture PRIVATE
@@ -21,6 +23,7 @@ foreach(local_test IN ITEMS
 endforeach()
 
 add_executable(test_plugins_loader ${sao_plugins_loader_test_sources})
+target_include_directories(test_plugins_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(test_plugins_loader PRIVATE
 	sao_plugins_loader
 	Catch2::Catch2WithMain)
@@ -32,6 +35,7 @@ target_compile_features(test_plugins_loader PRIVATE cxx_std_20)
 # the plain (undecorated) prototype and avoid __imp_* unresolved externals.
 target_compile_definitions(test_plugins_loader PRIVATE
 	SAO_PLUGINS_BUILDING_DLL
+	SAO_PLUGINS_LOADER_TESTING
 	SAO_TEST_NATIVE_PLUGIN_PATH=L"$<TARGET_FILE:sao_loader_native_fixture>")
 add_dependencies(test_plugins_loader sao_loader_native_fixture)
 

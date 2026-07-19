@@ -1,4 +1,6 @@
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 # ─── Wave 17c / Agent c — shared gap-closure test support ─────────────
 # STATIC library so every gap test binary (core/engine/net) links the same

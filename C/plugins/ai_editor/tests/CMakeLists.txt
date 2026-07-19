@@ -1,6 +1,8 @@
 # AI Editor real subprocess and named-pipe integration tests.
 
-find_package(Catch2 3 CONFIG REQUIRED)
+if (NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 CONFIG REQUIRED)
+endif()
 
 add_executable(sao_plugin_ai_editor_child_fixture
     ai_editor_child_fixture.cpp
@@ -68,6 +70,7 @@ target_link_libraries(sao_plugin_ai_editor_production_child_tests PRIVATE
 )
 target_compile_definitions(sao_plugin_ai_editor_production_child_tests PRIVATE
     SAO_AI_EDITOR_PRODUCTION_EXECUTABLE="$<TARGET_FILE:sao_ai_editor>"
+    SAO_AI_EDITOR_HAS_WEBVIEW=$<BOOL:${SAO_BUILD_WEBVIEW_BRIDGE}>
 )
 add_dependencies(sao_plugin_ai_editor_production_child_tests
     sao_ai_editor
