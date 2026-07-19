@@ -33,13 +33,9 @@ typedef uint64_t sao_engine_hook_token_t;
 // Returning NULL for out_payload means "leave payload unchanged".
 // Setting payload["__plugin_override__"] to a ui_spec fully replaces
 // the native render.
-typedef sao_status_t (SAO_ENGINE_CALL* sao_engine_hook_callback_t)(
-    const char* surface_id_utf8,
-    const uint8_t* payload_json_utf8,
-    size_t payload_len,
-    uint8_t* out_payload_json_utf8,
-    size_t out_payload_capacity,
-    size_t* out_payload_written,
+typedef sao_status_t(SAO_ENGINE_CALL* sao_engine_hook_callback_t)(
+    const char* surface_id_utf8, const uint8_t* payload_json_utf8, size_t payload_len,
+    uint8_t* out_payload_json_utf8, size_t out_payload_capacity, size_t* out_payload_written,
     void* user_data);
 
 enum sao_engine_render_clock_point_e : int32_t {
@@ -68,99 +64,67 @@ struct SaoEngineRenderClockPayload {
     uint32_t reserved;
 };
 
-typedef sao_status_t (SAO_ENGINE_CALL* sao_engine_render_clock_callback_t)(
-    int32_t hook_point,
-    const struct SaoEngineRenderClockPayload* payload,
-    void* user_data);
+typedef sao_status_t(SAO_ENGINE_CALL* sao_engine_render_clock_callback_t)(
+    int32_t hook_point, const struct SaoEngineRenderClockPayload* payload, void* user_data);
 
-typedef void (SAO_ENGINE_CALL* sao_engine_render_clock_user_data_release_t)(
-    void* user_data);
+typedef void(SAO_ENGINE_CALL* sao_engine_render_clock_user_data_release_t)(void* user_data);
 
-SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_registry_create(
-    sao_engine_render_hook_registry_handle_t* out_handle);
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
+sao_engine_render_hook_registry_create(sao_engine_render_hook_registry_handle_t* out_handle);
 
-SAO_ENGINE_API void SAO_ENGINE_CALL sao_engine_render_hook_registry_destroy(
-    sao_engine_render_hook_registry_handle_t handle);
+SAO_ENGINE_API void SAO_ENGINE_CALL
+sao_engine_render_hook_registry_destroy(sao_engine_render_hook_registry_handle_t handle);
 
 // Reports whether a native rendering-API provider is bound. The standalone
-// engine registry is host-dispatched and returns SAO_STATUS_ERR_NOT_IMPLEMENTED;
-// callers must not interpret logical hook registration as GPU/API interception.
+// engine registry has no GPU-present owner and reports
+// SAO_STATUS_ERR_CAPABILITY_MISSING; callers must not interpret logical hook
+// registration as GPU/API interception.
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
-sao_engine_render_hook_provider_status(
-    sao_engine_render_hook_registry_handle_t handle);
+sao_engine_render_hook_provider_status(sao_engine_render_hook_registry_handle_t handle);
 
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_register(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* plugin_id_utf8,
-    const char* surface_id_utf8,
-    float priority,
-    sao_engine_hook_callback_t callback,
-    void* user_data,
-    sao_engine_hook_token_t* out_token);
+    sao_engine_render_hook_registry_handle_t handle, const char* plugin_id_utf8,
+    const char* surface_id_utf8, float priority, sao_engine_hook_callback_t callback,
+    void* user_data, sao_engine_hook_token_t* out_token);
 
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_unregister(
-    sao_engine_render_hook_registry_handle_t handle,
-    sao_engine_hook_token_t token);
+    sao_engine_render_hook_registry_handle_t handle, sao_engine_hook_token_t token);
 
-SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
-sao_engine_render_clock_register(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* plugin_id_utf8,
-    const char* surface_id_utf8,
-    int32_t hook_point,
-    float priority,
-    sao_engine_render_clock_callback_t callback,
-    void* user_data,
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_clock_register(
+    sao_engine_render_hook_registry_handle_t handle, const char* plugin_id_utf8,
+    const char* surface_id_utf8, int32_t hook_point, float priority,
+    sao_engine_render_clock_callback_t callback, void* user_data,
     sao_engine_render_clock_user_data_release_t release_user_data,
     sao_engine_hook_token_t* out_token);
 
-SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
-sao_engine_render_clock_unregister(
-    sao_engine_render_hook_registry_handle_t handle,
-    sao_engine_hook_token_t token);
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_clock_unregister(
+    sao_engine_render_hook_registry_handle_t handle, sao_engine_hook_token_t token);
 
-SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
-sao_engine_render_clock_request_redraw(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* surface_id_utf8);
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_clock_request_redraw(
+    sao_engine_render_hook_registry_handle_t handle, const char* surface_id_utf8);
 
-SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL
-sao_engine_render_clock_dispatch(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* surface_id_utf8,
-    int32_t hook_point,
-    uint64_t monotonic_time_ns,
-    int32_t viewport_x_px,
-    int32_t viewport_y_px,
-    int32_t viewport_width_px,
-    int32_t viewport_height_px,
-    uint32_t dispatch_flags);
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_clock_dispatch(
+    sao_engine_render_hook_registry_handle_t handle, const char* surface_id_utf8,
+    int32_t hook_point, uint64_t monotonic_time_ns, int32_t viewport_x_px, int32_t viewport_y_px,
+    int32_t viewport_width_px, int32_t viewport_height_px, uint32_t dispatch_flags);
 
 // Set (or replace) the plugin's overlay spec for the given surface.
 // spec_json_utf8 must be a normalized ui_spec (see ui_spec.h).
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_set_overlay(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* plugin_id_utf8,
-    const char* surface_id_utf8,
-    const uint8_t* spec_json_utf8,
-    size_t spec_len);
+    sao_engine_render_hook_registry_handle_t handle, const char* plugin_id_utf8,
+    const char* surface_id_utf8, const uint8_t* spec_json_utf8, size_t spec_len);
 
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_clear_overlay(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* plugin_id_utf8,
-    const char* surface_id_utf8);      // null clears all surfaces for the plugin
+    sao_engine_render_hook_registry_handle_t handle, const char* plugin_id_utf8,
+    const char* surface_id_utf8); // null clears all surfaces for the plugin
 
 // Host-side dispatch — the compositor calls this to run the hook chain
 // for a surface and get the final payload to render.
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_render_hook_dispatch(
-    sao_engine_render_hook_registry_handle_t handle,
-    const char* surface_id_utf8,
-    const uint8_t* input_json_utf8,
-    size_t input_len,
-    uint8_t* out_json_utf8,
-    size_t out_capacity,
+    sao_engine_render_hook_registry_handle_t handle, const char* surface_id_utf8,
+    const uint8_t* input_json_utf8, size_t input_len, uint8_t* out_json_utf8, size_t out_capacity,
     size_t* out_bytes_written);
 
 #ifdef __cplusplus
-}  // extern "C"
+} // extern "C"
 #endif
