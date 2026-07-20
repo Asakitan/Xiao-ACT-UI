@@ -1,10 +1,10 @@
 // SAO Auto — Wave 17c gap-closure test support implementation.
 
-#include "wave17c_support.h"
+#include "core_gap_support.h"
 
 #include "sao/core/string.h"
 
-namespace sao::wave17c {
+namespace sao::core_gap {
 
 const char* gap_kind_label(GapKind kind) noexcept {
     switch (kind) {
@@ -73,4 +73,4 @@ std::size_t utf8_byte_count_for(const std::wstring& utf16) {
     return needed;
 }
 
-}  // namespace sao::wave17c
+}  // namespace sao::core_gap

@@ -606,6 +606,9 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_resolve(
     if (out_class_ptr != nullptr) {
         *out_class_ptr = 0;
     }
+    if (g_callback_provider != nullptr) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
     if (out_class_ptr == nullptr || !valid_utf8_name(class_name_utf8)) {
         return fail(SAO_ERR_INVALID_ARGUMENT, "class_index_resolve received invalid arguments");
     }
@@ -705,6 +708,9 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_resolve_fiel
     uint32_t* out_offset) {
     if (out_offset != nullptr) {
         *out_offset = 0;
+    }
+    if (g_callback_provider != nullptr) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
     if (out_offset == nullptr || class_ptr == 0 || !valid_utf8_name(field_name_utf8)) {
         return fail(SAO_ERR_INVALID_ARGUMENT,

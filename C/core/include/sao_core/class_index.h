@@ -32,8 +32,8 @@ sao_legacy_core_class_index_count(size_t* out_count);
 // describes the current retain/release and process-bound token lifecycle contract.
 #define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MAJOR 1u
 #define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MINOR 0u
-#define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION                                \
-    ((SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MAJOR << 16u) |                  \
+#define SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION                                        \
+    ((SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MAJOR << 16u) |                          \
      SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION_MINOR)
 
 typedef uint64_t sao_legacy_core_class_token_t;
@@ -43,20 +43,24 @@ typedef uint64_t sao_legacy_core_class_token_t;
 // throwing cleanup keeps the token quarantined for explicit retry and never counts as release.
 // The process handle is borrowed only for the duration of each callback. Providers must keep
 // returned tokens valid until a successful release and support callbacks from multiple threads.
+// Provider callbacks must not reenter resolve, resolve_field_offset, configure_provider, or
+// release. These calls fail immediately with SAO_ERR_OS_CALL_FAILED and do not emit a nested log.
 struct SaoLegacyCoreClassMetadataProvider {
     uint32_t struct_size;
     uint32_t abi_version;
     void* user_data;
     void(SAO_LEGACY_CORE_CALL* retain)(void* user_data);
     void(SAO_LEGACY_CORE_CALL* release)(void* user_data);
-    int32_t(SAO_LEGACY_CORE_CALL* resolve_class)(
-        void* user_data, sao_legacy_core_process_handle_t process, const char* class_name_utf8,
-        uint64_t* out_provider_class_token);
-    int32_t(SAO_LEGACY_CORE_CALL* resolve_field_offset)(
-        void* user_data, sao_legacy_core_process_handle_t process, uint64_t provider_class_token,
-        const char* field_name_utf8, uint32_t* out_offset);
-    void(SAO_LEGACY_CORE_CALL* release_class)(void* user_data,
-                                              uint64_t provider_class_token);
+    int32_t(SAO_LEGACY_CORE_CALL* resolve_class)(void* user_data,
+                                                 sao_legacy_core_process_handle_t process,
+                                                 const char* class_name_utf8,
+                                                 uint64_t* out_provider_class_token);
+    int32_t(SAO_LEGACY_CORE_CALL* resolve_field_offset)(void* user_data,
+                                                        sao_legacy_core_process_handle_t process,
+                                                        uint64_t provider_class_token,
+                                                        const char* field_name_utf8,
+                                                        uint32_t* out_offset);
+    void(SAO_LEGACY_CORE_CALL* release_class)(void* user_data, uint64_t provider_class_token);
 };
 
 // Installs a copied provider table and retains its owner. Passing nullptr clears the current
@@ -66,13 +70,11 @@ struct SaoLegacyCoreClassMetadataProvider {
 // that owner too if rollback fails), and can be retried by calling this function again. No
 // replacement is installed until every old-owner cleanup callback succeeds.
 extern "C" SAO_LEGACY_CORE_API int32_t SAO_LEGACY_CORE_CALL
-sao_legacy_core_class_index_configure_provider(
-    const SaoLegacyCoreClassMetadataProvider* provider);
+sao_legacy_core_class_index_configure_provider(const SaoLegacyCoreClassMetadataProvider* provider);
 
 // Releases one process-bound opaque token returned by class_index_resolve. If release_class fails,
 // the same handle/token pair remains valid only for another release attempt; resolution through
 // that token stays fail-closed. Callers release every token before closing its process handle. The
 // token is not a target address and must never be dereferenced or used with process memory APIs.
-extern "C" SAO_LEGACY_CORE_API int32_t SAO_LEGACY_CORE_CALL
-sao_legacy_core_class_index_release(sao_legacy_core_process_handle_t handle,
-                                    sao_legacy_core_class_token_t class_token);
+extern "C" SAO_LEGACY_CORE_API int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_class_index_release(
+    sao_legacy_core_process_handle_t handle, sao_legacy_core_class_token_t class_token);

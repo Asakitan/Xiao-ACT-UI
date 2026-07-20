@@ -1,11 +1,11 @@
-// Wave 4 tests for platform/core process + memory RPM/WPM covering G1.9.
+// Tests for platform/core process + memory RPM/WPM covering G1.9.
 //
 // Coverage:
 //   * process_open_current_pid_succeeds
 //   * process_read_own_memory_roundtrip
 //   * process_enum_modules_includes_kernel32
 //   * process_enum_regions_returns_committed
-//   * process_read_batch_returns_correct_per_request_status
+//   * process_read_multiple_requests_return_independent_status
 //
 // The Python authoritative source is `mem_probe/process.py`.  Every test
 // runs against the current process (self-attach) so no external target is
@@ -44,7 +44,7 @@ uint32_t self_pid() {
 }  // namespace
 
 TEST_CASE("process_open_current_pid_succeeds",
-          "[core][process][wave4]") {
+          "[core][process][runtime]") {
     const uint32_t pid = self_pid();
     REQUIRE(pid > 0u);
 
@@ -60,14 +60,14 @@ TEST_CASE("process_open_current_pid_succeeds",
 }
 
 TEST_CASE("process_read_own_memory_roundtrip",
-          "[core][process][memory][wave4]") {
+          "[core][process][memory][runtime]") {
     const uint32_t pid = self_pid();
     sao_core_process_handle_t p = nullptr;
     REQUIRE(sao_core_process_open(pid, SAO_PROCESS_ACCESS_READ, &p) == SAO_STATUS_OK);
 
     // Prepare a signature buffer that lives on our own stack/heap and
     // is guaranteed to be committed + readable across the ABI boundary.
-    const char signature[] = "SAO-WAVE4-TEST-RPM-XYZ12345";
+    const char signature[] = "SAO-PROCESS-READ-TEST-XYZ12345";
     const size_t sig_len = sizeof(signature);
     std::vector<char> src(sig_len);
     std::memcpy(src.data(), signature, sig_len);
@@ -94,7 +94,7 @@ TEST_CASE("process_read_own_memory_roundtrip",
 }
 
 TEST_CASE("process_enum_modules_includes_kernel32",
-          "[core][process][modules][wave4]") {
+          "[core][process][modules][runtime]") {
 #if !defined(_WIN32)
     SUCCEED("Windows-only test");
     return;
@@ -142,7 +142,7 @@ TEST_CASE("process_enum_modules_includes_kernel32",
 }
 
 TEST_CASE("process_enum_regions_returns_committed",
-          "[core][process][memory][wave4]") {
+          "[core][process][memory][runtime]") {
 #if !defined(_WIN32)
     SUCCEED("Windows-only test");
     return;
@@ -190,46 +190,47 @@ TEST_CASE("process_enum_regions_returns_committed",
 #endif
 }
 
-TEST_CASE("process_read_batch_returns_correct_per_request_status",
-          "[core][process][memory][batch][wave4]") {
+TEST_CASE("process_read_multiple_requests_return_independent_status",
+          "[core][process][memory][multiple][runtime]") {
     const uint32_t pid = self_pid();
     sao_core_process_handle_t p = nullptr;
     REQUIRE(sao_core_process_open(pid, SAO_PROCESS_ACCESS_READ, &p) == SAO_STATUS_OK);
 
-    // Two known-good reads + one deliberately bogus address.
-    const char text_a[] = "batch-request-A";
-    const char text_b[] = "batch-request-B";
+    // Two known-good reads with one deliberately bogus address between them.
+    // The failed request must not poison the valid request that follows it.
+    const char text_a[] = "read-request-A";
+    const char text_b[] = "read-request-B";
     char dst_a[32] = {};
     char dst_b[32] = {};
     char dst_bogus[16] = {};
 
-    SaoMemReadRequest reqs[3];
-    reqs[0] = SaoMemReadRequest{reinterpret_cast<uint64_t>(text_a), dst_a, sizeof(text_a)};
-    reqs[1] = SaoMemReadRequest{reinterpret_cast<uint64_t>(text_b), dst_b, sizeof(text_b)};
-    // A pointer within the kernel-address user-space wall — unmapped.
-    reqs[2] = SaoMemReadRequest{0xFFFFFFFFFFFF0000ULL, dst_bogus, sizeof(dst_bogus)};
+    size_t bytes_read_a = 0;
+    const sao_status_t status_a = sao_core_mem_read(
+        p, reinterpret_cast<uint64_t>(text_a), dst_a, sizeof(text_a), &bytes_read_a);
 
-    SaoMemReadResponse resps[3] = {};
-    const sao_status_t rc = sao_core_mem_read_batch(p, reqs, 3, resps);
-    // Worst status is the third read's failure — not OK.
-    CHECK(rc != SAO_STATUS_OK);
+    size_t bytes_read_bogus = 0;
+    const sao_status_t status_bogus = sao_core_mem_read(
+        p, 0xFFFFFFFFFFFF0000ULL, dst_bogus, sizeof(dst_bogus), &bytes_read_bogus);
 
-    // Per-request statuses are recorded independently.
-    CHECK(resps[0].status == SAO_STATUS_OK);
-    CHECK(resps[0].bytes_read == sizeof(text_a));
+    size_t bytes_read_b = 0;
+    const sao_status_t status_b = sao_core_mem_read(
+        p, reinterpret_cast<uint64_t>(text_b), dst_b, sizeof(text_b), &bytes_read_b);
+
+    CHECK(status_a == SAO_STATUS_OK);
+    CHECK(bytes_read_a == sizeof(text_a));
     CHECK(std::memcmp(dst_a, text_a, sizeof(text_a)) == 0);
 
-    CHECK(resps[1].status == SAO_STATUS_OK);
-    CHECK(resps[1].bytes_read == sizeof(text_b));
-    CHECK(std::memcmp(dst_b, text_b, sizeof(text_b)) == 0);
+    CHECK(status_bogus != SAO_STATUS_OK);
 
-    CHECK(resps[2].status != SAO_STATUS_OK);
+    CHECK(status_b == SAO_STATUS_OK);
+    CHECK(bytes_read_b == sizeof(text_b));
+    CHECK(std::memcmp(dst_b, text_b, sizeof(text_b)) == 0);
 
     sao_core_process_close(p);
 }
 
 TEST_CASE("process_read_pointer_chain_zero_offset_is_base",
-          "[core][process][memory][chain][wave4]") {
+          "[core][process][memory][chain][runtime]") {
     const uint32_t pid = self_pid();
     sao_core_process_handle_t p = nullptr;
     REQUIRE(sao_core_process_open(pid, SAO_PROCESS_ACCESS_READ, &p) == SAO_STATUS_OK);

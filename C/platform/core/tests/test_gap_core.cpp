@@ -32,16 +32,16 @@
 #include "sao/core/time.h"
 #include "sao/core/window.h"
 
-#include "wave17c_support.h"
+#include "core_gap_support.h"
 
-using sao::wave17c::GapKind;
-using sao::wave17c::make_pattern_bytes;
-using sao::wave17c::matches_gap_kind;
-using sao::wave17c::utf8_byte_count_for;
-using sao::wave17c::wide_from_utf8;
+using sao::core_gap::GapKind;
+using sao::core_gap::make_pattern_bytes;
+using sao::core_gap::matches_gap_kind;
+using sao::core_gap::utf8_byte_count_for;
+using sao::core_gap::wide_from_utf8;
 
-TEST_CASE("wave17c core status taxonomy exposes capability_missing",
-          "[wave17c][core][status]") {
+TEST_CASE("core gap status taxonomy exposes capability_missing",
+          "[core][gap][status]") {
     const char* label = sao_status_str(SAO_STATUS_ERR_CAPABILITY_MISSING);
     REQUIRE(label != nullptr);
     CHECK(std::string(label) == "capability_missing");
@@ -55,8 +55,8 @@ TEST_CASE("wave17c core status taxonomy exposes capability_missing",
     CHECK(SAO_STATUS_ERR_CAPABILITY_MISSING != SAO_STATUS_ERR_NOT_IMPLEMENTED);
 }
 
-TEST_CASE("wave17c core: crypto sha256 no longer reports NOT_IMPLEMENTED",
-          "[wave17c][core][crypto]") {
+TEST_CASE("core gap: crypto sha256 no longer reports NOT_IMPLEMENTED",
+          "[core][gap][crypto]") {
     const auto bytes = make_pattern_bytes(64);
     std::array<std::uint8_t, SAO_HASH_SHA256_BYTES> digest{};
     const sao_status_t rc = sao_core_hash(
@@ -83,8 +83,8 @@ TEST_CASE("wave17c core: crypto sha256 no longer reports NOT_IMPLEMENTED",
     }
 }
 
-TEST_CASE("wave17c core: crypto hmac + aes-gcm reach capability parity",
-          "[wave17c][core][crypto]") {
+TEST_CASE("core gap: crypto hmac + aes-gcm reach capability parity",
+          "[core][gap][crypto]") {
     // HMAC probe with a nominal key so we hit the real path on Windows and
     // the capability gate elsewhere.
     const auto data = make_pattern_bytes(32);
@@ -130,8 +130,8 @@ TEST_CASE("wave17c core: crypto hmac + aes-gcm reach capability parity",
     CHECK(rand_rc != SAO_STATUS_ERR_NOT_IMPLEMENTED);
 }
 
-TEST_CASE("wave17c core: window screen info + find-by-pid alive on Windows",
-          "[wave17c][core][window]") {
+TEST_CASE("core gap: window screen info + find-by-pid alive on Windows",
+          "[core][gap][window]") {
     SaoScreenInfo info{};
     const sao_status_t screen_rc = sao_core_window_get_screen_info(&info);
     CAPTURE(screen_rc);
@@ -160,8 +160,8 @@ TEST_CASE("wave17c core: window screen info + find-by-pid alive on Windows",
     CHECK(visible == false);
 }
 
-TEST_CASE("wave17c core: event auto/manual reset lifecycle",
-          "[wave17c][core][event]") {
+TEST_CASE("core gap: event auto/manual reset lifecycle",
+          "[core][gap][event]") {
     // Auto-reset — one signal wakes one waiter, second waiter times out.
     sao_core_wait_event_handle_t auto_evt = nullptr;
     REQUIRE(sao_core_wait_event_create(SAO_WAIT_RESET_AUTO, false,
@@ -184,8 +184,8 @@ TEST_CASE("wave17c core: event auto/manual reset lifecycle",
     sao_core_wait_event_destroy(manual_evt);
 }
 
-TEST_CASE("wave17c core: event cross-thread signal wakes waiter",
-          "[wave17c][core][event]") {
+TEST_CASE("core gap: event cross-thread signal wakes waiter",
+          "[core][gap][event]") {
     sao_core_wait_event_handle_t evt = nullptr;
     REQUIRE(sao_core_wait_event_create(SAO_WAIT_RESET_AUTO, false, &evt) ==
             SAO_STATUS_OK);
@@ -204,8 +204,8 @@ TEST_CASE("wave17c core: event cross-thread signal wakes waiter",
     sao_core_wait_event_destroy(evt);
 }
 
-TEST_CASE("wave17c core: thread pool submit + drain",
-          "[wave17c][core][thread]") {
+TEST_CASE("core gap: thread pool submit + drain",
+          "[core][gap][thread]") {
     CHECK(sao_core_thread_pool_configure(2) == SAO_STATUS_OK);
     std::atomic<std::uint32_t> counter{0};
     auto increment = [](void* arg) {
@@ -222,8 +222,8 @@ TEST_CASE("wave17c core: thread pool submit + drain",
     sao_core_thread_yield();
 }
 
-TEST_CASE("wave17c core: timer fires periodically then stops cleanly",
-          "[wave17c][core][thread][timer]") {
+TEST_CASE("core gap: timer fires periodically then stops cleanly",
+          "[core][gap][thread][timer]") {
     std::atomic<std::uint32_t> ticks{0};
     auto tick = [](void* arg) {
         static_cast<std::atomic<std::uint32_t>*>(arg)->fetch_add(1);
@@ -238,8 +238,8 @@ TEST_CASE("wave17c core: timer fires periodically then stops cleanly",
     CHECK(ticks.load() >= 2);
 }
 
-TEST_CASE("wave17c core: path base dir + join + is_directory",
-          "[wave17c][core][path]") {
+TEST_CASE("core gap: path base dir + join + is_directory",
+          "[core][gap][path]") {
     std::size_t needed = 0;
     REQUIRE(sao_core_path_base_dir(nullptr, 0, &needed) == SAO_STATUS_OK);
     REQUIRE(needed > 1);
@@ -264,8 +264,8 @@ TEST_CASE("wave17c core: path base dir + join + is_directory",
     CHECK_FALSE(sao_core_path_exists(""));
 }
 
-TEST_CASE("wave17c core: string utf8/utf16 codec round trip",
-          "[wave17c][core][string]") {
+TEST_CASE("core gap: string utf8/utf16 codec round trip",
+          "[core][gap][string]") {
     // hello + Chinese "zhwn" (U+4E2D U+6587) + grinning-face emoji (U+1F600)
     // — hand-encoded UTF-8 so we don't rely on u8"" giving us char*
     // (C++20 changed the type to char8_t which no longer implicitly
@@ -298,8 +298,8 @@ TEST_CASE("wave17c core: string utf8/utf16 codec round trip",
     CHECK(hash != 0);
 }
 
-TEST_CASE("wave17c core: time now / wall / sleep / scope",
-          "[wave17c][core][time]") {
+TEST_CASE("core gap: time now / wall / sleep / scope",
+          "[core][gap][time]") {
     const auto scope = sao_core_time_scope_begin();
     const std::uint64_t first_now = sao_core_time_now_ns();
     const std::uint64_t first_ms = sao_core_time_now_ms();

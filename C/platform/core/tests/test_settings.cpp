@@ -1,4 +1,4 @@
-// SAO Auto — platform/core/tests/test_settings_wave5.cpp
+// SAO Auto — platform/core/tests/test_settings.cpp
 //
 // Wave 5 / Phase 1 — settings envelope coverage.
 //
@@ -23,7 +23,7 @@ namespace {
 
 std::string tempSettingsPath(const char* stem) {
     std::filesystem::path p = std::filesystem::temp_directory_path();
-    p /= std::string("sao_wave5_") + stem + "_" +
+    p /= std::string("sao_settings_") + stem + "_" +
          std::to_string(::_getpid()) + ".json";
     // Wipe any leftover from a previous crashed run.
     std::error_code ec;
@@ -41,7 +41,7 @@ std::string readWholeFile(const std::string& path) {
 }  // namespace
 
 TEST_CASE("settings_load_missing_file_returns_default",
-          "[core][settings][wave5]") {
+          "[core][settings]") {
     // Nonexistent path is not an error — the API hands back an empty
     // envelope so the caller can seed defaults and save().
     const std::string path = tempSettingsPath("missing");
@@ -57,7 +57,7 @@ TEST_CASE("settings_load_missing_file_returns_default",
     sao_core_settings_free(settings);
 }
 
-TEST_CASE("settings_save_load_roundtrip", "[core][settings][wave5]") {
+TEST_CASE("settings_save_load_roundtrip", "[core][settings]") {
     const std::string path = tempSettingsPath("roundtrip");
 
     sao_core_settings_t* out = nullptr;
@@ -95,7 +95,7 @@ TEST_CASE("settings_save_load_roundtrip", "[core][settings][wave5]") {
     std::filesystem::remove(path, ec);
 }
 
-TEST_CASE("settings_get_int_missing_returns_default", "[core][settings][wave5]") {
+TEST_CASE("settings_get_int_missing_returns_default", "[core][settings]") {
     sao_core_settings_t* s = nullptr;
     REQUIRE(sao_core_settings_create(&s) == SAO_STATUS_OK);
 
@@ -120,7 +120,7 @@ TEST_CASE("settings_get_int_missing_returns_default", "[core][settings][wave5]")
     sao_core_settings_free(s);
 }
 
-TEST_CASE("settings_set_get_multiple_types", "[core][settings][wave5]") {
+TEST_CASE("settings_set_get_multiple_types", "[core][settings]") {
     sao_core_settings_t* s = nullptr;
     REQUIRE(sao_core_settings_create(&s) == SAO_STATUS_OK);
 
@@ -156,7 +156,7 @@ TEST_CASE("settings_set_get_multiple_types", "[core][settings][wave5]") {
 }
 
 TEST_CASE("settings_save_json_format_matches_python_style",
-          "[core][settings][wave5]") {
+          "[core][settings]") {
     // Python emits:
     //   {
     //     "alpha": 1,
@@ -190,7 +190,7 @@ TEST_CASE("settings_save_json_format_matches_python_style",
 }
 
 TEST_CASE("settings_load_malformed_json_returns_error",
-          "[core][settings][wave5]") {
+          "[core][settings]") {
     const std::string path = tempSettingsPath("malformed");
     {
         std::ofstream f(path, std::ios::binary);

@@ -42,7 +42,7 @@ uint32_t self_pid() {
 }  // namespace
 
 TEST_CASE("detect_own_process_is_native",
-          "[core][engine_detector][wave6]") {
+          "[core][engine_detector][automation]") {
     // The Catch2 test host has no IL2CPP, no Mono, no Unreal - it must
     // resolve to NATIVE.  This also proves the detector never returns
     // UNKNOWN for a live pid with readable modules.
@@ -56,7 +56,7 @@ TEST_CASE("detect_own_process_is_native",
 }
 
 TEST_CASE("detect_by_module_names_il2cpp_signature",
-          "[core][engine_detector][wave6]") {
+          "[core][engine_detector][automation]") {
     // Precedence check: name string containing GameAssembly.dll takes
     // priority over any mono/unreal signatures elsewhere in the list.
     // We exercise this via sao_core_engine_type_name to lock the enum
@@ -87,7 +87,7 @@ TEST_CASE("detect_by_module_names_il2cpp_signature",
 }
 
 TEST_CASE("detect_type_name_returns_known_strings",
-          "[core][engine_detector][wave6]") {
+          "[core][engine_detector][automation]") {
     char buffer[SAO_ENGINE_TYPE_NAME_MAX] = {0};
     REQUIRE(sao_core_engine_type_name(SAO_ENGINE_NATIVE,
                                       buffer, sizeof(buffer)) == SAO_STATUS_OK);
@@ -128,7 +128,7 @@ TEST_CASE("detect_type_name_returns_known_strings",
 }
 
 TEST_CASE("get_signature_module_native_returns_main_exe",
-          "[core][engine_detector][wave6]") {
+          "[core][engine_detector][automation]") {
     // For a native process, the "signature module" is the first module
     // reported by the OS - historically the main executable image.
     const uint32_t pid = self_pid();

@@ -97,6 +97,14 @@ struct SuspendedProcess {
     SuspendedProcess& operator=(const SuspendedProcess&) = delete;
 };
 
+struct MetadataReentryResult {
+    int calls = 0;
+    int32_t resolve_status = SAO_ERR_UNKNOWN;
+    int32_t field_status = SAO_ERR_UNKNOWN;
+    uint64_t resolved_token = UINT64_MAX;
+    uint32_t field_offset = UINT32_MAX;
+};
+
 struct MetadataFixture {
     struct ClassLease {
         sao_core_process_handle_t process = nullptr;
@@ -123,11 +131,30 @@ struct MetadataFixture {
     bool field_entered = false;
     bool allow_field = false;
     bool reenter_on_class_release = false;
+    bool reenter_resolve_and_field_on_retain = false;
+    bool reenter_resolve_and_field_on_resolve_class = false;
+    bool reenter_resolve_and_field_on_class_release = false;
+    sao_core_process_handle_t reentry_process = nullptr;
+    sao_legacy_core_class_token_t reentry_class_token = 0;
     int32_t class_release_reentry_status = SAO_OK;
+    MetadataReentryResult retain_reentry;
+    MetadataReentryResult resolve_class_reentry;
+    MetadataReentryResult release_class_reentry;
     std::condition_variable condition;
     std::unordered_map<uint64_t, ClassLease> classes;
     std::vector<std::string> release_events;
 };
+
+void exercise_metadata_reentry(MetadataFixture& fixture, MetadataReentryResult& result,
+                               sao_core_process_handle_t process) {
+    ++result.calls;
+    result.resolved_token = UINT64_MAX;
+    result.resolve_status =
+        sao_core_class_index_resolve(process, "Fixture.Entity", &result.resolved_token);
+    result.field_offset = UINT32_MAX;
+    result.field_status = sao_core_class_index_resolve_field_offset(
+        process, fixture.reentry_class_token, "value", &result.field_offset);
+}
 
 void SAO_LEGACY_CORE_CALL metadata_retain(void* user_data) {
     auto& fixture = *static_cast<MetadataFixture*>(user_data);
@@ -135,6 +162,9 @@ void SAO_LEGACY_CORE_CALL metadata_retain(void* user_data) {
     ++fixture.retain_attempts;
     ++fixture.retain_calls;
     fixture.condition.notify_all();
+    if (fixture.reenter_resolve_and_field_on_retain) {
+        exercise_metadata_reentry(fixture, fixture.retain_reentry, fixture.reentry_process);
+    }
     if (fixture.throw_next_retain) {
         fixture.throw_next_retain = false;
         throw std::runtime_error("metadata owner retain fixture");
@@ -168,6 +198,9 @@ int32_t SAO_LEGACY_CORE_CALL metadata_resolve_class(void* user_data,
         fixture.resolve_entered = true;
         fixture.condition.notify_all();
         fixture.condition.wait(lock, [&fixture] { return fixture.allow_resolve; });
+    }
+    if (fixture.reenter_resolve_and_field_on_resolve_class) {
+        exercise_metadata_reentry(fixture, fixture.resolve_class_reentry, process);
     }
     if (std::strcmp(class_name_utf8, "Fixture.Entity") != 0) {
         return SAO_ERR_NOT_FOUND;
@@ -218,6 +251,9 @@ void SAO_LEGACY_CORE_CALL metadata_release_class(void* user_data, uint64_t provi
     if (fixture.reenter_on_class_release) {
         fixture.class_release_reentry_status = sao_core_class_index_configure_provider(nullptr);
     }
+    if (fixture.reenter_resolve_and_field_on_class_release) {
+        exercise_metadata_reentry(fixture, fixture.release_class_reentry, fixture.reentry_process);
+    }
     fixture.classes.erase(provider_class_token);
     ++fixture.class_release_calls;
     fixture.release_events.emplace_back("token");
@@ -253,11 +289,27 @@ struct ReentrantLogFixture {
     int32_t reentry_status = SAO_ERR_UNKNOWN;
 };
 
+struct LogCounter {
+    int calls = 0;
+};
+
 void SAO_LEGACY_CORE_CALL reenter_configure_log(int32_t, const char*, int32_t, const char*,
                                                 void* user_data) {
     auto& fixture = *static_cast<ReentrantLogFixture*>(user_data);
     ++fixture.calls;
     fixture.reentry_status = sao_core_class_index_configure_provider(nullptr);
+}
+
+void SAO_LEGACY_CORE_CALL count_log(int32_t, const char*, int32_t, const char*, void* user_data) {
+    ++static_cast<LogCounter*>(user_data)->calls;
+}
+
+void check_metadata_reentry(const MetadataReentryResult& result) {
+    CHECK(result.calls == 1);
+    CHECK(result.resolve_status == SAO_ERR_OS_CALL_FAILED);
+    CHECK(result.field_status == SAO_ERR_OS_CALL_FAILED);
+    CHECK(result.resolved_token == 0);
+    CHECK(result.field_offset == 0);
 }
 
 } // namespace
@@ -792,6 +844,68 @@ TEST_CASE("blocking class resolution drains before replacement releases token ow
 
     REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
     CHECK(replacement.release_calls == 1);
+}
+
+TEST_CASE("provider callbacks reject class-index metadata reentry promptly",
+          "[class_index][provider][reentry]") {
+    using namespace std::chrono_literals;
+
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture fixture;
+    MetadataProviderReset reset;
+    StructuredLogReset log_reset;
+    LogCounter log;
+    auto provider = metadata_provider(fixture);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+
+    REQUIRE(sao_core_class_index_configure_provider(&provider) == SAO_OK);
+    uint64_t seed_token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &seed_token) == SAO_OK);
+    REQUIRE(seed_token != 0);
+    REQUIRE(sao_legacy_core_set_structured_log_callback(&count_log, &log) == SAO_OK);
+
+    SECTION("resolve_class callback") {
+        fixture.reentry_class_token = seed_token;
+        fixture.reenter_resolve_and_field_on_resolve_class = true;
+        uint64_t token = 0;
+        const auto started = std::chrono::steady_clock::now();
+        REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &token) == SAO_OK);
+        CHECK(std::chrono::steady_clock::now() - started < 250ms);
+        check_metadata_reentry(fixture.resolve_class_reentry);
+        CHECK(log.calls == 0);
+        REQUIRE(sao_core_class_index_release(process.handle, token) == SAO_OK);
+    }
+
+    SECTION("retain callback") {
+        MetadataFixture candidate;
+        candidate.reentry_process = process.handle;
+        candidate.reentry_class_token = seed_token;
+        candidate.reenter_resolve_and_field_on_retain = true;
+        auto candidate_provider = metadata_provider(candidate);
+        const auto started = std::chrono::steady_clock::now();
+        REQUIRE(sao_core_class_index_configure_provider(&candidate_provider) == SAO_OK);
+        CHECK(std::chrono::steady_clock::now() - started < 250ms);
+        check_metadata_reentry(candidate.retain_reentry);
+        CHECK(log.calls == 0);
+        seed_token = 0;
+        REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    }
+
+    SECTION("release_class callback") {
+        fixture.reentry_process = process.handle;
+        fixture.reentry_class_token = seed_token;
+        fixture.reenter_resolve_and_field_on_class_release = true;
+        const auto started = std::chrono::steady_clock::now();
+        REQUIRE(sao_core_class_index_release(process.handle, seed_token) == SAO_OK);
+        CHECK(std::chrono::steady_clock::now() - started < 250ms);
+        check_metadata_reentry(fixture.release_class_reentry);
+        CHECK(log.calls == 0);
+        seed_token = 0;
+    }
+
+    if (seed_token != 0) {
+        REQUIRE(sao_core_class_index_release(process.handle, seed_token) == SAO_OK);
+    }
 }
 
 TEST_CASE("class-index provider failure log can reenter configure after callback lease drains",

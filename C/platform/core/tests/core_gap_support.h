@@ -2,7 +2,7 @@
 //
 // These helpers keep the three gap tests (core/engine/net) DRY without
 // forcing every test binary to duplicate boiler-plate.  They live in a
-// dedicated STATIC library ``wave17c_support_lib`` so the same object code
+// dedicated STATIC library ``sao_core_gap_support_lib`` so the same object code
 // is linked into every gap test and stays out of the shipping DLLs.
 //
 // Scope: mock-only.  Nothing here spawns drivers, opens pcap adapters,
@@ -19,7 +19,7 @@
 
 #include "sao/core/status.h"
 
-namespace sao::wave17c {
+namespace sao::core_gap {
 
 // ---------------------------------------------------------------------------
 // Classification tag — mirrors the Wave 17c A/B/C matrix so gap tests can
@@ -66,4 +66,4 @@ std::wstring wide_from_utf8(const std::string& utf8);
 // results.
 std::size_t utf8_byte_count_for(const std::wstring& utf16);
 
-}  // namespace sao::wave17c
+}  // namespace sao::core_gap

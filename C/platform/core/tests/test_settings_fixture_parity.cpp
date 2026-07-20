@@ -230,52 +230,52 @@ void run_settings_fixture(const std::string& fixture_name) {
 // ---------------------------------------------------------------------------
 // The 10 pinned fixtures.
 // ---------------------------------------------------------------------------
-TEST_CASE("settings_fixture_parity_wave9 normal_default_only_panel_theme",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity normal_default_only_panel_theme",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("normal_default_only_panel_theme.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 normal_full_v5",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity normal_full_v5",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("normal_full_v5.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 normal_light_theme",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity normal_light_theme",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("normal_light_theme.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 normal_utf8_plugin_names",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity normal_utf8_plugin_names",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("normal_utf8_plugin_names.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 v0_legacy_migration_stripped",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity v0_legacy_migration_stripped",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("v0_legacy_migration_stripped.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 partial_only_hotkeys",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity partial_only_hotkeys",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("partial_only_hotkeys.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 partial_missing_panel_themes",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity partial_missing_panel_themes",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("partial_missing_panel_themes.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 extra_field_unknown_keys_kept",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity extra_field_unknown_keys_kept",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("extra_field_unknown_keys_kept.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 corrupt_wrong_theme_string",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity corrupt_wrong_theme_string",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("corrupt_wrong_theme_string.json");
 }
 
-TEST_CASE("settings_fixture_parity_wave9 corrupt_non_dict_theme",
-          "[core][settings][fixture_parity_wave9]") {
+TEST_CASE("settings_fixture_parity corrupt_non_dict_theme",
+          "[core][settings][fixture_parity]") {
     run_settings_fixture("corrupt_non_dict_theme.json");
 }

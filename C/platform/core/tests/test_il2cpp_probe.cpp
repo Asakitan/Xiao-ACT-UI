@@ -56,7 +56,7 @@ uint64_t game_assembly_base_for_current() {
 }  // namespace
 
 TEST_CASE("il2cpp_probe_metadata_no_target_skips",
-          "[core][il2cpp_probe][wave6]") {
+          "[core][il2cpp_probe][automation]") {
     // Without a live IL2CPP target, the probe must refuse cleanly and
     // never touch the probe_out fields with garbage.
     if (game_assembly_base_for_current() != 0) {
@@ -100,7 +100,7 @@ TEST_CASE("il2cpp_probe_metadata_no_target_skips",
 }
 
 TEST_CASE("il2cpp_scan_klass_pointers_callback_invoked",
-          "[core][il2cpp_probe][wave6]") {
+          "[core][il2cpp_probe][automation]") {
     // Build a synthetic 8-aligned buffer in our own address space.  The
     // scanner reads it via sao_core_mem_read against our own process
     // handle so we get an end-to-end path exercised.
@@ -163,7 +163,7 @@ TEST_CASE("il2cpp_scan_klass_pointers_callback_invoked",
 }
 
 TEST_CASE("il2cpp_read_klass_name_metadata_v27_stride",
-          "[core][il2cpp_probe][wave6]") {
+          "[core][il2cpp_probe][automation]") {
     // Simulate an IL2CPP klass in our own address space so the name
     // reader walks the standard klass+0x10 layout without needing a
     // real IL2CPP process.  Metadata v27/v29/v31 all place the name
