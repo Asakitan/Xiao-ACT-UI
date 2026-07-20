@@ -207,7 +207,7 @@ struct SaoSdkUiTable {
     sao_sdk_status_t(SAO_SDK_CALL* unregister_render_hook)(void* ctx_impl,
                                                            sao_sdk_hook_token_t token);
 
-    // Register a typed render-clock hook (Wave 7 — fires at
+    // Register a typed render-clock hook (fires at
     // BEFORE_COMPOSITOR / AFTER_COMPOSITOR / BEFORE_PRESENT /
     // AFTER_PRESENT).
     sao_sdk_status_t(SAO_SDK_CALL* register_render_hook_clock)(
@@ -217,7 +217,7 @@ struct SaoSdkUiTable {
 
     sao_sdk_status_t(SAO_SDK_CALL* request_redraw)(void* ctx_impl, const char* surface_id_utf8);
 
-    // ─── Wave 7 append-only extension ────────────────────────────────
+    // ─── Append-only typed UI extension ─────────────────────────────
     // Descriptor-based panel registration + widget CRUD.  Legacy
     // register_panel() above stays wired for JSON-spec consumers; the
     // fields below are what typed-C plugins call through.

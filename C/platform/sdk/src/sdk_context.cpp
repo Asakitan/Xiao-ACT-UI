@@ -1,4 +1,4 @@
-// SAO Auto — Wave 7 SDK context lifecycle + shared runtime.
+// SAO Auto — SDK context lifecycle and shared runtime.
 //
 // Wires:
 //   * sao_sdk_context_create / _destroy — allocate a per-plugin state

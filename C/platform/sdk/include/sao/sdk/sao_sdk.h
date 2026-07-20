@@ -41,7 +41,7 @@ SAO_SDK_API uint32_t SAO_SDK_CALL sao_sdk_abi_version(void);
 typedef sao_sdk_status_t(SAO_SDK_CALL* sao_plugin_init_fn_t)(const struct SaoSdkContext* ctx);
 typedef void(SAO_SDK_CALL* sao_plugin_shutdown_fn_t)(const struct SaoSdkContext* ctx);
 
-// ─── Context lifecycle (Wave 7) ─────────────────────────────────────
+// ─── Context lifecycle ──────────────────────────────────────────────
 //
 // The platform side calls these to hand a fully-wired context to a
 // plugin.  The context owns per-plugin state including:
@@ -76,7 +76,7 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_bind_context(const char* plugi
                                                                const char* plugin_version_utf8,
                                                                struct SaoSdkContext* out_ctx);
 
-// ─── UI panel + widget + render hook wire (Wave 7) ──────────────────
+// ─── UI panel, widget, and render-hook wire ─────────────────────────
 //
 // Free-function wrappers around the ctx->ui-> pointers so plugins never
 // dereference the vtable manually.  These forward directly to the
@@ -118,7 +118,7 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_request_redraw(const struct Sa
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_request_redraw_surface(const struct SaoSdkContext* ctx, const char* surface_id_utf8);
 
-// ─── Event bus wire (Wave 7) ────────────────────────────────────────
+// ─── Event bus wire ─────────────────────────────────────────────────
 
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_subscribe_event(
     const struct SaoSdkContext* ctx, const char* event_type_utf8, sao_sdk_event_callback_t callback,
@@ -132,7 +132,7 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_publish_event(const struct Sao
                                                                 const uint8_t* data_ptr,
                                                                 size_t size);
 
-// ─── Hotkey wire (Wave 7) ───────────────────────────────────────────
+// ─── Hotkey wire ────────────────────────────────────────────────────
 
 // Hotkey descriptor — trimmed subset of `SaoUiHotkeyBindingSpec`.
 struct SaoSdkHotkeySpec {

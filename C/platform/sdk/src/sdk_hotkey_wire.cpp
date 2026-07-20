@@ -1,4 +1,4 @@
-// SAO Auto — Wave 7 SDK hotkey wire.
+// SAO Auto — SDK hotkey wire.
 //
 // Forwards `SaoSdkContext::hotkey->*` into the platform input router
 // (`sao_ui_input_router_deep_*`).  Plugins never see the deep router;

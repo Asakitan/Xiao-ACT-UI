@@ -1,4 +1,4 @@
-// SAO Auto — Wave 7 SDK UI wire.
+// SAO Auto — SDK UI wire.
 //
 // Forwards `SaoSdkContext::ui->*` calls into the platform UI module:
 //   * register_ui_panel      → sao_ui_panel_register (SaoPanelDescriptor)
@@ -475,7 +475,7 @@ sao_sdk_status_t SAO_SDK_CALL ui_request_redraw(void* ctx_impl, const char* surf
     return SAO_SDK_OK;
 }
 
-// ─── Wave 7 append-only fields ──────────────────────────────────────
+// ─── Append-only typed panel and widget fields ─────────────────────
 
 sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel(void* ctx_impl,
                                                    const SaoSdkPanelDescriptor* descriptor,
@@ -967,16 +967,16 @@ sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
 
 const SaoSdkUiTable* make_ui_table() {
     static const SaoSdkUiTable table = {
-        // Legacy JSON path (Wave 6 will populate the JSON normalizer).
+        // Legacy JSON path retained for scripting-language ui_spec consumers.
         ui_register_panel_boundary,
         ui_set_panel_spec_boundary,
         ui_set_overlay_boundary,
         ui_register_render_hook_legacy_boundary,
         ui_unregister_render_hook_legacy_boundary,
-        // Wave 7 typed render-clock hook.
+        // Typed render-clock hook.
         ui_register_render_hook_clock_boundary,
         ui_request_redraw_boundary,
-        // Wave 7 descriptor + widget CRUD.
+        // Descriptor-based panel and widget CRUD.
         ui_register_ui_panel_boundary,
         ui_unregister_ui_panel_boundary,
         ui_panel_add_widget_boundary,
@@ -994,7 +994,7 @@ void test_fail_next_panel_unregister(sao_sdk_status_t status) noexcept {
     g_fail_next_panel_unregister_status.store(status);
 }
 
-// ─── Public free-function wrappers (Wave 7) ─────────────────────────
+// ─── Public free-function wrappers ──────────────────────────────────
 
 } // namespace sao_sdk_internal
 

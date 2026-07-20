@@ -1,4 +1,4 @@
-// SAO Auto — Wave 7 SDK register demo tests.
+// SAO Auto — SDK public registration integration tests.
 //
 // These tests demonstrate that "any plugin can register a panel +
 // widgets + event subs + hotkeys through the SDK, receive typed
