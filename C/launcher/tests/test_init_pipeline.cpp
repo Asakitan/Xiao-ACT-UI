@@ -43,6 +43,14 @@ extern "C" sao_status_t sao_launcher_init_pipeline_test_apply_streaming_mode_tra
     bool (*get_capture)(void*), sao_status_t (*set_capture)(bool, void*),
     sao_status_t (*set_flow)(bool, void*), sao_status_t (*release)(void*), void* user_data);
 
+extern "C" sao_status_t sao_launcher_init_pipeline_test_publish_entity_authority_before_online(
+    sao_status_t (*publish)(void*), sao_status_t (*bring_online)(void*), void* user_data);
+
+extern "C" sao_status_t sao_launcher_init_pipeline_test_apply_nervgear_mode_transaction(
+    bool* mode, sao_status_t (*set_shell_mode)(bool, void*),
+    sao_status_t (*persist_mode)(bool, void*), sao_status_t (*publish_degraded)(void*),
+    void* user_data);
+
 namespace {
 
 struct TeardownRecorder {
@@ -265,6 +273,60 @@ struct StreamingModeTransactionRecorder {
     }
 };
 
+struct EntityAuthorityStartupRecorder {
+    sao_status_t publication_status = SAO_STATUS_OK;
+    sao_status_t online_status = SAO_STATUS_OK;
+    std::vector<std::string> steps;
+
+    static sao_status_t publish(void* user_data) {
+        auto* self = static_cast<EntityAuthorityStartupRecorder*>(user_data);
+        self->steps.emplace_back("publish");
+        return self->publication_status;
+    }
+
+    static sao_status_t bringOnline(void* user_data) {
+        auto* self = static_cast<EntityAuthorityStartupRecorder*>(user_data);
+        self->steps.emplace_back("online");
+        return self->online_status;
+    }
+};
+
+struct NervgearModeTransactionRecorder {
+    bool shell_mode = true;
+    sao_status_t persist_status = SAO_STATUS_OK;
+    sao_status_t degraded_status = SAO_STATUS_OK;
+    std::vector<sao_status_t> set_statuses;
+    std::size_t set_attempt = 0;
+    std::size_t degraded_calls = 0;
+    std::vector<std::string> steps;
+
+    static sao_status_t setShellMode(bool enabled, void* user_data) {
+        auto* self = static_cast<NervgearModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back(enabled ? "shell:on" : "shell:off");
+        const sao_status_t status =
+            self->set_attempt < self->set_statuses.size()
+                ? self->set_statuses[self->set_attempt++]
+                : SAO_STATUS_OK;
+        if (status == SAO_STATUS_OK) {
+            self->shell_mode = enabled;
+        }
+        return status;
+    }
+
+    static sao_status_t persistMode(bool enabled, void* user_data) {
+        auto* self = static_cast<NervgearModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back(enabled ? "persist:on" : "persist:off");
+        return self->persist_status;
+    }
+
+    static sao_status_t publishDegraded(void* user_data) {
+        auto* self = static_cast<NervgearModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back("degraded");
+        ++self->degraded_calls;
+        return self->degraded_status;
+    }
+};
+
 struct ConfigFile {
     explicit ConfigFile(const char* content) {
         wchar_t temp_path[MAX_PATH]{};
@@ -454,6 +516,55 @@ TEST_CASE("launcher streaming mode release retries on the same thread",
     CHECK_FALSE(recorder.locked);
 }
 
+TEST_CASE("launcher publishes entity authority before bringing the shell online",
+          "[launcher][init_pipeline][entity][authority][startup][focused]") {
+    EntityAuthorityStartupRecorder recorder;
+    REQUIRE(sao_launcher_init_pipeline_test_publish_entity_authority_before_online(
+                &EntityAuthorityStartupRecorder::publish,
+                &EntityAuthorityStartupRecorder::bringOnline, &recorder) == SAO_STATUS_OK);
+    CHECK(recorder.steps == std::vector<std::string>{"publish", "online"});
+
+    recorder = {};
+    recorder.publication_status = SAO_STATUS_ERR_OS_CALL_FAILED;
+    CHECK(sao_launcher_init_pipeline_test_publish_entity_authority_before_online(
+              &EntityAuthorityStartupRecorder::publish,
+              &EntityAuthorityStartupRecorder::bringOnline, &recorder) ==
+          SAO_STATUS_ERR_OS_CALL_FAILED);
+    CHECK(recorder.steps == std::vector<std::string>{"publish"});
+}
+
+TEST_CASE("launcher NerveGear persistence rollback failure publishes degraded authority",
+          "[launcher][init_pipeline][entity][nervgear][rollback][degraded][focused]") {
+    bool runtime_mode = true;
+    NervgearModeTransactionRecorder recorder;
+    recorder.persist_status = SAO_STATUS_ERR_ACCESS_DENIED;
+    recorder.set_statuses = {SAO_STATUS_OK, SAO_STATUS_ERR_OS_CALL_FAILED};
+
+    CHECK(sao_launcher_init_pipeline_test_apply_nervgear_mode_transaction(
+              &runtime_mode, &NervgearModeTransactionRecorder::setShellMode,
+              &NervgearModeTransactionRecorder::persistMode,
+              &NervgearModeTransactionRecorder::publishDegraded, &recorder) ==
+          SAO_STATUS_ERR_UNKNOWN);
+    CHECK_FALSE(runtime_mode);
+    CHECK_FALSE(recorder.shell_mode);
+    CHECK(recorder.degraded_calls == 1);
+    CHECK(recorder.steps == std::vector<std::string>{"shell:off", "persist:off", "shell:on",
+                                                     "degraded"});
+
+    runtime_mode = true;
+    recorder = {};
+    recorder.persist_status = SAO_STATUS_ERR_ACCESS_DENIED;
+    recorder.set_statuses = {SAO_STATUS_OK, SAO_STATUS_OK};
+    CHECK(sao_launcher_init_pipeline_test_apply_nervgear_mode_transaction(
+              &runtime_mode, &NervgearModeTransactionRecorder::setShellMode,
+              &NervgearModeTransactionRecorder::persistMode,
+              &NervgearModeTransactionRecorder::publishDegraded, &recorder) ==
+          SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(runtime_mode);
+    CHECK(recorder.shell_mode);
+    CHECK(recorder.degraded_calls == 0);
+}
+
 TEST_CASE("launcher_init_pipeline_teardown_reverse_order", "[launcher][init_pipeline]") {
     DualRunChildGuard dual_run_child;
     ConfigFile config(kAllProvidersConfig);
@@ -610,7 +721,7 @@ TEST_CASE("launcher_init_pipeline_no_config_enables_stable_plugin_roots",
 }
 
 TEST_CASE("launcher raw license transport rejects prevalidated responses",
-          "[launcher][license][trust][w18]") {
+          "[launcher][license][trust]") {
     ConfigFile verified_locally(R"json({
         "license": {
             "enabled": true,
@@ -778,7 +889,7 @@ TEST_CASE("launcher_init_pipeline_security_failure_propagates",
 }
 
 TEST_CASE("launcher_headless_forwards_normalized_log_level_to_platform",
-          "[launcher][init_pipeline][logging][w18]") {
+          "[launcher][init_pipeline][logging]") {
     DualRunChildGuard dual_run_child;
     CompositionRecorder composition;
     CompositionHookGuard composition_guard(composition);
@@ -797,7 +908,7 @@ TEST_CASE("launcher_headless_forwards_normalized_log_level_to_platform",
     REQUIRE(composition.platform_log_level == "warn");
 }
 
-TEST_CASE("launcher_platform_config_applies_core_log_filter", "[launcher][logging][core][w18]") {
+TEST_CASE("launcher_platform_config_applies_core_log_filter", "[launcher][logging][core]") {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     int callback_calls = 0;
     REQUIRE(sao_core_set_log_callback(
@@ -832,7 +943,7 @@ TEST_CASE("launcher_platform_config_applies_core_log_filter", "[launcher][loggin
 }
 
 TEST_CASE("launcher_headless_production_path_applies_rollout_and_persists_anon_id",
-          "[launcher][init_pipeline][rollout][telemetry][w18]") {
+          "[launcher][init_pipeline][rollout][telemetry]") {
     ProductionRolloutGuard guard;
     sao_rollout_config rollout{};
     sao_rollout_config_default(&rollout);
@@ -889,7 +1000,7 @@ TEST_CASE("launcher_headless_production_path_applies_rollout_and_persists_anon_i
 }
 
 TEST_CASE("launcher_headless_records_results_and_checks_auto_retreat",
-          "[launcher][init_pipeline][rollout][w18]") {
+          "[launcher][init_pipeline][rollout]") {
     ProductionRolloutGuard guard;
     sao_rollout_config rollout{};
     sao_rollout_config_default(&rollout);

@@ -583,10 +583,14 @@ sao_status_t fail_closed_after(sao_status_t failure, sao_ui_entity_shell_handle_
                                entity_action_routes::EntityActionRouteStore& routes,
                                EntityProviderPublicationState& state, bool nervgear_mode,
                                SetRootsFn set_roots_fn) noexcept {
-    routes.close_invocation_gate();
+    const sao_status_t rundown_status = routes.close_invocation_gate();
     reset_published_state(state);
-    return first_failure(
-        failure, publish_fail_closed_roots(shell, routes, state, nervgear_mode, set_roots_fn));
+    sao_status_t status = first_failure(failure, rundown_status);
+    if (rundown_status == SAO_STATUS_OK) {
+        status = first_failure(
+            status, publish_fail_closed_roots(shell, routes, state, nervgear_mode, set_roots_fn));
+    }
+    return status;
 }
 
 sao_status_t
@@ -699,10 +703,13 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        routes.close_invocation_gate();
+        sao_status_t status = routes.close_invocation_gate();
+        if (status != SAO_STATUS_OK) {
+            return status;
+        }
         reset_published_state(state);
         entity_provider_catalog::OwnedEntityProviderCatalog catalog;
-        sao_status_t status = SAO_STATUS_OK;
+        status = SAO_STATUS_OK;
         if (state.builtin_authority.plugin_runtime ==
             PluginRuntimePublicationStatus::degraded_internal) {
             catalog = {};
@@ -783,7 +790,11 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        const sao_status_t status = publish_routes_transaction(
+        sao_status_t status = routes.close_invocation_gate();
+        if (status != SAO_STATUS_OK) {
+            return status;
+        }
+        status = publish_routes_transaction(
             shell, routes, {}, {}, nervgear_mode, state.topmost, state.streaming_mode,
             state.builtin_authority, set_roots_fn, RouteCommitMode::resync_on_failure);
         if (status != SAO_STATUS_OK)
@@ -805,9 +816,10 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
 sao_status_t invoke(const entity_action_routes::EntityActionRoute& route,
                     sao_ui_entity_shell_handle_t shell, InvokeProviderFn invoke_fn,
                     GetShellSnapshotFn get_snapshot_fn, HomeFn home_fn) noexcept {
-    if (!route.invocation_allowed()) {
-        return SAO_STATUS_ERR_NOT_FOUND;
-    }
+    entity_action_routes::EntityActionInvocationLease invocation_lease;
+    const sao_status_t lease_status = route.acquire_invocation(invocation_lease);
+    if (lease_status != SAO_STATUS_OK)
+        return lease_status;
     if (invoke_fn == nullptr || route.provider_id.empty() || route.provider_generation == 0 ||
         route.action_id.empty() || !route.can_activate) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;

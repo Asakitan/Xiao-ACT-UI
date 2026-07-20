@@ -213,7 +213,7 @@ TEST_CASE("dual_run_spawn_cpp_side_by_side_returns_real_pid",
 }
 
 TEST_CASE("dual_run_cpp_command_line_preserves_parent_argv",
-          "[launcher][dual_run][w18][argv]") {
+          "[launcher][dual_run][argv]") {
     DualRunGuard g;
     const wchar_t* parent_argv[] = {
         L"parent.exe",
@@ -246,7 +246,7 @@ TEST_CASE("dual_run_cpp_command_line_preserves_parent_argv",
 }
 
 TEST_CASE("dual_run_spawn_cpp_capture_keeps_argv_role_and_recursion_guard",
-          "[launcher][dual_run][w18][argv]") {
+          "[launcher][dual_run][argv]") {
     DualRunGuard g;
     const wchar_t* parent_argv[] = {
         L"parent.exe", L"--safe-mode", L"--config=C:\\A B\\c.json",

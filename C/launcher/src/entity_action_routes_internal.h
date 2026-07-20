@@ -2,8 +2,10 @@
 
 #include "sao/core/status.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -12,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -48,25 +51,119 @@ struct EntityActionRouteSpec {
     bool operator==(const EntityActionRouteSpec&) const = default;
 };
 
-class EntityActionInvocationGate final {
+class EntityActionInvocationControl final {
   public:
+    class Lease final {
+      public:
+        Lease() noexcept = default;
+
+        ~Lease() noexcept {
+            release();
+        }
+
+        Lease(const Lease&) = delete;
+        Lease& operator=(const Lease&) = delete;
+
+        Lease(Lease&& other) noexcept : control_(std::move(other.control_)) {}
+
+        Lease& operator=(Lease&& other) noexcept {
+            if (this != &other) {
+                release();
+                control_ = std::move(other.control_);
+            }
+            return *this;
+        }
+
+      private:
+        friend class EntityActionInvocationControl;
+
+        void release() noexcept {
+            const auto control = std::move(control_);
+            if (control == nullptr) {
+                return;
+            }
+            const auto active = std::find(active_controls_.rbegin(), active_controls_.rend(),
+                                          control.get());
+            if (active != active_controls_.rend()) {
+                active_controls_.erase(std::next(active).base());
+            }
+            try {
+                {
+                    std::lock_guard lock(control->mutex_);
+                    if (control->in_flight_ > 0) {
+                        --control->in_flight_;
+                    }
+                }
+                control->idle_.notify_all();
+            } catch (...) {
+            }
+        }
+
+        std::shared_ptr<EntityActionInvocationControl> control_;
+    };
+
     bool allows_invocation() const noexcept {
-        return open_.load(std::memory_order_acquire);
+        return accepting_.load(std::memory_order_acquire);
+    }
+
+    bool active_on_current_thread() const noexcept {
+        return std::find(active_controls_.begin(), active_controls_.end(), this) !=
+               active_controls_.end();
+    }
+
+    sao_status_t acquire(const std::shared_ptr<EntityActionInvocationControl>& self,
+                         Lease& out) noexcept {
+        out.release();
+        if (self == nullptr || self.get() != this) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        if (active_on_current_thread()) {
+            return SAO_STATUS_ERR_TIMEOUT;
+        }
+        try {
+            std::lock_guard lock(mutex_);
+            if (!accepting_.load(std::memory_order_acquire)) {
+                return SAO_STATUS_ERR_NOT_FOUND;
+            }
+            active_controls_.push_back(this);
+            ++in_flight_;
+            out.control_ = self;
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
     }
 
   private:
     friend class EntityActionRouteStore;
 
     void close() noexcept {
-        open_.store(false, std::memory_order_release);
+        accepting_.store(false, std::memory_order_release);
     }
 
-    void open() noexcept {
-        open_.store(true, std::memory_order_release);
+    void activate() noexcept {
+        accepting_.store(true, std::memory_order_release);
     }
 
-    std::atomic_bool open_{true};
+    sao_status_t wait_until_idle() noexcept {
+        try {
+            std::unique_lock lock(mutex_);
+            idle_.wait(lock, [this] { return in_flight_ == 0; });
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
+    inline static thread_local std::vector<const EntityActionInvocationControl*>
+        active_controls_;
+    std::atomic_bool accepting_{false};
+    std::mutex mutex_;
+    std::condition_variable idle_;
+    std::size_t in_flight_ = 0;
 };
+
+using EntityActionInvocationLease = EntityActionInvocationControl::Lease;
 
 struct EntityActionRoute {
     std::int32_t token = 0;
@@ -85,7 +182,13 @@ struct EntityActionRoute {
     bool close_menu_before = false;
 
     bool invocation_allowed() const noexcept {
-        return invocation_gate_ == nullptr || invocation_gate_->allows_invocation();
+        return invocation_control_ == nullptr || invocation_control_->allows_invocation();
+    }
+
+    sao_status_t acquire_invocation(EntityActionInvocationLease& out) const noexcept {
+        return invocation_control_ == nullptr
+                   ? SAO_STATUS_OK
+                   : invocation_control_->acquire(invocation_control_, out);
     }
 
     bool operator==(const EntityActionRoute& other) const noexcept {
@@ -103,7 +206,7 @@ struct EntityActionRoute {
   private:
     friend class EntityActionRouteStore;
 
-    std::shared_ptr<EntityActionInvocationGate> invocation_gate_;
+        std::shared_ptr<EntityActionInvocationControl> invocation_control_;
 };
 
 struct EntityActionRouteSnapshot {
@@ -121,22 +224,74 @@ class EntityActionRouteStore final {
     };
 
     struct StoreState {
-        StoreState(std::int32_t first_token, std::int32_t last_token_value,
-                   std::shared_ptr<EntityActionInvocationGate> gate) noexcept
+                StoreState(std::int32_t first_token, std::int32_t last_token_value) noexcept
             : last_token(last_token_value), next_token(first_token),
               token_range_valid(first_token >= kFirstDynamicToken &&
                                 first_token <= last_token_value &&
-                                last_token_value <= kLastDynamicToken),
-              invocation_gate(std::move(gate)) {}
+                                                                last_token_value <= kLastDynamicToken) {}
 
         std::int32_t last_token = kLastDynamicToken;
         std::int64_t next_token = kFirstDynamicToken;
         bool token_range_valid = true;
         std::atomic_bool accepting{true};
+        std::atomic_bool invocation_enabled{true};
         std::mutex publish_mutex;
+        bool transition_in_progress = false;
         std::atomic<std::shared_ptr<const PublishedState>> published;
-        std::shared_ptr<EntityActionInvocationGate> invocation_gate;
     };
+
+    static bool controls_active_on_current_thread(const PublishedState* published) noexcept {
+        return published != nullptr &&
+               std::any_of(published->snapshot.routes.begin(), published->snapshot.routes.end(),
+                           [](const auto& route) {
+                               return route.invocation_control_ != nullptr &&
+                                      route.invocation_control_->active_on_current_thread();
+                           });
+    }
+
+    static bool controls_are_active(const PublishedState* published) noexcept {
+        return published == nullptr ||
+               std::all_of(published->snapshot.routes.begin(), published->snapshot.routes.end(),
+                           [](const auto& route) { return route.invocation_allowed(); });
+    }
+
+    static void close_controls(const PublishedState* published) noexcept {
+        if (published == nullptr) {
+            return;
+        }
+        for (const auto& route : published->snapshot.routes) {
+            if (route.invocation_control_ != nullptr) {
+                route.invocation_control_->close();
+            }
+        }
+    }
+
+    static sao_status_t wait_for_controls(const PublishedState* published) noexcept {
+        if (published == nullptr) {
+            return SAO_STATUS_OK;
+        }
+        for (const auto& route : published->snapshot.routes) {
+            if (route.invocation_control_ == nullptr) {
+                continue;
+            }
+            const sao_status_t status = route.invocation_control_->wait_until_idle();
+            if (status != SAO_STATUS_OK) {
+                return status;
+            }
+        }
+        return SAO_STATUS_OK;
+    }
+
+    static void activate_controls(const PublishedState* published) noexcept {
+        if (published == nullptr) {
+            return;
+        }
+        for (const auto& route : published->snapshot.routes) {
+            if (route.invocation_control_ != nullptr) {
+                route.invocation_control_->activate();
+            }
+        }
+    }
 
   public:
     class PreparedPublication final {
@@ -204,22 +359,51 @@ class EntityActionRouteStore final {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             const auto state = state_;
-            std::lock_guard lock(state->publish_mutex);
+            std::unique_lock lock(state->publish_mutex);
             if (!state->accepting.load(std::memory_order_acquire)) {
                 release();
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (state->transition_in_progress) {
+                release();
+                return SAO_STATUS_ERR_TIMEOUT;
             }
             if (state->published.load(std::memory_order_acquire) != base_ ||
                 state->next_token != base_next_token_) {
                 release();
                 return SAO_STATUS_ERR_CANCELLED;
             }
+            const bool activate_candidate =
+                open_invocation_gate || state->invocation_enabled.load(std::memory_order_acquire);
             if (changed_) {
+                if (controls_active_on_current_thread(base_.get())) {
+                    release();
+                    return SAO_STATUS_ERR_TIMEOUT;
+                }
+                state->transition_in_progress = true;
+                state->invocation_enabled.store(false, std::memory_order_release);
+                close_controls(base_.get());
+                lock.unlock();
+                const sao_status_t rundown_status = wait_for_controls(base_.get());
+                lock.lock();
+                if (rundown_status != SAO_STATUS_OK ||
+                    !state->accepting.load(std::memory_order_acquire)) {
+                    state->transition_in_progress = false;
+                    release();
+                    return rundown_status == SAO_STATUS_OK ? SAO_STATUS_ERR_INVALID_ARGUMENT
+                                                           : rundown_status;
+                }
                 state->next_token = candidate_next_token_;
                 state->published.store(candidate_, std::memory_order_release);
+                if (activate_candidate) {
+                    activate_controls(candidate_.get());
+                }
+                state->invocation_enabled.store(activate_candidate, std::memory_order_release);
+                state->transition_in_progress = false;
             }
-            if (open_invocation_gate) {
-                state->invocation_gate->open();
+            if (!changed_ && open_invocation_gate) {
+                activate_controls(base_.get());
+                state->invocation_enabled.store(true, std::memory_order_release);
             }
             release();
             return SAO_STATUS_OK;
@@ -268,9 +452,17 @@ class EntityActionRouteStore final {
 
     ~EntityActionRouteStore() noexcept {
         if (state_ != nullptr) {
-            std::lock_guard lock(state_->publish_mutex);
-            state_->accepting.store(false, std::memory_order_release);
-            state_->invocation_gate->close();
+            std::shared_ptr<const PublishedState> current;
+            {
+                std::lock_guard lock(state_->publish_mutex);
+                state_->accepting.store(false, std::memory_order_release);
+                state_->invocation_enabled.store(false, std::memory_order_release);
+                current = state_->published.load(std::memory_order_acquire);
+                close_controls(current.get());
+            }
+            if (!controls_active_on_current_thread(current.get())) {
+                (void)wait_for_controls(current.get());
+            }
         }
     }
 
@@ -279,10 +471,33 @@ class EntityActionRouteStore final {
     EntityActionRouteStore(EntityActionRouteStore&&) = delete;
     EntityActionRouteStore& operator=(EntityActionRouteStore&&) = delete;
 
-    void close_invocation_gate() noexcept {
+    sao_status_t close_invocation_gate() noexcept {
         const auto state = state_;
-        if (state != nullptr && state->invocation_gate != nullptr) {
-            state->invocation_gate->close();
+        if (state == nullptr) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        try {
+            std::unique_lock lock(state->publish_mutex);
+            if (!state->accepting.load(std::memory_order_acquire)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (state->transition_in_progress) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
+            const auto current = state->published.load(std::memory_order_acquire);
+            if (controls_active_on_current_thread(current.get())) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
+            state->transition_in_progress = true;
+            state->invocation_enabled.store(false, std::memory_order_release);
+            close_controls(current.get());
+            lock.unlock();
+            const sao_status_t status = wait_for_controls(current.get());
+            lock.lock();
+            state->transition_in_progress = false;
+            return status;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
         }
     }
 
@@ -304,18 +519,26 @@ class EntityActionRouteStore final {
             if (!state->accepting.load(std::memory_order_acquire) || !state->token_range_valid) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
+            if (state->transition_in_progress) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
             const sao_status_t validation_status = validate(rows);
             if (validation_status != SAO_STATUS_OK) {
                 return validation_status;
             }
 
             const auto current = state->published.load(std::memory_order_acquire);
-            if (same_semantics(current.get(), rows)) {
+            const bool semantics_changed = !same_semantics(current.get(), rows);
+            const bool controls_active =
+                state->invocation_enabled.load(std::memory_order_acquire) &&
+                controls_are_active(current.get());
+            if (!semantics_changed && (current == nullptr || current->snapshot.routes.empty() ||
+                                       controls_active)) {
                 out = PreparedPublication(state, current, current, state->next_token,
                                           state->next_token, false);
                 return SAO_STATUS_OK;
             }
-            if (current != nullptr &&
+            if (semantics_changed && current != nullptr &&
                 current->snapshot.revision == std::numeric_limits<std::uint64_t>::max()) {
                 return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             }
@@ -340,7 +563,9 @@ class EntityActionRouteStore final {
             }
 
             auto next = std::make_shared<PublishedState>();
-            next->snapshot.revision = current == nullptr ? 1 : current->snapshot.revision + 1;
+            next->snapshot.revision =
+                current == nullptr ? 1
+                                   : current->snapshot.revision + (semantics_changed ? 1U : 0U);
             next->snapshot.routes.reserve(rows.size());
             next->route_by_token.reserve(rows.size());
 
@@ -354,7 +579,7 @@ class EntityActionRouteStore final {
                     token = active->second;
                 }
                 const std::size_t index = next->snapshot.routes.size();
-                next->snapshot.routes.push_back(make_route(row, token, state->invocation_gate));
+                next->snapshot.routes.push_back(make_route(row, token));
                 next->route_by_token.emplace(token, index);
             }
 
@@ -390,7 +615,7 @@ class EntityActionRouteStore final {
         if (state == nullptr) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
-        if (state->invocation_gate == nullptr || !state->invocation_gate->allows_invocation()) {
+        if (!state->invocation_enabled.load(std::memory_order_acquire)) {
             return SAO_STATUS_ERR_NOT_FOUND;
         }
         const auto current = state->published.load(std::memory_order_acquire);
@@ -414,8 +639,7 @@ class EntityActionRouteStore final {
     static std::shared_ptr<StoreState> make_state(std::int32_t first_token,
                                                   std::int32_t last_token) noexcept {
         try {
-            auto gate = std::make_shared<EntityActionInvocationGate>();
-            return std::make_shared<StoreState>(first_token, last_token, std::move(gate));
+            return std::make_shared<StoreState>(first_token, last_token);
         } catch (...) {
             return nullptr;
         }
@@ -565,9 +789,7 @@ class EntityActionRouteStore final {
         return true;
     }
 
-    static EntityActionRoute
-    make_route(const EntityActionRouteSpec& row, std::int32_t token,
-               const std::shared_ptr<EntityActionInvocationGate>& invocation_gate) {
+    static EntityActionRoute make_route(const EntityActionRouteSpec& row, std::int32_t token) {
         EntityActionRoute route;
         route.token = token;
         route.provider_id = row.provider_id;
@@ -583,7 +805,7 @@ class EntityActionRouteStore final {
         route.can_activate = row.can_activate;
         route.keep_menu_open = row.keep_menu_open;
         route.close_menu_before = row.close_menu_before;
-        route.invocation_gate_ = invocation_gate;
+        route.invocation_control_ = std::make_shared<EntityActionInvocationControl>();
         return route;
     }
 

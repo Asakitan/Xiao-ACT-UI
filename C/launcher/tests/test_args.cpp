@@ -63,7 +63,7 @@ TEST_CASE("flag log-level populates log_level", "[launcher][args]") {
 }
 
 TEST_CASE("log-level is normalized and invalid values fail closed",
-          "[launcher][args][w18]") {
+          "[launcher][args]") {
     AppState normalized{};
     bool exit_flag = false;
     int code = -1;

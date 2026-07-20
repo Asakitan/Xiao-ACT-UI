@@ -54,6 +54,8 @@
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/rt_io/proxy.h"
+#include "sao/rt_io/window_rect.h"
+#include "sao/ui/dc_mutation.h"
 #include "sao/ui/entity_shell.h"
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/streaming_flow.h"
@@ -539,6 +541,10 @@ using StreamingModeAcquireFn = sao_status_t (*)(void* user_data);
 using StreamingModeGetFn = bool (*)(void* user_data);
 using StreamingModeSetFn = sao_status_t (*)(bool enabled, void* user_data);
 using StreamingModeReleaseFn = sao_status_t (*)(void* user_data);
+using EntityAuthorityStepFn = sao_status_t (*)(void* user_data);
+using NervgearModeSetFn = sao_status_t (*)(bool enabled, void* user_data);
+using NervgearModePersistFn = sao_status_t (*)(bool enabled, void* user_data);
+using NervgearDegradedFn = sao_status_t (*)(void* user_data);
 
 sao_status_t releaseStreamingModeWithRetry(StreamingModeReleaseFn release, void* user_data) {
     sao_status_t status = release(user_data);
@@ -549,10 +555,12 @@ sao_status_t releaseStreamingModeWithRetry(StreamingModeReleaseFn release, void*
     return status;
 }
 
-sao_status_t applyStreamingModeTransaction(
-    bool enabled, StreamingModeAcquireFn acquire, StreamingModeGetFn get_flow,
-    StreamingModeGetFn get_capture, StreamingModeSetFn set_capture,
-    StreamingModeSetFn set_flow, StreamingModeReleaseFn release, void* user_data) {
+sao_status_t applyStreamingModeTransaction(bool enabled, StreamingModeAcquireFn acquire,
+                                           StreamingModeGetFn get_flow,
+                                           StreamingModeGetFn get_capture,
+                                           StreamingModeSetFn set_capture,
+                                           StreamingModeSetFn set_flow,
+                                           StreamingModeReleaseFn release, void* user_data) {
     sao_status_t status = acquire(user_data);
     if (status != SAO_STATUS_OK) {
         return status;
@@ -589,6 +597,43 @@ sao_status_t applyStreamingModeTransaction(
         return release_status;
     }
     return status;
+}
+
+sao_status_t publishEntityAuthorityBeforeOnline(EntityAuthorityStepFn publish,
+                                                EntityAuthorityStepFn bring_online,
+                                                void* user_data) {
+    if (publish == nullptr || bring_online == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const sao_status_t publication_status = publish(user_data);
+    return publication_status == SAO_STATUS_OK ? bring_online(user_data) : publication_status;
+}
+
+sao_status_t applyNervgearModeTransaction(bool& mode, NervgearModeSetFn set_shell_mode,
+                                          NervgearModePersistFn persist_mode,
+                                          NervgearDegradedFn publish_degraded, void* user_data) {
+    if (set_shell_mode == nullptr || persist_mode == nullptr || publish_degraded == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const bool previous = mode;
+    const bool target = !previous;
+    sao_status_t status = set_shell_mode(target, user_data);
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
+    status = persist_mode(target, user_data);
+    if (status == SAO_STATUS_OK) {
+        mode = target;
+        return SAO_STATUS_OK;
+    }
+    const sao_status_t rollback_status = set_shell_mode(previous, user_data);
+    if (rollback_status == SAO_STATUS_OK) {
+        return status;
+    }
+
+    mode = target;
+    const sao_status_t degraded_status = publish_degraded(user_data);
+    return degraded_status == SAO_STATUS_OK ? SAO_STATUS_ERR_UNKNOWN : degraded_status;
 }
 
 } // namespace
@@ -754,6 +799,22 @@ sao_status_t sao_launcher_init_pipeline_test_apply_streaming_mode_transaction(
                                          set_flow, release, user_data);
 }
 
+sao_status_t sao_launcher_init_pipeline_test_publish_entity_authority_before_online(
+    sao_status_t (*publish)(void*), sao_status_t (*bring_online)(void*), void* user_data) {
+    return publishEntityAuthorityBeforeOnline(publish, bring_online, user_data);
+}
+
+sao_status_t sao_launcher_init_pipeline_test_apply_nervgear_mode_transaction(
+    bool* mode, sao_status_t (*set_shell_mode)(bool, void*),
+    sao_status_t (*persist_mode)(bool, void*), sao_status_t (*publish_degraded)(void*),
+    void* user_data) {
+    if (mode == nullptr) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    return applyNervgearModeTransaction(*mode, set_shell_mode, persist_mode, publish_degraded,
+                                        user_data);
+}
+
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
     if (!g_composition_test_hooks.platform_bringup) {
         return SAO_STATUS_NOT_IMPLEMENTED;
@@ -801,6 +862,10 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 struct sao_platform_ctx {
     sao_rt_io_proxy_handle_t rt_io_proxy;
+    sao_rt_io_window_rect_controller_t window_rect_controller;
+    SaoRtIoWindowToken window_rect_token;
+    bool window_rect_registered;
+    sao_ui_dc_mutation_coordinator_handle_t dc_mutation_coordinator;
     sao_ui_overlay_host_handle_t overlay_host;
     sao_ui_entity_shell_handle_t entity_shell;
     bool home_hotkey_registered;
@@ -868,6 +933,31 @@ sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx, sao_platform_ctx**
     return failure_status;
 }
 
+sao_status_t SAO_UI_CALL hide_window_rect(void* user_data, void* hwnd,
+                                          const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms,
+                                          uint32_t timeout_ms) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || hwnd == nullptr || fake_rect == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
+    const SaoRtIoWindowToken& token = ctx->window_rect_token;
+    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
+        token.hwnd != hwnd_value) {
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    if (fake_rect->right <= fake_rect->left || fake_rect->bottom <= fake_rect->top) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const SaoRtIoRect rect{fake_rect->left, fake_rect->top, fake_rect->right, fake_rect->bottom};
+    SaoRtIoCallResult result{};
+    return sao_rt_io_hide_window_rect(ctx->window_rect_controller, &token, &rect, settle_ms,
+                                      timeout_ms, &result);
+}
+
 bool SAO_UI_CALL entity_hit_test(int32_t x, int32_t y, void* user_data) {
     bool hit = false;
     return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
@@ -899,11 +989,11 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.fisheye_procedural = source.fisheye_procedural;
     target.fisheye_live = source.fisheye_live;
     target.theme = source.theme;
-    target.controls = source.controls && !ctx->builtin_action_state.controls_degraded
-                          ? sao::launcher::entity_provider_publication::
-                                ControlPublicationStatus::ready
-                          : sao::launcher::entity_provider_publication::
-                                ControlPublicationStatus::degraded_internal;
+    target.controls =
+        source.controls && !ctx->builtin_action_state.controls_degraded
+            ? sao::launcher::entity_provider_publication::ControlPublicationStatus::ready
+            : sao::launcher::entity_provider_publication::ControlPublicationStatus::
+                  degraded_internal;
 }
 #endif
 
@@ -920,8 +1010,7 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     return applyStreamingModeTransaction(
-        enabled,
-        [](void*) { return sao_streaming_flow_mode_lock_acquire(2.0); },
+        enabled, [](void*) { return sao_streaming_flow_mode_lock_acquire(2.0); },
         [](void*) { return sao_streaming_flow_get_mode(); },
         [](void* context) {
             return sao_ui_overlay_host_capture_excluded(
@@ -932,9 +1021,8 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
                 static_cast<sao_platform_ctx*>(context)->overlay_host, exclude);
         },
         [](bool exclude, void*) -> sao_status_t {
-            return sao_streaming_flow_set_mode(exclude) == 0
-                       ? SAO_STATUS_ERR_NOT_INITIALIZED
-                       : SAO_STATUS_OK;
+            return sao_streaming_flow_set_mode(exclude) == 0 ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                                             : SAO_STATUS_OK;
         },
         [](void*) { return sao_streaming_flow_mode_lock_release(); }, ctx);
 }
@@ -999,6 +1087,25 @@ sao_status_t refresh_entity(void* user_data) {
 #endif
 }
 
+sao_status_t publish_nervgear_degraded(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->entity_shell == nullptr) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    ctx->builtin_action_state.controls_degraded = true;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    sync_entity_publication_authority(ctx);
+    const sao_status_t status = refresh_entity(ctx);
+    if (status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.authority.publication_available = false;
+        sync_entity_publication_authority(ctx);
+    }
+    return status;
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
 sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data) {
     const auto action_token = static_cast<std::int32_t>(action);
     if (sao::launcher::entity_action_routes::is_dynamic_token(action_token)) {
@@ -1024,11 +1131,11 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     if (ctx == nullptr) {
         const sao::launcher::entity_builtin_action::State unavailable_state{};
         return sao::launcher::entity_builtin_action::authorization_status(action,
-                                                                           unavailable_state);
+                                                                          unavailable_state);
     }
     const sao_status_t authority_status =
-        sao::launcher::entity_builtin_action::authorization_status(
-            action, ctx->builtin_action_state);
+        sao::launcher::entity_builtin_action::authorization_status(action,
+                                                                   ctx->builtin_action_state);
     if (authority_status != SAO_STATUS_OK) {
         ctx->builtin_action_state.last_status = authority_status;
         return authority_status;
@@ -1069,18 +1176,17 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (ctx == nullptr || ctx->entity_shell == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
-        const bool target = !ctx->nervgear_mode;
-        sao_status_t status = sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, target);
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-        status = ctx->settings_owner->set_value_and_save("nervgear_mode", target);
-        if (status != SAO_STATUS_OK) {
-            (void)sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, ctx->nervgear_mode);
-            return status;
-        }
-        ctx->nervgear_mode = target;
-        return SAO_STATUS_OK;
+        return applyNervgearModeTransaction(
+            ctx->nervgear_mode,
+            [](bool enabled, void* context) {
+                return sao_ui_entity_shell_set_nervgear_mode(
+                    static_cast<sao_platform_ctx*>(context)->entity_shell, enabled);
+            },
+            [](bool enabled, void* context) {
+                return static_cast<sao_platform_ctx*>(context)->settings_owner->set_value_and_save(
+                    "nervgear_mode", enabled);
+            },
+            &publish_nervgear_degraded, ctx);
     }
     case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR: {
         if (ctx == nullptr || !ctx->ai_editor) {
@@ -1196,12 +1302,6 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
-    status = sao_streaming_flow_startup(2.0);
-    if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
-    }
-    ctx->streaming_flow_started = true;
-
     SaoRtIoProxyConfig rt_io_cfg{};
     rt_io_cfg.session_name_utf8 = "launcher";
     rt_io_cfg.strict_bootstrap = 1;
@@ -1210,11 +1310,45 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
+    status =
+        sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+
+    SaoUiDcMutationProvider dc_mutation_provider{};
+    dc_mutation_provider.hide_window_rect = &hide_window_rect;
+    dc_mutation_provider.user_data = ctx;
+    status = sao_ui_dc_mutation_coordinator_create_ex(&dc_mutation_provider,
+                                                      &ctx->dc_mutation_coordinator);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+
     SaoOverlayHostConfig overlay_cfg{};
+    overlay_cfg.dc_mutation_coordinator = ctx->dc_mutation_coordinator;
     status = sao_ui_overlay_host_create(&overlay_cfg, &ctx->overlay_host);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
+    const auto render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
+    if (render_hwnd == nullptr) {
+        return rollback_platform_bringup(ctx, ctx_out, SAO_STATUS_ERR_HANDLE_INVALID);
+    }
+    status = sao_rt_io_window_rect_register(
+        ctx->window_rect_controller,
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &ctx->window_rect_token);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    ctx->window_rect_registered = true;
+
+    status = sao_streaming_flow_startup(2.0);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    ctx->streaming_flow_started = true;
+
     status = apply_streaming_mode(ctx->builtin_action_state.streaming_mode, ctx);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
@@ -1271,9 +1405,12 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
     }
     if (ctx->entity_shell) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-        (void)sao::launcher::entity_provider_publication::clear(
+        const sao_status_t clear_status = sao::launcher::entity_provider_publication::clear(
             ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
             ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
+        if (clear_status != SAO_STATUS_OK) {
+            return clear_status;
+        }
 #endif
         sao_ui_entity_shell_destroy(ctx->entity_shell);
         ctx->entity_shell = nullptr;
@@ -1283,6 +1420,23 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
             return SAO_STATUS_INTERNAL;
         }
         ctx->overlay_host = nullptr;
+    }
+    if (ctx->dc_mutation_coordinator) {
+        sao_ui_dc_mutation_coordinator_destroy(ctx->dc_mutation_coordinator);
+        ctx->dc_mutation_coordinator = nullptr;
+    }
+    if (ctx->window_rect_registered) {
+        const sao_status_t revoke_status =
+            sao_rt_io_window_rect_revoke(ctx->window_rect_controller, &ctx->window_rect_token);
+        if (revoke_status != SAO_STATUS_OK) {
+            return revoke_status;
+        }
+        ctx->window_rect_registered = false;
+        ctx->window_rect_token = {};
+    }
+    if (ctx->window_rect_controller) {
+        sao_rt_io_window_rect_controller_destroy(ctx->window_rect_controller);
+        ctx->window_rect_controller = nullptr;
     }
     if (ctx->rt_io_proxy) {
         const sao_status_t proxy_status = sao_rt_io_proxy_close(ctx->rt_io_proxy);
@@ -1342,7 +1496,8 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
     ctx->builtin_action_state.authority.plugin_runtime = plugin_runtime_ready;
     ctx->builtin_action_state.authority.reload_plugins = plugin_runtime_ready;
     sync_entity_publication_authority(ctx);
-    authority.plugin_runtime = plugin_runtime_ready
+    authority.plugin_runtime =
+        plugin_runtime_ready
             ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
             : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
                   degraded_internal;
@@ -1369,19 +1524,26 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
-    sao_status_t status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
-    if (status != SAO_STATUS_OK)
-        return status;
+    sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    status = refresh_entity(ctx);
+    status = publishEntityAuthorityBeforeOnline(
+        [](void* context) { return refresh_entity(context); },
+        [](void* context) {
+            return sao_ui_entity_shell_bring_online(
+                static_cast<sao_platform_ctx*>(context)->entity_shell);
+        },
+        ctx);
     if (status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
-                            "initial catalog publication deferred: status=%d", status);
+                            "initial catalog publication failed: status=%d", status);
 #endif
-        (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return status;
     }
+#else
+    status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
+    if (status != SAO_STATUS_OK)
+        return status;
 #endif
     if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -1414,6 +1576,10 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     }
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    status = ctx->entity_action_routes.close_invocation_gate();
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
     ctx->builtin_action_state.authority.publication_available = false;
     sync_entity_publication_authority(ctx);
     status = sao::launcher::entity_provider_publication::clear(
@@ -1450,8 +1616,8 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     const sao_status_t provider_status =
         ctx->builtin_action_state.authority.publication_available
             ? sao::launcher::entity_provider_publication::poll(
-                  ctx->entity_shell, ctx->entity_action_routes,
-                  ctx->entity_provider_publication, elapsed_ms, ctx->nervgear_mode,
+                  ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+                  elapsed_ms, ctx->nervgear_mode,
                   &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
                   &sao_ui_entity_shell_set_roots)
             : refresh_entity(ctx);
@@ -1541,7 +1707,7 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
         return SAO_STATUS_OK;
 
     uint32_t score = 0;
-    sao_status_t status = sao_security_anti_debug_wave8_scan_all(&score);
+    sao_status_t status = sao_security_anti_debug_scan_all(&score);
     if (status != SAO_STATUS_OK)
         return status;
     return score == 0 ? SAO_STATUS_OK : SAO_STATUS_PLATFORM_INIT_FAIL;

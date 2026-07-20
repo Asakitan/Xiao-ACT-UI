@@ -6,11 +6,16 @@
 #include "tool_launch_internal.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -393,6 +398,62 @@ std::int32_t SAO_PLUGINS_CALL fake_invoke(const char* provider_id, std::uint64_t
     g_action_log->action_id = action_id;
     g_action_log->payload = payload;
     return g_action_log->invoke_status;
+}
+
+struct BlockingActionProbe {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    std::atomic_int calls{0};
+};
+
+BlockingActionProbe* g_blocking_action_probe = nullptr;
+
+std::int32_t SAO_PLUGINS_CALL blocking_invoke(const char*, std::uint64_t, const char*,
+                                              const char*) {
+    auto* probe = g_blocking_action_probe;
+    if (probe == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    probe->calls.fetch_add(1, std::memory_order_acq_rel);
+    std::unique_lock lock(probe->mutex);
+    probe->entered = true;
+    probe->condition.notify_all();
+    probe->condition.wait(lock, [probe] { return probe->release; });
+    return SAO_OK;
+}
+
+enum class ReentryOperation : std::uint8_t {
+    invoke,
+    clear,
+};
+
+struct ReentryActionProbe {
+    const EntityActionRoute* route = nullptr;
+    EntityActionRouteStore* store = nullptr;
+    EntityProviderPublicationState* state = nullptr;
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    ReentryOperation operation = ReentryOperation::invoke;
+    sao_status_t nested_status = SAO_STATUS_OK;
+    int calls = 0;
+};
+
+ReentryActionProbe* g_reentry_action_probe = nullptr;
+
+std::int32_t SAO_PLUGINS_CALL reentrant_invoke(const char*, std::uint64_t, const char*,
+                                               const char*) {
+    auto* probe = g_reentry_action_probe;
+    if (probe == nullptr || probe->route == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    ++probe->calls;
+    if (probe->operation == ReentryOperation::invoke) {
+        probe->nested_status = sao::launcher::entity_provider_publication::invoke(
+            *probe->route, probe->shell, &reentrant_invoke, nullptr, nullptr);
+    } else {
+        probe->nested_status = sao::launcher::entity_provider_publication::clear(
+            probe->shell, *probe->store, *probe->state, false, &fake_set_roots);
+    }
+    return SAO_OK;
 }
 
 } // namespace
@@ -1113,6 +1174,176 @@ TEST_CASE("Entity provider action honors close timing and maps loader statuses",
     g_action_log = nullptr;
 }
 
+TEST_CASE("Entity route rundown blocks copied routes and drains active callbacks",
+          "[launcher][entity_provider][invocation][rundown][concurrency][focused]") {
+    EntityActionRouteStore store;
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 31, "category", "Category", "C", 0.0, "Action", "A",
+                    "action", "{}");
+    fixture.finish(301);
+    g_catalog_fixture = &fixture;
+
+    PublicationLog publication_log;
+    g_publication_log = &publication_log;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    auto copied_route = snapshot(store).routes.front();
+    copied_route.keep_menu_open = true;
+
+    BlockingActionProbe probe;
+    g_blocking_action_probe = &probe;
+    std::atomic<sao_status_t> invoke_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread invoke_thread([&] {
+        invoke_status.store(sao::launcher::entity_provider_publication::invoke(
+                                copied_route, shell, &blocking_invoke, nullptr, nullptr),
+                            std::memory_order_release);
+    });
+    {
+        std::unique_lock lock(probe.mutex);
+        REQUIRE(probe.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&probe] { return probe.entered; }));
+    }
+
+    std::atomic_bool clear_finished{false};
+    std::atomic<sao_status_t> clear_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread clear_thread([&] {
+        clear_status.store(sao::launcher::entity_provider_publication::clear(
+                               shell, store, state, false, &fake_set_roots),
+                           std::memory_order_release);
+        clear_finished.store(true, std::memory_order_release);
+    });
+
+    const auto close_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (copied_route.invocation_allowed() && std::chrono::steady_clock::now() < close_deadline) {
+        std::this_thread::yield();
+    }
+    REQUIRE_FALSE(copied_route.invocation_allowed());
+    CHECK_FALSE(clear_finished.load(std::memory_order_acquire));
+
+    ActionLog blocked;
+    g_action_log = &blocked;
+    CHECK(sao::launcher::entity_provider_publication::invoke(
+              copied_route, shell, &fake_invoke, &fake_get_shell_snapshot, &fake_home) ==
+          SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(blocked.order.empty());
+    CHECK(probe.calls.load(std::memory_order_acquire) == 1);
+
+    {
+        std::lock_guard lock(probe.mutex);
+        probe.release = true;
+    }
+    probe.condition.notify_all();
+    invoke_thread.join();
+    clear_thread.join();
+
+    CHECK(invoke_status.load(std::memory_order_acquire) == SAO_STATUS_OK);
+    CHECK(clear_status.load(std::memory_order_acquire) == SAO_STATUS_OK);
+    CHECK(clear_finished.load(std::memory_order_acquire));
+    CHECK(snapshot(store).routes.empty());
+    CHECK_FALSE(copied_route.invocation_allowed());
+
+    g_action_log = nullptr;
+    g_blocking_action_probe = nullptr;
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity route invocation and clear reentry return busy without invalidating authority",
+          "[launcher][entity_provider][invocation][reentry][focused]") {
+    EntityActionRouteStore store;
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 32, "category", "Category", "C", 0.0, "Action", "A",
+                    "action", "{}");
+    fixture.finish(302);
+    g_catalog_fixture = &fixture;
+
+    PublicationLog publication_log;
+    g_publication_log = &publication_log;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    auto route = snapshot(store).routes.front();
+    route.keep_menu_open = true;
+
+    ReentryActionProbe probe{&route, &store, &state, shell};
+    g_reentry_action_probe = &probe;
+    REQUIRE(sao::launcher::entity_provider_publication::invoke(
+                route, shell, &reentrant_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    CHECK(probe.calls == 1);
+    CHECK(probe.nested_status == SAO_STATUS_ERR_TIMEOUT);
+    CHECK(route.invocation_allowed());
+
+    probe.operation = ReentryOperation::clear;
+    REQUIRE(sao::launcher::entity_provider_publication::invoke(
+                route, shell, &reentrant_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    CHECK(probe.calls == 2);
+    CHECK(probe.nested_status == SAO_STATUS_ERR_TIMEOUT);
+    CHECK(route.invocation_allowed());
+    EntityActionRoute resolved;
+    CHECK(store.resolve(route.token, resolved) == SAO_STATUS_OK);
+
+    REQUIRE(sao::launcher::entity_provider_publication::clear(shell, store, state, false,
+                                                              &fake_set_roots) == SAO_STATUS_OK);
+    CHECK_FALSE(route.invocation_allowed());
+    CHECK(sao::launcher::entity_provider_publication::invoke(
+              route, shell, &reentrant_invoke, nullptr, nullptr) == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(probe.calls == 2);
+
+    g_reentry_action_probe = nullptr;
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity refresh permanently retires copied routes even when semantics are unchanged",
+          "[launcher][entity_provider][invocation][refresh][focused]") {
+    EntityActionRouteStore store;
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 33, "category", "Category", "C", 0.0, "Action", "A",
+                    "action", "{}");
+    fixture.finish(303);
+    g_catalog_fixture = &fixture;
+
+    PublicationLog publication_log;
+    g_publication_log = &publication_log;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    auto stale = snapshot(store).routes.front();
+    stale.keep_menu_open = true;
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    auto current = snapshot(store).routes.front();
+    current.keep_menu_open = true;
+    CHECK(current.token == stale.token);
+    CHECK_FALSE(stale.invocation_allowed());
+    CHECK(current.invocation_allowed());
+
+    ActionLog log;
+    g_action_log = &log;
+    CHECK(sao::launcher::entity_provider_publication::invoke(
+              stale, shell, &fake_invoke, nullptr, nullptr) == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(log.order.empty());
+    CHECK(sao::launcher::entity_provider_publication::invoke(
+              current, shell, &fake_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    CHECK(log.order == std::vector<std::string>{"invoke"});
+
+    g_action_log = nullptr;
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
 TEST_CASE("Entity provider catalog rejects duplicate providers and invalid UTF-8",
           "[launcher][entity_provider][focused]") {
     CatalogFixture fixture;
@@ -1223,6 +1454,99 @@ TEST_CASE("Entity provider publication snapshots restored generation after faile
     CHECK_FALSE(degraded_plugins[1].can_activate);
     CHECK(degraded_plugins[2].name == "Plugin Runtime: DEGRADED/INTERNAL");
     CHECK(degraded_plugins[3].name == "无已启用面板插件");
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider same catalog revision content replacement characterizes v1 limitation",
+          "[launcher][entity-provider][same-revision][focused]") {
+    constexpr std::uint64_t kCatalogRevision = 214;
+    constexpr std::uint64_t kProviderRevision = 14;
+    constexpr std::uint64_t kGeneration = 21;
+
+    EntityActionRouteStore store;
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "same-revision-provider", kGeneration, "same-revision-category",
+                    "Same Revision", "S", 0.0, "Label A", "A", "same-revision-action",
+                    R"({"content":"A"})");
+    fixture.providers[0].revision = kProviderRevision;
+    fixture.finish(kCatalogRevision);
+    g_catalog_fixture = &fixture;
+
+    PublicationLog log;
+    g_publication_log = &log;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    const auto first = snapshot(store);
+    REQUIRE(first.routes.size() == 1);
+    const auto first_token = first.routes[0].token;
+    CHECK(first.routes[0].provider_id == "same-revision-provider");
+    CHECK(first.routes[0].provider_generation == kGeneration);
+    CHECK(first.routes[0].action_id == "same-revision-action");
+    CHECK(first.routes[0].row_label == "Label A");
+    CHECK(first.routes[0].payload_json == R"({"content":"A"})");
+    REQUIRE(state.has_catalog_revision);
+    CHECK(state.catalog_revision == kCatalogRevision);
+    REQUIRE(state.published_catalog.providers.size() == 1);
+    REQUIRE(state.published_catalog.providers[0].rows.size() == 1);
+    CHECK(state.published_catalog.revision == kCatalogRevision);
+    CHECK(state.published_catalog.providers[0].provider_id == "same-revision-provider");
+    CHECK(state.published_catalog.providers[0].generation == kGeneration);
+    CHECK(state.published_catalog.providers[0].revision == kProviderRevision);
+    CHECK(state.published_catalog.providers[0].rows[0].action_id == "same-revision-action");
+    CHECK(state.published_catalog.providers[0].rows[0].row_label == "Label A");
+    CHECK(state.published_catalog.providers[0].rows[0].payload_json == R"({"content":"A"})");
+    REQUIRE(log.calls.size() == 1);
+    CHECK(published_root(log.calls[0], "Plugins").children.back().name == "Label A");
+
+    // Characterization of the v1 limitation: equal catalog and provider revisions do not make
+    // their associated content immutable across refreshes.
+    fixture.row_labels[0] = "Label B";
+    fixture.rows[0].row_label_utf8 = fixture.row_labels[0].c_str();
+    fixture.payloads[0] = R"({"content":"B"})";
+    fixture.rows[0].payload_json_utf8 = fixture.payloads[0].c_str();
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    const auto second = snapshot(store);
+    REQUIRE(second.routes.size() == 1);
+    CHECK(state.catalog_revision == kCatalogRevision);
+    CHECK(second.revision == first.revision + 1);
+    CHECK(second.routes[0].token == first_token);
+    CHECK(second.routes[0].provider_id == first.routes[0].provider_id);
+    CHECK(second.routes[0].provider_generation == first.routes[0].provider_generation);
+    CHECK(second.routes[0].category_id == first.routes[0].category_id);
+    CHECK(second.routes[0].action_id == first.routes[0].action_id);
+    CHECK(second.routes[0].row_label == "Label B");
+    CHECK(second.routes[0].payload_json == R"({"content":"B"})");
+
+    EntityActionRoute active;
+    REQUIRE(store.resolve(first_token, active) == SAO_STATUS_OK);
+    CHECK(active.provider_id == "same-revision-provider");
+    CHECK(active.provider_generation == kGeneration);
+    CHECK(active.action_id == "same-revision-action");
+    CHECK(active.row_label == "Label B");
+    CHECK(active.payload_json == R"({"content":"B"})");
+
+    REQUIRE(state.published_catalog.providers.size() == 1);
+    const auto& published_provider = state.published_catalog.providers[0];
+    REQUIRE(published_provider.rows.size() == 1);
+    CHECK(state.published_catalog.revision == kCatalogRevision);
+    CHECK(published_provider.revision == kProviderRevision);
+    CHECK(published_provider.provider_id == "same-revision-provider");
+    CHECK(published_provider.generation == kGeneration);
+    CHECK(published_provider.rows[0].action_id == "same-revision-action");
+    CHECK(published_provider.rows[0].row_label == "Label B");
+    CHECK(published_provider.rows[0].payload_json == R"({"content":"B"})");
+    REQUIRE(log.calls.size() == 2);
+    CHECK(published_root(log.calls.back(), "Plugins").children.back().name == "Label B");
+
     g_publication_log = nullptr;
     g_catalog_fixture = nullptr;
 }
