@@ -1,4 +1,4 @@
-// test_lua_sandbox_wave18b.cpp — Wave 18 / Agent b Lua sandbox 10 case
+// test_lua_sandbox.cpp — Lua 沙箱 10 项行为测试
 //
 // hermetic mock + 合成 script — 不真加载不受信 Lua, 全走 lua_host + sandbox
 // API + luaL_dostring 合成脚本.  未 gated (SAO_HAS_LUA 缺) 时四个 arm/disarm/
@@ -55,13 +55,13 @@ exec_result exec_script(lua_host_handle_t h, const char* src) {
 
 } // namespace
 
-TEST_CASE("wave18b_lua_arm_null_L_returns_invalid_argument", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_null_L_returns_invalid_argument", "[lua][sandbox][sandbox]") {
     lua_sandbox_config cfg{};
     int32_t rc = sao_plugins_luahost_sandbox_arm(nullptr, &cfg);
     REQUIRE(rc == SAO_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("wave18b_lua_arm_null_config_invalid", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_null_config_invalid", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -75,7 +75,7 @@ TEST_CASE("wave18b_lua_arm_null_config_invalid", "[lua][sandbox][wave18b]") {
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_creates_restricted_env", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_creates_restricted_env", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -101,7 +101,7 @@ TEST_CASE("wave18b_lua_arm_creates_restricted_env", "[lua][sandbox][wave18b]") {
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_io_module_absent_from_env", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_io_module_absent_from_env", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -127,7 +127,7 @@ TEST_CASE("wave18b_lua_arm_io_module_absent_from_env", "[lua][sandbox][wave18b]"
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_os_execute_absent", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_os_execute_absent", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -156,7 +156,7 @@ TEST_CASE("wave18b_lua_arm_os_execute_absent", "[lua][sandbox][wave18b]") {
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_math_lib_present", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_math_lib_present", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -176,7 +176,7 @@ TEST_CASE("wave18b_lua_arm_math_lib_present", "[lua][sandbox][wave18b]") {
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_string_lib_present_but_string_dump_absent", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_string_lib_present_but_string_dump_absent", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -202,7 +202,7 @@ TEST_CASE("wave18b_lua_arm_string_lib_present_but_string_dump_absent", "[lua][sa
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_hook_count_terminates_infinite_loop", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_hook_count_terminates_infinite_loop", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -225,7 +225,7 @@ TEST_CASE("wave18b_lua_arm_hook_count_terminates_infinite_loop", "[lua][sandbox]
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_max_memory_bytes_enforced", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_max_memory_bytes_enforced", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;
@@ -256,7 +256,7 @@ TEST_CASE("wave18b_lua_arm_max_memory_bytes_enforced", "[lua][sandbox][wave18b]"
     sao_plugins_luahost_destroy(h);
 }
 
-TEST_CASE("wave18b_lua_arm_denied_globals_config_enforced", "[lua][sandbox][wave18b]") {
+TEST_CASE("lua_sandbox_arm_denied_globals_config_enforced", "[lua][sandbox][sandbox]") {
     if (!sao_plugins_luahost_is_available()) {
         SUCCEED("lua_host: not available, skipped");
         return;

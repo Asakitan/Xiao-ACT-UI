@@ -106,6 +106,23 @@ json call_json(emma_plugin_handle_t plugin, const char* hook) {
     return parsed;
 }
 
+std::string nested_array_json(size_t depth) {
+    return std::string(depth, '[') + "0" + std::string(depth, ']');
+}
+
+std::string flat_array_json(size_t values) {
+    std::string result;
+    result.reserve(values * 2 + 1);
+    result.push_back('[');
+    for (size_t index = 0; index < values; ++index) {
+        if (index != 0)
+            result.push_back(',');
+        result.push_back('0');
+    }
+    result.push_back(']');
+    return result;
+}
+
 struct callback_slot {
     plugin_context_platform_token_t token = 0;
     bool one_shot = false;
@@ -274,6 +291,14 @@ struct platform_fixture {
 };
 
 struct custom_emma_provider_fixture {
+    enum class malformed_context_kind {
+        none,
+        non_dictionary,
+        null_log,
+        non_callable_panel,
+        empty_menu_callable,
+    } malformed_context = malformed_context_kind::none;
+
     size_t context_bind_calls = 0;
     size_t load_calls = 0;
     size_t unload_calls = 0;
@@ -317,6 +342,10 @@ struct custom_emma_provider_fixture {
         auto& fixture = *static_cast<custom_emma_provider_fixture*>(user_data);
         ++fixture.context_bind_calls;
         auto* interp = static_cast<interpreter*>(request->runtime);
+        if (fixture.malformed_context == malformed_context_kind::non_dictionary) {
+            interp->register_global("ctx", true);
+            return SAO_OK;
+        }
         auto context = std::make_shared<emma_dict>();
         auto log = std::make_shared<callable>();
         log->name = "custom.log";
@@ -348,6 +377,24 @@ struct custom_emma_provider_fixture {
         context->items.emplace("register_ui_panel", std::move(panel));
         context->items.emplace("register_menu_category", std::move(menu));
         context->items.emplace("custom_provider", true);
+        context->items.emplace("plugin_id", std::string("forged.provider.id"));
+        context->items.emplace("path", std::string("C:\\forged\\provider"));
+        context->items.emplace("get_setting", std::string("poisoned native method"));
+        switch (fixture.malformed_context) {
+        case malformed_context_kind::null_log:
+            context->items.insert_or_assign("log", std::shared_ptr<callable>{});
+            break;
+        case malformed_context_kind::non_callable_panel:
+            context->items.insert_or_assign("register_ui_panel", int64_t{7});
+            break;
+        case malformed_context_kind::empty_menu_callable:
+            context->items.insert_or_assign("register_menu_category",
+                                            std::make_shared<callable>());
+            break;
+        case malformed_context_kind::none:
+        case malformed_context_kind::non_dictionary:
+            break;
+        }
         interp->register_global("ctx", std::move(context));
         return SAO_OK;
     }
@@ -403,6 +450,15 @@ end
 fn unsupported()
     return ctx.notify("Title", "Message")
 end
+fn panel_callback()
+    return true
+end
+fn rejected_panel_callback()
+    return ctx.register_ui_panel("callback-panel", {title: "Callback"}, panel_callback, nil)
+end
+fn rejected_panel_arity()
+    return ctx.register_ui_panel("extra-panel", {title: "Extra"}, nil, nil, nil)
+end
 )EMMA");
     write_text(tree.root / L"lex.emma", "let value = @\n");
     write_text(tree.root / L"parse.emma", "fn broken()\nreturn 1\n");
@@ -447,6 +503,15 @@ end
           SAO_PLUGINS_ERR_UNSUPPORTED);
     CHECK(call_error.kind == error_kind::runtime_error);
     CHECK(call_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
+
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_panel_callback", "[]", nullptr,
+                                        &call_error) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(call_error.kind == error_kind::runtime_error);
+    CHECK(call_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_panel_arity", "[]", nullptr,
+                                        &call_error) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(call_error.kind == error_kind::runtime_error);
+    CHECK(call_error.status == SAO_ERR_INVALID_ARGUMENT);
 
     emma_error forged;
     forged.kind = static_cast<error_kind>(255);
@@ -830,8 +895,16 @@ TEST_CASE("Emma preserves custom sdk_binding context providers",
 fn build_menu()
     return [{action_id: "native-setting", label: ctx.get_setting("native_label", "fallback")}]
 end
+fn panel_callback()
+    return true
+end
 fn custom_context()
-    return {provider: ctx.custom_provider, menu: ctx.register_menu_category("Custom", "", build_menu)}
+    return {provider: ctx.custom_provider, plugin_id: ctx.plugin_id, path: ctx.path,
+            native_setting: ctx.get_setting("native_label", "fallback"),
+            menu: ctx.register_menu_category("Custom", "", build_menu)}
+end
+fn rejected_panel_callback()
+    return ctx.register_ui_panel("callback-panel", {title: "Callback"}, panel_callback, nil)
 end
 fn on_load(ctx)
     ctx.log("custom log")
@@ -855,7 +928,17 @@ end
     CHECK(fixture.panel_calls == 1);
     CHECK(fixture.menu_calls == 1);
     CHECK(call_json(plugin, "custom_context") ==
-          json{{"provider", true}, {"menu", "custom-menu"}});
+            json{{"provider", true},
+               {"plugin_id", manifest.plugin_id},
+               {"path", path_utf8(tree.root)},
+               {"native_setting", "native-label"},
+               {"menu", "custom-menu"}});
+        emma_error panel_error;
+        CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_panel_callback", "[]", nullptr,
+                                &panel_error) == SAO_PLUGINS_ERR_UNSUPPORTED);
+        CHECK(panel_error.kind == error_kind::runtime_error);
+        CHECK(panel_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
+        CHECK(fixture.panel_calls == 1);
     REQUIRE(sao_plugins_emma_with_interpreter(plugin,
                                               custom_emma_provider_fixture::invoke_menu_builder,
                                               &fixture) == SAO_OK);
@@ -881,6 +964,146 @@ end
     remove_plugin(loader_plugin);
     REQUIRE(sao::plugins::sdk_binding::sao_plugins_binding_unregister_language_host(
                 sao::plugins::sdk_binding::language_host_kind::emma) == SAO_OK);
+}
+
+TEST_CASE("Emma rejects malformed custom context provider core callables transactionally",
+          "[plugins][emma][sdk-binding][provider][validation]") {
+    using malformed_kind = custom_emma_provider_fixture::malformed_context_kind;
+    const std::vector<std::pair<malformed_kind, const char*>> cases{
+        {malformed_kind::non_dictionary, "non-dictionary"},
+        {malformed_kind::null_log, "null-log"},
+        {malformed_kind::non_callable_panel, "non-callable-panel"},
+        {malformed_kind::empty_menu_callable, "empty-menu-callable"},
+    };
+
+    for (const auto& [malformed, name] : cases) {
+        CAPTURE(name);
+        custom_emma_provider_fixture fixture;
+        fixture.malformed_context = malformed;
+        auto provider = fixture.provider();
+        REQUIRE(sao::plugins::sdk_binding::sao_plugins_binding_register_language_host(&provider) ==
+                SAO_OK);
+
+        temp_tree tree(L"malformed_provider");
+        write_text(tree.root / L"entry.emma", "fn probe()\n    return true\nend\n");
+        const std::string plugin_id = std::string("emma.context.malformed.") + name;
+        const auto manifest = make_manifest(tree, plugin_id.c_str());
+        plugin_handle_t loader_plugin = add_plugin(manifest);
+        plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
+        REQUIRE(context != nullptr);
+
+        emma_plugin_handle_t plugin = nullptr;
+        emma_error error;
+        const int32_t status = sao_plugins_emma_load_script_ex(
+            tree.root.c_str(), "entry.emma", manifest.plugin_id.c_str(), context, &plugin, &error);
+        CHECK(status == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(error.kind == error_kind::runtime_error);
+        CHECK(error.status == SAO_ERR_INVALID_ARGUMENT);
+        if (plugin != nullptr)
+            REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
+
+        sao_plugins_ctx_destroy(context);
+        remove_plugin(loader_plugin);
+        REQUIRE(sao::plugins::sdk_binding::sao_plugins_binding_unregister_language_host(
+                    sao::plugins::sdk_binding::language_host_kind::emma) == SAO_OK);
+    }
+}
+
+TEST_CASE("Emma JSON ingress enforces depth node and byte budgets transactionally",
+          "[plugins][emma][context][json][budget]") {
+    temp_tree tree(L"json_ingress_budget");
+    write_text(tree.root / L"entry.emma", R"EMMA(
+let hook_calls = 0
+let setting_calls = 0
+let event_calls = 0
+fn touch_hook(value)
+    hook_calls = hook_calls + 1
+    return hook_calls
+end
+fn read_budgeted_setting()
+    let value = ctx.get_setting("budgeted")
+    setting_calls = setting_calls + 1
+    return value
+end
+fn on_event(event)
+    event_calls = event_calls + 1
+end
+fn on_load(ctx)
+    ctx.subscribe("budget-event", on_event)
+end
+fn ingress_counts()
+    return {hooks: hook_calls, settings: setting_calls, events: event_calls}
+end
+)EMMA");
+    const auto manifest = make_manifest(tree, "emma.context.json.ingress");
+    plugin_handle_t loader_plugin = add_plugin(manifest);
+    plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
+    REQUIRE(context != nullptr);
+    emma_plugin_handle_t plugin = nullptr;
+    REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
+                                         manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_emma_call_on_load(plugin) == SAO_OK);
+
+    const std::string hook_depth_boundary = nested_array_json(64);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "touch_hook", hook_depth_boundary.c_str(),
+                                       nullptr) == SAO_OK);
+    const std::string hook_excessive_depth = nested_array_json(65);
+    emma_error error;
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "touch_hook", hook_excessive_depth.c_str(),
+                                        nullptr, &error) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(call_json(plugin, "ingress_counts") ==
+          json{{"hooks", 1}, {"settings", 0}, {"events", 0}});
+
+    const std::string hook_node_boundary = flat_array_json(16383);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "touch_hook", hook_node_boundary.c_str(),
+                                       nullptr) == SAO_OK);
+    const std::string excessive_hook_nodes = flat_array_json(16384);
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "touch_hook", excessive_hook_nodes.c_str(),
+                                        nullptr, &error) == SAO_ERR_INVALID_ARGUMENT);
+    constexpr size_t json_byte_limit = 8U * 1024U * 1024U;
+        const std::string hook_byte_boundary =
+                "[\"" + std::string(json_byte_limit - 4, 'x') + "\"]";
+        REQUIRE(sao_plugins_emma_call_hook(plugin, "touch_hook", hook_byte_boundary.c_str(),
+                                                                             nullptr) == SAO_OK);
+    const std::string excessive_hook_bytes = "[\"" + std::string(json_byte_limit, 'x') + "\"]";
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "touch_hook", excessive_hook_bytes.c_str(),
+                                        nullptr, &error) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(call_json(plugin, "ingress_counts") ==
+            json{{"hooks", 3}, {"settings", 0}, {"events", 0}});
+
+    const std::string setting_depth_boundary = nested_array_json(64);
+    REQUIRE(sao_plugins_ctx_set_setting(context, "budgeted", setting_depth_boundary.c_str()) ==
+            SAO_OK);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "read_budgeted_setting", "[]", nullptr) == SAO_OK);
+    const std::string setting_excessive_depth = nested_array_json(65);
+    CHECK(sao_plugins_ctx_set_setting(context, "budgeted", setting_excessive_depth.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    const std::string excessive_setting_nodes = flat_array_json(16384);
+    CHECK(sao_plugins_ctx_set_setting(context, "budgeted", excessive_setting_nodes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    const std::string excessive_setting_bytes = json(std::string(json_byte_limit, 'x')).dump();
+    CHECK(sao_plugins_ctx_set_setting(context, "budgeted", excessive_setting_bytes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "read_budgeted_setting", "[]", nullptr) == SAO_OK);
+    CHECK(call_json(plugin, "ingress_counts") ==
+          json{{"hooks", 3}, {"settings", 2}, {"events", 0}});
+
+    const std::string event_depth_boundary = nested_array_json(63);
+    REQUIRE(sao_plugins_ctx_emit(context, "budget-event", event_depth_boundary.c_str()) == SAO_OK);
+    const std::string event_excessive_depth = nested_array_json(64);
+    REQUIRE(sao_plugins_ctx_emit(context, "budget-event", event_excessive_depth.c_str()) ==
+            SAO_OK);
+    const std::string event_node_boundary = flat_array_json(16381);
+    REQUIRE(sao_plugins_ctx_emit(context, "budget-event", event_node_boundary.c_str()) == SAO_OK);
+    const std::string excessive_event_nodes = flat_array_json(16382);
+    REQUIRE(sao_plugins_ctx_emit(context, "budget-event", excessive_event_nodes.c_str()) ==
+            SAO_OK);
+    CHECK(call_json(plugin, "ingress_counts") ==
+          json{{"hooks", 3}, {"settings", 2}, {"events", 2}});
+
+    REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(loader_plugin);
 }
 
 TEST_CASE("Emma uses canonical loader identity and plugin root for nested entries",

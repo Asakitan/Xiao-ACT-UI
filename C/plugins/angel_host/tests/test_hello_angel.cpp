@@ -1,4 +1,4 @@
-// test_hello_angel_wave8.cpp — Wave 8 / Agent d Phase 8 首切片
+// test_hello_angel.cpp — AngelScript 示例插件生命周期测试
 //
 // 5 CASE:
 //   1. engine_init_success
@@ -7,7 +7,7 @@
 //   4. hello_angel_on_tick_ticks_3_times
 //   5. hello_angel_unload_cleanup_no_leak
 //
-// 无 AngelScript SDK 时 SUCCEED("skipped") 退出 0, 跟 wave3 test 一致.
+// 无 AngelScript SDK 时 SUCCEED("skipped") 退出 0, 与 host 测试保持一致.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,7 +20,7 @@
 
 using namespace sao::plugins::angel_host;
 
-// 这两条辅助 API 在 as_host.cpp 里定义但 header 未声明 (wave3 内嵌 fwd).
+// 这两条辅助 API 在 as_host.cpp 里定义但 header 未声明 (测试内嵌 fwd).
 extern "C" {
 SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_ashost_is_available(void);
 SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_ashost_free_string(char* s);
@@ -38,7 +38,7 @@ as_plugin_handle_t g_plugin = nullptr;
 
 } // namespace
 
-TEST_CASE("angel_host wave8 :: engine_init_success", "[plugins][angel][wave8]") {
+TEST_CASE("angel_host :: engine_init_success", "[plugins][angel][lifecycle]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available in this build");
         return;
@@ -53,7 +53,7 @@ TEST_CASE("angel_host wave8 :: engine_init_success", "[plugins][angel][wave8]") 
     REQUIRE(std::strlen(v) > 0);
 }
 
-TEST_CASE("angel_host wave8 :: load_hello_angel_plugin_success", "[plugins][angel][wave8]") {
+TEST_CASE("angel_host :: load_hello_angel_plugin_success", "[plugins][angel][lifecycle]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
@@ -68,7 +68,7 @@ TEST_CASE("angel_host wave8 :: load_hello_angel_plugin_success", "[plugins][ange
         sao_plugins_ashost_free_string(err);
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_lifecycle_hooks_compiled", "[plugins][angel][wave8]") {
+TEST_CASE("angel_host :: hello_angel_lifecycle_hooks_compiled", "[plugins][angel][lifecycle]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
@@ -79,7 +79,7 @@ TEST_CASE("angel_host wave8 :: hello_angel_lifecycle_hooks_compiled", "[plugins]
     CHECK(sao_plugins_ashost_has_hook(g_plugin, "on_unload"));
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times", "[plugins][angel][wave8]") {
+TEST_CASE("angel_host :: hello_angel_on_tick_ticks_3_times", "[plugins][angel][lifecycle]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
@@ -103,7 +103,7 @@ TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times", "[plugins][an
     REQUIRE(v == 3);
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_unload_cleanup_no_leak", "[plugins][angel][wave8]") {
+TEST_CASE("angel_host :: hello_angel_unload_cleanup_no_leak", "[plugins][angel][lifecycle]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;

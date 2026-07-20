@@ -27,7 +27,7 @@ sao_plugins_cshost_load_assembly(cs_domain_handle_t domain,
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_unload_assembly(cs_assembly_handle_t /*assembly*/) {
-    // Wave 4: no assembly ever created, treat as OK
+    // Reserved compile path creates no assembly, so unload is a no-op.
     return SAO_OK;
 }
 

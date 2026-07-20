@@ -1,4 +1,4 @@
-# plugins/angel_host/tests — smoke + Wave 3 Catch2 单测
+# plugins/angel_host/tests — smoke + AngelScript host Catch2 单测
 
 add_executable(test_plugins_angel_host test_angel.cpp)
 target_link_libraries(test_plugins_angel_host PRIVATE sao_plugins_angel_host)
@@ -9,17 +9,17 @@ set_tests_properties(plugins_angel_host_smoke PROPERTIES LABELS "plugins;angel")
 
 find_package(Catch2 3 QUIET CONFIG)
 if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
-    add_executable(test_plugins_angel_host_wave3 test_as_wave3.cpp)
-    target_link_libraries(test_plugins_angel_host_wave3 PRIVATE
+    add_executable(test_plugins_angel_host_as_host test_as_host.cpp)
+    target_link_libraries(test_plugins_angel_host_as_host PRIVATE
         sao_plugins_angel_host
         Catch2::Catch2WithMain
     )
-    target_compile_features(test_plugins_angel_host_wave3 PRIVATE cxx_std_17)
-    target_compile_definitions(test_plugins_angel_host_wave3 PRIVATE SAO_PLUGINS_BUILDING_DLL)
+    target_compile_features(test_plugins_angel_host_as_host PRIVATE cxx_std_17)
+    target_compile_definitions(test_plugins_angel_host_as_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
     if (MSVC)
-        target_compile_options(test_plugins_angel_host_wave3 PRIVATE /GR)
+        target_compile_options(test_plugins_angel_host_as_host PRIVATE /GR)
     endif()
-    add_test(NAME plugins_angel_host_wave3 COMMAND test_plugins_angel_host_wave3)
+    add_test(NAME plugins_angel_host_as_host COMMAND test_plugins_angel_host_as_host)
 
     add_executable(test_plugins_angel_host_bridge_stdlib
         test_as_bridge_stdlib.cpp)
@@ -61,24 +61,24 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_angel_host_bridge_stdlib
         PROPERTIES LABELS "plugins;angel;bridge;stdlib")
 
-    # Wave 8 / Agent d Phase 8: hello_angel 真加载 + on_load/tick/unload
-    add_executable(test_plugins_angel_host_wave8 test_hello_angel_wave8.cpp)
-    target_link_libraries(test_plugins_angel_host_wave8 PRIVATE
+    # hello_angel 真加载 + on_load/tick/unload
+    add_executable(test_plugins_angel_host_hello test_hello_angel.cpp)
+    target_link_libraries(test_plugins_angel_host_hello PRIVATE
         sao_plugins_angel_host
         Catch2::Catch2WithMain
     )
-    target_compile_features(test_plugins_angel_host_wave8 PRIVATE cxx_std_17)
-    target_compile_definitions(test_plugins_angel_host_wave8 PRIVATE
+    target_compile_features(test_plugins_angel_host_hello PRIVATE cxx_std_17)
+    target_compile_definitions(test_plugins_angel_host_hello PRIVATE
         SAO_PLUGINS_BUILDING_DLL  # 静态库 + 头 dllimport → 加此定义清 __imp_ 前缀
         SAO_HELLO_ANGEL_JSON="${CMAKE_SOURCE_DIR}/plugins/examples/hello_angel/plugin.json")
     if (MSVC)
-        target_compile_options(test_plugins_angel_host_wave8 PRIVATE /GR)
+        target_compile_options(test_plugins_angel_host_hello PRIVATE /GR)
     endif()
-    add_test(NAME plugins_angel_host_wave8 COMMAND test_plugins_angel_host_wave8)
-    set_tests_properties(plugins_angel_host_wave8
-        PROPERTIES LABELS "plugins;angel;wave8")
+    add_test(NAME plugins_angel_host_hello COMMAND test_plugins_angel_host_hello)
+    set_tests_properties(plugins_angel_host_hello
+        PROPERTIES LABELS "plugins;angel;lifecycle")
 
-    # Phase 4: gpu_hunt SDK binding on AngelScript engine.
+    # gpu_hunt SDK binding on AngelScript engine.
     add_executable(test_plugins_angel_host_gpu_hunt_bind test_gpu_hunt_bind.cpp)
     target_link_libraries(test_plugins_angel_host_gpu_hunt_bind PRIVATE
         sao_plugins_angel_host
@@ -120,24 +120,24 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_angel_host_loader_adapter
         PROPERTIES LABELS "plugins;angel;loader_adapter")
 
-    # ── Wave 18 / Agent b — AngelScript sandbox 8 case ──────────────
-    add_executable(test_plugins_angel_host_sandbox_wave18b
-        test_as_sandbox_wave18b.cpp)
-    target_link_libraries(test_plugins_angel_host_sandbox_wave18b PRIVATE
+    # ── AngelScript sandbox 8 case ──────────────
+    add_executable(test_plugins_angel_host_sandbox
+        test_as_sandbox.cpp)
+    target_link_libraries(test_plugins_angel_host_sandbox PRIVATE
         sao_plugins_angel_host
         sao_script_sandbox_common_lib
         Catch2::Catch2WithMain
     )
-    target_compile_features(test_plugins_angel_host_sandbox_wave18b PRIVATE cxx_std_20)
-    target_compile_definitions(test_plugins_angel_host_sandbox_wave18b PRIVATE
+    target_compile_features(test_plugins_angel_host_sandbox PRIVATE cxx_std_20)
+    target_compile_definitions(test_plugins_angel_host_sandbox PRIVATE
         SAO_PLUGINS_BUILDING_DLL)
     if (MSVC)
-        target_compile_options(test_plugins_angel_host_sandbox_wave18b PRIVATE /GR)
+        target_compile_options(test_plugins_angel_host_sandbox PRIVATE /GR)
     endif()
-    add_test(NAME plugins_angel_host_sandbox_wave18b
-             COMMAND test_plugins_angel_host_sandbox_wave18b)
-    set_tests_properties(plugins_angel_host_sandbox_wave18b
-        PROPERTIES LABELS "plugins;angel;wave18b;sandbox")
+    add_test(NAME plugins_angel_host_sandbox
+             COMMAND test_plugins_angel_host_sandbox)
+    set_tests_properties(plugins_angel_host_sandbox
+        PROPERTIES LABELS "plugins;angel;sandbox")
 else()
-    message(STATUS "plugins/angel_host: Catch2 未找到, 跳过 wave3/wave8/wave18b 单测")
+    message(STATUS "plugins/angel_host: Catch2 未找到, 跳过 host/lifecycle/sandbox 单测")
 endif()

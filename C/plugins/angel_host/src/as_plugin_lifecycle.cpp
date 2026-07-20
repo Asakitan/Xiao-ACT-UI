@@ -1,4 +1,4 @@
-// as_plugin_lifecycle.cpp — Wave 8 / Agent d Phase 8 实装
+// as_plugin_lifecycle.cpp — AngelScript 插件生命周期实现
 //
 // SDK 3 条 C 函数被注册到 asIScriptEngine 全局命名空间, 用 asCALL_CDECL.
 // 每条内部通过 asGetActiveContext()->GetUserData() 拿到 as_plugin_s* 更新计数器.

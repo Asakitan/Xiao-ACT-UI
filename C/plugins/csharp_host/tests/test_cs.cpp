@@ -1,6 +1,6 @@
 // test_cs.cpp — smoke test
 //
-// Wave 8: init 可能 OK (hostfxr 就绪) / NOT_INITIALIZED (无 hostfxr) /
+// init 可能 OK (hostfxr 就绪) / NOT_INITIALIZED (无 hostfxr) /
 // NOT_IMPLEMENTED (非 Win 平台).  接受任一.
 #include "sao/plugins/csharp_host/cs_host.h"
 

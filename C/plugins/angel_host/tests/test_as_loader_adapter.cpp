@@ -212,7 +212,7 @@ void callback() { release_self_callback(); }
             SAO_OK);
     sao_plugins_ashost_free_string(result);
     sao_plugins_ashost_free_string(error);
-    asIScriptModule* module = engine->GetModule("wave3", asGM_ONLY_IF_EXISTS);
+    asIScriptModule* module = engine->GetModule("inline_script", asGM_ONLY_IF_EXISTS);
     REQUIRE(module != nullptr);
     asIScriptFunction* function = module->GetFunctionByName("callback");
     REQUIRE(function != nullptr);

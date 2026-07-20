@@ -129,12 +129,22 @@ struct gate {
     bool released = false;
 };
 
+struct lifecycle_unload_probe {
+    plugin_handle_t plugin = nullptr;
+    std::atomic_int status{SAO_ERR_OS_CALL_FAILED};
+};
+
 void gate_callback(const char*, const char*, void* user_data) {
     auto& value = *static_cast<gate*>(user_data);
     std::unique_lock lock(value.mutex);
     value.entered = true;
     value.condition.notify_all();
     value.condition.wait(lock, [&value] { return value.released; });
+}
+
+void reentrant_unload_callback(const char*, const char*, void* user_data) {
+    auto& probe = *static_cast<lifecycle_unload_probe*>(user_data);
+    probe.status.store(sao_plugins_lifecycle_unload(probe.plugin));
 }
 
 struct menu_row_snapshot {
@@ -1145,11 +1155,16 @@ local mode = 0
 local build_calls = 0
 local action_calls = 0
 local action_fail = false
+local reentrant_unload = false
 local duplicate_rejected = false
 local extension_id = ""
+local context = nil
 
 local function shared_command()
     if action_fail then error("menu action fixture failure") end
+    if reentrant_unload then
+        context:emit("lua_menu_reentrant_unload", {})
+    end
     action_calls = action_calls + 1
 end
 
@@ -1186,6 +1201,7 @@ local function build_menu()
 end
 
 function on_load(ctx)
+    context = ctx
     extension_id = ctx:register_menu_category(
         "工具 α", "⚙", build_menu, 10.5)
     duplicate_rejected = not pcall(function()
@@ -1195,6 +1211,8 @@ end
 
 function set_mode(value) mode = value end
 function set_action_fail(value) action_fail = value end
+function set_reentrant_unload(value) reentrant_unload = value end
+function action_call_count() return action_calls end
 function stats()
     return {
         build_calls = build_calls,
@@ -1340,6 +1358,29 @@ end
     REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
     REQUIRE(catalog.providers.size() == 1);
     CHECK(catalog.providers[0].generation == provider.generation);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+    lifecycle_unload_probe unload_probe;
+    unload_probe.plugin = handle;
+    std::uint32_t unload_token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "lua_menu_reentrant_unload",
+                                      reentrant_unload_callback, &unload_probe,
+                                      &unload_token) == SAO_OK);
+    REQUIRE(call_hook(adapter.owner, handle, "set_reentrant_unload", "[true]") == "null");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(unload_probe.status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+    menu_catalog_snapshot after_reentrant_busy;
+    REQUIRE(snapshot_menu_catalog(after_reentrant_busy) == SAO_OK);
+    CHECK(after_reentrant_busy == catalog);
+    CHECK(call_hook(adapter.owner, handle, "action_call_count") == "3");
+    REQUIRE(call_hook(adapter.owner, handle, "set_reentrant_unload", "[false]") == "null");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(call_hook(adapter.owner, handle, "action_call_count") == "4");
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, unload_token) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(),

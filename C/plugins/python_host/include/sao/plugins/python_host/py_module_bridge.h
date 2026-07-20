@@ -78,7 +78,7 @@ sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context)
 // 已知的 SDK 方法数 (调 binding_python 侧的 method_defs 拿到)。
 extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL sao_plugins_pyhost_sdk_method_count(void);
 
-// 内省 PluginContext 记账 (Wave 7 新增, 单测和内部使用)。
+// 内省 PluginContext 记账 (单测和内部使用)。
 // record_kind ∈ {"panels","hotkeys","subscriptions","published","logs",
 //                "timers","timer_tokens","callback_refs","notifications","settings",
 //                "menus"}。

@@ -1,4 +1,4 @@
-// test_pyhost_real_plugins_wave7.cpp — Wave 7 真实老插件加载 (Catch2)
+// test_pyhost_real_plugins.cpp — 真实老插件加载与 SDK 桥接测试 (Catch2)
 //
 // 目标: 用**未改动**的 Python 老插件 (star_resonance / hide_seek / midi_piano)
 // 验证 C++ python_host 的加载语义, 覆盖:
@@ -556,7 +556,7 @@ TEST_CASE("pyhost_uses_isolated_no_site_configuration", "[pyhost][isolated]") {
 // ══════════════════════════════════════════════════════════
 // CASE 1: star_resonance 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged", "[pyhost][real_plugins][load]") {
     const char* dir = SAO_TEST_PLUGIN_STAR_RESONANCE;
     if (!plugin_dir_ok(dir)) {
         SKIP("star_resonance_plugin dir not present");
@@ -595,7 +595,7 @@ TEST_CASE("pyhost_loads_star_resonance_plugin_unchanged", "[pyhost][wave7][real_
 // ══════════════════════════════════════════════════════════
 // CASE 2: hide_seek 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged", "[pyhost][real_plugins][load]") {
     const char* dir = SAO_TEST_PLUGIN_HIDE_SEEK;
     if (!plugin_dir_ok(dir)) {
         SKIP("hide_seek_plugin dir not present");
@@ -649,7 +649,7 @@ TEST_CASE("pyhost_loads_hide_seek_plugin_unchanged", "[pyhost][wave7][real_plugi
 // ══════════════════════════════════════════════════════════
 // CASE 3: midi_piano 老插件加载
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged", "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged", "[pyhost][real_plugins][load]") {
     const char* dir = SAO_TEST_PLUGIN_MIDI_PIANO;
     if (!plugin_dir_ok(dir)) {
         SKIP("midi_piano_plugin dir not present");
@@ -674,7 +674,7 @@ TEST_CASE("pyhost_loads_midi_piano_plugin_unchanged", "[pyhost][wave7][real_plug
 // ══════════════════════════════════════════════════════════
 // CASE 4: 反复 4 次 load/unload star_resonance 无泄漏
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_unload_reload_star_resonance", "[pyhost][wave7][real_plugins]") {
+TEST_CASE("pyhost_unload_reload_star_resonance", "[pyhost][real_plugins][reload]") {
     const char* dir = SAO_TEST_PLUGIN_STAR_RESONANCE;
     if (!plugin_dir_ok(dir)) {
         SKIP("star_resonance_plugin dir not present");
@@ -715,7 +715,7 @@ TEST_CASE("pyhost_unload_reload_star_resonance", "[pyhost][wave7][real_plugins]"
 // ══════════════════════════════════════════════════════════
 // CASE 5: plugin.py 里 `import sao_sdk` 能拿到 module
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin", "[pyhost][wave7]") {
+TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin", "[pyhost][real_plugins]") {
     REQUIRE(ensure_host() != nullptr);
 
     // 直接 PyImport_ImportModule (相当于插件里的 `import sao_sdk`).
@@ -749,7 +749,7 @@ TEST_CASE("pyhost_sao_sdk_module_importable_from_plugin", "[pyhost][wave7]") {
 // ══════════════════════════════════════════════════════════
 // CASE 6: ctx.log_info(msg) → host 记账
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_ctx_log_info_reaches_platform_log", "[pyhost][wave7]") {
+TEST_CASE("pyhost_ctx_log_info_reaches_platform_log", "[pyhost][real_plugins]") {
     REQUIRE(ensure_host() != nullptr);
 
     // 建一个 PluginContext 直接调 (不需要加载 real plugin).
@@ -795,7 +795,7 @@ TEST_CASE("pyhost_ctx_log_info_reaches_platform_log", "[pyhost][wave7]") {
 // ══════════════════════════════════════════════════════════
 // CASE 7: ctx.register_ui_panel → 得 panel_id handle
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle", "[pyhost][wave7]") {
+TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle", "[pyhost][real_plugins]") {
     REQUIRE(ensure_host() != nullptr);
 
     PyObject* mod = PyImport_ImportModule("sao_sdk");
@@ -842,7 +842,7 @@ TEST_CASE("pyhost_register_ui_panel_from_python_gets_handle", "[pyhost][wave7]")
 // ══════════════════════════════════════════════════════════
 // CASE 8: ctx.add_hotkey → 记账
 // ══════════════════════════════════════════════════════════
-TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key", "[pyhost][wave7]") {
+TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key", "[pyhost][real_plugins]") {
     REQUIRE(ensure_host() != nullptr);
 
     PyObject* mod = PyImport_ImportModule("sao_sdk");
@@ -926,8 +926,8 @@ TeardownSentinel g_teardown{};
 
 #else // !SAO_HAS_PYTHON_EMBED
 
-TEST_CASE("pyhost_wave7_skipped_no_python_embed", "[pyhost][wave7][.skip]") {
-    SKIP("Python3 embed not found — Wave 7 real-plugin tests require CPython 3.11+");
+TEST_CASE("pyhost_skipped_no_python_embed", "[pyhost][real_plugins][.skip]") {
+    SKIP("Python3 embed not found — real-plugin tests require CPython 3.11+");
 }
 
 #endif // SAO_HAS_PYTHON_EMBED

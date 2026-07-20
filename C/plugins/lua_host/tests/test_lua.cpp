@@ -1,6 +1,4 @@
-// test_lua.cpp — smoke test (无 Catch2)
-//
-// 只做 version 字符串 + gate 存在性检测; 真功能测走 test_lua_wave3.cpp。
+// Lightweight Lua host smoke test without Catch2.
 
 #include "sao/plugins/lua_host/lua_call.h"
 #include "sao/plugins/lua_host/lua_host.h"
@@ -15,28 +13,27 @@
 int main() {
     using namespace sao::plugins::lua_host;
 
-    const char* v = sao_plugins_luahost_version();
-    assert(v != nullptr);
-    assert(std::strlen(v) > 0);
+    const char* version = sao_plugins_luahost_version();
+    assert(version != nullptr);
+    assert(std::strlen(version) > 0);
 
-    bool avail = sao_plugins_luahost_is_available();
-    if (avail) {
-        lua_host_config cfg{};
-        cfg.install_stdlib = true;
-        lua_host_handle_t h = nullptr;
-        int32_t rc = sao_plugins_luahost_create(&cfg, &h);
+    if (sao_plugins_luahost_is_available()) {
+        lua_host_config config{};
+        config.install_stdlib = true;
+        lua_host_handle_t host = nullptr;
+        const int32_t rc = sao_plugins_luahost_create(&config, &host);
         assert(rc == SAO_OK);
-        assert(h != nullptr);
-        assert(sao_plugins_luahost_state(h) != nullptr);
-        sao_plugins_luahost_destroy(h);
-        std::printf("lua_host smoke test passed (real Lua %s)\n", v);
+        assert(host != nullptr);
+        assert(sao_plugins_luahost_state(host) != nullptr);
+        sao_plugins_luahost_destroy(host);
+        std::printf("lua_host smoke test passed (real Lua %s)\n", version);
     } else {
-        // 无 lua: create 应返 NOT_IMPLEMENTED
-        lua_host_config cfg{};
-        lua_host_handle_t h = nullptr;
-        int32_t rc = sao_plugins_luahost_create(&cfg, &h);
+        lua_host_config config{};
+        lua_host_handle_t host = nullptr;
+        int32_t rc = sao_plugins_luahost_create(&config, &host);
         assert(rc == SAO_ERR_NOT_IMPLEMENTED);
-        assert(h == nullptr);
+        assert(host == nullptr);
+
         auto* unavailable_state = reinterpret_cast<lua_State*>(1);
         assert(sao_plugins_luahost_install_sao_stdlib(unavailable_state) ==
                SAO_ERR_NOT_IMPLEMENTED);
@@ -71,7 +68,7 @@ int main() {
         assert(sao_plugins_luahost_destroy(unavailable_host) == SAO_ERR_NOT_IMPLEMENTED);
 
         lua_loader_adapter_owner_t adapter_owner = reinterpret_cast<lua_loader_adapter_owner_t>(1);
-        assert(sao_plugins_luahost_register_loader_adapter(&cfg, &adapter_owner) ==
+        assert(sao_plugins_luahost_register_loader_adapter(&config, &adapter_owner) ==
                SAO_ERR_NOT_IMPLEMENTED);
         assert(adapter_owner == nullptr);
         assert(sao_plugins_luahost_unregister_loader_adapter(
@@ -97,7 +94,7 @@ int main() {
         assert(sao_plugins_luahost_call_function_by_ref(unavailable_state, 1, nullptr, &result) ==
                SAO_ERR_NOT_IMPLEMENTED);
         assert(result == nullptr);
-        std::printf("lua_host smoke test passed (stub: %s)\n", v);
+        std::printf("lua_host smoke test passed (stub: %s)\n", version);
     }
     return 0;
 }

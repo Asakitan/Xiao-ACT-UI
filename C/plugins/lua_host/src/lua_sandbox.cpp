@@ -1,4 +1,4 @@
-// lua_sandbox.cpp — Wave 18 / Agent b 真装
+// lua_sandbox.cpp — Lua restricted-environment 沙箱实现
 //
 // 实现三条安全线:
 //   1. Restricted _ENV — 用 lua_setupvalue 把匿名主 chunk 的 _ENV 换成
@@ -265,7 +265,7 @@ int32_t build_restricted_env(lua_State* L, const lua_sandbox_config* cfg) {
 // **arm 时直接把该 env 存 registry 里, 提供 sao_plugins_luahost_sandbox_env_ref**
 // 给外部 wrap.
 //
-// wave18/b 为保 API 面简单, arm 时把 restricted env 装成 registry
+// 为保持 arm/disarm API 简洁, arm 时把 restricted env 装成 registry
 // LUA_RIDX_GLOBALS (i.e. 用 lua_rawseti 覆盖).  这样后续所有 lua_getglobal /
 // _ENV 查找都走这份 restricted _G.  disarm 时恢复原 _G.
 

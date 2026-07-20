@@ -1,4 +1,4 @@
-// cs_plugin_lifecycle.cpp — Wave 8 / Agent d Phase 8 实装
+// cs_plugin_lifecycle.cpp — C# 插件生命周期实现
 //
 // hostfxr API 用法参考:
 //   https://learn.microsoft.com/en-us/dotnet/core/tutorials/netcore-hosting
@@ -29,7 +29,7 @@ enum : int32_t {
     hdt_load_assembly_and_get_function_pointer = 5,
 };
 
-// ── hostfxr 官方函数签名 (与 wave 4 cs_host.cpp 里的定义对齐) ────
+// ── hostfxr 官方函数签名 (与 cs_host.cpp 里的定义对齐) ─────────
 #if defined(_WIN32)
 using hostfxr_handle_t = void*;
 typedef int32_t (*hostfxr_initialize_for_runtime_config_fn)(
@@ -168,11 +168,11 @@ struct cs_plugin_s {
 
 // ── 从 cs_host_impl 里拿 hostfxr module + fn ptrs ─────────
 //
-// wave 4 cs_host 有 cs_host_impl (internal) 里的 module + init_fn + get_delegate_fn.
-// wave 8 我们不 depend on 这个 internal struct; 而是**自己再 GetProcAddress**
+// cs_host_impl (internal) 持有 module + init_fn + get_delegate_fn.
+// 生命周期加载器不依赖这个 internal struct; 而是**自己再 GetProcAddress**
 // 从 host 的 hostfxr.dll (LoadLibraryW 的 handle 从 cs_host 里没直接暴露).
 //
-// 折中: 直接自己 LoadLibraryW hostfxr.dll (probe 复用 wave 4 逻辑, 但因为
+// 直接 LoadLibraryW hostfxr.dll (probe 复用 host 逻辑, 但因为
 // 那个是 file-static 的 probe_hostfxr_path, 我们简化: 从 %DOTNET_ROOT% 或
 // C:\Program Files\dotnet\host\fxr\*\hostfxr.dll 找).
 

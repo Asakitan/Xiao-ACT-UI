@@ -1,4 +1,4 @@
-// test_as_sandbox_wave18b.cpp — Wave 18 / Agent b AngelScript sandbox 8 case
+// test_as_sandbox.cpp — AngelScript 沙箱 8 项行为测试
 //
 // hermetic mock — 全走本地合成 script + sandbox_arm 白名单验证.
 // **声明**: 不真跑不受信 Lua/AS 脚本, 全合成 UTF-8 字面量 + 走沙盒.
@@ -57,13 +57,13 @@ exec_res exec_script(as_host_handle_t h, const char* src) {
 
 } // namespace
 
-TEST_CASE("wave18b_as_arm_null_engine_invalid_argument", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_null_engine_invalid_argument", "[as][sandbox][sandbox]") {
     as_sandbox_config cfg{};
     int32_t rc = sao_plugins_ashost_sandbox_arm(nullptr, &cfg);
     REQUIRE(rc == SAO_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("wave18b_as_arm_null_config_invalid", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_null_config_invalid", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -77,7 +77,7 @@ TEST_CASE("wave18b_as_arm_null_config_invalid", "[as][sandbox][wave18b]") {
     sao_plugins_ashost_destroy(h);
 }
 
-TEST_CASE("wave18b_as_arm_registers_whitelist_only", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_registers_whitelist_only", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -104,7 +104,7 @@ TEST_CASE("wave18b_as_arm_registers_whitelist_only", "[as][sandbox][wave18b]") {
     sao_plugins_ashost_destroy(h);
 }
 
-TEST_CASE("wave18b_as_arm_math_functions_available", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_math_functions_available", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -129,7 +129,7 @@ TEST_CASE("wave18b_as_arm_math_functions_available", "[as][sandbox][wave18b]") {
     sao_plugins_ashost_destroy(h);
 }
 
-TEST_CASE("wave18b_as_arm_string_type_gated_by_config", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_string_type_gated_by_config", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -167,7 +167,7 @@ TEST_CASE("wave18b_as_arm_string_type_gated_by_config", "[as][sandbox][wave18b]"
     sao_plugins_ashost_destroy(h2);
 }
 
-TEST_CASE("wave18b_as_arm_jit_forced_off", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_jit_forced_off", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -184,7 +184,7 @@ TEST_CASE("wave18b_as_arm_jit_forced_off", "[as][sandbox][wave18b]") {
     sao_plugins_ashost_destroy(h);
 }
 
-TEST_CASE("wave18b_as_arm_max_context_ms_records_config", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_max_context_ms_records_config", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -200,7 +200,7 @@ TEST_CASE("wave18b_as_arm_max_context_ms_records_config", "[as][sandbox][wave18b
     sao_plugins_ashost_destroy(h);
 }
 
-TEST_CASE("wave18b_as_arm_denied_globals_enforced", "[as][sandbox][wave18b]") {
+TEST_CASE("as_sandbox_arm_denied_globals_enforced", "[as][sandbox][sandbox]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;

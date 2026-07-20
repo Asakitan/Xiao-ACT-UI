@@ -12,9 +12,9 @@ add_library(sao_plugins_angel_host STATIC
     src/as_sandbox.cpp
     src/as_stdlib.cpp
     src/as_error.cpp
-    # Wave 8 / Agent d Phase 8: plugin lifecycle (真加载真跑)
+    # Plugin lifecycle (真加载真跑)
     src/as_plugin_lifecycle.cpp
-    # Phase 4: gpu_hunt SDK binding (Vec3 / Mat4 / GpuTracker → AS)
+    # gpu_hunt SDK binding (Vec3 / Mat4 / GpuTracker → AS)
     src/as_gpu_hunt_bind.cpp
 )
 add_library(sao::plugins::angel_host ALIAS sao_plugins_angel_host)
@@ -26,7 +26,7 @@ target_include_directories(sao_plugins_angel_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../sdk_binding/include>
 )
 
-# Wave 18 / Agent b — SAO_ENC_STR (header-only, 无需链接)
+# 沙箱敏感字符串使用 SAO_ENC_STR (header-only, 无需链接)
 target_include_directories(sao_plugins_angel_host PRIVATE
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/security/obfuscation/include>
 )
@@ -37,7 +37,7 @@ target_compile_definitions(sao_plugins_angel_host PRIVATE SAO_PLUGINS_BUILDING_D
 target_link_libraries(sao_plugins_angel_host PUBLIC
     sao_plugins_loader
     sao_plugins_sdk_binding
-    # Phase 4: gpu_hunt static lib supplies Vec3 / Mat4 / GpuTracker for
+    # gpu_hunt static lib supplies Vec3 / Mat4 / GpuTracker for
     # the standalone binding path.
     sao::gpu_hunt
 )

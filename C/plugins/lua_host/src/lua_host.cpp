@@ -136,7 +136,7 @@ sao_plugins_luahost_version(void) {
 #endif
 }
 
-// ── Wave 3 高层 execute / call_function 便利 (in-memory, 无文件路径) ──
+// ── 内存源码 execute / call_function 便利入口 (无文件路径) ───────────
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_luahost_execute(lua_host_handle_t host,

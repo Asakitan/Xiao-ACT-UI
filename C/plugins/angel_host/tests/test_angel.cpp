@@ -1,6 +1,6 @@
 // test_angel.cpp — smoke test (无 Catch2)
 //
-// version 字符串 + gate 存在性检测。真功能测走 test_as_wave3.cpp。
+// version 字符串 + gate 存在性检测。真功能测走 test_as_host.cpp。
 
 #include "sao/plugins/angel_host/as_host.h"
 
@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-// wave3 便利
+// Host capability probe exported by the runtime implementation.
 extern "C" {
     SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_ashost_is_available(void);
 }

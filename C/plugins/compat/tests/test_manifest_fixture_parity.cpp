@@ -1,4 +1,4 @@
-// test_manifest_fixture_parity_wave8.cpp — Wave 8 / Agent d Phase 8 首切片
+// test_manifest_fixture_parity.cpp — plugin manifest 磁盘 fixture parity
 //
 // 用磁盘 docs/fixtures/plugin_manifest/*.json 13 个真实 fixture 驱动 parser
 // 逐字段对齐 expected.normalized. 每 case 是 assert 死断.
@@ -467,11 +467,11 @@ int main(int argc, char** argv) {
     if (dir.empty()) dir = SAO_FIXTURE_DIR;
 #endif
     if (dir.empty()) {
-        std::printf("test_manifest_fixture_parity_wave8: no fixture dir configured\n");
+        std::printf("test_manifest_fixture_parity: no fixture dir configured\n");
         return 1;
     }
 
-    std::printf("test_manifest_fixture_parity_wave8: fixture_dir=%s\n", dir.c_str());
+    std::printf("test_manifest_fixture_parity: fixture_dir=%s\n", dir.c_str());
 
     // 13 个 fixture (按字典序)
     const char* names[] = {
@@ -499,11 +499,11 @@ int main(int argc, char** argv) {
     }
 
     if (failed == 0) {
-        std::printf("test_manifest_fixture_parity_wave8: %zu/%zu cases passed\n",
+        std::printf("test_manifest_fixture_parity: %zu/%zu cases passed\n",
                     total, total);
         return 0;
     } else {
-        std::printf("test_manifest_fixture_parity_wave8: %d/%zu failures\n",
+        std::printf("test_manifest_fixture_parity: %d/%zu failures\n",
                     failed, total);
         return 1;
     }

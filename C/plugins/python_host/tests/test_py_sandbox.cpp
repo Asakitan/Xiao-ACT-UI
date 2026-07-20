@@ -1,4 +1,4 @@
-// test_py_sandbox_wave18a.cpp — Wave 18 / Agent a
+// test_py_sandbox.cpp — Python 子解释器沙箱测试
 //
 // 10 CASE (Catch2):
 //   1. arm_creates_interpreter_returns_ok
@@ -46,7 +46,7 @@ py_host_handle_t ensure_host() {
     cfg.controlled_test_shim = true;
     int32_t rc = sao_plugins_pyhost_init(&cfg, &g_host);
     if (rc != SAO_OK) {
-        std::printf("[wave18a] pyhost_init rc=%d (embed missing?), skip\n", rc);
+        std::printf("[sandbox] pyhost_init rc=%d (embed missing?), skip\n", rc);
         g_host_ready = false;
         g_host = nullptr;
         return nullptr;
@@ -73,8 +73,8 @@ py_sandbox_config make_default_cfg() {
 
 }  // namespace
 
-TEST_CASE("py_sandbox wave18a :: arm_creates_interpreter_returns_ok",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_creates_interpreter_returns_ok",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -86,8 +86,8 @@ TEST_CASE("py_sandbox wave18a :: arm_creates_interpreter_returns_ok",
     safe_disarm("case1_arm_ok");
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_null_plugin_id_returns_invalid_argument",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_null_plugin_id_returns_invalid_argument",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -101,8 +101,8 @@ TEST_CASE("py_sandbox wave18a :: arm_null_plugin_id_returns_invalid_argument",
     REQUIRE(rc == SAO_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_duplicate_plugin_id_returns_already_exists",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_duplicate_plugin_id_returns_already_exists",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -115,8 +115,8 @@ TEST_CASE("py_sandbox wave18a :: arm_duplicate_plugin_id_returns_already_exists"
     safe_disarm("case3_dup");
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_registers_math_and_json_but_not_os",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_registers_math_and_json_but_not_os",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -154,8 +154,8 @@ TEST_CASE("py_sandbox wave18a :: arm_registers_math_and_json_but_not_os",
     safe_disarm("case4_whitelist");
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_denies_import_ctypes_module",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_denies_import_ctypes_module",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -185,8 +185,8 @@ TEST_CASE("py_sandbox wave18a :: arm_denies_import_ctypes_module",
     safe_disarm("case5_ctypes");
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_denies_builtins_open_when_io_deny",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_denies_builtins_open_when_io_deny",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -210,8 +210,8 @@ TEST_CASE("py_sandbox wave18a :: arm_denies_builtins_open_when_io_deny",
     safe_disarm("case6_open");
 }
 
-TEST_CASE("py_sandbox wave18a :: arm_config_allow_extra_module_appends_whitelist",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: arm_config_allow_extra_module_appends_whitelist",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -253,8 +253,8 @@ TEST_CASE("py_sandbox wave18a :: arm_config_allow_extra_module_appends_whitelist
     safe_disarm("case7_extra");
 }
 
-TEST_CASE("py_sandbox wave18a :: disarm_releases_interpreter",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: disarm_releases_interpreter",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -273,8 +273,8 @@ TEST_CASE("py_sandbox wave18a :: disarm_releases_interpreter",
     REQUIRE(rc == SAO_ERR_HANDLE_INVALID);
 }
 
-TEST_CASE("py_sandbox wave18a :: disarm_unknown_plugin_returns_not_found",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: disarm_unknown_plugin_returns_not_found",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;
@@ -287,8 +287,8 @@ TEST_CASE("py_sandbox wave18a :: disarm_unknown_plugin_returns_not_found",
     REQUIRE(rc == SAO_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("py_sandbox wave18a :: concurrent_arm_two_plugins_safe",
-          "[plugins][python][wave18a]") {
+TEST_CASE("py_sandbox :: concurrent_arm_two_plugins_safe",
+          "[plugins][python][sandbox]") {
     if (ensure_host() == nullptr) {
         SUCCEED("Python embed missing, skip");
         return;

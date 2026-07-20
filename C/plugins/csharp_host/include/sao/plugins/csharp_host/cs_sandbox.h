@@ -24,7 +24,7 @@ struct cs_sandbox_config {
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_sandbox_arm(cs_domain_handle_t domain, const cs_sandbox_config* cfg);
 
-// ── Wave 18 / Agent a 测试 & 内省 hook ─────────────────────
+// ── 沙箱测试与内省 hook ────────────────────────────────────
 // mode: 0=真实探测(默认); 1=强制 hostfxr 可用; 2=强制不可用.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_sandbox_set_hostfxr_mock(int mode);

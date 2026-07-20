@@ -4,7 +4,7 @@
 //   print / str / int / float / len / type / tostring / tonumber /
 //   pairs / ipairs / range / abs / min / max
 //
-// C++ 额外内置 (task Wave 3 明确要求 8+):
+// C++ 额外内置 (补足容器构造和常用数学函数):
 //   list()   — 空数组构造 (对齐 python list())
 //   dict()   — 空字典构造 (对齐 python dict())
 //   floor / ceil / sqrt — math 扩展

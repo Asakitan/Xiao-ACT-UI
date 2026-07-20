@@ -1,4 +1,4 @@
-// as_sandbox.h — AngelScript 沙箱 (Wave 18 / Agent b 真装)
+// as_sandbox.h — AngelScript 白名单沙箱
 //
 // AngelScript 的沙箱定位:
 //   1. 只注册**白名单** global function / global type — 危险 API 不 register
@@ -33,7 +33,7 @@ class asIScriptEngine;
 namespace sao::plugins::angel_host {
 
 struct as_sandbox_config {
-    // 老字段 — 兼容 wave3 stub 阶段.
+    // 兼容 addon 权限字段.
     bool allow_datetime_addon = false;
     bool allow_file_addon = false;
     bool allow_math_addon = true;
@@ -41,7 +41,7 @@ struct as_sandbox_config {
     bool allow_array_addon = false;
     bool allow_string_addon = true;
 
-    // 新字段 (wave18b 真装)
+    // 沙箱执行策略字段.
     //
     // allow_string_type:
     //   注册 SaoString 值类型 (命名为 "string") — script 里可写

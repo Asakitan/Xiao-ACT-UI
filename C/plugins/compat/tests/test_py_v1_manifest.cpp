@@ -1,6 +1,6 @@
-// test_py_v1_manifest_wave2.cpp — 用真实老 Python 平台 plugin.json 校验兼容层
+// test_py_v1_manifest.cpp — 用真实老 Python 平台 plugin.json 校验兼容层
 //
-// 每个 CASE 都是 assert 死断. 对齐 Wave1c 728 行零依赖 parser 实装:
+// 每个 CASE 都是 assert 死断，覆盖零依赖 parser 实装:
 //   - 真实 star_resonance plugin.json 内嵌 (无外部文件依赖, CI 友好)
 //   - 老别名 engine / runtime / deps 归一化
 //   - language / entry 缺失互相推断
@@ -141,7 +141,7 @@ constexpr const char* kHideSeekJson = R"JSON({
 
 // ── 老别名合成 fixture ──────────────────────────────────
 
-// 用 engine 老字段而非 language (Wave1c parser 应识别)
+// 用 engine 老字段而非 language (兼容 parser 应识别)
 constexpr const char* kLuaWithEngineAlias = R"JSON({
   "id": "legacy_engine_field",
   "name": "Legacy",
@@ -346,7 +346,7 @@ void case_parse_dict_requires_flattened() {
     assert(err == nullptr);
     // {"act_platform": ">=1.0"} → "act_platform>=1.0"
     assert(contains(m.requires_list, "act_platform>=1.0"));
-    // Wave 8 parity 修正: Python 侧硬编码 runtime_features 展开为单数
+    // Python parity: Python 侧硬编码 runtime_features 展开为单数
     // "runtime_feature:<item>", 不是复数 "runtime_features:...".  见
     // act_platform.plugins._normalize_requires + fixture deep_nested_requires_dict.
     assert(contains(m.requires_list, "runtime_feature:rgba_frame"));
@@ -403,7 +403,7 @@ void case_parse_hide_seek_requires_array_preserved() {
 } // namespace
 
 int main() {
-    std::printf("test_py_v1_manifest_wave2:\n");
+    std::printf("test_py_v1_manifest:\n");
     case_parse_star_resonance_plugin_json_no_errors();
     case_parse_lua_plugin_json_engine_alias_normalized();
     case_parse_missing_entry_infers_from_language();
@@ -413,6 +413,6 @@ int main() {
     case_parse_utf8_bom_tolerated();
     case_parse_json_line_comment_tolerated();
     case_parse_hide_seek_requires_array_preserved();
-    std::printf("py_v1_manifest_wave2: 9 cases passed\n");
+    std::printf("py_v1_manifest: 9 cases passed\n");
     return 0;
 }

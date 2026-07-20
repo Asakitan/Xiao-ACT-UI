@@ -20,9 +20,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,6 +42,18 @@ using namespace sao::plugins::loader;
 using namespace sao::plugins::python_host;
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+#if defined(SAO_HAS_PYTHON_EMBED) && defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+namespace sao::plugins::loader {
+struct entity_provider_test_counters {
+    std::uint64_t next_generation;
+    std::uint64_t catalog_revision;
+};
+
+entity_provider_test_counters entity_provider_get_counters_for_testing() noexcept;
+void entity_provider_set_counters_for_testing(entity_provider_test_counters counters) noexcept;
+} // namespace sao::plugins::loader
+#endif
 
 #if defined(SAO_HAS_PYTHON_EMBED)
 
@@ -143,6 +157,246 @@ class GilGuard {
   private:
     PyGILState_STATE state_;
 };
+
+struct NativeBridgeTeardownProbe {
+    bool fail_panel_unregister = true;
+    bool fail_hotkey_unregister = true;
+    bool fail_event_unsubscribe = true;
+    bool fail_timer_unregister = true;
+    bool panel_registered = false;
+    bool hotkey_registered = false;
+    bool event_registered = false;
+    bool timer_registered = false;
+    int panel_unregister_calls = 0;
+    int hotkey_unregister_calls = 0;
+    int event_unsubscribe_calls = 0;
+    int timer_unregister_calls = 0;
+    int retain_calls = 0;
+    int release_calls = 0;
+    sao_sdk_panel_action_callback_t panel_callback = nullptr;
+    void* panel_user_data = nullptr;
+    sao_sdk_hotkey_callback_t hotkey_callback = nullptr;
+    void* hotkey_user_data = nullptr;
+    sao_sdk_event_callback_t event_callback = nullptr;
+    void* event_user_data = nullptr;
+    sao_sdk_timer_callback_t timer_callback = nullptr;
+    void* timer_user_data = nullptr;
+
+    static void SAO_SDK_CALL retain(void* user_data) {
+        ++static_cast<NativeBridgeTeardownProbe*>(user_data)->retain_calls;
+    }
+
+    static void SAO_SDK_CALL release(void* user_data) {
+        ++static_cast<NativeBridgeTeardownProbe*>(user_data)->release_calls;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL register_timer(
+        void* user_data, std::uint32_t, sao_sdk_timer_callback_t callback,
+        void* callback_user_data, std::uint64_t* out_provider_token) {
+        auto* probe = static_cast<NativeBridgeTeardownProbe*>(user_data);
+        if (probe == nullptr || callback == nullptr || out_provider_token == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        probe->timer_registered = true;
+        probe->timer_callback = callback;
+        probe->timer_user_data = callback_user_data;
+        *out_provider_token = 4001;
+        return SAO_SDK_OK;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL unregister_timer(void* user_data,
+                                                           std::uint64_t provider_token) {
+        auto* probe = static_cast<NativeBridgeTeardownProbe*>(user_data);
+        if (probe == nullptr || provider_token != 4001)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        ++probe->timer_unregister_calls;
+        if (!probe->timer_registered)
+            return SAO_SDK_ERR_NOT_FOUND;
+        if (probe->fail_timer_unregister)
+            return SAO_SDK_ERR_BUSY;
+        probe->timer_registered = false;
+        probe->timer_callback = nullptr;
+        probe->timer_user_data = nullptr;
+        return SAO_SDK_OK;
+    }
+
+    SaoSdkProviderVTable provider() {
+        SaoSdkProviderVTable table{};
+        table.abi_version = SAO_SDK_PROVIDER_ABI_VERSION;
+        table.struct_size = sizeof(table);
+        table.user_data = this;
+        table.retain = retain;
+        table.release = release;
+        table.register_timer = register_timer;
+        table.unregister_timer = unregister_timer;
+        return table;
+    }
+
+    void fire_registered_callbacks() const {
+        if (panel_callback != nullptr)
+            panel_callback("retry-action", nullptr, 0, panel_user_data);
+        if (hotkey_callback != nullptr)
+            hotkey_callback(2001, hotkey_user_data);
+        if (event_callback != nullptr) {
+            constexpr char payload[] = "{}";
+            event_callback("retry.event", reinterpret_cast<const std::uint8_t*>(payload),
+                           sizeof(payload) - 1, event_user_data);
+        }
+        if (timer_callback != nullptr)
+            timer_callback(4001, timer_user_data);
+    }
+};
+
+NativeBridgeTeardownProbe* g_native_bridge_teardown_probe = nullptr;
+
+class NativeBridgeTeardownProbeScope {
+  public:
+    explicit NativeBridgeTeardownProbeScope(NativeBridgeTeardownProbe& probe) {
+        REQUIRE(g_native_bridge_teardown_probe == nullptr);
+        g_native_bridge_teardown_probe = &probe;
+    }
+
+    ~NativeBridgeTeardownProbeScope() {
+        g_native_bridge_teardown_probe = nullptr;
+    }
+
+    NativeBridgeTeardownProbeScope(const NativeBridgeTeardownProbeScope&) = delete;
+    NativeBridgeTeardownProbeScope& operator=(const NativeBridgeTeardownProbeScope&) = delete;
+};
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_register_panel(
+    void*, const char*, const char*, const std::uint8_t*, std::size_t,
+    sao_sdk_panel_action_callback_t callback, void* user_data, sao_sdk_ui_panel_t* out_panel) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || callback == nullptr || out_panel == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (probe->panel_registered)
+        return SAO_SDK_ERR_ALREADY_EXISTS;
+    probe->panel_registered = true;
+    probe->panel_callback = callback;
+    probe->panel_user_data = user_data;
+    *out_panel = reinterpret_cast<sao_sdk_ui_panel_t>(std::uintptr_t{1001});
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_unregister_panel(void*, sao_sdk_ui_panel_t panel) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || panel != reinterpret_cast<sao_sdk_ui_panel_t>(std::uintptr_t{1001}))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    ++probe->panel_unregister_calls;
+    if (!probe->panel_registered)
+        return SAO_SDK_ERR_NOT_FOUND;
+    if (probe->fail_panel_unregister)
+        return SAO_SDK_ERR_INTERNAL;
+    probe->panel_registered = false;
+    probe->panel_callback = nullptr;
+    probe->panel_user_data = nullptr;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_register_hotkey(
+    void*, const char*, std::uint32_t, std::uint32_t, sao_sdk_hotkey_callback_t callback,
+    void* user_data, sao_sdk_hotkey_id_t* out_id) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || callback == nullptr || out_id == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (probe->hotkey_registered)
+        return SAO_SDK_ERR_ALREADY_EXISTS;
+    probe->hotkey_registered = true;
+    probe->hotkey_callback = callback;
+    probe->hotkey_user_data = user_data;
+    *out_id = 2001;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_unregister_hotkey(void*, sao_sdk_hotkey_id_t id) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || id != 2001)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    ++probe->hotkey_unregister_calls;
+    if (!probe->hotkey_registered)
+        return SAO_SDK_ERR_NOT_FOUND;
+    if (probe->fail_hotkey_unregister)
+        return SAO_SDK_ERR_BUSY;
+    probe->hotkey_registered = false;
+    probe->hotkey_callback = nullptr;
+    probe->hotkey_user_data = nullptr;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_subscribe_event(
+    void*, const char*, sao_sdk_event_callback_t callback, void* user_data,
+    sao_sdk_subscription_t* out_subscription) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || callback == nullptr || out_subscription == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (probe->event_registered)
+        return SAO_SDK_ERR_ALREADY_EXISTS;
+    probe->event_registered = true;
+    probe->event_callback = callback;
+    probe->event_user_data = user_data;
+    *out_subscription = 3001;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_unsubscribe_event(void*, sao_sdk_subscription_t token) {
+    auto* probe = g_native_bridge_teardown_probe;
+    if (probe == nullptr || token != 3001)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    ++probe->event_unsubscribe_calls;
+    if (!probe->event_registered)
+        return SAO_SDK_ERR_NOT_FOUND;
+    if (probe->fail_event_unsubscribe)
+        return SAO_SDK_ERR_INTERNAL;
+    probe->event_registered = false;
+    probe->event_callback = nullptr;
+    probe->event_user_data = nullptr;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL bridge_test_publish_event(void*, const char*, const std::uint8_t*,
+                                                         std::size_t) {
+    return SAO_SDK_OK;
+}
+
+SaoSdkUiTable bridge_test_ui_table() {
+    SaoSdkUiTable table{};
+    table.register_panel = bridge_test_register_panel;
+    table.unregister_ui_panel = bridge_test_unregister_panel;
+    return table;
+}
+
+SaoSdkHotkeyTable bridge_test_hotkey_table() {
+    SaoSdkHotkeyTable table{};
+    table.register_hotkey = bridge_test_register_hotkey;
+    table.unregister_hotkey = bridge_test_unregister_hotkey;
+    return table;
+}
+
+SaoSdkEventTable bridge_test_event_table() {
+    SaoSdkEventTable table{};
+    table.subscribe = bridge_test_subscribe_event;
+    table.unsubscribe = bridge_test_unsubscribe_event;
+    table.publish = bridge_test_publish_event;
+    return table;
+}
+
+void require_bridge_ledger_size(PyObject* context, const char* kind, Py_ssize_t expected) {
+    void* records = sao_plugins_pyhost_ctx_get_records(context, kind);
+    REQUIRE(records != nullptr);
+    auto* value = reinterpret_cast<PyObject*>(records);
+    REQUIRE(PyList_Check(value));
+    CHECK(PyList_GET_SIZE(value) == expected);
+    Py_DECREF(value);
+}
+
+void require_native_bridge_ledgers(PyObject* context, PyObject* callback_weakref) {
+    require_bridge_ledger_size(context, "panels", 1);
+    require_bridge_ledger_size(context, "hotkeys", 1);
+    require_bridge_ledger_size(context, "subscriptions", 1);
+    require_bridge_ledger_size(context, "timers", 1);
+    require_bridge_ledger_size(context, "callback_refs", 4);
+    CHECK(PyWeakref_GetObject(callback_weakref) != Py_None);
+}
 
 struct busy_gpu_provider {
     bool busy = true;
@@ -511,6 +765,7 @@ plugin_context_platform_provider capability_provider(CapabilityProbe& probe) {
 }
 
 void* g_teardown_context = nullptr;
+plugin_handle_t g_teardown_plugin = nullptr;
 std::atomic_int g_teardown_status{SAO_ERR_OS_CALL_FAILED};
 
 PyObject* teardown_from_callback(PyObject*, PyObject*) {
@@ -521,6 +776,18 @@ PyObject* teardown_from_callback(PyObject*, PyObject*) {
 PyMethodDef g_teardown_method = {
     "teardown_from_callback",
     reinterpret_cast<PyCFunction>(teardown_from_callback),
+    METH_O,
+    nullptr,
+};
+
+PyObject* unload_from_callback(PyObject*, PyObject*) {
+    g_teardown_status.store(sao_plugins_lifecycle_unload(g_teardown_plugin));
+    Py_RETURN_NONE;
+}
+
+PyMethodDef g_unload_method = {
+    "unload_from_callback",
+    reinterpret_cast<PyCFunction>(unload_from_callback),
     METH_O,
     nullptr,
 };
@@ -618,6 +885,19 @@ int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* v
 
 int32_t snapshot_menu_catalog(MenuCatalogSnapshot& out) {
     return sao_plugins_entity_provider_snapshot(copy_menu_catalog, &out);
+}
+
+std::string expected_menu_action_id(const std::string& contribution_id,
+                                    const std::string& explicit_identity) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const std::string input = contribution_id + "\n" + explicit_identity;
+    for (const unsigned char byte : input) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    char suffix[17]{};
+    std::snprintf(suffix, sizeof(suffix), "%016llx", static_cast<unsigned long long>(hash));
+    return std::string("menu-action-") + suffix;
 }
 #endif
 
@@ -1165,11 +1445,14 @@ def on_load(ctx):
 events = []
 mode = 0
 action_fail = False
+teardown_during_action = False
 build_calls = 0
 context = None
 duplicate_rejected = False
 
 def run_primary():
+    if teardown_during_action:
+        teardown_action(None)
     if action_fail:
         raise RuntimeError("action fixture failure")
     events.append("primary")
@@ -1182,6 +1465,8 @@ def build_menu():
     build_calls += 1
     if mode == 2:
         raise RuntimeError("builder fixture failure")
+    if mode == 3:
+        return []
     primary = {
         "action_id": "primary",
         "icon": "界",
@@ -1251,6 +1536,10 @@ def on_load(ctx):
     {
         GilGuard gil;
         PyObject* module = loaded_module("adapter_menu");
+        PyObject* teardown_action = PyCFunction_NewEx(&g_unload_method, nullptr, nullptr);
+        REQUIRE(teardown_action != nullptr);
+        REQUIRE(PyObject_SetAttrString(module, "teardown_action", teardown_action) == 0);
+        Py_DECREF(teardown_action);
         PyObject* build_calls = PyObject_GetAttrString(module, "build_calls");
         REQUIRE(build_calls != nullptr);
         CHECK(PyLong_AsLong(build_calls) == 1);
@@ -1332,6 +1621,29 @@ def on_load(ctx):
     {
         GilGuard gil;
         PyObject* module = loaded_module("adapter_menu");
+        PyObject* three = PyLong_FromLong(3);
+        REQUIRE(three != nullptr);
+        REQUIRE(PyObject_SetAttrString(module, "mode", three) == 0);
+        Py_DECREF(three);
+    }
+    MenuCatalogSnapshot historical_empty_catalog;
+    REQUIRE(snapshot_menu_catalog(historical_empty_catalog) == SAO_OK);
+    REQUIRE(historical_empty_catalog.providers.size() == 1);
+    CHECK(historical_empty_catalog.providers[0].revision == 3);
+    CHECK(historical_empty_catalog.providers[0].rows.empty());
+    REQUIRE(historical_empty_catalog.roots.size() == 1);
+    CHECK(historical_empty_catalog.roots[0].actions.empty());
+    REQUIRE(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
+                                               primary_action.c_str(), "{}") == SAO_OK);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu");
+        CHECK(event_at(module, 3) == "primary");
+    }
+
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu");
         REQUIRE(PyObject_SetAttrString(module, "action_fail", Py_True) == 0);
     }
     CHECK(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
@@ -1345,8 +1657,6 @@ def on_load(ctx):
         REQUIRE(zero != nullptr);
         REQUIRE(PyObject_SetAttrString(module, "mode", zero) == 0);
         Py_DECREF(zero);
-        REQUIRE(PyObject_DelAttrString(module, "build_menu") == 0);
-        REQUIRE(PyObject_DelAttrString(module, "run_primary") == 0);
     }
 
     REQUIRE(sao_plugins_lifecycle_disable(menu_plugin) == SAO_OK);
@@ -1357,6 +1667,32 @@ def on_load(ctx):
     CHECK(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
                                              primary_action.c_str(), "{}") == SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_lifecycle_enable(menu_plugin) == SAO_OK);
+    g_teardown_status.store(SAO_ERR_OS_CALL_FAILED);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu");
+        REQUIRE(PyObject_SetAttrString(module, "teardown_during_action", Py_True) == 0);
+    }
+    g_teardown_plugin = menu_plugin;
+    CHECK(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
+                                             primary_action.c_str(), "{}") == SAO_OK);
+    CHECK(g_teardown_status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(menu_plugin) == lifecycle_state::loaded_active);
+    MenuCatalogSnapshot after_reentrant_busy;
+    REQUIRE(snapshot_menu_catalog(after_reentrant_busy) == SAO_OK);
+    REQUIRE(after_reentrant_busy.providers.size() == 1);
+    CHECK(after_reentrant_busy.providers[0].generation == menu_generation);
+    CHECK(after_reentrant_busy.providers[0].rows.size() == 2);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu");
+        CHECK(PyObject_SetAttrString(module, "teardown_during_action", Py_False) == 0);
+        REQUIRE(PyObject_DelAttrString(module, "build_menu") == 0);
+        REQUIRE(PyObject_DelAttrString(module, "run_primary") == 0);
+    }
+    g_teardown_plugin = nullptr;
+    CHECK(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
+                                             primary_action.c_str(), "{}") == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(menu_plugin) == SAO_OK);
     CHECK(sao_plugins_entity_provider_invoke(first_provider.provider_id.c_str(), menu_generation,
                                              primary_action.c_str(),
@@ -1370,6 +1706,55 @@ def on_load(ctx):
         Py_DECREF(builder_weakref);
         Py_DECREF(action_weakref);
     }
+
+    plugin_handle_t reloaded_menu_plugin = nullptr;
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &menu_manifest, &reloaded_menu_plugin) ==
+            SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(reloaded_menu_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(reloaded_menu_plugin) == SAO_OK);
+    MenuCatalogSnapshot reloaded_menu_catalog;
+    REQUIRE(snapshot_menu_catalog(reloaded_menu_catalog) == SAO_OK);
+    REQUIRE(reloaded_menu_catalog.providers.size() == 1);
+    REQUIRE(reloaded_menu_catalog.providers[0].rows.size() == 2);
+    REQUIRE(reloaded_menu_catalog.roots.size() == 1);
+    REQUIRE(reloaded_menu_catalog.roots[0].actions.size() == 2);
+    const auto& reloaded_provider = reloaded_menu_catalog.providers[0];
+    const auto& reloaded_root = reloaded_menu_catalog.roots[0];
+    CHECK(reloaded_provider.provider_id == first_provider.provider_id);
+    CHECK(reloaded_provider.generation != menu_generation);
+    CHECK(reloaded_provider.rows[0].action_id == primary_action);
+    CHECK(reloaded_root.contribution_id == first_root.contribution_id);
+    CHECK(reloaded_root.actions[0] ==
+          std::pair{reloaded_provider.provider_id, reloaded_provider.rows[0].action_id});
+    CHECK(sao_plugins_entity_provider_invoke(reloaded_provider.provider_id.c_str(), menu_generation,
+                                             primary_action.c_str(),
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_entity_provider_invoke(
+              reloaded_provider.provider_id.c_str(), reloaded_provider.generation,
+              reloaded_provider.rows[0].action_id.c_str(), "{}") == SAO_OK);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu");
+        REQUIRE(module != nullptr);
+        CHECK(event_at(module, 0) == "menu:" + reloaded_root.contribution_id);
+        CHECK(event_at(module, 1) == "primary");
+    }
+    const std::uint64_t reloaded_generation = reloaded_provider.generation;
+    REQUIRE(sao_plugins_lifecycle_unload(reloaded_menu_plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(reloaded_menu_plugin) == lifecycle_state::unloaded);
+    MenuCatalogSnapshot after_reload_unload;
+    REQUIRE(snapshot_menu_catalog(after_reload_unload) == SAO_OK);
+    CHECK(after_reload_unload.providers.empty());
+    CHECK(after_reload_unload.roots.empty());
+    CHECK(sao_plugins_pyhost_loader_adapter_plugin_count(owner) == 0);
+    CHECK(sao_plugins_entity_provider_invoke(reloaded_provider.provider_id.c_str(),
+                                             reloaded_generation, primary_action.c_str(),
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    {
+        GilGuard gil;
+        CHECK(loaded_module("adapter_menu") == nullptr);
+    }
+    REQUIRE(sao_plugins_registry_remove(registry, reloaded_menu_plugin) == SAO_OK);
 
     TempTree menu_rollback(L"menu_rollback");
     write_text(menu_rollback.root / L"plugin.py", R"PY(
@@ -1590,6 +1975,482 @@ def on_load(ctx):
     CHECK(dependency_state.retain_calls == dependency_state.release_calls);
     CHECK(capability_probe.create_session_calls == capability_probe.destroy_session_calls);
     CHECK(capability_probe.retain_calls == capability_probe.release_calls);
+}
+
+#if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+TEST_CASE("Python menu bridge validates candidate snapshots transactionally",
+          "[plugins][python][menu]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+
+    CapabilityProbe capability_probe;
+    auto platform_provider = capability_provider(capability_probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
+
+    py_host_config config = production_config();
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+    REQUIRE(owner != nullptr);
+
+    TempTree hardened_menu(L"hardened_menu");
+    write_text(hardened_menu.root / L"plugin.py", R"PY(
+context = None
+mode = "stable"
+nul_name_rejected = False
+nul_icon_rejected = False
+
+def run_stable():
+    pass
+
+def run_poison():
+    pass
+
+def build_menu():
+    if mode == "stable":
+        return [{
+            "action_id": "stable",
+            "label": "稳定",
+            "icon": "S",
+            "command": run_stable,
+            "payload_json": '{ "raw": [1, 2] }',
+        }]
+    if mode == "depth64":
+        return [{
+            "action_id": "depth64",
+            "label": "深度边界",
+            "command": run_stable,
+            "payload_json": "[" * 64 + "0" + "]" * 64,
+        }]
+    if mode == "activation":
+        return [
+            {
+                "action_id": "missing-command",
+                "label": "缺少命令",
+                "can_activate": True,
+            },
+            {
+                "action_id": "none-command",
+                "label": "空命令",
+                "command": None,
+                "can_activate": True,
+            },
+            {
+                "action_id": "requested-disabled",
+                "label": "请求禁用",
+                "command": run_stable,
+                "can_activate": False,
+            },
+        ]
+
+    row = {
+        "action_id": "candidate-" + mode,
+        "label": "候选",
+        "icon": "C",
+        "command": run_poison,
+        "payload_json": "{}",
+    }
+    if mode == "noncallable":
+        row["command"] = 7
+    elif mode == "syntax":
+        row["payload_json"] = "{invalid"
+    elif mode == "depth65":
+        row["payload_json"] = "[" * 65 + "0" + "]" * 65
+    elif mode == "nul_label":
+        row["label"] = "坏\x00标签"
+    elif mode == "nul_icon":
+        row["icon"] = "坏\x00图标"
+    elif mode == "nul_action_id":
+        row["action_id"] = "坏\x00动作"
+    elif mode == "nul_payload":
+        row["payload_json"] = '{"ok":true}\x00junk'
+    return [row]
+
+def rejected_category(name, icon):
+    try:
+        context.register_menu_category(name, icon, build_menu)
+    except ValueError:
+        return True
+    return False
+
+def on_load(ctx):
+    global context, nul_name_rejected, nul_icon_rejected
+    context = ctx
+    nul_name_rejected = rejected_category("坏\x00名称", "N")
+    nul_icon_rejected = rejected_category("坏图标", "I\x00X")
+    ctx.register_menu_category("宿主校验", "V", build_menu, priority=2.5)
+)PY");
+    plugin_manifest hardened_manifest = make_manifest(hardened_menu, "adapter_hardened_menu");
+    plugin_handle_t hardened_plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &hardened_manifest, &hardened_plugin) ==
+            SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(hardened_plugin) == SAO_OK);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_hardened_menu");
+        REQUIRE(module != nullptr);
+        for (const char* attribute : {"nul_name_rejected", "nul_icon_rejected"}) {
+            CAPTURE(attribute);
+            PyObject* value = PyObject_GetAttrString(module, attribute);
+            REQUIRE(value != nullptr);
+            CHECK(PyObject_IsTrue(value) == 1);
+            Py_DECREF(value);
+        }
+    }
+    REQUIRE(sao_plugins_lifecycle_enable(hardened_plugin) == SAO_OK);
+
+    const auto set_mode = [](const char* value) {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_hardened_menu");
+        REQUIRE(module != nullptr);
+        PyObject* mode_value = PyUnicode_FromString(value);
+        REQUIRE(mode_value != nullptr);
+        REQUIRE(PyObject_SetAttrString(module, "mode", mode_value) == 0);
+        Py_DECREF(mode_value);
+    };
+
+    MenuCatalogSnapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.roots.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK(catalog.providers[0].revision == 1);
+    CHECK(catalog.providers[0].rows[0].payload == R"({ "raw": [1, 2] })");
+    const std::string provider_id = catalog.providers[0].provider_id;
+    const std::uint64_t generation = catalog.providers[0].generation;
+    const std::string contribution_id = catalog.roots[0].contribution_id;
+
+    set_mode("depth64");
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK(catalog.providers[0].revision == 2);
+    CHECK(catalog.providers[0].rows[0].payload ==
+          std::string(64, '[') + "0" + std::string(64, ']'));
+
+    set_mode("stable");
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.providers[0].revision == 3);
+    const MenuCatalogSnapshot retained = catalog;
+
+    for (const char* invalid_mode : {"noncallable", "syntax", "depth65", "nul_label", "nul_icon",
+                                     "nul_action_id", "nul_payload"}) {
+        CAPTURE(invalid_mode);
+        set_mode(invalid_mode);
+        MenuCatalogSnapshot rejected = retained;
+        CHECK(snapshot_menu_catalog(rejected) == SAO_ERR_OS_CALL_FAILED);
+        CHECK(rejected.providers == retained.providers);
+        CHECK(rejected.roots == retained.roots);
+        const std::string identity = std::string("candidate-") + invalid_mode;
+        const std::string candidate_action = expected_menu_action_id(contribution_id, identity);
+        CHECK(sao_plugins_entity_provider_invoke(provider_id.c_str(), generation,
+                                                 candidate_action.c_str(),
+                                                 "{}") == SAO_ERR_HANDLE_INVALID);
+        set_mode("stable");
+        MenuCatalogSnapshot restored;
+        REQUIRE(snapshot_menu_catalog(restored) == SAO_OK);
+        REQUIRE(restored.providers.size() == 1);
+        CHECK(restored.providers[0].revision == 3);
+        CHECK(restored.providers == retained.providers);
+        CHECK(restored.roots == retained.roots);
+    }
+
+    set_mode("activation");
+    MenuCatalogSnapshot activation_catalog;
+    REQUIRE(snapshot_menu_catalog(activation_catalog) == SAO_OK);
+    REQUIRE(activation_catalog.providers.size() == 1);
+    REQUIRE(activation_catalog.providers[0].rows.size() == 3);
+    CHECK_FALSE(activation_catalog.providers[0].rows[0].can_activate);
+    CHECK_FALSE(activation_catalog.providers[0].rows[1].can_activate);
+    CHECK_FALSE(activation_catalog.providers[0].rows[2].can_activate);
+    for (const std::size_t index : {std::size_t{0}, std::size_t{1}}) {
+        CHECK(sao_plugins_entity_provider_invoke(
+                  provider_id.c_str(), generation,
+                  activation_catalog.providers[0].rows[index].action_id.c_str(),
+                  "{}") == SAO_ERR_HANDLE_INVALID);
+    }
+
+    REQUIRE(sao_plugins_lifecycle_unload(hardened_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, hardened_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+}
+#endif
+
+#if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+TEST_CASE("Python menu bridge unregister failure preserves provider and references for retry",
+          "[plugins][python][menu][teardown][retry]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+
+    CapabilityProbe capability_probe;
+    auto platform_provider = capability_provider(capability_probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
+
+    py_host_config config = production_config();
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+    REQUIRE(owner != nullptr);
+
+    TempTree tree(L"menu_teardown_retry");
+    write_text(tree.root / L"plugin.py", R"PY(
+context = None
+events = []
+
+def run_action():
+    events.append("action")
+
+def build_menu():
+    return [{
+        "action_id": "retry-action",
+        "label": "retry",
+        "command": run_action,
+    }]
+
+def on_load(ctx):
+    global context
+    context = ctx
+    ctx.register_menu_category("重试菜单", "R", build_menu)
+)PY");
+    plugin_manifest manifest = make_manifest(tree, "adapter_menu_teardown_retry");
+    plugin_handle_t plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &manifest, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+
+    MenuCatalogSnapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    const std::string provider_id = catalog.providers[0].provider_id;
+    const std::uint64_t generation = catalog.providers[0].generation;
+    const std::string action_id = catalog.providers[0].rows[0].action_id;
+
+    PyObject* builder_weakref = nullptr;
+    PyObject* action_weakref = nullptr;
+    PyObject* context = nullptr;
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("adapter_menu_teardown_retry");
+        REQUIRE(module != nullptr);
+        context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        PyObject* weakref_module = PyImport_ImportModule("weakref");
+        REQUIRE(weakref_module != nullptr);
+        PyObject* weakref_ref = PyObject_GetAttrString(weakref_module, "ref");
+        Py_DECREF(weakref_module);
+        REQUIRE(weakref_ref != nullptr);
+        PyObject* builder = PyObject_GetAttrString(module, "build_menu");
+        PyObject* action = PyObject_GetAttrString(module, "run_action");
+        REQUIRE(builder != nullptr);
+        REQUIRE(action != nullptr);
+        builder_weakref = PyObject_CallOneArg(weakref_ref, builder);
+        action_weakref = PyObject_CallOneArg(weakref_ref, action);
+        Py_DECREF(builder);
+        Py_DECREF(action);
+        Py_DECREF(weakref_ref);
+        REQUIRE(builder_weakref != nullptr);
+        REQUIRE(action_weakref != nullptr);
+        REQUIRE(PyObject_DelAttrString(module, "build_menu") == 0);
+        REQUIRE(PyObject_DelAttrString(module, "run_action") == 0);
+    }
+
+    const auto original_counters = entity_provider_get_counters_for_testing();
+    auto failure_counters = original_counters;
+    failure_counters.catalog_revision = (std::numeric_limits<std::uint64_t>::max)();
+    entity_provider_set_counters_for_testing(failure_counters);
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_ctx_try_teardown_native(context) == SAO_ERR_OS_CALL_FAILED);
+        require_bridge_ledger_size(context, "menus", 1);
+        CHECK(PyWeakref_GetObject(builder_weakref) != Py_None);
+        CHECK(PyWeakref_GetObject(action_weakref) != Py_None);
+    }
+    REQUIRE(sao_plugins_entity_provider_invoke(provider_id.c_str(), generation, action_id.c_str(),
+                                               "{}") == SAO_OK);
+    auto retry_counters = original_counters;
+    retry_counters.catalog_revision = (std::numeric_limits<std::uint64_t>::max)() - 1;
+    entity_provider_set_counters_for_testing(retry_counters);
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_ctx_try_teardown_native(context) == SAO_OK);
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(action_weakref) == Py_None);
+        Py_DECREF(context);
+        context = nullptr;
+    }
+    MenuCatalogSnapshot removed;
+    REQUIRE(snapshot_menu_catalog(removed) == SAO_OK);
+    CHECK(removed.providers.empty());
+    CHECK(removed.roots.empty());
+    CHECK(sao_plugins_entity_provider_invoke(provider_id.c_str(), generation, action_id.c_str(),
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    entity_provider_set_counters_for_testing(original_counters);
+
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, plugin) == SAO_OK);
+    {
+        GilGuard gil;
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(builder_weakref) == Py_None);
+        CHECK(PyWeakref_GetObject(action_weakref) == Py_None);
+        Py_DECREF(builder_weakref);
+        Py_DECREF(action_weakref);
+    }
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+}
+#endif
+
+TEST_CASE("Python native bridge teardown retries every failed unregister transactionally",
+          "[plugins][python][bridge][teardown][retry]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+    py_host_config config = production_config();
+    py_host_handle_t host = nullptr;
+    REQUIRE(sao_plugins_pyhost_init(&config, &host) == SAO_OK);
+    REQUIRE(host != nullptr);
+
+    NativeBridgeTeardownProbe probe;
+    NativeBridgeTeardownProbeScope probe_scope(probe);
+    SaoSdkContext external_context{};
+    REQUIRE(sao_sdk_bind_context("native_bridge_teardown_retry", "1.0", &external_context) ==
+            SAO_SDK_OK);
+    auto provider = probe.provider();
+    REQUIRE(sao_sdk_context_bind_provider(&external_context, &provider) == SAO_SDK_OK);
+    const auto ui = bridge_test_ui_table();
+    const auto hotkey = bridge_test_hotkey_table();
+    const auto event = bridge_test_event_table();
+    external_context.ui = &ui;
+    external_context.hotkey = &hotkey;
+    external_context.event = &event;
+
+    TempTree tree(L"native_bridge_teardown_retry");
+    write_text(tree.root / L"plugin.py", R"PY(
+context = None
+hits = 0
+
+def callback(*args):
+    global hits
+    hits += 1
+    return None
+
+def on_load(ctx):
+    global context
+    context = ctx
+    ctx.register_ui_panel("retry.panel", {"kind": "panel"}, None, callback)
+    ctx.add_hotkey("retry.hotkey", callback, "Ctrl+F12", "Retry")
+    ctx.subscribe("retry.event", callback)
+    ctx.set_interval(callback, 60.0)
+)PY");
+    (void)make_manifest(tree, "native_bridge_teardown_retry");
+
+    py_plugin_handle_t plugin = nullptr;
+    PyObject* callback_weakref = nullptr;
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_load_plugin(host, tree.root.c_str(), "plugin.py",
+                                               "native_bridge_teardown_retry", &external_context,
+                                               &plugin) == SAO_OK);
+        REQUIRE(plugin != nullptr);
+        REQUIRE(sao_plugins_pyhost_call_on_load(plugin) == SAO_OK);
+        PyObject* module = loaded_module("native_bridge_teardown_retry");
+        REQUIRE(module != nullptr);
+        PyObject* context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        PyObject* weakref_module = PyImport_ImportModule("weakref");
+        REQUIRE(weakref_module != nullptr);
+        PyObject* weakref_ref = PyObject_GetAttrString(weakref_module, "ref");
+        Py_DECREF(weakref_module);
+        REQUIRE(weakref_ref != nullptr);
+        PyObject* callback = PyObject_GetAttrString(module, "callback");
+        REQUIRE(callback != nullptr);
+        callback_weakref = PyObject_CallOneArg(weakref_ref, callback);
+        Py_DECREF(callback);
+        Py_DECREF(weakref_ref);
+        REQUIRE(callback_weakref != nullptr);
+        REQUIRE(PyObject_DelAttrString(module, "callback") == 0);
+        require_native_bridge_ledgers(context, callback_weakref);
+        Py_DECREF(context);
+
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_SDK_ERR_BUSY);
+        context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_native_bridge_ledgers(context, callback_weakref);
+        Py_DECREF(context);
+        CHECK(probe.timer_unregister_calls == 1);
+        CHECK(probe.event_unsubscribe_calls == 0);
+        CHECK(probe.hotkey_unregister_calls == 0);
+        CHECK(probe.panel_unregister_calls == 0);
+        probe.fire_registered_callbacks();
+        PyObject* hits = PyObject_GetAttrString(module, "hits");
+        REQUIRE(hits != nullptr);
+        CHECK(PyLong_AsLong(hits) == 4);
+        Py_DECREF(hits);
+
+        probe.fail_timer_unregister = false;
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_SDK_ERR_INTERNAL);
+        context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_native_bridge_ledgers(context, callback_weakref);
+        Py_DECREF(context);
+        CHECK(probe.timer_unregister_calls == 2);
+        CHECK(probe.event_unsubscribe_calls == 1);
+        CHECK(probe.hotkey_unregister_calls == 0);
+        CHECK(probe.panel_unregister_calls == 0);
+
+        probe.fail_event_unsubscribe = false;
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_SDK_ERR_BUSY);
+        context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_native_bridge_ledgers(context, callback_weakref);
+        Py_DECREF(context);
+        CHECK(probe.timer_unregister_calls == 2);
+        CHECK(probe.event_unsubscribe_calls == 2);
+        CHECK(probe.hotkey_unregister_calls == 1);
+        CHECK(probe.panel_unregister_calls == 0);
+
+        probe.fail_hotkey_unregister = false;
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_SDK_ERR_INTERNAL);
+        context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_native_bridge_ledgers(context, callback_weakref);
+        Py_DECREF(context);
+        CHECK(probe.timer_unregister_calls == 2);
+        CHECK(probe.event_unsubscribe_calls == 2);
+        CHECK(probe.hotkey_unregister_calls == 2);
+        CHECK(probe.panel_unregister_calls == 1);
+
+        probe.fail_panel_unregister = false;
+        probe.panel_registered = false;
+        probe.panel_callback = nullptr;
+        probe.panel_user_data = nullptr;
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_OK);
+        plugin = nullptr;
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(callback_weakref) == Py_None);
+        Py_DECREF(callback_weakref);
+        callback_weakref = nullptr;
+    }
+
+    CHECK_FALSE(probe.panel_registered);
+    CHECK_FALSE(probe.hotkey_registered);
+    CHECK_FALSE(probe.event_registered);
+    CHECK_FALSE(probe.timer_registered);
+    CHECK(probe.timer_unregister_calls == 2);
+    CHECK(probe.event_unsubscribe_calls == 2);
+    CHECK(probe.hotkey_unregister_calls == 2);
+    CHECK(probe.panel_unregister_calls == 2);
+    REQUIRE(sao_sdk_context_try_destroy(&external_context) == SAO_SDK_OK);
+    CHECK(probe.retain_calls == probe.release_calls);
+    REQUIRE(sao_plugins_pyhost_shutdown(host) == SAO_OK);
 }
 
 #else

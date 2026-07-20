@@ -1,4 +1,4 @@
-// as_sandbox.cpp — Wave 18 / Agent b 真装
+// as_sandbox.cpp — AngelScript 白名单沙箱实现
 //
 // 沙盒策略:
 //   1. Whitelist API — 只 RegisterGlobalFunction 白名单 math 函数.  未注册

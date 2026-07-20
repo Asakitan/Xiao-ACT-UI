@@ -1,4 +1,4 @@
-// cs_host.cpp — Wave 4 首切片
+// cs_host.cpp — hostfxr 生命周期与版本探测
 //
 // hostfxr 生命周期 (gate by SAO_HAS_DOTNET_HOSTFXR):
 //   1. LoadLibrary hostfxr.dll (从 %DOTNET_ROOT%\host\fxr\<ver>\ 探测)
@@ -8,7 +8,7 @@
 //      - hostfxr_close
 //   3. 初始化 CLR (延迟到实际 create_domain / compile_source)
 //
-// Wave 4 只完成 host 生命周期 + 版本检测, 真编译留 Wave 5。
+// 源码编译接口保留为 fail-closed；组件加载由预编译程序集路径负责。
 
 #include "sao/plugins/csharp_host/cs_host.h"
 
@@ -57,7 +57,7 @@ struct cs_host_impl {
     bool available = false;
 };
 
-// 存 last host (进程内单例; Wave 4 只支持一个)
+// 存 last host (进程内单例，只支持一个)
 static std::unique_ptr<cs_host_impl>& singleton_slot() {
     static std::unique_ptr<cs_host_impl> slot;
     return slot;
@@ -370,7 +370,7 @@ sao_plugins_cshost_runtime_version(cs_host_handle_t host) {
     }
 }
 
-// ── Wave 4 新增: is_available + get_runtime_version(buf) 便捷版本 ─────
+// ── is_available + get_runtime_version(buf) 便捷版本 ─────────────────
 
 // 静态查询: 检测 hostfxr 是否可用 (无需先 init)。
 // 供测试和 sdk_binding 用来判断 C# 支持。

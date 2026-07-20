@@ -70,7 +70,7 @@ extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_compat_free_paths(w
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
 sao_plugins_compat_has_requirements_txt(const wchar_t* plugin_dir);
 
-// ── Wave 4 新增: runtime probe API ──────────────────────────
+// ── runtime 依赖目录 probe API ──────────────────────────────
 
 // 扫 plugin_dir/libs/ + plugin_dir/vendor/, 返回目录字符串列表。
 // out_dirs 归属调用方 free。

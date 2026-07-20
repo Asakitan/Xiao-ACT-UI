@@ -1,6 +1,6 @@
-// as_plugin_lifecycle.h — Wave 8 / Agent d Phase 8
+// as_plugin_lifecycle.h — AngelScript 插件生命周期
 //
-// 从纯 execute-source (Wave 3) 升级到"加载真插件":
+// 在内存源码执行之外提供完整插件加载:
 //   1. 从 plugin.json 找 entry .as
 //   2. 读 .as 文件, AddScriptSection + Build
 //   3. 注册 3 条 legacy compatibility 全局函数:

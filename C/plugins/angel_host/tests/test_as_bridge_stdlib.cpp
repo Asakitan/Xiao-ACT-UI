@@ -189,7 +189,7 @@ TEST_CASE("Angel build messages remain structured under concurrent calls",
         worker.join();
     for (size_t index = 0; index < workers.size(); ++index) {
         CHECK(statuses[index] == SAO_ERR_INVALID_ARGUMENT);
-        CHECK(errors[index].find("wave3_source") != std::string::npos);
+        CHECK(errors[index].find("inline_source") != std::string::npos);
         CHECK(errors[index].find("ERR:") != std::string::npos);
     }
 }

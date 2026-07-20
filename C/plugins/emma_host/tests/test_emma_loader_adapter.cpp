@@ -143,6 +143,16 @@ struct menu_catalog_snapshot {
     bool operator==(const menu_catalog_snapshot&) const = default;
 };
 
+struct lifecycle_unload_probe {
+    plugin_handle_t plugin = nullptr;
+    std::atomic_int status{SAO_ERR_OS_CALL_FAILED};
+};
+
+void reentrant_unload_callback(const char*, const char*, void* user_data) {
+    auto& probe = *static_cast<lifecycle_unload_probe*>(user_data);
+    probe.status.store(sao_plugins_lifecycle_unload(probe.plugin));
+}
+
 int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* view,
                                            void* user_data) {
     if (view == nullptr || user_data == nullptr)
@@ -359,6 +369,9 @@ fn shared_command()
     if ctx.get_setting("fail_action", false)
         missing_action()
     end
+    if ctx.get_setting("reentrant_unload", false)
+        ctx.emit("emma_menu_reentrant_unload", {})
+    end
     ctx.set_setting("action_invoked", true)
 end
 fn build_menu()
@@ -505,6 +518,28 @@ end
     REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
     REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
     CHECK(catalog.providers[0].generation == provider.generation);
+    lifecycle_unload_probe unload_probe;
+    unload_probe.plugin = plugin;
+    std::uint32_t unload_token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "emma_menu_reentrant_unload",
+                                      reentrant_unload_callback, &unload_probe,
+                                      &unload_token) == SAO_OK);
+    set_context_json(context, "reentrant_unload", "true");
+    set_context_json(context, "action_invoked", "false");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(unload_probe.status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
+    menu_catalog_snapshot after_reentrant_busy;
+    REQUIRE(snapshot_menu_catalog(after_reentrant_busy) == SAO_OK);
+    CHECK(after_reentrant_busy == catalog);
+    CHECK(context_json(context, "action_invoked") == "true");
+    set_context_json(context, "reentrant_unload", "false");
+    set_context_json(context, "action_invoked", "false");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(context_json(context, "action_invoked") == "true");
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, unload_token) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(),
@@ -605,7 +640,11 @@ end
 TEST_CASE("Emma menu snapshots reject invalid candidates atomically",
           "[plugins][emma][adapter][menu][budget]") {
     temp_tree tree(L"menu_budget");
-    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+    const std::string depth64_json = std::string(64, '[') + "0" + std::string(64, ']');
+    const std::string depth65_json = std::string(65, '[') + "0" + std::string(65, ']');
+    const std::string source =
+        "let depth64_payload = " + json(depth64_json).dump() + "\n" +
+        "let depth65_payload = " + json(depth65_json).dump() + "\n" + R"EMMA(
 fn command()
     return true
 end
@@ -622,7 +661,13 @@ fn build_menu()
         return ctx.get_setting("too_many", [])
     end
     if mode == 3
-        return ctx.get_setting("oversized_snapshot", [])
+        let large_payload = ctx.get_setting("large_payload", "null")
+        let rows = range(0, 513)
+        for index in range(0, 513)
+            rows[index] = {action_id: "large-" + str(index), label: "row",
+                           payload_json: large_payload}
+        end
+        return rows
     end
     if mode == 4
         return [{label: "flag", keep_menu_open: "false"}]
@@ -646,12 +691,29 @@ fn build_menu()
             {action_id: "collision", label: "second"}
         ]
     end
+    if mode == 10
+        return [{action_id: "depth-boundary", label: "depth boundary",
+                 payload_json: depth64_payload}]
+    end
+    if mode == 11
+        return [{action_id: "depth-excess", label: "depth excess",
+                 payload_json: depth65_payload}]
+    end
+    if mode == 12
+        return [{action_id: "byte-boundary", label: "byte boundary",
+                 payload_json: ctx.get_setting("large_payload", "null")}]
+    end
+    if mode == 13
+        return [{action_id: "byte-excess", label: "byte excess",
+                 payload_json: ctx.get_setting("oversized_payload", "null")}]
+    end
     return [{label: "not actionable", can_activate: true}]
 end
 fn on_load(ctx)
     ctx.register_menu_category("Budget", "", build_menu)
 end
-)EMMA");
+)EMMA";
+    write_text(tree.root / L"nested" / L"plugin.emma", source);
 
     emma_loader_adapter_owner_t owner = nullptr;
     REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
@@ -667,27 +729,40 @@ end
     for (std::size_t index = 0; index < 4097; ++index)
         too_many.push_back({{"label", "row"}});
     set_context_json(context, "too_many", too_many.dump());
-    json oversized_snapshot = json::array();
-    const std::string large_payload = json(std::string(2046, 'x')).dump();
-    for (std::size_t index = 0; index < 4096; ++index) {
-        oversized_snapshot.push_back({{"action_id", "large-" + std::to_string(index)},
-                                      {"label", "row"},
-                                      {"payload_json", large_payload}});
-    }
-    set_context_json(context, "oversized_snapshot", oversized_snapshot.dump());
+    const std::string large_payload = "{\"data\":\"" + std::string(16373, 'x') + "\"}";
+    REQUIRE(large_payload.size() == 16U * 1024U);
+    set_context_json(context, "large_payload", json(large_payload).dump());
+    const std::string oversized_payload =
+        "{\"data\":\"" + std::string(16374, 'x') + "\"}";
+    REQUIRE(oversized_payload.size() == 16U * 1024U + 1);
+    set_context_json(context, "oversized_payload", json(oversized_payload).dump());
     json remembered = json::array();
     for (std::size_t index = 0; index < 4096; ++index) {
         remembered.push_back(
             {{"action_id", "remembered-" + std::to_string(index)}, {"label", "row"}});
     }
     set_context_json(context, "remembered", remembered.dump());
-
     menu_catalog_snapshot baseline;
     REQUIRE(snapshot_menu_catalog(baseline) == SAO_OK);
     REQUIRE(baseline.providers.size() == 1);
     REQUIRE(baseline.providers[0].rows.size() == 1);
     CHECK(baseline.providers[0].revision == 1);
     CHECK(baseline.providers[0].rows[0].payload == "{\"raw\":true}");
+    set_context_json(context, "mode", "12");
+    menu_catalog_snapshot byte_boundary;
+    REQUIRE(snapshot_menu_catalog(byte_boundary) == SAO_OK);
+    REQUIRE(byte_boundary.providers[0].rows.size() == 1);
+    CHECK(byte_boundary.providers[0].rows[0].payload == large_payload);
+    CHECK(byte_boundary.providers[0].revision == 2);
+    set_context_json(context, "mode", "10");
+    menu_catalog_snapshot depth_boundary;
+    REQUIRE(snapshot_menu_catalog(depth_boundary) == SAO_OK);
+    REQUIRE(depth_boundary.providers[0].rows.size() == 1);
+    CHECK(depth_boundary.providers[0].rows[0].payload == depth64_json);
+    CHECK(depth_boundary.providers[0].revision == 3);
+    set_context_json(context, "mode", "0");
+    REQUIRE(snapshot_menu_catalog(baseline) == SAO_OK);
+    CHECK(baseline.providers[0].revision == 4);
     for (int mode = 1; mode <= 5; ++mode) {
         set_context_json(context, "mode", std::to_string(mode));
         menu_catalog_snapshot candidate = baseline;
@@ -698,13 +773,21 @@ end
     menu_catalog_snapshot collision = baseline;
     CHECK(snapshot_menu_catalog(collision) == SAO_ERR_OS_CALL_FAILED);
     CHECK(collision == baseline);
+    set_context_json(context, "mode", "11");
+    menu_catalog_snapshot excessive_depth = baseline;
+    CHECK(snapshot_menu_catalog(excessive_depth) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(excessive_depth == baseline);
+    set_context_json(context, "mode", "13");
+    menu_catalog_snapshot excessive_bytes = baseline;
+    CHECK(snapshot_menu_catalog(excessive_bytes) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(excessive_bytes == baseline);
 
     set_context_json(context, "mode", "6");
     menu_catalog_snapshot at_limit;
     REQUIRE(snapshot_menu_catalog(at_limit) == SAO_OK);
     REQUIRE(at_limit.providers.size() == 1);
     REQUIRE(at_limit.providers[0].rows.size() == 4096);
-    CHECK(at_limit.providers[0].revision == 2);
+    CHECK(at_limit.providers[0].revision == 5);
     set_context_json(context, "mode", "7");
     menu_catalog_snapshot overflow = at_limit;
     CHECK(snapshot_menu_catalog(overflow) == SAO_ERR_OS_CALL_FAILED);
@@ -715,7 +798,7 @@ end
     REQUIRE(snapshot_menu_catalog(not_actionable) == SAO_OK);
     REQUIRE(not_actionable.providers[0].rows.size() == 1);
     CHECK_FALSE(not_actionable.providers[0].rows[0].can_activate);
-    CHECK(not_actionable.providers[0].revision == 3);
+    CHECK(not_actionable.providers[0].revision == 6);
 
     REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
     remove_plugin(plugin);
@@ -738,6 +821,12 @@ fn gated_action()
         end
     end
     ctx.set_setting("action_completed", true)
+    while not ctx.get_setting("release_action_return", false)
+        let index = 0
+        while index < 1000
+            index = index + 1
+        end
+    end
 end
 fn build_menu()
     ctx.set_setting("snapshot_started", true)
@@ -796,6 +885,7 @@ end
 
     REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
     set_context_json(context, "release_action", "false");
+    set_context_json(context, "release_action_return", "false");
     menu_catalog_snapshot active_catalog;
     REQUIRE(snapshot_menu_catalog(active_catalog) == SAO_OK);
     REQUIRE(active_catalog.providers.size() == 1);
@@ -826,8 +916,14 @@ end
     }
     CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::unloading);
     set_context_json(context, "release_action", "true");
+    const auto completed_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!context_setting_equals(context, "action_completed", "true") &&
+           std::chrono::steady_clock::now() < completed_deadline) {
+        std::this_thread::yield();
+    }
+    REQUIRE(context_setting_equals(context, "action_completed", "true"));
+    set_context_json(context, "release_action_return", "true");
     action_thread.join();
-    REQUIRE(context_json(context, "action_completed") == "true");
     unload_thread.join();
     REQUIRE(action_status.load() == SAO_OK);
     REQUIRE(unload_status.load() == SAO_OK);

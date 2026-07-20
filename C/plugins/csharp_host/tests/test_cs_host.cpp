@@ -1,4 +1,4 @@
-// test_cs_host_wave4.cpp — G2.6 csharp_host Wave 4 首切片单测
+// test_cs_host.cpp — csharp_host 可用性与保留编译接口单测
 //
 // 4 CASE:
 //   1. cshost_is_available_matches_env
@@ -76,7 +76,7 @@ void case_cshost_get_runtime_version_nonempty() {
     assert(std::strcmp(v, buf) == 0);
 }
 
-// CASE 4: compile 返 stub 状态 (Wave 4)
+// CASE 4: compile 返回保留接口状态
 void case_cshost_compile_returns_expected_stub_status() {
     if (!g_available || g_host == nullptr) {
         // 无 hostfxr: compile 应 INVALID_ARGUMENT (domain nullptr)
@@ -89,11 +89,11 @@ void case_cshost_compile_returns_expected_stub_status() {
                     "(no hostfxr, INVALID_ARGUMENT)\n");
         return;
     }
-    // 有 hostfxr: 尝试建 domain (Wave 4 stub → NOT_IMPLEMENTED)
+    // 有 hostfxr: 尝试建 domain (无隔离 bootstrap 时返 NOT_IMPLEMENTED)
     cs_domain_handle_t dom = nullptr;
     int32_t rc = sao_plugins_cshost_create_domain(g_host, "test_domain", &dom);
     assert(rc == SAO_ERR_NOT_IMPLEMENTED || rc == SAO_OK);
-    // Wave 4 create_domain stub → dom 是 nullptr, compile INVALID_ARGUMENT
+    // domain 未创建时 dom 是 nullptr, compile 返回 INVALID_ARGUMENT
     if (dom == nullptr) {
         cs_assembly_handle_t asm_out = nullptr;
         rc = sao_plugins_cshost_compile_source(
@@ -114,12 +114,12 @@ void teardown() {
 } // namespace
 
 int main() {
-    std::printf("test_cs_host_wave4:\n");
+    std::printf("test_cs_host:\n");
     case_cshost_is_available_matches_env();
     case_cshost_init_returns_ok_or_not_available();
     case_cshost_get_runtime_version_nonempty();
     case_cshost_compile_returns_expected_stub_status();
     teardown();
-    std::printf("test_cs_host_wave4: 4 cases passed\n");
+    std::printf("test_cs_host: 4 cases passed\n");
     return 0;
 }

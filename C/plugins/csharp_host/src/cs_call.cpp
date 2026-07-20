@@ -1,7 +1,6 @@
-// cs_call.cpp — Wave 4 首切片
+// cs_call.cpp — 保留的程序集调用 ABI
 //
-// Wave 4: 只暴露 execute / call_function stub (Roslyn 通路留 Wave 5)。
-// 已有 call_method / call_hook 保持 stub。
+// call_method / call_hook 在预编译组件调用路径接入前保持 fail-closed。
 
 #include "sao/plugins/csharp_host/cs_call.h"
 

@@ -1,4 +1,4 @@
-// py_sandbox.cpp — Wave 18 / Agent a 真实装.
+// py_sandbox.cpp — Python 子解释器沙箱实现.
 //
 // 设计要点:
 //   1. 每 plugin_id 建独立 `PyThreadState*` (Py_NewInterpreter 子解释器);
@@ -590,7 +590,7 @@ sao_plugins_pyhost_default_import_blacklist(size_t* out_count) {
     return kDefaultBlacklist;
 }
 
-// ── 测试内省 API (仅 wave18a) ─────────────────────────────
+// ── 测试内省 API ──────────────────────────────────────────
 // 用来在测试里 exec 一段代码到子解释器.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_sandbox_exec_test(const char* plugin_id_utf8,

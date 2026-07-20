@@ -1,6 +1,6 @@
-// py_host.cpp — CPython 生命周期 + Wave 7 真加载/卸载/hook 调用
+// py_host.cpp — CPython 生命周期、插件加载/卸载与 hook 调用
 //
-// 已实装 (Wave 2 → Wave 7 完整):
+// 已实装:
 //   - sao_plugins_pyhost_init  : Py_InitializeEx(0) + 注入 sao_sdk + shim
 //   - sao_plugins_pyhost_shutdown : Py_Finalize + 释放 handle
 //   - sao_plugins_pyhost_version : Py_GetVersion 字符串直接透传
@@ -55,7 +55,7 @@ struct py_host_state {
     bool initialized = false;
     bool owns_finalize = false;
     std::string python_home_utf8;
-    // Wave 7: 是否已注入 sao_sdk 内置模块 (只需一次).
+    // 是否已注入 sao_sdk 内置模块 (只需一次).
     bool sao_sdk_registered = false;
     std::wstring python_home;
     std::wstring platform_site_dir;
@@ -676,7 +676,7 @@ sao_plugins_pyhost_available(const wchar_t* python_home) {
 #endif
 }
 
-// ── Wave 7: 加载 / 卸载 / hook 调用 ──────────────────────────
+// ── 加载 / 卸载 / hook 调用 ─────────────────────────────────
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_load_plugin(
     py_host_handle_t host, const wchar_t* plugin_dir, const char* entry_relative,

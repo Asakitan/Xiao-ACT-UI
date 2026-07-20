@@ -1,4 +1,4 @@
-// test_as_wave3.cpp — Wave 3 AngelScript host 功能测试
+// test_as_host.cpp — AngelScript host 功能测试
 //
 // 无 vcpkg unofficial-angelscript 时 SUCCEED("skipped") 退出 0 (task 要求)。
 
@@ -12,7 +12,7 @@
 
 using namespace sao::plugins::angel_host;
 
-// 前向声明 wave3 便利 API (在 as_host.cpp 里)
+// Runtime convenience API declarations implemented by as_host.cpp.
 extern "C" {
     SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
     sao_plugins_ashost_execute(as_host_handle_t host,
@@ -51,7 +51,7 @@ as_host_handle_t make_host() {
 
 } // namespace
 
-TEST_CASE("as_execute_return_int", "[as][wave3]") {
+TEST_CASE("as_execute_return_int", "[as][interpreter]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available (SAO_HAS_ANGELSCRIPT undefined), skipped");
         return;
@@ -74,7 +74,7 @@ TEST_CASE("as_execute_return_int", "[as][wave3]") {
     sao_plugins_ashost_destroy(host);
 }
 
-TEST_CASE("as_execute_string", "[as][wave3]") {
+TEST_CASE("as_execute_string", "[as][interpreter]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;
@@ -103,7 +103,7 @@ TEST_CASE("as_execute_string", "[as][wave3]") {
     sao_plugins_ashost_destroy(host);
 }
 
-TEST_CASE("as_error_syntax", "[as][wave3]") {
+TEST_CASE("as_error_syntax", "[as][interpreter]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel_host: not available, skipped");
         return;

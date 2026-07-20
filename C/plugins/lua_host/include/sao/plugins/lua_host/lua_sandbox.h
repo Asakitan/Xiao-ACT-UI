@@ -1,6 +1,6 @@
-// lua_sandbox.h — Lua 沙箱 (Wave 18 / Agent b 真装)
+// lua_sandbox.h — Lua restricted-environment 沙箱
 //
-// Wave 18 / Agent b 将 wave3 时期的 stub 升级成真沙盒:
+// 沙箱实现提供以下约束:
 //   * 用 restricted _ENV table 收窄可见全局
 //   * 通过 lua_setallocf 拦截 alloc 累计跟踪 & 上限拦截 (returns NULL → Lua raises
 //     "not enough memory")
@@ -23,10 +23,10 @@ struct lua_State;
 
 namespace sao::plugins::lua_host {
 
-// ── 老字段 (向后兼容 wave3 stub 阶段) ─────────────────────────────────
+// ── 兼容权限字段 ─────────────────────────────────────────────────────
 //
 // 这些 bool 老字段控制"是否让脚本触到 fs / net / process / require /
-// coroutine".  Wave 18/b 新装法下若这些为 false, 相应全局符号会被从
+// coroutine".  若这些为 false, 相应全局符号会被从
 // restricted _ENV 里移除.
 struct lua_sandbox_config {
     bool allow_fs = false;
@@ -35,7 +35,7 @@ struct lua_sandbox_config {
     bool allow_require = false;
     bool allow_coroutine = true;
 
-    // ── Wave 18/b 新增字段 ───────────────────────────────────────────
+    // ── 执行与内存限制字段 ───────────────────────────────────────────
     //
     // max_instructions_per_run:
     //   通过 lua_sethook(L, hook, LUA_MASKCOUNT, N) 每 N 条指令强制 hook 抬

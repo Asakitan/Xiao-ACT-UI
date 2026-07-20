@@ -51,7 +51,7 @@ sao_plugins_cshost_destroy_domain(cs_domain_handle_t domain);
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
 sao_plugins_cshost_runtime_version(cs_host_handle_t host);
 
-// ── Wave 4 新增 API (旧签名不动, 只追加) ─────────────────────
+// ── hostfxr 可用性与版本查询 API ────────────────────────────
 
 // 静态查询 hostfxr 是否可用 (无需先 init)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

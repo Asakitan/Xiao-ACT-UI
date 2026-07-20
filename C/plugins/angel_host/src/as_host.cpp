@@ -3,12 +3,12 @@
 // CMake gate: SAO_HAS_ANGELSCRIPT (find_package(unofficial-angelscript) 成功)
 // 未 gated 时全部 API 返回 SAO_ERR_NOT_IMPLEMENTED。
 //
-// 只用核心 AngelScript API — 不依赖 scripthelper/scriptstdstring 等 addon
-// (那些需要单独编译 addon 源, 未来 wave 引入)。因此 wave3 首切片:
+// 只用核心 AngelScript API — 不依赖需要单独编译源码的
+// scripthelper/scriptstdstring 等 addon。内存源码入口负责:
 //   - execute source: engine->GetModule("m", asGM_ALWAYS_CREATE) + AddScriptSection
 //                     + Build + 找 int main() 或 int foo() 或 double foo() 入口执行
-//   - call_function: 拿 module→GetFunctionByName + context Execute (只支持
-//                    int/double 返回值 wave3)
+//   - call_function: 拿 module→GetFunctionByName + context Execute (支持
+//                    标量返回值)
 
 #include "sao/plugins/angel_host/as_host.h"
 
@@ -221,7 +221,7 @@ extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL sao_plugins_ashost_versi
 #endif
 }
 
-// ── Wave 3 host-level 便利入口 ──
+// ── host-level 内存源码便利入口 ──
 //
 // execute source 语义:
 //   1. 建/覆盖 module "main"
@@ -253,7 +253,7 @@ sao_plugins_ashost_execute(as_host_handle_t host, const char* source_utf8, size_
 
     clear_retained_messages(*state);
 
-    asIScriptModule* mod = engine->GetModule("wave3", asGM_ALWAYS_CREATE);
+    asIScriptModule* mod = engine->GetModule("inline_script", asGM_ALWAYS_CREATE);
     if (mod == nullptr) {
         if (out_error_utf8) {
             const char* m = "GetModule failed";
@@ -267,7 +267,7 @@ sao_plugins_ashost_execute(as_host_handle_t host, const char* source_utf8, size_
     }
 
     std::string src(source_utf8, source_len);
-    int r = mod->AddScriptSection("wave3_source", src.c_str(), src.size());
+    int r = mod->AddScriptSection("inline_source", src.c_str(), src.size());
     if (r < 0) {
         if (out_error_utf8) {
             const std::string msg = retained_messages_text(*state, "AddScriptSection failed");
@@ -396,7 +396,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_call_func
     asIScriptEngine* engine = state->engine;
     if (engine == nullptr)
         return SAO_ERR_HANDLE_INVALID;
-    asIScriptModule* mod = engine->GetModule("wave3", asGM_ONLY_IF_EXISTS);
+    asIScriptModule* mod = engine->GetModule("inline_script", asGM_ONLY_IF_EXISTS);
     if (mod == nullptr)
         return SAO_ERR_HANDLE_INVALID;
     asIScriptFunction* fn = mod->GetFunctionByName(fn_name);

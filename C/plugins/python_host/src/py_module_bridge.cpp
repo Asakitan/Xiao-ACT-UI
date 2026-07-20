@@ -1,4 +1,4 @@
-// py_module_bridge.cpp — Wave 7 真实装 sao_sdk 内置模块
+// py_module_bridge.cpp — sao_sdk 内置模块与 PluginContext 桥接
 //
 // 老 Python 插件 (star_resonance / hide_seek / midi_piano) 里 on_load(ctx) 拿到
 // 一个 ctx 对象。C++ 平台侧把它包成一个 PyObject (PluginContext), 方法名/签名
@@ -56,6 +56,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace sao::plugins::python_host {
 
@@ -198,6 +200,7 @@ struct NativePanelBridge {
     CallbackGate gate;
     PyObject* callback = nullptr;
     sao_sdk_ui_panel_t panel = nullptr;
+    bool registered = true;
     uint64_t sequence = 0;
     NativePanelBridge* next = nullptr;
 };
@@ -206,6 +209,7 @@ struct NativeHotkeyBridge {
     CallbackGate gate;
     PyObject* callback = nullptr;
     sao_sdk_hotkey_id_t token = 0;
+    bool registered = true;
     uint64_t sequence = 0;
     NativeHotkeyBridge* next = nullptr;
 };
@@ -215,6 +219,7 @@ struct NativeEventBridge {
     PyObject* callback = nullptr;
     sao_sdk_subscription_t token = 0;
     std::string python_token;
+    bool registered = true;
     uint64_t sequence = 0;
     NativeEventBridge* next = nullptr;
 };
@@ -229,6 +234,7 @@ struct NativeTimerBridge {
     bool uses_loader = false;
     bool one_shot = false;
     bool owner_ref_held = false;
+    bool registered = true;
     uint64_t sequence = 0;
     NativeTimerBridge* next = nullptr;
 };
@@ -237,6 +243,7 @@ struct NativeNotifyBridge {
     std::string python_token;
     sao_sdk_notify_token_t sdk_token = 0;
     bool uses_loader = false;
+    bool registered = true;
     uint64_t sequence = 0;
     NativeNotifyBridge* next = nullptr;
 };
@@ -262,12 +269,14 @@ struct NativeMenuBridge {
     CallbackGate gate;
     PyObject* builder = nullptr;
     std::string provider_id;
+    std::string qualified_provider_id;
     std::string contribution_id;
     std::string root_id;
     std::string name;
     std::string icon;
     double priority = 0.0;
     uint64_t revision = 0;
+    bool registered = true;
     uint64_t sequence = 0;
     std::vector<NativeMenuRow> rows;
     std::unordered_map<std::string, PyObject*> actions;
@@ -475,66 +484,164 @@ int32_t release_native_bridges(PluginContextObject* self) {
     self->teardown_deferred = false;
 
     SaoSdkContext* sdk = native_context(self);
+    std::vector<CallbackGate*> stopped_gates;
+    stopped_gates.reserve(resources.size());
+    for (const auto& resource : resources) {
+        CallbackGate* gate = nullptr;
+        switch (resource.kind) {
+        case Resource::Kind::panel:
+            gate = &static_cast<NativePanelBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::hotkey:
+            gate = &static_cast<NativeHotkeyBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::event:
+            gate = &static_cast<NativeEventBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::timer:
+            gate = &static_cast<NativeTimerBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::menu:
+            gate = &static_cast<NativeMenuBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::notify:
+            break;
+        }
+        if (gate != nullptr) {
+            if (!stop_callbacks(*gate)) {
+                for (auto* stopped : stopped_gates)
+                    resume_callbacks(*stopped);
+                self->tearing_down = false;
+                self->teardown_deferred = true;
+                return loader::SAO_PLUGINS_ERR_BUSY;
+            }
+            stopped_gates.push_back(gate);
+        }
+    }
+
+    const auto rollback_teardown = [self, &stopped_gates](int32_t status) {
+        for (auto* gate : stopped_gates)
+            resume_callbacks(*gate);
+        self->tearing_down = false;
+        self->teardown_deferred = false;
+        return status;
+    };
+    const auto sdk_unregister_complete = [](int32_t status) {
+        return status == SAO_OK || status == SAO_SDK_ERR_NOT_FOUND;
+    };
+    const auto loader_unregister_complete = [](int32_t status) {
+        return status == SAO_OK || status == SAO_ERR_HANDLE_INVALID;
+    };
+
     bool loader_notifications_dismissed = false;
     for (const auto& resource : resources) {
+        int32_t status = SAO_OK;
+        bool complete = true;
         switch (resource.kind) {
         case Resource::Kind::panel: {
             auto* bridge = static_cast<NativePanelBridge*>(resource.value);
-            stop_callbacks(bridge->gate);
-            if (sdk != nullptr && bridge->panel != nullptr) {
-                (void)sao_sdk_unregister_ui_panel(sdk, bridge->panel);
+            if (bridge->registered && sdk != nullptr && bridge->panel != nullptr) {
+                status = sao_sdk_unregister_ui_panel(sdk, bridge->panel);
+                complete = sdk_unregister_complete(status);
+            } else if (bridge->registered && bridge->panel != nullptr) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
             }
+            if (complete)
+                bridge->registered = false;
             break;
         }
         case Resource::Kind::hotkey: {
             auto* bridge = static_cast<NativeHotkeyBridge*>(resource.value);
-            stop_callbacks(bridge->gate);
-            if (sdk != nullptr && bridge->token != 0) {
-                (void)sao_sdk_unregister_hotkey(sdk, bridge->token);
+            if (bridge->registered && sdk != nullptr && bridge->token != 0) {
+                status = sao_sdk_unregister_hotkey(sdk, bridge->token);
+                complete = sdk_unregister_complete(status);
+            } else if (bridge->registered && bridge->token != 0) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
             }
+            if (complete)
+                bridge->registered = false;
             break;
         }
         case Resource::Kind::event: {
             auto* bridge = static_cast<NativeEventBridge*>(resource.value);
-            stop_callbacks(bridge->gate);
-            if (self->loader_context != nullptr && bridge->token != 0) {
-                (void)loader::sao_plugins_ctx_unsubscribe(self->loader_context,
-                                                          static_cast<uint32_t>(bridge->token));
-            } else if (sdk != nullptr && bridge->token != 0) {
-                (void)sao_sdk_unsubscribe_event(sdk, bridge->token);
+            if (bridge->registered && self->loader_context != nullptr && bridge->token != 0) {
+                status = loader::sao_plugins_ctx_unsubscribe(
+                    self->loader_context, static_cast<uint32_t>(bridge->token));
+                complete = loader_unregister_complete(status);
+            } else if (bridge->registered && sdk != nullptr && bridge->token != 0) {
+                status = sao_sdk_unsubscribe_event(sdk, bridge->token);
+                complete = sdk_unregister_complete(status);
+            } else if (bridge->registered && bridge->token != 0) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
             }
+            if (complete)
+                bridge->registered = false;
             break;
         }
         case Resource::Kind::timer: {
             auto* bridge = static_cast<NativeTimerBridge*>(resource.value);
-            stop_callbacks(bridge->gate);
-            if (bridge->uses_loader && self->loader_context != nullptr &&
+            if (bridge->registered && bridge->uses_loader && self->loader_context != nullptr &&
                 !bridge->loader_token.empty()) {
-                (void)loader::sao_plugins_ctx_clear_timer(self->loader_context,
-                                                          bridge->loader_token.c_str());
-            } else if (sdk != nullptr && bridge->sdk_token != 0) {
-                (void)sao_sdk_timer_unregister(sdk, bridge->sdk_token);
+                status = loader::sao_plugins_ctx_clear_timer(self->loader_context,
+                                                             bridge->loader_token.c_str());
+                complete = loader_unregister_complete(status);
+            } else if (bridge->registered && sdk != nullptr && bridge->sdk_token != 0) {
+                status = sao_sdk_timer_unregister(sdk, bridge->sdk_token);
+                complete = sdk_unregister_complete(status);
+            } else if (bridge->registered &&
+                       ((!bridge->loader_token.empty() && bridge->uses_loader) ||
+                        bridge->sdk_token != 0)) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
             }
+            if (complete)
+                bridge->registered = false;
             break;
         }
         case Resource::Kind::notify: {
             auto* bridge = static_cast<NativeNotifyBridge*>(resource.value);
-            if (bridge->uses_loader && self->loader_context != nullptr) {
+            if (bridge->registered && bridge->uses_loader && self->loader_context != nullptr) {
                 if (!loader_notifications_dismissed) {
-                    (void)loader::sao_plugins_ctx_dismiss_notify(self->loader_context);
-                    loader_notifications_dismissed = true;
+                    status = loader::sao_plugins_ctx_dismiss_notify(self->loader_context);
+                    complete = loader_unregister_complete(status);
+                    loader_notifications_dismissed = complete;
                 }
-            } else if (sdk != nullptr && bridge->sdk_token != 0) {
-                (void)sao_sdk_notify_dismiss(sdk, bridge->sdk_token);
+            } else if (bridge->registered && sdk != nullptr && bridge->sdk_token != 0) {
+                status = sao_sdk_notify_dismiss(sdk, bridge->sdk_token);
+                complete = sdk_unregister_complete(status);
+            } else if (bridge->registered &&
+                       (bridge->uses_loader || bridge->sdk_token != 0)) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
             }
+            if (complete)
+                bridge->registered = false;
             break;
         }
         case Resource::Kind::menu: {
             auto* bridge = static_cast<NativeMenuBridge*>(resource.value);
-            stop_callbacks(bridge->gate);
+#if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+            if (bridge->registered && self->loader_context != nullptr &&
+                !bridge->qualified_provider_id.empty()) {
+                const char* provider_ids[] = {bridge->qualified_provider_id.c_str()};
+                status = loader::plugin_context_unregister_entity_providers(
+                    self->loader_context, provider_ids, std::size(provider_ids));
+                complete = status == SAO_OK;
+            } else if (bridge->registered && !bridge->qualified_provider_id.empty()) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
+            }
+#endif
+            if (complete)
+                bridge->registered = false;
             break;
         }
         }
+        if (!complete)
+            return rollback_teardown(status);
     }
 
     while (self->native_panel_bridges != nullptr) {
@@ -794,6 +901,85 @@ constexpr std::size_t kMaximumMenuRows = 4096;
 constexpr std::size_t kMaximumMenuStringBytes = 16U * 1024U;
 constexpr std::size_t kMaximumMenuSnapshotBytes = 8U * 1024U * 1024U;
 constexpr std::size_t kMaximumRememberedActions = 4096;
+constexpr std::size_t kMaximumMenuJsonNestingDepth = 64;
+constexpr std::size_t kMaximumMenuJsonNodes = 16384;
+
+class BoundedMenuJsonSax final : public nlohmann::json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_node();
+    }
+    bool number_float(number_float_t, const string_t&) override {
+        return consume_node();
+    }
+    bool string(string_t&) override {
+        return consume_node();
+    }
+    bool binary(binary_t&) override {
+        return consume_node();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t&) override {
+        return true;
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumMenuJsonNodes)
+            return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumMenuJsonNestingDepth || !consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0)
+            return false;
+        --depth_;
+        return true;
+    }
+
+    std::size_t depth_ = 0;
+    std::size_t nodes_ = 0;
+};
+
+bool valid_menu_json(std::string_view value) noexcept {
+    try {
+        BoundedMenuJsonSax sax;
+        return nlohmann::json::sax_parse(value.begin(), value.end(), &sax);
+    } catch (...) {
+        return false;
+    }
+}
 
 std::uint64_t stable_hash(std::string_view value) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
@@ -835,6 +1021,10 @@ bool unicode_value(PyObject* value, bool required, std::string& out) {
         }
         return false;
     }
+    if (std::memchr(text, '\0', static_cast<std::size_t>(length)) != nullptr) {
+        PyErr_SetString(PyExc_ValueError, "menu text fields must not contain embedded NUL bytes");
+        return false;
+    }
     out.assign(text, static_cast<std::size_t>(length));
     return true;
 }
@@ -865,7 +1055,14 @@ bool menu_payload(PyObject* mapping, std::string& out) {
     if (encoded != nullptr) {
         const bool ok = unicode_value(encoded, false, out);
         Py_DECREF(encoded);
-        return ok;
+        if (!ok)
+            return false;
+        if (!valid_menu_json(out)) {
+            PyErr_SetString(PyExc_ValueError,
+                            "menu payload_json is invalid or exceeds its complexity budget");
+            return false;
+        }
+        return true;
     }
     PyObject* payload = mapping_item(mapping, "payload");
     if (payload == nullptr) {
@@ -878,7 +1075,14 @@ bool menu_payload(PyObject* mapping, std::string& out) {
         return false;
     const bool ok = unicode_value(encoded, false, out);
     Py_DECREF(encoded);
-    return ok;
+    if (!ok)
+        return false;
+    if (!valid_menu_json(out)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "menu payload_json is invalid or exceeds its complexity budget");
+        return false;
+    }
+    return true;
 }
 
 std::string callable_identity(PyObject* command) {
@@ -951,9 +1155,16 @@ bool build_menu_snapshot(NativeMenuBridge* bridge) {
             break;
 
         PyObject* command = mapping_item(item, "command");
-        const bool callable = command != nullptr && PyCallable_Check(command);
-        row.can_activate = callable;
-        ok = mapping_flag(item, "can_activate", row.can_activate, row.can_activate);
+        if (command != nullptr && command != Py_None && PyCallable_Check(command) == 0) {
+            Py_DECREF(command);
+            PyErr_SetString(PyExc_TypeError, "menu command must be callable or None");
+            ok = false;
+            break;
+        }
+        const bool callable = command != nullptr && command != Py_None;
+        bool requested = true;
+        ok = mapping_flag(item, "can_activate", true, requested);
+        row.can_activate = callable && requested;
         if (!ok) {
             Py_XDECREF(command);
             break;
@@ -1469,9 +1680,9 @@ PyObject* PluginContext_register_ui_panel(PluginContextObject* self, PyObject* a
     if (rec == nullptr)
         return nullptr;
     PyDict_SetItemString(rec, "panel_id", PyUnicode_FromString(panel_id));
-    PyDict_SetItemString(rec, "meta", Py_NewRef(meta));
-    PyDict_SetItemString(rec, "render", Py_NewRef(render));
-    PyDict_SetItemString(rec, "on_action", Py_NewRef(on_action));
+    PyDict_SetItemString(rec, "meta", meta);
+    PyDict_SetItemString(rec, "render", render);
+    PyDict_SetItemString(rec, "on_action", on_action);
     PyDict_SetItemString(rec, "native_handle", PyLong_FromVoidPtr(native_panel));
     PyList_Append(self->panels, rec);
     Py_DECREF(rec);
@@ -1529,7 +1740,7 @@ PyObject* PluginContext_add_hotkey(PluginContextObject* self, PyObject* args, Py
     PyDict_SetItemString(rec, "hotkey_id", PyUnicode_FromString(hotkey_id));
     PyDict_SetItemString(rec, "default_key", PyUnicode_FromString(default_key));
     PyDict_SetItemString(rec, "label", PyUnicode_FromString(label));
-    PyDict_SetItemString(rec, "callback", Py_NewRef(callback));
+    PyDict_SetItemString(rec, "callback", callback);
     PyDict_SetItemString(rec, "native_handle", PyLong_FromUnsignedLongLong(native_hotkey));
     PyList_Append(self->hotkeys, rec);
     Py_DECREF(rec);
@@ -2397,6 +2608,7 @@ PyObject* PluginContext_register_menu_category(PluginContextObject* self, PyObje
         if (bridge == nullptr)
             return PyErr_NoMemory();
         bridge->provider_id = identity;
+        bridge->qualified_provider_id = std::string(plugin_id) + "/" + identity;
         bridge->contribution_id = identity;
         bridge->root_id = "plugin:" + hash_suffix(std::string(plugin_id) + "\n" + name);
         bridge->name = name;
@@ -2740,7 +2952,7 @@ PyObject* sao_sdk_log_error(PyObject* /*self*/, PyObject* args) {
 }
 // version helper
 PyObject* sao_sdk_version(PyObject* /*self*/, PyObject* /*args*/) {
-    return PyUnicode_FromString("sao_sdk 1.0 (wave7)");
+    return PyUnicode_FromString("sao_sdk 1.0 (native)");
 }
 
 PyMethodDef sao_sdk_module_methods[] = {
@@ -2939,7 +3151,8 @@ sao_plugins_pyhost_ctx_teardown_native(void* pyobject) {
     if (!PyObject_TypeCheck(obj, &PluginContextType))
         return;
     auto* context = reinterpret_cast<PluginContextObject*>(obj);
-    (void)release_native_bridges(context);
+    if (release_native_bridges(context) == SAO_OK)
+        clear_callback_ledgers(context);
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -2951,7 +3164,11 @@ sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject) {
     PyObject* obj = reinterpret_cast<PyObject*>(pyobject);
     if (!PyObject_TypeCheck(obj, &PluginContextType))
         return SAO_ERR_INVALID_ARGUMENT;
-    return release_native_bridges(reinterpret_cast<PluginContextObject*>(obj));
+    auto* context = reinterpret_cast<PluginContextObject*>(obj);
+    const int32_t status = release_native_bridges(context);
+    if (status == SAO_OK)
+        clear_callback_ledgers(context);
+    return status;
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -2991,7 +3208,7 @@ extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL sao_plugins_pyhost_sdk_method
     return g_sdk_method_count;
 }
 
-// 供 py_host.cpp 内部访问 PluginContext state (Wave 7 内省 API).
+// 供 py_host.cpp、单测和宿主内省 PluginContext state.
 // 返回 void* 以避免 header include Python.h; 调用方 cast 为 PyObject* 用完 DECREF.
 extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_get_records(void* pyobject, const char* record_kind) {

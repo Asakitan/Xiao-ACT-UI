@@ -1,4 +1,4 @@
-# plugins/lua_host/tests — smoke + Wave 3 Catch2 单测
+# plugins/lua_host/tests — smoke + interpreter Catch2 单测
 
 add_executable(test_plugins_lua_host test_lua.cpp)
 target_link_libraries(test_plugins_lua_host PRIVATE sao_plugins_lua_host)
@@ -8,18 +8,20 @@ add_test(NAME plugins_lua_host_smoke COMMAND test_plugins_lua_host)
 
 find_package(Catch2 3 QUIET CONFIG)
 if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
-    add_executable(test_plugins_lua_host_wave3 test_lua_wave3.cpp)
-    target_link_libraries(test_plugins_lua_host_wave3 PRIVATE
+    add_executable(test_plugins_lua_host_interpreter
+        test_lua_interpreter.cpp)
+    target_link_libraries(test_plugins_lua_host_interpreter PRIVATE
         sao_plugins_lua_host
         Catch2::Catch2WithMain
     )
-    target_compile_features(test_plugins_lua_host_wave3 PRIVATE cxx_std_17)
-    target_compile_definitions(test_plugins_lua_host_wave3 PRIVATE
+    target_compile_features(test_plugins_lua_host_interpreter PRIVATE cxx_std_17)
+    target_compile_definitions(test_plugins_lua_host_interpreter PRIVATE
         SAO_PLUGINS_BUILDING_DLL)
     if (MSVC)
-        target_compile_options(test_plugins_lua_host_wave3 PRIVATE /GR)
+        target_compile_options(test_plugins_lua_host_interpreter PRIVATE /GR)
     endif()
-    add_test(NAME plugins_lua_host_wave3 COMMAND test_plugins_lua_host_wave3)
+    add_test(NAME plugins_lua_host_interpreter
+             COMMAND test_plugins_lua_host_interpreter)
 
     if (TARGET Lua::Lua OR TARGET lua::lua OR Lua_FOUND OR LUA_FOUND)
         add_executable(test_plugins_lua_host_hardening
@@ -71,25 +73,25 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_lua_loader_adapter
         PROPERTIES LABELS "plugins;lua;adapter;lifecycle;sandbox")
 
-    # ── Wave 18 / Agent b — Lua sandbox 10 case ─────────────────────
-    add_executable(test_plugins_lua_host_sandbox_wave18b
-        test_lua_sandbox_wave18b.cpp)
-    target_link_libraries(test_plugins_lua_host_sandbox_wave18b PRIVATE
+    # ── Lua sandbox 10 case ──────────────────────────────────────────
+    add_executable(test_plugins_lua_host_sandbox
+        test_lua_sandbox.cpp)
+    target_link_libraries(test_plugins_lua_host_sandbox PRIVATE
         sao_plugins_lua_host
         sao_script_sandbox_common_lib
         Catch2::Catch2WithMain
     )
-    target_compile_features(test_plugins_lua_host_sandbox_wave18b PRIVATE cxx_std_20)
-    target_compile_definitions(test_plugins_lua_host_sandbox_wave18b PRIVATE
+    target_compile_features(test_plugins_lua_host_sandbox PRIVATE cxx_std_20)
+    target_compile_definitions(test_plugins_lua_host_sandbox PRIVATE
         # 静态 lib + header 用 dllimport → 手动加此定义清 __imp_ 前缀
         SAO_PLUGINS_BUILDING_DLL)
     if (MSVC)
-        target_compile_options(test_plugins_lua_host_sandbox_wave18b PRIVATE /GR)
+        target_compile_options(test_plugins_lua_host_sandbox PRIVATE /GR)
     endif()
-    add_test(NAME plugins_lua_host_sandbox_wave18b
-             COMMAND test_plugins_lua_host_sandbox_wave18b)
-    set_tests_properties(plugins_lua_host_sandbox_wave18b
-        PROPERTIES LABELS "plugins;lua;wave18b;sandbox")
+    add_test(NAME plugins_lua_host_sandbox
+             COMMAND test_plugins_lua_host_sandbox)
+    set_tests_properties(plugins_lua_host_sandbox
+        PROPERTIES LABELS "plugins;lua;sandbox")
 else()
-    message(STATUS "plugins/lua_host: Catch2 未找到, 跳过 wave3 / wave18b 单测")
+    message(STATUS "plugins/lua_host: Catch2 未找到, 跳过 interpreter / sandbox 单测")
 endif()

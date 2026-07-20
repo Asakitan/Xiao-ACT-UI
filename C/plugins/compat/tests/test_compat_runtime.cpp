@@ -1,4 +1,4 @@
-// test_compat_runtime_wave4.cpp — G2.8 compat runtime shim 首切片单测
+// test_compat_runtime.cpp — compat runtime shim 单测
 //
 // 5 CASE:
 //   1. compat_ctx_v1_register_alias_lookup
@@ -85,7 +85,7 @@ void case_compat_ctx_v1_add_hotkey_alias_hits() {
 
     // wrap: 只接受真实现代 SDK context, 不接受任意 non-null 指针
     SaoSdkContext sdk_ctx{};
-    assert(sao_sdk_bind_context("compat.wave4", "1.0", &sdk_ctx) == SAO_SDK_OK);
+    assert(sao_sdk_bind_context("compat.runtime", "1.0", &sdk_ctx) == SAO_SDK_OK);
     plugin_context_ptr fake_ctx =
         reinterpret_cast<plugin_context_ptr>(&sdk_ctx);
     plugin_context_ptr wrapped = nullptr;
@@ -106,7 +106,7 @@ void case_compat_ctx_v1_add_hotkey_alias_hits() {
 void case_compat_libs_vendor_probe_finds_dirs() {
     // 造两个临时目录 (libs + vendor 都建, engine 不建)
     namespace fs = std::filesystem;
-    fs::path root = fs::temp_directory_path() / "sao_wave4_probe_test";
+    fs::path root = fs::temp_directory_path() / "sao_compat_probe_test";
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
@@ -216,12 +216,12 @@ void case_compat_format_lua_package_path_pattern() {
 } // namespace
 
 int main() {
-    std::printf("test_compat_runtime_wave4:\n");
+    std::printf("test_compat_runtime:\n");
     case_compat_ctx_v1_register_alias_lookup();
     case_compat_ctx_v1_add_hotkey_alias_hits();
     case_compat_libs_vendor_probe_finds_dirs();
     case_compat_format_python_sys_path_uses_pathsep();
     case_compat_format_lua_package_path_pattern();
-    std::printf("test_compat_runtime_wave4: 5 cases passed\n");
+    std::printf("test_compat_runtime: 5 cases passed\n");
     return 0;
 }

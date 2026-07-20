@@ -584,8 +584,129 @@ std::shared_ptr<callable> require_callable(const std::vector<emma_value>& argume
     throw emma_exception(std::move(error));
 }
 
+std::string require_metadata_only_panel(const std::vector<emma_value>& arguments) {
+    if (arguments.size() < 2 || arguments.size() > 4)
+        throw_context_status("ctx.register_ui_panel", SAO_ERR_INVALID_ARGUMENT);
+    const std::string panel_id = require_string(arguments, 0, "ctx.register_ui_panel");
+    if ((arguments.size() > 2 && !std::holds_alternative<std::nullptr_t>(arguments[2])) ||
+        (arguments.size() > 3 && !std::holds_alternative<std::nullptr_t>(arguments[3]))) {
+        throw_context_status("ctx.register_ui_panel callbacks",
+                             sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    }
+    return panel_id;
+}
+
+constexpr std::size_t kMaximumJsonNestingDepth = 64;
+constexpr std::size_t kMaximumJsonNodes = 16384;
+constexpr std::size_t kMaximumJsonInputBytes = 8U * 1024U * 1024U;
+
+class bounded_json_sax final : public json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_node();
+    }
+    bool number_float(number_float_t value, const string_t&) override {
+        return std::isfinite(value) && consume_node();
+    }
+    bool string(string_t&) override {
+        return consume_node();
+    }
+    bool binary(binary_t&) override {
+        return consume_node();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t&) override {
+        return true;
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumJsonNodes)
+            return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumJsonNestingDepth || !consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0)
+            return false;
+        --depth_;
+        return true;
+    }
+
+    std::size_t depth_ = 0;
+    std::size_t nodes_ = 0;
+};
+
+bool valid_bounded_json(std::string_view input, std::size_t byte_limit) noexcept {
+    if (input.size() > byte_limit)
+        return false;
+    try {
+        bounded_json_sax sax;
+        return json::sax_parse(input.begin(), input.end(), &sax);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_bounded_json(std::string_view input, std::size_t byte_limit, json& output) noexcept {
+    if (!valid_bounded_json(input, byte_limit))
+        return false;
+    try {
+        json candidate = json::parse(input.begin(), input.end(), nullptr, false);
+        if (candidate.is_discarded())
+            return false;
+        output = std::move(candidate);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_bounded_json_c_string(const char* input, std::size_t byte_limit,
+                                 json& output) noexcept {
+    if (input == nullptr)
+        return false;
+    std::size_t length = 0;
+    while (length <= byte_limit && input[length] != '\0')
+        ++length;
+    if (length > byte_limit)
+        return false;
+    return parse_bounded_json(std::string_view(input, length), byte_limit, output);
+}
+
 bool value_to_json(const emma_value& value, json& output, size_t depth = 0) {
-    if (depth > 64)
+    if (depth > kMaximumJsonNestingDepth)
         return false;
     if (std::holds_alternative<std::nullptr_t>(value)) {
         output = nullptr;
@@ -637,7 +758,7 @@ bool value_to_json(const emma_value& value, json& output, size_t depth = 0) {
 }
 
 bool json_to_value(const json& input, emma_value& output, size_t depth = 0) {
-    if (depth > 64)
+    if (depth > kMaximumJsonNestingDepth)
         return false;
     if (input.is_null()) {
         output = nullptr;
@@ -883,8 +1004,7 @@ bool menu_payload(const emma_dict& dictionary, std::string& output, std::string&
             error = "menu payload_json must be a valid text field";
             return false;
         }
-        const json parsed = json::parse(*value, nullptr, false);
-        if (parsed.is_discarded()) {
+        if (!valid_bounded_json(*value, kMaximumMenuStringBytes)) {
             error = "menu payload_json must be valid JSON";
             return false;
         }
@@ -1350,9 +1470,13 @@ emma_value parse_owned_json(int32_t status, char* owned_json, const char* method
         owned_json, &sao::plugins::loader::sao_plugins_ctx_free_string);
     if (status != SAO_OK)
         throw_context_status(method, status);
-    const json parsed = json::parse(value == nullptr ? "null" : value.get(), nullptr, false);
+    json parsed;
+    const bool parsed_ok = value == nullptr
+                               ? parse_bounded_json("null", kMaximumJsonInputBytes, parsed)
+                               : parse_bounded_json_c_string(value.get(), kMaximumJsonInputBytes,
+                                                             parsed);
     emma_value converted = nullptr;
-    if (parsed.is_discarded() || !json_to_value(parsed, converted)) {
+    if (!parsed_ok || !json_to_value(parsed, converted)) {
         throw_context_status(method, SAO_ERR_OS_CALL_FAILED);
     }
     return converted;
@@ -1493,9 +1617,12 @@ void SAO_PLUGINS_CALL event_callback_bridge(const char*, const char* event_json_
                                             void* user_data) {
     try {
         emma_value event = nullptr;
-        const json parsed =
-            json::parse(event_json_utf8 == nullptr ? "null" : event_json_utf8, nullptr, false);
-        if (parsed.is_discarded() || !json_to_value(parsed, event))
+        json parsed;
+        const bool parsed_ok =
+            event_json_utf8 == nullptr
+                ? parse_bounded_json("null", kMaximumJsonInputBytes, parsed)
+                : parse_bounded_json_c_string(event_json_utf8, kMaximumJsonInputBytes, parsed);
+        if (!parsed_ok || !json_to_value(parsed, event))
             return;
         invoke_callback(static_cast<emma_plugin_runtime::callback_record*>(user_data),
                         {std::move(event)});
@@ -1587,15 +1714,7 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace(
         "register_ui_panel",
         make_host_callable("ctx.register_ui_panel", [context](std::vector<emma_value> arguments) {
-            const std::string panel_id = require_string(arguments, 0, "ctx.register_ui_panel");
-            if (arguments.size() < 2) {
-                throw_context_status("ctx.register_ui_panel", SAO_ERR_INVALID_ARGUMENT);
-            }
-            if ((arguments.size() > 2 && !std::holds_alternative<std::nullptr_t>(arguments[2])) ||
-                (arguments.size() > 3 && !std::holds_alternative<std::nullptr_t>(arguments[3]))) {
-                throw_context_status("ctx.register_ui_panel callbacks",
-                                     sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-            }
+            const std::string panel_id = require_metadata_only_panel(arguments);
             const std::string metadata = serialize_value_or_throw(arguments[1]);
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_ui_panel(
                 context, panel_id.c_str(), metadata.c_str(), nullptr, nullptr, nullptr);
@@ -2006,15 +2125,59 @@ int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) 
     const int32_t binding_status = sao::plugins::sdk_binding::sao_plugins_binding_emma_register_ctx(
         reinterpret_cast<sao::plugins::sdk_binding::emma_interpreter_ptr>(plugin->interp.get()),
         reinterpret_cast<sao::plugins::sdk_binding::plugin_context_ptr>(context));
-    const emma_value native_context = make_native_context(plugin);
+    emma_value native_context = make_native_context(plugin);
     if (binding_status == SAO_OK) {
         const emma_value candidate = plugin->interp->get_global("ctx");
         const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&candidate);
         auto native_dictionary = std::get<std::shared_ptr<emma_dict>>(native_context);
-        if (dictionary != nullptr && *dictionary != nullptr) {
-            for (const auto& [name, value] : (*dictionary)->items)
-                native_dictionary->items.insert_or_assign(name, value);
+        if (dictionary == nullptr || *dictionary == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        constexpr std::array<std::string_view, 3> core_callables{
+            "log", "register_ui_panel", "register_menu_category"};
+        for (const auto& [name, value] : (*dictionary)->items) {
+            if (name == "plugin_id" || name == "path")
+                continue;
+            const bool core =
+                std::find(core_callables.begin(), core_callables.end(), name) !=
+                core_callables.end();
+            if (core) {
+                const auto* function = std::get_if<std::shared_ptr<callable>>(&value);
+                if (function == nullptr || *function == nullptr ||
+                    (!(*function)->host_impl &&
+                     ((*function)->body.empty() || (*function)->closure == nullptr))) {
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                if (name == "register_ui_panel") {
+                    const auto provider_panel = *function;
+                    native_dictionary->items.insert_or_assign(
+                        name, make_host_callable(
+                                  "ctx.register_ui_panel",
+                                  [plugin, provider_panel](std::vector<emma_value> arguments) {
+                                      (void)require_metadata_only_panel(arguments);
+                                      std::string message;
+                                      emma_error error;
+                                      emma_value result = plugin->interp->call_function(
+                                          provider_panel, std::move(arguments), message, &error);
+                                      if (error.kind != error_kind::none || !message.empty()) {
+                                          if (error.kind == error_kind::none) {
+                                              error.kind = error_kind::runtime_error;
+                                              error.status = SAO_ERR_OS_CALL_FAILED;
+                                              error.message = std::move(message);
+                                          }
+                                          throw emma_exception(std::move(error));
+                                      }
+                                      return result;
+                                  }));
+                } else {
+                    native_dictionary->items.insert_or_assign(name, value);
+                }
+                continue;
+            }
+            if (!native_dictionary->items.contains(name))
+                native_dictionary->items.emplace(name, value);
         }
+    } else if (binding_status != sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED) {
+        return binding_status;
     }
     plugin->context_value = native_context;
     plugin->interp->register_global("ctx", plugin->context_value);
@@ -2364,8 +2527,9 @@ sao_plugins_emma_call_hook(emma_plugin_handle_t plugin, const char* hook_name,
             runtime.last_error = {};
             std::vector<emma_value> arguments;
             if (args_json_utf8 != nullptr && args_json_utf8[0] != '\0') {
-                const json parsed = json::parse(args_json_utf8, nullptr, false);
-                if (parsed.is_discarded() || !parsed.is_array()) {
+                json parsed;
+                if (!parse_bounded_json_c_string(args_json_utf8, kMaximumJsonInputBytes, parsed) ||
+                    !parsed.is_array()) {
                     set_api_error(&runtime.last_error, error_kind::runtime_error,
                                   SAO_ERR_INVALID_ARGUMENT,
                                   "Emma hook arguments must be a JSON array");
@@ -2578,7 +2742,7 @@ sao_plugins_emma_unload_script(emma_plugin_handle_t plugin) {
     }
 }
 
-// ── Wave 3 host-level in-memory 便利函数 ──
+// ── host-level 内存源码便利函数 ──
 //
 // task 描述里说的 sao_emma_host_execute/call_function 走这个门。签名式对齐:
 //   sao_plugins_emma_execute_source(interp, source, source_len, out_result_utf8)

@@ -1,5 +1,5 @@
-// py_call.cpp — legacy stub 保留 (sao_plugins_pyhost_call_hook 已被 py_host.cpp
-// Wave 7 真实装; 这里只留 load_script / unload_script 旧接口)。
+// py_call.cpp — legacy stub 保留 (sao_plugins_pyhost_call_hook 已由 py_host.cpp
+// 实现; 这里只留 load_script / unload_script 旧接口)。
 #include "sao/plugins/python_host/py_call.h"
 
 namespace sao::plugins::python_host {

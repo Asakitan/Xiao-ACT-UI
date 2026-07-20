@@ -1,4 +1,4 @@
-// test_hello_csharp_wave8.cpp — Wave 8 / Agent d Phase 8 首切片
+// test_hello_csharp.cpp — C# 示例插件生命周期测试
 //
 // 4 CASE:
 //   1. hostfxr_init_success
@@ -44,8 +44,8 @@ bool file_exists(const char* path) {
 
 } // namespace
 
-TEST_CASE("csharp_host wave8 :: hostfxr_init_success",
-          "[plugins][csharp][wave8]") {
+TEST_CASE("csharp_host :: hostfxr_init_success",
+          "[plugins][csharp][lifecycle]") {
     bool avail = false;
     int32_t rc = sao_plugins_cshost_is_available(&avail);
     REQUIRE(rc == SAO_OK);
@@ -65,8 +65,8 @@ TEST_CASE("csharp_host wave8 :: hostfxr_init_success",
     }
 }
 
-TEST_CASE("csharp_host wave8 :: load_hello_csharp_dll_success",
-          "[plugins][csharp][wave8]") {
+TEST_CASE("csharp_host :: load_hello_csharp_dll_success",
+          "[plugins][csharp][lifecycle]") {
     bool avail = false;
     sao_plugins_cshost_is_available(&avail);
     if (!avail) {
@@ -87,8 +87,8 @@ TEST_CASE("csharp_host wave8 :: load_hello_csharp_dll_success",
     sao_plugins_cshost_free_string(err);
 }
 
-TEST_CASE("csharp_host wave8 :: hello_csharp_on_load_ticks",
-          "[plugins][csharp][wave8]") {
+TEST_CASE("csharp_host :: hello_csharp_on_load_ticks",
+          "[plugins][csharp][lifecycle]") {
     bool avail = false;
     sao_plugins_cshost_is_available(&avail);
     if (!avail || g_plugin == nullptr) {
@@ -120,8 +120,8 @@ TEST_CASE("csharp_host wave8 :: hello_csharp_on_load_ticks",
     REQUIRE(tc == 3);
 }
 
-TEST_CASE("csharp_host wave8 :: hello_csharp_unload_clean",
-          "[plugins][csharp][wave8]") {
+TEST_CASE("csharp_host :: hello_csharp_unload_clean",
+          "[plugins][csharp][lifecycle]") {
     bool avail = false;
     sao_plugins_cshost_is_available(&avail);
     if (!avail || g_plugin == nullptr) {

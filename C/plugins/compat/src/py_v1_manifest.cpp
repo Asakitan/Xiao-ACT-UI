@@ -1,6 +1,5 @@
 // py_v1_manifest.cpp — 老 Python 平台 manifest 兼容层 (真实装 JSON 解析)
 //
-// 这一层是 Wave 1 Agent c 里唯一被 spec 要求真实装的模块 (其他 host 保持 stub)。
 // 手写零依赖 JSON 解析器 + 字段规范化, 让老 plugin.json 一个字不改就能被
 // 新 C++ loader 解析。
 //
@@ -318,7 +317,7 @@ std::vector<std::string> array_to_string_list(const json_array& arr) {
 
 // 从 json (可能是 array 也可能是 object) 拉规范化 requires
 //
-// 对齐 Python act_platform.plugins._normalize_requires (Wave 8 fixture parity):
+// 对齐 Python act_platform.plugins._normalize_requires fixture parity:
 //   array 形式:  [...] 原样保留字符串项
 //   object 形式:
 //     - key == "runtime_features" 且 value 是 list → 每 item 展开为

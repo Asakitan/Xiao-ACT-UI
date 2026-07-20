@@ -3,7 +3,7 @@
 // 对齐 Python emma_runtime.py _tokenize / _TOKEN_RE。C++ 侧手写状态机, 支持
 // Python 侧全部 token 类型 + 两种注释:
 //   - `--` (Python 侧唯一注释, 权威)
-//   - `#`  (task Wave 3 需求, 兼容 script/shebang 风格)
+//   - `#`  (兼容 script/shebang 风格)
 //
 // 关键字集合与 Python _KEYWORDS 一致:
 //   let / fn / end / if / elif / else / while / for / in / return /

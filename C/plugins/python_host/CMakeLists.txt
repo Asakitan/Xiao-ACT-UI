@@ -39,7 +39,7 @@ target_link_libraries(sao_plugins_python_host PUBLIC
     sao::sdk
 )
 
-# Wave 2: 嵌入式 CPython 3.11+ (Development.Embed).
+# 嵌入式 CPython 3.11+ (Development.Embed).
 # QUIET 让本地无 Python dev headers 时 CMake 不 stop, 而是走 "无 embed" 分支
 # (py_host.cpp 里 SAO_HAS_PYTHON_EMBED 未定义 → init 返 NOT_IMPLEMENTED).
 find_package(Python3 3.11 COMPONENTS Development.Embed QUIET)

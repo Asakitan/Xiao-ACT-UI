@@ -23,7 +23,7 @@ target_include_directories(sao_plugins_lua_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../loader/include>
 )
 
-# Wave 18 / Agent b — SAO_ENC_STR (header-only, 无需链接)
+# 沙箱敏感字符串使用 SAO_ENC_STR (header-only, 无需链接)
 target_include_directories(sao_plugins_lua_host PRIVATE
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/security/obfuscation/include>
 )
