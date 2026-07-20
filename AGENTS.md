@@ -190,6 +190,23 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 - If you encounter a docstring outside AI Editor, convert it to `#` comments in the same change. Do NOT reintroduce one.
 - Rationale: uniform comment style + explicit user policy. `__doc__` inflation and mixed comment/reflection semantics were the recurring complaints.
 
+## Wave-Named Persistent Artifacts — Hard Ban
+
+**持久文件、目录、CMake target、C ABI 符号、测试 tag 一律不得用 `wave*` 命名。**
+
+`wave` 是过去的迭代批次代号，不是功能名。新代码必须用**功能名**命名，例如：
+- `sao_engine_event_bus_*_wave5` → `sao_engine_event_bus_*_priority`（priority + cancel 语义）
+- `sao_wave17c_support_lib` → `sao_core_gap_support_lib`（gap closure 支持）
+- `sao_wave17a_ui_support_lib` → `sao_ui_gap_support_lib`
+- `test_*_wave*.cpp` → `test_*_<功能>.cpp`（如 `test_event_bus_priority.cpp`）
+- `[wave5]` / `[wave18a]` 等 Catch2 tag → `[priority]` / `[sandbox]` 等功能 tag
+
+**例外**：
+- 已发布的 C ABI 导出符号（如 `sao_shell_crypter_wave8_*`、`sao_security_anti_debug_wave8_*`）保留 wave 标签作为二进制 ABI 版本标识，避免破坏 DLL 二进制兼容。
+- 历史 changelog 行项中 "Wave N" 字样作为历史记录保留（PLAN.md/STATUS.md/CHANGELOG.md 历史表格）。
+
+**新代码违反 = broken change**。CI 的 `sao_assert_no_wave_impl_libraries` 函数已禁止 `wave*` 命名的临时 impl 库；新 target/文件/符号同样不得以 wave 开头。
+
 ## Documentation Hygiene
 
 - Keep `AGENTS.md` focused on durable instructions.

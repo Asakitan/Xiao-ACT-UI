@@ -313,9 +313,10 @@ if (SAO_BUILD_TESTS)
 endif()
 
 # Wave-specific implementation archives were temporary delivery scaffolding.
-# Their sources must live in stable production targets; wave-named test
-# executables remain valid.  Fail during configure if an implementation
-# archive is reintroduced anywhere below the source root.
+# Their sources must live in stable production targets.  The repository naming
+# rule also forbids wave-named test executables; this legacy guard remains
+# narrowly scoped to temporary implementation libraries.  Fail during configure
+# if an implementation archive is reintroduced anywhere below the source root.
 function(sao_assert_no_wave_impl_libraries directory)
     get_property(_sao_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
     foreach (_sao_target IN LISTS _sao_targets)

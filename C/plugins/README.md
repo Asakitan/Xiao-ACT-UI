@@ -229,7 +229,7 @@ cmake --build build --config Release
 v2 是新的多宿主分层布局)。任何插件 manifest 声明 ``abi_version`` 与之不匹配
 时, ``loader/plugin_manifest`` 拒绝加载并给出**明确升级路径**说明。
 
-## 状态 (Wave 1 / Agent c 深化后)
+## 当前状态
 
 **头文件深化完成**: 每个模块 header 都已扩展到能编译过的深度, 每个 host 的
 SDK 暴露函数数量 ≥ 20 (Python 65+, Lua 55+, AS 45+, C# 60+, Emma 通过 host_impl

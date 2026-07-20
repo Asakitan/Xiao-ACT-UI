@@ -33,7 +33,7 @@ set(SAO_LAUNCHER_HEADERS
     include/sao/launcher/init_pipeline.h
     include/sao/launcher/shutdown.h
     include/sao/launcher/dual_run.h
-    # Wave 10 / Agent a — Phase 12 rollout system.
+    # rollout slice — Phase 12 rollout system.
     include/sao/launcher/rollout.h
     include/sao/launcher/provider_config.h
     include/sao/launcher/user_menu.h
@@ -55,7 +55,7 @@ set(SAO_LAUNCHER_SOURCES
     src/init_pipeline.cpp
     src/shutdown.cpp
     src/dual_run.cpp
-    # Wave 10 / Agent a — Phase 12 rollout system.
+    # rollout slice — Phase 12 rollout system.
     src/rollout_manager.cpp
     src/rollout_dispatcher.cpp
     src/provider_config.cpp
@@ -273,7 +273,7 @@ target_link_libraries(SaoAuto PRIVATE
     crypt32        # current-user DPAPI for secure settings envelopes
 )
 
-# Wave 10 / Agent a — rollout_manager depends on freetier telemetry_client
+# rollout slice — rollout_manager depends on freetier telemetry_client
 # for its record_success / record_failure telemetry publishes.  When the
 # server subsystem is disabled rollout_manager compiles a no-op emit path.
 if (TARGET sao::server::freetier::telemetry_client)

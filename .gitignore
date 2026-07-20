@@ -1,3 +1,23 @@
+# ── GPU hunt subsystem (kept local only, out of git) ──
+# All gpu_hunt sources live under E:\VC\SAO-UI\GPU_hunt\ outside this repo.
+# These patterns are a belt-and-braces defence against re-introducing any
+# gpu_hunt file into the sao_auto tree by accident (agent WIP, IDE moves,
+# stale checkout, etc.).
+**/gpu_hunt/
+**/gpu_hunt_*.cpp
+**/gpu_hunt_*.h
+**/gpu_hunt_*.hpp
+**/*_gpu_hunt_*.cpp
+**/*_gpu_hunt_*.h
+**/sdk_gpu_hunt_*.cpp
+**/sao_sdk_gpu_hunt*.h
+**/as_gpu_hunt_*.cpp
+**/as_gpu_hunt_*.h
+**/test_gpu_hunt_*.cpp
+**/gpu_hunt-*.md
+.vscode/handoff/gpu_hunt-*
+GPU_hunt/
+
 # ── Python cache ──────────────────────────────────
 __pycache__/
 *.py[cod]
