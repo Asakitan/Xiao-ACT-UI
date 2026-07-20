@@ -5,7 +5,6 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -629,38 +628,6 @@ PlatformProviderState& platform_provider_state() {
     return state;
 }
 
-std::mutex g_platform_hotkey_owner_mutex;
-constexpr size_t kMaxPlatformHotkeyOwnerQuarantine = 4096;
-std::array<std::shared_ptr<PlatformHotkeyEntry>, kMaxPlatformHotkeyOwnerQuarantine>
-    g_platform_hotkey_owner_slots;
-size_t g_platform_hotkey_owner_slot_count = 0;
-
-bool preserve_platform_hotkey_owner(const std::shared_ptr<PlatformHotkeyEntry>& entry) {
-    std::lock_guard<std::mutex> lock(g_platform_hotkey_owner_mutex);
-    if (g_platform_hotkey_owner_slot_count == g_platform_hotkey_owner_slots.size())
-        return false;
-    for (auto& slot : g_platform_hotkey_owner_slots) {
-        if (slot == nullptr) {
-            slot = entry;
-            ++g_platform_hotkey_owner_slot_count;
-            return true;
-        }
-    }
-    return false;
-}
-
-void release_unpublished_platform_hotkey_owner(
-    const std::shared_ptr<PlatformHotkeyEntry>& entry) {
-    std::lock_guard<std::mutex> lock(g_platform_hotkey_owner_mutex);
-    for (auto& slot : g_platform_hotkey_owner_slots) {
-        if (slot == entry) {
-            slot.reset();
-            --g_platform_hotkey_owner_slot_count;
-            return;
-        }
-    }
-}
-
 void SAO_SDK_CALL platform_provider_retain(void*) {}
 
 void SAO_SDK_CALL platform_provider_release(void*) {}
@@ -1047,12 +1014,6 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
     auto entry = std::make_shared<PlatformHotkeyEntry>();
     entry->callback = callback;
     entry->user_data = callback_user_data;
-    try {
-        if (!preserve_platform_hotkey_owner(entry))
-            return SAO_SDK_ERR_BUSY;
-    } catch (...) {
-        return SAO_SDK_ERR_NOT_INITIALIZED;
-    }
     SaoUiHotkeyBindingSpec spec{};
     spec.binding_id_utf8 = binding_id_utf8;
     spec.virtual_key = virtual_key;
@@ -1063,10 +1024,8 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
     const sao_status_t status =
         sao_ui_input_router_register_hotkey(runtime.input_router, plugin_id_utf8, &spec,
                                             platform_hotkey_callback, entry.get(), &entry->binding);
-    if (status != SAO_STATUS_OK) {
-        release_unpublished_platform_hotkey_owner(entry);
+    if (status != SAO_STATUS_OK)
         return static_cast<sao_sdk_status_t>(status);
-    }
     try {
         std::lock_guard<std::mutex> lock(state->mutex);
         if (g_fail_next_platform_hotkey_insertion.exchange(false))
@@ -1573,11 +1532,14 @@ sao_sdk_status_t normalize_provider_status(sao_sdk_status_t status) {
 }
 
 sao_sdk_status_t configure_memory_provider(ContextState* state,
-                                           const SaoSdkMemoryProviderVTable* provider) {
+                                           const SaoSdkMemoryProviderVTable* provider,
+                                           ProviderConfigureOrigin origin) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
+    if (origin == ProviderConfigureOrigin::cleanup && provider != nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (state->destroying.load(std::memory_order_acquire) &&
-        !context_destroy_on_current_thread(state))
+        origin != ProviderConfigureOrigin::cleanup)
         return SAO_SDK_ERR_BUSY;
     if (memory_callback_reentered(state))
         return SAO_SDK_ERR_BUSY;
@@ -1715,7 +1677,7 @@ sao_sdk_status_t memory_attachment_status(ContextState* state) {
 sao_sdk_status_t memory_provider_cleanup(ContextState* state) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
-    return configure_memory_provider(state, nullptr);
+    return configure_memory_provider(state, nullptr, ProviderConfigureOrigin::cleanup);
 }
 
 sao_sdk_status_t memory_attach(ContextState* state, const SaoSdkMemoryTargetIdentity* identity) {
@@ -2220,14 +2182,24 @@ extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_
     auto& platform_state = platform_provider_state();
     std::lock_guard<std::mutex> lock(platform_state.mutex);
     const auto found = platform_state.hotkeys.find(provider_token);
-    return found == platform_state.hotkeys.end() ? nullptr : found->second.get();
+    if (found == platform_state.hotkeys.end())
+        return nullptr;
+    return new (std::nothrow) std::shared_ptr<PlatformHotkeyEntry>(found->second);
 }
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data) {
     SaoUiInputEvent event{};
     event.kind = SAO_UI_INPUT_KEY_DOWN;
-    platform_hotkey_callback(nullptr, &event, snapshot_user_data);
+    auto* snapshot = static_cast<std::shared_ptr<PlatformHotkeyEntry>*>(snapshot_user_data);
+    platform_hotkey_callback(nullptr, &event,
+                             snapshot == nullptr || *snapshot == nullptr ? nullptr
+                                                                        : snapshot->get());
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_release_platform_hotkey_snapshot(void* snapshot_user_data) {
+    delete static_cast<std::shared_ptr<PlatformHotkeyEntry>*>(snapshot_user_data);
 }
 #endif
 
@@ -2296,7 +2268,10 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_m
     if (!lease)
         return lease.status();
     return sao_sdk_internal::invoke_callback_barrier(
-        [&] { return sao_sdk_internal::configure_memory_provider(lease.state(), provider); });
+        [&] {
+            return sao_sdk_internal::configure_memory_provider(
+                lease.state(), provider, sao_sdk_internal::ProviderConfigureOrigin::public_api);
+        });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL

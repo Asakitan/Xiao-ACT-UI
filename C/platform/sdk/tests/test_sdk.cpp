@@ -2,6 +2,7 @@
 
 #include "sao/sdk/sao_sdk.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 
@@ -43,6 +44,40 @@ sao_sdk_status_t SAO_SDK_CALL throwing_register_panel(void*, const SaoSdkPanelDe
 TEST_CASE("sdk ABI version is queryable", "[sdk][abi]") {
     REQUIRE(sao_sdk_abi_version() == SAO_SDK_ABI_VERSION);
     REQUIRE(SAO_SDK_ABI_VERSION_MAJOR == 1u);
+    REQUIRE(SAO_SDK_ABI_VERSION_MINOR == 11u);
+    REQUIRE(SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR == SAO_SDK_ABI_VERSION_MAJOR);
+    REQUIRE(SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MINOR == SAO_SDK_ABI_VERSION_MINOR);
+    REQUIRE(SAO_SDK_GPU_HUNT_TABLE_LEGACY_SIZE ==
+            offsetof(SaoSdkGpuHuntTable, get_split_lock_info) +
+                sizeof(SaoSdkGpuHuntTable::get_split_lock_info));
+}
+
+TEST_CASE("GPU table metadata gates current slots without changing legacy offsets",
+          "[sdk][abi][gpu_hunt][table]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("gpu.table.abi", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(ctx.gpu_hunt != nullptr);
+    CHECK(ctx.gpu_hunt->abi_version == SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION);
+    CHECK(ctx.gpu_hunt->struct_size == sizeof(SaoSdkGpuHuntTable));
+    CHECK(sao_sdk_gpu_hunt_table_status(&ctx) == SAO_SDK_OK);
+
+    SaoSdkGpuHuntTable table = *ctx.gpu_hunt;
+    SaoSdkContext probe = ctx;
+    probe.gpu_hunt = &table;
+
+    probe.abi_version = (SAO_SDK_ABI_VERSION_MAJOR << 16) | 10u;
+    CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_ERR_UNSUPPORTED);
+    probe.abi_version = SAO_SDK_ABI_VERSION;
+
+    table.abi_version = (2u << 16) | SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MINOR;
+    CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_ERR_ABI_MISMATCH);
+    table.abi_version = (SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR << 16) | 10u;
+    CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_ERR_UNSUPPORTED);
+    table.abi_version = SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION;
+    table.struct_size = SAO_SDK_GPU_HUNT_TABLE_LEGACY_SIZE;
+    CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_ERR_UNSUPPORTED);
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
 }
 
 TEST_CASE("sdk_bind_context creates the unified owned context", "[sdk][bind]") {

@@ -19,10 +19,14 @@ extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
     const SaoSdkContext* ctx, sao_sdk_subscription_t subscription);
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_release_event_snapshot(void* snapshot_user_data);
 extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(
     const SaoSdkContext* ctx, sao_sdk_hotkey_id_t hotkey);
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_release_platform_hotkey_snapshot(void* snapshot_user_data);
 extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_arm_context_api_pause(uint32_t point);
 extern "C" SAO_SDK_API bool SAO_SDK_CALL sao_sdk_test_wait_for_context_api_pause(uint32_t point);
 extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_resume_context_api_pause(uint32_t point);
@@ -75,6 +79,16 @@ struct ProviderFixture {
     bool throw_retain = false;
     bool throw_release = false;
     bool throw_tts = false;
+    bool block_release = false;
+    bool release_entered = false;
+    bool allow_release = false;
+    std::mutex release_mutex;
+    std::condition_variable release_condition;
+    SaoSdkContext* configure_reentry_context = nullptr;
+    const SaoSdkMemoryProviderVTable* configure_memory_replacement = nullptr;
+    const SaoSdkNetProviderVTable* configure_net_replacement = nullptr;
+    sao_sdk_status_t configure_memory_status = SAO_SDK_OK;
+    sao_sdk_status_t configure_net_status = SAO_SDK_OK;
     SaoSdkContext* gpu_reentry_context = nullptr;
     sao_sdk_gpu_tracker_t gpu_reentry_tracker = 0;
     sao_sdk_status_t gpu_destroy_status = SAO_SDK_OK;
@@ -168,6 +182,20 @@ void SAO_SDK_CALL provider_retain(void* user_data) {
 void SAO_SDK_CALL provider_release(void* user_data) {
     auto* state = fixture(user_data);
     state->events.emplace_back("release");
+    {
+        std::unique_lock<std::mutex> lock(state->release_mutex);
+        if (state->block_release) {
+            state->release_entered = true;
+            state->release_condition.notify_all();
+            state->release_condition.wait(lock, [state] { return state->allow_release; });
+        }
+    }
+    if (state->configure_reentry_context != nullptr) {
+        state->configure_memory_status = sao_sdk_context_configure_memory_provider(
+            state->configure_reentry_context, state->configure_memory_replacement);
+        state->configure_net_status = sao_sdk_context_configure_net_provider(
+            state->configure_reentry_context, state->configure_net_replacement);
+    }
     if (state->throw_release)
         throw std::runtime_error("provider release fixture");
 }
@@ -425,6 +453,8 @@ struct ProcessMemoryFixture {
     size_t live_sessions = 0;
     sao_sdk_status_t open_status = SAO_SDK_OK;
     sao_sdk_status_t close_status = SAO_SDK_OK;
+    const SaoSdkMemoryProviderVTable* replacement_on_open = nullptr;
+    sao_sdk_status_t replacement_status = SAO_SDK_OK;
 };
 
 void SAO_SDK_CALL process_memory_retain(void* user_data) {
@@ -442,6 +472,10 @@ sao_sdk_status_t SAO_SDK_CALL process_memory_open(void* user_data, const char*,
     *out_session = nullptr;
     auto* state = static_cast<ProcessMemoryFixture*>(user_data);
     ++state->open_count;
+    if (state->replacement_on_open != nullptr) {
+        const auto* replacement = std::exchange(state->replacement_on_open, nullptr);
+        state->replacement_status = sao_sdk_platform_memory_configure_provider(replacement);
+    }
     if (state->open_status != SAO_SDK_OK)
         return state->open_status;
     *out_session = new ProcessMemorySession{state};
@@ -661,6 +695,8 @@ void wait_in_callback(BlockingCallbackProbe* probe) {
 void SAO_SDK_CALL blocking_event_probe(const char*, const uint8_t*, size_t, void* user_data) {
     wait_in_callback(static_cast<BlockingCallbackProbe*>(user_data));
 }
+
+void SAO_SDK_CALL no_op_event_probe(const char*, const uint8_t*, size_t, void*) {}
 
 void SAO_SDK_CALL blocking_hotkey_probe(sao_sdk_hotkey_id_t, void* user_data) {
     wait_in_callback(static_cast<BlockingCallbackProbe*>(user_data));
@@ -1067,6 +1103,35 @@ TEST_CASE("platform composite bind returns busy without replacing existing provi
     CHECK(net.live_sessions == 0);
 }
 
+TEST_CASE("process composite bind rejects a replaced owner generation before publish",
+          "[sdk][provider][transaction][process_owner][generation][aba]") {
+    ProcessMemoryFixture original;
+    ProcessMemoryFixture replacement;
+    ProcessProviderReset reset;
+    auto original_provider = make_process_memory_provider(&original);
+    auto replacement_provider = make_process_memory_provider(&replacement);
+
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("provider.transaction.generation", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_platform_memory_configure_provider(&original_provider) == SAO_SDK_OK);
+    original.replacement_on_open = &replacement_provider;
+
+    CHECK(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_ERR_BUSY);
+    CHECK(original.replacement_status == SAO_SDK_OK);
+    CHECK(original.open_count == 1);
+    CHECK(original.close_count == 1);
+    CHECK(original.live_sessions == 0);
+    CHECK(sao_sdk_context_memory_provider_status(&ctx) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(replacement.open_count == 0);
+
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    CHECK(replacement.open_count == 1);
+    CHECK(replacement.live_sessions == 1);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    CHECK(replacement.live_sessions == 0);
+}
+
 TEST_CASE("failed process candidate rollback remains quarantined for retry",
           "[sdk][provider][transaction][rollback][quarantine]") {
     ProcessMemoryFixture memory;
@@ -1240,6 +1305,97 @@ TEST_CASE("platform capability insertion failures roll back native resources",
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
 }
 
+TEST_CASE("event and platform hotkey owners recycle past the former fixed capacity",
+          "[sdk][event][hotkey][lifetime][recycle]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("owner.recycle", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+
+    SaoSdkHotkeySpec hotkey_spec{};
+    hotkey_spec.binding_id_utf8 = "owner.recycle.hotkey";
+    hotkey_spec.virtual_key = 0x77;
+    CallbackProbe probe;
+    constexpr size_t kLifecycleCount = 4097;
+    for (size_t index = 0; index < kLifecycleCount; ++index) {
+        CAPTURE(index);
+        sao_sdk_subscription_t subscription = 0;
+        REQUIRE(sao_sdk_subscribe_event(&ctx, "owner.recycle.event", no_op_event_probe, nullptr,
+                                        &subscription) == SAO_SDK_OK);
+        REQUIRE(sao_sdk_unsubscribe_event(&ctx, subscription) == SAO_SDK_OK);
+
+        sao_sdk_hotkey_id_t hotkey = 0;
+        REQUIRE(sao_sdk_register_hotkey(&ctx, &hotkey_spec, hotkey_probe, &probe, &hotkey) ==
+                SAO_SDK_OK);
+        REQUIRE(sao_sdk_unregister_hotkey(&ctx, hotkey) == SAO_SDK_OK);
+    }
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("concurrent context destroy retry has one executor and busy followers",
+          "[sdk][context][destroy][retry][concurrency]") {
+    ProviderFixture provider_state;
+    provider_state.block_release = true;
+    auto provider = make_provider(&provider_state);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("context.destroy.serialized", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &provider) == SAO_SDK_OK);
+
+    auto first = std::async(std::launch::async, [&] { return sao_sdk_context_try_destroy(&ctx); });
+    {
+        std::unique_lock<std::mutex> lock(provider_state.release_mutex);
+        REQUIRE(provider_state.release_condition.wait_for(
+            lock, std::chrono::seconds(2), [&provider_state] {
+                return provider_state.release_entered;
+            }));
+    }
+
+    const auto retry_started = std::chrono::steady_clock::now();
+    CHECK(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_ERR_BUSY);
+    CHECK(std::chrono::steady_clock::now() - retry_started < std::chrono::seconds(1));
+
+    {
+        std::lock_guard<std::mutex> lock(provider_state.release_mutex);
+        provider_state.allow_release = true;
+    }
+    provider_state.release_condition.notify_all();
+    REQUIRE(first.get() == SAO_SDK_OK);
+    CHECK(ctx.ctx_impl == nullptr);
+}
+
+TEST_CASE("public provider configure cannot rebuild sessions during teardown",
+          "[sdk][context][destroy][provider][configure][reentry]") {
+    ProviderFixture general;
+    auto general_provider = make_provider(&general);
+    ProcessMemoryFixture memory;
+    ProcessMemoryFixture replacement_memory;
+    auto memory_provider = make_process_memory_provider(&memory);
+    auto replacement_memory_provider = make_process_memory_provider(&replacement_memory);
+    ProcessNetFixture net;
+    ProcessNetFixture replacement_net;
+    auto net_provider = make_process_net_provider(&net);
+    auto replacement_net_provider = make_process_net_provider(&replacement_net);
+
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("context.destroy.configure", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_configure_memory_provider(&ctx, &memory_provider) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_configure_net_provider(&ctx, &net_provider) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &general_provider) == SAO_SDK_OK);
+    general.configure_reentry_context = &ctx;
+    general.configure_memory_replacement = &replacement_memory_provider;
+    general.configure_net_replacement = &replacement_net_provider;
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    CHECK(general.configure_memory_status == SAO_SDK_ERR_BUSY);
+    CHECK(general.configure_net_status == SAO_SDK_ERR_BUSY);
+    CHECK(memory.live_sessions == 0);
+    CHECK(net.live_sessions == 0);
+    CHECK(replacement_memory.open_count == 0);
+    CHECK(replacement_memory.live_sessions == 0);
+    CHECK(replacement_net.open_count == 0);
+    CHECK(replacement_net.live_sessions == 0);
+}
+
 TEST_CASE("context destroy drains ordinary event and UI API leases",
           "[sdk][context][api-lease][destroy][concurrency]") {
     SECTION("subscribe registration") {
@@ -1374,6 +1530,7 @@ TEST_CASE("event subscription drains its own copied callback snapshots",
 
     sao_sdk_test_invoke_event_snapshot(snapshot);
     CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+    sao_sdk_test_release_event_snapshot(snapshot);
 
     EventReentryProbe reentry{&ctx};
     REQUIRE(sao_sdk_subscribe_event(&ctx, "event.reentry", event_reentry_probe, &reentry,
@@ -1386,6 +1543,7 @@ TEST_CASE("event subscription drains its own copied callback snapshots",
     CHECK(reentry.destroy_status == SAO_SDK_ERR_BUSY);
     CHECK(reentry.status == SAO_SDK_ERR_BUSY);
     REQUIRE(sao_sdk_unsubscribe_event(&ctx, reentry.subscription) == SAO_SDK_OK);
+    sao_sdk_test_release_event_snapshot(reentry_snapshot);
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
 }
 
@@ -1418,6 +1576,7 @@ TEST_CASE("context destroy retires event snapshots before releasing subscription
 
     sao_sdk_test_invoke_event_snapshot(snapshot);
     CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+    sao_sdk_test_release_event_snapshot(snapshot);
 }
 
 TEST_CASE("void context destroy from a plugin callback quarantines for later retry",
@@ -1552,6 +1711,7 @@ TEST_CASE("platform hotkey snapshots keep their bridge alive and drain on unregi
 
     sao_sdk_test_invoke_platform_hotkey_snapshot(snapshot);
     CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+    sao_sdk_test_release_platform_hotkey_snapshot(snapshot);
 
     HotkeyReentryProbe reentry{&ctx};
     spec.binding_id_utf8 = "hotkey_reentry";
@@ -1565,6 +1725,7 @@ TEST_CASE("platform hotkey snapshots keep their bridge alive and drain on unregi
     CHECK(reentry.calls == 1);
     CHECK(reentry.status == SAO_SDK_ERR_BUSY);
     REQUIRE(sao_sdk_unregister_hotkey(&ctx, reentry.hotkey) == SAO_SDK_OK);
+    sao_sdk_test_release_platform_hotkey_snapshot(reentry_snapshot);
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
 }
 

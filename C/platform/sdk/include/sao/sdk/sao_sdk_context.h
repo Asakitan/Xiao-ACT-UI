@@ -635,7 +635,24 @@ struct SaoSdkGpuHuntTable {
         uint64_t* out_view_heap_base, uint32_t* out_view_offset,
         uint64_t* out_proj_heap_base, uint32_t* out_proj_offset,
         uint8_t* out_view_locked, uint8_t* out_proj_locked);
+
+    // ABI 1.11 metadata is appended after every pre-existing slot so all
+    // historical GPU table offsets remain unchanged.  Consumers validate
+    // these fields before reading any slot from the current table contract.
+    uint32_t abi_version;
+    uint32_t struct_size;
 };
+
+#define SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR SAO_SDK_ABI_VERSION_MAJOR
+#define SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MINOR SAO_SDK_ABI_VERSION_MINOR
+#define SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION                                                   \
+    ((SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR << 16) |                                      \
+     SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MINOR)
+
+#define SAO_SDK_GPU_HUNT_TABLE_LEGACY_SIZE offsetof(struct SaoSdkGpuHuntTable, abi_version)
+#define SAO_SDK_GPU_HUNT_TABLE_REQUIRED_SIZE                                                 \
+    (offsetof(struct SaoSdkGpuHuntTable, struct_size) +                                      \
+     sizeof(((struct SaoSdkGpuHuntTable*)0)->struct_size))
 
 // HeapLocatorProfile constants (ABI 1.10).  Append-only; existing
 // values never move.

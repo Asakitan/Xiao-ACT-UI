@@ -162,6 +162,12 @@ enum class CapabilityKind : uint8_t {
     overlay,
 };
 
+enum class ProviderConfigureOrigin : uint8_t {
+    public_api,
+    process_binding,
+    cleanup,
+};
+
 struct CapabilityRegistration {
     CapabilityKind kind = CapabilityKind::timer;
     uint64_t sdk_token = 0;
@@ -317,12 +323,14 @@ struct ContextState {
     std::vector<std::shared_ptr<MemoryProviderSession>> memory_quarantine;
     std::weak_ptr<MemoryProviderSession> process_memory_session;
     const void* process_memory_owner_tag = nullptr;
+    uint64_t process_memory_owner_generation = 0;
     std::mutex memory_lifecycle_mutex;
 
     ProviderSessionSlot<NetProviderSession> net_provider;
     std::vector<std::shared_ptr<NetProviderSession>> net_quarantine;
     std::weak_ptr<NetProviderSession> process_net_session;
     const void* process_net_owner_tag = nullptr;
+    uint64_t process_net_owner_generation = 0;
     std::mutex net_lifecycle_mutex;
 
     std::atomic_bool provider_bind_transaction = false;
@@ -470,7 +478,8 @@ bool provider_callback_reentered(ContextState* state) noexcept;
 sao_sdk_status_t normalize_provider_status(sao_sdk_status_t status);
 
 sao_sdk_status_t configure_memory_provider(ContextState* state,
-                                           const SaoSdkMemoryProviderVTable* provider);
+                                           const SaoSdkMemoryProviderVTable* provider,
+                                           ProviderConfigureOrigin origin);
 sao_sdk_status_t memory_provider_status(const ContextState* state);
 sao_sdk_status_t memory_attachment_status(ContextState* state);
 sao_sdk_status_t memory_provider_cleanup(ContextState* state);
@@ -484,7 +493,8 @@ sao_sdk_status_t memory_enumerate_modules(ContextState* state, SaoSdkMemoryModul
                                           size_t* out_count);
 
 sao_sdk_status_t configure_net_provider(ContextState* state,
-                                        const SaoSdkNetProviderVTable* provider);
+                                        const SaoSdkNetProviderVTable* provider,
+                                        ProviderConfigureOrigin origin);
 sao_sdk_status_t net_provider_status(const ContextState* state);
 sao_sdk_status_t net_provider_cleanup(ContextState* state);
 bool net_callback_reentered(ContextState* state) noexcept;
@@ -532,7 +542,8 @@ inline bool context_destroy_on_current_thread(ContextState* state) noexcept {
 inline bool context_api_reentered(ContextState* state) noexcept {
     return state != nullptr && g_context_api_owner == state;
 }
-sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextState** out_state);
+sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextState** out_state,
+                                        std::unique_lock<std::mutex>* out_destroy_lock);
 void cancel_context_shutdown(ContextState* state) noexcept;
 void quarantine_context(ContextState* state);
 void unquarantine_context(ContextState* state);

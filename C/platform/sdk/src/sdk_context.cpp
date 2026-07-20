@@ -289,14 +289,17 @@ void release_context_snapshot(ContextState* state) noexcept {
         g_ctx_registry_idle.notify_all();
 }
 
-sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextState** out_state) {
-    if (out_state == nullptr)
+sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextState** out_state,
+                                        std::unique_lock<std::mutex>* out_destroy_lock) {
+    if (out_state == nullptr || out_destroy_lock == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_state = nullptr;
+    *out_destroy_lock = {};
     if (context == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
 
     ContextState* state = nullptr;
+    std::unique_lock<std::mutex> destroy_lock;
     {
         std::unique_lock<std::mutex> registry_lock(g_ctx_registry_mu);
         const auto found = g_ctx_by_public_context.find(context);
@@ -308,6 +311,9 @@ sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextSta
             net_callback_reentered(state) || gpu_callback_reentered(state)) {
             return SAO_SDK_ERR_BUSY;
         }
+        destroy_lock = std::unique_lock<std::mutex>(state->destroy_mutex, std::try_to_lock);
+        if (!destroy_lock.owns_lock())
+            return SAO_SDK_ERR_BUSY;
         if (state->destroying.load(std::memory_order_acquire) &&
             !state->destroy_quarantined.load(std::memory_order_acquire))
             return SAO_SDK_ERR_BUSY;
@@ -325,6 +331,7 @@ sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextSta
         state->callback_gate->idle.wait(lock, [state] { return state->callback_gate->active == 0; });
     }
     *out_state = state;
+    *out_destroy_lock = std::move(destroy_lock);
     return SAO_SDK_OK;
 }
 
@@ -869,6 +876,16 @@ const SaoSdkBannerTable* make_banner_table() {
     return &kBannerTable;
 }
 
+const SaoSdkGpuHuntTable* make_public_gpu_hunt_table() {
+    static const SaoSdkGpuHuntTable table = [] {
+        SaoSdkGpuHuntTable value = *make_gpu_hunt_table();
+        value.abi_version = SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION;
+        value.struct_size = sizeof(SaoSdkGpuHuntTable);
+        return value;
+    }();
+    return &table;
+}
+
 void populate_context(ContextState* state, SaoSdkContext* out_ctx,
                       const char* plugin_version_utf8) {
     std::memset(out_ctx, 0, sizeof(*out_ctx));
@@ -886,7 +903,7 @@ void populate_context(ContextState* state, SaoSdkContext* out_ctx,
     out_ctx->hotkey = make_hotkey_table();
     out_ctx->tts = make_tts_table();
     out_ctx->banner = make_banner_table();
-    out_ctx->gpu_hunt = make_gpu_hunt_table();
+    out_ctx->gpu_hunt = make_public_gpu_hunt_table();
 }
 
 } // namespace sao_sdk_internal
@@ -943,8 +960,10 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_context_try_destroy(struct SaoSdkContext* ctx) {
     sao_sdk_internal::ContextState* state = nullptr;
+    std::unique_lock<std::mutex> destroy_lock;
     try {
-        const auto preflight_status = sao_sdk_internal::begin_context_shutdown(ctx, &state);
+        const auto preflight_status =
+            sao_sdk_internal::begin_context_shutdown(ctx, &state, &destroy_lock);
         if (preflight_status != SAO_SDK_OK)
             return preflight_status;
         const bool caller_owns_context = ctx != &state->public_ctx;
@@ -979,6 +998,7 @@ sao_sdk_context_try_destroy(struct SaoSdkContext* ctx) {
             std::memset(ctx, 0, sizeof(*ctx));
         }
         sao_sdk_internal::g_context_destroy_owner = nullptr;
+        destroy_lock.unlock();
         delete state;
         return SAO_SDK_OK;
     } catch (...) {

@@ -29,6 +29,8 @@ struct ProcessProviderState {
     std::mutex mutex;
     std::shared_ptr<ProcessProviderOwner<SaoSdkMemoryProviderVTable>> memory;
     std::shared_ptr<ProcessProviderOwner<SaoSdkNetProviderVTable>> net;
+    uint64_t memory_generation = 0;
+    uint64_t net_generation = 0;
 };
 
 ProcessProviderState& process_provider_state() {
@@ -104,12 +106,21 @@ class ProcessBindTransaction {
 struct ProcessProviderSnapshot {
     std::shared_ptr<ProcessProviderOwner<SaoSdkMemoryProviderVTable>> memory;
     std::shared_ptr<ProcessProviderOwner<SaoSdkNetProviderVTable>> net;
+    uint64_t memory_generation = 0;
+    uint64_t net_generation = 0;
 };
 
 ProcessProviderSnapshot process_provider_snapshot() {
     auto& owners = process_provider_state();
     std::lock_guard<std::mutex> lock(owners.mutex);
-    return {owners.memory, owners.net};
+    return {owners.memory, owners.net, owners.memory_generation, owners.net_generation};
+}
+
+bool process_provider_snapshot_is_current_locked(const ProcessProviderState& current,
+                                                 const ProcessProviderSnapshot& snapshot) {
+    return current.memory == snapshot.memory && current.net == snapshot.net &&
+           current.memory_generation == snapshot.memory_generation &&
+           current.net_generation == snapshot.net_generation;
 }
 
 sao_sdk_status_t preflight_existing_bindings(ContextState* state,
@@ -122,6 +133,12 @@ sao_sdk_status_t preflight_existing_bindings(ContextState* state,
 
     std::shared_ptr<MemoryProviderSession> current_memory;
     std::shared_ptr<NetProviderSession> current_net;
+    std::shared_ptr<MemoryProviderSession> process_memory_session;
+    std::shared_ptr<NetProviderSession> process_net_session;
+    const void* process_memory_owner_tag = nullptr;
+    const void* process_net_owner_tag = nullptr;
+    uint64_t process_memory_owner_generation = 0;
+    uint64_t process_net_owner_generation = 0;
     bool provider_bound = false;
     {
         std::lock_guard<std::mutex> lock(state->mu);
@@ -131,6 +148,12 @@ sao_sdk_status_t preflight_existing_bindings(ContextState* state,
         }
         current_memory = state->memory_provider.published();
         current_net = state->net_provider.published();
+        process_memory_session = state->process_memory_session.lock();
+        process_net_session = state->process_net_session.lock();
+        process_memory_owner_tag = state->process_memory_owner_tag;
+        process_net_owner_tag = state->process_net_owner_tag;
+        process_memory_owner_generation = state->process_memory_owner_generation;
+        process_net_owner_generation = state->process_net_owner_generation;
         provider_bound = state->provider_bound;
     }
 
@@ -148,8 +171,9 @@ sao_sdk_status_t preflight_existing_bindings(ContextState* state,
     if (owners.memory != nullptr) {
         if (current_memory == nullptr) {
             *bind_memory = true;
-        } else if (state->process_memory_session.lock() != current_memory ||
-                   state->process_memory_owner_tag != owners.memory.get()) {
+        } else if (process_memory_session != current_memory ||
+                   process_memory_owner_tag != owners.memory.get() ||
+                   process_memory_owner_generation != owners.memory_generation) {
             return SAO_SDK_ERR_BUSY;
         } else {
             const auto status = memory_provider_status(state);
@@ -160,8 +184,9 @@ sao_sdk_status_t preflight_existing_bindings(ContextState* state,
     if (owners.net != nullptr) {
         if (current_net == nullptr) {
             *bind_net = true;
-        } else if (state->process_net_session.lock() != current_net ||
-                   state->process_net_owner_tag != owners.net.get()) {
+        } else if (process_net_session != current_net ||
+                   process_net_owner_tag != owners.net.get() ||
+                   process_net_owner_generation != owners.net_generation) {
             return SAO_SDK_ERR_BUSY;
         } else {
             const auto status = net_provider_status(state);
@@ -219,7 +244,7 @@ sao_sdk_status_t discard_memory_candidate(ContextState* state,
         return quarantine_process_candidate(state, *candidate);
     sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
     try {
-        status = configure_memory_provider(state, nullptr);
+        status = configure_memory_provider(state, nullptr, ProviderConfigureOrigin::cleanup);
     } catch (...) {
     }
     std::shared_ptr<MemoryProviderSession> residual;
@@ -246,7 +271,7 @@ sao_sdk_status_t discard_net_candidate(ContextState* state,
         return quarantine_process_candidate(state, *candidate);
     sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
     try {
-        status = configure_net_provider(state, nullptr);
+        status = configure_net_provider(state, nullptr, ProviderConfigureOrigin::cleanup);
     } catch (...) {
     }
     std::shared_ptr<NetProviderSession> residual;
@@ -283,7 +308,8 @@ sao_sdk_status_t prepare_memory_candidate(
     }
     sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
     try {
-        status = configure_memory_provider(state, &owner->provider);
+        status = configure_memory_provider(state, &owner->provider,
+                           ProviderConfigureOrigin::process_binding);
     } catch (...) {
     }
     {
@@ -304,7 +330,8 @@ sao_sdk_status_t prepare_net_candidate(
     }
     sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
     try {
-        status = configure_net_provider(state, &owner->provider);
+        status = configure_net_provider(state, &owner->provider,
+                        ProviderConfigureOrigin::process_binding);
     } catch (...) {
     }
     {
@@ -351,6 +378,14 @@ sao_sdk_status_t bind_provider_set(ContextState* state, bool include_platform) {
 
     std::unique_lock<std::mutex> memory_lock(state->memory_lifecycle_mutex);
     std::unique_lock<std::mutex> net_lock(state->net_lifecycle_mutex);
+    auto& process_owners = process_provider_state();
+    std::unique_lock<std::mutex> process_owner_lock(process_owners.mutex);
+    if (!process_provider_snapshot_is_current_locked(process_owners, owners)) {
+        process_owner_lock.unlock();
+        net_lock.unlock();
+        memory_lock.unlock();
+        return discard_candidates(state, &candidates, SAO_SDK_ERR_BUSY);
+    }
     bool recheck_memory = false;
     bool recheck_net = false;
     bool recheck_platform = false;
@@ -358,6 +393,7 @@ sao_sdk_status_t bind_provider_set(ContextState* state, bool include_platform) {
         state, owners, include_platform, &recheck_memory, &recheck_net, &recheck_platform);
     if (recheck_status != SAO_SDK_OK || recheck_memory != bind_memory ||
         recheck_net != bind_net || recheck_platform != bind_platform) {
+        process_owner_lock.unlock();
         net_lock.unlock();
         memory_lock.unlock();
         return discard_candidates(
@@ -382,12 +418,14 @@ sao_sdk_status_t bind_provider_set(ContextState* state, bool include_platform) {
             state->memory_provider.publish(candidates.memory);
             state->process_memory_session = candidates.memory;
             state->process_memory_owner_tag = owners.memory.get();
+            state->process_memory_owner_generation = owners.memory_generation;
             candidates.memory.reset();
         }
         if (bind_net) {
             state->net_provider.publish(candidates.net);
             state->process_net_session = candidates.net;
             state->process_net_owner_tag = owners.net.get();
+            state->process_net_owner_generation = owners.net_generation;
             candidates.net.reset();
         }
     }
@@ -441,12 +479,16 @@ sao_sdk_status_t make_owner(const Provider* provider, uint32_t major, size_t req
 }
 
 template <typename Owner>
-void replace_owner(std::shared_ptr<Owner>& destination, std::shared_ptr<Owner> replacement) {
+void replace_owner(std::shared_ptr<Owner>& destination, uint64_t& generation,
+                   std::shared_ptr<Owner> replacement) {
     std::shared_ptr<Owner> previous;
     {
         auto& state = process_provider_state();
         std::lock_guard<std::mutex> lock(state.mutex);
         previous = std::exchange(destination, std::move(replacement));
+        ++generation;
+        if (generation == 0)
+            ++generation;
     }
     previous.reset();
 }
@@ -459,7 +501,8 @@ sao_sdk_status_t configure_process_memory_provider(const SaoSdkMemoryProviderVTa
                                    SAO_SDK_MEMORY_PROVIDER_REQUIRED_SIZE, replacement);
     if (status != SAO_SDK_OK)
         return status;
-    replace_owner(process_provider_state().memory, std::move(replacement));
+    auto& owners = process_provider_state();
+    replace_owner(owners.memory, owners.memory_generation, std::move(replacement));
     return SAO_SDK_OK;
 }
 
@@ -469,7 +512,8 @@ sao_sdk_status_t configure_process_net_provider(const SaoSdkNetProviderVTable* p
                                    SAO_SDK_NET_PROVIDER_REQUIRED_SIZE, replacement);
     if (status != SAO_SDK_OK)
         return status;
-    replace_owner(process_provider_state().net, std::move(replacement));
+    auto& owners = process_provider_state();
+    replace_owner(owners.net, owners.net_generation, std::move(replacement));
     return SAO_SDK_OK;
 }
 

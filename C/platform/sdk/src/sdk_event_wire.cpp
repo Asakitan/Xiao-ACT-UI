@@ -15,43 +15,13 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
-#include <array>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <vector>
 
 namespace sao_sdk_internal {
 namespace {
-
-std::mutex g_event_owner_mutex;
-constexpr size_t kMaxEventOwnerQuarantine = 4096;
-std::array<std::shared_ptr<EventSubscriptionOwner>, kMaxEventOwnerQuarantine> g_event_owner_slots;
-size_t g_event_owner_slot_count = 0;
-
-bool preserve_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
-    std::lock_guard<std::mutex> lock(g_event_owner_mutex);
-    if (g_event_owner_slot_count == g_event_owner_slots.size())
-        return false;
-    for (auto& slot : g_event_owner_slots) {
-        if (slot == nullptr) {
-            slot = owner;
-            ++g_event_owner_slot_count;
-            return true;
-        }
-    }
-    return false;
-}
-
-void release_unpublished_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
-    std::lock_guard<std::mutex> lock(g_event_owner_mutex);
-    for (auto& slot : g_event_owner_slots) {
-        if (slot == owner) {
-            slot.reset();
-            --g_event_owner_slot_count;
-            return;
-        }
-    }
-}
 
 // Bridge — invoked by the priority bus.  user_data is the
 // stable owner stashed at subscribe time. Retired owners remain valid
@@ -101,8 +71,6 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
         owner->callback_gate = state->callback_gate;
         owner->plugin_cb = callback;
         owner->plugin_ud = user_data;
-        if (!preserve_event_owner(owner))
-            return SAO_SDK_ERR_BUSY;
     } catch (...) {
         return SAO_SDK_ERR_NOT_INITIALIZED;
     }
@@ -112,7 +80,6 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
         rt.event_bus, topic_utf8, /*priority=*/0, priority_bridge, owner.get(), &bus_token);
     if (rc != SAO_STATUS_OK) {
         owner->callback_activity.retire_and_wait();
-        release_unpublished_event_owner(owner);
         return static_cast<sao_sdk_status_t>(rc);
     }
 
@@ -269,14 +236,23 @@ extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
     const auto found = std::find_if(
         state->event_subs.begin(), state->event_subs.end(),
         [subscription](const EventSubscription& item) { return item.sdk_token == subscription; });
-    return found == state->event_subs.end() || found->owner == nullptr ? nullptr
-                                                                      : found->owner.get();
+    if (found == state->event_subs.end() || found->owner == nullptr)
+        return nullptr;
+    return new (std::nothrow) std::shared_ptr<EventSubscriptionOwner>(found->owner);
 }
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data) {
     static constexpr char kTopic[] = "sdk.test.snapshot";
-    (void)priority_bridge(kTopic, nullptr, 0, snapshot_user_data);
+    auto* snapshot =
+        static_cast<std::shared_ptr<EventSubscriptionOwner>*>(snapshot_user_data);
+    (void)priority_bridge(kTopic, nullptr, 0,
+                          snapshot == nullptr || *snapshot == nullptr ? nullptr : snapshot->get());
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_release_event_snapshot(void* snapshot_user_data) {
+    delete static_cast<std::shared_ptr<EventSubscriptionOwner>*>(snapshot_user_data);
 }
 #endif
 

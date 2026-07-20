@@ -337,11 +337,14 @@ const SaoSdkNetTable* make_net_table() {
 }
 
 sao_sdk_status_t configure_net_provider(ContextState* state,
-                                        const SaoSdkNetProviderVTable* provider) {
+                                        const SaoSdkNetProviderVTable* provider,
+                                        ProviderConfigureOrigin origin) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
+    if (origin == ProviderConfigureOrigin::cleanup && provider != nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (state->destroying.load(std::memory_order_acquire) &&
-        !context_destroy_on_current_thread(state))
+        origin != ProviderConfigureOrigin::cleanup)
         return SAO_SDK_ERR_BUSY;
     if (net_callback_reentered(state))
         return SAO_SDK_ERR_BUSY;
@@ -460,7 +463,7 @@ sao_sdk_status_t net_provider_cleanup(ContextState* state) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
     try {
-        return configure_net_provider(state, nullptr);
+        return configure_net_provider(state, nullptr, ProviderConfigureOrigin::cleanup);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
@@ -632,7 +635,8 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_n
     if (!lease)
         return lease.status();
     try {
-        return sao_sdk_internal::configure_net_provider(lease.state(), provider);
+        return sao_sdk_internal::configure_net_provider(
+            lease.state(), provider, sao_sdk_internal::ProviderConfigureOrigin::public_api);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
