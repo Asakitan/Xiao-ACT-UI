@@ -56,7 +56,7 @@ typedef void (SAO_ENGINE_CALL* sao_engine_event_callback_t)(
     void* user_data);
 
 // ---------------------------------------------------------------------------
-// Wave 17c note — base ABI classification.
+// Base ABI classification note.
 //
 // PLAN §1.5 lists the base subscribe/publish/recent/stats/mark_ephemeral
 // entry points as "legacy stubs".  On audit those symbols turned out to be
@@ -67,8 +67,8 @@ typedef void (SAO_ENGINE_CALL* sao_engine_event_callback_t)(
 // engine DLL.  That source count is audit inventory, not a runtime
 // completeness measure.  We therefore do NOT mark these declarations
 // ``[[deprecated]]`` — doing so would spam warnings on live consumers.
-// New code can bind against the ``_wave5`` API when it needs the priority
-// and cancellation semantics layered on top of the same production bus.
+// New code can bind against the ``_priority`` API when it needs the
+// priority and cancellation semantics layered on top of the same bus.
 // ---------------------------------------------------------------------------
 
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create(
@@ -150,12 +150,12 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_stats(
     sao_engine_event_bus_handle_t handle, SaoEngineBusStats* out_stats);
 
 // ---------------------------------------------------------------------------
-// Wave 5 / Phase 1 — priority + cancel API.
+// Priority + cancel API.
 //
 // Extends the base subscribe/publish above with per-subscriber priority
 // ordering and a cancellation return code.  The two APIs share the same
-// underlying bus (create/destroy/unsubscribe are unchanged); the Wave 5
-// entry points are named ``_wave5`` so the base API stays byte-stable
+// underlying bus (create/destroy/unsubscribe are unchanged); the priority
+// entry points are named ``_priority`` so the base API stays byte-stable
 // for consumers that already bound against it.
 //
 // Delivery order for a single publish:
@@ -166,26 +166,61 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_stats(
 //
 // A subscriber that mutates the bus (unsubscribe / publish another
 // topic) from inside a callback is supported — see
-// ``event_bus_unsubscribe_mid_fire`` in the Wave 5 tests.
+// ``event_bus_unsubscribe_mid_fire`` in the priority API tests.
 // ---------------------------------------------------------------------------
 
-// Callback return codes for the wave5 API.
+// Callback return codes for the priority API.
 #define SAO_ENGINE_EVENT_CONTINUE   0
 #define SAO_ENGINE_EVENT_CANCELLED  1
 
-typedef int (SAO_ENGINE_CALL* sao_engine_event_wave5_callback_t)(
+typedef int (SAO_ENGINE_CALL* sao_engine_event_priority_callback_t)(
     const char* topic_utf8,
     const uint8_t* data_ptr,
     size_t data_size,
     void* user_data);
 
-struct SaoEngineWave5PublishOptions {
+struct SaoEnginePriorityPublishOptions {
     // Non-zero when the caller wants asynchronous semantics.  Currently
     // implemented as synchronous dispatch that still guarantees no
     // subscribe/unsubscribe deadlock when a callback mutates the bus —
     // a follow-up slice will move async publish onto a work queue.
     uint32_t async;
 };
+
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_priority(
+    sao_engine_event_bus_handle_t* out_handle);
+
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_subscribe_priority(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    int32_t priority,
+    sao_engine_event_priority_callback_t callback,
+    void* user_data,
+    sao_engine_subscription_t* out_handle);
+
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_priority(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    const uint8_t* data_ptr,
+    size_t data_size);
+
+SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_ex_priority(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    const uint8_t* data_ptr,
+    size_t data_size,
+    const SaoEnginePriorityPublishOptions* options);
+
+// ---------------------------------------------------------------------------
+// Backward-compatibility aliases.
+//
+// Historical code bound against the ``_wave5`` names.  The wave tag was
+// an iteration-batch label, not a feature name, so the primary symbols are
+// now ``_priority``.  These aliases keep existing consumers building
+// without touching call sites; new code should bind against ``_priority``.
+// ---------------------------------------------------------------------------
+typedef sao_engine_event_priority_callback_t sao_engine_event_wave5_callback_t;
+typedef SaoEnginePriorityPublishOptions SaoEngineWave5PublishOptions;
 
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_wave5(
     sao_engine_event_bus_handle_t* out_handle);
@@ -194,7 +229,7 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_subscribe_wave5
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     int32_t priority,
-    sao_engine_event_wave5_callback_t callback,
+    sao_engine_event_priority_callback_t callback,
     void* user_data,
     sao_engine_subscription_t* out_handle);
 
@@ -209,7 +244,7 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_ex_wave
     const char* event_type_utf8,
     const uint8_t* data_ptr,
     size_t data_size,
-    const SaoEngineWave5PublishOptions* options);
+    const SaoEnginePriorityPublishOptions* options);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -1,12 +1,12 @@
 // SAO Auto — platform/engine/src/event_bus.cpp
 //
-// Historical Wave 5 translation unit.  This file is not compiled into
-// sao_platform_engine; the shipping implementation of both the base ABI
-// and the ``_wave5`` API is ``event_bus_adapter.cpp``.
+// Historical priority-API translation unit.  This file is not compiled
+// into sao_platform_engine; the shipping implementation of both the base
+// ABI and the ``_priority`` API is ``event_bus_adapter.cpp``.
 //
-// The source remains as an audit artifact.  Its base-ABI section has seven
-// NOT_IMPLEMENTED return statements, followed by an older concrete Wave 5
-// implementation.  Neither section is a production runtime path.
+// The source remains as an audit artifact.  Its base-ABI section has
+// seven NOT_IMPLEMENTED return statements, followed by an older concrete
+// priority implementation.  Neither section is a production runtime path.
 //
 // Threading: an ``std::shared_mutex`` protects the subscriber table.
 // Callbacks fire without the lock held so a subscriber that mutates
@@ -27,7 +27,7 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Wave 17c note — this translation unit is DEAD CODE.
+// Base ABI classification note — this translation unit is DEAD CODE.
 //
 // PLAN §1.5 lists the base API as "legacy stubs".  On audit the real
 // production implementation lives in ``src/event_bus_adapter.cpp`` and
@@ -40,7 +40,7 @@
 // symbol duplication will land.
 // ---------------------------------------------------------------------------
 
-// Forward-declare the handle so the base stubs and the wave5 impl can
+// Forward-declare the handle so the base stubs and the priority impl can
 // share it.
 struct sao_engine_event_bus_s;
 
@@ -92,7 +92,7 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_stats(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 5 implementation
+// Priority API implementation (historical — superseded by adapter)
 // ---------------------------------------------------------------------------
 
 struct SubscriberEntry {
@@ -103,7 +103,7 @@ struct SubscriberEntry {
     // counter is fine — we never reset it during a bus's lifetime and
     // uint64_t won't wrap in any realistic run.
     uint64_t insertion_seq = 0;
-    sao_engine_event_wave5_callback_t callback = nullptr;
+    sao_engine_event_priority_callback_t callback = nullptr;
     void* user_data = nullptr;
     // Torn-down subscribers are tombstoned rather than removed so
     // in-flight iteration in publish() doesn't have to worry about
@@ -169,7 +169,7 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_unsubscribe(
     return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_wave5(
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_priority(
     sao_engine_event_bus_handle_t* out_handle) {
     if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
@@ -181,11 +181,11 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_wave5(
     return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_subscribe_wave5(
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_subscribe_priority(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     int32_t priority,
-    sao_engine_event_wave5_callback_t callback,
+    sao_engine_event_priority_callback_t callback,
     void* user_data,
     sao_engine_subscription_t* out_handle) {
     if (handle == nullptr || event_type_utf8 == nullptr || callback == nullptr
@@ -296,7 +296,7 @@ sao_status_t doPublish(sao_engine_event_bus_handle_t handle,
 
 }  // namespace
 
-extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_wave5(
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_priority(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     const uint8_t* data_ptr,
@@ -304,12 +304,12 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_wave5(
     return doPublish(handle, event_type_utf8, data_ptr, data_size);
 }
 
-extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_ex_wave5(
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_ex_priority(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     const uint8_t* data_ptr,
     size_t data_size,
-    const SaoEngineWave5PublishOptions* /*options*/) {
+    const SaoEnginePriorityPublishOptions* /*options*/) {
     // Async is currently synchronous but retains the outer contract so
     // callers can migrate to a future work-queue-backed impl without
     // touching call sites.  ``options`` is intentionally unused today.

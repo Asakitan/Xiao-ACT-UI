@@ -1,4 +1,4 @@
-// SAO Auto — platform/engine/tests/test_history_ring_wave6.cpp
+// SAO Auto — platform/engine/tests/test_history_ring.cpp
 //
 // Wave 6 / Phase 5 — generic history ring buffer coverage.
 //
@@ -40,7 +40,7 @@ Payload readAt(sao_engine_history_ring_handle_t ring, int32_t index) {
 }  // namespace
 
 TEST_CASE("history_ring_push_get_newest_at_index_zero",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     sao_engine_history_ring_handle_t ring = nullptr;
     REQUIRE(sao_engine_history_ring_create(4, sizeof(Payload), &ring) == SAO_STATUS_OK);
     REQUIRE(ring != nullptr);
@@ -74,7 +74,7 @@ TEST_CASE("history_ring_push_get_newest_at_index_zero",
 }
 
 TEST_CASE("history_ring_overwrites_oldest_past_capacity",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     sao_engine_history_ring_handle_t ring = nullptr;
     REQUIRE(sao_engine_history_ring_create(3, sizeof(Payload), &ring) == SAO_STATUS_OK);
 
@@ -92,7 +92,7 @@ TEST_CASE("history_ring_overwrites_oldest_past_capacity",
 }
 
 TEST_CASE("history_ring_negative_indexing_python_style",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     sao_engine_history_ring_handle_t ring = nullptr;
     REQUIRE(sao_engine_history_ring_create(5, sizeof(Payload), &ring) == SAO_STATUS_OK);
 
@@ -116,7 +116,7 @@ TEST_CASE("history_ring_negative_indexing_python_style",
 }
 
 TEST_CASE("history_ring_range_returns_chronological_slice",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     sao_engine_history_ring_handle_t ring = nullptr;
     REQUIRE(sao_engine_history_ring_create(8, sizeof(Payload), &ring) == SAO_STATUS_OK);
 
@@ -146,7 +146,7 @@ TEST_CASE("history_ring_range_returns_chronological_slice",
 }
 
 TEST_CASE("history_ring_clear_empties_ring",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     sao_engine_history_ring_handle_t ring = nullptr;
     REQUIRE(sao_engine_history_ring_create(4, sizeof(Payload), &ring) == SAO_STATUS_OK);
 
@@ -167,7 +167,7 @@ TEST_CASE("history_ring_clear_empties_ring",
 }
 
 TEST_CASE("history_ring_range_buffer_too_small_reports_full_count",
-          "[engine][history_ring][wave6]") {
+          "[engine][history_ring][automation]") {
     // Callers can size a buffer via a first query-only pass.  When we
     // supply a payload buffer that's too small, ``count`` still tells
     // us how many entries *would* have been written.

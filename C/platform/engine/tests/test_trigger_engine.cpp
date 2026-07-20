@@ -1,4 +1,4 @@
-// SAO Auto — platform/engine/tests/test_trigger_engine_wave6.cpp
+// SAO Auto — platform/engine/tests/test_trigger_engine.cpp
 //
 // Wave 6 / Phase 5 — game-agnostic trigger engine coverage.
 //
@@ -126,7 +126,7 @@ SaoEngineTriggerSpec makeSpec(int32_t type, const char* params_json,
 }  // namespace
 
 TEST_CASE("trigger_event_match_fires_on_payload_substring",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -161,7 +161,7 @@ TEST_CASE("trigger_event_match_fires_on_payload_substring",
 }
 
 TEST_CASE("trigger_timer_ticks_periodically",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -190,7 +190,7 @@ TEST_CASE("trigger_timer_ticks_periodically",
 }
 
 TEST_CASE("trigger_timer_rejects_non_integer_non_finite_and_out_of_range_intervals",
-          "[engine][trigger][wave6][timer]") {
+          "[engine][trigger][automation][timer]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -215,7 +215,7 @@ TEST_CASE("trigger_timer_rejects_non_integer_non_finite_and_out_of_range_interva
 }
 
 TEST_CASE("trigger_concurrent_ticks_serialize_condition_state",
-          "[engine][trigger][wave6][timer][concurrency]") {
+          "[engine][trigger][automation][timer][concurrency]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -252,7 +252,7 @@ TEST_CASE("trigger_concurrent_ticks_serialize_condition_state",
 }
 
 TEST_CASE("trigger_throwing_callback_is_contained_and_dispatch_continues",
-          "[engine][trigger][wave6][callback][exception]") {
+          "[engine][trigger][automation][callback][exception]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -292,7 +292,7 @@ TEST_CASE("trigger_throwing_callback_is_contained_and_dispatch_continues",
 }
 
 TEST_CASE("trigger_timer_handles_uint64_max_tick_without_loop_or_wrap",
-          "[engine][trigger][wave6][timer][overflow]") {
+          "[engine][trigger][automation][timer][overflow]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -325,7 +325,7 @@ TEST_CASE("trigger_timer_handles_uint64_max_tick_without_loop_or_wrap",
 }
 
 TEST_CASE("trigger_combo_all_children_must_match",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -361,7 +361,7 @@ TEST_CASE("trigger_combo_all_children_must_match",
 }
 
 TEST_CASE("trigger_combo_timer_children_are_order_independent",
-          "[engine][trigger][wave6][timer][combo]") {
+          "[engine][trigger][automation][timer][combo]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -400,7 +400,7 @@ TEST_CASE("trigger_combo_timer_children_are_order_independent",
 }
 
 TEST_CASE("trigger_unregister_removes_from_dispatch",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -430,7 +430,7 @@ TEST_CASE("trigger_unregister_removes_from_dispatch",
 }
 
 TEST_CASE("trigger_unregister_keeps_in_flight_callback_storage_alive",
-          "[engine][trigger][wave6][concurrency]") {
+          "[engine][trigger][automation][concurrency]") {
     using namespace std::chrono_literals;
 
     sao_engine_trigger_engine_handle_t eng = nullptr;
@@ -486,7 +486,7 @@ TEST_CASE("trigger_unregister_keeps_in_flight_callback_storage_alive",
 }
 
 TEST_CASE("trigger_timer_callback_can_unregister_itself",
-          "[engine][trigger][wave6][timer][lifecycle]") {
+          "[engine][trigger][automation][timer][lifecycle]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -516,7 +516,7 @@ TEST_CASE("trigger_timer_callback_can_unregister_itself",
 }
 
 TEST_CASE("trigger_evaluate_reports_action_ids_in_registration_order",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 
@@ -547,7 +547,7 @@ TEST_CASE("trigger_evaluate_reports_action_ids_in_registration_order",
 }
 
 TEST_CASE("trigger_timer_one_shot_fires_only_once",
-          "[engine][trigger][wave6]") {
+          "[engine][trigger][automation]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
     REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
 

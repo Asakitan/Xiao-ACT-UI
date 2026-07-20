@@ -1,6 +1,6 @@
-// SAO Auto — platform/engine/tests/test_event_bus_wave5.cpp
+// SAO Auto — platform/engine/tests/test_event_bus_priority.cpp
 //
-// Wave 5 / Phase 1 — event bus coverage.
+// Priority API event-bus coverage.
 //
 // Six deterministic scenarios that pin the Python-equivalent semantics:
 //   * subscribe / publish delivery
@@ -54,19 +54,19 @@ int taggedCallback(const char* /*topic*/, const uint8_t* /*data*/,
 }  // namespace
 
 TEST_CASE("event_bus_subscribe_publish_delivers_to_subscriber",
-          "[engine][event_bus][wave5]") {
+          "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     Bag bag;
     TaggedBag tb{&bag, "sub_a", SAO_ENGINE_EVENT_CONTINUE};
     sao_engine_subscription_t sub = 0;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "topic.x", 0,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "topic.x", 0,
                                                   &taggedCallback, &tb,
                                                   &sub) == SAO_STATUS_OK);
     REQUIRE(sub != 0);
 
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "topic.x",
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "topic.x",
                                                 nullptr, 0) == SAO_STATUS_OK);
     REQUIRE(bag.seen.size() == 1);
     REQUIRE(bag.seen[0] == "sub_a");
@@ -74,9 +74,9 @@ TEST_CASE("event_bus_subscribe_publish_delivers_to_subscriber",
     sao_engine_event_bus_destroy(bus);
 }
 
-TEST_CASE("event_bus_priority_ordering", "[engine][event_bus][wave5]") {
+TEST_CASE("event_bus_priority_ordering", "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     Bag bag;
     TaggedBag low  {&bag, "low",  SAO_ENGINE_EVENT_CONTINUE};
@@ -85,17 +85,17 @@ TEST_CASE("event_bus_priority_ordering", "[engine][event_bus][wave5]") {
 
     // Register in the "wrong" order so the sort has real work to do.
     sao_engine_subscription_t s1 = 0, s2 = 0, s3 = 0;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 1,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 1,
                                                   &taggedCallback, &low,
                                                   &s1) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 10,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 10,
                                                   &taggedCallback, &high,
                                                   &s2) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 5,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 5,
                                                   &taggedCallback, &mid,
                                                   &s3) == SAO_STATUS_OK);
 
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "t", nullptr, 0)
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "t", nullptr, 0)
             == SAO_STATUS_OK);
     REQUIRE(bag.seen.size() == 3);
     REQUIRE(bag.seen[0] == "high");
@@ -106,9 +106,9 @@ TEST_CASE("event_bus_priority_ordering", "[engine][event_bus][wave5]") {
 }
 
 TEST_CASE("event_bus_cancel_stops_propagation",
-          "[engine][event_bus][wave5]") {
+          "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     Bag bag;
     TaggedBag first {&bag, "first",  SAO_ENGINE_EVENT_CONTINUE};
@@ -117,17 +117,17 @@ TEST_CASE("event_bus_cancel_stops_propagation",
     TaggedBag third {&bag, "third",  SAO_ENGINE_EVENT_CONTINUE};
 
     sao_engine_subscription_t s1 = 0, s2 = 0, s3 = 0;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 10,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 10,
                                                   &taggedCallback, &first,
                                                   &s1) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 5,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 5,
                                                   &taggedCallback, &second,
                                                   &s2) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 1,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 1,
                                                   &taggedCallback, &third,
                                                   &s3) == SAO_STATUS_OK);
 
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "t", nullptr, 0)
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "t", nullptr, 0)
             == SAO_STATUS_OK);
     REQUIRE(bag.seen.size() == 2);
     REQUIRE(bag.seen[0] == "first");
@@ -166,9 +166,9 @@ int unsubberCallback(const char* /*topic*/, const uint8_t*, size_t,
 }  // namespace
 
 TEST_CASE("event_bus_unsubscribe_mid_fire",
-          "[engine][event_bus][wave5]") {
+          "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     Bag bag;
     UnsubStub a{};
@@ -180,15 +180,15 @@ TEST_CASE("event_bus_unsubscribe_mid_fire",
     // Subscribe B first so we know its token, then A which will remove
     // B mid-fire.  A has higher priority so it runs first.
     sao_engine_subscription_t bs = 0, as = 0;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 1,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 1,
                                                   &taggedCallback, &b,
                                                   &bs) == SAO_STATUS_OK);
     a.target = bs;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "t", 10,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "t", 10,
                                                   &unsubberCallback, &a,
                                                   &as) == SAO_STATUS_OK);
 
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "t", nullptr, 0)
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "t", nullptr, 0)
             == SAO_STATUS_OK);
 
     REQUIRE(a.ran);
@@ -199,7 +199,7 @@ TEST_CASE("event_bus_unsubscribe_mid_fire",
     REQUIRE(bag.seen[0] == "A_unsubs_B");
     // A second publish must see B gone.
     bag.seen.clear();
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "t", nullptr, 0)
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "t", nullptr, 0)
             == SAO_STATUS_OK);
     // Only "A_unsubs_B" this time — B was pruned.
     REQUIRE(bag.seen.size() == 1);
@@ -209,16 +209,16 @@ TEST_CASE("event_bus_unsubscribe_mid_fire",
 }
 
 TEST_CASE("event_bus_publish_no_subscribers_returns_ok",
-          "[engine][event_bus][wave5]") {
+          "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     // Publish to a topic no one listens to.  Not an error.
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "empty.topic",
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "empty.topic",
                                                 nullptr, 0) == SAO_STATUS_OK);
     // With payload too.
     const uint8_t payload[] = "hello";
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "empty.topic",
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "empty.topic",
                                                 payload, sizeof(payload))
             == SAO_STATUS_OK);
 
@@ -244,30 +244,30 @@ int fireYCallback(const char* /*topic*/, const uint8_t*, size_t,
     auto* r = static_cast<RecursiveStub*>(user_data);
     r->bag->seen.push_back("A_on_X");
     // Publish Y from inside X's callback.
-    (void)sao_engine_event_bus_publish_wave5(r->bus, "Y", nullptr, 0);
+    (void)sao_engine_event_bus_publish_priority(r->bus, "Y", nullptr, 0);
     return SAO_ENGINE_EVENT_CONTINUE;
 }
 
 }  // namespace
 
 TEST_CASE("event_bus_recursive_publish_handled",
-          "[engine][event_bus][wave5]") {
+          "[engine][event_bus][priority]") {
     sao_engine_event_bus_handle_t bus = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
 
     Bag bag;
     RecursiveStub r{bus, &bag};
     TaggedBag b_on_y{&bag, "B_on_Y", SAO_ENGINE_EVENT_CONTINUE};
 
     sao_engine_subscription_t as = 0, bs = 0;
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "X", 0,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "X", 0,
                                                   &fireYCallback, &r,
                                                   &as) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe_wave5(bus, "Y", 0,
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "Y", 0,
                                                   &taggedCallback, &b_on_y,
                                                   &bs) == SAO_STATUS_OK);
 
-    REQUIRE(sao_engine_event_bus_publish_wave5(bus, "X", nullptr, 0)
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "X", nullptr, 0)
             == SAO_STATUS_OK);
     REQUIRE(bag.seen.size() == 2);
     REQUIRE(bag.seen[0] == "A_on_X");

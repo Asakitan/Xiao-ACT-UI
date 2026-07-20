@@ -4,12 +4,12 @@ endif()
 
 add_executable(sao_platform_engine_tests
     test_engine.cpp
-    test_event_bus_wave5.cpp
+    test_event_bus_priority.cpp
     test_runtime_state_render.cpp
-    # Wave 6 / Phase 5 — automation SDK primitives.
-    test_state_machine_wave6.cpp
-    test_history_ring_wave6.cpp
-    test_trigger_engine_wave6.cpp
+    # automation SDK primitives.
+    test_state_machine.cpp
+    test_history_ring.cpp
+    test_trigger_engine.cpp
 )
 
 target_link_libraries(sao_platform_engine_tests PRIVATE
@@ -24,52 +24,52 @@ include(CTest)
 include(Catch)
 catch_discover_tests(sao_platform_engine_tests)
 
-# ── Wave 9 / Agent e — event_bus fixture parity (8 pinned scenarios) ──
+# ── event_bus fixture parity (8 pinned scenarios) ────────────────────
 #
-# Drives sao_engine_event_bus_subscribe_wave5 / _publish_wave5 /
+# Drives sao_engine_event_bus_subscribe_priority / _publish_priority /
 # _unsubscribe through every JSON fixture at docs/fixtures/event_bus/
 # and asserts subscriber_logs + published + retained + recent_topics +
 # callback_failures parity vs the Python oracle
 # (act_platform/event_bus.py).  Adds a small harness for wildcard "*"
-# fan-out, ephemeral-topic set + retained counter, since the wave5 ABI
+# fan-out, ephemeral-topic set + retained counter, since the priority ABI
 # doesn't carry those out of the box.
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_event_bus_fixture_parity_wave9.cpp")
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_event_bus_fixture_parity.cpp")
     find_package(nlohmann_json 3 CONFIG REQUIRED)
-    add_executable(sao_platform_engine_event_bus_fixture_parity_wave9_tests
-        test_event_bus_fixture_parity_wave9.cpp
+    add_executable(sao_platform_engine_event_bus_fixture_parity_tests
+        test_event_bus_fixture_parity.cpp
     )
-    target_link_libraries(sao_platform_engine_event_bus_fixture_parity_wave9_tests
+    target_link_libraries(sao_platform_engine_event_bus_fixture_parity_tests
         PRIVATE
             sao::engine
             nlohmann_json::nlohmann_json
             Catch2::Catch2WithMain
     )
-    target_compile_definitions(sao_platform_engine_event_bus_fixture_parity_wave9_tests
+    target_compile_definitions(sao_platform_engine_event_bus_fixture_parity_tests
         PRIVATE
             SAO_ENGINE_USING_DLL
             SAO_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/docs/fixtures/event_bus")
-    target_compile_features(sao_platform_engine_event_bus_fixture_parity_wave9_tests
+    target_compile_features(sao_platform_engine_event_bus_fixture_parity_tests
         PRIVATE cxx_std_20)
-    catch_discover_tests(sao_platform_engine_event_bus_fixture_parity_wave9_tests
-        PROPERTIES LABELS "event_bus;fixture_parity_wave9;wave9")
+    catch_discover_tests(sao_platform_engine_event_bus_fixture_parity_tests
+        PROPERTIES LABELS "event_bus;fixture_parity")
 endif()
 
-# ── Wave 17c / Agent c — gap closure tests for platform/engine ───────
+# ── gap closure tests for platform/engine ────────────────────────────
 # Asserts the render_hook capability gate plus EventBus source wiring and
 # executable production behavior.  Dead-source counts are inventory only.
 # The shared support library lives under platform/core/tests so we don't
 # duplicate object code across the three gap binaries.
-add_executable(sao_platform_engine_gap_wave17c_tests
-    test_gap_wave17c_engine.cpp
+add_executable(sao_platform_engine_gap_tests
+    test_gap_engine.cpp
 )
-target_link_libraries(sao_platform_engine_gap_wave17c_tests PRIVATE
+target_link_libraries(sao_platform_engine_gap_tests PRIVATE
     sao::engine
-    wave17c_support_lib
+    sao_core_gap_support_lib
     Catch2::Catch2WithMain
 )
-target_compile_definitions(sao_platform_engine_gap_wave17c_tests PRIVATE
+target_compile_definitions(sao_platform_engine_gap_tests PRIVATE
     SAO_ENGINE_USING_DLL
     SAO_ENGINE_MODULE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_compile_features(sao_platform_engine_gap_wave17c_tests PRIVATE cxx_std_20)
-catch_discover_tests(sao_platform_engine_gap_wave17c_tests
-    PROPERTIES LABELS "engine;wave17c;gap_closure")
+target_compile_features(sao_platform_engine_gap_tests PRIVATE cxx_std_20)
+catch_discover_tests(sao_platform_engine_gap_tests
+    PROPERTIES LABELS "engine;gap_closure")

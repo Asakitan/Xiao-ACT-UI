@@ -16,7 +16,7 @@
 // This test drives ``sao_engine_event_bus_*_wave5`` (subscribe/publish/
 // unsubscribe/cancel) through a thin harness that adds:
 //   * envelope construction (topic/payload/source as JSON bytes)
-//   * wildcard "*" fan-out — the wave5 API treats "*" as a plain topic;
+//   * wildcard "*" fan-out — the priority API treats "*" as a plain topic;
 //     the fixture semantics require it to catch every publish
 //   * ephemeral topic set (which topics do NOT bump retained)
 //   * callback_failures counter (a callback that returns a special code
@@ -73,7 +73,7 @@ std::optional<std::string> load_event_bus_fixture(const std::string& name) {
     return std::nullopt;
 }
 
-// Fixture harness.  Wraps a wave5 bus with the fixture-required semantics
+// Fixture harness.  Wraps a priority bus bus with the fixture-required semantics
 // the raw bus doesn't cover: source envelope, ephemeral topics, retained
 // counter, wildcard fan-out, callback failures.  The fixture generator
 // runs against a full EventBus in Python; we're rebuilding just enough
@@ -89,7 +89,7 @@ struct Harness {
     uint32_t max_recent = 200;
 
     Harness() {
-        REQUIRE(sao_engine_event_bus_create_wave5(&bus) == SAO_STATUS_OK);
+        REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
     }
     ~Harness() {
         if (bus != nullptr) sao_engine_event_bus_destroy(bus);
@@ -112,7 +112,7 @@ struct Harness {
         auto* ctx = new SubCtx{this, owner, std::move(extra)};
         contexts.emplace_back(ctx);
         sao_engine_subscription_t token = 0;
-        REQUIRE(sao_engine_event_bus_subscribe_wave5(
+        REQUIRE(sao_engine_event_bus_subscribe_priority(
             bus, topic.c_str(), 0, &SubCtx::dispatch, ctx, &token) == SAO_STATUS_OK);
         tokens_by_owner[owner] = token;
     }
@@ -139,16 +139,16 @@ struct Harness {
         }
 
         // Fan out to topic subscribers.
-        REQUIRE(sao_engine_event_bus_publish_wave5(
+        REQUIRE(sao_engine_event_bus_publish_priority(
             bus, topic.c_str(),
             reinterpret_cast<const uint8_t*>(blob.data()),
             blob.size()) == SAO_STATUS_OK);
 
         // Wildcard fan-out — Python does this by looking up "*" alongside
-        // the topic; the wave5 bus stores it as a plain topic, so we
+        // the topic; the priority bus bus stores it as a plain topic, so we
         // publish a second time on "*".  A wildcard subscriber sees the
         // real topic name inside the envelope, so this stays parity-faithful.
-        REQUIRE(sao_engine_event_bus_publish_wave5(
+        REQUIRE(sao_engine_event_bus_publish_priority(
             bus, "*",
             reinterpret_cast<const uint8_t*>(blob.data()),
             blob.size()) == SAO_STATUS_OK);
@@ -184,7 +184,7 @@ struct Harness {
             } catch (...) {
                 // Python's callback-failure isolation: the failure is
                 // counted, but the next subscriber still fires.  The
-                // wave5 callback ABI has no exception channel, so the
+                // priority bus callback ABI has no exception channel, so the
                 // "raiser" here signals failure by returning CONTINUE
                 // after incrementing the counter — matches the
                 // callback_failure_isolation fixture, whose "raiser"
@@ -257,8 +257,8 @@ ordered_json load_fixture_json(const std::string& fixture_name) {
 // ---------------------------------------------------------------------------
 // Scenario 1: normal ordered delivery to two topic subscribers.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 normal_ordered_delivery",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity normal_ordered_delivery",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("normal_ordered_delivery.json");
     Harness h;
     h.subscribe("damage", "A");
@@ -278,8 +278,8 @@ TEST_CASE("event_bus_fixture_parity_wave9 normal_ordered_delivery",
 // ---------------------------------------------------------------------------
 // Scenario 2: wildcard subscriber sees every publish.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 wildcard_catch_all",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity wildcard_catch_all",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("wildcard_catch_all.json");
     Harness h;
     h.subscribe("damage", "dmg");
@@ -298,8 +298,8 @@ TEST_CASE("event_bus_fixture_parity_wave9 wildcard_catch_all",
 // ---------------------------------------------------------------------------
 // Scenario 3: late subscriber added between publishes; ordering respected.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 high_priority_preemption",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity high_priority_preemption",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("high_priority_preemption.json");
     Harness h;
     h.subscribe("skill", "early");
@@ -318,16 +318,16 @@ TEST_CASE("event_bus_fixture_parity_wave9 high_priority_preemption",
 
 // ---------------------------------------------------------------------------
 // Scenario 4: unsubscribe mid-fire.  Callback A unsubscribes B during
-// publish; the wave5 bus's snapshot-then-fire behaviour means B does NOT
+// publish; the priority bus bus's snapshot-then-fire behaviour means B does NOT
 // receive the current publish (its subscription is torn down before the
 // snapshot re-check).  Fixture pins B's log as empty.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 unsubscribe_mid_fire",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity unsubscribe_mid_fire",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("unsubscribe_mid_fire.json");
     Harness h;
     // Subscribe B first (lower priority — will be scheduled after A but
-    // the wave5 bus uses the same priority=0, so insertion order picks
+    // the priority bus bus uses the same priority=0, so insertion order picks
     // A first as long as it's registered first).
     h.subscribe("scene", "A", [&h](const ordered_json& /*env*/) {
         h.unsubscribe("B");
@@ -348,8 +348,8 @@ TEST_CASE("event_bus_fixture_parity_wave9 unsubscribe_mid_fire",
 // ---------------------------------------------------------------------------
 // Scenario 5: recursive publish — a subscriber publishes a downstream event.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 recursive_publish",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity recursive_publish",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("recursive_publish.json");
     Harness h;
     h.subscribe("upstream", "up", [&h](const ordered_json& env) {
@@ -371,8 +371,8 @@ TEST_CASE("event_bus_fixture_parity_wave9 recursive_publish",
 // ---------------------------------------------------------------------------
 // Scenario 6: ephemeral topic (act_snapshot) delivered but NOT retained.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 ephemeral_topic_no_retention",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity ephemeral_topic_no_retention",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("ephemeral_topic_no_retention.json");
     Harness h;
     h.set_max_recent(8);
@@ -397,8 +397,8 @@ TEST_CASE("event_bus_fixture_parity_wave9 ephemeral_topic_no_retention",
 // ---------------------------------------------------------------------------
 // Scenario 7: subscribe after publish — no replay.
 // ---------------------------------------------------------------------------
-TEST_CASE("event_bus_fixture_parity_wave9 subscribe_after_publish_no_replay",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity subscribe_after_publish_no_replay",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("subscribe_after_publish_no_replay.json");
     Harness h;
     h.set_max_recent(8);
@@ -417,13 +417,13 @@ TEST_CASE("event_bus_fixture_parity_wave9 subscribe_after_publish_no_replay",
 // ---------------------------------------------------------------------------
 // Scenario 8: callback that raises must not block the next subscriber.
 // ---------------------------------------------------------------------------
-// The wave5 callback ABI can't throw; we simulate the Python "blow_up"
+// The priority bus callback ABI can't throw; we simulate the Python "blow_up"
 // callback with an extra hook that throws inside the try/catch that the
 // harness's dispatch already runs.  The exception increments
 // callback_failures without stopping the next subscriber (the harness's
 // dispatch always returns CONTINUE).
-TEST_CASE("event_bus_fixture_parity_wave9 callback_failure_isolation",
-          "[engine][event_bus][fixture_parity_wave9]") {
+TEST_CASE("event_bus_fixture_parity callback_failure_isolation",
+          "[engine][event_bus][fixture_parity]") {
     const auto j = load_fixture_json("callback_failure_isolation.json");
     Harness h;
     h.set_max_recent(8);

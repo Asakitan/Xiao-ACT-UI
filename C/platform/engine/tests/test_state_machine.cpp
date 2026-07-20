@@ -1,4 +1,4 @@
-// SAO Auto — platform/engine/tests/test_state_machine_wave6.cpp
+// SAO Auto — platform/engine/tests/test_state_machine.cpp
 //
 // Wave 6 / Phase 5 — generic state machine coverage.
 //
@@ -43,7 +43,7 @@ std::string readCurrent(sao_engine_state_machine_handle_t handle) {
 }  // namespace
 
 TEST_CASE("state_machine_create_returns_initial_state",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     sao_engine_state_machine_handle_t sm = nullptr;
     REQUIRE(sao_engine_state_machine_create(kMinimalConfig, &sm) == SAO_STATUS_OK);
     REQUIRE(sm != nullptr);
@@ -52,7 +52,7 @@ TEST_CASE("state_machine_create_returns_initial_state",
 }
 
 TEST_CASE("state_machine_dispatch_advances_along_declared_edge",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     sao_engine_state_machine_handle_t sm = nullptr;
     REQUIRE(sao_engine_state_machine_create(kMinimalConfig, &sm) == SAO_STATUS_OK);
 
@@ -71,7 +71,7 @@ TEST_CASE("state_machine_dispatch_advances_along_declared_edge",
 }
 
 TEST_CASE("state_machine_illegal_event_returns_invalid_transition",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     sao_engine_state_machine_handle_t sm = nullptr;
     REQUIRE(sao_engine_state_machine_create(kMinimalConfig, &sm) == SAO_STATUS_OK);
 
@@ -87,7 +87,7 @@ TEST_CASE("state_machine_illegal_event_returns_invalid_transition",
 }
 
 TEST_CASE("state_machine_history_records_accepted_transitions",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     sao_engine_state_machine_handle_t sm = nullptr;
     REQUIRE(sao_engine_state_machine_create(kMinimalConfig, &sm) == SAO_STATUS_OK);
 
@@ -135,7 +135,7 @@ TEST_CASE("state_machine_history_records_accepted_transitions",
 }
 
 TEST_CASE("state_machine_reset_clears_state_and_history",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     sao_engine_state_machine_handle_t sm = nullptr;
     REQUIRE(sao_engine_state_machine_create(kMinimalConfig, &sm) == SAO_STATUS_OK);
 
@@ -157,7 +157,7 @@ TEST_CASE("state_machine_reset_clears_state_and_history",
 }
 
 TEST_CASE("state_machine_history_query_reports_capacity",
-          "[engine][state_machine][wave6]") {
+          "[engine][state_machine][automation]") {
     // Buffer too small propagates but the count / bytes still report
     // what the caller would need.  This is what enables the
     // two-call size-then-fetch idiom used by both Tk and WebView paths.

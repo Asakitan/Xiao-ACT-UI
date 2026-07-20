@@ -25,10 +25,10 @@
 #include "sao/engine/event_bus.h"
 #include "sao/engine/render_hook.h"
 
-#include "wave17c_support.h"
+#include "core_gap_support.h"
 
-using sao::wave17c::GapKind;
-using sao::wave17c::matches_gap_kind;
+using sao::core_gap::GapKind;
+using sao::core_gap::matches_gap_kind;
 
 namespace {
 
@@ -72,8 +72,8 @@ std::size_t count_occurrences(std::string_view text, std::string_view needle) {
 
 } // namespace
 
-TEST_CASE("wave17c engine: EventBus static inventory excludes dead source",
-          "[wave17c][engine][event_bus][source_inventory]") {
+TEST_CASE("engine gap: EventBus static inventory excludes dead source",
+          "[gap_closure][engine][event_bus][source_inventory]") {
     const std::filesystem::path source_dir = SAO_ENGINE_MODULE_SOURCE_DIR;
     const auto cmake = read_text_file(source_dir / "CMakeLists.txt");
     const auto dead_source = read_text_file(source_dir / "src" / "event_bus.cpp");
@@ -93,8 +93,8 @@ TEST_CASE("wave17c engine: EventBus static inventory excludes dead source",
     CHECK(count_occurrences(*dead_source, "return SAO_STATUS_ERR_NOT_IMPLEMENTED;") == 7);
 }
 
-TEST_CASE("wave17c engine: shipping EventBus base ABI creates a live bus",
-          "[wave17c][engine][event_bus]") {
+TEST_CASE("engine gap: shipping EventBus base ABI creates a live bus",
+          "[gap_closure][engine][event_bus]") {
     // The linked engine target resolves the base ABI to the production
     // adapter selected by CMake.
     sao_engine_event_bus_handle_t handle = nullptr;
@@ -105,8 +105,8 @@ TEST_CASE("wave17c engine: shipping EventBus base ABI creates a live bus",
     sao_engine_event_bus_destroy(handle);
 }
 
-TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
-          "[wave17c][engine][event_bus]") {
+TEST_CASE("engine gap: shipping EventBus dispatches and retains",
+          "[gap_closure][engine][event_bus]") {
     sao_engine_event_bus_handle_t handle = nullptr;
     REQUIRE(sao_engine_event_bus_create(4, 0.0F, &handle) == SAO_STATUS_OK);
 
@@ -114,9 +114,9 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     CallbackContext wildcard;
     sao_engine_subscription_t exact_subscription = 0;
     sao_engine_subscription_t wildcard_subscription = 0;
-    REQUIRE(sao_engine_event_bus_subscribe(handle, "wave17c/topic", "wave17c/exact", record_event,
+    REQUIRE(sao_engine_event_bus_subscribe(handle, "gap/topic", "gap/exact", record_event,
                                            &exact, &exact_subscription) == SAO_STATUS_OK);
-    REQUIRE(sao_engine_event_bus_subscribe(handle, "*", "wave17c/wildcard", record_event, &wildcard,
+    REQUIRE(sao_engine_event_bus_subscribe(handle, "*", "gap/wildcard", record_event, &wildcard,
                                            &wildcard_subscription) == SAO_STATUS_OK);
 
     constexpr std::uint8_t first_payload[] = {'{', '"', 'n', '"', ':', '1', '}'};
@@ -125,12 +125,12 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     supplied_header.producer_id_hash = 0x17C;
     supplied_header.source_id_hash = 0xA11;
     supplied_header.confidence = 0.75F;
-    REQUIRE(sao_engine_event_bus_publish(handle, "wave17c/topic", first_payload,
+    REQUIRE(sao_engine_event_bus_publish(handle, "gap/topic", first_payload,
                                          sizeof(first_payload), &supplied_header) == SAO_STATUS_OK);
 
     REQUIRE(exact.calls == 1);
     REQUIRE(wildcard.calls == 1);
-    CHECK(exact.topics == std::vector<std::string>{"wave17c/topic"});
+    CHECK(exact.topics == std::vector<std::string>{"gap/topic"});
     CHECK(wildcard.topics == exact.topics);
     const auto first_payload_end = first_payload + sizeof(first_payload);
     const std::vector<std::uint8_t> expected_first_payload(first_payload, first_payload_end);
@@ -150,7 +150,7 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     REQUIRE(sao_engine_event_bus_recent(handle, 0, nullptr, 0, nullptr, 0, nullptr, 0, &event_count,
                                         &topics_used, &jsons_used) == SAO_STATUS_OK);
     REQUIRE(event_count == 1);
-    REQUIRE(topics_used == std::strlen("wave17c/topic"));
+    REQUIRE(topics_used == std::strlen("gap/topic"));
     REQUIRE(jsons_used == sizeof(first_payload));
 
     std::vector<SaoEngineRingEntry> events(event_count);
@@ -162,15 +162,15 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     REQUIRE(events.size() == 1);
     const auto& retained = events.front();
     CHECK(std::string(topics.data() + retained.topic_offset, retained.topic_length) ==
-          "wave17c/topic");
+          "gap/topic");
     CHECK(std::vector<std::uint8_t>(payloads.begin() + retained.json_offset,
                                     payloads.begin() + retained.json_offset +
                                         retained.json_length) == expected_first_payload);
     CHECK(retained.header.sequence_id == exact.headers.front().sequence_id);
 
-    REQUIRE(sao_engine_event_bus_mark_ephemeral(handle, "wave17c/topic") == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_mark_ephemeral(handle, "gap/topic") == SAO_STATUS_OK);
     constexpr std::uint8_t second_payload[] = {'[', ']'};
-    REQUIRE(sao_engine_event_bus_publish(handle, "wave17c/topic", second_payload,
+    REQUIRE(sao_engine_event_bus_publish(handle, "gap/topic", second_payload,
                                          sizeof(second_payload), nullptr) == SAO_STATUS_OK);
     CHECK(exact.calls == 2);
     CHECK(wildcard.calls == 2);
@@ -191,13 +191,13 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     CHECK(event_count == 1);
 
     std::uint32_t removed = 0;
-    REQUIRE(sao_engine_event_bus_unsubscribe_owner(handle, "wave17c/exact", &removed) ==
+    REQUIRE(sao_engine_event_bus_unsubscribe_owner(handle, "gap/exact", &removed) ==
             SAO_STATUS_OK);
     CHECK(removed == 1);
     CHECK(sao_engine_event_bus_unsubscribe(handle, exact_subscription) ==
           SAO_STATUS_ERR_SUBSCRIPTION_GONE);
 
-    REQUIRE(sao_engine_event_bus_publish(handle, "wave17c/topic", nullptr, 0, nullptr) ==
+    REQUIRE(sao_engine_event_bus_publish(handle, "gap/topic", nullptr, 0, nullptr) ==
             SAO_STATUS_OK);
     CHECK(exact.calls == 2);
     CHECK(wildcard.calls == 3);
@@ -206,18 +206,18 @@ TEST_CASE("wave17c engine: shipping EventBus dispatches and retains",
     sao_engine_event_bus_destroy(handle);
 }
 
-TEST_CASE("wave17c engine: shipping EventBus exposes the wave5 extension",
-          "[wave17c][engine][event_bus][wave5]") {
+TEST_CASE("engine gap: shipping EventBus exposes the priority extension",
+          "[gap_closure][engine][event_bus][priority]") {
     // The base and _wave5 APIs are both exported by the production adapter;
     // the dedicated Wave 5 suite exercises priority and cancel semantics.
     sao_engine_event_bus_handle_t handle = nullptr;
-    REQUIRE(sao_engine_event_bus_create_wave5(&handle) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_create_priority(&handle) == SAO_STATUS_OK);
     REQUIRE(handle != nullptr);
     sao_engine_event_bus_destroy(handle);
 }
 
-TEST_CASE("wave17c engine: render_hook provider_status advertises capability gap",
-          "[wave17c][engine][render_hook]") {
+TEST_CASE("engine gap: render_hook provider_status advertises capability gap",
+          "[gap_closure][engine][render_hook]") {
     sao_engine_render_hook_registry_handle_t registry = nullptr;
     REQUIRE(sao_engine_render_hook_registry_create(&registry) == SAO_STATUS_OK);
     REQUIRE(registry != nullptr);
@@ -234,8 +234,8 @@ TEST_CASE("wave17c engine: render_hook provider_status advertises capability gap
     sao_engine_render_hook_registry_destroy(registry);
 }
 
-TEST_CASE("wave17c engine: render_clock_dispatch GPU_PRESENT is capability-gated",
-          "[wave17c][engine][render_hook]") {
+TEST_CASE("engine gap: render_clock_dispatch GPU_PRESENT is capability-gated",
+          "[gap_closure][engine][render_hook]") {
     sao_engine_render_hook_registry_handle_t registry = nullptr;
     REQUIRE(sao_engine_render_hook_registry_create(&registry) == SAO_STATUS_OK);
 
@@ -243,7 +243,7 @@ TEST_CASE("wave17c engine: render_clock_dispatch GPU_PRESENT is capability-gated
     // SAO_STATUS_OK (implementation may reject a viewport of 0x0), but it
     // definitely must not report NOT_IMPLEMENTED / CAPABILITY_MISSING.
     const sao_status_t logical_rc = sao_engine_render_clock_dispatch(
-        registry, "wave17c-surface", SAO_ENGINE_RENDER_BEFORE_COMPOSITOR, 1000u, 0, 0, 640, 480,
+        registry, "gap-surface", SAO_ENGINE_RENDER_BEFORE_COMPOSITOR, 1000u, 0, 0, 640, 480,
         SAO_ENGINE_RENDER_DISPATCH_LOGICAL_TICK);
     CAPTURE(logical_rc);
     CHECK(logical_rc != SAO_STATUS_ERR_CAPABILITY_MISSING);
@@ -251,7 +251,7 @@ TEST_CASE("wave17c engine: render_clock_dispatch GPU_PRESENT is capability-gated
 
     // GPU_PRESENT — the capability-gated path.
     const sao_status_t gpu_rc = sao_engine_render_clock_dispatch(
-        registry, "wave17c-surface", SAO_ENGINE_RENDER_BEFORE_COMPOSITOR, 2000u, 0, 0, 640, 480,
+        registry, "gap-surface", SAO_ENGINE_RENDER_BEFORE_COMPOSITOR, 2000u, 0, 0, 640, 480,
         SAO_ENGINE_RENDER_DISPATCH_GPU_PRESENT);
     CAPTURE(gpu_rc);
     CHECK(matches_gap_kind(gpu_rc, GapKind::CapabilityGate));

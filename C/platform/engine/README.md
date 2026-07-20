@@ -55,10 +55,12 @@ UTF-8 JSON crossing the event bus — it never parses it.
 ## EventBus implementation status
 
 `sao_platform_engine` ships `src/event_bus_adapter.cpp` as its production
-EventBus path.  The adapter implements both the base C ABI and the `_wave5`
+EventBus path.  The adapter implements the base C ABI and the `_priority`
 entry points, including synchronous exact/wildcard dispatch, owner and token
 unsubscribe, ephemeral topics, bounded recent-event retention, counters,
-priority ordering, and cancellation.
+priority ordering, and cancellation.  The `_wave5` symbols remain only as
+compatibility ABI aliases that forward to `_priority`; new consumers should use
+the `_priority` API.
 
 `src/event_bus.cpp` is a historical translation unit that CMake deliberately
 does not compile.  Its dead base-ABI section contains seven

@@ -1,9 +1,10 @@
 // Shipping EventBus implementation for sao_platform_engine.
 //
 // CMake compiles this translation unit, not the historical
-// ``event_bus.cpp`` file.  Both the base C ABI and the ``_wave5`` entry
+// ``event_bus.cpp`` file.  Both the base C ABI and the ``_priority`` entry
 // points below therefore use this production state, dispatch, retention,
-// subscription, and statistics implementation.
+// subscription, and statistics implementation.  The ``_wave5`` symbols are
+// kept as backward-compatibility aliases for existing consumers.
 
 #include "sao/engine/event_bus.h"
 
@@ -33,7 +34,7 @@ struct SubscriberEntry {
     int32_t priority = 0;
     uint64_t insertion_seq = 0;
     sao_engine_event_callback_t callback = nullptr;
-    sao_engine_event_wave5_callback_t wave5_callback = nullptr;
+    sao_engine_event_priority_callback_t priority_callback = nullptr;
     void* user_data = nullptr;
     std::atomic<bool> active{true};
 };
@@ -176,8 +177,8 @@ sao_status_t dispatch_event(sao_engine_event_bus_handle_t handle,
             const auto started = std::chrono::steady_clock::now();
             int callback_result = SAO_ENGINE_EVENT_CONTINUE;
             try {
-                if (subscriber->wave5_callback != nullptr) {
-                    callback_result = subscriber->wave5_callback(
+                if (subscriber->priority_callback != nullptr) {
+                    callback_result = subscriber->priority_callback(
                         event_type_utf8, data_ptr, data_size,
                         subscriber->user_data);
                 } else if (subscriber->callback != nullptr) {
@@ -216,7 +217,7 @@ sao_status_t subscribe_common(
     const char* owner_id_utf8,
     int32_t priority,
     sao_engine_event_callback_t callback,
-    sao_engine_event_wave5_callback_t wave5_callback,
+    sao_engine_event_priority_callback_t priority_callback,
     void* user_data,
     sao_engine_subscription_t* out_subscription) {
     if (out_subscription != nullptr) {
@@ -224,7 +225,7 @@ sao_status_t subscribe_common(
     }
     if (handle == nullptr || event_type_utf8 == nullptr ||
         event_type_utf8[0] == '\0' ||
-        (callback == nullptr && wave5_callback == nullptr) ||
+        (callback == nullptr && priority_callback == nullptr) ||
         out_subscription == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -239,7 +240,7 @@ sao_status_t subscribe_common(
         subscriber->insertion_seq = handle->next_insertion_seq.fetch_add(
             1, std::memory_order_relaxed);
         subscriber->callback = callback;
-        subscriber->wave5_callback = wave5_callback;
+        subscriber->priority_callback = priority_callback;
         subscriber->user_data = user_data;
 
         {
@@ -529,18 +530,18 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_stats(
     }
 }
 
-extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_wave5(
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_priority(
     sao_engine_event_bus_handle_t* out_handle) {
     return sao_engine_event_bus_create(kDefaultRecentCapacity, 0.0F,
                                        out_handle);
 }
 
 extern "C" sao_status_t SAO_ENGINE_CALL
-sao_engine_event_bus_subscribe_wave5(
+sao_engine_event_bus_subscribe_priority(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     int32_t priority,
-    sao_engine_event_wave5_callback_t callback,
+    sao_engine_event_priority_callback_t callback,
     void* user_data,
     sao_engine_subscription_t* out_handle) {
     return subscribe_common(handle, event_type_utf8, "", priority, nullptr,
@@ -548,7 +549,7 @@ sao_engine_event_bus_subscribe_wave5(
 }
 
 extern "C" sao_status_t SAO_ENGINE_CALL
-sao_engine_event_bus_publish_wave5(
+sao_engine_event_bus_publish_priority(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     const uint8_t* data_ptr,
@@ -558,12 +559,57 @@ sao_engine_event_bus_publish_wave5(
 }
 
 extern "C" sao_status_t SAO_ENGINE_CALL
+sao_engine_event_bus_publish_ex_priority(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    const uint8_t* data_ptr,
+    size_t data_size,
+    const SaoEnginePriorityPublishOptions*) {
+    return dispatch_event(handle, event_type_utf8, data_ptr, data_size,
+                          nullptr, false);
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatibility aliases — historical ``_wave5`` names.
+// New code should bind against the ``_priority`` symbols above.
+// ---------------------------------------------------------------------------
+
+extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_create_wave5(
+    sao_engine_event_bus_handle_t* out_handle) {
+    return sao_engine_event_bus_create_priority(out_handle);
+}
+
+extern "C" sao_status_t SAO_ENGINE_CALL
+sao_engine_event_bus_subscribe_wave5(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    int32_t priority,
+    sao_engine_event_priority_callback_t callback,
+    void* user_data,
+    sao_engine_subscription_t* out_handle) {
+    return sao_engine_event_bus_subscribe_priority(handle, event_type_utf8,
+                                                    priority, callback,
+                                                    user_data, out_handle);
+}
+
+extern "C" sao_status_t SAO_ENGINE_CALL
+sao_engine_event_bus_publish_wave5(
+    sao_engine_event_bus_handle_t handle,
+    const char* event_type_utf8,
+    const uint8_t* data_ptr,
+    size_t data_size) {
+    return sao_engine_event_bus_publish_priority(handle, event_type_utf8,
+                                                  data_ptr, data_size);
+}
+
+extern "C" sao_status_t SAO_ENGINE_CALL
 sao_engine_event_bus_publish_ex_wave5(
     sao_engine_event_bus_handle_t handle,
     const char* event_type_utf8,
     const uint8_t* data_ptr,
     size_t data_size,
-    const SaoEngineWave5PublishOptions*) {
-    return dispatch_event(handle, event_type_utf8, data_ptr, data_size,
-                          nullptr, false);
+    const SaoEnginePriorityPublishOptions* options) {
+    return sao_engine_event_bus_publish_ex_priority(handle, event_type_utf8,
+                                                     data_ptr, data_size,
+                                                     options);
 }
