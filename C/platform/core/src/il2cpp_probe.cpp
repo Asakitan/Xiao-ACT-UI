@@ -1,4 +1,4 @@
-// Wave 6 - generic IL2CPP runtime probe.  Delivers the primitives the
+// Generic IL2CPP runtime probe.  Delivers the primitives the
 // Python `il2cpp_adapter.py` uses (PE export walk to locate
 // `il2cpp_domain_get`, name pointer read at klass+0x10, safe pointer
 // scan) without embedding any title-specific klass name.

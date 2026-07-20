@@ -1,4 +1,4 @@
-// SAO Auto — Wave 17c gap-closure test support implementation.
+// SAO Auto — capability and implementation gap-closure test support implementation.
 
 #include "core_gap_support.h"
 

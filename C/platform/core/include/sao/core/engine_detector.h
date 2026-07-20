@@ -1,4 +1,4 @@
-// SAO Auto - Wave 6 - generic engine type detection.
+// SAO Auto - generic engine type detection.
 //
 // Mirrors the responsibilities of `mem_probe/engine/detector.py` and
 // `mem_probe/engine/adapter.py`.  The detector answers a single question:
@@ -14,7 +14,7 @@
 //   * A native process with no known managed runtime resolves to
 //     SAO_ENGINE_NATIVE (never fails, never returns "unknown").
 //
-// The header lives alongside sao/core/process.h because Wave 6 detection
+// The header lives alongside sao/core/process.h because runtime detection
 // piggybacks on `sao_core_process_enum_modules` for module discovery.
 
 #pragma once

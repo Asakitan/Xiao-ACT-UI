@@ -1,4 +1,4 @@
-// SAO Auto — Wave 17c gap-closure test support helpers.
+// SAO Auto — capability and implementation gap-closure test support helpers.
 //
 // These helpers keep the three gap tests (core/engine/net) DRY without
 // forcing every test binary to duplicate boiler-plate.  They live in a
@@ -22,7 +22,7 @@
 namespace sao::core_gap {
 
 // ---------------------------------------------------------------------------
-// Classification tag — mirrors the Wave 17c A/B/C matrix so gap tests can
+// Classification tag — mirrors the capability/implementation/legacy matrix so tests can
 // assert an entry point returns the *right* code for the right reason.
 // ---------------------------------------------------------------------------
 enum class GapKind : std::uint32_t {

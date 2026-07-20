@@ -1,6 +1,6 @@
 // SAO Auto — platform/core/tests/test_settings.cpp
 //
-// Wave 5 / Phase 1 — settings envelope coverage.
+// Settings envelope persistence and serialization coverage.
 //
 // The envelope is a dict-of-variant that serialises to disk with the
 // same shape Python's ``json.dumps(indent=2, sort_keys=True)`` emits.

@@ -1,4 +1,4 @@
-// Wave 6 tests for platform/core generic IL2CPP runtime probe.
+// Tests for the platform/core generic IL2CPP runtime probe.
 //
 // Coverage:
 //   * il2cpp_probe_metadata_no_target_skips

@@ -1,13 +1,13 @@
 // SAO Auto — platform/core/src/config.cpp
 //
-// Wave 5 / Phase 1 — settings envelope implementation.
+// Settings envelope implementation.
 //
 // This translation unit provides two API families:
 //
 //   * ``sao_core_config_*`` — the older dotted-path facade, backed by the
 //     settings envelope below.
 //
-//   * ``sao_core_settings_*`` — the Wave 5 dict-of-variant store backed by
+//   * ``sao_core_settings_*`` — the dict-of-variant store backed by
 //     a JSON file whose on-disk shape matches Python's
 //     ``json.dumps(indent=2, sort_keys=True)`` byte-for-byte, so a config
 //     written by C and one written by Python can be diffed cleanly.
@@ -161,7 +161,7 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_config_erase(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 5 settings envelope
+// Flat settings envelope
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -172,7 +172,7 @@ namespace {
 // we recurse over an intermediate ordered map + emit deterministic
 // output ourselves.
 //
-// For Wave 5 the settings dict is flat (no nested arrays / objects) so
+// The base settings dict is flat (no nested arrays / objects), so
 // the writer below deliberately only handles the flat case — deeper
 // structures round-trip through nlohmann::json for the reader path but
 // are rejected by the writer with SAO_STATUS_ERR_INVALID_ARGUMENT so we
@@ -294,7 +294,7 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_load(
         } else if (val.is_string()) {
             handle->data[key] = val.get<std::string>();
         } else {
-            // Nested arrays / objects / nulls aren't part of the Wave 5
+            // Nested arrays / objects / nulls aren't part of the flat settings
             // envelope contract — surface them as invalid so the caller
             // fails loudly rather than losing data on a subsequent save.
             sao_core_settings_free(handle);
@@ -343,8 +343,9 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_save(
     // Write atomically-ish: dump to a temp file, then rename.  On
     // Windows ``std::rename`` fails if the target exists; use the C
     // library ``rename`` after removing the target for simplicity.
-    // This isn't as robust as ``ReplaceFileW`` but is enough for
-    // Wave 5's smoke tests — a follow-up will harden it.
+    // This basic persistence path uses remove + rename rather than
+    // ``ReplaceFileW``; callers needing stronger transactions use the
+    // launcher-owned secure settings path.
     std::string tmp_path = std::string(path_utf8) + ".tmp";
     {
         std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
@@ -517,7 +518,7 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_key_count(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 9 / Agent e — settings fixture parity helpers.
+// Settings fixture parity helpers.
 //
 // Reproduce Python's ``json.dumps(data, ensure_ascii=False)`` byte-for-byte.
 // The differences vs nlohmann::json::dump() that matter here:

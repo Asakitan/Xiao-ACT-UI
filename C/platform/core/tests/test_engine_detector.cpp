@@ -1,4 +1,4 @@
-// Wave 6 tests for platform/core generic engine type detection.
+// Tests for platform/core generic engine type detection.
 //
 // Coverage:
 //   * detect_own_process_is_native

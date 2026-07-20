@@ -19,7 +19,7 @@ add_library(sao_platform_core STATIC
     src/thread.cpp
     src/event.cpp
     src/error.cpp
-    # Wave 6 (Phase 4) - game-agnostic engine detection + IL2CPP probe.
+    # Game-agnostic engine detection and IL2CPP runtime probing.
     src/engine_detector.cpp
     src/il2cpp_probe.cpp
 )

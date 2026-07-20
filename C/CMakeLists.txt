@@ -222,8 +222,8 @@ if (SAO_BUILD_TESTS)
     endif()
 endif()
 
-# nlohmann_json is a header-only runtime dependency of platform/core (Wave 5
-# Phase 1 settings envelope).  Prefer a vcpkg / system installation; when the
+# nlohmann_json is a header-only runtime dependency of the platform/core
+# settings envelope.  Prefer a vcpkg / system installation; when the
 # host lacks either, fall back to FetchContent so the build gate is still
 # satisfiable on a bare CI runner.  Header-only + CMake 3.24 FIND_PACKAGE_ARGS
 # means find_package(nlohmann_json 3 CONFIG REQUIRED) at the subsystem level

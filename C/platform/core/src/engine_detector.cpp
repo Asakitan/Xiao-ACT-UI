@@ -1,4 +1,4 @@
-// Wave 6 - generic engine type detection.  Mirrors the module-name
+// Generic engine type detection.  Mirrors the module-name
 // classification `mem_probe/engine/detector.py` performs against
 // `process.list_modules()`.  Never calls into the target's memory - the
 // detector is intentionally cheap so probes on hundreds of pids stay

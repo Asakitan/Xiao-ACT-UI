@@ -1,4 +1,4 @@
-// SAO Auto — Wave 17c gap tests for platform/core.
+// SAO Auto — capability and implementation gap-closure tests for platform/core.
 //
 // Coverage matrix:
 //   A. capability gate  — crypto/window Windows-only fallbacks.  On the
@@ -6,7 +6,7 @@
 //      real path and assert the entry point is no longer NOT_IMPLEMENTED.
 //   B. real implementation — event / thread / path / string / time entry
 //      points.  These used to sit behind a NOT_IMPLEMENTED stub on
-//      non-Windows; the Wave 17c fallback lives inside the shared
+//      non-Windows; the portable fallback lives inside the shared
 //      implementation and can be observed via the ABI even on Windows.
 //   C. legacy stub — none for core.
 //
@@ -310,6 +310,6 @@ TEST_CASE("core gap: time now / wall / sleep / scope",
     CHECK(first_ms == first_now / 1'000'000ULL);
     CHECK(elapsed > 0);
     CHECK(sao_core_time_wall_ns() > 0);
-    // sleep_ms(0) must not report NOT_IMPLEMENTED — Wave 17c contract.
+    // sleep_ms(0) must not report NOT_IMPLEMENTED under the time API contract.
     CHECK(sao_core_time_sleep_ms(0) == SAO_STATUS_OK);
 }

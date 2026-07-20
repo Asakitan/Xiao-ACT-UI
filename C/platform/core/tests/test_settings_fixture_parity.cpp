@@ -1,12 +1,12 @@
-// Wave 9 / Agent e - settings fixture parity, Phase 0 deep dive.
+// Settings fixture parity against the canonical Python projections.
 //
 // The freeze at docs/fixtures/settings/*.json captures the 10 canonical
 // settings-envelope outcomes ``config.py``'s SettingsManager + the
 // downstream ``json.dumps(data, ensure_ascii=False[, indent=2])`` writer
 // produce.  This test drives ``sao_core_settings_dump_compact`` /
 // ``_dump_pretty`` / ``_normalize_panel_themes`` / ``_merge_hotkeys`` /
-// ``_strip_legacy_dump`` (all newly implemented in this wave — previously
-// the API only handled flat primitive dicts) through each fixture's
+// ``_strip_legacy_dump`` (the fixture-parity helpers extend the earlier
+// flat primitive dict API) through each fixture's
 // ``input`` block and verifies the byte-identical Python-parity output.
 //
 // The 10 fixtures the freeze recorded (see FROZEN.md at rev 9f023ef7):
@@ -67,9 +67,9 @@ std::optional<std::string> load_settings_fixture(const std::string& name) {
 
 // Serialise a JSON node with Python's compact dump semantics matches the
 // fixture's expected string comparison basis.  Nested settings mean we
-// can't just use nlohmann's dump() — the Wave 5 slice actually had this
-// bug and was scoped to flat primitives only.  This wave's new API is
-// what we're validating.
+// can't just use nlohmann's dump() — the original settings envelope was
+// scoped to flat primitives only.  The fixture-parity API is what we're
+// validating here.
 std::string call_dump_compact(const std::string& input_blob) {
     size_t needed = 0;
     sao_status_t rc = sao_core_settings_dump_compact(

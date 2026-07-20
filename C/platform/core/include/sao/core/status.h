@@ -32,8 +32,8 @@ enum sao_status_e : int32_t {
     SAO_STATUS_ERR_TIMEOUT              =   -7,
     SAO_STATUS_ERR_CANCELLED            =   -8,
     SAO_STATUS_ERR_ABI_MISMATCH         =   -9,   // plugin/host ABI version disagreement
-    // Wave 17b (Agent b) — signals that a code path is intentionally a
-    // stub because the underlying external capability is unavailable
+    // Signals that a code path is intentionally unavailable because the
+    // underlying external capability is missing
     // (real driver / real HWID / real DPAPI user context / real network
     // endpoint / non-Windows host).  Distinct from NOT_IMPLEMENTED so
     // callers can distinguish "hasn't been written yet" from "cannot be

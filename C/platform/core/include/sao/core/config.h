@@ -72,7 +72,7 @@ SAO_CORE_API sao_status_t SAO_CORE_CALL sao_core_config_erase(
     sao_core_config_handle_t handle, const char* key_utf8);
 
 // ---------------------------------------------------------------------------
-// Wave 5 / Phase 1 — Settings envelope API.
+// Settings envelope API.
 //
 // A pure in-memory dict-of-variant that serialises to/from a JSON file on
 // disk.  Mirrors Python's ``json.dumps(indent=2, sort_keys=True)`` output
@@ -138,7 +138,7 @@ SAO_CORE_API sao_status_t SAO_CORE_CALL sao_core_settings_key_count(
     const sao_core_settings_t* settings, size_t* out_count);
 
 // ---------------------------------------------------------------------------
-// Wave 9 / Agent e — settings fixture parity helpers.
+// Settings fixture parity helpers.
 //
 // The docs/fixtures/settings/*.json freeze pins the output of Python's
 // ``json.dumps(data, ensure_ascii=False)`` (compact) and

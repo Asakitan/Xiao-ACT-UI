@@ -1,4 +1,4 @@
-// SAO Auto - Wave 6 - generic IL2CPP runtime probe.
+// SAO Auto - generic IL2CPP runtime probe.
 //
 // The probe is the game-agnostic half of `mem_probe/engine/il2cpp_adapter.py`:
 // it can locate the IL2CPP metadata region, sweep a memory range for
