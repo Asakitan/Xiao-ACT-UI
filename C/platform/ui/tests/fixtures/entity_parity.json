@@ -2,9 +2,9 @@
   "format": "premultiplied-bgra",
   "frames": [
     {
-      "asset": "assets/entity/w19_entity_nervegear_idle.bgra",
+      "asset": "assets/entity/entity_nervegear_idle.bgra",
       "bytes": 20736,
-      "file": "w19_entity_nervegear_idle.bgra",
+      "file": "entity_nervegear_idle.bgra",
       "height": 72,
       "name": "idle",
       "sha256": "4b881372a988999416307db106e2be0e4e42a0d8132eecb7b3f66a1e0eae90ff",
@@ -19,9 +19,9 @@
       "width": 72
     },
     {
-      "asset": "assets/entity/w19_entity_nervegear_hover.bgra",
+      "asset": "assets/entity/entity_nervegear_hover.bgra",
       "bytes": 20736,
-      "file": "w19_entity_nervegear_hover.bgra",
+      "file": "entity_nervegear_hover.bgra",
       "height": 72,
       "name": "hover",
       "sha256": "850ed70d8baa32f15acde8fb5ea36b928bc33e745d9e5cf7843518028d2ea925",
@@ -36,9 +36,9 @@
       "width": 72
     },
     {
-      "asset": "assets/entity/w19_entity_nervegear_pressed.bgra",
+      "asset": "assets/entity/entity_nervegear_pressed.bgra",
       "bytes": 20736,
-      "file": "w19_entity_nervegear_pressed.bgra",
+      "file": "entity_nervegear_pressed.bgra",
       "height": 72,
       "name": "pressed",
       "sha256": "8710a3b064c38bd7e5f6e1f3c443121a19dcad7049bdf37a1d5a770bf0688088",

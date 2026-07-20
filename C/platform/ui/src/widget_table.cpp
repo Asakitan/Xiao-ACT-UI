@@ -21,6 +21,8 @@
 #include "sao/ui/widget_table.h"
 #include "sao/ui/widget_kit.h"
 
+#include "widget_typed_internal.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -225,6 +227,18 @@ struct TreeState {
     bool callbacks_retired{false};
     std::condition_variable callback_cv;
     mutable std::mutex mtx;
+};
+
+struct TablePropsSnapshot {
+    std::vector<OwnedRow> rows_all;
+    std::vector<size_t> rows_view;
+    std::string sort_key;
+    std::string filter_text;
+    bool sort_desc{};
+    bool sorted{};
+    std::vector<OwnedTreeNode> nodes;
+    std::vector<VisibleTreeNode> visible;
+    int64_t selected_node_id{};
 };
 
 thread_local std::vector<const void*> current_table_callback_states;
@@ -1304,6 +1318,505 @@ sao_ui_widget_tree_get_selected_node(sao_ui_widget_handle_t handle, int64_t* out
         *out_node_id = tree->selected_node_id;
         return SAO_STATUS_OK;
     });
+}
+
+sao_status_t sao::ui::detail::widget_table_apply_props(
+    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    try {
+        auto snapshot = std::make_shared<TablePropsSnapshot>();
+        if (kind == kTableTag) {
+            if (!widget_props_has_only(props, {"rows", "sort_key", "sort_desc", "filter"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+            const auto rows_property = props.find("rows");
+            const auto sort_key_property = props.find("sort_key");
+            const auto sort_desc_property = props.find("sort_desc");
+            const auto filter_property = props.find("filter");
+
+            std::vector<std::vector<std::string>> string_storage;
+            std::vector<std::vector<SaoUiCellValue>> cell_storage;
+            std::vector<SaoUiTableRow> rows;
+            if (rows_property != props.end()) {
+                if (!rows_property->is_array() || rows_property->size() > kMaxTableRows)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const size_t row_count = rows_property->size();
+                string_storage.resize(row_count);
+                cell_storage.resize(row_count);
+                rows.resize(row_count);
+                size_t total_cells = 0;
+                for (size_t row_index = 0; row_index < row_count; ++row_index) {
+                    const auto& row_json = (*rows_property)[row_index];
+                    if (!widget_props_has_only(
+                            row_json, {"row_id", "cells", "highlight", "mem_priority_badge",
+                                       "zebra_alt", "dim", "row_bg_argb", "row_fg_argb"})) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto row_id = row_json.find("row_id");
+                    const auto cells = row_json.find("cells");
+                    if (row_id == row_json.end() || cells == row_json.end() ||
+                        !widget_props_i64(*row_id, &rows[row_index].row_id) ||
+                        !cells->is_array() || cells->size() > kMaxTableColumns ||
+                        cells->size() > kMaxTableCells - total_cells) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    total_cells += cells->size();
+                    string_storage[row_index].resize(cells->size());
+                    cell_storage[row_index].resize(cells->size());
+                    for (size_t cell_index = 0; cell_index < cells->size(); ++cell_index) {
+                        const auto& cell_json = (*cells)[cell_index];
+                        if (!widget_props_has_only(
+                                cell_json, {"kind", "value", "max_hint", "fg_argb",
+                                            "bg_argb"})) {
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        }
+                        const auto cell_kind = cell_json.find("kind");
+                        const auto value = cell_json.find("value");
+                        if (cell_kind == cell_json.end() || !cell_kind->is_string() ||
+                            value == cell_json.end()) {
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        }
+                        SaoUiCellValue& output = cell_storage[row_index][cell_index];
+                        const std::string kind_name = cell_kind->get<std::string>();
+                        if (kind_name == "string") {
+                            if (!value->is_string())
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                            output.kind = SAO_UI_CELL_STRING;
+                            string_storage[row_index][cell_index] = value->get<std::string>();
+                            output.v.s_utf8 = string_storage[row_index][cell_index].c_str();
+                        } else if (kind_name == "int64") {
+                            output.kind = SAO_UI_CELL_INT64;
+                            if (!widget_props_i64(*value, &output.v.i64))
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        } else if (kind_name == "double") {
+                            output.kind = SAO_UI_CELL_DOUBLE;
+                            if (!widget_props_double(*value, &output.v.f64))
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        } else if (kind_name == "bool") {
+                            output.kind = SAO_UI_CELL_BOOL;
+                            if (!widget_props_bool(*value, &output.v.b))
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        } else {
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        }
+                        const auto max_hint = cell_json.find("max_hint");
+                        const auto foreground = cell_json.find("fg_argb");
+                        const auto background = cell_json.find("bg_argb");
+                        if ((max_hint != cell_json.end() &&
+                             !widget_props_double(*max_hint, &output.max_hint)) ||
+                            (foreground != cell_json.end() &&
+                             !widget_props_argb(*foreground, &output.fg_argb)) ||
+                            (background != cell_json.end() &&
+                             !widget_props_argb(*background, &output.bg_argb))) {
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        }
+                    }
+                    rows[row_index].cells = cell_storage[row_index].empty()
+                                                     ? nullptr
+                                                     : cell_storage[row_index].data();
+                    rows[row_index].cell_count = cell_storage[row_index].size();
+                    const auto parse_flag = [&](const char* key, bool* output) {
+                        const auto property = row_json.find(key);
+                        return property == row_json.end() || widget_props_bool(*property, output);
+                    };
+                    if (!parse_flag("highlight", &rows[row_index].highlight) ||
+                        !parse_flag("mem_priority_badge",
+                                    &rows[row_index].mem_priority_badge) ||
+                        !parse_flag("zebra_alt", &rows[row_index].zebra_alt) ||
+                        !parse_flag("dim", &rows[row_index].dim)) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto row_background = row_json.find("row_bg_argb");
+                    const auto row_foreground = row_json.find("row_fg_argb");
+                    if ((row_background != row_json.end() &&
+                         !widget_props_argb(*row_background,
+                                            &rows[row_index].row_bg_override_argb)) ||
+                        (row_foreground != row_json.end() &&
+                         !widget_props_argb(*row_foreground,
+                                            &rows[row_index].row_fg_override_argb))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+
+            std::string sort_key;
+            bool clear_sort = false;
+            if (sort_key_property != props.end()) {
+                if (sort_key_property->is_null()) {
+                    clear_sort = true;
+                } else if (sort_key_property->is_string()) {
+                    sort_key = sort_key_property->get<std::string>();
+                } else {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+            }
+            bool sort_desc = false;
+            if (sort_desc_property != props.end() &&
+                !widget_props_bool(*sort_desc_property, &sort_desc)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            std::string filter;
+            if (filter_property != props.end()) {
+                if (!filter_property->is_string())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                filter = filter_property->get<std::string>();
+            }
+
+            auto state = as_table(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->rows_all = state->rows_all;
+                snapshot->rows_view = state->rows_view;
+                snapshot->sort_key = state->sort_key;
+                snapshot->sort_desc = state->sort_desc;
+                snapshot->sorted = state->sorted;
+                snapshot->filter_text = state->filter_text;
+                if (sort_key_property == props.end())
+                    sort_key = state->sort_key;
+                if (sort_desc_property == props.end())
+                    sort_desc = state->sort_desc;
+            }
+            sao_status_t status = SAO_STATUS_OK;
+            if (rows_property != props.end())
+                status = sao_ui_table_set_rows(handle, rows.empty() ? nullptr : rows.data(),
+                                               rows.size());
+            if (status == SAO_STATUS_OK &&
+                (sort_key_property != props.end() || sort_desc_property != props.end())) {
+                status = sao_ui_table_set_sort(
+                    handle, clear_sort || sort_key.empty() ? nullptr : sort_key.c_str(), sort_desc);
+            }
+            if (status == SAO_STATUS_OK && filter_property != props.end())
+                status = sao_ui_table_set_filter(handle, filter.c_str());
+            if (status != SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->rows_all = snapshot->rows_all;
+                state->rows_view = snapshot->rows_view;
+                state->sort_key = snapshot->sort_key;
+                state->sort_desc = snapshot->sort_desc;
+                state->sorted = snapshot->sorted;
+                state->filter_text = snapshot->filter_text;
+                return status;
+            }
+        } else if (kind == kTreeTag) {
+            if (!widget_props_has_only(props, {"nodes", "selected_node_id"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto nodes_property = props.find("nodes");
+            const auto selected_property = props.find("selected_node_id");
+            std::vector<std::string> labels;
+            std::vector<std::string> details;
+            std::vector<SaoUiTreeNode> nodes;
+            if (nodes_property != props.end()) {
+                if (!nodes_property->is_array() || nodes_property->size() > kMaxTreeNodes)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                labels.resize(nodes_property->size());
+                details.resize(nodes_property->size());
+                nodes.resize(nodes_property->size());
+                for (size_t index = 0; index < nodes.size(); ++index) {
+                    const auto& item = (*nodes_property)[index];
+                    if (!widget_props_has_only(
+                            item, {"node_id", "parent_id", "label", "detail", "icon_slot",
+                                   "expanded", "selectable", "fg_argb", "bg_argb"})) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto node_id = item.find("node_id");
+                    const auto parent_id = item.find("parent_id");
+                    if (node_id == item.end() ||
+                        !widget_props_i64(*node_id, &nodes[index].node_id) ||
+                        nodes[index].node_id == 0 ||
+                        (parent_id != item.end() &&
+                         !widget_props_i64(*parent_id, &nodes[index].parent_id))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto label = item.find("label");
+                    const auto detail = item.find("detail");
+                    if ((label != item.end() && !label->is_string()) ||
+                        (detail != item.end() && !detail->is_string())) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    labels[index] = label == item.end() ? "" : label->get<std::string>();
+                    details[index] = detail == item.end() ? "" : detail->get<std::string>();
+                    nodes[index].label_utf8 = labels[index].c_str();
+                    nodes[index].detail_utf8 = details[index].c_str();
+                    nodes[index].selectable = true;
+                    const auto icon = item.find("icon_slot");
+                    const auto expanded = item.find("expanded");
+                    const auto selectable = item.find("selectable");
+                    const auto foreground = item.find("fg_argb");
+                    const auto background = item.find("bg_argb");
+                    if ((icon != item.end() &&
+                         !widget_props_i32(*icon, &nodes[index].icon_slot)) ||
+                        (expanded != item.end() &&
+                         !widget_props_bool(*expanded, &nodes[index].expanded_default)) ||
+                        (selectable != item.end() &&
+                         !widget_props_bool(*selectable, &nodes[index].selectable)) ||
+                        (foreground != item.end() &&
+                         !widget_props_argb(*foreground, &nodes[index].fg_argb)) ||
+                        (background != item.end() &&
+                         !widget_props_argb(*background, &nodes[index].bg_argb))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+            int64_t selected = 0;
+            if (selected_property != props.end() &&
+                !widget_props_i64(*selected_property, &selected)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            auto state = as_tree(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->nodes = state->nodes;
+                snapshot->visible = state->visible;
+                snapshot->selected_node_id = state->selected_node_id;
+            }
+            sao_status_t status = SAO_STATUS_OK;
+            if (nodes_property != props.end())
+                status = sao_ui_tree_view_set_nodes(handle, nodes.empty() ? nullptr : nodes.data(),
+                                                    nodes.size());
+            if (status == SAO_STATUS_OK && selected_property != props.end())
+                status = sao_ui_tree_view_select_node(handle, selected);
+            if (status != SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->nodes = snapshot->nodes;
+                state->visible = snapshot->visible;
+                state->selected_node_id = snapshot->selected_node_id;
+                return status;
+            }
+        } else {
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_table_restore_props(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    const WidgetPropsSnapshot& snapshot) noexcept {
+    const auto previous = std::static_pointer_cast<TablePropsSnapshot>(snapshot);
+    if (previous == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        if (kind == kTableTag) {
+            auto state = as_table(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->rows_all = previous->rows_all;
+            state->rows_view = previous->rows_view;
+            state->sort_key = previous->sort_key;
+            state->sort_desc = previous->sort_desc;
+            state->sorted = previous->sorted;
+            state->filter_text = previous->filter_text;
+            return SAO_STATUS_OK;
+        }
+        if (kind == kTreeTag) {
+            auto state = as_tree(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->nodes = previous->nodes;
+            state->visible = previous->visible;
+            state->selected_node_id = previous->selected_node_id;
+            return SAO_STATUS_OK;
+        }
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_table_paint(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+    int32_t width, int32_t height) noexcept {
+    try {
+        if (kind == kTableTag) {
+            SaoUiTableSpec spec{};
+            std::vector<OwnedColumn> columns;
+            std::vector<OwnedRow> rows;
+            auto state = as_table(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                columns = state->columns;
+                rows.reserve(state->rows_view.size());
+                for (const size_t index : state->rows_view)
+                    rows.push_back(state->rows_all[index]);
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.body_bg_argb == 0 ? 0xff1d2430U : spec.body_bg_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            int32_t cursor_y = y;
+            if (spec.show_header) {
+                const int32_t header_height = std::max(1, spec.header_height_px);
+                status = sao_ui_paint_ctx_fill_rect(
+                    context, static_cast<float>(x), static_cast<float>(cursor_y),
+                    static_cast<float>(width), static_cast<float>(header_height),
+                    spec.header_bg_argb == 0 ? 0xff293a52U : spec.header_bg_argb);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                const int32_t column_width = columns.empty()
+                                                 ? width
+                                                 : std::max(1, width /
+                                                                   static_cast<int32_t>(columns.size()));
+                for (size_t index = 0; index < columns.size(); ++index) {
+                    if (columns[index].hidden)
+                        continue;
+                    status = sao_ui_paint_ctx_draw_utf8(
+                        context, static_cast<float>(x + static_cast<int32_t>(index) * column_width + 2),
+                        static_cast<float>(cursor_y + 2), columns[index].title.c_str(), 10.0F,
+                        columns[index].header_fg_argb == 0
+                            ? (spec.header_fg_argb == 0 ? 0xfff0f4faU : spec.header_fg_argb)
+                            : columns[index].header_fg_argb);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                cursor_y += header_height;
+            }
+            const int32_t row_height = std::max(1, spec.row_height_px);
+            const size_t visible_rows = std::min(
+                rows.size(), static_cast<size_t>(std::max(0, height - (cursor_y - y)) / row_height));
+            const int32_t column_width = columns.empty()
+                                             ? width
+                                             : std::max(1, width /
+                                                               static_cast<int32_t>(columns.size()));
+            for (size_t row_index = 0; row_index < visible_rows; ++row_index) {
+                const OwnedRow& row = rows[row_index];
+                uint32_t row_background = row.row_bg_override_argb;
+                if (row_background == 0) {
+                    if (row.highlight)
+                        row_background = 0xff2f4f72U;
+                    else if (spec.zebra_stripes && (row_index % 2U) != 0U)
+                        row_background = 0xff222c3aU;
+                    else
+                        row_background = spec.body_bg_argb == 0 ? 0xff1d2430U
+                                                                : spec.body_bg_argb;
+                }
+                status = sao_ui_paint_ctx_fill_rect(
+                    context, static_cast<float>(x), static_cast<float>(cursor_y),
+                    static_cast<float>(width), static_cast<float>(row_height), row_background);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                for (size_t cell_index = 0;
+                     cell_index < row.cells.size() && cell_index < columns.size(); ++cell_index) {
+                    const OwnedCell& cell = row.cells[cell_index];
+                    std::string text;
+                    switch (cell.kind) {
+                    case SAO_UI_CELL_STRING:
+                        text = cell.s;
+                        break;
+                    case SAO_UI_CELL_INT64:
+                        text = std::to_string(cell.i64);
+                        break;
+                    case SAO_UI_CELL_DOUBLE:
+                        text = std::to_string(cell.f64);
+                        break;
+                    case SAO_UI_CELL_BOOL:
+                        text = cell.b ? "true" : "false";
+                        break;
+                    default:
+                        break;
+                    }
+                    const uint32_t foreground = row.dim
+                                                    ? 0xff687587U
+                                                    : (cell.fg_argb != 0
+                                                           ? cell.fg_argb
+                                                           : (row.row_fg_override_argb != 0
+                                                                  ? row.row_fg_override_argb
+                                                                  : (columns[cell_index]
+                                                                                 .cell_fg_argb == 0
+                                                                         ? 0xfff0f4faU
+                                                                         : columns[cell_index]
+                                                                               .cell_fg_argb)));
+                    status = sao_ui_paint_ctx_draw_utf8(
+                        context,
+                        static_cast<float>(x + static_cast<int32_t>(cell_index) * column_width + 2),
+                        static_cast<float>(cursor_y + 2), text.c_str(), 10.0F, foreground);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                cursor_y += row_height;
+            }
+            return SAO_STATUS_OK;
+        }
+        if (kind == kTreeTag) {
+            SaoUiTreeViewSpec spec{};
+            std::vector<OwnedTreeNode> nodes;
+            std::vector<VisibleTreeNode> visible;
+            int64_t selected = 0;
+            auto state = as_tree(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                nodes = state->nodes;
+                visible = state->visible;
+                selected = state->selected_node_id;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.body_bg_argb == 0 ? 0xff1d2430U : spec.body_bg_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            const int32_t row_height = std::max(1, spec.row_height_px);
+            const size_t count = std::min(visible.size(), static_cast<size_t>(height / row_height));
+            for (size_t index = 0; index < count; ++index) {
+                const VisibleTreeNode& item = visible[index];
+                const OwnedTreeNode& node = nodes[item.node_index];
+                const int32_t row_y = y + static_cast<int32_t>(index) * row_height;
+                if (node.node_id == selected || node.bg_argb != 0) {
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(x), static_cast<float>(row_y),
+                        static_cast<float>(width), static_cast<float>(row_height),
+                        node.node_id == selected ? 0xff2f4f72U : node.bg_argb);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                const int32_t indent = item.depth * std::max(1, spec.indent_px);
+                const int32_t caret = std::max(3, spec.caret_width_px);
+                const bool has_children = std::any_of(
+                    nodes.begin(), nodes.end(), [&](const OwnedTreeNode& candidate) {
+                        return candidate.parent_id == node.node_id;
+                    });
+                if (has_children) {
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(x + indent + 2),
+                        static_cast<float>(row_y + row_height / 2 - 1),
+                        static_cast<float>(caret), 2.0F,
+                        spec.caret_argb == 0 ? 0xff75849aU : spec.caret_argb);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                status = sao_ui_paint_ctx_draw_utf8(
+                    context, static_cast<float>(x + indent + caret + 5),
+                    static_cast<float>(row_y + 2), node.label.c_str(), 10.0F,
+                    node.fg_argb == 0 ? 0xfff0f4faU : node.fg_argb);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            return SAO_STATUS_OK;
+        }
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // Shared destroy helper.

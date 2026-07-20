@@ -1,6 +1,8 @@
 #include "sao/ui/abi.h"
 #include "sao/ui/widget_kit.h"
 
+#include "widget_typed_internal.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -39,6 +41,10 @@ struct WidgetRendererProvider {
     int32_t widget_kind{};
     sao_ui_widget_renderer_cb_t callback{};
     void* user_data{};
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t in_flight{};
+    bool accepting{true};
 };
 
 struct WidgetExtensionRegistry {
@@ -46,7 +52,7 @@ struct WidgetExtensionRegistry {
     std::unordered_map<sao_ui_widget_handle_t,
                        std::vector<std::shared_ptr<WidgetEventHandler>>>
         handlers;
-    std::unordered_map<int32_t, WidgetRendererProvider> renderers;
+    std::unordered_map<int32_t, std::shared_ptr<WidgetRendererProvider>> renderers;
     std::unordered_map<uint64_t, int32_t> renderer_kinds;
     std::atomic<uint64_t> next_token{1};
     std::atomic_bool fail_next_renderer_kind_insertion{false};
@@ -92,6 +98,13 @@ struct ActiveEventHandler {
 };
 
 thread_local ActiveEventHandler* active_event_handler = nullptr;
+
+struct ActiveRendererProvider {
+    const WidgetRendererProvider* provider{};
+    ActiveRendererProvider* previous{};
+};
+
+thread_local ActiveRendererProvider* active_renderer_provider = nullptr;
 
 thread_local std::vector<void*> active_widget_lifecycles;
 
@@ -189,6 +202,15 @@ bool event_handler_is_active(const WidgetEventHandler* handler) {
     return false;
 }
 
+bool renderer_provider_is_active(const WidgetRendererProvider* provider) {
+    for (const ActiveRendererProvider* active = active_renderer_provider; active != nullptr;
+         active = active->previous) {
+        if (active->provider == provider)
+            return true;
+    }
+    return false;
+}
+
 void retire_event_handler(const std::shared_ptr<WidgetEventHandler>& handler) {
     {
         std::lock_guard lock(handler->mutex);
@@ -243,6 +265,66 @@ class EventHandlerLease {
     sao_ui_widget_event_cb_t callback_{};
     void* user_data_{};
     ActiveEventHandler marker_{};
+    bool acquired_{};
+};
+
+void retire_renderer_provider(const std::shared_ptr<WidgetRendererProvider>& provider) {
+    {
+        std::lock_guard lock(provider->mutex);
+        provider->accepting = false;
+    }
+    std::unique_lock lock(provider->mutex);
+    provider->cv.wait(lock, [&] { return provider->in_flight == 0; });
+}
+
+class RendererProviderLease {
+  public:
+    explicit RendererProviderLease(std::shared_ptr<WidgetRendererProvider> provider)
+        : provider_(std::move(provider)) {
+        if (provider_ == nullptr)
+            return;
+        std::lock_guard lock(provider_->mutex);
+        if (!provider_->accepting)
+            return;
+        ++provider_->in_flight;
+        callback_ = provider_->callback;
+        user_data_ = provider_->user_data;
+        marker_ = {provider_.get(), active_renderer_provider};
+        active_renderer_provider = &marker_;
+        acquired_ = true;
+    }
+
+    RendererProviderLease(const RendererProviderLease&) = delete;
+    RendererProviderLease& operator=(const RendererProviderLease&) = delete;
+
+    ~RendererProviderLease() {
+        if (!acquired_)
+            return;
+        active_renderer_provider = marker_.previous;
+        {
+            std::lock_guard lock(provider_->mutex);
+            --provider_->in_flight;
+        }
+        provider_->cv.notify_all();
+    }
+
+    explicit operator bool() const noexcept {
+        return acquired_;
+    }
+
+    sao_ui_widget_renderer_cb_t callback() const noexcept {
+        return callback_;
+    }
+
+    void* user_data() const noexcept {
+        return user_data_;
+    }
+
+  private:
+    std::shared_ptr<WidgetRendererProvider> provider_;
+    sao_ui_widget_renderer_cb_t callback_{};
+    void* user_data_{};
+    ActiveRendererProvider marker_{};
     bool acquired_{};
 };
 
@@ -317,6 +399,91 @@ void set_size_hint(
 }
 
 }  // namespace
+
+bool sao::ui::detail::is_typed_widget_handle(sao_ui_widget_handle_t handle) noexcept {
+    WidgetHandleMetadata metadata{};
+    if (!inspect_widget_handle(handle, &metadata))
+        return false;
+    return metadata.family == WidgetHandleFamily::text ||
+           metadata.family == WidgetHandleFamily::input ||
+           metadata.family == WidgetHandleFamily::data ||
+           metadata.family == WidgetHandleFamily::chart ||
+           metadata.family == WidgetHandleFamily::table;
+}
+
+sao_status_t sao::ui::detail::apply_typed_widget_props(
+    sao_ui_widget_handle_t handle, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_snapshot == nullptr || !props.is_object())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    WidgetHandleMetadata metadata{};
+    if (!inspect_widget_handle(handle, &metadata))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    switch (metadata.family) {
+    case WidgetHandleFamily::text:
+        return widget_text_apply_props(handle, metadata.kind, props, out_snapshot);
+    case WidgetHandleFamily::input:
+        return widget_input_apply_props(handle, metadata.kind, props, out_snapshot);
+    case WidgetHandleFamily::data:
+        return widget_data_apply_props(handle, metadata.kind, props, out_snapshot);
+    case WidgetHandleFamily::chart:
+        return widget_chart_apply_props(handle, metadata.kind, props, out_snapshot);
+    case WidgetHandleFamily::table:
+        return widget_table_apply_props(handle, metadata.kind, props, out_snapshot);
+    default:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+}
+
+sao_status_t sao::ui::detail::restore_typed_widget_props(
+    sao_ui_widget_handle_t handle, const WidgetPropsSnapshot& snapshot) noexcept {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    WidgetHandleMetadata metadata{};
+    if (!inspect_widget_handle(handle, &metadata))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    switch (metadata.family) {
+    case WidgetHandleFamily::text:
+        return widget_text_restore_props(handle, metadata.kind, snapshot);
+    case WidgetHandleFamily::input:
+        return widget_input_restore_props(handle, metadata.kind, snapshot);
+    case WidgetHandleFamily::data:
+        return widget_data_restore_props(handle, metadata.kind, snapshot);
+    case WidgetHandleFamily::chart:
+        return widget_chart_restore_props(handle, metadata.kind, snapshot);
+    case WidgetHandleFamily::table:
+        return widget_table_restore_props(handle, metadata.kind, snapshot);
+    default:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+}
+
+sao_status_t sao::ui::detail::paint_typed_widget(
+    sao_ui_widget_handle_t handle, sao_ui_paint_ctx_handle_t context,
+    int32_t x, int32_t y, int32_t width, int32_t height) noexcept {
+    WidgetHandleMetadata metadata{};
+    if (!inspect_widget_handle(handle, &metadata))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    switch (metadata.family) {
+    case WidgetHandleFamily::text:
+        return widget_text_paint(handle, metadata.kind, context, x, y, width, height);
+    case WidgetHandleFamily::input:
+        return widget_input_paint(handle, metadata.kind, context, x, y, width, height);
+    case WidgetHandleFamily::data:
+        return widget_data_paint(handle, metadata.kind, context, x, y, width, height);
+    case WidgetHandleFamily::chart:
+        return widget_chart_paint(handle, metadata.kind, context, x, y, width, height);
+    case WidgetHandleFamily::table:
+        return widget_table_paint(handle, metadata.kind, context, x, y, width, height);
+    default:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+}
 
 void* sao::ui::detail::register_widget_handle(
     WidgetHandleFamily family, int32_t kind,
@@ -769,17 +936,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
                 handle, ctx, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height));
         } else {
-            WidgetRendererProvider provider{};
+            std::shared_ptr<WidgetRendererProvider> provider;
             {
                 auto& registry = extension_registry();
                 std::lock_guard lock(registry.mutex);
                 const auto found = registry.renderers.find(kind);
                 if (found != registry.renderers.end()) provider = found->second;
             }
-            paint_status = provider.callback == nullptr
-                ? paint_extended_default(kind, ctx, x, y, width, height)
-                : provider.callback(handle, ctx, x, y, width, height,
-                                    provider.user_data);
+            RendererProviderLease provider_lease(std::move(provider));
+            if (provider_lease && provider_lease.callback() != nullptr) {
+                paint_status = provider_lease.callback()(handle, ctx, x, y, width, height,
+                                                          provider_lease.user_data());
+            } else {
+                paint_status = sao::ui::detail::paint_typed_widget(
+                    handle, ctx, x, y, width, height);
+                if (paint_status == SAO_STATUS_ERR_NOT_IMPLEMENTED) {
+                    paint_status = paint_extended_default(kind, ctx, x, y, width, height);
+                }
+            }
         }
 
         const PaintContextRestoreStatuses restore_statuses =
@@ -804,14 +978,18 @@ sao_ui_widget_register_renderer_provider(
     *out_provider_token = 0;
     const uint64_t token = allocate_token();
     try {
+        auto provider = std::make_shared<WidgetRendererProvider>();
+        provider->token = token;
+        provider->widget_kind = widget_kind;
+        provider->callback = callback;
+        provider->user_data = user_data;
         auto& registry = extension_registry();
         std::lock_guard lock(registry.mutex);
         if (registry.renderers.contains(widget_kind)) {
             return SAO_STATUS_ERR_ALREADY_EXISTS;
         }
         const auto [renderer_it, renderer_inserted] = registry.renderers.emplace(
-            widget_kind,
-            WidgetRendererProvider{token, widget_kind, callback, user_data});
+            widget_kind, std::move(provider));
         if (!renderer_inserted)
             return SAO_STATUS_ERR_ALREADY_EXISTS;
         try {
@@ -844,15 +1022,40 @@ sao_ui_widget_test_fail_next_renderer_kind_insertion() {
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_widget_unregister_renderer_provider(uint64_t provider_token) {
     if (provider_token == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& registry = extension_registry();
-    std::lock_guard lock(registry.mutex);
-    const auto token = registry.renderer_kinds.find(provider_token);
-    if (token == registry.renderer_kinds.end()) {
-        return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+    try {
+        std::shared_ptr<WidgetRendererProvider> provider;
+        auto& registry = extension_registry();
+        {
+            std::lock_guard lock(registry.mutex);
+            const auto token = registry.renderer_kinds.find(provider_token);
+            if (token == registry.renderer_kinds.end()) {
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            }
+            const auto renderer = registry.renderers.find(token->second);
+            if (renderer == registry.renderers.end() ||
+                renderer->second->token != provider_token) {
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            }
+            provider = renderer->second;
+            if (renderer_provider_is_active(provider.get()))
+                return SAO_UI_STATUS_ERR_BUSY;
+        }
+        retire_renderer_provider(provider);
+        {
+            std::lock_guard lock(registry.mutex);
+            const auto token = registry.renderer_kinds.find(provider_token);
+            if (token == registry.renderer_kinds.end())
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            const auto renderer = registry.renderers.find(token->second);
+            if (renderer == registry.renderers.end() || renderer->second != provider)
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            registry.renderers.erase(renderer);
+            registry.renderer_kinds.erase(token);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    registry.renderers.erase(token->second);
-    registry.renderer_kinds.erase(token);
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_size_hint(

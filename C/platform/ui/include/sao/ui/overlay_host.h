@@ -77,10 +77,10 @@ typedef struct sao_ui_overlay_host_s* sao_ui_overlay_host_handle_t;
 struct SaoOverlayHostConfig {
     // 0 → GetSystemMetrics(SM_CX/CYSCREEN) at create time.  Non-zero
     // → explicit override (test rigs / secondary monitor).
-    int32_t     width;
-    int32_t     height;
-    int32_t     origin_x;
-    int32_t     origin_y;
+    int32_t width;
+    int32_t height;
+    int32_t origin_x;
+    int32_t origin_y;
 
     // Optional window-title override for debug tooling.  Not shown to
     // user (host has WS_EX_TOOLWINDOW + owner suppression).  UTF-16.
@@ -89,20 +89,21 @@ struct SaoOverlayHostConfig {
 
     // Enable diagnostic stderr output (mirrors env SAO_OVERLAY_DIAGNOSTICS=1).
     // Prints masked HWND, capture-mode partial states, exstyle failures.
-    bool        diagnostics;
+    bool diagnostics;
 
     // Enable tagWND snapshot dump (mirrors env SAO_DUMP_TW=1).  Writes
     // to %TEMP%/sao_tw_dump.jsonl.  Very verbose; only for hard bugs
     // where GetWindowLong reports one exstyle and physical memory
     // reports another (anti-cheat exstyle-hook diagnosis).
-    bool        tagwnd_dump;
+    bool tagwnd_dump;
 
     // Optional DC-mutation-coordinator handle (from
-    // `render/dc_mutation_coordinator.py` equivalent).  When non-null,
-    // all exstyle / rect writes are routed through it — required for
-    // safe teardown when a kernel-side mutation worker is in flight.
-    // NULL → direct user32 path (test-only).
-    void*       dc_mutation_coordinator;
+    // `render/dc_mutation_coordinator.py` equivalent). Real on-screen
+    // geometry is always published synchronously through USER32 and DWM;
+    // when a rect-scrub provider is installed, the coordinator then scrubs
+    // the physical rcWindow to a decoy rectangle as the ordered second step.
+    // NULL → USER32/DWM geometry only.
+    void* dc_mutation_coordinator;
 };
 
 // Creates the one real overlay host: registers a random class name,
@@ -119,8 +120,7 @@ struct SaoOverlayHostConfig {
 // the interactive path when self.hwnd==0 (short-circuit-false).  This
 // is documented at length in the Python WndProc (line 507-560).
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
-    const SaoOverlayHostConfig* config,
-    sao_ui_overlay_host_handle_t* out_handle);
+    const SaoOverlayHostConfig* config, sao_ui_overlay_host_handle_t* out_handle);
 
 // Two-phase destroy (mirrors Python `destroy()`).  Phase 1 drains the
 // dc-mutation coordinator; failure → return false (retry expected).
@@ -128,55 +128,48 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
 // HDC, destroys hRender / hControl / owner in order.  Never partial-
 // clears handles — a partial teardown must be retryable.
 // Returns false if teardown failed and caller should retry.
-SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_destroy(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_handle_t handle);
 
 // Grab the raw HWND for interop with D3D swapchains, DirectComposition,
 // input hooks etc.  Do not destroy or reparent — the handle is owned
 // by this module.  Returns hRender (α semantics).
-SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hwnd(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle_t handle);
 
 // Grab the hidden 1x1 hControl HWND.  Capture affinity is always set on
 // BOTH hRender and hControl, or on neither.
-SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(sao_ui_overlay_host_handle_t handle);
 
 // Borrowed DC-mutation coordinator configured at host creation, or NULL.
 // The host owns only its HWND registration; it does not own the coordinator.
-SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_dc_mutation_coordinator(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL
+sao_ui_overlay_host_dc_mutation_coordinator(sao_ui_overlay_host_handle_t handle);
 
 // The production host is D3D/DComp based.  WGL interop is deliberately
 // unsupported in this build: these accessors return NULL and the three WGL
 // operations below return SAO_STATUS_ERR_NOT_IMPLEMENTED.  This keeps the
 // legacy ABI honest rather than manufacturing a context that cannot present
 // through the DComp render host.
-SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hglrc(
-    sao_ui_overlay_host_handle_t handle);
-SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hdc(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hglrc(sao_ui_overlay_host_handle_t handle);
+SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hdc(sao_ui_overlay_host_handle_t handle);
 
-// Set the host's on-screen geometry (screen coords, DPI-aware).
-// Prefers the kernel-side syscall_set_window_pos path when the DC
-// coordinator is attached; falls back to user32.SetWindowPos.
+// Set the host's on-screen geometry (screen coords, DPI-aware). The ordered
+// pair is: synchronous USER32 SetWindowPos(real), cached geometry update,
+// DwmFlush, then one asynchronous physical rcWindow scrub when configured.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
-    sao_ui_overlay_host_handle_t handle,
-    int32_t x, int32_t y, int32_t width, int32_t height);
+    sao_ui_overlay_host_handle_t handle, int32_t x, int32_t y, int32_t width, int32_t height);
 
 // Returns the last successfully requested on-screen geometry.  This remains
 // stable when an external tagWND rcWindow scrub makes WM_SIZE/WM_MOVE report
 // a decoy rectangle, so the z-order authority can re-assert the real DWM
 // presentation bounds on its next tick.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
-    sao_ui_overlay_host_handle_t handle,
-    struct SaoOverlayHostClientRect* out_rect);
+    sao_ui_overlay_host_handle_t handle, struct SaoOverlayHostClientRect* out_rect);
 
 // Show/hide.  ShowWindow(hRender, SW_SHOWNOACTIVATE) — never
 // SW_SHOW/SW_SHOWNORMAL (would activate).  hControl gets the same
 // treatment; owner stays hidden.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_visible(
-    sao_ui_overlay_host_handle_t handle, bool visible);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visible);
 
 // Toggle `WS_EX_TRANSPARENT` for cross-process click passthrough.
 // See §4 of the handoff — `WM_NCHITTEST → HTTRANSPARENT` only works
@@ -185,11 +178,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_visible(
 // readback; on mismatch (anti-cheat hook / access denied), keeps
 // the previous internal state and returns SAO_STATUS_ERR_ACCESS_DENIED.
 // Owner-thread-affine; cross-thread calls return ACCESS_DENIED.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_passthrough(
-    sao_ui_overlay_host_handle_t handle, bool passthrough);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_set_input_passthrough(sao_ui_overlay_host_handle_t handle, bool passthrough);
 
-SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_input_passthrough(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API bool SAO_UI_CALL
+sao_ui_overlay_host_input_passthrough(sao_ui_overlay_host_handle_t handle);
 
 // Interactive rectangles are expressed in hRender client coordinates.
 // The host owns no widget geometry; input_router supplies the current union
@@ -210,9 +203,7 @@ struct SaoOverlayHostInputRect {
 };
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
-    sao_ui_overlay_host_handle_t handle,
-    const SaoOverlayHostInputRect* rects,
-    size_t rect_count);
+    sao_ui_overlay_host_handle_t handle, const SaoOverlayHostInputRect* rects, size_t rect_count);
 
 // An input update is transactional.  If SetWindowRgn succeeds but the
 // passthrough style update fails, the host restores both the prior region and
@@ -225,55 +216,53 @@ enum SaoOverlayHostInputSyncState : uint32_t {
     SAO_UI_OVERLAY_INPUT_PARTIAL = 1,
 };
 
-SAO_UI_API uint32_t SAO_UI_CALL sao_ui_overlay_host_input_sync_state(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API uint32_t SAO_UI_CALL
+sao_ui_overlay_host_input_sync_state(sao_ui_overlay_host_handle_t handle);
 
 // SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) toggle.  Applies
 // symmetrically to hRender + hControl with rollback on partial failure.
 // If the OS does not support the requested affinity, returns
 // SAO_STATUS_ERR_NOT_IMPLEMENTED and preserves the prior state.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_capture_mode(
-    sao_ui_overlay_host_handle_t handle, bool exclude);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool exclude);
 
-SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_capture_excluded(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API bool SAO_UI_CALL
+sao_ui_overlay_host_capture_excluded(sao_ui_overlay_host_handle_t handle);
 
 // Legacy WGL operations.  See the WGL accessor contract above: all three
 // return SAO_STATUS_ERR_NOT_IMPLEMENTED in the D3D/DComp production path.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_make_current(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_make_current(sao_ui_overlay_host_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_release_current(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_release_current(sao_ui_overlay_host_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_swap_buffers(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_swap_buffers(sao_ui_overlay_host_handle_t handle);
 
 // Drain pending Win32 messages for the overlay HWND (up to 128 per call).
 // PeekMessageW/TranslateMessage/DispatchMessageW loop — do NOT use
 // GetMessage (blocks the render thread indefinitely if the game
 // stops feeding input).
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_pump_messages(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_pump_messages(sao_ui_overlay_host_handle_t handle);
 
 // Wait for a pending message OR timeout, whichever comes first.
 // Wraps MsgWaitForMultipleObjectsEx(QS_ALLINPUT).  Without this, a
 // naive sleep inside the render thread blocks WM_NCHITTEST for the
 // full sleep window — the cursor becomes unresponsive during long
 // idle frames.  Called from compositor sleep path.
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_msg_wait(
-    sao_ui_overlay_host_handle_t handle,
-    uint32_t timeout_ms);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_msg_wait(sao_ui_overlay_host_handle_t handle, uint32_t timeout_ms);
 
 // Hit test callback — invoked from WndProc's WM_NCHITTEST handler on
 // the UI thread.  Return true for "interactive" (HTCLIENT), false for
 // "click-through" (HTTRANSPARENT).  Screen coordinates.
-typedef bool (SAO_UI_CALL* sao_ui_hit_test_fn_t)(
-    int32_t screen_x, int32_t screen_y, void* user_data);
+typedef bool(SAO_UI_CALL* sao_ui_hit_test_fn_t)(int32_t screen_x, int32_t screen_y,
+                                                void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_hit_test_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data);
 
 // Mouse event callback — invoked from WndProc for WM_MOUSEMOVE /
 // WM_LBUTTON* / WM_RBUTTON* / WM_MOUSEWHEEL / WM_MOUSELEAVE.
@@ -283,15 +272,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
 // TrackMouseEvent(TME_LEAVE) is auto-armed on WM_MOUSEMOVE so a
 // WM_MOUSELEAVE arrives when the cursor exits without a WM_MOUSEMOVE
 // (which happens for cross-screen moves).
-typedef void (SAO_UI_CALL* sao_ui_mouse_fn_t)(
-    uint32_t msg_type,
-    int32_t screen_x, int32_t screen_y,
-    int32_t button, int32_t wheel_delta,
-    void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_mouse_fn_t)(uint32_t msg_type, int32_t screen_x, int32_t screen_y,
+                                             int32_t button, int32_t wheel_delta, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_mouse(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_mouse_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_mouse_fn_t fn, void* user_data);
 
 // ── Window-message completion handlers ───────────────────────────
 //
@@ -333,19 +318,16 @@ struct SaoOverlayHostState {
     uint8_t _pad[1];
 };
 
-SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_visible(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_visible(sao_ui_overlay_host_handle_t handle);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_state(
-    sao_ui_overlay_host_handle_t handle,
-    SaoOverlayHostState* out_state);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_get_state(sao_ui_overlay_host_handle_t handle, SaoOverlayHostState* out_state);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_client_rect(
-    sao_ui_overlay_host_handle_t handle,
-    SaoOverlayHostClientRect*    out_rect);
+    sao_ui_overlay_host_handle_t handle, SaoOverlayHostClientRect* out_rect);
 
-SAO_UI_API uint32_t SAO_UI_CALL sao_ui_overlay_host_current_dpi(
-    sao_ui_overlay_host_handle_t handle);
+SAO_UI_API uint32_t SAO_UI_CALL
+sao_ui_overlay_host_current_dpi(sao_ui_overlay_host_handle_t handle);
 
 // Counters exposed for tests: how many times each WM_ handler fired
 // during the host's lifetime.  Monotonic; wraps at UINT32_MAX.
@@ -360,50 +342,38 @@ struct SaoOverlayHostWMCounters {
 };
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_wm_counters(
-    sao_ui_overlay_host_handle_t handle,
-    SaoOverlayHostWMCounters*    out_counters);
+    sao_ui_overlay_host_handle_t handle, SaoOverlayHostWMCounters* out_counters);
 
 // Optional consumer callbacks.  All fire from the WndProc thread —
 // callback impl must not block or the host's message pump stalls.
-typedef void (SAO_UI_CALL* sao_ui_size_fn_t)(
-    int32_t new_width, int32_t new_height, void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_size_fn_t)(int32_t new_width, int32_t new_height, void* user_data);
 
-typedef void (SAO_UI_CALL* sao_ui_move_fn_t)(
-    int32_t new_x, int32_t new_y, void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_move_fn_t)(int32_t new_x, int32_t new_y, void* user_data);
 
-typedef void (SAO_UI_CALL* sao_ui_activate_fn_t)(
-    bool activated, void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_activate_fn_t)(bool activated, void* user_data);
 
-typedef void (SAO_UI_CALL* sao_ui_dpi_changed_fn_t)(
-    uint32_t new_dpi,
-    int32_t suggested_x, int32_t suggested_y,
-    int32_t suggested_w, int32_t suggested_h,
-    void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_dpi_changed_fn_t)(uint32_t new_dpi, int32_t suggested_x,
+                                                   int32_t suggested_y, int32_t suggested_w,
+                                                   int32_t suggested_h, void* user_data);
 
-typedef void (SAO_UI_CALL* sao_ui_display_change_fn_t)(
-    uint32_t bit_depth, uint32_t width, uint32_t height,
-    void* user_data);
+typedef void(SAO_UI_CALL* sao_ui_display_change_fn_t)(uint32_t bit_depth, uint32_t width,
+                                                      uint32_t height, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_size_fn(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_size_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_size_fn_t fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_move_fn(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_move_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_move_fn_t fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activate_fn(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_activate_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_activate_fn_t fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_changed_fn(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_dpi_changed_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_dpi_changed_fn_t fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_display_change_fn(
-    sao_ui_overlay_host_handle_t handle,
-    sao_ui_display_change_fn_t fn, void* user_data);
+    sao_ui_overlay_host_handle_t handle, sao_ui_display_change_fn_t fn, void* user_data);
 
 #ifdef __cplusplus
-}  // extern "C"
+} // extern "C"
 #endif

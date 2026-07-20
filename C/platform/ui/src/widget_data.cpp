@@ -12,6 +12,8 @@
 #include "sao/ui/widget_data.h"
 #include "sao/ui/widget_kit.h"
 
+#include "widget_typed_internal.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -103,6 +105,17 @@ struct EmptyState {
     std::string detail;
     std::string action;
     mutable std::mutex mtx;
+};
+
+struct DataPropsSnapshot {
+    std::string text;
+    float value{};
+    float max_value{};
+    float displayed_value{};
+    float trail_value{};
+    float target_value{};
+    int32_t elapsed_ms{};
+    int32_t count{};
 };
 
 template <typename State>
@@ -580,6 +593,448 @@ sao_ui_widget_progress_get_segment_count(
     if (s == nullptr) return 0;
     std::lock_guard<std::mutex> lk(s->mtx);
     return s->segments.size();
+}
+
+sao_status_t sao::ui::detail::widget_data_apply_props(
+    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    try {
+        auto snapshot = std::make_shared<DataPropsSnapshot>();
+        switch (kind) {
+        case kProgressTag: {
+            if (!widget_props_has_only(props, {"value", "max_value"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            float value = 0.0F;
+            float maximum = 0.0F;
+            bool has_value = false;
+            bool has_maximum = false;
+            const auto value_property = props.find("value");
+            if (value_property != props.end()) {
+                if (!widget_props_float(*value_property, &value))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                has_value = true;
+            }
+            const auto maximum_property = props.find("max_value");
+            if (maximum_property != props.end()) {
+                if (!widget_props_float(*maximum_property, &maximum) || maximum < 0.0F)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                has_maximum = true;
+            }
+            auto state = as_progress(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->value = state->spec.value;
+                snapshot->max_value = state->spec.max_value;
+                snapshot->displayed_value = state->displayed_value;
+                snapshot->trail_value = state->trail_value;
+                snapshot->target_value = state->target_value;
+                snapshot->elapsed_ms = state->animate_elapsed_ms;
+            }
+            sao_status_t status = SAO_STATUS_OK;
+            if (has_maximum)
+                status = sao_ui_progress_bar_set_max(handle, maximum);
+            if (status == SAO_STATUS_OK && has_value)
+                status = sao_ui_progress_bar_set_value(handle, value);
+            if (status != SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                state->spec.value = snapshot->value;
+                state->spec.max_value = snapshot->max_value;
+                state->displayed_value = snapshot->displayed_value;
+                state->trail_value = snapshot->trail_value;
+                state->target_value = snapshot->target_value;
+                state->animate_elapsed_ms = snapshot->elapsed_ms;
+                return status;
+            }
+            break;
+        }
+        case kGaugeTag: {
+            if (!widget_props_has_only(props, {"value"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_tagged<GaugeState>(handle, kGaugeTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->value = state->spec.value;
+            }
+            const auto value_property = props.find("value");
+            if (value_property != props.end()) {
+                float value = 0.0F;
+                if (!widget_props_float(*value_property, &value))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const sao_status_t status = sao_ui_gauge_set_value(handle, value);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kBadgeTag:
+        case kTooltipTag:
+        case kMetricTag:
+        case kEmptyStateTag: {
+            const char* key = kind == kMetricTag ? "value" : kind == kEmptyStateTag ? "detail"
+                                                                                     : "text";
+            if (!widget_props_has_only(props, {key}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto replacement = props.find(key);
+            std::string text;
+            if (replacement != props.end()) {
+                if (!replacement->is_string())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                text = replacement->get<std::string>();
+            }
+            if (kind == kBadgeTag) {
+                auto state = as_tagged<BadgeState>(handle, kBadgeTag);
+                if (state == nullptr)
+                    return SAO_STATUS_ERR_HANDLE_INVALID;
+                {
+                    std::lock_guard<std::mutex> lock(state->mtx);
+                    snapshot->text = state->text;
+                }
+                if (replacement != props.end()) {
+                    const sao_status_t status =
+                        sao_ui_status_badge_set_text(handle, text.c_str());
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+            } else if (kind == kTooltipTag) {
+                auto state = as_tagged<TooltipState>(handle, kTooltipTag);
+                if (state == nullptr)
+                    return SAO_STATUS_ERR_HANDLE_INVALID;
+                {
+                    std::lock_guard<std::mutex> lock(state->mtx);
+                    snapshot->text = state->text;
+                }
+                if (replacement != props.end()) {
+                    const sao_status_t status = sao_ui_tooltip_set_text(handle, text.c_str());
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+            } else if (kind == kMetricTag) {
+                auto state = as_tagged<MetricState>(handle, kMetricTag);
+                if (state == nullptr)
+                    return SAO_STATUS_ERR_HANDLE_INVALID;
+                {
+                    std::lock_guard<std::mutex> lock(state->mtx);
+                    snapshot->text = state->value;
+                }
+                if (replacement != props.end()) {
+                    const sao_status_t status = sao_ui_metric_set_value(handle, text.c_str());
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+            } else {
+                auto state = as_tagged<EmptyState>(handle, kEmptyStateTag);
+                if (state == nullptr)
+                    return SAO_STATUS_ERR_HANDLE_INVALID;
+                {
+                    std::lock_guard<std::mutex> lock(state->mtx);
+                    snapshot->text = state->detail;
+                }
+                if (replacement != props.end()) {
+                    const sao_status_t status = sao_ui_empty_state_set_detail(handle, text.c_str());
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+            }
+            break;
+        }
+        case kMoreTag: {
+            if (!widget_props_has_only(props, {"hidden_count"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_tagged<MoreState>(handle, kMoreTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->count = state->spec.hidden_count;
+            }
+            const auto count_property = props.find("hidden_count");
+            if (count_property != props.end()) {
+                int32_t count = 0;
+                if (!widget_props_i32(*count_property, &count) || count < 0)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const sao_status_t status = sao_ui_more_indicator_set_count(handle, count);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_data_restore_props(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    const WidgetPropsSnapshot& snapshot) noexcept {
+    const auto previous = std::static_pointer_cast<DataPropsSnapshot>(snapshot);
+    if (previous == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        switch (kind) {
+        case kProgressTag: {
+            auto state = as_progress(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            state->spec.value = previous->value;
+            state->spec.max_value = previous->max_value;
+            state->displayed_value = previous->displayed_value;
+            state->trail_value = previous->trail_value;
+            state->target_value = previous->target_value;
+            state->animate_elapsed_ms = previous->elapsed_ms;
+            return SAO_STATUS_OK;
+        }
+        case kGaugeTag:
+            return sao_ui_gauge_set_value(handle, previous->value);
+        case kBadgeTag:
+            return sao_ui_status_badge_set_text(handle, previous->text.c_str());
+        case kTooltipTag:
+            return sao_ui_tooltip_set_text(handle, previous->text.c_str());
+        case kMoreTag:
+            return sao_ui_more_indicator_set_count(handle, previous->count);
+        case kMetricTag:
+            return sao_ui_metric_set_value(handle, previous->text.c_str());
+        case kEmptyStateTag:
+            return sao_ui_empty_state_set_detail(handle, previous->text.c_str());
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_data_paint(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+    int32_t width, int32_t height) noexcept {
+    try {
+        switch (kind) {
+        case kProgressTag: {
+            SaoUiProgressBarSpec spec{};
+            std::vector<SaoUiProgressSegment> segments;
+            float displayed = 0.0F;
+            auto state = as_progress(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                displayed = state->displayed_value;
+                segments = state->segments;
+            }
+            const float ratio = spec.max_value <= 0.0F
+                                    ? 0.0F
+                                    : clamp_ratio(displayed / spec.max_value);
+            const uint32_t background = spec.bg_argb == 0 ? 0xff273447U : spec.bg_argb;
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height), background);
+            if (status != SAO_STATUS_OK)
+                return status;
+            if (spec.style == SAO_UI_PROGRESS_SEGMENTS && !segments.empty()) {
+                for (const auto& segment : segments) {
+                    const float start = std::clamp(segment.fraction_start, 0.0F, ratio);
+                    const float end = std::clamp(segment.fraction_end, 0.0F, ratio);
+                    if (end <= start)
+                        continue;
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(x) + width * start, static_cast<float>(y),
+                        width * (end - start), static_cast<float>(height),
+                        segment.fill_argb == 0 ? 0xff4ea5ffU : segment.fill_argb);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                return SAO_STATUS_OK;
+            }
+            uint32_t fill = spec.fill_argb == 0 ? 0xff4ea5ffU : spec.fill_argb;
+            if (spec.style == SAO_UI_PROGRESS_HP_RAMP) {
+                if (ratio < 0.25F && spec.fill_low_argb != 0)
+                    fill = spec.fill_low_argb;
+                else if (ratio < 0.5F && spec.fill_mid_argb != 0)
+                    fill = spec.fill_mid_argb;
+                else if (ratio >= 0.5F && spec.fill_high_argb != 0)
+                    fill = spec.fill_high_argb;
+            }
+            if (ratio <= 0.0F)
+                return SAO_STATUS_OK;
+            return sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                std::max(1.0F, width * ratio), static_cast<float>(height), fill);
+        }
+        case kGaugeTag: {
+            SaoUiGaugeSpec spec{};
+            auto state = as_tagged<GaugeState>(handle, kGaugeTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+            }
+            const float ratio = spec.max_value <= 0.0F
+                                    ? 0.0F
+                                    : clamp_ratio(spec.value / spec.max_value);
+            const int32_t diameter = std::max(1, std::min(width, height));
+            const int32_t left = x + (width - diameter) / 2;
+            const int32_t top = y + (height - diameter) / 2;
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.center_argb == 0 ? 0xff1d2430U : spec.center_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            status = sao_ui_paint_ctx_fill_ellipse(
+                context, static_cast<float>(left), static_cast<float>(top),
+                static_cast<float>(diameter), static_cast<float>(diameter),
+                spec.track_argb == 0 ? 0xff39485cU : spec.track_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            const int32_t inner = std::max(1, diameter - std::max(2, spec.thickness_px) * 2);
+            status = sao_ui_paint_ctx_fill_ellipse(
+                context, static_cast<float>(left + (diameter - inner) / 2),
+                static_cast<float>(top + (diameter - inner) / 2), static_cast<float>(inner),
+                static_cast<float>(inner), spec.center_argb == 0 ? 0xff1d2430U : spec.center_argb);
+            if (status != SAO_STATUS_OK || ratio <= 0.0F)
+                return status;
+            const int32_t indicator = std::max(2, static_cast<int32_t>(std::lround(inner * ratio)));
+            return sao_ui_paint_ctx_fill_ellipse(
+                context, static_cast<float>(left + (diameter - indicator) / 2),
+                static_cast<float>(top + (diameter - indicator) / 2),
+                static_cast<float>(indicator), static_cast<float>(indicator),
+                spec.fill_argb == 0 ? 0xff4ea5ffU : spec.fill_argb);
+        }
+        case kBadgeTag: {
+            SaoUiStatusBadgeSpec spec{};
+            std::string text;
+            auto state = as_tagged<BadgeState>(handle, kBadgeTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                text = state->text;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.fill_argb == 0 ? 0xff273447U : spec.fill_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            return sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
+                static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
+                static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
+                spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb);
+        }
+        case kTooltipTag: {
+            SaoUiTooltipSpec spec{};
+            std::string text;
+            auto state = as_tagged<TooltipState>(handle, kTooltipTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                text = state->text;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.bg_argb == 0 ? 0xee1d2430U : spec.bg_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            return sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
+                static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
+                static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
+                spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb);
+        }
+        case kMoreTag: {
+            SaoUiMoreIndicatorSpec spec{};
+            std::string noun;
+            auto state = as_tagged<MoreState>(handle, kMoreTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                noun = state->noun;
+            }
+            const std::string text = "... " + std::to_string(spec.hidden_count) + " " + noun;
+            return sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
+                static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
+                static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
+                spec.fg_argb == 0 ? 0xff8f9aaaU : spec.fg_argb);
+        }
+        case kMetricTag: {
+            SaoUiMetricSpec spec{};
+            std::string label;
+            std::string value;
+            std::string unit;
+            auto state = as_tagged<MetricState>(handle, kMetricTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                label = state->label;
+                value = state->value;
+                unit = state->unit;
+            }
+            sao_status_t status = sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + 2), static_cast<float>(y + 2), label.c_str(),
+                10.0F, spec.label_argb == 0 ? 0xff8f9aaaU : spec.label_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            const std::string displayed = value + (unit.empty() ? "" : " " + unit);
+            return sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + 2), static_cast<float>(y + height / 2),
+                displayed.c_str(),
+                static_cast<float>(spec.value_font_size_px > 0 ? spec.value_font_size_px : 14),
+                spec.value_argb == 0 ? 0xfff0f4faU : spec.value_argb);
+        }
+        case kEmptyStateTag: {
+            SaoUiEmptyStateSpec spec{};
+            std::string title;
+            std::string detail;
+            auto state = as_tagged<EmptyState>(handle, kEmptyStateTag);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                spec = state->spec;
+                title = state->title;
+                detail = state->detail;
+            }
+            sao_status_t status = sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + 2), static_cast<float>(y + 2), title.c_str(),
+                14.0F, spec.title_argb == 0 ? 0xfff0f4faU : spec.title_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            return sao_ui_paint_ctx_draw_utf8(
+                context, static_cast<float>(x + 2), static_cast<float>(y + height / 2),
+                detail.c_str(), 11.0F,
+                spec.detail_argb == 0 ? 0xff8f9aaaU : spec.detail_argb);
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // Shared destroy helper.

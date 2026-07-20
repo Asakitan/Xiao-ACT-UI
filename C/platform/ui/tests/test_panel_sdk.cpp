@@ -43,9 +43,14 @@ sao_ui_panel_test_pointer_button(sao_ui_panel_handle_t panel, int32_t x, int32_t
 extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_panel_retired_geometry_count_();
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_panel_test_set_body_replace_failure_point(int32_t point);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_panel_test_set_publish_failure_point(int32_t point);
+extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_panel_geometry_worker_count_();
 extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(
     sao_ui_widget_handle_t handle, const char* color_key, uint32_t* out_color, char* out_text,
     size_t out_text_capacity);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_button_is_active(sao_ui_widget_handle_t handle, bool* out_active);
 
 // Test APIs declared in the implementation only (the panel_sdk.h
 // header remains unchanged).  Prototypes
@@ -335,44 +340,196 @@ TEST_CASE("panel body handles never alias a later registration", "[ui][panel_sdk
     sao_ui_layout_node_handle_t root = reinterpret_cast<sao_ui_layout_node_handle_t>(uintptr_t{1});
     CHECK(sao_ui_panel_body_get_root(stale_body, &root) == SAO_STATUS_ERR_HANDLE_INVALID);
     CHECK(root == nullptr);
+    sao_ui_layout_tree_handle_t tree =
+        reinterpret_cast<sao_ui_layout_tree_handle_t>(uintptr_t{1});
+    CHECK(sao_ui_panel_body_get_tree(stale_body, &tree) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(tree == nullptr);
+    CHECK(sao_ui_panel_update_body(stale_body, nullptr, 0) == SAO_STATUS_ERR_HANDLE_INVALID);
+    SaoUiBodyMutation mutation{};
+    CHECK(sao_ui_panel_update_body(stale_body, &mutation, 1) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_panel_body_set_spec(stale_body, nullptr, 0) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
     REQUIRE(sao_ui_panel_body_get_root(second_body, &root) == SAO_STATUS_OK);
     CHECK(root != nullptr);
     REQUIRE(sao_ui_panel_unregister(second_panel) == SAO_STATUS_OK);
 }
 
-TEST_CASE("panel body rejects widget families without generic backing",
-      "[ui][panel_sdk][family]") {
-    auto descriptor = make_descriptor("panel_body_family_gate", SAO_UI_PANEL_Z_NORMAL, 0);
+TEST_CASE("panel publish failure tears down runtime resources",
+          "[ui][panel_sdk][publish][rollback]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+
+    size_t registry_baseline = 0;
+    REQUIRE(sao_ui_panel_registry_count(&registry_baseline) == SAO_STATUS_OK);
+    size_t layer_baseline = 0;
+    REQUIRE(sao_ui_compositor_list_layers(compositor, nullptr, 0, &layer_baseline) ==
+            SAO_STATUS_OK);
+    const size_t worker_baseline = sao_ui_panel_geometry_worker_count_();
+
+    for (int32_t failure_point = 1; failure_point <= 5; ++failure_point) {
+        INFO("failure point " << failure_point);
+        const std::string id = "panel_publish_failure_" + std::to_string(failure_point);
+        auto descriptor = make_descriptor(id.c_str(), SAO_UI_PANEL_Z_NORMAL, 0);
+        descriptor.remember_geometry = true;
+        sao_ui_panel_handle_t panel = reinterpret_cast<sao_ui_panel_handle_t>(uintptr_t{1});
+        sao_ui_panel_body_handle_t body =
+            reinterpret_cast<sao_ui_panel_body_handle_t>(uintptr_t{1});
+
+        sao_ui_panel_test_set_publish_failure_point(failure_point);
+        const sao_status_t status =
+            sao_ui_panel_register(compositor, &descriptor, &panel, &body);
+        sao_ui_panel_test_set_publish_failure_point(0);
+        if (status == SAO_STATUS_OK)
+            (void)sao_ui_panel_unregister(panel);
+        REQUIRE(status == SAO_STATUS_ERR_UNKNOWN);
+        CHECK(panel == nullptr);
+        CHECK(body == nullptr);
+
+        size_t registry_count = 0;
+        REQUIRE(sao_ui_panel_registry_count(&registry_count) == SAO_STATUS_OK);
+        CHECK(registry_count == registry_baseline);
+        size_t layer_count = 0;
+        REQUIRE(sao_ui_compositor_list_layers(compositor, nullptr, 0, &layer_count) ==
+                SAO_STATUS_OK);
+        CHECK(layer_count == layer_baseline);
+        CHECK(sao_ui_panel_geometry_worker_count_() == worker_baseline);
+        sao_ui_panel_handle_t found = nullptr;
+        CHECK(sao_ui_panel_find_by_id(compositor, id.c_str(), &found) ==
+              SAO_STATUS_ERR_NOT_FOUND);
+
+        REQUIRE(sao_ui_panel_register(compositor, &descriptor, &panel, &body) ==
+                SAO_STATUS_OK);
+        REQUIRE(sao_ui_panel_unregister(panel) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_compositor_list_layers(compositor, nullptr, 0, &layer_count) ==
+                SAO_STATUS_OK);
+        CHECK(layer_count == layer_baseline);
+        CHECK(sao_ui_panel_geometry_worker_count_() == worker_baseline);
+    }
+
+    sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("panel body admits and transactionally updates typed widgets",
+        "[ui][panel_sdk][family][typed][transaction][layer]") {
+    SaoCompositorConfig compositor_config{};
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
+    auto descriptor = make_descriptor("panel_body_typed_widgets", SAO_UI_PANEL_Z_NORMAL, 0);
+    descriptor.show_titlebar = false;
+    descriptor.default_width_px = 120;
+    descriptor.default_height_px = 80;
+    descriptor.min_width_px = 1;
+    descriptor.min_height_px = 1;
     sao_ui_panel_handle_t panel = nullptr;
     sao_ui_panel_body_handle_t body = nullptr;
-    REQUIRE(sao_ui_panel_register(nullptr, &descriptor, &panel, &body) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_register(compositor, &descriptor, &panel, &body) == SAO_STATUS_OK);
+    const auto empty_pixels = compositor_snapshot(compositor);
+
     SaoUiLayoutSpec layout{};
     sao_ui_layout_spec_defaults(&layout);
+    layout.fixed_width_px = 110;
+    layout.fixed_height_px = 32;
 
     SaoUiButtonSpec button_spec{};
-    button_spec.text_utf8 = "input";
+    button_spec.text_utf8 = "before";
     button_spec.kind = SAO_UI_BTN_NORMAL;
-    sao_ui_widget_handle_t input = nullptr;
-    REQUIRE(sao_ui_button_create(nullptr, &button_spec, &input) == SAO_STATUS_OK);
-    SaoUiBodyMutation add{};
-    add.kind = SAO_UI_BODY_ADD_WIDGET;
-    add.widget = input;
-    add.spec = &layout;
-    CHECK(sao_ui_panel_update_body(body, &add, 1) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    button_spec.colors.fill_argb = 0xff203040U;
+    button_spec.colors.active_fill_argb = 0xffd06020U;
+    sao_ui_widget_handle_t button = nullptr;
+    REQUIRE(sao_ui_button_create(nullptr, &button_spec, &button) == SAO_STATUS_OK);
 
-    SaoUiBarChartBar bar{"bar", 1.0, 0, 0, 0.0, 0};
+    SaoUiBarChartBar initial_bars[] = {{"first", 1.0, 0xff4090e0U, 0, 0.0, 0},
+                           {"second", 4.0, 0xff4090e0U, 0, 0.0, 0}};
     SaoUiBarChartSpec chart_spec{};
-    chart_spec.bars = &bar;
-    chart_spec.bar_count = 1;
+    chart_spec.bars = initial_bars;
+    chart_spec.bar_count = 2;
+    chart_spec.bg_argb = 0xff101820U;
     sao_ui_widget_handle_t chart = nullptr;
     REQUIRE(sao_ui_bar_chart_create(nullptr, &chart_spec, &chart) == SAO_STATUS_OK);
-    add.widget = chart;
-    CHECK(sao_ui_panel_update_body(body, &add, 1) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
-    CHECK(sao_ui_panel_body_mutation_count(body) == 0);
 
-    sao_ui_widget_destroy(chart);
-    sao_ui_widget_destroy(input);
+    const char button_props[] = R"({"text":"after","active":true})";
+    const char chart_props[] =
+        R"({"bars":[{"label":"first","value":4,"fill_argb":4282421472},{"label":"second","value":1,"fill_argb":4282421472}]})";
+    SaoUiBodyMutation initial[4]{};
+    initial[0].kind = SAO_UI_BODY_ADD_WIDGET;
+    initial[0].widget = button;
+    initial[0].spec = &layout;
+    initial[1].kind = SAO_UI_BODY_ADD_WIDGET;
+    initial[1].widget = chart;
+    initial[1].spec = &layout;
+    initial[2].kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    initial[2].widget = button;
+    initial[2].props_json_utf8 = reinterpret_cast<const uint8_t*>(button_props);
+    initial[2].props_len = std::strlen(button_props);
+    initial[3].kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    initial[3].widget = chart;
+    initial[3].props_json_utf8 = reinterpret_cast<const uint8_t*>(chart_props);
+    initial[3].props_len = std::strlen(chart_props);
+    REQUIRE(sao_ui_panel_update_body(body, initial, 4) == SAO_STATUS_OK);
+    CHECK(sao_ui_panel_body_mutation_count(body) == 4);
+    CHECK(compositor_snapshot(compositor) != empty_pixels);
+
+    bool active = false;
+    REQUIRE(sao_ui_widget_button_is_active(button, &active) == SAO_STATUS_OK);
+    CHECK(active);
+    SaoUiBarChartBar current_bar{};
+    REQUIRE(sao_ui_bar_chart_get_bar(chart, 0, &current_bar) == SAO_STATUS_OK);
+    CHECK(current_bar.value == 4.0);
+
+    const char deactivate[] = R"({"active":false})";
+    const char invalid_chart[] = R"({"bars":[{"label":"broken","value":"bad"}]})";
+    SaoUiBodyMutation rejected[2]{};
+    rejected[0].kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    rejected[0].widget = button;
+    rejected[0].props_json_utf8 = reinterpret_cast<const uint8_t*>(deactivate);
+    rejected[0].props_len = std::strlen(deactivate);
+    rejected[1].kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    rejected[1].widget = chart;
+    rejected[1].props_json_utf8 = reinterpret_cast<const uint8_t*>(invalid_chart);
+    rejected[1].props_len = std::strlen(invalid_chart);
+    CHECK(sao_ui_panel_update_body(body, rejected, 2) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_widget_button_is_active(button, &active) == SAO_STATUS_OK);
+    CHECK(active);
+    REQUIRE(sao_ui_bar_chart_get_bar(chart, 0, &current_bar) == SAO_STATUS_OK);
+    CHECK(current_bar.value == 4.0);
+    CHECK(sao_ui_panel_body_mutation_count(body) == 4);
+
+    sao_ui_panel_test_set_body_replace_failure_point(1);
+    CHECK(sao_ui_panel_update_body(body, &rejected[0], 1) == SAO_STATUS_ERR_UNKNOWN);
+    sao_ui_panel_test_set_body_replace_failure_point(0);
+    REQUIRE(sao_ui_widget_button_is_active(button, &active) == SAO_STATUS_OK);
+    CHECK(active);
+    CHECK(sao_ui_panel_body_mutation_count(body) == 4);
+
+    const char wrong_family[] = R"({"bars":[]})";
+    SaoUiBodyMutation cross_family{};
+    cross_family.kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    cross_family.widget = button;
+    cross_family.props_json_utf8 = reinterpret_cast<const uint8_t*>(wrong_family);
+    cross_family.props_len = std::strlen(wrong_family);
+    CHECK(sao_ui_panel_update_body(body, &cross_family, 1) ==
+        SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_widget_button_is_active(button, &active) == SAO_STATUS_OK);
+    CHECK(active);
+
+    SaoUiButtonSpec stale_spec{};
+    stale_spec.text_utf8 = "stale";
+    sao_ui_widget_handle_t stale = nullptr;
+    REQUIRE(sao_ui_button_create(nullptr, &stale_spec, &stale) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(stale);
+    SaoUiBodyMutation add_stale{};
+    add_stale.kind = SAO_UI_BODY_ADD_WIDGET;
+    add_stale.widget = stale;
+    add_stale.spec = &layout;
+    CHECK(sao_ui_panel_update_body(body, &add_stale, 1) ==
+        SAO_STATUS_ERR_HANDLE_INVALID);
+
     REQUIRE(sao_ui_panel_unregister(panel) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(chart);
+    sao_ui_widget_destroy(button);
+    sao_ui_compositor_destroy(compositor);
 }
 
 TEST_CASE("panel body restores complete props and reports rollback failure",

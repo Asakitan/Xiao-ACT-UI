@@ -23,6 +23,8 @@
 #include "sao/ui/widget_text.h"
 #include "sao/ui/widget_kit.h"
 
+#include "widget_typed_internal.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -105,6 +107,12 @@ struct DurationLabelState {
     LabelState              label;
     int64_t                 last_duration_ms{0};
     mutable std::mutex      mtx;
+};
+
+struct TextPropsSnapshot {
+    std::string text;
+    int64_t first{};
+    int64_t second{};
 };
 
 // ---------------------------------------------------------------------------
@@ -647,6 +655,202 @@ sao_ui_widget_format_duration_strict(
     char* buf,
     size_t buf_size) {
     fmt_dur_into(duration_ms, buf, buf_size);
+}
+
+sao_status_t sao::ui::detail::widget_text_apply_props(
+    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    try {
+        auto snapshot = std::make_shared<TextPropsSnapshot>();
+        switch (kind) {
+        case kTagLabel: {
+            if (!widget_props_has_only(props, {"text"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_label(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->text = state->text;
+            }
+            const auto text = props.find("text");
+            if (text != props.end()) {
+                if (!text->is_string())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const std::string replacement = text->get<std::string>();
+                const sao_status_t status = sao_ui_label_set_text(handle, replacement.c_str());
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kTagClockLabel: {
+            if (!widget_props_has_only(props, {"epoch_ms"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_clock(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->first = state->last_epoch_ms;
+            }
+            const auto epoch = props.find("epoch_ms");
+            int64_t replacement = 0;
+            if (epoch != props.end()) {
+                if (!widget_props_i64(*epoch, &replacement))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const sao_status_t status = sao_ui_clock_label_update(handle, replacement);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kTagRelativeTimeLabel: {
+            if (!widget_props_has_only(props, {"epoch_ms", "base_epoch_ms"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_reltime(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->first = state->last_epoch_ms;
+                snapshot->second = state->last_base_epoch_ms;
+            }
+            int64_t epoch = snapshot->first;
+            int64_t base = snapshot->second;
+            const auto epoch_property = props.find("epoch_ms");
+            const auto base_property = props.find("base_epoch_ms");
+            if ((epoch_property != props.end() && !widget_props_i64(*epoch_property, &epoch)) ||
+                (base_property != props.end() && !widget_props_i64(*base_property, &base))) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (epoch_property != props.end() || base_property != props.end()) {
+                const sao_status_t status = sao_ui_relative_time_label_update(handle, epoch, base);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kTagDurationLabel: {
+            if (!widget_props_has_only(props, {"duration_ms"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto state = as_duration(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                snapshot->first = state->last_duration_ms;
+            }
+            const auto duration = props.find("duration_ms");
+            int64_t replacement = 0;
+            if (duration != props.end()) {
+                if (!widget_props_i64(*duration, &replacement))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const sao_status_t status = sao_ui_duration_label_update(handle, replacement);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_text_restore_props(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    const WidgetPropsSnapshot& snapshot) noexcept {
+    const auto previous = std::static_pointer_cast<TextPropsSnapshot>(snapshot);
+    if (previous == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    switch (kind) {
+    case kTagLabel:
+        return sao_ui_label_set_text(handle, previous->text.c_str());
+    case kTagClockLabel:
+        return sao_ui_clock_label_update(handle, previous->first);
+    case kTagRelativeTimeLabel:
+        return sao_ui_relative_time_label_update(handle, previous->first, previous->second);
+    case kTagDurationLabel:
+        return sao_ui_duration_label_update(handle, previous->first);
+    default:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_text_paint(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+    int32_t width, int32_t height) noexcept {
+    try {
+        std::string text;
+        SaoUiLabelSpec spec{};
+        switch (kind) {
+        case kTagLabel: {
+            auto state = as_label(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            text = state->text;
+            spec = state->spec;
+            break;
+        }
+        case kTagClockLabel: {
+            auto state = as_clock(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            std::lock_guard<std::mutex> label_lock(state->label.mtx);
+            text = state->label.text;
+            spec = state->label.spec;
+            break;
+        }
+        case kTagRelativeTimeLabel: {
+            auto state = as_reltime(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            std::lock_guard<std::mutex> label_lock(state->label.mtx);
+            text = state->label.text;
+            spec = state->label.spec;
+            break;
+        }
+        case kTagDurationLabel: {
+            auto state = as_duration(handle);
+            if (state == nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(state->mtx);
+            std::lock_guard<std::mutex> label_lock(state->label.mtx);
+            text = state->label.text;
+            spec = state->label.spec;
+            break;
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        if (spec.bg_argb != 0) {
+            const sao_status_t fill_status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height), spec.bg_argb);
+            if (fill_status != SAO_STATUS_OK)
+                return fill_status;
+        }
+        const uint32_t foreground = spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb;
+        const float font_size = static_cast<float>(
+            spec.font_size_px > 0 ? spec.font_size_px : std::clamp(height - 4, 5, 16));
+        return sao_ui_paint_ctx_draw_utf8(
+            context, static_cast<float>(x + 2), static_cast<float>(y + 2),
+            text.c_str(), font_size, foreground);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------

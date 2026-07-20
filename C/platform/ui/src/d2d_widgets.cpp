@@ -4,6 +4,8 @@
 #include "sao/ui/sao_ui_scriptable_canvas.h"
 #include "sao/ui/widget_kit.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -13,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 struct BgraPixel {
@@ -54,6 +57,16 @@ struct sao_ui_widget_s {
     std::string text;
     std::unordered_map<std::string, uint32_t> colors;
     std::mutex mutex;
+};
+
+struct GenericWidgetPropsState {
+    bool active{};
+    bool enabled{true};
+    float value{};
+    float radius{6.0F};
+    float border_width{1.0F};
+    std::string text;
+    std::unordered_map<std::string, uint32_t> colors;
 };
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_paint_widget(
@@ -270,7 +283,10 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
 }
 
 bool parse_color(const std::string& value, uint32_t* out_color) {
-    if (out_color == nullptr || value.size() != 7U || value[0] != '#') return false;
+    if (out_color == nullptr || (value.size() != 7U && value.size() != 9U) ||
+        value[0] != '#') {
+        return false;
+    }
     uint32_t color = 0U;
     for (size_t index = 1U; index < value.size(); ++index) {
         const char c = value[index];
@@ -279,31 +295,116 @@ bool parse_color(const std::string& value, uint32_t* out_color) {
         else if (c >= 'A' && c <= 'F') color = (color << 4U) | static_cast<uint32_t>(c - 'A' + 10);
         else return false;
     }
-    *out_color = 0xff000000U | color;
+    *out_color = value.size() == 7U
+                     ? 0xff000000U | color
+                     : ((color & 0xffU) << 24U) | (color >> 8U);
     return true;
 }
 
-bool json_string(const std::string& json, const char* key, std::string* result) {
-    const std::string needle = std::string("\"") + key + "\"";
-    const size_t name = json.find(needle);
-    const size_t colon = name == std::string::npos ? std::string::npos : json.find(':', name + needle.size());
-    const size_t quote = colon == std::string::npos ? std::string::npos : json.find('"', colon + 1U);
-    const size_t end = quote == std::string::npos ? std::string::npos : json.find('"', quote + 1U);
-    if (end == std::string::npos) return false;
-    *result = json.substr(quote + 1U, end - quote - 1U);
-    return true;
-}
+sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len,
+                                int32_t widget_kind, GenericWidgetPropsState* out_state) {
+    if (props_json_utf8 == nullptr || props_len == 0U || out_state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        const auto* begin = reinterpret_cast<const char*>(props_json_utf8);
+        const auto document =
+            nlohmann::json::parse(begin, begin + props_len, nullptr, false, false);
+        if (document.is_discarded() || !document.is_object())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
-bool json_number(const std::string& json, const char* key, float* result) {
-    const std::string needle = std::string("\"") + key + "\"";
-    const size_t name = json.find(needle);
-    const size_t colon = name == std::string::npos ? std::string::npos : json.find(':', name + needle.size());
-    if (colon == std::string::npos) return false;
-    char* end = nullptr;
-    const float value = std::strtof(json.c_str() + colon + 1U, &end);
-    if (end == json.c_str() + colon + 1U || !std::isfinite(value)) return false;
-    *result = value;
-    return true;
+        GenericWidgetPropsState candidate;
+        for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg"}) {
+            const auto property = document.find(key);
+            if (property == document.end())
+                continue;
+            uint32_t color = 0U;
+            if (!property->is_string() ||
+                !parse_color(property->get_ref<const std::string&>(), &color)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            candidate.colors.emplace(key, color);
+        }
+
+        const auto parse_number = [&document](const char* key, float* out_value,
+                                               bool* out_present) {
+            const auto property = document.find(key);
+            const bool present = property != document.end();
+            if (out_present != nullptr)
+                *out_present = present;
+            if (!present)
+                return true;
+            if (!property->is_number())
+                return false;
+            const double value = property->get<double>();
+            if (!std::isfinite(value) ||
+                value < static_cast<double>(std::numeric_limits<float>::lowest()) ||
+                value > static_cast<double>(std::numeric_limits<float>::max())) {
+                return false;
+            }
+            *out_value = static_cast<float>(value);
+            return true;
+        };
+
+        if (!parse_number("radius", &candidate.radius, nullptr) ||
+            !parse_number("border_width", &candidate.border_width, nullptr)) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const bool uses_numeric_value = widget_kind == SAO_UI_WIDGET_SCROLLBAR ||
+                                        widget_kind == SAO_UI_WIDGET_BAR ||
+                                        widget_kind == SAO_UI_WIDGET_SLIDER;
+        if (uses_numeric_value) {
+            float value = 0.0F;
+            float ratio = 0.0F;
+            bool has_value = false;
+            bool has_ratio = false;
+            if (!parse_number("value", &value, &has_value) ||
+                !parse_number("ratio", &ratio, &has_ratio)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (has_value || has_ratio) {
+                candidate.value = std::clamp(has_value ? value : ratio, 0.0F, 1.0F);
+            }
+        }
+
+        const auto padding = document.find("padding");
+        if (padding != document.end() && !padding->is_number_integer()) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const auto tooltip = document.find("tooltip");
+        if (tooltip != document.end() && !tooltip->is_string()) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+
+        bool selected_text = false;
+        for (const char* key : {"text", "label", "title"}) {
+            const auto property = document.find(key);
+            if (property == document.end())
+                continue;
+            if (!property->is_string())
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (!selected_text) {
+                candidate.text = property->get<std::string>();
+                selected_text = true;
+            }
+        }
+
+        for (const auto [key, target] :
+             {std::pair{"active", &candidate.active}, std::pair{"enabled", &candidate.enabled}}) {
+            const auto property = document.find(key);
+            if (property == document.end())
+                continue;
+            if (!property->is_boolean())
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            *target = property->get<bool>();
+        }
+
+        *out_state = std::move(candidate);
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_create(
@@ -420,42 +521,28 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
     GenericLifecycleLease lifecycle(handle);
     if (!lifecycle)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    const sao_status_t backing_status = sao_ui_widget_generic_backing_get_kind(handle, nullptr);
+    int32_t widget_kind = -1;
+    const sao_status_t backing_status =
+        sao_ui_widget_generic_backing_get_kind(handle, &widget_kind);
     if (backing_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (backing_status != SAO_STATUS_OK)
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
-    const std::string json(reinterpret_cast<const char*>(props_json_utf8), props_len);
+
+    GenericWidgetPropsState candidate;
+    const sao_status_t parse_status =
+        parse_widget_props(props_json_utf8, props_len, widget_kind, &candidate);
+    if (parse_status != SAO_STATUS_OK)
+        return parse_status;
+
     std::scoped_lock lock(handle->mutex);
-    handle->active = false;
-    handle->enabled = true;
-    handle->value = 0.0F;
-    handle->radius = 6.0F;
-    handle->border_width = 1.0F;
-    handle->text.clear();
-    handle->colors.clear();
-    for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg"}) {
-        std::string text;
-        uint32_t color = 0U;
-        if (json_string(json, key, &text)) {
-            if (!parse_color(text, &color)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            handle->colors[key] = color;
-        }
-    }
-    json_number(json, "radius", &handle->radius);
-    json_number(json, "border_width", &handle->border_width);
-    if (json_number(json, "value", &handle->value) || json_number(json, "ratio", &handle->value)) handle->value = std::clamp(handle->value, 0.0F, 1.0F);
-    for (const char* key : {"text", "label", "title"}) {
-        std::string text;
-        if (json_string(json, key, &text)) {
-            handle->text = std::move(text);
-            break;
-        }
-    }
-    if (json.find("\"active\":true") != std::string::npos) handle->active = true;
-    if (json.find("\"active\":false") != std::string::npos) handle->active = false;
-    if (json.find("\"enabled\":false") != std::string::npos) handle->enabled = false;
-    if (json.find("\"enabled\":true") != std::string::npos) handle->enabled = true;
+    handle->active = candidate.active;
+    handle->enabled = candidate.enabled;
+    handle->value = candidate.value;
+    handle->radius = candidate.radius;
+    handle->border_width = candidate.border_width;
+    handle->text.swap(candidate.text);
+    handle->colors.swap(candidate.colors);
     return SAO_STATUS_OK;
 }
 

@@ -82,6 +82,45 @@ TEST_CASE("generic progress widget produces stable fill geometry", "[ui][raster]
     sao_ui_offscreen_raster_destroy(raster);
 }
 
+TEST_CASE("generic widget RGBA colors preserve semitransparent and transparent alpha",
+          "[ui][raster][widget][color][alpha]") {
+    SaoUiOffscreenRasterDesc desc{4, 2, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    sao_ui_widget_handle_t translucent = nullptr;
+    sao_ui_widget_handle_t transparent = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_BAR, nullptr, &translucent) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_BAR, nullptr, &transparent) == SAO_STATUS_OK);
+
+    constexpr char translucent_props[] = R"({"fill":"#ff000080"})";
+    constexpr char transparent_props[] = R"({"fill":"#00ff0000"})";
+    REQUIRE(sao_ui_widget_apply_props(
+                translucent, reinterpret_cast<const uint8_t*>(translucent_props),
+                sizeof(translucent_props) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_apply_props(
+                transparent, reinterpret_cast<const uint8_t*>(transparent_props),
+                sizeof(transparent_props) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint(translucent, context, 0, 0, 2, 2) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint(transparent, context, 2, 0, 2, 2) == SAO_STATUS_OK);
+
+    const auto pixels = snapshot(raster);
+    CHECK(pixels[0].b == 0);
+    CHECK(pixels[0].g == 0);
+    CHECK(pixels[0].r == 128);
+    CHECK(pixels[0].a == 128);
+    CHECK(pixels[2].b == 0);
+    CHECK(pixels[2].g == 0);
+    CHECK(pixels[2].r == 0);
+    CHECK(pixels[2].a == 0);
+
+    sao_ui_widget_destroy(transparent);
+    sao_ui_widget_destroy(translucent);
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+}
+
 TEST_CASE("scriptable canvas rasterizes stateful line rectangle and bitmap operations", "[ui][raster][canvas]") {
     SaoUiOffscreenRasterDesc desc{16, 16, 0x00000000U};
     SaoUiScriptCanvasSpec spec{16, 16, 0, false, false, false, 0, 64};

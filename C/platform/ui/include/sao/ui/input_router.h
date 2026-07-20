@@ -271,6 +271,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_register_hotkey(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_unregister_hotkey(
     sao_ui_input_router_deep_handle_t handle, sao_ui_hotkey_binding_t binding);
 
+// Successful unregister drains callbacks already dispatched on other threads.
+// A callback may unregister its own binding without waiting on itself.
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_unregister_plugin_hotkeys(
     sao_ui_input_router_deep_handle_t handle, const char* plugin_id_utf8);
 

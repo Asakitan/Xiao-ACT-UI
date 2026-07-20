@@ -31,7 +31,7 @@ def write_frame(name: str, *, hover: bool, pressed: bool) -> dict[str, Any]:
     if image is None:
         raise RuntimeError("authoritative NerveGear renderer returned no image")
     pixels = _premultiply_bgra(image)
-    filename = f"w19_entity_nervegear_{name}.bgra"
+    filename = f"entity_nervegear_{name}.bgra"
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     (ASSET_DIR / filename).write_bytes(pixels)
     return {
@@ -178,7 +178,7 @@ def main() -> None:
         },
         "interaction": build_interaction_trace(),
     }
-    output = FIXTURE_DIR / "w19_entity_parity.json"
+    output = FIXTURE_DIR / "entity_parity.json"
     output.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

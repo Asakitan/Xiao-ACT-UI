@@ -95,12 +95,18 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_create(
 
 SAO_UI_API void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle);
 
-// Apply a normalized property dict (UTF-8 JSON) to the widget.  The
+// Apply a normalized property dict (UTF-8 JSON object) to the widget.
+// Supported values are validated before the replacement state is committed;
+// malformed JSON, non-object JSON, or an invalid supported value returns
+// SAO_STATUS_ERR_INVALID_ARGUMENT without changing the current state.  The
 // widget picks out the keys it cares about and ignores the rest.
 // Standard keys accepted by all widget kinds:
-//   { "fill": "#RRGGBBAA", "border": "#RRGGBBAA", "fg": "#RRGGBBAA",
-//     "canvas_bg": "#RRGGBBAA", "radius": <int>, "padding": <int>,
+//   { "fill": "#RRGGBB|#RRGGBBAA", "border": "#RRGGBB|#RRGGBBAA",
+//     "fg": "#RRGGBB|#RRGGBBAA", "accent": "#RRGGBB|#RRGGBBAA",
+//     "canvas_bg": "#RRGGBB|#RRGGBBAA", "radius": <number>, "padding": <int>,
 //     "enabled": <bool>, "active": <bool>, "tooltip": "utf-8 str" }
+// Six-digit colors are opaque.  Eight-digit colors place the trailing AA byte
+// into the internal 0xAARRGGBB representation.
 // Widget-specific keys documented in each widget's paint_hint.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
     sao_ui_widget_handle_t handle,

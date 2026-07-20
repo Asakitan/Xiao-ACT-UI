@@ -46,7 +46,7 @@ constexpr uint32_t kMouseLeave = 0x02A3;
 
 nlohmann::json read_metadata() {
     const std::filesystem::path path =
-        std::filesystem::path(SAO_UI_TEST_FIXTURE_DIR) / "w19_entity_parity.json";
+        std::filesystem::path(SAO_UI_TEST_FIXTURE_DIR) / "entity_parity.json";
     std::ifstream input(path);
     REQUIRE(input.good());
     return nlohmann::json::parse(input);
@@ -272,8 +272,8 @@ void require_phase_checkpoints(sao_ui_menu_handle_t menu, const nlohmann::json& 
 
 } // namespace
 
-TEST_CASE("W19 Entity NerveGear frames match Python authority exactly",
-          "[ui][w19][entity][parity][pixel]") {
+TEST_CASE("Entity NerveGear frames match Python authority exactly",
+          "[ui][entity][parity][python_authority][pixel]") {
     const auto metadata = read_metadata();
     REQUIRE(metadata.at("schema") == "sao.ui.python-authority.w19.entity.v1");
     REQUIRE(metadata.at("format") == "premultiplied-bgra");
@@ -298,8 +298,8 @@ TEST_CASE("W19 Entity NerveGear frames match Python authority exactly",
     require_authority_crop(fixture, find_frame(metadata, "pressed"));
 }
 
-TEST_CASE("W19 Entity menu phase follows Python fade authority",
-          "[ui][w19][entity][parity][phase]") {
+TEST_CASE("Entity menu phase follows Python fade authority",
+          "[ui][entity][parity][python_authority][phase]") {
     const auto metadata = read_metadata();
     sao_ui_menu_handle_t menu = make_menu();
     REQUIRE(sao_ui_menu_show(menu, 40, 40) == SAO_STATUS_OK);
@@ -309,8 +309,8 @@ TEST_CASE("W19 Entity menu phase follows Python fade authority",
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("W19 Entity click trace follows Python interaction authority",
-          "[ui][w19][entity][parity][interaction]") {
+TEST_CASE("Entity click trace follows Python interaction authority",
+          "[ui][entity][parity][python_authority][interaction]") {
     const auto metadata = read_metadata();
     const auto& interaction = metadata.at("interaction");
     const auto& events = interaction.at("events");
@@ -361,8 +361,8 @@ TEST_CASE("W19 Entity click trace follows Python interaction authority",
     }
 }
 
-TEST_CASE("W19 Entity menu layer consumes Python fade progress",
-          "[ui][w19][entity][parity][phase][integration]") {
+TEST_CASE("Entity menu layer consumes Python fade progress",
+          "[ui][entity][parity][python_authority][phase][integration]") {
     ShellFixture fixture;
     CHECK(menu_alpha_sum(fixture) == 0U);
 

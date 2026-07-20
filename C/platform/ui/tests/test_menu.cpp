@@ -333,7 +333,8 @@ TEST_CASE("menu_hide_transitions_to_closing", "[ui][menu][interpreter]") {
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("menu_dynamic_reorder_preserves_active_name_and_children", "[ui][menu][interpreter][w21a]") {
+TEST_CASE("menu_dynamic_reorder_preserves_active_name_and_children",
+          "[ui][menu][interpreter][dynamic_children]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
@@ -361,7 +362,8 @@ TEST_CASE("menu_dynamic_reorder_preserves_active_name_and_children", "[ui][menu]
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("menu_dynamic_items_prune_deleted_child_parent", "[ui][menu][interpreter][w21a]") {
+TEST_CASE("menu_dynamic_items_prune_deleted_child_parent",
+          "[ui][menu][interpreter][dynamic_children]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
@@ -387,7 +389,8 @@ TEST_CASE("menu_dynamic_items_prune_deleted_child_parent", "[ui][menu][interpret
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("menu_child_activation_enters_opening_then_open", "[ui][menu][interpreter][w21a]") {
+TEST_CASE("menu_child_activation_enters_opening_then_open",
+          "[ui][menu][interpreter][dynamic_children]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
@@ -405,7 +408,8 @@ TEST_CASE("menu_child_activation_enters_opening_then_open", "[ui][menu][interpre
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("menu_child_hit_width_tracks_visible_animation_width", "[ui][menu][interpreter][w21a]") {
+TEST_CASE("menu_child_hit_width_tracks_visible_animation_width",
+          "[ui][menu][interpreter][dynamic_children]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
@@ -448,7 +452,8 @@ TEST_CASE("menu_child_hit_width_tracks_visible_animation_width", "[ui][menu][int
     sao_ui_menu_destroy(menu);
 }
 
-TEST_CASE("menu_child_rows_use_44_height_and_47_stride", "[ui][menu][interpreter][w21a]") {
+TEST_CASE("menu_child_rows_use_44_height_and_47_stride",
+          "[ui][menu][interpreter][dynamic_children]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
@@ -481,7 +486,7 @@ TEST_CASE("menu_child_rows_use_44_height_and_47_stride", "[ui][menu][interpreter
 }
 
 TEST_CASE("menu_child_callback_orders_payload_and_allows_reentry",
-          "[ui][menu][interpreter][w21a][callback]") {
+          "[ui][menu][interpreter][dynamic_children][callback]") {
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     ChildCallbackProbe probe{menu};

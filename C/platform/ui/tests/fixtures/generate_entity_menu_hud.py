@@ -114,7 +114,7 @@ def write_frame(name: str, hover_index: int | None) -> dict[str, Any]:
     )
     pixels = composer.to_premultiplied_bgra(rgba, FADE_ALPHA)
     validate_frame(rgba.width, rgba.height, pixels)
-    filename = f"w20_entity_menu_hud_{name}.bgra"
+    filename = f"entity_menu_hud_{name}.bgra"
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     (ASSET_DIR / filename).write_bytes(pixels)
     return {
@@ -205,7 +205,7 @@ def main() -> None:
         },
         "frames": frames,
     }
-    output = FIXTURE_DIR / "w20_entity_menu_hud.json"
+    output = FIXTURE_DIR / "entity_menu_hud.json"
     output.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

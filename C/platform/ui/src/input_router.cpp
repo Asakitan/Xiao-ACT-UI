@@ -87,6 +87,10 @@ struct HotkeyRecord {
     void* user_data = nullptr;
     // Insertion counter for stable tie-break in subset matcher.
     uint64_t insert_order = 0;
+    std::mutex callback_mutex;
+    std::condition_variable callback_idle;
+    size_t active_callbacks = 0;
+    bool active = true;
 };
 
 // Modifier bit constants for the observed side (hard bits only).
@@ -161,7 +165,7 @@ struct sao_ui_input_router_deep_s {
     uint64_t next_focus_registration_order = 0;
 
     // Hotkey list.  Insertion order preserved so ties broken oldest-first.
-    std::vector<HotkeyRecord> hotkeys;
+    std::vector<std::shared_ptr<HotkeyRecord>> hotkeys;
     uint64_t next_hotkey_handle = 1;
     uint64_t next_insert_order = 0;
 
@@ -215,6 +219,7 @@ RouterHandleRegistry& router_handle_registry() {
 std::atomic<int32_t> g_router_create_failure_point{0};
 
 thread_local std::vector<sao_ui_input_router_deep_handle_t> g_router_callback_stack;
+thread_local std::vector<const HotkeyRecord*> g_hotkey_callback_stack;
 
 bool router_callback_owns(sao_ui_input_router_deep_handle_t handle) {
     return std::find(g_router_callback_stack.begin(), g_router_callback_stack.end(), handle) !=
@@ -237,6 +242,71 @@ class RouterCallbackScope final {
   private:
     sao_ui_input_router_deep_handle_t handle_;
 };
+
+size_t hotkey_callback_owned_count(const HotkeyRecord* record) {
+    return static_cast<size_t>(
+        std::count(g_hotkey_callback_stack.begin(), g_hotkey_callback_stack.end(), record));
+}
+
+class HotkeyCallbackScope final {
+  public:
+    explicit HotkeyCallbackScope(const HotkeyRecord* record) {
+        g_hotkey_callback_stack.push_back(record);
+    }
+
+    ~HotkeyCallbackScope() {
+        g_hotkey_callback_stack.pop_back();
+    }
+
+    HotkeyCallbackScope(const HotkeyCallbackScope&) = delete;
+    HotkeyCallbackScope& operator=(const HotkeyCallbackScope&) = delete;
+};
+
+class HotkeyDispatchLease final {
+  public:
+    explicit HotkeyDispatchLease(std::shared_ptr<HotkeyRecord> record)
+        : record_(std::move(record)) {
+        if (record_ == nullptr)
+            return;
+        std::lock_guard<std::mutex> lock(record_->callback_mutex);
+        if (!record_->active)
+            return;
+        ++record_->active_callbacks;
+        active_ = true;
+    }
+
+    ~HotkeyDispatchLease() {
+        if (!active_)
+            return;
+        {
+            std::lock_guard<std::mutex> lock(record_->callback_mutex);
+            --record_->active_callbacks;
+        }
+        record_->callback_idle.notify_all();
+    }
+
+    HotkeyDispatchLease(const HotkeyDispatchLease&) = delete;
+    HotkeyDispatchLease& operator=(const HotkeyDispatchLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return active_;
+    }
+
+  private:
+    std::shared_ptr<HotkeyRecord> record_;
+    bool active_ = false;
+};
+
+void retire_hotkey(const std::shared_ptr<HotkeyRecord>& record) {
+    if (record == nullptr)
+        return;
+    const size_t owned_callbacks = hotkey_callback_owned_count(record.get());
+    std::unique_lock<std::mutex> lock(record->callback_mutex);
+    record->active = false;
+    record->callback_idle.wait(lock, [&record, owned_callbacks] {
+        return record->active_callbacks <= owned_callbacks;
+    });
+}
 
 void finalize_router(sao_ui_input_router_deep_handle_t handle) noexcept {
     try {
@@ -355,8 +425,8 @@ bool hotkey_dispatch_completed(const RouterLease& lease, uint64_t transition,
     std::lock_guard<std::mutex> guard(lease->mu);
     if (lease->transition_generation == transition)
         return true;
-    return std::ranges::none_of(lease->hotkeys, [binding](const HotkeyRecord& record) {
-        return record.handle == binding;
+    return std::ranges::none_of(lease->hotkeys, [binding](const auto& record) {
+        return record->handle == binding;
     });
 }
 
@@ -407,6 +477,7 @@ uint64_t bump_transition_locked(sao_ui_input_router_deep_s* router) {
 }
 
 struct HotkeyMatch {
+    std::shared_ptr<HotkeyRecord> record;
     sao_ui_hotkey_binding_t binding = 0;
     sao_ui_hotkey_cb_t callback = nullptr;
     void* user_data = nullptr;
@@ -437,35 +508,36 @@ bool hotkey_scope_matches(const sao_ui_input_router_deep_s* router, const Hotkey
 
 HotkeyMatch select_hotkey_locked(const sao_ui_input_router_deep_s* router,
                                  const SaoUiInputEvent& event) {
-    const HotkeyRecord* best = nullptr;
+    std::shared_ptr<HotkeyRecord> best;
     int best_specificity = -1;
     uint64_t best_insert = UINT64_MAX;
     for (const auto& record : router->hotkeys) {
-        if (record.virtual_key != event.virtual_key)
+        if (record->virtual_key != event.virtual_key)
             continue;
-        if (event.kind == SAO_UI_INPUT_KEY_UP && !record.require_release)
+        if (event.kind == SAO_UI_INPUT_KEY_UP && !record->require_release)
             continue;
-        if (event.kind == SAO_UI_INPUT_KEY_DOWN && record.require_release)
+        if (event.kind == SAO_UI_INPUT_KEY_DOWN && record->require_release)
             continue;
         if (event.kind != SAO_UI_INPUT_KEY_DOWN && event.kind != SAO_UI_INPUT_KEY_UP)
             continue;
-        if (event.key_repeat && !record.allow_repeat)
+        if (event.key_repeat && !record->allow_repeat)
             continue;
-        if (!binding_matches(record.modifiers, event.modifiers))
+        if (!binding_matches(record->modifiers, event.modifiers))
             continue;
-        if (!hotkey_scope_matches(router, record))
+        if (!hotkey_scope_matches(router, *record))
             continue;
-        const int specificity = binding_specificity(record.modifiers);
+        const int specificity = binding_specificity(record->modifiers);
         if (specificity > best_specificity ||
-            (specificity == best_specificity && record.insert_order < best_insert)) {
-            best = &record;
+            (specificity == best_specificity && record->insert_order < best_insert)) {
+            best = record;
             best_specificity = specificity;
-            best_insert = record.insert_order;
+            best_insert = record->insert_order;
         }
     }
     if (best == nullptr)
         return {};
-    return {best->handle, best->callback, best->user_data, best->binding_id, best->prevent_default};
+    return {best, best->handle, best->callback, best->user_data, best->binding_id,
+            best->prevent_default};
 }
 
 bool valid_event_kind(int32_t kind) {
@@ -813,8 +885,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
             }
         }
         if (hotkey.callback != nullptr) {
-            RouterCallbackScope callback_scope(handle);
-            hotkey.callback(hotkey.binding_id.c_str(), event, hotkey.user_data);
+            HotkeyDispatchLease hotkey_lease(hotkey.record);
+            if (hotkey_lease) {
+                RouterCallbackScope callback_scope(handle);
+                HotkeyCallbackScope hotkey_scope(hotkey.record.get());
+                hotkey.callback(hotkey.binding_id.c_str(), event, hotkey.user_data);
+            }
             if (!hotkey_dispatch_completed(lease, transition, hotkey.binding))
                 return SAO_UI_STATUS_ERR_BUSY;
         }
@@ -1140,26 +1216,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_register_hotkey(
             }
         }
 
-        HotkeyRecord rec{};
-        rec.handle = lease->next_hotkey_handle++;
-        rec.insert_order = lease->next_insert_order++;
-        rec.plugin_id = (plugin_id_utf8 == nullptr ? "" : plugin_id_utf8);
-        rec.binding_id = (spec->binding_id_utf8 == nullptr ? "" : spec->binding_id_utf8);
-        rec.virtual_key = spec->virtual_key;
-        rec.modifiers = effective_mods;
-        rec.scope = spec->scope;
-        rec.scope_panel_id =
+        auto rec = std::make_shared<HotkeyRecord>();
+        rec->handle = lease->next_hotkey_handle++;
+        rec->insert_order = lease->next_insert_order++;
+        rec->plugin_id = (plugin_id_utf8 == nullptr ? "" : plugin_id_utf8);
+        rec->binding_id = (spec->binding_id_utf8 == nullptr ? "" : spec->binding_id_utf8);
+        rec->virtual_key = spec->virtual_key;
+        rec->modifiers = effective_mods;
+        rec->scope = spec->scope;
+        rec->scope_panel_id =
             (spec->scope_panel_id_utf8 == nullptr ? "" : spec->scope_panel_id_utf8);
-        rec.enforce_ctrl_prefix = spec->enforce_ctrl_prefix;
-        rec.prevent_default = spec->prevent_default;
-        rec.allow_repeat = spec->allow_repeat;
-        rec.require_release = spec->require_release;
-        rec.callback = callback;
-        rec.user_data = user_data;
+        rec->enforce_ctrl_prefix = spec->enforce_ctrl_prefix;
+        rec->prevent_default = spec->prevent_default;
+        rec->allow_repeat = spec->allow_repeat;
+        rec->require_release = spec->require_release;
+        rec->callback = callback;
+        rec->user_data = user_data;
 
-        lease->hotkeys.push_back(std::move(rec));
+        lease->hotkeys.push_back(rec);
         if (out_binding != nullptr)
-            *out_binding = lease->hotkeys.back().handle;
+            *out_binding = rec->handle;
         bump_transition_locked(lease.get());
         return SAO_STATUS_OK;
     } catch (...) {
@@ -1174,16 +1250,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_unregister_hotkey(
         auto lease = acquire_router(handle);
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;
-        std::lock_guard<std::mutex> guard(lease->mu);
-        auto& hotkeys = lease->hotkeys;
-        const auto found =
-            std::remove_if(hotkeys.begin(), hotkeys.end(), [binding](const HotkeyRecord& record) {
-                return record.handle == binding;
-            });
-        if (found == hotkeys.end())
-            return SAO_STATUS_ERR_NOT_FOUND;
-        hotkeys.erase(found, hotkeys.end());
-        bump_transition_locked(lease.get());
+        std::shared_ptr<HotkeyRecord> removed;
+        {
+            std::lock_guard<std::mutex> guard(lease->mu);
+            auto& hotkeys = lease->hotkeys;
+            const auto found = std::find_if(hotkeys.begin(), hotkeys.end(),
+                                            [binding](const auto& record) {
+                                                return record->handle == binding;
+                                            });
+            if (found == hotkeys.end())
+                return SAO_STATUS_ERR_NOT_FOUND;
+            removed = *found;
+            hotkeys.erase(found);
+            bump_transition_locked(lease.get());
+        }
+        retire_hotkey(removed);
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1201,16 +1282,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_unregister_plugin_hotkey
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         const std::string needle(plugin_id_utf8);
-        std::lock_guard<std::mutex> guard(lease->mu);
-        auto& hotkeys = lease->hotkeys;
-        const size_t old_size = hotkeys.size();
-        hotkeys.erase(std::remove_if(hotkeys.begin(), hotkeys.end(),
-                                     [&needle](const HotkeyRecord& record) {
-                                         return record.plugin_id == needle;
-                                     }),
-                      hotkeys.end());
-        if (hotkeys.size() != old_size)
-            bump_transition_locked(lease.get());
+        std::vector<std::shared_ptr<HotkeyRecord>> removed;
+        {
+            std::lock_guard<std::mutex> guard(lease->mu);
+            auto& hotkeys = lease->hotkeys;
+            for (const auto& record : hotkeys) {
+                if (record->plugin_id == needle)
+                    removed.push_back(record);
+            }
+            hotkeys.erase(std::remove_if(hotkeys.begin(), hotkeys.end(),
+                                         [&needle](const auto& record) {
+                                             return record->plugin_id == needle;
+                                         }),
+                          hotkeys.end());
+            if (!removed.empty())
+                bump_transition_locked(lease.get());
+        }
+        for (const auto& record : removed)
+            retire_hotkey(record);
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1231,12 +1320,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_find_conflicts(
 
         size_t written = 0;
         for (const auto& record : lease->hotkeys) {
-            if (record.virtual_key != virtual_key)
+            if (record->virtual_key != virtual_key)
                 continue;
-            if (!binding_matches(record.modifiers, modifiers))
+            if (!binding_matches(record->modifiers, modifiers))
                 continue;
             if (out_bindings != nullptr && written < capacity)
-                out_bindings[written] = record.handle;
+                out_bindings[written] = record->handle;
             ++written;
         }
         if (out_written != nullptr)
@@ -1287,8 +1376,12 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_match_hotkey(
         if (out_binding != nullptr)
             *out_binding = match.binding;
         if (match.callback != nullptr) {
-            RouterCallbackScope callback_scope(handle);
-            match.callback(match.binding_id.c_str(), event, match.user_data);
+            HotkeyDispatchLease hotkey_lease(match.record);
+            if (hotkey_lease) {
+                RouterCallbackScope callback_scope(handle);
+                HotkeyCallbackScope hotkey_scope(match.record.get());
+                match.callback(match.binding_id.c_str(), event, match.user_data);
+            }
             if (!hotkey_dispatch_completed(lease, transition, match.binding))
                 return SAO_UI_STATUS_ERR_BUSY;
         }

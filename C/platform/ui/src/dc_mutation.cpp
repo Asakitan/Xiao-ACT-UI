@@ -1,9 +1,9 @@
 // SAO Auto — serialized, generation-aware display-context mutations.
 //
-// The worker executes the two mutation methods used by the production UI:
-// set_window_rect/set_bounds and hide_exstyle. Inputs are validated before
-// queue admission. A dispatch is recorded only after the OS mutation and its
-// readback both succeed.
+// Legacy set_window_rect/set_bounds and hide_exstyle mutations execute on the
+// HWND owner thread. Typed hide_window_rect work executes directly on the
+// coordinator worker through a copied provider table. A dispatch is recorded
+// only after the selected executor reports success.
 
 #include "sao/ui/dc_mutation.h"
 
@@ -85,6 +85,7 @@ struct Token {
 enum class MutationKind : uint8_t {
     kSetBounds,
     kHideExstyle,
+    kHideWindowRect,
 };
 
 struct MutationPayload {
@@ -94,6 +95,9 @@ struct MutationPayload {
     int32_t width = 0;
     int32_t height = 0;
     uint32_t mask = 0;
+    SaoUiDcMutationRect fake_rect{};
+    uint32_t settle_ms = 0;
+    uint32_t timeout_ms = 0;
 };
 
 struct Mutation {
@@ -325,6 +329,10 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     bool accepting = true;
     bool stop_requested = false;
 
+    // Copied provider table. user_data remains borrowed until shutdown joins
+    // the worker and destroy() returns.
+    SaoUiDcMutationProvider rect_provider{};
+
     // ── Diagnostic dispatch log (for tests) ────────────────────
     std::mutex dispatch_mu;
     std::deque<DispatchRecord> dispatch_log;
@@ -336,7 +344,10 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     // ── Worker thread ──────────────────────────────────────────
     std::thread worker;
 
-    Coordinator() {
+    explicit Coordinator(const SaoUiDcMutationProvider* provider) {
+        if (provider != nullptr) {
+            rect_provider = *provider;
+        }
         worker = std::thread([this] { this->run(); });
     }
 
@@ -464,15 +475,19 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         return true;
     }
 
-    bool submit_dc(uintptr_t hwnd, const std::string& op, const std::string& method_name,
-                   const std::string& args_json, const MutationPayload& payload) {
+    sao_status_t submit_dc(uintptr_t hwnd, const std::string& op, const std::string& method_name,
+                           const std::string& args_json, const MutationPayload& payload,
+                           bool requires_rect_provider) {
         std::lock_guard<std::mutex> guard(mu);
         if (!accepting || invalidating.count(hwnd) != 0 || failed.count(hwnd) != 0) {
-            return false;
+            return SAO_STATUS_ERR_ACCESS_DENIED;
         }
         auto tok_it = tokens.find(hwnd);
         if (tok_it == tokens.end()) {
-            return false;
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        }
+        if (requires_rect_provider && rect_provider.hide_window_rect == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
         const Token token = tok_it->second;
         const uint64_t generation = token.generation;
@@ -487,7 +502,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             queue.push_back(key);
         }
         cv.notify_all();
-        return true;
+        return SAO_STATUS_OK;
     }
 
     bool token_current(const Token& token) {
@@ -572,6 +587,23 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
 #endif
     }
 
+    sao_status_t execute_hide_window_rect_on_worker(const Mutation& task) {
+        // Revalidate immediately before entering borrowed provider code. This
+        // is intentionally independent of the owner-thread dispatch hook.
+        if (!token_current(task.token))
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const auto callback = rect_provider.hide_window_rect;
+        if (callback == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        try {
+            return callback(rect_provider.user_data, reinterpret_cast<void*>(task.key.hwnd),
+                            &task.payload.fake_rect, task.payload.settle_ms,
+                            task.payload.timeout_ms);
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
     sao_status_t execute_on_owner_thread(const Mutation& task) {
 #if defined(_WIN32)
         if (::GetCurrentThreadId() != task.token.thread_id)
@@ -584,11 +616,15 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             return execute_set_bounds_on_owner(task);
         case MutationKind::kHideExstyle:
             return execute_hide_exstyle_on_owner(task);
+        case MutationKind::kHideWindowRect:
+            return SAO_STATUS_ERR_ACCESS_DENIED;
         }
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     }
 
     sao_status_t execute(const Mutation& task) {
+        if (task.payload.kind == MutationKind::kHideWindowRect)
+            return execute_hide_window_rect_on_worker(task);
 #if !defined(_WIN32)
         return execute_on_owner_thread(task);
 #else
@@ -809,14 +845,14 @@ struct BarrierHandle {
 
 } // namespace
 
-extern "C" sao_status_t SAO_UI_CALL
-sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
+    const SaoUiDcMutationProvider* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
     if (out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_handle = nullptr;
     try {
-        auto coordinator = std::make_shared<Coordinator>();
+        auto coordinator = std::make_shared<Coordinator>(provider);
         auto handle = std::make_unique<CoordinatorHandle>();
         handle->coord = std::move(coordinator);
         *out_handle = reinterpret_cast<sao_ui_dc_mutation_coordinator_handle_t>(handle.release());
@@ -824,6 +860,11 @@ sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* o
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
+    return sao_ui_dc_mutation_coordinator_create_ex(nullptr, out_handle);
 }
 
 extern "C" void SAO_UI_CALL
@@ -886,13 +927,39 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_dc(
         const std::string op(*operation);
         const std::string method_name(*method);
         const std::string args_json(reinterpret_cast<const char*>(args_json_utf8), args_len);
-        const bool ok = h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), op, method_name,
-                                            args_json, payload);
-        return ok ? SAO_STATUS_OK : SAO_STATUS_ERR_ACCESS_DENIED;
+        return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), op, method_name, args_json,
+                                   payload, false);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
 #endif
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
+    const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms) {
+    if (handle == nullptr || hwnd == nullptr || fake_rect == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (fake_rect->right <= fake_rect->left || fake_rect->bottom <= fake_rect->top)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        MutationPayload payload{};
+        payload.kind = MutationKind::kHideWindowRect;
+        payload.fake_rect = *fake_rect;
+        payload.settle_ms = settle_ms;
+        payload.timeout_ms = timeout_ms;
+        const std::string args_json = "{\"left\":" + std::to_string(fake_rect->left) +
+                                      ",\"top\":" + std::to_string(fake_rect->top) +
+                                      ",\"right\":" + std::to_string(fake_rect->right) +
+                                      ",\"bottom\":" + std::to_string(fake_rect->bottom) +
+                                      ",\"settle_ms\":" + std::to_string(settle_ms) +
+                                      ",\"timeout_ms\":" + std::to_string(timeout_ms) + "}";
+        auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
+        return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), "host-rect-scrub",
+                                   "hide_window_rect", args_json, payload, true);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" bool SAO_UI_CALL sao_ui_dc_mutation_coordinator_invalidate(

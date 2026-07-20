@@ -9,9 +9,14 @@
 //   * modal barrier blocks route to targets not on the modal panel
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <future>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -89,6 +94,26 @@ struct SelfUnregisterHotkey {
     size_t calls{};
 };
 
+struct BlockingHotkey {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    std::atomic_int calls{0};
+};
+
+struct ReentrantDrainHotkey {
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    sao_ui_hotkey_binding_t binding = 0;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool first_entered = false;
+    bool second_entered = false;
+    bool release_first = false;
+    std::atomic_int calls{0};
+    sao_status_t unregister_status{SAO_STATUS_ERR_UNKNOWN};
+};
+
 void SAO_UI_CALL hotkey_cb(const char* binding_id, const SaoUiInputEvent*, void* user_data) {
     auto* log = reinterpret_cast<HotkeyFireLog*>(user_data);
     log->hits.fetch_add(1);
@@ -100,6 +125,34 @@ void SAO_UI_CALL self_unregister_hotkey_cb(const char*, const SaoUiInputEvent*, 
     auto* state = static_cast<SelfUnregisterHotkey*>(user_data);
     ++state->calls;
     state->status = sao_ui_input_router_unregister_hotkey(state->router, state->binding);
+}
+
+void SAO_UI_CALL blocking_hotkey_cb(const char*, const SaoUiInputEvent*, void* user_data) {
+    auto* state = static_cast<BlockingHotkey*>(user_data);
+    state->calls.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->condition.notify_all();
+    state->condition.wait(lock, [state] { return state->release; });
+}
+
+void SAO_UI_CALL reentrant_drain_hotkey_cb(const char*, const SaoUiInputEvent*, void* user_data) {
+    auto* state = static_cast<ReentrantDrainHotkey*>(user_data);
+    const int call = state->calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (call == 1) {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->first_entered = true;
+        state->condition.notify_all();
+        state->condition.wait(lock, [state] { return state->release_first; });
+    } else if (call == 2) {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->second_entered = true;
+        }
+        state->condition.notify_all();
+        state->unregister_status =
+            sao_ui_input_router_unregister_hotkey(state->router, state->binding);
+    }
 }
 
 void SAO_UI_CALL focus_event_cb(int32_t event_type, const uint8_t*, size_t, void* user_data) {
@@ -417,6 +470,98 @@ TEST_CASE("router hotkey self unregister completes once and stops later routes",
     CHECK(sao_ui_input_router_route_event(router, &event, &consumed) == SAO_STATUS_OK);
     CHECK_FALSE(consumed);
     CHECK(state.calls == 1);
+    sao_ui_input_router_deep_destroy(router);
+}
+
+TEST_CASE("router hotkey unregister drains another thread before owner release",
+          "[ui][input_router][hotkey][lifetime][concurrency]") {
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(nullptr, &router) == SAO_STATUS_OK);
+    BlockingHotkey state;
+    SaoUiHotkeyBindingSpec spec{};
+    spec.binding_id_utf8 = "drain";
+    spec.virtual_key = 0x78;
+    spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
+    sao_ui_hotkey_binding_t binding = 0;
+    REQUIRE(sao_ui_input_router_register_hotkey(router, "core", &spec, blocking_hotkey_cb,
+                                                &state, &binding) == SAO_STATUS_OK);
+    const auto event = key_down_event(0x78, SAO_UI_MOD_NONE);
+    auto dispatch = std::async(std::launch::async, [&] {
+        sao_ui_hotkey_binding_t matched = 0;
+        return sao_ui_input_router_match_hotkey(router, &event, &matched);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.entered; }));
+    }
+    auto unregister = std::async(std::launch::async,
+                                 [&] { return sao_ui_input_router_unregister_hotkey(router,
+                                                                                     binding); });
+    CHECK(unregister.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.release = true;
+    }
+    state.condition.notify_all();
+    REQUIRE(dispatch.get() == SAO_STATUS_OK);
+    REQUIRE(unregister.get() == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+    sao_ui_hotkey_binding_t matched = 0;
+    CHECK(sao_ui_input_router_match_hotkey(router, &event, &matched) ==
+          SAO_STATUS_ERR_NOT_FOUND);
+    sao_ui_input_router_deep_destroy(router);
+}
+
+TEST_CASE("router hotkey self unregister drains only callbacks owned by other threads",
+          "[ui][input_router][hotkey][lifetime][concurrency][reentry]") {
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(nullptr, &router) == SAO_STATUS_OK);
+    ReentrantDrainHotkey state;
+    state.router = router;
+    SaoUiHotkeyBindingSpec spec{};
+    spec.binding_id_utf8 = "self-drain";
+    spec.virtual_key = 0x79;
+    spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
+    REQUIRE(sao_ui_input_router_register_hotkey(router, "core", &spec,
+                                                reentrant_drain_hotkey_cb, &state,
+                                                &state.binding) == SAO_STATUS_OK);
+    const auto event = key_down_event(0x79, SAO_UI_MOD_NONE);
+
+    auto first_dispatch = std::async(std::launch::async, [&] {
+        sao_ui_hotkey_binding_t matched = 0;
+        return sao_ui_input_router_match_hotkey(router, &event, &matched);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.first_entered; }));
+    }
+
+    auto second_dispatch = std::async(std::launch::async, [&] {
+        sao_ui_hotkey_binding_t matched = 0;
+        return sao_ui_input_router_match_hotkey(router, &event, &matched);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.second_entered; }));
+    }
+    CHECK(second_dispatch.wait_for(std::chrono::milliseconds(50)) ==
+          std::future_status::timeout);
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.release_first = true;
+    }
+    state.condition.notify_all();
+    REQUIRE(first_dispatch.get() == SAO_STATUS_OK);
+    REQUIRE(second_dispatch.get() == SAO_STATUS_OK);
+    CHECK(state.unregister_status == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 2);
+    sao_ui_hotkey_binding_t matched = 0;
+    CHECK(sao_ui_input_router_match_hotkey(router, &event, &matched) ==
+          SAO_STATUS_ERR_NOT_FOUND);
     sao_ui_input_router_deep_destroy(router);
 }
 

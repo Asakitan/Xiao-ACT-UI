@@ -43,7 +43,7 @@ constexpr int32_t kMenuSlot = 70;
 constexpr int32_t kMenuColumnLeft = 40;
 constexpr int32_t kMenuColumnRight = 110;
 constexpr std::string_view kReviewedManifestSha256 =
-    "7c63ddd2a51107c28fb0a8c6a4321a21f94bdce260cdd3f5d05d1ba000a1fe01";
+    "fc9c69d9eab08b2e42ff929b0b513a86ed8d9cbfb3610f4672fd8eb02f34b003";
 
 std::vector<uint8_t> read_bytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -52,7 +52,7 @@ std::vector<uint8_t> read_bytes(const std::filesystem::path& path) {
 }
 
 std::filesystem::path metadata_path() {
-    return std::filesystem::path(SAO_UI_TEST_FIXTURE_DIR) / "w20_entity_menu_hud.json";
+    return std::filesystem::path(SAO_UI_TEST_FIXTURE_DIR) / "entity_menu_hud.json";
 }
 
 nlohmann::json read_metadata() {
@@ -229,8 +229,8 @@ void require_canonical_crop(const ShellFixture& fixture, const nlohmann::json& f
 
 } // namespace
 
-TEST_CASE("W20 Entity menu HUD resources retain reviewed Python authority",
-          "[ui][w20][entity_menu_hud][resource_integrity]") {
+TEST_CASE("Entity menu HUD resources retain reviewed Python authority",
+          "[ui][entity_menu_hud][python_authority][resource_integrity]") {
     const auto manifest_bytes = read_bytes(metadata_path());
     REQUIRE(sha256_hex(manifest_bytes) == kReviewedManifestSha256);
     const auto metadata = nlohmann::json::parse(manifest_bytes.begin(), manifest_bytes.end());
@@ -280,8 +280,8 @@ TEST_CASE("W20 Entity menu HUD resources retain reviewed Python authority",
     }
 }
 
-TEST_CASE("W20 Entity public composition selects every canonical menu frame",
-          "[ui][w20][entity_menu_hud][production_composition]") {
+TEST_CASE("Entity public composition selects every canonical menu frame",
+          "[ui][entity_menu_hud][python_authority][production_composition]") {
     const auto metadata = read_metadata();
     ShellFixture fixture;
     fixture.open_menu();
@@ -312,8 +312,8 @@ TEST_CASE("W20 Entity public composition selects every canonical menu frame",
     require_canonical_crop(fixture, find_frame(metadata, "hover_2"));
 }
 
-TEST_CASE("W20 Entity root menu uses canonical 70px authority hit slots",
-          "[ui][w20][entity_menu_hud][production_composition][geometry]") {
+TEST_CASE("Entity root menu uses canonical 70px authority hit slots",
+          "[ui][entity_menu_hud][python_authority][production_composition][geometry]") {
     const auto metadata = read_metadata();
     const auto& hit_rects = metadata.at("menu").at("geometry").at("hit_rects");
     REQUIRE(hit_rects.size() == 5U);

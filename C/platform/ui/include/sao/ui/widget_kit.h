@@ -184,6 +184,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_register_renderer_provider(
     void* user_data,
     uint64_t* out_provider_token);
 
+// Retires the provider and waits for every in-flight paint callback before
+// returning OK, after which user_data may be released.  Calling this for the
+// active provider from inside its own callback returns SAO_UI_STATUS_ERR_BUSY
+// and leaves the provider registered for a later teardown call.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_unregister_renderer_provider(
     uint64_t provider_token);
 

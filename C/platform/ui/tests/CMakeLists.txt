@@ -362,54 +362,54 @@ target_compile_features(sao_platform_ui_entity_roots_focused_tests PRIVATE cxx_s
 
 catch_discover_tests(sao_platform_ui_entity_roots_focused_tests
     TEST_PREFIX "ui.entity_roots.focused."
-    PROPERTIES LABELS "ui;entity_shell;entity_roots;w21"
+    PROPERTIES LABELS "ui;entity_shell;entity_roots;dynamic_roots"
 )
 
 if (WIN32)
-    add_executable(sao_platform_ui_parity_entity_w19_tests
-        test_ui_parity_entity_w19.cpp
+    add_executable(sao_platform_ui_entity_parity_tests
+        test_entity_parity.cpp
     )
 
-    target_link_libraries(sao_platform_ui_parity_entity_w19_tests PRIVATE
+    target_link_libraries(sao_platform_ui_entity_parity_tests PRIVATE
         sao::ui
         nlohmann_json::nlohmann_json
         Catch2::Catch2WithMain
         bcrypt
     )
 
-    target_compile_definitions(sao_platform_ui_parity_entity_w19_tests PRIVATE
+    target_compile_definitions(sao_platform_ui_entity_parity_tests PRIVATE
         SAO_UI_USING_DLL
         SAO_UI_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
         SAO_UI_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/entity"
     )
-    target_compile_features(sao_platform_ui_parity_entity_w19_tests PRIVATE cxx_std_20)
+    target_compile_features(sao_platform_ui_entity_parity_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_parity_entity_w19_tests
-        TEST_PREFIX "ui.w19.entity."
-        PROPERTIES LABELS "ui;w19;entity;parity"
+    catch_discover_tests(sao_platform_ui_entity_parity_tests
+        TEST_PREFIX "ui.entity_parity."
+        PROPERTIES LABELS "ui;entity;parity;python_authority"
     )
 
-    add_executable(sao_platform_ui_entity_menu_hud_w20_tests
-        test_entity_menu_hud_w20.cpp
+    add_executable(sao_platform_ui_entity_menu_hud_tests
+        test_entity_menu_hud.cpp
     )
 
-    target_link_libraries(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE
+    target_link_libraries(sao_platform_ui_entity_menu_hud_tests PRIVATE
         sao::ui
         nlohmann_json::nlohmann_json
         Catch2::Catch2WithMain
         bcrypt
     )
 
-    target_compile_definitions(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE
+    target_compile_definitions(sao_platform_ui_entity_menu_hud_tests PRIVATE
         SAO_UI_USING_DLL
         SAO_UI_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
         SAO_UI_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/entity"
     )
-    target_compile_features(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE cxx_std_20)
+    target_compile_features(sao_platform_ui_entity_menu_hud_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_entity_menu_hud_w20_tests
-        TEST_PREFIX "ui.w20.entity_menu_hud."
-        PROPERTIES LABELS "ui;w20;entity;resource_integrity;production_composition"
+    catch_discover_tests(sao_platform_ui_entity_menu_hud_tests
+        TEST_PREFIX "ui.entity_menu_hud."
+        PROPERTIES LABELS "ui;entity;menu_hud;resource_integrity;production_composition"
     )
 endif()
 

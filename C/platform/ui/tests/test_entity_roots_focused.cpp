@@ -177,7 +177,7 @@ std::vector<uint8_t> pixels(sao_ui_entity_shell_handle_t shell) {
 
 } // namespace
 
-TEST_CASE("W21 B3c C1 defaults publish five roots on UI ABI 1.5", "[ui][entity_roots]") {
+TEST_CASE("Entity roots default to five entries on UI ABI 1.5", "[ui][entity_roots]") {
     CHECK(SAO_UI_ABI_VERSION_MAJOR == 1U);
     CHECK(SAO_UI_ABI_VERSION_MINOR == 5U);
     CHECK(SAO_UI_ABI_VERSION == 0x00010005U);
@@ -195,7 +195,7 @@ TEST_CASE("W21 B3c C1 defaults publish five roots on UI ABI 1.5", "[ui][entity_r
     sao_ui_entity_shell_destroy(shell);
 }
 
-TEST_CASE("W21 B3c C1 root viewport scrolls and maps the sixth action", "[ui][entity_roots]") {
+TEST_CASE("Entity root viewport scrolls and maps the sixth action", "[ui][entity_roots]") {
     ActionLog actions{};
     const auto config = make_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
@@ -228,7 +228,7 @@ TEST_CASE("W21 B3c C1 root viewport scrolls and maps the sixth action", "[ui][en
     destroy_shell(shell);
 }
 
-TEST_CASE("W21 B3c C1 stable IDs preserve active root and viewport", "[ui][entity_roots]") {
+TEST_CASE("Entity root stable IDs preserve active root and viewport", "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
     REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
@@ -264,7 +264,7 @@ TEST_CASE("W21 B3c C1 stable IDs preserve active root and viewport", "[ui][entit
     destroy_shell(shell);
 }
 
-TEST_CASE("W21 B3c C1 validation is fail closed and semantic no-op is stable",
+TEST_CASE("Entity root validation is fail closed and semantic no-op is stable",
           "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
@@ -312,7 +312,7 @@ TEST_CASE("W21 B3c C1 validation is fail closed and semantic no-op is stable",
     sao_ui_entity_shell_destroy(shell);
 }
 
-TEST_CASE("W21 B3c C1 empty root publication is a semantic tree", "[ui][entity_roots]") {
+TEST_CASE("Empty Entity root publication is a semantic tree", "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
     REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
@@ -331,7 +331,7 @@ TEST_CASE("W21 B3c C1 empty root publication is a semantic tree", "[ui][entity_r
     sao_ui_entity_shell_destroy(shell);
 }
 
-TEST_CASE("W21 B3c C1 root publication enforces string and child budgets", "[ui][entity_roots]") {
+TEST_CASE("Entity root publication enforces string and child budgets", "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
     REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
@@ -416,7 +416,7 @@ TEST_CASE("W21 B3c C1 root publication enforces string and child budgets", "[ui]
     sao_ui_entity_shell_destroy(shell);
 }
 
-TEST_CASE("W21 B3c C1 active root survives viewport projection", "[ui][entity_roots]") {
+TEST_CASE("Active Entity root survives viewport projection", "[ui][entity_roots]") {
     ActionLog actions{};
     const auto config = make_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
@@ -440,7 +440,7 @@ TEST_CASE("W21 B3c C1 active root survives viewport projection", "[ui][entity_ro
     destroy_shell(shell);
 }
 
-TEST_CASE("W21 B3c C1 hiding the menu clears the active root", "[ui][entity_roots]") {
+TEST_CASE("Hiding the Entity menu clears the active root", "[ui][entity_roots]") {
     ActionLog actions{};
     const auto config = make_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
@@ -453,7 +453,7 @@ TEST_CASE("W21 B3c C1 hiding the menu clears the active root", "[ui][entity_root
     destroy_shell(shell);
 }
 
-TEST_CASE("W21 B3c C1 legacy children survive root projection", "[ui][entity_roots]") {
+TEST_CASE("Legacy Entity children survive root projection", "[ui][entity_roots]") {
     ActionLog actions{};
     const auto config = make_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
@@ -479,7 +479,7 @@ TEST_CASE("W21 B3c C1 legacy children survive root projection", "[ui][entity_roo
     destroy_shell(shell);
 }
 
-TEST_CASE("W21 B3c C1 set_roots is owner-thread only", "[ui][entity_roots]") {
+TEST_CASE("Entity set_roots is owner-thread only", "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
     REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
@@ -494,7 +494,7 @@ TEST_CASE("W21 B3c C1 set_roots is owner-thread only", "[ui][entity_roots]") {
     sao_ui_entity_shell_destroy(shell);
 }
 
-TEST_CASE("W21 B3c C1 dynamic Unicode roots rasterize", "[ui][entity_roots]") {
+TEST_CASE("Dynamic Unicode Entity roots rasterize", "[ui][entity_roots]") {
     const auto config = make_config();
     sao_ui_entity_shell_handle_t shell = nullptr;
     REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);

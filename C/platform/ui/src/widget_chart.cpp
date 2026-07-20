@@ -13,6 +13,8 @@
 #include "sao/ui/widget_chart.h"
 #include "sao/ui/widget_kit.h"
 
+#include "widget_typed_internal.h"
+
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
@@ -118,6 +120,14 @@ struct SparklineState {
     SaoUiSparklineSpec spec{};
     std::vector<double> values;
     mutable std::mutex mtx;
+};
+
+struct ChartPropsSnapshot {
+    std::vector<TimeSeriesLane> lanes;
+    std::vector<OwnedBar> bars;
+    std::vector<OwnedLineSeries> series;
+    std::vector<double> values;
+    int64_t zoom_window_ms{};
 };
 
 struct ChartHandleShell {
@@ -1109,6 +1119,605 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_timeseries_compute_
         out_axis->tick_count =
             lease->spec.x_axis.desired_tick_count > 0 ? lease->spec.x_axis.desired_tick_count : 5;
         return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_chart_apply_props(
+    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    try {
+        auto snapshot = std::make_shared<ChartPropsSnapshot>();
+        switch (kind) {
+        case kTimeSeriesTag: {
+            if (!widget_props_has_only(props, {"lanes", "zoom_window_ms"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto lanes_property = props.find("lanes");
+            const auto zoom_property = props.find("zoom_window_ms");
+            int64_t zoom = 0;
+            if (zoom_property != props.end() &&
+                (!widget_props_i64(*zoom_property, &zoom) || zoom < 0)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+
+            std::vector<std::string> lane_ids;
+            std::vector<std::string> lane_labels;
+            std::vector<std::vector<SaoUiTimePoint>> lane_points;
+            std::vector<SaoUiTimeSeriesLane> lanes;
+            if (lanes_property != props.end()) {
+                if (!lanes_property->is_array() ||
+                    lanes_property->size() > kMaxTimeSeriesLanes) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                const size_t count = lanes_property->size();
+                lane_ids.resize(count);
+                lane_labels.resize(count);
+                lane_points.resize(count);
+                lanes.resize(count);
+                for (size_t index = 0; index < count; ++index) {
+                    const auto& item = (*lanes_property)[index];
+                    if (!widget_props_has_only(
+                            item, {"lane_id", "label", "points", "fill_argb",
+                                   "area_fill_argb", "line_width_px", "show_points",
+                                   "interpolate", "peak_hint"})) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto lane_id = item.find("lane_id");
+                    if (lane_id == item.end() || !lane_id->is_string())
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    lane_ids[index] = lane_id->get<std::string>();
+                    if (lane_ids[index].empty() ||
+                        std::find(lane_ids.begin(), lane_ids.begin() + index, lane_ids[index]) !=
+                            lane_ids.begin() + index) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto label = item.find("label");
+                    if (label != item.end()) {
+                        if (!label->is_string())
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        lane_labels[index] = label->get<std::string>();
+                    }
+                    const auto points = item.find("points");
+                    if (points != item.end()) {
+                        if (!points->is_array() || points->size() > kMaxChartItems)
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        lane_points[index].reserve(points->size());
+                        for (const auto& point : *points) {
+                            if (!widget_props_has_only(point, {"time_ms", "value"}))
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                            const auto time = point.find("time_ms");
+                            const auto value = point.find("value");
+                            int64_t time_ms = 0;
+                            double sample = 0.0;
+                            if (time == point.end() || value == point.end() ||
+                                !widget_props_i64(*time, &time_ms) ||
+                                !widget_props_double(*value, &sample)) {
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                            }
+                            lane_points[index].push_back({time_ms, sample});
+                        }
+                    }
+                    auto& lane = lanes[index];
+                    lane.lane_id_utf8 = lane_ids[index].c_str();
+                    lane.label_utf8 = lane_labels[index].empty() ? nullptr
+                                                                 : lane_labels[index].c_str();
+                    lane.points = lane_points[index].empty() ? nullptr : lane_points[index].data();
+                    lane.point_count = lane_points[index].size();
+                    lane.line_width_px = 1.5F;
+                    lane.interpolate = true;
+                    const auto fill = item.find("fill_argb");
+                    const auto area = item.find("area_fill_argb");
+                    const auto line_width = item.find("line_width_px");
+                    const auto show_points = item.find("show_points");
+                    const auto interpolate = item.find("interpolate");
+                    const auto peak_hint = item.find("peak_hint");
+                    if ((fill != item.end() && !widget_props_argb(*fill, &lane.fill_argb)) ||
+                        (area != item.end() &&
+                         !widget_props_argb(*area, &lane.area_fill_argb)) ||
+                        (line_width != item.end() &&
+                         (!widget_props_float(*line_width, &lane.line_width_px) ||
+                          lane.line_width_px < 0.0F)) ||
+                        (show_points != item.end() &&
+                         !widget_props_bool(*show_points, &lane.show_points)) ||
+                        (interpolate != item.end() &&
+                         !widget_props_bool(*interpolate, &lane.interpolate)) ||
+                        (peak_hint != item.end() &&
+                         !widget_props_double(*peak_hint, &lane.peak_hint))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+
+            auto lease = acquire_chart_lease<TimeSeriesState>(handle, kTimeSeriesTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                snapshot->lanes = lease->lanes;
+                snapshot->zoom_window_ms = lease->zoom_window_ms;
+            }
+            sao_status_t status = SAO_STATUS_OK;
+            if (lanes_property != props.end()) {
+                status = sao_ui_time_series_chart_set_lanes(
+                    handle, lanes.empty() ? nullptr : lanes.data(), lanes.size());
+            }
+            if (status == SAO_STATUS_OK && zoom_property != props.end())
+                status = sao_ui_time_series_chart_set_zoom(handle, zoom);
+            if (status != SAO_STATUS_OK) {
+                auto restore = acquire_chart_lease<TimeSeriesState>(handle, kTimeSeriesTag);
+                if (restore) {
+                    std::lock_guard<std::mutex> lock(restore->mtx);
+                    restore->lanes = snapshot->lanes;
+                    restore->zoom_window_ms = snapshot->zoom_window_ms;
+                }
+                return status;
+            }
+            break;
+        }
+        case kBarChartTag: {
+            if (!widget_props_has_only(props, {"bars"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto bars_property = props.find("bars");
+            std::vector<std::string> labels;
+            std::vector<SaoUiBarChartBar> bars;
+            if (bars_property != props.end()) {
+                if (!bars_property->is_array() || bars_property->size() > kMaxChartItems)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                labels.resize(bars_property->size());
+                bars.resize(bars_property->size());
+                for (size_t index = 0; index < bars.size(); ++index) {
+                    const auto& item = (*bars_property)[index];
+                    if (!widget_props_has_only(
+                            item, {"label", "value", "fill_argb", "border_argb",
+                                   "overlay_value", "overlay_fill_argb"})) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto label = item.find("label");
+                    const auto value = item.find("value");
+                    if (value == item.end() || !widget_props_double(*value, &bars[index].value))
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    if (label != item.end()) {
+                        if (!label->is_string())
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        labels[index] = label->get<std::string>();
+                    }
+                    bars[index].label_utf8 = labels[index].c_str();
+                    const auto fill = item.find("fill_argb");
+                    const auto border = item.find("border_argb");
+                    const auto overlay = item.find("overlay_value");
+                    const auto overlay_fill = item.find("overlay_fill_argb");
+                    if ((fill != item.end() &&
+                         !widget_props_argb(*fill, &bars[index].fill_argb)) ||
+                        (border != item.end() &&
+                         !widget_props_argb(*border, &bars[index].border_argb)) ||
+                        (overlay != item.end() &&
+                         !widget_props_double(*overlay, &bars[index].overlay_value)) ||
+                        (overlay_fill != item.end() &&
+                         !widget_props_argb(*overlay_fill,
+                                            &bars[index].overlay_fill_argb))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+            auto lease = acquire_chart_lease<BarChartState>(handle, kBarChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                snapshot->bars = lease->bars;
+            }
+            if (bars_property != props.end()) {
+                const sao_status_t status = sao_ui_bar_chart_set_bars(
+                    handle, bars.empty() ? nullptr : bars.data(), bars.size());
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kLineChartTag: {
+            if (!widget_props_has_only(props, {"series"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto series_property = props.find("series");
+            std::vector<std::string> ids;
+            std::vector<std::string> labels;
+            std::vector<std::vector<SaoUiLinePoint>> points;
+            std::vector<SaoUiLineChartSeries> series;
+            if (series_property != props.end()) {
+                if (!series_property->is_array() || series_property->size() > kMaxChartSeries)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const size_t count = series_property->size();
+                ids.resize(count);
+                labels.resize(count);
+                points.resize(count);
+                series.resize(count);
+                size_t total_points = 0;
+                for (size_t index = 0; index < count; ++index) {
+                    const auto& item = (*series_property)[index];
+                    if (!widget_props_has_only(
+                            item, {"series_id", "label", "points", "line_argb",
+                                   "marker_argb", "line_width_px", "dashed", "show_markers",
+                                   "threshold_y", "threshold_argb"})) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                    const auto id = item.find("series_id");
+                    if (id == item.end() || !id->is_string())
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    ids[index] = id->get<std::string>();
+                    const auto label = item.find("label");
+                    if (label != item.end()) {
+                        if (!label->is_string())
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        labels[index] = label->get<std::string>();
+                    }
+                    const auto point_array = item.find("points");
+                    if (point_array != item.end()) {
+                        if (!point_array->is_array() ||
+                            point_array->size() > kMaxChartItems - total_points) {
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        }
+                        total_points += point_array->size();
+                        points[index].reserve(point_array->size());
+                        for (const auto& point : *point_array) {
+                            if (!widget_props_has_only(point, {"x", "y"}))
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                            const auto px = point.find("x");
+                            const auto py = point.find("y");
+                            SaoUiLinePoint parsed{};
+                            if (px == point.end() || py == point.end() ||
+                                !widget_props_double(*px, &parsed.x) ||
+                                !widget_props_double(*py, &parsed.y)) {
+                                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                            }
+                            points[index].push_back(parsed);
+                        }
+                    }
+                    auto& output = series[index];
+                    output.series_id_utf8 = ids[index].c_str();
+                    output.label_utf8 = labels[index].empty() ? nullptr : labels[index].c_str();
+                    output.points = points[index].empty() ? nullptr : points[index].data();
+                    output.point_count = points[index].size();
+                    output.line_width_px = 1.0F;
+                    output.threshold_y = std::numeric_limits<double>::quiet_NaN();
+                    const auto line_color = item.find("line_argb");
+                    const auto marker_color = item.find("marker_argb");
+                    const auto line_width = item.find("line_width_px");
+                    const auto dashed = item.find("dashed");
+                    const auto show_markers = item.find("show_markers");
+                    const auto threshold = item.find("threshold_y");
+                    const auto threshold_color = item.find("threshold_argb");
+                    if ((line_color != item.end() &&
+                         !widget_props_argb(*line_color, &output.line_argb)) ||
+                        (marker_color != item.end() &&
+                         !widget_props_argb(*marker_color, &output.marker_argb)) ||
+                        (line_width != item.end() &&
+                         (!widget_props_float(*line_width, &output.line_width_px) ||
+                          output.line_width_px < 0.0F)) ||
+                        (dashed != item.end() && !widget_props_bool(*dashed, &output.dashed)) ||
+                        (show_markers != item.end() &&
+                         !widget_props_bool(*show_markers, &output.show_markers)) ||
+                        (threshold != item.end() &&
+                         !widget_props_double(*threshold, &output.threshold_y)) ||
+                        (threshold_color != item.end() &&
+                         !widget_props_argb(*threshold_color, &output.threshold_argb))) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+            auto lease = acquire_chart_lease<LineChartState>(handle, kLineChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                snapshot->series = lease->series;
+            }
+            if (series_property != props.end()) {
+                const sao_status_t status = sao_ui_line_chart_set_series(
+                    handle, series.empty() ? nullptr : series.data(), series.size());
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        case kSparklineTag: {
+            if (!widget_props_has_only(props, {"values"}))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto values_property = props.find("values");
+            std::vector<double> values;
+            if (values_property != props.end()) {
+                if (!values_property->is_array() || values_property->size() > kMaxChartItems)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                values.reserve(values_property->size());
+                for (const auto& value : *values_property) {
+                    double parsed = 0.0;
+                    if (!widget_props_double(value, &parsed))
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    values.push_back(parsed);
+                }
+            }
+            auto lease = acquire_chart_lease<SparklineState>(handle, kSparklineTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                snapshot->values = lease->values;
+            }
+            if (values_property != props.end()) {
+                const sao_status_t status = sao_ui_sparkline_set_values(
+                    handle, values.empty() ? nullptr : values.data(), values.size());
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            break;
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_chart_restore_props(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    const WidgetPropsSnapshot& snapshot) noexcept {
+    const auto previous = std::static_pointer_cast<ChartPropsSnapshot>(snapshot);
+    if (previous == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        switch (kind) {
+        case kTimeSeriesTag: {
+            auto lease = acquire_chart_lease<TimeSeriesState>(handle, kTimeSeriesTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            lease->lanes = previous->lanes;
+            lease->zoom_window_ms = previous->zoom_window_ms;
+            return SAO_STATUS_OK;
+        }
+        case kBarChartTag: {
+            auto lease = acquire_chart_lease<BarChartState>(handle, kBarChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            lease->bars = previous->bars;
+            return SAO_STATUS_OK;
+        }
+        case kLineChartTag: {
+            auto lease = acquire_chart_lease<LineChartState>(handle, kLineChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            lease->series = previous->series;
+            return SAO_STATUS_OK;
+        }
+        case kSparklineTag: {
+            auto lease = acquire_chart_lease<SparklineState>(handle, kSparklineTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            lease->values = previous->values;
+            return SAO_STATUS_OK;
+        }
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_chart_paint(
+    sao_ui_widget_handle_t handle, int32_t kind,
+    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+    int32_t width, int32_t height) noexcept {
+    try {
+        const auto paint_polyline = [&](const std::vector<std::pair<double, double>>& points,
+                                        uint32_t color, float line_width,
+                                        double min_x, double max_x,
+                                        double min_y, double max_y) -> sao_status_t {
+            if (points.empty())
+                return SAO_STATUS_OK;
+            const double x_span = max_x > min_x ? max_x - min_x : 1.0;
+            const double y_span = max_y > min_y ? max_y - min_y : 1.0;
+            const auto screen = [&](const auto& point) {
+                const float px = static_cast<float>(
+                    x + 2 + (width - 4) * ((point.first - min_x) / x_span));
+                const float py = static_cast<float>(
+                    y + height - 2 - (height - 4) * ((point.second - min_y) / y_span));
+                return std::pair{px, py};
+            };
+            if (points.size() == 1) {
+                const auto [px, py] = screen(points.front());
+                return sao_ui_paint_ctx_fill_ellipse(context, px - 2.0F, py - 2.0F, 4.0F,
+                                                     4.0F, color);
+            }
+            for (size_t index = 1; index < points.size(); ++index) {
+                const auto [x1, y1] = screen(points[index - 1]);
+                const auto [x2, y2] = screen(points[index]);
+                const sao_status_t status = sao_ui_paint_ctx_stroke_line(
+                    context, x1, y1, x2, y2, std::max(1.0F, line_width), color);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            return SAO_STATUS_OK;
+        };
+
+        if (kind == kTimeSeriesTag) {
+            SaoUiTimeSeriesSpec spec{};
+            std::vector<TimeSeriesLane> lanes;
+            auto lease = acquire_chart_lease<TimeSeriesState>(handle, kTimeSeriesTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                spec = lease->spec;
+                lanes = lease->lanes;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            double min_x = std::numeric_limits<double>::infinity();
+            double max_x = -std::numeric_limits<double>::infinity();
+            double min_y = std::numeric_limits<double>::infinity();
+            double max_y = -std::numeric_limits<double>::infinity();
+            std::vector<std::vector<std::pair<double, double>>> samples(lanes.size());
+            for (size_t lane_index = 0; lane_index < lanes.size(); ++lane_index) {
+                const auto& lane = lanes[lane_index];
+                const size_t start = (lane.head + lane.capacity - lane.count) % lane.capacity;
+                samples[lane_index].reserve(lane.count);
+                for (size_t index = 0; index < lane.count; ++index) {
+                    const auto& point = lane.ring[(start + index) % lane.capacity];
+                    const double px = static_cast<double>(point.time_ms);
+                    samples[lane_index].emplace_back(px, point.value);
+                    min_x = std::min(min_x, px);
+                    max_x = std::max(max_x, px);
+                    min_y = std::min(min_y, point.value);
+                    max_y = std::max(max_y, point.value);
+                }
+            }
+            if (!std::isfinite(min_x))
+                return SAO_STATUS_OK;
+            for (size_t index = 0; index < lanes.size(); ++index) {
+                status = paint_polyline(samples[index],
+                                        lanes[index].fill_argb == 0 ? 0xff4ea5ffU
+                                                                    : lanes[index].fill_argb,
+                                        lanes[index].line_width_px, min_x, max_x, min_y, max_y);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            return SAO_STATUS_OK;
+        }
+        if (kind == kBarChartTag) {
+            SaoUiBarChartSpec spec{};
+            std::vector<OwnedBar> bars;
+            auto lease = acquire_chart_lease<BarChartState>(handle, kBarChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                spec = lease->spec;
+                bars = lease->bars;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+            if (status != SAO_STATUS_OK || bars.empty())
+                return status;
+            const size_t visible = spec.max_visible_bars <= 0
+                                       ? bars.size()
+                                       : std::min(bars.size(),
+                                                  static_cast<size_t>(spec.max_visible_bars));
+            double maximum = 0.0;
+            for (size_t index = 0; index < visible; ++index)
+                maximum = std::max(maximum, std::max(0.0, bars[index].value));
+            if (maximum <= 0.0)
+                maximum = 1.0;
+            if (spec.horizontal) {
+                const float row_height = static_cast<float>(height) / visible;
+                for (size_t index = 0; index < visible; ++index) {
+                    const float bar_width = static_cast<float>(
+                        (width - 4) * (std::max(0.0, bars[index].value) / maximum));
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(x + 2), y + row_height * index + 1.0F,
+                        std::max(1.0F, bar_width), std::max(1.0F, row_height - 2.0F),
+                        bars[index].fill_argb == 0 ? 0xff4ea5ffU : bars[index].fill_argb);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                return SAO_STATUS_OK;
+            }
+            const float column_width = static_cast<float>(width) / visible;
+            for (size_t index = 0; index < visible; ++index) {
+                const float bar_height = static_cast<float>(
+                    (height - 4) * (std::max(0.0, bars[index].value) / maximum));
+                status = sao_ui_paint_ctx_fill_rect(
+                    context, x + column_width * index + 1.0F,
+                    static_cast<float>(y + height - 2) - bar_height,
+                    std::max(1.0F, column_width - 2.0F), std::max(1.0F, bar_height),
+                    bars[index].fill_argb == 0 ? 0xff4ea5ffU : bars[index].fill_argb);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            return SAO_STATUS_OK;
+        }
+        if (kind == kLineChartTag) {
+            SaoUiLineChartSpec spec{};
+            std::vector<OwnedLineSeries> series;
+            auto lease = acquire_chart_lease<LineChartState>(handle, kLineChartTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                spec = lease->spec;
+                series = lease->series;
+            }
+            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                context, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height),
+                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+            if (status != SAO_STATUS_OK)
+                return status;
+            double min_x = std::numeric_limits<double>::infinity();
+            double max_x = -std::numeric_limits<double>::infinity();
+            double min_y = std::numeric_limits<double>::infinity();
+            double max_y = -std::numeric_limits<double>::infinity();
+            for (const auto& item : series) {
+                for (const auto& point : item.points) {
+                    min_x = std::min(min_x, point.x);
+                    max_x = std::max(max_x, point.x);
+                    min_y = std::min(min_y, point.y);
+                    max_y = std::max(max_y, point.y);
+                }
+            }
+            if (!std::isfinite(min_x))
+                return SAO_STATUS_OK;
+            for (const auto& item : series) {
+                std::vector<std::pair<double, double>> points;
+                points.reserve(item.points.size());
+                for (const auto& point : item.points)
+                    points.emplace_back(point.x, point.y);
+                status = paint_polyline(points,
+                                        item.line_argb == 0 ? 0xff4ea5ffU : item.line_argb,
+                                        item.line_width_px, min_x, max_x, min_y, max_y);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            return SAO_STATUS_OK;
+        }
+        if (kind == kSparklineTag) {
+            SaoUiSparklineSpec spec{};
+            std::vector<double> values;
+            auto lease = acquire_chart_lease<SparklineState>(handle, kSparklineTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                spec = lease->spec;
+                values = lease->values;
+            }
+            std::vector<std::pair<double, double>> points;
+            points.reserve(values.size());
+            for (size_t index = 0; index < values.size(); ++index)
+                points.emplace_back(static_cast<double>(index), values[index]);
+            if (points.empty())
+                return SAO_STATUS_OK;
+            const auto range = std::minmax_element(values.begin(), values.end());
+            return paint_polyline(points, spec.line_argb == 0 ? 0xff4ea5ffU : spec.line_argb,
+                                  spec.line_width_px, 0.0,
+                                  static_cast<double>(std::max<size_t>(1, values.size() - 1)),
+                                  *range.first, *range.second);
+        }
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

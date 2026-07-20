@@ -9,6 +9,8 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -236,6 +238,60 @@ bool wait_for_owner_request() {
     return false;
 }
 
+struct RectProviderCall {
+    void* hwnd = nullptr;
+    SaoUiDcMutationRect fake_rect{};
+    uint32_t settle_ms = 0;
+    uint32_t timeout_ms = 0;
+    DWORD thread_id = 0;
+};
+
+struct RectProviderProbe {
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::vector<RectProviderCall> calls;
+    bool block_first = false;
+    bool first_entered = false;
+    bool release_first = false;
+    bool throw_exception = false;
+    sao_status_t return_status = SAO_STATUS_OK;
+};
+
+sao_status_t SAO_UI_CALL rect_provider_callback(void* user_data, void* hwnd,
+                                                const SaoUiDcMutationRect* fake_rect,
+                                                uint32_t settle_ms, uint32_t timeout_ms) {
+    auto* probe = static_cast<RectProviderProbe*>(user_data);
+    std::unique_lock<std::mutex> lock(probe->mutex);
+    probe->calls.push_back({hwnd, *fake_rect, settle_ms, timeout_ms, ::GetCurrentThreadId()});
+    if (probe->calls.size() == 1) {
+        probe->first_entered = true;
+        probe->condition.notify_all();
+        if (probe->block_first) {
+            probe->condition.wait(lock, [probe] { return probe->release_first; });
+        }
+    }
+    const bool throw_exception = probe->throw_exception;
+    const sao_status_t status = probe->return_status;
+    lock.unlock();
+    if (throw_exception)
+        throw std::runtime_error("rect provider failure");
+    return status;
+}
+
+bool wait_for_rect_provider(RectProviderProbe& probe) {
+    std::unique_lock<std::mutex> lock(probe.mutex);
+    return probe.condition.wait_for(lock, std::chrono::seconds(1),
+                                    [&probe] { return probe.first_entered; });
+}
+
+void release_rect_provider(RectProviderProbe& probe) {
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        probe.release_first = true;
+    }
+    probe.condition.notify_all();
+}
+
 #endif
 
 } // namespace
@@ -321,6 +377,179 @@ TEST_CASE("dc mutation executor clears only requested exstyle bits",
           sao_ui_dc_mut_test_worker_thread_id(c));
 
     sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
+TEST_CASE("dc mutation rect provider executes once on the coordinator worker with exact arguments",
+          "[ui][dc_mutation][rect_provider][worker][automation][win32]") {
+    PumpingWindow window;
+    REQUIRE(window.hwnd() != nullptr);
+    RectProviderProbe probe;
+    SaoUiDcMutationProvider provider{&rect_provider_callback, &probe};
+    sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex(&provider, &c) == SAO_STATUS_OK);
+    provider = {};
+    REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
+
+    const SaoUiDcMutationRect fake_rect{-7, 11, 19, 31};
+    REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(c, window.hwnd(), &fake_rect, 40,
+                                                                   2000) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
+
+    RectProviderCall call{};
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        REQUIRE(probe.calls.size() == 1);
+        call = probe.calls.front();
+    }
+    CHECK(call.hwnd == window.hwnd());
+    CHECK(call.fake_rect.left == fake_rect.left);
+    CHECK(call.fake_rect.top == fake_rect.top);
+    CHECK(call.fake_rect.right == fake_rect.right);
+    CHECK(call.fake_rect.bottom == fake_rect.bottom);
+    CHECK(call.settle_ms == 40);
+    CHECK(call.timeout_ms == 2000);
+    CHECK(call.thread_id == sao_ui_dc_mut_test_worker_thread_id(c));
+    CHECK(call.thread_id != window.owner_thread_id());
+    CHECK(sao_ui_dc_mut_test_owner_execution_thread_id(c) == 0);
+    CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 1);
+    CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0);
+
+    char operation[64]{};
+    char method[64]{};
+    char args[256]{};
+    REQUIRE(sao_ui_dc_mut_test_last_op(c, operation, sizeof(operation), method, sizeof(method),
+                                       args, sizeof(args)));
+    CHECK(std::string(operation) == "host-rect-scrub");
+    CHECK(std::string(method) == "hide_window_rect");
+    CHECK(
+        std::string(args) ==
+        "{\"left\":-7,\"top\":11,\"right\":19,\"bottom\":31,\"settle_ms\":40,\"timeout_ms\":2000}");
+
+    sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
+TEST_CASE("dc mutation typed rect admission requires a provider after HWND registration",
+          "[ui][dc_mutation][rect_provider][admission][automation][win32]") {
+    PumpingWindow window;
+    REQUIRE(window.hwnd() != nullptr);
+    sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+    REQUIRE(sao_ui_dc_mutation_coordinator_create(&c) == SAO_STATUS_OK);
+
+    const SaoUiDcMutationRect fake_rect{0, 0, 1, 1};
+    CHECK(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+              c, window.hwnd(), &fake_rect, 40, 2000) == SAO_STATUS_ERR_ACCESS_DENIED);
+    REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
+    CHECK(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+              c, window.hwnd(), &fake_rect, 40, 2000) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    const SaoUiDcMutationRect empty_width{0, 0, 0, 1};
+    const SaoUiDcMutationRect empty_height{0, 0, 1, 0};
+    CHECK(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+              c, window.hwnd(), &empty_width, 40, 2000) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+              c, window.hwnd(), &empty_height, 40, 2000) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_dc_mutation_coordinator_invalidate(c, window.hwnd(), 1.0));
+    CHECK(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+              c, window.hwnd(), &fake_rect, 40, 2000) == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 0);
+    CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0);
+
+    sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
+TEST_CASE("dc mutation pending rect scrub coalesces to the latest typed payload",
+          "[ui][dc_mutation][rect_provider][coalesce][automation][win32]") {
+    PumpingWindow window;
+    REQUIRE(window.hwnd() != nullptr);
+    RectProviderProbe probe;
+    probe.block_first = true;
+    const SaoUiDcMutationProvider provider{&rect_provider_callback, &probe};
+    sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex(&provider, &c) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
+
+    const SaoUiDcMutationRect first{1, 2, 3, 4};
+    const SaoUiDcMutationRect second{5, 6, 7, 8};
+    const SaoUiDcMutationRect latest{9, 10, 11, 12};
+    REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(c, window.hwnd(), &first, 10,
+                                                                   1000) == SAO_STATUS_OK);
+    REQUIRE(wait_for_rect_provider(probe));
+    REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(c, window.hwnd(), &second, 20,
+                                                                   1500) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(c, window.hwnd(), &latest, 40,
+                                                                   2000) == SAO_STATUS_OK);
+    SaoDcMutationStats stats{};
+    REQUIRE(sao_ui_dc_mutation_coordinator_stats(c, &stats) == SAO_STATUS_OK);
+    CHECK(stats.inflight_operations == 1);
+    CHECK(stats.queued_operations == 1);
+
+    release_rect_provider(probe);
+    REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        REQUIRE(probe.calls.size() == 2);
+        CHECK(probe.calls[0].fake_rect.left == first.left);
+        CHECK(probe.calls[0].settle_ms == 10);
+        CHECK(probe.calls[0].timeout_ms == 1000);
+        CHECK(probe.calls[1].fake_rect.left == latest.left);
+        CHECK(probe.calls[1].fake_rect.top == latest.top);
+        CHECK(probe.calls[1].fake_rect.right == latest.right);
+        CHECK(probe.calls[1].fake_rect.bottom == latest.bottom);
+        CHECK(probe.calls[1].settle_ms == 40);
+        CHECK(probe.calls[1].timeout_ms == 2000);
+    }
+    CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 2);
+    CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0);
+
+    sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
+TEST_CASE("dc mutation rect provider failures are one-shot and exceptions map to unknown",
+          "[ui][dc_mutation][rect_provider][failure][automation][win32]") {
+    struct Scenario {
+        const char* name;
+        sao_status_t callback_status;
+        bool throw_exception;
+        sao_status_t expected_status;
+    };
+    const Scenario scenarios[] = {
+        {"provider-specific error", static_cast<sao_status_t>(-4031), false,
+         static_cast<sao_status_t>(-4031)},
+        {"provider unknown", SAO_STATUS_ERR_UNKNOWN, false, SAO_STATUS_ERR_UNKNOWN},
+        {"provider exception", SAO_STATUS_OK, true, SAO_STATUS_ERR_UNKNOWN},
+    };
+
+    for (const auto& scenario : scenarios) {
+        INFO(scenario.name);
+        PumpingWindow window;
+        REQUIRE(window.hwnd() != nullptr);
+        RectProviderProbe probe;
+        probe.return_status = scenario.callback_status;
+        probe.throw_exception = scenario.throw_exception;
+        const SaoUiDcMutationProvider provider{&rect_provider_callback, &probe};
+        sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+        REQUIRE(sao_ui_dc_mutation_coordinator_create_ex(&provider, &c) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) ==
+                SAO_STATUS_OK);
+
+        const SaoUiDcMutationRect fake_rect{0, 0, 1, 1};
+        REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(c, window.hwnd(), &fake_rect,
+                                                                       40, 2000) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        {
+            std::lock_guard<std::mutex> lock(probe.mutex);
+            CHECK(probe.calls.size() == 1);
+        }
+        SaoDcMutationStats stats{};
+        REQUIRE(sao_ui_dc_mutation_coordinator_stats(c, &stats) == SAO_STATUS_OK);
+        CHECK(stats.inflight_operations == 0);
+        CHECK(stats.queued_operations == 0);
+        CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 0);
+        CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 1);
+        CHECK(sao_ui_dc_mut_test_last_dispatch_status(c) == scenario.expected_status);
+
+        sao_ui_dc_mutation_coordinator_destroy(c);
+    }
 }
 
 TEST_CASE("dc mutation rejects unknown and malformed work before enqueue",

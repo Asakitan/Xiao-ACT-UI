@@ -4,20 +4,16 @@
 // (399 lines)
 //
 // Serialized, generation-aware display-context mutations for overlay
-// HWNDs.  The compositor and Tk threads submit work here instead of
-// blocking on the rt_io pipe.  Calls with the same (hwnd, generation,
-// operation) key are coalesced while an earlier call is in flight.
-// The shipping executor validates and applies supported mutations on its
-// dedicated worker. Unsupported operation/method pairs fail before enqueue.
+// HWNDs. Calls with the same (hwnd, generation, operation) key are
+// coalesced while an earlier call is in flight. Legacy USER32 mutations run
+// on the HWND owner thread. The typed rect-scrub provider runs directly on
+// the coordinator worker after the real USER32/DWM geometry is published.
 //
 // ── Why serialization matters ────────────────────────────────
-//   Every kernel-side tagWND write (exstyle bits, rcWindow) goes
-//   through a syscall path via `mem_probe._dc`.  Concurrent writes
-//   to overlapping fields can flap the tagWND in ways that user-mode
-//   API readbacks won't detect until 500 ms later — a spurious
-//   racing SetWindowLongPtrW then overwrites the wanted value.
-//   The coordinator serializes all writes per-HWND and coalesces
-//   duplicates in the queue.
+//   Real on-screen bounds are always published through USER32 and DWM first.
+//   A provider may then scrub the physical tagWND rcWindow to a decoy rect.
+//   The coordinator serializes these ordered mutations per HWND and keeps
+//   rect scrubs in a lane separate from owner-thread USER32 bounds updates.
 //
 // ── Invalidation barrier ────────────────────────────────────
 //   `invalidate(hwnd, timeout)` is the teardown API.  It:
@@ -52,12 +48,38 @@ extern "C" {
 typedef struct sao_ui_dc_mutation_coordinator_s* sao_ui_dc_mutation_coordinator_handle_t;
 typedef struct sao_ui_dc_mutation_barrier_s* sao_ui_dc_mutation_barrier_handle_t;
 
+typedef struct SaoUiDcMutationRect {
+    int32_t left;
+    int32_t top;
+    int32_t right;
+    int32_t bottom;
+} SaoUiDcMutationRect;
+
+typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_hide_window_rect_fn_t)(
+    void* user_data, void* hwnd, const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms,
+    uint32_t timeout_ms);
+
+typedef struct SaoUiDcMutationProvider {
+    sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
+    void* user_data;
+} SaoUiDcMutationProvider;
+
+// Copies the provider table by value. provider->user_data remains borrowed and
+// must stay valid until destroy() returns. NULL installs no rect-scrub provider.
+// A provider callback must not re-enter or destroy the same coordinator.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
+    const SaoUiDcMutationProvider* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle);
+
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle);
 
 // Stops new admission, cancels queued/coalesced work, and joins the worker.
-// Only the single currently executing owner-thread transaction is allowed to
-// finish, bounded by the coordinator's OS dispatch timeout.
+// A single already-executing owner-thread transaction or rect-provider callback
+// is allowed to finish before destroy returns. Owner-thread dispatch is bounded
+// by the coordinator's OS timeout; providers must honor their supplied timeout.
+// The caller must first prevent new API entries, wait for external users to
+// quiesce, and call destroy exactly once; the opaque handle itself is not a
+// concurrent reference-counted object.
 SAO_UI_API void SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_destroy(sao_ui_dc_mutation_coordinator_handle_t handle);
 
@@ -80,6 +102,14 @@ sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t
                                          const char* operation_utf8, const char* method_name_utf8,
                                          const uint8_t* args_json_utf8, // NULL / empty → no args
                                          size_t args_len);
+
+// Typed physical rcWindow scrub. The lane is fixed to operation
+// "host-rect-scrub" and method "hide_window_rect" and does not parse JSON.
+// fake_rect must have right > left and bottom > top. A registered HWND with no
+// provider returns NOT_INITIALIZED; revoked generations remain ACCESS_DENIED.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
+    const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms);
 
 // Invalidate an HWND — teardown barrier.  Marks the HWND as
 // invalidating, drains any inflight mutation on the HWND, and
