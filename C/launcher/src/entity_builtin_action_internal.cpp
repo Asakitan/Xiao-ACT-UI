@@ -133,7 +133,78 @@ sao_status_t reload_plugins(State& state, const Operations& operations) noexcept
 
 } // namespace
 
+sao_status_t authorization_status(std::int32_t action, const State& state) noexcept {
+    const bool controls_ready = state.authority.controls;
+    bool control_action = false;
+    bool available = false;
+    switch (action) {
+    case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
+        available = state.authority.about;
+        break;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
+        control_action = true;
+        available = controls_ready && state.authority.topmost;
+        break;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
+        control_action = true;
+        available = controls_ready && state.authority.nervgear;
+        break;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
+        control_action = true;
+        available = controls_ready && state.authority.streaming;
+        break;
+    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
+        control_action = true;
+        available = controls_ready && state.authority.save_settings;
+        break;
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
+        control_action = true;
+        available = controls_ready && state.authority.fisheye_procedural;
+        break;
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
+        control_action = true;
+        available = controls_ready && state.authority.fisheye_live;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
+        available = state.authority.ai_editor;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
+        available = state.authority.workshop;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
+        available = state.authority.process_selector;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
+        available = state.authority.plugin_runtime && state.authority.plugin_manager;
+        break;
+    case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
+        available = state.authority.plugin_runtime && state.authority.reload_plugins;
+        break;
+    case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
+        available = state.authority.plugin_runtime && state.authority.plugin_status;
+        break;
+    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+        available = state.authority.theme;
+        break;
+    default:
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (!state.authority.publication_available) {
+        return kKnownUnavailableStatus;
+    }
+    if (control_action && state.controls_degraded) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    return available ? SAO_STATUS_OK : kKnownUnavailableStatus;
+}
+
 sao_status_t dispatch(std::int32_t action, State& state, const Operations& operations) noexcept {
+    const sao_status_t authority_status = authorization_status(action, state);
+    if (authority_status != SAO_STATUS_OK) {
+        state.last_status = authority_status;
+        return authority_status;
+    }
     switch (action) {
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
         return toggle_topmost(state, operations);
@@ -147,7 +218,13 @@ sao_status_t dispatch(std::int32_t action, State& state, const Operations& opera
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
-        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
+    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
+    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
+    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
+    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+        return fail(state, kKnownUnavailableStatus);
     default:
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }

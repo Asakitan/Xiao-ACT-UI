@@ -66,12 +66,24 @@ sao::launcher::entity_builtin_action::Operations operations(ActionFixture& fixtu
     };
 }
 
+sao::launcher::entity_builtin_action::Authority transactional_authority() {
+    sao::launcher::entity_builtin_action::Authority authority{};
+    authority.publication_available = true;
+    authority.controls = true;
+    authority.topmost = true;
+    authority.streaming = true;
+    authority.plugin_runtime = true;
+    authority.reload_plugins = true;
+    return authority;
+}
+
 } // namespace
 
 TEST_CASE("streaming action applies persists and publishes one transaction",
           "[launcher][entity][builtin_action][streaming][focused]") {
     ActionFixture fixture;
     sao::launcher::entity_builtin_action::State state{false, false, true};
+    state.authority = transactional_authority();
 
     REQUIRE(sao::launcher::entity_builtin_action::dispatch(
                 SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, state, operations(fixture)) ==
@@ -85,6 +97,7 @@ TEST_CASE("streaming action enforces entitlement and provider availability",
     ActionFixture fixture;
     auto provider = operations(fixture);
     sao::launcher::entity_builtin_action::State state{false, false, false};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
                                                          state,
@@ -105,6 +118,7 @@ TEST_CASE("streaming action rolls runtime back when persistence fails",
     ActionFixture fixture;
     fixture.persist_status = SAO_STATUS_ERR_OS_CALL_FAILED;
     sao::launcher::entity_builtin_action::State state{false, false, true};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
                                                          state, operations(fixture)) ==
@@ -118,6 +132,7 @@ TEST_CASE("streaming action rolls persistence and runtime back when publication 
     ActionFixture fixture;
     fixture.refresh_status = SAO_STATUS_ERR_CANCELLED;
     sao::launcher::entity_builtin_action::State state{false, false, true};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
                                                          state, operations(fixture)) ==
@@ -133,6 +148,7 @@ TEST_CASE("streaming compensation failure becomes one observable internal state"
     fixture.persist_status = SAO_STATUS_ERR_OS_CALL_FAILED;
     fixture.rollback_status = SAO_STATUS_ERR_TIMEOUT;
     sao::launcher::entity_builtin_action::State state{false, false, true};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
                                                          state, operations(fixture)) ==
@@ -153,6 +169,7 @@ TEST_CASE("topmost action applies persists publishes and rolls back as one trans
           "[launcher][entity][builtin_action][topmost][rollback][focused]") {
     ActionFixture fixture;
     sao::launcher::entity_builtin_action::State state{};
+    state.authority = transactional_authority();
 
     REQUIRE(sao::launcher::entity_builtin_action::dispatch(
                 SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, state, operations(fixture)) == SAO_STATUS_OK);
@@ -178,6 +195,7 @@ TEST_CASE("topmost action requires the owning z-order and persistence authoritie
     auto provider = operations(fixture);
     provider.apply_topmost_mode = nullptr;
     sao::launcher::entity_builtin_action::State state{};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, state,
                                                          provider) ==
@@ -192,6 +210,7 @@ TEST_CASE("topmost compensation failure becomes one observable internal state",
     fixture.topmost_persist_status = SAO_STATUS_ERR_OS_CALL_FAILED;
     fixture.topmost_rollback_status = SAO_STATUS_ERR_TIMEOUT;
     sao::launcher::entity_builtin_action::State state{};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, state,
                                                          operations(fixture)) ==
@@ -205,6 +224,7 @@ TEST_CASE("plugin reload publishes only after the lifecycle succeeds",
           "[launcher][entity][builtin_action][plugins][focused]") {
     ActionFixture fixture;
     sao::launcher::entity_builtin_action::State state{};
+    state.authority = transactional_authority();
 
     REQUIRE(sao::launcher::entity_builtin_action::dispatch(
                 SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, state, operations(fixture)) == SAO_STATUS_OK);
@@ -224,6 +244,7 @@ TEST_CASE("plugin reload surfaces failed generation refresh as compensation fail
     fixture.reload_status = SAO_STATUS_ERR_OS_CALL_FAILED;
     fixture.refresh_status = SAO_STATUS_ERR_CANCELLED;
     sao::launcher::entity_builtin_action::State state{};
+    state.authority = transactional_authority();
 
     CHECK(sao::launcher::entity_builtin_action::dispatch(SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, state,
                                                          operations(fixture)) ==
@@ -237,16 +258,109 @@ TEST_CASE("ownerless builtin actions stay explicit fail closed",
           "[launcher][entity][builtin_action][focused]") {
     sao::launcher::entity_builtin_action::State state{};
     const sao::launcher::entity_builtin_action::Operations provider{};
-    constexpr SaoUiEntityAction unsupported[] = {
-        SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE,
-        SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP,          SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
-        SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER,    SAO_UI_ENTITY_ACTION_PLUGIN_STATUS,
+    constexpr SaoUiEntityAction unavailable[] = {
+        SAO_UI_ENTITY_ACTION_OPEN_ABOUT,
+        SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST,
+        SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR,
+        SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
+        SAO_UI_ENTITY_ACTION_SAVE_SETTINGS,
+        SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL,
+        SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE,
+        SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR,
+        SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP,
+        SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
+        SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER,
+        SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS,
+        SAO_UI_ENTITY_ACTION_PLUGIN_STATUS,
+        SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT,
+        SAO_UI_ENTITY_ACTION_SET_ALL_DARK,
     };
-    for (const auto action : unsupported) {
+    for (const auto action : unavailable) {
         CHECK(sao::launcher::entity_builtin_action::dispatch(action, state, provider) ==
-              SAO_STATUS_ERR_NOT_IMPLEMENTED);
+              sao::launcher::entity_builtin_action::kKnownUnavailableStatus);
     }
     CHECK(sao::launcher::entity_builtin_action::dispatch(static_cast<SaoUiEntityAction>(-777),
                                                          state, provider) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("builtin authority keeps launcher actions open and external gates closed",
+          "[launcher][entity][builtin_action][authority][focused]") {
+    using namespace sao::launcher::entity_builtin_action;
+    State state{};
+    state.authority.publication_available = true;
+    state.authority.controls = true;
+    state.authority.nervgear = true;
+    state.authority.streaming = true;
+    state.authority.save_settings = true;
+    state.authority.ai_editor = true;
+    state.authority.plugin_runtime = true;
+    state.authority.reload_plugins = true;
+    state.authority.theme = true;
+    state.authority.about = true;
+
+    constexpr SaoUiEntityAction available[] = {
+        SAO_UI_ENTITY_ACTION_OPEN_ABOUT,
+        SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR,
+        SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
+        SAO_UI_ENTITY_ACTION_SAVE_SETTINGS,
+        SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR,
+        SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS,
+        SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT,
+        SAO_UI_ENTITY_ACTION_SET_ALL_DARK,
+    };
+    for (const auto action : available) {
+        CHECK(authorization_status(action, state) == SAO_STATUS_OK);
+    }
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_OPEN_ABOUT, state, {}) == kKnownUnavailableStatus);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, state, {}) == kKnownUnavailableStatus);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, state, {}) == kKnownUnavailableStatus);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, state, {}) == kKnownUnavailableStatus);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, state, {}) == kKnownUnavailableStatus);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_SET_ALL_DARK, state, {}) == kKnownUnavailableStatus);
+
+    constexpr SaoUiEntityAction external[] = {
+        SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST,
+        SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL,
+        SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE,
+        SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP,
+        SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
+        SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER,
+        SAO_UI_ENTITY_ACTION_PLUGIN_STATUS,
+    };
+    for (const auto action : external) {
+        CHECK(authorization_status(action, state) == kKnownUnavailableStatus);
+    }
+    CHECK(authorization_status(-777, state) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    ActionFixture fixture;
+    state.streaming_entitled = true;
+    state.authority.streaming = false;
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, state, operations(fixture)) ==
+          kKnownUnavailableStatus);
+    CHECK(fixture.events.empty());
+
+    state.authority.streaming = true;
+    state.authority.plugin_runtime = false;
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, state) ==
+          kKnownUnavailableStatus);
+    state.authority.plugin_runtime = true;
+    state.authority.publication_available = false;
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, state) ==
+          kKnownUnavailableStatus);
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, state) ==
+          kKnownUnavailableStatus);
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_OPEN_ABOUT, state) ==
+          kKnownUnavailableStatus);
+    CHECK(authorization_status(-777, state) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(dispatch(SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, state, operations(fixture)) ==
+          kKnownUnavailableStatus);
+    CHECK(fixture.events.empty());
+    state.authority.publication_available = true;
+    state.controls_degraded = true;
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, state) ==
+          SAO_STATUS_ERR_UNKNOWN);
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, state) == SAO_STATUS_OK);
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, state) == SAO_STATUS_OK);
+    CHECK(authorization_status(SAO_UI_ENTITY_ACTION_OPEN_ABOUT, state) == SAO_STATUS_OK);
 }

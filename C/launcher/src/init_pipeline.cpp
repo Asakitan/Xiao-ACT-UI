@@ -881,6 +881,32 @@ void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y, int32_t bu
                                            message, x, y, button, wheel_delta);
 }
 
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
+    const auto& source = ctx->builtin_action_state.authority;
+    auto& target = ctx->entity_provider_publication.builtin_authority;
+    target.publication_available = source.publication_available;
+    target.topmost = source.topmost;
+    target.nervgear = source.nervgear;
+    target.streaming = source.streaming;
+    target.save_settings = source.save_settings;
+    target.ai_editor = source.ai_editor;
+    target.workshop = source.workshop;
+    target.process_selector = source.process_selector;
+    target.plugin_manager = source.plugin_manager;
+    target.reload_plugins = source.reload_plugins;
+    target.plugin_status = source.plugin_status;
+    target.fisheye_procedural = source.fisheye_procedural;
+    target.fisheye_live = source.fisheye_live;
+    target.theme = source.theme;
+    target.controls = source.controls && !ctx->builtin_action_state.controls_degraded
+                          ? sao::launcher::entity_provider_publication::
+                                ControlPublicationStatus::ready
+                          : sao::launcher::entity_provider_publication::
+                                ControlPublicationStatus::degraded_internal;
+}
+#endif
+
 sao_status_t persist_topmost_mode(bool enabled, void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     return ctx == nullptr || !ctx->settings_owner
@@ -931,9 +957,14 @@ sao_status_t reload_plugins(void* user_data) {
     plugins_status.struct_size = sizeof(plugins_status);
     const sao_status_t snapshot_status =
         sao_plugins_status_snapshot(ctx->plugins_registry, &plugins_status);
-    ctx->entity_provider_publication.builtin_authority.plugin_runtime =
+    const bool plugin_runtime_ready =
         snapshot_status == SAO_STATUS_OK &&
-                plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY
+        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
+    ctx->builtin_action_state.authority.plugin_runtime = plugin_runtime_ready;
+    ctx->builtin_action_state.authority.reload_plugins = plugin_runtime_ready;
+    sync_entity_publication_authority(ctx);
+    ctx->entity_provider_publication.builtin_authority.plugin_runtime =
+        plugin_runtime_ready
             ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
             : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
                   degraded_internal;
@@ -950,17 +981,19 @@ sao_status_t refresh_entity(void* user_data) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->builtin_action_state.authority.publication_available = true;
+    sync_entity_publication_authority(ctx);
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
-    ctx->entity_provider_publication.builtin_authority.controls =
-        ctx->builtin_action_state.controls_degraded
-            ? sao::launcher::entity_provider_publication::ControlPublicationStatus::
-                  degraded_internal
-            : sao::launcher::entity_provider_publication::ControlPublicationStatus::ready;
-    return sao::launcher::entity_provider_publication::refresh(
+    const sao_status_t status = sao::launcher::entity_provider_publication::refresh(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
         ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
         &sao_ui_entity_shell_set_roots);
+    if (status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.authority.publication_available = false;
+        sync_entity_publication_authority(ctx);
+    }
+    return status;
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
@@ -987,6 +1020,19 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         return route_status == SAO_STATUS_ERR_NOT_FOUND ? SAO_STATUS_ERR_INVALID_ARGUMENT
                                                         : route_status;
     }
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr) {
+        const sao::launcher::entity_builtin_action::State unavailable_state{};
+        return sao::launcher::entity_builtin_action::authorization_status(action,
+                                                                           unavailable_state);
+    }
+    const sao_status_t authority_status =
+        sao::launcher::entity_builtin_action::authorization_status(
+            action, ctx->builtin_action_state);
+    if (authority_status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.last_status = authority_status;
+        return authority_status;
+    }
     switch (action) {
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
         break;
@@ -999,10 +1045,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS: {
-        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
-        if (ctx == nullptr) {
-            return SAO_STATUS_ERR_NOT_INITIALIZED;
-        }
         const sao::launcher::entity_builtin_action::Operations operations{
             nullptr,
             &persist_topmost_mode,
@@ -1024,7 +1066,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         return status;
     }
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR: {
-        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || ctx->entity_shell == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
@@ -1042,7 +1083,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         return SAO_STATUS_OK;
     }
     case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR: {
-        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || !ctx->ai_editor) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
@@ -1051,7 +1091,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         return sao::launcher::tool_launch::open_ai_editor(ctx->ai_editor.get());
     }
     case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS: {
-        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
@@ -1059,7 +1098,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     }
     case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
     case SAO_UI_ENTITY_ACTION_SET_ALL_DARK: {
-        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
@@ -1076,7 +1114,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     default:
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     HWND owner = ctx == nullptr || ctx->overlay_host == nullptr
                      ? nullptr
                      : static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
@@ -1129,6 +1166,16 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     ctx->builtin_action_state.streaming_entitled = cfg->streaming_entitled != 0;
     ctx->builtin_action_state.streaming_mode =
         ctx->builtin_action_state.streaming_entitled && persisted_streaming_mode;
+    auto& action_authority = ctx->builtin_action_state.authority;
+    action_authority.publication_available = true;
+    action_authority.controls = true;
+    action_authority.nervgear = true;
+    action_authority.streaming = ctx->builtin_action_state.streaming_entitled;
+    action_authority.save_settings = true;
+    action_authority.ai_editor = sao::launcher::tool_launch::ai_editor_capability_available();
+    action_authority.reload_plugins = false;
+    action_authority.theme = true;
+    action_authority.about = true;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
@@ -1185,14 +1232,9 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     }
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     auto& authority = ctx->entity_provider_publication.builtin_authority;
-    authority.topmost = false;
+    sync_entity_publication_authority(ctx);
     authority.topmost_status = sao::launcher::entity_provider_publication::
         TopmostPublicationStatus::degraded_authority_unavailable;
-    authority.nervgear = true;
-    authority.streaming = ctx->builtin_action_state.streaming_entitled;
-    authority.save_settings = true;
-    authority.ai_editor = sao::launcher::tool_launch::ai_editor_capability_available();
-    authority.theme = true;
 #endif
     status =
         sao_ui_overlay_host_set_hit_test(ctx->overlay_host, &entity_hit_test, ctx->entity_shell);
@@ -1275,7 +1317,9 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     auto& authority = ctx->entity_provider_publication.builtin_authority;
     if (registry == nullptr) {
-        authority.reload_plugins = false;
+        ctx->builtin_action_state.authority.plugin_runtime = false;
+        ctx->builtin_action_state.authority.reload_plugins = false;
+        sync_entity_publication_authority(ctx);
         authority.plugin_runtime = sao::launcher::entity_provider_publication::
             PluginRuntimePublicationStatus::not_applicable;
         authority.python_runtime = sao::launcher::entity_provider_publication::
@@ -1286,14 +1330,22 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
     plugins_status.struct_size = sizeof(plugins_status);
     const sao_status_t status = sao_plugins_status_snapshot(registry, &plugins_status);
     if (status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.authority.plugin_runtime = false;
+        ctx->builtin_action_state.authority.reload_plugins = false;
+        sync_entity_publication_authority(ctx);
+        authority.plugin_runtime = sao::launcher::entity_provider_publication::
+            PluginRuntimePublicationStatus::degraded_internal;
         return status;
     }
-    authority.plugin_runtime =
-        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY
+    const bool plugin_runtime_ready =
+        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
+    ctx->builtin_action_state.authority.plugin_runtime = plugin_runtime_ready;
+    ctx->builtin_action_state.authority.reload_plugins = plugin_runtime_ready;
+    sync_entity_publication_authority(ctx);
+    authority.plugin_runtime = plugin_runtime_ready
             ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
             : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
                   degraded_internal;
-    authority.reload_plugins = plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
     using PythonStatus = sao::launcher::entity_provider_publication::PythonRuntimePublicationStatus;
     switch (plugins_status.python_runtime_status) {
     case SAO_PLUGINS_PYTHON_RUNTIME_READY:
@@ -1321,10 +1373,7 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK)
         return status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    status = sao::launcher::entity_provider_publication::refresh(
-        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
-        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
-        &sao_ui_entity_shell_set_roots);
+    status = refresh_entity(ctx);
     if (status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
@@ -1365,6 +1414,8 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     }
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->builtin_action_state.authority.publication_available = false;
+    sync_entity_publication_authority(ctx);
     status = sao::launcher::entity_provider_publication::clear(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
         ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
@@ -1396,10 +1447,18 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (tick_status != SAO_STATUS_OK)
         return tick_status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    const sao_status_t provider_status = sao::launcher::entity_provider_publication::poll(
-        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication, elapsed_ms,
-        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
-        &sao_ui_entity_shell_set_roots);
+    const sao_status_t provider_status =
+        ctx->builtin_action_state.authority.publication_available
+            ? sao::launcher::entity_provider_publication::poll(
+                  ctx->entity_shell, ctx->entity_action_routes,
+                  ctx->entity_provider_publication, elapsed_ms, ctx->nervgear_mode,
+                  &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+                  &sao_ui_entity_shell_set_roots)
+            : refresh_entity(ctx);
+    if (provider_status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.authority.publication_available = false;
+        sync_entity_publication_authority(ctx);
+    }
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     if (provider_status != SAO_STATUS_OK) {
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",

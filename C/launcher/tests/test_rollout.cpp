@@ -1,4 +1,4 @@
-// SAO Auto - launcher/tests/test_rollout_wave10.cpp
+// SAO Auto - launcher/tests/test_rollout.cpp
 //
 // Wave 10 / Agent a - Phase 12 rollout system tests.
 //
@@ -135,7 +135,7 @@ std::string synth_anon_id(BCRYPT_ALG_HANDLE rng) {
 // 1) config_load_default_when_missing
 // ===========================================================================
 TEST_CASE("rollout_config_load_default_when_missing",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("cfg_missing");
     sao_rollout_config cfg{};
     // Deliberately corrupt with sentinels so we can prove _load overwrote
@@ -153,7 +153,7 @@ TEST_CASE("rollout_config_load_default_when_missing",
 // 2) config_roundtrip_persists_all_fields
 // ===========================================================================
 TEST_CASE("rollout_config_roundtrip_persists_all_fields",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("cfg_roundtrip");
 
     sao_rollout_config in{};
@@ -187,7 +187,7 @@ TEST_CASE("rollout_config_roundtrip_persists_all_fields",
 // 3) bucket_deterministic_same_anon_same_salt_same_result
 // ===========================================================================
 TEST_CASE("rollout_bucket_deterministic_same_anon_same_salt_same_result",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("bucket_det");
     // Same input -> same bucket, repeatable, in-range.
     const char* anon = "00112233-4455-6677-8899-aabbccddeeff";
@@ -214,7 +214,7 @@ TEST_CASE("rollout_bucket_deterministic_same_anon_same_salt_same_result",
 // 4) bucket_uniform_distribution_10000_samples (stddev < 20)
 // ===========================================================================
 TEST_CASE("rollout_bucket_uniform_distribution_10000_samples",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("bucket_uniform");
     RngHolder rng;
     REQUIRE(rng.alg != nullptr);
@@ -252,7 +252,7 @@ TEST_CASE("rollout_bucket_uniform_distribution_10000_samples",
 // 5) should_use_cpp_percent_0_returns_false_all
 // ===========================================================================
 TEST_CASE("rollout_should_use_cpp_percent_0_returns_false_all",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("sucpp_0");
     sao_rollout_config cfg{};
     sao_rollout_config_default(&cfg);
@@ -269,7 +269,7 @@ TEST_CASE("rollout_should_use_cpp_percent_0_returns_false_all",
 // 6) should_use_cpp_percent_100_returns_true_all
 // ===========================================================================
 TEST_CASE("rollout_should_use_cpp_percent_100_returns_true_all",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("sucpp_100");
     sao_rollout_config cfg{};
     sao_rollout_config_default(&cfg);
@@ -285,7 +285,7 @@ TEST_CASE("rollout_should_use_cpp_percent_100_returns_true_all",
 // 7) should_use_cpp_percent_50_splits_evenly (+/- 5%)
 // ===========================================================================
 TEST_CASE("rollout_should_use_cpp_percent_50_splits_evenly",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("sucpp_50");
     sao_rollout_config cfg{};
     sao_rollout_config_default(&cfg);
@@ -316,7 +316,7 @@ TEST_CASE("rollout_should_use_cpp_percent_50_splits_evenly",
 // 8) user_override_wins_over_percent
 // ===========================================================================
 TEST_CASE("rollout_user_override_wins_over_percent",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("override");
     sao_rollout_config cfg{};
     sao_rollout_config_default(&cfg);
@@ -342,7 +342,7 @@ TEST_CASE("rollout_user_override_wins_over_percent",
 // 9) record_success_publishes_telemetry_event
 // ===========================================================================
 TEST_CASE("rollout_record_success_publishes_telemetry_event",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("rec_success");
     REQUIRE(captured_count() == 0);
 
@@ -368,7 +368,7 @@ TEST_CASE("rollout_record_success_publishes_telemetry_event",
 // 10) record_failure_increments_counter
 // ===========================================================================
 TEST_CASE("rollout_record_failure_increments_counter",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("rec_failure");
     REQUIRE(sao_rollout_record_failure(SAO_DUAL_RUN_MODE_CPP_ONLY,
                                         SAO_STATUS_PLATFORM_INIT_FAIL,
@@ -395,7 +395,7 @@ TEST_CASE("rollout_record_failure_increments_counter",
 // 11) auto_retreat_triggers_at_3_of_5_failures
 // ===========================================================================
 TEST_CASE("rollout_auto_retreat_triggers_at_3_of_5_failures",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("retreat");
 
     // Start at 100% cpp.
@@ -442,7 +442,7 @@ TEST_CASE("rollout_auto_retreat_triggers_at_3_of_5_failures",
 // 12) dispatcher_falls_back_to_dual_run_when_no_rollout
 // ===========================================================================
 TEST_CASE("rollout_dispatcher_falls_back_to_dual_run_when_no_rollout",
-          "[launcher][rollout][wave10]") {
+          "[launcher][rollout]") {
     RolloutGuard g("dispatch_fallback");
 
     sao_dual_run_config dual{};

@@ -48,6 +48,26 @@ struct EntityActionRouteSpec {
     bool operator==(const EntityActionRouteSpec&) const = default;
 };
 
+class EntityActionInvocationGate final {
+  public:
+    bool allows_invocation() const noexcept {
+        return open_.load(std::memory_order_acquire);
+    }
+
+  private:
+    friend class EntityActionRouteStore;
+
+    void close() noexcept {
+        open_.store(false, std::memory_order_release);
+    }
+
+    void open() noexcept {
+        open_.store(true, std::memory_order_release);
+    }
+
+    std::atomic_bool open_{true};
+};
+
 struct EntityActionRoute {
     std::int32_t token = 0;
     std::string provider_id;
@@ -64,7 +84,26 @@ struct EntityActionRoute {
     bool keep_menu_open = false;
     bool close_menu_before = false;
 
-    bool operator==(const EntityActionRoute&) const = default;
+    bool invocation_allowed() const noexcept {
+        return invocation_gate_ == nullptr || invocation_gate_->allows_invocation();
+    }
+
+    bool operator==(const EntityActionRoute& other) const noexcept {
+        return token == other.token && provider_id == other.provider_id &&
+               provider_generation == other.provider_generation &&
+               category_id == other.category_id && category_label == other.category_label &&
+               category_icon == other.category_icon &&
+               category_priority == other.category_priority && row_label == other.row_label &&
+               row_icon == other.row_icon && action_id == other.action_id &&
+               payload_json == other.payload_json && can_activate == other.can_activate &&
+               keep_menu_open == other.keep_menu_open &&
+               close_menu_before == other.close_menu_before;
+    }
+
+  private:
+    friend class EntityActionRouteStore;
+
+    std::shared_ptr<EntityActionInvocationGate> invocation_gate_;
 };
 
 struct EntityActionRouteSnapshot {
@@ -82,13 +121,13 @@ class EntityActionRouteStore final {
     };
 
     struct StoreState {
-        StoreState(std::int32_t first_token,
-                   std::int32_t last_token_value) noexcept
-            : last_token(last_token_value),
-              next_token(first_token),
+        StoreState(std::int32_t first_token, std::int32_t last_token_value,
+                   std::shared_ptr<EntityActionInvocationGate> gate) noexcept
+            : last_token(last_token_value), next_token(first_token),
               token_range_valid(first_token >= kFirstDynamicToken &&
                                 first_token <= last_token_value &&
-                                last_token_value <= kLastDynamicToken) {}
+                                last_token_value <= kLastDynamicToken),
+              invocation_gate(std::move(gate)) {}
 
         std::int32_t last_token = kLastDynamicToken;
         std::int64_t next_token = kFirstDynamicToken;
@@ -96,6 +135,7 @@ class EntityActionRouteStore final {
         std::atomic_bool accepting{true};
         std::mutex publish_mutex;
         std::atomic<std::shared_ptr<const PublishedState>> published;
+        std::shared_ptr<EntityActionInvocationGate> invocation_gate;
     };
 
   public:
@@ -123,8 +163,7 @@ class EntityActionRouteStore final {
         }
 
         bool valid() const noexcept {
-            return state_ != nullptr &&
-                   state_->accepting.load(std::memory_order_acquire);
+            return state_ != nullptr && state_->accepting.load(std::memory_order_acquire);
         }
 
         bool changed() const noexcept {
@@ -148,6 +187,19 @@ class EntityActionRouteStore final {
         }
 
         sao_status_t commit() noexcept {
+            return commit_impl(false);
+        }
+
+        sao_status_t commit_and_open_invocation_gate() noexcept {
+            return commit_impl(true);
+        }
+
+        void abort() noexcept {
+            release();
+        }
+
+      private:
+        sao_status_t commit_impl(bool open_invocation_gate) noexcept {
             if (state_ == nullptr) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
@@ -166,29 +218,21 @@ class EntityActionRouteStore final {
                 state->next_token = candidate_next_token_;
                 state->published.store(candidate_, std::memory_order_release);
             }
+            if (open_invocation_gate) {
+                state->invocation_gate->open();
+            }
             release();
             return SAO_STATUS_OK;
         }
-
-        void abort() noexcept {
-            release();
-        }
-
-      private:
         friend class EntityActionRouteStore;
 
-        PreparedPublication(
-                        std::shared_ptr<StoreState> state,
-                        std::shared_ptr<const PublishedState> base,
-            std::shared_ptr<const PublishedState> candidate,
-                        std::int64_t base_next_token,
-            std::int64_t candidate_next_token,
-            bool changed) noexcept
-                        : state_(std::move(state)),
-                            base_(std::move(base)),
-              candidate_(std::move(candidate)),
-                            base_next_token_(base_next_token),
-              candidate_next_token_(candidate_next_token),
+        PreparedPublication(std::shared_ptr<StoreState> state,
+                            std::shared_ptr<const PublishedState> base,
+                            std::shared_ptr<const PublishedState> candidate,
+                            std::int64_t base_next_token, std::int64_t candidate_next_token,
+                            bool changed) noexcept
+            : state_(std::move(state)), base_(std::move(base)), candidate_(std::move(candidate)),
+              base_next_token_(base_next_token), candidate_next_token_(candidate_next_token),
               changed_(changed) {}
 
         void move_from(PreparedPublication&& other) noexcept {
@@ -217,17 +261,16 @@ class EntityActionRouteStore final {
         bool changed_ = false;
     };
 
-    EntityActionRouteStore() noexcept
-        : state_(make_state(kFirstDynamicToken, kLastDynamicToken)) {}
+    EntityActionRouteStore() noexcept : state_(make_state(kFirstDynamicToken, kLastDynamicToken)) {}
 
-    EntityActionRouteStore(std::int32_t first_token,
-                           std::int32_t last_token) noexcept
+    EntityActionRouteStore(std::int32_t first_token, std::int32_t last_token) noexcept
         : state_(make_state(first_token, last_token)) {}
 
     ~EntityActionRouteStore() noexcept {
         if (state_ != nullptr) {
             std::lock_guard lock(state_->publish_mutex);
             state_->accepting.store(false, std::memory_order_release);
+            state_->invocation_gate->close();
         }
     }
 
@@ -236,15 +279,21 @@ class EntityActionRouteStore final {
     EntityActionRouteStore(EntityActionRouteStore&&) = delete;
     EntityActionRouteStore& operator=(EntityActionRouteStore&&) = delete;
 
+    void close_invocation_gate() noexcept {
+        const auto state = state_;
+        if (state != nullptr && state->invocation_gate != nullptr) {
+            state->invocation_gate->close();
+        }
+    }
+
     sao_status_t publish(const std::vector<EntityActionRouteSpec>& rows) noexcept {
         PreparedPublication publication;
         const sao_status_t status = prepare(rows, publication);
         return status == SAO_STATUS_OK ? publication.commit() : status;
     }
 
-    sao_status_t prepare(
-        const std::vector<EntityActionRouteSpec>& rows,
-        PreparedPublication& out) noexcept {
+    sao_status_t prepare(const std::vector<EntityActionRouteSpec>& rows,
+                         PreparedPublication& out) noexcept {
         out.abort();
         try {
             const auto state = state_;
@@ -252,8 +301,7 @@ class EntityActionRouteStore final {
                 return SAO_STATUS_ERR_UNKNOWN;
             }
             std::lock_guard lock(state->publish_mutex);
-            if (!state->accepting.load(std::memory_order_acquire) ||
-                !state->token_range_valid) {
+            if (!state->accepting.load(std::memory_order_acquire) || !state->token_range_valid) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             const sao_status_t validation_status = validate(rows);
@@ -263,19 +311,16 @@ class EntityActionRouteStore final {
 
             const auto current = state->published.load(std::memory_order_acquire);
             if (same_semantics(current.get(), rows)) {
-                out = PreparedPublication(state, current, current,
-                                          state->next_token,
+                out = PreparedPublication(state, current, current, state->next_token,
                                           state->next_token, false);
                 return SAO_STATUS_OK;
             }
             if (current != nullptr &&
-                current->snapshot.revision ==
-                    std::numeric_limits<std::uint64_t>::max()) {
+                current->snapshot.revision == std::numeric_limits<std::uint64_t>::max()) {
                 return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             }
 
-            std::unordered_map<IdentityView, std::int32_t, IdentityHash>
-                active_tokens;
+            std::unordered_map<IdentityView, std::int32_t, IdentityHash> active_tokens;
             if (current != nullptr) {
                 active_tokens.reserve(current->snapshot.routes.size());
                 for (const auto& route : current->snapshot.routes) {
@@ -289,16 +334,13 @@ class EntityActionRouteStore final {
                 }
             }
             const std::int64_t available =
-                static_cast<std::int64_t>(state->last_token) -
-                state->next_token + 1;
-            if (available < 0 ||
-                new_identity_count > static_cast<std::size_t>(available)) {
+                static_cast<std::int64_t>(state->last_token) - state->next_token + 1;
+            if (available < 0 || new_identity_count > static_cast<std::size_t>(available)) {
                 return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             }
 
             auto next = std::make_shared<PublishedState>();
-            next->snapshot.revision =
-                current == nullptr ? 1 : current->snapshot.revision + 1;
+            next->snapshot.revision = current == nullptr ? 1 : current->snapshot.revision + 1;
             next->snapshot.routes.reserve(rows.size());
             next->route_by_token.reserve(rows.size());
 
@@ -312,14 +354,12 @@ class EntityActionRouteStore final {
                     token = active->second;
                 }
                 const std::size_t index = next->snapshot.routes.size();
-                next->snapshot.routes.push_back(make_route(row, token));
+                next->snapshot.routes.push_back(make_route(row, token, state->invocation_gate));
                 next->route_by_token.emplace(token, index);
             }
 
             std::shared_ptr<const PublishedState> immutable = std::move(next);
-            out = PreparedPublication(state, current,
-                                      std::move(immutable),
-                                      state->next_token,
+            out = PreparedPublication(state, current, std::move(immutable), state->next_token,
                                       candidate_next_token, true);
             return SAO_STATUS_OK;
         } catch (...) {
@@ -345,11 +385,13 @@ class EntityActionRouteStore final {
         }
     }
 
-    sao_status_t resolve(std::int32_t token,
-                         EntityActionRoute& out) const noexcept {
+    sao_status_t resolve(std::int32_t token, EntityActionRoute& out) const noexcept {
         const auto state = state_;
         if (state == nullptr) {
             return SAO_STATUS_ERR_UNKNOWN;
+        }
+        if (state->invocation_gate == nullptr || !state->invocation_gate->allows_invocation()) {
+            return SAO_STATUS_ERR_NOT_FOUND;
         }
         const auto current = state->published.load(std::memory_order_acquire);
         if (current == nullptr) {
@@ -369,11 +411,11 @@ class EntityActionRouteStore final {
     }
 
   private:
-    static std::shared_ptr<StoreState> make_state(
-        std::int32_t first_token,
-        std::int32_t last_token) noexcept {
+    static std::shared_ptr<StoreState> make_state(std::int32_t first_token,
+                                                  std::int32_t last_token) noexcept {
         try {
-            return std::make_shared<StoreState>(first_token, last_token);
+            auto gate = std::make_shared<EntityActionInvocationGate>();
+            return std::make_shared<StoreState>(first_token, last_token, std::move(gate));
         } catch (...) {
             return nullptr;
         }
@@ -389,10 +431,9 @@ class EntityActionRouteStore final {
     struct IdentityHash {
         std::size_t operator()(const IdentityView& identity) const noexcept {
             std::size_t result = std::hash<std::string_view>{}(identity.provider_id);
-            const std::size_t action_hash =
-                std::hash<std::string_view>{}(identity.action_id);
-            result ^= action_hash + static_cast<std::size_t>(0x9e3779b9U) +
-                      (result << 6U) + (result >> 2U);
+            const std::size_t action_hash = std::hash<std::string_view>{}(identity.action_id);
+            result ^= action_hash + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
+                      (result >> 2U);
             return result;
         }
     };
@@ -424,17 +465,15 @@ class EntityActionRouteStore final {
                 return false;
             }
             for (std::size_t index = 1; index <= continuation_count; ++index) {
-                const auto next =
-                    static_cast<unsigned char>(value[offset + index]);
+                const auto next = static_cast<unsigned char>(value[offset + index]);
                 if ((next & 0xc0u) != 0x80u) {
                     return false;
                 }
                 code_point = (code_point << 6u) | (next & 0x3fu);
             }
-            const bool overlong =
-                (continuation_count == 1 && code_point < 0x80u) ||
-                (continuation_count == 2 && code_point < 0x800u) ||
-                (continuation_count == 3 && code_point < 0x10000u);
+            const bool overlong = (continuation_count == 1 && code_point < 0x80u) ||
+                                  (continuation_count == 2 && code_point < 0x800u) ||
+                                  (continuation_count == 3 && code_point < 0x10000u);
             if (overlong || code_point > 0x10ffffu ||
                 (code_point >= 0xd800u && code_point <= 0xdfffu)) {
                 return false;
@@ -445,8 +484,8 @@ class EntityActionRouteStore final {
     }
 
     static bool valid_string(std::string_view value) noexcept {
-        return value.size() <= kMaximumStringBytes &&
-               value.find('\0') == std::string_view::npos && valid_utf8(value);
+        return value.size() <= kMaximumStringBytes && value.find('\0') == std::string_view::npos &&
+               valid_utf8(value);
     }
 
     static sao_status_t validate(const std::vector<EntityActionRouteSpec>& rows) {
@@ -459,9 +498,8 @@ class EntityActionRouteStore final {
         identities.reserve(rows.size());
         for (const auto& row : rows) {
             const std::string_view strings[] = {
-                row.provider_id,    row.category_id, row.category_label,
-                row.category_icon,  row.row_label,   row.row_icon,
-                row.action_id,
+                row.provider_id, row.category_id, row.category_label, row.category_icon,
+                row.row_label,   row.row_icon,    row.action_id,
             };
             if (row.provider_id.empty() || row.action_id.empty() ||
                 !std::isfinite(row.category_priority)) {
@@ -469,17 +507,14 @@ class EntityActionRouteStore final {
             }
             for (const auto value : strings) {
                 if (!valid_string(value) ||
-                    value.size() >
-                        kMaximumSnapshotStringBytes - total_string_bytes) {
+                    value.size() > kMaximumSnapshotStringBytes - total_string_bytes) {
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 }
                 total_string_bytes += value.size();
             }
             if (row.payload_json.size() > kMaximumPayloadBytes ||
-                row.payload_json.find('\0') != std::string::npos ||
-                !valid_utf8(row.payload_json) ||
-                row.payload_json.size() >
-                    kMaximumSnapshotStringBytes - total_string_bytes) {
+                row.payload_json.find('\0') != std::string::npos || !valid_utf8(row.payload_json) ||
+                row.payload_json.size() > kMaximumSnapshotStringBytes - total_string_bytes) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             total_string_bytes += row.payload_json.size();
@@ -492,8 +527,7 @@ class EntityActionRouteStore final {
 
     static bool same_identity(const EntityActionRoute& left,
                               const EntityActionRouteSpec& right) noexcept {
-        return left.provider_id == right.provider_id &&
-               left.action_id == right.action_id;
+        return left.provider_id == right.provider_id && left.action_id == right.action_id;
     }
 
     static IdentityView identity_of(const EntityActionRouteSpec& route) noexcept {
@@ -504,9 +538,8 @@ class EntityActionRouteStore final {
         return {route.provider_id, route.action_id};
     }
 
-    static bool same_semantics(
-        const PublishedState* current,
-        const std::vector<EntityActionRouteSpec>& rows) noexcept {
+    static bool same_semantics(const PublishedState* current,
+                               const std::vector<EntityActionRouteSpec>& rows) noexcept {
         if (current == nullptr) {
             return rows.empty();
         }
@@ -522,10 +555,8 @@ class EntityActionRouteStore final {
                 route.category_label != row.category_label ||
                 route.category_icon != row.category_icon ||
                 route.category_priority != row.category_priority ||
-                route.row_label != row.row_label ||
-                route.row_icon != row.row_icon ||
-                route.payload_json != row.payload_json ||
-                route.can_activate != row.can_activate ||
+                route.row_label != row.row_label || route.row_icon != row.row_icon ||
+                route.payload_json != row.payload_json || route.can_activate != row.can_activate ||
                 route.keep_menu_open != row.keep_menu_open ||
                 route.close_menu_before != row.close_menu_before) {
                 return false;
@@ -534,8 +565,9 @@ class EntityActionRouteStore final {
         return true;
     }
 
-    static EntityActionRoute make_route(const EntityActionRouteSpec& row,
-                                        std::int32_t token) {
+    static EntityActionRoute
+    make_route(const EntityActionRouteSpec& row, std::int32_t token,
+               const std::shared_ptr<EntityActionInvocationGate>& invocation_gate) {
         EntityActionRoute route;
         route.token = token;
         route.provider_id = row.provider_id;
@@ -551,6 +583,7 @@ class EntityActionRouteStore final {
         route.can_activate = row.can_activate;
         route.keep_menu_open = row.keep_menu_open;
         route.close_menu_before = row.close_menu_before;
+        route.invocation_gate_ = invocation_gate;
         return route;
     }
 

@@ -10,26 +10,26 @@ if (NOT Catch2_FOUND)
     return()
 endif()
 
-# Wave 8 phase 12 test cpps 由并发 agent 后续 land;
+# Phase 12 test cpps 由并发 agent 后续 land;
 # 用 file(EXISTS) 判断可用源, 保持 configure 通过.
 set(_sao_launcher_test_sources
     test_launcher_smoke.cpp
     test_args.cpp
     test_single_instance.cpp
     test_working_dir.cpp
-    test_init_pipeline_wave5.cpp
+    test_init_pipeline.cpp
     test_entity_builtin_action_focused.cpp
     test_entity_action_routes_focused.cpp
     test_settings_owner_focused.cpp
     test_tool_launch_focused.cpp
 )
-# Wave 10 / Agent a — Phase 12 rollout tests join the same discovery scheme
+# Phase 12 rollout tests join the same discovery scheme
 # so an operator building a slim launcher can drop them without CMake edits.
 foreach (_maybe
     test_dual_run_phase12.cpp
     test_cutover_diff_phase12.cpp
-    test_rollout_wave10.cpp
-    test_rollout_admin_wave10.cpp)
+    test_rollout.cpp
+    test_rollout_admin.cpp)
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_maybe}")
         list(APPEND _sao_launcher_test_sources ${_maybe})
     endif()
@@ -58,13 +58,13 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/working_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/crash_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/app.cpp
-    # Wave 5 / Phase 1 — headless init pipeline + shutdown so the
-    # wave5 tests can drive the full sequence with fail-closed stubs.
+    # Phase 1 — headless init pipeline + shutdown so the
+    # init pipeline tests can drive the full sequence with fail-closed stubs.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/init_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/shutdown.cpp
-    # Wave 8 / Phase 12 — dual-run driver.
+    # Phase 12 — dual-run driver.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/dual_run.cpp
-    # Wave 10 / Agent a — Phase 12 rollout manager + dispatcher.
+    # Phase 12 rollout manager + dispatcher.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/rollout_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/rollout_dispatcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
@@ -113,7 +113,7 @@ else()
     )
 endif()
 
-# Wave 10 / Agent a — sao_rollout_admin CLI target lookup.
+# sao_rollout_admin CLI target lookup.
 #
 # tools/ is add_subdirectory'd AFTER launcher/ in the top-level CMakeLists,
 # so at THIS point in configure `TARGET sao_rollout_admin` is not yet
@@ -149,7 +149,7 @@ target_link_libraries(sao_launcher_tests
         shlwapi
         dbghelp
         version
-        bcrypt          # HMAC-SHA-256 for rollout bucketing (Wave 10)
+        bcrypt          # HMAC-SHA-256 for rollout bucketing
         crypt32         # current-user DPAPI for secure settings envelopes
         nlohmann_json::nlohmann_json
 )
@@ -159,7 +159,7 @@ if (TARGET sao::core)
         SAO_LAUNCHER_CORE_LOG_PROVIDER=1)
 endif()
 
-# Wave 10 / Agent a — rollout_manager.cpp guards its telemetry_client
+# rollout_manager.cpp guards its telemetry_client
 # include behind SAO_LAUNCHER_HAS_TELEMETRY_CLIENT.  Tests set the
 # telemetry hook to observe events, so we still enable the include path
 # when the target is present so tests exercise the real client too.

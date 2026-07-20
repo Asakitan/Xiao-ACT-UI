@@ -1,4 +1,4 @@
-// SAO Auto - launcher/tests/test_rollout_admin_wave10.cpp
+// SAO Auto - launcher/tests/test_rollout_admin.cpp
 //
 // Wave 10 / Agent a - Phase 12 rollout admin CLI integration test.
 //
@@ -115,7 +115,7 @@ std::string wpath_to_utf8(const fs::path& p) {
 // 1) show_output_contains_current_percent
 // ===========================================================================
 TEST_CASE("rollout_admin_show_output_contains_current_percent",
-          "[launcher][rollout_admin][wave10]") {
+          "[launcher][rollout_admin]") {
     std::string exe = rollout_admin_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("sao_rollout_admin exe not built in this configuration; skipping");
@@ -150,7 +150,7 @@ TEST_CASE("rollout_admin_show_output_contains_current_percent",
 // 2) set_percent_persists_and_shows_new_value
 // ===========================================================================
 TEST_CASE("rollout_admin_set_percent_persists_and_shows_new_value",
-          "[launcher][rollout_admin][wave10]") {
+          "[launcher][rollout_admin]") {
     std::string exe = rollout_admin_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("sao_rollout_admin exe not built in this configuration; skipping");
@@ -189,7 +189,7 @@ TEST_CASE("rollout_admin_set_percent_persists_and_shows_new_value",
 // 3) simulate_buckets_10000_uniform_within_tolerance
 // ===========================================================================
 TEST_CASE("rollout_admin_simulate_buckets_10000_uniform_within_tolerance",
-          "[launcher][rollout_admin][wave10]") {
+          "[launcher][rollout_admin]") {
     std::string exe = rollout_admin_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("sao_rollout_admin exe not built in this configuration; skipping");
@@ -221,7 +221,7 @@ TEST_CASE("rollout_admin_simulate_buckets_10000_uniform_within_tolerance",
 // 4) reset_retreat_clears_history
 // ===========================================================================
 TEST_CASE("rollout_admin_reset_retreat_clears_history",
-          "[launcher][rollout_admin][wave10]") {
+          "[launcher][rollout_admin]") {
     std::string exe = rollout_admin_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("sao_rollout_admin exe not built in this configuration; skipping");

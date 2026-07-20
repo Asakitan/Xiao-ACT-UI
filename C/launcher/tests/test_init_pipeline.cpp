@@ -1,4 +1,4 @@
-// SAO Auto — launcher/tests/test_init_pipeline_wave5.cpp
+// SAO Auto — launcher/tests/test_init_pipeline.cpp
 //
 // Wave 5 / Phase 1 — headless init pipeline coverage.
 //
@@ -33,7 +33,7 @@
 #include "sao_core/sao_status.h"
 #endif
 
-// The wave5 exit-code constants live in the sao::launcher namespace
+// The init pipeline exit-code constants live in the sao::launcher namespace
 // alongside the App state machine.  Pull them in for terser assertions.
 using sao::launcher::SAO_EXIT_ALREADY_RUNNING;
 using sao::launcher::SAO_EXIT_OK;
@@ -381,7 +381,7 @@ size_t countStep(const std::vector<std::string>& steps, const char* name) {
 
 } // namespace
 
-TEST_CASE("launcher_init_pipeline_run_no_deps_returns_ok", "[launcher][init_pipeline][wave5]") {
+TEST_CASE("launcher_init_pipeline_run_no_deps_returns_ok", "[launcher][init_pipeline]") {
     CompositionRecorder composition;
     CompositionHookGuard composition_guard(composition);
     TeardownRecorder rec;
@@ -454,7 +454,7 @@ TEST_CASE("launcher streaming mode release retries on the same thread",
     CHECK_FALSE(recorder.locked);
 }
 
-TEST_CASE("launcher_init_pipeline_teardown_reverse_order", "[launcher][init_pipeline][wave5]") {
+TEST_CASE("launcher_init_pipeline_teardown_reverse_order", "[launcher][init_pipeline]") {
     DualRunChildGuard dual_run_child;
     ConfigFile config(kAllProvidersConfig);
     CompositionRecorder composition;
@@ -755,7 +755,7 @@ TEST_CASE("launcher_init_pipeline_enabled_provider_missing_config_fails_closed",
 }
 
 TEST_CASE("launcher_init_pipeline_security_failure_propagates",
-          "[launcher][init_pipeline][wave5]") {
+          "[launcher][init_pipeline]") {
     DualRunChildGuard dual_run_child;
     CompositionRecorder composition;
     composition.security_status = SAO_STATUS_INTERNAL;
@@ -933,7 +933,7 @@ TEST_CASE("launcher_headless_records_results_and_checks_auto_retreat",
 }
 
 TEST_CASE("launcher_init_pipeline_without_provider_fails_closed",
-          "[launcher][init_pipeline][wave5]") {
+          "[launcher][init_pipeline]") {
     DualRunChildGuard dual_run_child;
     sao_launcher_set_composition_test_hooks(nullptr);
     wchar_t argv0[] = L"SaoAutoTests.exe";
@@ -1069,7 +1069,7 @@ TEST_CASE("launcher_init_failure_shutdown_retries_owned_platform_context",
     REQUIRE(countStep(composition.steps, "platform_teardown") == 2);
 }
 
-TEST_CASE("launcher_single_instance_second_run_fails", "[launcher][init_pipeline][wave5]") {
+TEST_CASE("launcher_single_instance_second_run_fails", "[launcher][init_pipeline]") {
     // Acquire the mutex directly (mirroring what a first launcher
     // instance would do), then run the pipeline.  It must return
     // SAO_EXIT_ALREADY_RUNNING because the mutex is held.
