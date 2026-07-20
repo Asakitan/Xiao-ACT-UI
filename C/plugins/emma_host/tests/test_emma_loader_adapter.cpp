@@ -145,11 +145,13 @@ struct menu_catalog_snapshot {
 
 struct lifecycle_unload_probe {
     plugin_handle_t plugin = nullptr;
+    std::atomic_int callback_count{0};
     std::atomic_int status{SAO_ERR_OS_CALL_FAILED};
 };
 
 void reentrant_unload_callback(const char*, const char*, void* user_data) {
     auto& probe = *static_cast<lifecycle_unload_probe*>(user_data);
+    probe.callback_count.fetch_add(1);
     probe.status.store(sao_plugins_lifecycle_unload(probe.plugin));
 }
 
@@ -362,17 +364,24 @@ end
 }
 
 TEST_CASE("Emma menu category adapter preserves canonical identity and lifecycle",
-          "[plugins][emma][adapter][menu]") {
+          "[plugins][emma][adapter][menu][lifecycle][reentry]") {
     temp_tree tree(L"menu_identity");
     write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
 fn shared_command()
     if ctx.get_setting("fail_action", false)
         missing_action()
     end
+    if ctx.get_setting("nested_emit", false)
+        ctx.emit("emma_menu_nested", {})
+    end
     if ctx.get_setting("reentrant_unload", false)
         ctx.emit("emma_menu_reentrant_unload", {})
     end
     ctx.set_setting("action_invoked", true)
+end
+fn nested_event(event)
+    let calls = ctx.get_setting("nested_event_calls", 0)
+    ctx.set_setting("nested_event_calls", calls + 1)
 end
 fn build_menu()
     let mode = ctx.get_setting("mode", 0)
@@ -419,6 +428,7 @@ fn build_menu()
     return []
 end
 fn on_load(ctx)
+    ctx.subscribe("emma_menu_nested", nested_event)
     ctx.register_menu_category("工具 α", "⚙", build_menu, 10.5)
 end
 )EMMA");
@@ -471,6 +481,16 @@ end
                                              explicit_action.c_str(),
                                              provider.rows[0].payload.c_str()) == SAO_OK);
     CHECK(context_json(context, "action_invoked") == "true");
+    REQUIRE(sao_plugins_ctx_emit(context, "emma_menu_nested", "{}") == SAO_OK);
+    CHECK(context_json(context, "nested_event_calls") == "1");
+    set_context_json(context, "nested_emit", "true");
+    set_context_json(context, "action_invoked", "false");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") ==
+          SAO_PLUGINS_ERR_BUSY);
+    CHECK(context_json(context, "nested_event_calls") == "1");
+    CHECK(context_json(context, "action_invoked") == "false");
+    set_context_json(context, "nested_emit", "false");
     set_context_json(context, "fail_action", "true");
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(),
@@ -528,6 +548,7 @@ end
     set_context_json(context, "action_invoked", "false");
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(unload_probe.callback_count.load() == 1);
     CHECK(unload_probe.status.load() == SAO_PLUGINS_ERR_BUSY);
     CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
     menu_catalog_snapshot after_reentrant_busy;
@@ -538,9 +559,15 @@ end
     set_context_json(context, "action_invoked", "false");
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(), "{}") == SAO_OK);
+    CHECK(unload_probe.callback_count.load() == 1);
     CHECK(context_json(context, "action_invoked") == "true");
     REQUIRE(sao_plugins_ctx_unsubscribe(context, unload_token) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::unloaded);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(),
                                              "{}") == SAO_ERR_HANDLE_INVALID);

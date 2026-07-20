@@ -16,6 +16,7 @@
 // 字符串支持双/单引号 + \n \t \\ \" \' 转义 (对齐 Python _unescape)
 
 #include "sao/plugins/emma_host/emma_lexer.h"
+#include "emma_source_io.h"
 #include "sao/plugins/emma_host/emma_error.h"
 
 #include <cctype>
@@ -387,6 +388,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_emma_tokenize(
     if (out_count != nullptr)
         *out_count = 0;
     if (utf8_source == nullptr || out_tokens == nullptr || out_count == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (source_len > kMaximumEmmaSourceBytes)
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         std::vector<token> toks = tokenize_source(std::string_view(utf8_source, source_len));

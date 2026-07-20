@@ -6,6 +6,7 @@
 //   sao_plugins_emma_call_by_name(interp, name, args, argc, out_result, out_error)
 
 #include "sao/plugins/emma_host/emma_call.h"
+#include "emma_json_internal.h"
 #include "emma_source_io.h"
 #include "sao/plugins/emma_host/emma_interpreter.h"
 #include "sao/plugins/emma_host/emma_lexer.h"
@@ -14,6 +15,7 @@
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/plugins/sdk_binding/binding_emma.h"
 
 #include <algorithm>
@@ -35,8 +37,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-#include <nlohmann/json.hpp>
 
 namespace sao::plugins::emma_host {
 
@@ -596,98 +596,25 @@ std::string require_metadata_only_panel(const std::vector<emma_value>& arguments
     return panel_id;
 }
 
-constexpr std::size_t kMaximumJsonNestingDepth = 64;
-constexpr std::size_t kMaximumJsonNodes = 16384;
-constexpr std::size_t kMaximumJsonInputBytes = 8U * 1024U * 1024U;
-
-class bounded_json_sax final : public json::json_sax_t {
-  public:
-    bool null() override {
-        return consume_node();
-    }
-    bool boolean(bool) override {
-        return consume_node();
-    }
-    bool number_integer(number_integer_t) override {
-        return consume_node();
-    }
-    bool number_unsigned(number_unsigned_t) override {
-        return consume_node();
-    }
-    bool number_float(number_float_t value, const string_t&) override {
-        return std::isfinite(value) && consume_node();
-    }
-    bool string(string_t&) override {
-        return consume_node();
-    }
-    bool binary(binary_t&) override {
-        return consume_node();
-    }
-    bool start_object(std::size_t) override {
-        return start_container();
-    }
-    bool key(string_t&) override {
-        return true;
-    }
-    bool end_object() override {
-        return end_container();
-    }
-    bool start_array(std::size_t) override {
-        return start_container();
-    }
-    bool end_array() override {
-        return end_container();
-    }
-    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
-        return false;
-    }
-
-  private:
-    bool consume_node() noexcept {
-        if (nodes_ >= kMaximumJsonNodes)
-            return false;
-        ++nodes_;
-        return true;
-    }
-
-    bool start_container() noexcept {
-        if (depth_ >= kMaximumJsonNestingDepth || !consume_node())
-            return false;
-        ++depth_;
-        return true;
-    }
-
-    bool end_container() noexcept {
-        if (depth_ == 0)
-            return false;
-        --depth_;
-        return true;
-    }
-
-    std::size_t depth_ = 0;
-    std::size_t nodes_ = 0;
-};
+constexpr std::size_t kMaximumJsonInputBytes = detail::kMaximumEmmaJsonInputBytes;
 
 bool valid_bounded_json(std::string_view input, std::size_t byte_limit) noexcept {
     if (input.size() > byte_limit)
         return false;
     try {
-        bounded_json_sax sax;
-        return json::sax_parse(input.begin(), input.end(), &sax);
+        std::string error;
+        return detail::validate_json(input, error);
     } catch (...) {
         return false;
     }
 }
 
 bool parse_bounded_json(std::string_view input, std::size_t byte_limit, json& output) noexcept {
-    if (!valid_bounded_json(input, byte_limit))
+    if (input.size() > byte_limit)
         return false;
     try {
-        json candidate = json::parse(input.begin(), input.end(), nullptr, false);
-        if (candidate.is_discarded())
-            return false;
-        output = std::move(candidate);
-        return true;
+        std::string error;
+        return detail::parse_json(input.data(), input.size(), output, error);
     } catch (...) {
         return false;
     }
@@ -706,124 +633,30 @@ bool parse_bounded_json_c_string(const char* input, std::size_t byte_limit,
 }
 
 bool value_to_json(const emma_value& value, json& output, size_t depth = 0) {
-    if (depth > kMaximumJsonNestingDepth)
+    if (depth != 0)
         return false;
-    if (std::holds_alternative<std::nullptr_t>(value)) {
-        output = nullptr;
-        return true;
-    }
-    if (const auto* boolean = std::get_if<bool>(&value)) {
-        output = *boolean;
-        return true;
-    }
-    if (const auto* integer = std::get_if<int64_t>(&value)) {
-        output = *integer;
-        return true;
-    }
-    if (const auto* number = std::get_if<double>(&value)) {
-        if (!std::isfinite(*number))
-            return false;
-        output = *number;
-        return true;
-    }
-    if (const auto* string = std::get_if<std::string>(&value)) {
-        output = *string;
-        return true;
-    }
-    if (const auto* list = std::get_if<std::shared_ptr<emma_list>>(&value)) {
-        output = json::array();
-        if (!*list)
-            return true;
-        for (const auto& item : (*list)->items) {
-            json converted;
-            if (!value_to_json(item, converted, depth + 1))
-                return false;
-            output.push_back(std::move(converted));
-        }
-        return true;
-    }
-    if (const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&value)) {
-        output = json::object();
-        if (!*dictionary)
-            return true;
-        for (const auto& [key, item] : (*dictionary)->items) {
-            json converted;
-            if (!value_to_json(item, converted, depth + 1))
-                return false;
-            output[key] = std::move(converted);
-        }
-        return true;
-    }
-    return false;
+    std::string error;
+    return detail::emma_value_to_json(value, output, error);
 }
 
 bool json_to_value(const json& input, emma_value& output, size_t depth = 0) {
-    if (depth > kMaximumJsonNestingDepth)
+    if (depth != 0)
         return false;
-    if (input.is_null()) {
-        output = nullptr;
-        return true;
-    }
-    if (input.is_boolean()) {
-        output = input.get<bool>();
-        return true;
-    }
-    if (input.is_number_integer()) {
-        output = input.get<int64_t>();
-        return true;
-    }
-    if (input.is_number_unsigned()) {
-        const auto value = input.get<uint64_t>();
-        if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-            return false;
-        }
-        output = static_cast<int64_t>(value);
-        return true;
-    }
-    if (input.is_number_float()) {
-        const double value = input.get<double>();
-        if (!std::isfinite(value))
-            return false;
-        output = value;
-        return true;
-    }
-    if (input.is_string()) {
-        output = input.get<std::string>();
-        return true;
-    }
-    if (input.is_array()) {
-        auto list = std::make_shared<emma_list>();
-        list->items.reserve(input.size());
-        for (const auto& item : input) {
-            emma_value converted = nullptr;
-            if (!json_to_value(item, converted, depth + 1))
-                return false;
-            list->items.push_back(std::move(converted));
-        }
-        output = std::move(list);
-        return true;
-    }
-    if (input.is_object()) {
-        auto dictionary = std::make_shared<emma_dict>();
-        for (auto iterator = input.begin(); iterator != input.end(); ++iterator) {
-            emma_value converted = nullptr;
-            if (!json_to_value(iterator.value(), converted, depth + 1)) {
-                return false;
-            }
-            dictionary->items.emplace(iterator.key(), std::move(converted));
-        }
-        output = std::move(dictionary);
-        return true;
-    }
-    return false;
+    std::string error;
+    return detail::json_to_emma_value(input, output, error);
 }
 
 std::string serialize_value_or_throw(const emma_value& value) {
-    json converted;
-    if (!value_to_json(value, converted)) {
-        throw_context_status("JSON conversion", SAO_ERR_INVALID_ARGUMENT);
+    std::string serialized;
+    std::string message;
+    if (!detail::serialize_emma_value(value, serialized, message)) {
+        emma_error error;
+        error.kind = error_kind::runtime_error;
+        error.status = SAO_ERR_INVALID_ARGUMENT;
+        error.message = "JSON conversion: " + message;
+        throw emma_exception(std::move(error));
     }
-    return converted.dump();
+    return serialized;
 }
 
 constexpr std::size_t kMaximumMenuRows = 4096;
@@ -903,51 +736,9 @@ std::string callable_identity(const emma_plugin_runtime& runtime, const callable
     return "emma-callable-" + hash_suffix(hash);
 }
 
-bool valid_utf8(std::string_view value) noexcept {
-    std::size_t offset = 0;
-    while (offset < value.size()) {
-        const auto first = static_cast<unsigned char>(value[offset]);
-        if (first <= 0x7fU) {
-            ++offset;
-            continue;
-        }
-        std::size_t continuation_count = 0;
-        std::uint32_t code_point = 0;
-        if ((first & 0xe0U) == 0xc0U) {
-            continuation_count = 1;
-            code_point = first & 0x1fU;
-        } else if ((first & 0xf0U) == 0xe0U) {
-            continuation_count = 2;
-            code_point = first & 0x0fU;
-        } else if ((first & 0xf8U) == 0xf0U) {
-            continuation_count = 3;
-            code_point = first & 0x07U;
-        } else {
-            return false;
-        }
-        if (offset + continuation_count >= value.size())
-            return false;
-        for (std::size_t index = 1; index <= continuation_count; ++index) {
-            const auto next = static_cast<unsigned char>(value[offset + index]);
-            if ((next & 0xc0U) != 0x80U)
-                return false;
-            code_point = (code_point << 6U) | (next & 0x3fU);
-        }
-        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
-                              (continuation_count == 2 && code_point < 0x800U) ||
-                              (continuation_count == 3 && code_point < 0x10000U);
-        if (overlong || code_point > 0x10ffffU ||
-            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
-            return false;
-        }
-        offset += continuation_count + 1;
-    }
-    return true;
-}
-
 bool valid_menu_string(std::string_view value, bool required) noexcept {
     return (!required || !value.empty()) && value.size() <= kMaximumMenuStringBytes &&
-           value.find('\0') == std::string_view::npos && valid_utf8(value);
+           value.find('\0') == std::string_view::npos && detail::valid_utf8(value);
 }
 
 void remember_menu_error(emma_plugin_runtime& runtime, int32_t status, std::string message) {
@@ -1018,12 +809,11 @@ bool menu_payload(const emma_dict& dictionary, std::string& output, std::string&
         output = "{}";
         return true;
     }
-    json converted;
-    if (!value_to_json(payload->second, converted)) {
+    std::string conversion_error;
+    if (!detail::serialize_emma_value(payload->second, output, conversion_error)) {
         error = "menu payload cannot be converted to JSON";
         return false;
     }
-    output = converted.dump();
     if (!valid_menu_string(output, false)) {
         error = "menu payload exceeds its field budget";
         return false;
@@ -1276,8 +1066,9 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
                 error.status = SAO_ERR_OS_CALL_FAILED;
                 error.message = std::move(message);
             }
+            const int32_t status = sao_plugins_emma_error_status(&error);
             runtime->last_error = std::move(error);
-            return SAO_ERR_OS_CALL_FAILED;
+            return status;
         }
         runtime->last_error = {};
         return SAO_OK;
@@ -1533,6 +1324,22 @@ bool find_owned_resource(emma_plugin_runtime& runtime, Predicate&& predicate,
     return true;
 }
 
+bool has_accepting_event_subscription(emma_plugin_runtime& runtime, std::string_view topic) {
+    std::lock_guard resources_lock(runtime.resources_mutex);
+    for (const auto& resource : runtime.resources) {
+        if (resource.kind != emma_plugin_runtime::resource_kind::event_subscription ||
+            resource.key != topic || resource.callback == nullptr) {
+            continue;
+        }
+        std::lock_guard callback_lock(resource.callback->mutex);
+        if (resource.callback->accepting && resource.callback->runtime == &runtime &&
+            resource.callback->function != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void remember_callback_error(emma_plugin_runtime* runtime, const emma_error& error) noexcept {
     if (runtime == nullptr)
         return;
@@ -1782,7 +1589,7 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                 emma_plugin_runtime::callback_record::one_shot_state::registering;
         }
         const uint64_t resource_id = add_owned_resource(
-            *runtime, emma_plugin_runtime::resource_kind::event_subscription, 0, {}, callback);
+            *runtime, emma_plugin_runtime::resource_kind::event_subscription, 0, topic, callback);
         uint32_t token = 0;
         const int32_t status = once ? sao::plugins::loader::sao_plugins_ctx_subscribe_once(
                                           runtime->context, topic.c_str(), event_callback_bridge,
@@ -1795,7 +1602,7 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             retire_callback(callback);
             throw_context_status(method, status);
         }
-        (void)update_owned_resource(*runtime, resource_id, token, {});
+        (void)update_owned_resource(*runtime, resource_id, token, topic);
         if (once) {
             std::lock_guard callback_lock(callback->mutex);
             if (callback->one_shot_phase ==
@@ -1849,12 +1656,15 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             return emma_value(true);
         }));
     wrapper->items.emplace(
-        "emit", make_host_callable("ctx.emit", [context](std::vector<emma_value> arguments) {
+        "emit", make_host_callable("ctx.emit", [runtime](std::vector<emma_value> arguments) {
             const std::string topic = require_string(arguments, 0, "ctx.emit");
+            if (g_active_runtime == runtime && has_accepting_event_subscription(*runtime, topic)) {
+                throw_context_status("ctx.emit", sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+            }
             const std::string payload =
                 arguments.size() > 1 ? serialize_value_or_throw(arguments[1]) : "null";
-            const int32_t status =
-                sao::plugins::loader::sao_plugins_ctx_emit(context, topic.c_str(), payload.c_str());
+            const int32_t status = sao::plugins::loader::sao_plugins_ctx_emit(
+                runtime->context, topic.c_str(), payload.c_str());
             if (status != SAO_OK)
                 throw_context_status("ctx.emit", status);
             return emma_value(true);
@@ -2282,6 +2092,19 @@ int32_t finish_failed_load(std::unique_ptr<emma_plugin_s> plugin, int32_t failur
     return closing_status;
 }
 
+struct interpreter_callback_call final {
+    emma_interpreter_callback_t callback = nullptr;
+    interpreter* interp = nullptr;
+    void* user_data = nullptr;
+};
+
+int32_t SAO_PLUGINS_CALL invoke_interpreter_callback(void* user_data) {
+    auto* call = static_cast<interpreter_callback_call*>(user_data);
+    if (call == nullptr || call->callback == nullptr || call->interp == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    return call->callback(call->interp, call->user_data);
+}
+
 } // namespace
 
 emma_plugin_runtime::~emma_plugin_runtime() {
@@ -2560,7 +2383,13 @@ sao_plugins_emma_call_hook(emma_plugin_handle_t plugin, const char* hook_name,
                               "Emma hook result cannot be converted to JSON");
                 return sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED;
             }
-            const std::string text = serialized.dump();
+            std::string text;
+            std::string serialization_error;
+            if (!detail::serialize_json(serialized, text, serialization_error)) {
+                set_api_error(&runtime.last_error, error_kind::runtime_error,
+                              SAO_ERR_INVALID_ARGUMENT, std::move(serialization_error));
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
             auto* buffer = static_cast<char*>(std::malloc(text.size() + 1));
             if (buffer == nullptr) {
                 set_api_error(&runtime.last_error, error_kind::runtime_error,
@@ -2649,7 +2478,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_emma_with_interp
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         return with_direct_plugin(plugin, [&](emma_plugin_runtime& runtime) {
-            return callback(runtime.interp.get(), user_data);
+            interpreter_callback_call call{callback, runtime.interp.get(), user_data};
+            return sao::plugins::sdk_binding::sao_plugins_binding_barrier(
+                &invoke_interpreter_callback, &call, nullptr);
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;

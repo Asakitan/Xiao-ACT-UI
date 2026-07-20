@@ -16,6 +16,7 @@
 // 每 interpreter 保留自己的 log_fn 状态 — 用一个 static 表挂 host。
 
 #include "sao/plugins/emma_host/emma_stdlib.h"
+#include "emma_json_internal.h"
 #include "emma_source_io.h"
 #include "sao/plugins/emma_host/emma_error.h"
 #include "sao/plugins/emma_host/emma_interpreter.h"
@@ -25,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -35,8 +37,6 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
-
-#include <nlohmann/json.hpp>
 
 namespace sao::plugins::emma_host {
 
@@ -87,9 +87,10 @@ std::shared_ptr<callable> make_host(const std::string& name,
     return c;
 }
 
-[[noreturn]] void throw_runtime_error(std::string message) {
+[[noreturn]] void throw_runtime_error(std::string message, int32_t status = SAO_OK) {
     emma_error error;
     error.kind = error_kind::runtime_error;
+    error.status = status;
     error.message = std::move(message);
     throw emma_exception(std::move(error));
 }
@@ -120,110 +121,22 @@ double numeric_value(const emma_value& value, const char* operation) {
     throw_runtime_error(std::string(operation) + ": expected numeric argument");
 }
 
-bool value_to_json(const emma_value& value, nlohmann::json& output, size_t depth = 0) {
-    if (depth > 64)
-        return false;
-    if (std::holds_alternative<std::nullptr_t>(value)) {
-        output = nullptr;
-    } else if (const auto* boolean = std::get_if<bool>(&value)) {
-        output = *boolean;
-    } else if (const auto* integer = std::get_if<int64_t>(&value)) {
-        output = *integer;
-    } else if (const auto* number = std::get_if<double>(&value)) {
-        if (!std::isfinite(*number))
-            return false;
-        output = *number;
-    } else if (const auto* string = std::get_if<std::string>(&value)) {
-        output = *string;
-    } else if (const auto* list = std::get_if<std::shared_ptr<emma_list>>(&value)) {
-        output = nlohmann::json::array();
-        if (*list != nullptr) {
-            for (const auto& item : (*list)->items) {
-                nlohmann::json converted;
-                if (!value_to_json(item, converted, depth + 1))
-                    return false;
-                output.push_back(std::move(converted));
-            }
-        }
-    } else if (const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&value)) {
-        output = nlohmann::json::object();
-        if (*dictionary != nullptr) {
-            for (const auto& [key, item] : (*dictionary)->items) {
-                nlohmann::json converted;
-                if (!value_to_json(item, converted, depth + 1))
-                    return false;
-                output[key] = std::move(converted);
-            }
-        }
-    } else {
-        return false;
-    }
-    return true;
-}
-
-bool json_to_value(const nlohmann::json& input, emma_value& output, size_t depth = 0) {
-    if (depth > 64)
-        return false;
-    if (input.is_null()) {
-        output = nullptr;
-    } else if (input.is_boolean()) {
-        output = input.get<bool>();
-    } else if (input.is_number_integer()) {
-        output = input.get<int64_t>();
-    } else if (input.is_number_unsigned()) {
-        const uint64_t value = input.get<uint64_t>();
-        if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-            return false;
-        }
-        output = static_cast<int64_t>(value);
-    } else if (input.is_number_float()) {
-        const double value = input.get<double>();
-        if (!std::isfinite(value))
-            return false;
-        output = value;
-    } else if (input.is_string()) {
-        output = input.get<std::string>();
-    } else if (input.is_array()) {
-        auto list = std::make_shared<emma_list>();
-        list->items.reserve(input.size());
-        for (const auto& item : input) {
-            emma_value converted = nullptr;
-            if (!json_to_value(item, converted, depth + 1))
-                return false;
-            list->items.push_back(std::move(converted));
-        }
-        output = std::move(list);
-    } else if (input.is_object()) {
-        auto dictionary = std::make_shared<emma_dict>();
-        for (auto iterator = input.begin(); iterator != input.end(); ++iterator) {
-            emma_value converted = nullptr;
-            if (!json_to_value(iterator.value(), converted, depth + 1)) {
-                return false;
-            }
-            dictionary->items.emplace(iterator.key(), std::move(converted));
-        }
-        output = std::move(dictionary);
-    } else {
-        return false;
-    }
-    return true;
-}
-
 emma_value bi_json_encode(std::vector<emma_value> arguments) {
     const auto& value = require_argument(arguments, 0, "json_encode");
-    nlohmann::json converted;
-    if (!value_to_json(value, converted)) {
-        throw_runtime_error("json_encode: value is not serializable");
+    std::string encoded;
+    std::string error;
+    if (!detail::serialize_emma_value(value, encoded, error)) {
+        throw_runtime_error("json_encode: " + error, SAO_ERR_INVALID_ARGUMENT);
     }
-    return converted.dump();
+    return encoded;
 }
 
 emma_value bi_json_decode(std::vector<emma_value> arguments) {
     const std::string source = require_string(arguments, 0, "json_decode");
-    const auto parsed = nlohmann::json::parse(source, nullptr, false);
     emma_value converted = nullptr;
-    if (parsed.is_discarded() || !json_to_value(parsed, converted)) {
-        throw_runtime_error("json_decode: invalid JSON value");
+    std::string error;
+    if (!detail::parse_json_to_emma_value(source.data(), source.size(), converted, error)) {
+        throw_runtime_error("json_decode: " + error, SAO_ERR_INVALID_ARGUMENT);
     }
     return converted;
 }
@@ -396,33 +309,83 @@ emma_value bi_type(std::vector<emma_value> args) {
     return std::string("unknown");
 }
 
+constexpr std::uint64_t kMaximumRangeItems = 16384;
+
+bool range_integer(const emma_value& value, std::int64_t& output) {
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+        output = *integer;
+        return true;
+    }
+    if (const auto* number = std::get_if<double>(&value)) {
+        constexpr double kInt64Limit = 9223372036854775808.0;
+        if (!std::isfinite(*number) || std::trunc(*number) != *number ||
+            *number < -kInt64Limit || *number >= kInt64Limit) {
+            return false;
+        }
+        output = static_cast<std::int64_t>(*number);
+        return true;
+    }
+    return false;
+}
+
+bool checked_add(std::int64_t left, std::int64_t right, std::int64_t& output) {
+    if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
+        (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right)) {
+        return false;
+    }
+    output = left + right;
+    return true;
+}
+
+std::uint64_t range_item_count(std::int64_t start, std::int64_t stop, std::int64_t step) {
+    if ((step > 0 && start >= stop) || (step < 0 && start <= stop))
+        return 0;
+    const std::uint64_t distance =
+        step > 0 ? static_cast<std::uint64_t>(stop) - static_cast<std::uint64_t>(start)
+                 : static_cast<std::uint64_t>(start) - static_cast<std::uint64_t>(stop);
+    const std::uint64_t magnitude =
+        step > 0 ? static_cast<std::uint64_t>(step)
+                 : std::uint64_t{0} - static_cast<std::uint64_t>(step);
+    return distance / magnitude + (distance % magnitude != 0 ? 1U : 0U);
+}
+
 // range(stop) / range(start, stop) / range(start, stop, step) → array
-emma_value bi_range(std::vector<emma_value> args) {
-    int64_t start = 0, stop = 0, step = 1;
-    if (args.size() == 1) {
-        stop = std::holds_alternative<int64_t>(args[0]) ? std::get<int64_t>(args[0])
-               : std::holds_alternative<double>(args[0])
-                   ? static_cast<int64_t>(std::get<double>(args[0]))
-                   : 0;
-    } else if (args.size() == 2) {
-        start = std::holds_alternative<int64_t>(args[0]) ? std::get<int64_t>(args[0]) : 0;
-        stop = std::holds_alternative<int64_t>(args[1]) ? std::get<int64_t>(args[1]) : 0;
-    } else if (args.size() >= 3) {
-        start = std::holds_alternative<int64_t>(args[0]) ? std::get<int64_t>(args[0]) : 0;
-        stop = std::holds_alternative<int64_t>(args[1]) ? std::get<int64_t>(args[1]) : 0;
-        step = std::holds_alternative<int64_t>(args[2]) ? std::get<int64_t>(args[2]) : 1;
-        if (step == 0)
-            step = 1;
+emma_value bi_range(std::vector<emma_value> arguments) {
+    if (arguments.empty() || arguments.size() > 3) {
+        throw_runtime_error("range expects 1 to 3 arguments", SAO_ERR_INVALID_ARGUMENT);
     }
-    auto arr = std::make_shared<emma_list>();
-    if (step > 0) {
-        for (int64_t i = start; i < stop; i += step)
-            arr->items.push_back(i);
-    } else {
-        for (int64_t i = start; i > stop; i += step)
-            arr->items.push_back(i);
+
+    std::int64_t start = 0;
+    std::int64_t stop = 0;
+    std::int64_t step = 1;
+    if (arguments.size() == 1) {
+        if (!range_integer(arguments[0], stop))
+            throw_runtime_error("range arguments must be integers", SAO_ERR_INVALID_ARGUMENT);
+    } else if (!range_integer(arguments[0], start) ||
+               !range_integer(arguments[1], stop) ||
+               (arguments.size() == 3 && !range_integer(arguments[2], step))) {
+        throw_runtime_error("range arguments must be integers", SAO_ERR_INVALID_ARGUMENT);
     }
-    return arr;
+    if (step == 0)
+        throw_runtime_error("range step must not be zero", SAO_ERR_INVALID_ARGUMENT);
+
+    const std::uint64_t item_count = range_item_count(start, stop, step);
+    if (item_count > kMaximumRangeItems)
+        throw_runtime_error("range exceeds its item budget", SAO_ERR_INVALID_ARGUMENT);
+
+    auto result = std::make_shared<emma_list>();
+    result->items.reserve(static_cast<std::size_t>(item_count));
+    std::int64_t current = start;
+    for (std::uint64_t index = 0; index < item_count; ++index) {
+        result->items.emplace_back(current);
+        if (index + 1 == item_count)
+            break;
+        std::int64_t next = 0;
+        if (!checked_add(current, step, next))
+            throw_runtime_error("range arithmetic overflow", SAO_ERR_INVALID_ARGUMENT);
+        current = next;
+    }
+    return result;
 }
 
 emma_value bi_list(std::vector<emma_value> args) {

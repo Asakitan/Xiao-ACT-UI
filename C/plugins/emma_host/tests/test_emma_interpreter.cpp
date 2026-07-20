@@ -7,6 +7,7 @@
 #include "sao/plugins/emma_host/emma_parser.h"
 #include "sao/plugins/emma_host/emma_stdlib.h"
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -79,6 +80,35 @@ std::string as_string(const emma_value& value) {
     return {};
 }
 
+int32_t execute_main_status(const std::string& source, emma_error& structured_error) {
+    structured_error = {};
+    try {
+        ast_pool pool;
+        interpreter interp;
+        interp.set_pool(&pool);
+        sao_plugins_emma_install_stdlib(&interp);
+
+        const std::vector<token> tokens = tokenize_source(source);
+        parser source_parser(tokens, &pool);
+        std::vector<node_id> statements;
+        std::string error;
+        int32_t status = source_parser.parse_program(statements, error);
+        if (status != SAO_OK)
+            return status;
+        status = interp.execute(statements, error, &structured_error);
+        if (status != SAO_OK)
+            return status;
+        const auto main_function = interp.get_function("__main__");
+        if (main_function == nullptr)
+            return SAO_OK;
+        (void)interp.call_function(main_function, {}, error, &structured_error);
+        return sao_plugins_emma_error_status(&structured_error);
+    } catch (const emma_exception& error) {
+        structured_error = error.error();
+        return sao_plugins_emma_error_status(&structured_error);
+    }
+}
+
 } // namespace
 
 TEST_CASE("emma_execute_hello_world", "[emma][interpreter]") {
@@ -97,6 +127,89 @@ TEST_CASE("emma_execute_arithmetic", "[emma][interpreter]") {
         end
     )emma");
     REQUIRE(as_int(result) == 3);
+}
+
+TEST_CASE("emma_range_handles_extreme_arithmetic and bounded allocation",
+          "[emma][interpreter][stdlib][range][budget]") {
+    const emma_value descending = execute_and_get_result(R"emma(
+        fn __main__()
+            return range(9223372036854775807, -9223372036854775807 - 1,
+                         -9223372036854775807 - 1)
+        end
+    )emma");
+    const auto* descending_list = std::get_if<std::shared_ptr<emma_list>>(&descending);
+    REQUIRE(descending_list != nullptr);
+    REQUIRE(*descending_list != nullptr);
+    REQUIRE((*descending_list)->items.size() == 2);
+    CHECK(as_int((*descending_list)->items[0]) == std::numeric_limits<int64_t>::max());
+    CHECK(as_int((*descending_list)->items[1]) == -1);
+
+    const emma_value ascending = execute_and_get_result(R"emma(
+        fn __main__()
+            return range(-9223372036854775807 - 1, 9223372036854775807,
+                         9223372036854775807)
+        end
+    )emma");
+    const auto* ascending_list = std::get_if<std::shared_ptr<emma_list>>(&ascending);
+    REQUIRE(ascending_list != nullptr);
+    REQUIRE(*ascending_list != nullptr);
+    REQUIRE((*ascending_list)->items.size() == 3);
+    CHECK(as_int((*ascending_list)->items[0]) == std::numeric_limits<int64_t>::min());
+    CHECK(as_int((*ascending_list)->items[1]) == -1);
+    CHECK(as_int((*ascending_list)->items[2]) == std::numeric_limits<int64_t>::max() - 1);
+
+    CHECK(as_int(execute_and_get_result(R"emma(
+        fn __main__()
+            return len(range(5, 0, 1)) + len(range(0, 5, -1))
+        end
+    )emma")) == 0);
+    CHECK(as_int(execute_and_get_result(R"emma(
+        fn __main__()
+            return len(range(0, 16384))
+        end
+    )emma")) == 16384);
+
+    emma_error error;
+    CHECK(execute_main_status(R"emma(
+        fn __main__()
+            return range(0, 10, 0)
+        end
+    )emma",
+                              error) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(error.kind == error_kind::runtime_error);
+    CHECK(error.status == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(error.message.find("step") != std::string::npos);
+
+    CHECK(execute_main_status(R"emma(
+        fn __main__()
+            return range(0, 16385)
+        end
+    )emma",
+                              error) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(error.status == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(error.message.find("budget") != std::string::npos);
+}
+
+TEST_CASE("emma public tokenizer enforces the source byte boundary transactionally",
+          "[emma][lexer][budget][public]") {
+    constexpr size_t kSourceLimit = 8U * 1024U * 1024U;
+    const std::string boundary(kSourceLimit, ' ');
+    token* tokens = reinterpret_cast<token*>(1);
+    size_t count = 99;
+    REQUIRE(sao_plugins_emma_tokenize(boundary.data(), boundary.size(), &tokens, &count) ==
+            SAO_OK);
+    REQUIRE(tokens != nullptr);
+    REQUIRE(count == 1);
+    CHECK(tokens[0].kind == token_kind::eof);
+    sao_plugins_emma_tokens_free(tokens, count);
+
+    const std::string excessive(kSourceLimit + 1, ' ');
+    tokens = reinterpret_cast<token*>(1);
+    count = 99;
+    CHECK(sao_plugins_emma_tokenize(excessive.data(), excessive.size(), &tokens, &count) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(tokens == nullptr);
+    CHECK(count == 0);
 }
 
 TEST_CASE("emma_execute_if_else", "[emma][interpreter]") {

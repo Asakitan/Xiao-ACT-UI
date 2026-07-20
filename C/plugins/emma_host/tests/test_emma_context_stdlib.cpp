@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -121,6 +122,28 @@ std::string flat_array_json(size_t values) {
     }
     result.push_back(']');
     return result;
+}
+
+struct global_injection {
+    const char* name = nullptr;
+    emma_value value = nullptr;
+};
+
+int32_t SAO_PLUGINS_CALL inject_global(interpreter* interp, void* user_data) {
+    auto* injection = static_cast<global_injection*>(user_data);
+    if (interp == nullptr || injection == nullptr || injection->name == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    interp->register_global(injection->name, injection->value);
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL throwing_interpreter_callback(interpreter*, void*) {
+    throw std::runtime_error("Emma interpreter callback failure");
+}
+
+int32_t SAO_PLUGINS_CALL seh_interpreter_callback(interpreter*, void*) {
+    RaiseException(0xE0421001U, 0, 0, nullptr);
+    return SAO_OK;
 }
 
 struct callback_slot {
@@ -551,9 +574,6 @@ fn on_load(ctx)
     ctx.set_setting("name", "Emma")
     subscription = ctx.subscribe("demo", event_callback)
     ctx.subscribe_once("once", event_callback)
-    ctx.emit("demo", {amount: 1})
-    ctx.emit("once", {amount: 2})
-    ctx.emit("once", {amount: 100})
     ctx.register_hotkey("main", hotkey_callback, "Ctrl+E", "Main")
     ctx.set_interval(timer_callback, 1.0)
     ctx.set_timeout(timer_callback, 1.0)
@@ -582,6 +602,9 @@ end
     REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
                                          manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
     REQUIRE(sao_plugins_emma_call_on_load(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_ctx_emit(context, "demo", R"({"amount":1})") == SAO_OK);
+    REQUIRE(sao_plugins_ctx_emit(context, "once", R"({"amount":2})") == SAO_OK);
+    REQUIRE(sao_plugins_ctx_emit(context, "once", R"({"amount":100})") == SAO_OK);
     REQUIRE(fixture.callbacks.size() == 3);
     REQUIRE(fixture.redraw_count == 1);
 
@@ -601,13 +624,13 @@ end
     std::erase_if(fixture.callbacks, [](const callback_slot& slot) { return slot.one_shot; });
 
     const json snapshot = call_json(plugin, "snapshot");
-    CHECK(snapshot == json{{"events", 2},
+    CHECK(snapshot == json{{"events", 3},
                            {"hotkeys", 1},
                            {"timers", 2},
                            {"level", 3},
                            {"name", "Emma"},
                            {"missing", 7}});
-    CHECK(call_json(plugin, "stop_events") == 2);
+    CHECK(call_json(plugin, "stop_events") == 3);
 
     REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
     CHECK(fixture.teardown ==
@@ -1061,11 +1084,11 @@ end
     CHECK(sao_plugins_emma_call_hook_ex(plugin, "touch_hook", excessive_hook_nodes.c_str(),
                                         nullptr, &error) == SAO_ERR_INVALID_ARGUMENT);
     constexpr size_t json_byte_limit = 8U * 1024U * 1024U;
-        const std::string hook_byte_boundary =
-                "[\"" + std::string(json_byte_limit - 4, 'x') + "\"]";
-        REQUIRE(sao_plugins_emma_call_hook(plugin, "touch_hook", hook_byte_boundary.c_str(),
-                                                                             nullptr) == SAO_OK);
-    const std::string excessive_hook_bytes = "[\"" + std::string(json_byte_limit, 'x') + "\"]";
+    std::string hook_byte_boundary = "[]";
+    hook_byte_boundary.append(json_byte_limit - hook_byte_boundary.size(), ' ');
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "touch_hook", hook_byte_boundary.c_str(),
+                                       nullptr) == SAO_OK);
+    const std::string excessive_hook_bytes = hook_byte_boundary + " ";
     CHECK(sao_plugins_emma_call_hook_ex(plugin, "touch_hook", excessive_hook_bytes.c_str(),
                                         nullptr, &error) == SAO_ERR_INVALID_ARGUMENT);
     CHECK(call_json(plugin, "ingress_counts") ==
@@ -1100,6 +1123,176 @@ end
             SAO_OK);
     CHECK(call_json(plugin, "ingress_counts") ==
           json{{"hooks", 3}, {"settings", 2}, {"events", 2}});
+
+    REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(loader_plugin);
+}
+
+TEST_CASE("Emma JSON codec unifies string key aggregate and output budgets",
+          "[plugins][emma][stdlib][json][budget][transaction]") {
+    constexpr size_t kStringLimit = 1024U * 1024U;
+    constexpr size_t kTotalStringLimit = 4U * 1024U * 1024U;
+
+    temp_tree tree(L"json_codec_budget");
+    write_text(tree.root / L"entry.emma", R"EMMA(
+fn decode_probe()
+    return json_decode(json_source)
+end
+fn encode_probe()
+    return json_encode(json_value)
+end
+fn alive()
+    return 7
+end
+)EMMA");
+    const auto manifest = make_manifest(tree, "emma.context.json.codec");
+    plugin_handle_t loader_plugin = add_plugin(manifest);
+    plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
+    REQUIRE(context != nullptr);
+    emma_plugin_handle_t plugin = nullptr;
+    REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
+                                         manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+
+    const auto set_global = [&](const char* name, emma_value value) {
+        global_injection injection{name, std::move(value)};
+        REQUIRE(sao_plugins_emma_with_interpreter(plugin, inject_global, &injection) == SAO_OK);
+    };
+    const auto check_failure = [&](const char* hook, const char* expected_text) {
+        char* output = reinterpret_cast<char*>(1);
+        emma_error error;
+        CHECK(sao_plugins_emma_call_hook_ex(plugin, hook, "[]", &output, &error) ==
+              SAO_ERR_INVALID_ARGUMENT);
+        CHECK(output == nullptr);
+        CHECK(error.kind == error_kind::runtime_error);
+        CHECK(error.status == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(error.message.find(expected_text) != std::string::npos);
+        CHECK(call_json(plugin, "alive") == 7);
+    };
+
+    const std::string boundary_string(kStringLimit, 's');
+    set_global("json_source", json(boundary_string).dump());
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "decode_probe", "[]", nullptr) == SAO_OK);
+    set_global("json_source", json(boundary_string + "x").dump());
+    check_failure("decode_probe", "string budget");
+
+    set_global("json_source", std::string("9223372036854775808"));
+    check_failure("decode_probe", "signed integer range");
+
+    std::string key_boundary = "{";
+    for (size_t index = 0; index < kTotalStringLimit / kStringLimit; ++index) {
+        if (index != 0)
+            key_boundary.push_back(',');
+        std::string key(kStringLimit, 'k');
+        key.back() = static_cast<char>('0' + index);
+        key_boundary += json(key).dump();
+        key_boundary += ":0";
+    }
+    key_boundary.push_back('}');
+    set_global("json_source", key_boundary);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "decode_probe", "[]", nullptr) == SAO_OK);
+    key_boundary.insert(key_boundary.size() - 1, ",\"x\":0");
+    set_global("json_source", std::move(key_boundary));
+    check_failure("decode_probe", "string budget");
+
+    set_global("json_value", boundary_string);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "encode_probe", "[]", nullptr) == SAO_OK);
+    set_global("json_value", boundary_string + "x");
+    check_failure("encode_probe", "string budget");
+
+    auto aggregate = std::make_shared<emma_list>();
+    aggregate->items.reserve(4);
+    for (size_t index = 0; index < 4; ++index)
+        aggregate->items.emplace_back(boundary_string);
+    set_global("json_value", aggregate);
+    REQUIRE(sao_plugins_emma_call_hook(plugin, "encode_probe", "[]", nullptr) == SAO_OK);
+    auto aggregate_excess = std::make_shared<emma_list>();
+    aggregate_excess->items = aggregate->items;
+    aggregate_excess->items.emplace_back(std::string("x"));
+    set_global("json_value", aggregate_excess);
+    check_failure("encode_probe", "string budget");
+
+    auto escaped_output = std::make_shared<emma_list>();
+    escaped_output->items.reserve(4);
+    for (size_t index = 0; index < 4; ++index)
+        escaped_output->items.emplace_back(std::string(kStringLimit, '\\'));
+    set_global("json_value", escaped_output);
+    check_failure("encode_probe", "output exceeds");
+
+    REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(loader_plugin);
+}
+
+TEST_CASE("Emma nested emit to an active Emma subscriber returns busy explicitly",
+          "[plugins][emma][context][event][reentry][busy]") {
+    temp_tree tree(L"nested_event_busy");
+    write_text(tree.root / L"entry.emma", R"EMMA(
+let event_calls = 0
+fn on_event(event)
+    event_calls = event_calls + 1
+end
+fn on_load(ctx)
+    ctx.subscribe("nested-event", on_event)
+end
+fn emit_nested()
+    return ctx.emit("nested-event", {value: 1})
+end
+fn event_count()
+    return event_calls
+end
+)EMMA");
+    const auto manifest = make_manifest(tree, "emma.context.event.reentry");
+    plugin_handle_t loader_plugin = add_plugin(manifest);
+    plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
+    REQUIRE(context != nullptr);
+    emma_plugin_handle_t plugin = nullptr;
+    REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
+                                         manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_emma_call_on_load(plugin) == SAO_OK);
+
+    REQUIRE(sao_plugins_ctx_emit(context, "nested-event", R"({"value":0})") == SAO_OK);
+    CHECK(call_json(plugin, "event_count") == 1);
+
+    char* output = reinterpret_cast<char*>(1);
+    emma_error error;
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "emit_nested", "[]", &output, &error) ==
+          SAO_PLUGINS_ERR_BUSY);
+    CHECK(output == nullptr);
+    CHECK(error.kind == error_kind::runtime_error);
+    CHECK(error.status == SAO_PLUGINS_ERR_BUSY);
+    CHECK(call_json(plugin, "event_count") == 1);
+
+    REQUIRE(sao_plugins_ctx_emit(context, "nested-event", R"({"value":2})") == SAO_OK);
+    CHECK(call_json(plugin, "event_count") == 2);
+
+    REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(loader_plugin);
+}
+
+TEST_CASE("Emma with_interpreter contains C++ and structured exceptions",
+          "[plugins][emma][interpreter][barrier][seh]") {
+    temp_tree tree(L"interpreter_barrier");
+    write_text(tree.root / L"entry.emma", R"EMMA(
+fn alive()
+    return 9
+end
+)EMMA");
+    const auto manifest = make_manifest(tree, "emma.context.interpreter.barrier");
+    plugin_handle_t loader_plugin = add_plugin(manifest);
+    plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
+    REQUIRE(context != nullptr);
+    emma_plugin_handle_t plugin = nullptr;
+    REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
+                                         manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+
+    CHECK(sao_plugins_emma_with_interpreter(plugin, throwing_interpreter_callback, nullptr) ==
+          SAO_ERR_OS_CALL_FAILED);
+    CHECK(call_json(plugin, "alive") == 9);
+    CHECK(sao_plugins_emma_with_interpreter(plugin, seh_interpreter_callback, nullptr) ==
+          SAO_ERR_OS_CALL_FAILED);
+    CHECK(call_json(plugin, "alive") == 9);
 
     REQUIRE(sao_plugins_emma_unload_script(plugin) == SAO_OK);
     sao_plugins_ctx_destroy(context);
