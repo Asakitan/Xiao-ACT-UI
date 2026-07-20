@@ -1,4 +1,4 @@
-// SAO Auto — Wave 17c gap tests for platform/net.
+// SAO Auto — capability and implementation gap-closure tests for platform/net.
 //
 // Coverage:
 //   A. capability gate — zstd (compile-time) and npcap dispatch symbol
@@ -48,7 +48,7 @@ TEST_CASE("net gap: zstd availability probe reports coherently",
 
     if (available) {
         // When zstd is compiled in we round trip a small in-memory buffer
-        // to prove Wave 17c didn't regress the real path.  No stream, no
+        // to prove the capability-gate work didn't regress the real path.  No stream, no
         // disk — just a hermetic memory transform.
         REQUIRE(compress_rc == SAO_STATUS_OK);
         REQUIRE(compressed_size > 0);
@@ -62,7 +62,7 @@ TEST_CASE("net gap: zstd availability probe reports coherently",
         CHECK(std::equal(roundtrip.begin(), roundtrip.begin() + out_size,
                          bytes.begin()));
     } else {
-        // When zstd is not compiled in, Wave 17c contract says the entry
+        // When zstd is not compiled in, the capability contract says the entry
         // points must return CAPABILITY_MISSING, not NOT_IMPLEMENTED.
         CAPTURE(compress_rc);
         CHECK(matches_gap_kind(compress_rc, GapKind::CapabilityGate));

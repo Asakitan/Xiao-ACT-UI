@@ -1,4 +1,4 @@
-// SAO Auto — Wave 6 tests for the game-agnostic TCP reassembler.
+// SAO Auto — tests for the game-agnostic TCP reassembler.
 //
 // These tests build synthetic pcap frames (Ethernet + IPv4 + TCP)
 // entirely in-process; nothing depends on Npcap or a live NIC.

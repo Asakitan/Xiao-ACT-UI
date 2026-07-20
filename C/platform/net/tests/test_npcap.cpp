@@ -1,4 +1,4 @@
-// SAO Auto — Wave 6 tests for the low-level Npcap wrapper.
+// SAO Auto — tests for the low-level Npcap wrapper.
 //
 // The wrapper is designed to compile & link even without the Npcap SDK
 // (wpcap.dll is loaded lazily via GetProcAddress).  These tests reflect

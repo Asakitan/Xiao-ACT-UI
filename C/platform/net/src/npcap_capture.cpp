@@ -1,6 +1,6 @@
 // SAO Auto — Npcap (wpcap.dll) capture wrapper.
 //
-// Wave 6: implements the low-level primitive surface declared in
+// Implements the low-level primitive surface declared in
 // `npcap_capture.h`.  wpcap.dll is loaded lazily via GetProcAddress; the
 // build does NOT depend on wpcap.lib, so machines without the Npcap SDK
 // can still link and machines without Npcap installed can still start
@@ -195,7 +195,7 @@ struct sao_net_capture_s {
 };
 
 // ───────────────────────────────────────────────────────────────────────
-// Wave 6 primitive surface.
+// Low-level Npcap primitive surface.
 // ───────────────────────────────────────────────────────────────────────
 
 extern "C" uint32_t SAO_NET_CALL sao_net_abi_version(void) {

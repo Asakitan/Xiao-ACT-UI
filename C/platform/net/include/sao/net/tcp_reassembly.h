@@ -1,4 +1,4 @@
-// SAO Auto — game-agnostic TCP reassembler (Wave 6).
+// SAO Auto — game-agnostic TCP reassembler.
 //
 // The reassembler ingests raw pcap frames (Ethernet + IPv4/IPv6 + TCP)
 // and yields byte streams in sequence order per TCP flow.  It knows
@@ -71,7 +71,7 @@ struct SaoReassemblerStats {
     uint64_t streams_flushed_timeout;
 };
 
-// Wave 6 API — 5 calls.  All calls are thread-hostile (single-threaded
+// Reassembler API — five calls.  All calls are thread-hostile (single-threaded
 // use only).  Wrap externally if concurrent ingest is required.
 
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_reassembler_create(

@@ -1,8 +1,8 @@
-// Wave 6 - protobuf varint + zstd compress/decompress primitives.
+// Protobuf varint and zstd compress/decompress primitives.
 //
 // The zstd path routes through vcpkg's `zstd` package.  When the port is
 // unavailable the build system defines `SAO_NET_ZSTD_MISSING` and every
-// zstd entry point stubs to SAO_STATUS_ERR_CAPABILITY_MISSING (Wave 17c —
+// zstd entry point stubs to SAO_STATUS_ERR_CAPABILITY_MISSING,
 // reclassified from NOT_IMPLEMENTED so callers can tell "zstd not linked
 // in this build" from "feature never written").  This keeps the ABI stable
 // regardless of dependency provenance.
@@ -78,7 +78,7 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_zstd_decompress(
 #ifdef SAO_NET_ZSTD_MISSING
     (void)output_out;
     (void)out_capacity;
-    // Wave 17c: build-time capability gate — vcpkg zstd port wasn't
+    // Build-time capability gate — the vcpkg zstd port wasn't
     // available at configure time.  Advertised via sao_net_zstd_available.
     return fail_zstd(SAO_STATUS_ERR_CAPABILITY_MISSING,
                      "zstd not compiled in", __FILE__, __LINE__);
@@ -141,7 +141,7 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_zstd_compress(
 
 #ifdef SAO_NET_ZSTD_MISSING
     (void)level;
-    // Wave 17c: build-time capability gate — see sao_net_zstd_decompress
+    // Build-time capability gate — see sao_net_zstd_decompress
     // for the taxonomy note.
     return fail_zstd(SAO_STATUS_ERR_CAPABILITY_MISSING,
                      "zstd not compiled in", __FILE__, __LINE__);

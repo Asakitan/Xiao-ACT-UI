@@ -1,4 +1,4 @@
-// SAO Auto - Wave 6 - protobuf + zstd primitives.
+// SAO Auto - protobuf and zstd primitives.
 //
 // This header exposes the *game-agnostic* low-level building blocks for
 // wire-format work:
@@ -15,7 +15,7 @@
 // The zstd APIs route through `find_package(zstd CONFIG)` provided by
 // vcpkg's `zstd` port.  When the ports are absent the CMake gate
 // disables the source file and the symbols are exported as stubs that
-// return SAO_STATUS_ERR_CAPABILITY_MISSING (Wave 17c — reclassified from
+// return SAO_STATUS_ERR_CAPABILITY_MISSING (reclassified from
 // NOT_IMPLEMENTED so callers can distinguish "zstd not linked in this
 // build" from "feature never written").  Callers should therefore not
 // assume zstd is always compiled in and can probe via a small
@@ -35,7 +35,7 @@ extern "C" {
 
 // zstd availability probe.  Returns SAO_STATUS_OK regardless; the caller
 // inspects `*available_out`.  When false, every other zstd call in this
-// header returns SAO_STATUS_ERR_CAPABILITY_MISSING (Wave 17c; see CMake gate).
+// header returns SAO_STATUS_ERR_CAPABILITY_MISSING; see the CMake gate.
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_zstd_available(
     bool* available_out);
 

@@ -12,7 +12,7 @@ add_library(sao_platform_net SHARED
     src/tls.cpp
     src/url.cpp
     src/winhttp_internal.cpp
-    # Wave 6 (Phase 4) - protobuf varint + zstd primitives.
+    # Protobuf varint and zstd primitives.
     src/proto_zstd.cpp
 )
 add_library(sao::net ALIAS sao_platform_net)
@@ -37,7 +37,7 @@ if (WIN32)
             crypt32
             ws2_32
             iphlpapi
-            # Wave 6: wpcap.dll is loaded lazily via GetProcAddress in
+            # wpcap.dll is loaded lazily via GetProcAddress in
             # src/npcap_capture.cpp — DO NOT link wpcap.lib here.  Builds
             # without the Npcap SDK must still succeed; runtime probing
             # (sao_net_npcap_available) is the source of truth for
@@ -45,9 +45,9 @@ if (WIN32)
     )
 endif()
 
-# Wave 6 (Phase 4) — zstd binding.  Gated on find_package(zstd CONFIG) so
+# Optional zstd binding.  Gated on find_package(zstd CONFIG) so
 # hosts without the vcpkg port still configure/build; the symbols degrade
-# to SAO_STATUS_ERR_NOT_IMPLEMENTED (see src/proto_zstd.cpp).  Runtime
+# to SAO_STATUS_ERR_CAPABILITY_MISSING (see src/proto_zstd.cpp).  Runtime
 # probing via sao_net_zstd_available() is the source of truth.
 find_package(zstd CONFIG QUIET)
 if (TARGET zstd::libzstd_shared OR TARGET zstd::libzstd_static OR TARGET zstd::libzstd)

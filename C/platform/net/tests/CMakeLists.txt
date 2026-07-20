@@ -30,7 +30,7 @@ target_link_libraries(sao_platform_net_network_abi_tests PRIVATE
 target_compile_features(sao_platform_net_network_abi_tests PRIVATE cxx_std_20)
 target_compile_definitions(sao_platform_net_network_abi_tests PRIVATE SAO_NET_USING_DLL)
 
-# ─── Wave 6 tests ──────────────────────────────────────────────────
+# ─── Npcap and TCP reassembly tests ────────────────────────────────
 # Npcap wrapper (wpcap.dll late-bound, tests SKIP gracefully when the
 # machine has no Npcap installed).
 add_executable(sao_platform_net_npcap_tests

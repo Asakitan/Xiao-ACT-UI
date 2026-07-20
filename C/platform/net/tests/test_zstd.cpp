@@ -1,4 +1,4 @@
-// Wave 6 tests for platform/net protobuf/zstd primitives.
+// Tests for platform/net protobuf and zstd primitives.
 //
 // Coverage:
 //   * zstd_compress_decompress_roundtrip_small
@@ -39,9 +39,9 @@ TEST_CASE("zstd_compress_decompress_roundtrip_small",
 
     // Small payload with repeated content - zstd should shrink it.
     const std::string payload =
-        "SAO-Auto Wave6 - the-quick-brown-fox-jumps-over-the-lazy-dog. "
-        "SAO-Auto Wave6 - the-quick-brown-fox-jumps-over-the-lazy-dog. "
-        "SAO-Auto Wave6 - the-quick-brown-fox-jumps-over-the-lazy-dog.";
+        "SAO-Auto zstd payload - the-quick-brown-fox-jumps-over-the-lazy-dog. "
+        "SAO-Auto zstd payload - the-quick-brown-fox-jumps-over-the-lazy-dog. "
+        "SAO-Auto zstd payload - the-quick-brown-fox-jumps-over-the-lazy-dog.";
 
     std::vector<uint8_t> compressed(payload.size() * 2 + 128);
     size_t compressed_size = 0;

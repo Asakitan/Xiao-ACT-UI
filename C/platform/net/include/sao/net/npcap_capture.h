@@ -88,12 +88,12 @@ SAO_NET_API void SAO_NET_CALL sao_net_capture_close(
     sao_net_capture_handle_t handle);
 
 // ───────────────────────────────────────────────────────────────────────
-// Wave 6 — low-level Npcap wrapper (game-agnostic).
+// Low-level Npcap wrapper (game-agnostic).
 //
 // The signatures above expose a callback-driven "delivery thread" surface
-// on top of Npcap; the Wave 6 API sits underneath: it exposes the pcap
+// on top of Npcap; the primitive API underneath exposes the pcap
 // primitives themselves (probe / list / open / filter / next / dispatch /
-// close) so higher layers can drive their own pump.  All Wave 6 calls
+// close) so higher layers can drive their own pump.  All primitive calls
 // route through `GetProcAddress("wpcap.dll", …)` — there is no
 // wpcap.lib link dependency, so builds without the Npcap SDK still
 // compile and the runtime gracefully reports `SAO_STATUS_ERR_NOT_FOUND`

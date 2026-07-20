@@ -1,4 +1,4 @@
-// SAO Auto — game-agnostic TCP reassembler (Wave 6).
+// SAO Auto — game-agnostic TCP reassembler.
 //
 // See `include/sao/net/tcp_reassembly.h` for the API contract.
 //
@@ -121,7 +121,7 @@ static bool parse_pcap_frame(const uint8_t* pkt, size_t size, ParsedTcp& out) {
         if (proto != 6) return false;  // not TCP
 
         // Skip IP fragments (offset != 0 or MF set) — reassembler is
-        // TCP-level; layered IP reassembly is out of scope for Wave 6.
+        // TCP-level; layered IP reassembly is outside this component's scope.
         uint16_t frag = static_cast<uint16_t>((ip[6] << 8) | ip[7]);
         uint16_t frag_off = static_cast<uint16_t>(frag & 0x1fff);
         bool more_frag = (frag & 0x2000) != 0;
@@ -253,7 +253,7 @@ struct sao_net_reassembler_s {
 };
 
 // ───────────────────────────────────────────────────────────────────────
-// Wave 6 API
+// Reassembler API
 // ───────────────────────────────────────────────────────────────────────
 
 extern "C" sao_status_t SAO_NET_CALL sao_net_reassembler_create(
