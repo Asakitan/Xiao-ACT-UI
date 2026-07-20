@@ -10483,6 +10483,219 @@ exports.activate = (context) => {
                 .contains("result"));
 }
 
+TEST_CASE("ExtensionHost deactivation settles unique subscriptions in reverse order",
+          "[plugins][ai_editor][native][extensions][node][deactivation]"
+          "[disposal_barrier]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"deactivation-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    const auto order_path = extension / L"deactivation-order.txt";
+    {
+        std::ofstream source(extension / L"extension.js");
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+const fs = require('fs');
+const vscode = require('vscode');
+let record;
+exports.activate = (context) => {
+    record = (value) => fs.appendFileSync(
+        context.asAbsolutePath('deactivation-order.txt'), value + '\n');
+    const raw = { dispose() { record('raw'); } };
+    const first = { dispose() { record('first'); } };
+    const failing = {
+        dispose() {
+            record('failing-start');
+            return {
+                then(_resolve, reject) {
+                    record('failing-reject');
+                    reject(new Error('intentional disposal failure'));
+                },
+            };
+        },
+    };
+    const panel = vscode.window.createWebviewPanel(
+        'sao.test.deactivationPanel', 'Deactivation Panel',
+        vscode.ViewColumn.One, {});
+    const disposePanel = panel.dispose.bind(panel);
+    panel.dispose = () => {
+        record('panel-start');
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                record('panel-dispose');
+                disposePanel();
+                resolve();
+            }, 75);
+        });
+    };
+    context.subscriptions.push(raw, first, failing, panel, raw);
+    return { panelId: panel.panelId };
+};
+exports.deactivate = async () => {
+    record('deactivate-start');
+    await Promise.resolve();
+    record('deactivate-end');
+};
+)JS";
+    }
+
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "extensions.configure_host",
+                     {{"nodeExecutable", node},
+                      {"entryScript", shim},
+                      {"workingDirectory", utf8_path(extension)},
+                      {"startupMs", 5000}})
+                .contains("result"));
+    const Json manifest{{"name", "deactivation"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.deactivation";
+    REQUIRE(dispatch(runtime, "extensions.register",
+                     {{"manifest", manifest},
+                      {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "vscode.window.listWebviewPanels")
+                ["result"]["panels"]
+                    .size() == 1);
+
+    REQUIRE(dispatch(runtime, "extensions.deactivate",
+                     {{"extensionId", extension_id}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "vscode.window.listWebviewPanels")
+                ["result"]["panels"]
+                    .empty());
+
+    std::ifstream order_stream(order_path);
+    REQUIRE(order_stream.good());
+    const std::string order{std::istreambuf_iterator<char>(order_stream),
+                            std::istreambuf_iterator<char>()};
+    REQUIRE(order == "deactivate-start\ndeactivate-end\nraw\npanel-start\n"
+                     "panel-dispose\nfailing-start\nfailing-reject\nfirst\n");
+    REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] ==
+            true);
+}
+
+TEST_CASE("NodeRuntime retains every timed out request id for the boot lifecycle",
+          "[plugins][ai_editor][native][extensions][node][late_response]"
+          "[timeout_tombstone]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"timeout-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    {
+        std::ofstream source(extension / L"extension.js");
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+const vscode = require('vscode');
+const pendingTimeouts = [];
+exports.activate = (context) => {
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.timeoutPending', () => new Promise((resolve) => {
+            pendingTimeouts.push(resolve);
+        })));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.releaseOldestTimeout', () => {
+            const resolve = pendingTimeouts.shift();
+            if (resolve) {
+                resolve({ late: true, oldest: true });
+            }
+            return {
+                released: Boolean(resolve),
+                remaining: pendingTimeouts.length,
+            };
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.releaseTimeouts', () => {
+            const pending = pendingTimeouts.splice(0);
+            for (const resolve of pending) {
+                resolve({ late: true });
+            }
+            return { released: pending.length };
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.timeoutHealth', () => ({ alive: true })));
+    return { ready: true };
+};
+)JS";
+    }
+
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "extensions.configure_host",
+                     {{"nodeExecutable", node},
+                      {"entryScript", shim},
+                      {"workingDirectory", utf8_path(extension)},
+                      {"startupMs", 5000}})
+                .contains("result"));
+    const Json manifest{{"name", "timeout"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.timeout";
+    REQUIRE(dispatch(runtime, "extensions.register",
+                     {{"manifest", manifest},
+                      {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000}})
+                .contains("result"));
+
+    constexpr size_t kTimeoutCount = 257;
+    for (size_t index = 0; index < kTimeoutCount; ++index) {
+        INFO("timeout request index=" << index);
+        const Json timed_out = dispatch(
+            runtime, "extensions.execute_command",
+            {{"command", "sao.test.timeoutPending"},
+             {"arguments", Json::array()},
+             {"timeoutMs", 1}});
+        REQUIRE(timed_out.contains("error"));
+        REQUIRE(timed_out["error"]["data"]["status"] ==
+                SAO_AI_EDITOR_ERR_TIMEOUT);
+    }
+
+    const Json released_oldest = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.releaseOldestTimeout"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(released_oldest.contains("result"));
+    REQUIRE(released_oldest["result"]["released"] == true);
+    REQUIRE(released_oldest["result"]["remaining"] == kTimeoutCount - 1);
+    REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] ==
+            true);
+
+    const Json released_remaining = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.releaseTimeouts"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(released_remaining.contains("result"));
+    REQUIRE(released_remaining["result"]["released"] == kTimeoutCount - 1);
+    REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] ==
+            true);
+    const Json healthy = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.timeoutHealth"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(healthy.contains("result"));
+    REQUIRE(healthy["result"]["alive"] == true);
+    REQUIRE(dispatch(runtime, "extensions.deactivate",
+                     {{"extensionId", extension_id}})
+                .contains("result"));
+}
+
 TEST_CASE("ExtensionHost handles reentrant callbacks, malformed frames, "
           "disposed panels, and restart",
           "[plugins][ai_editor][native][extensions][node][reentrant][protocol]"

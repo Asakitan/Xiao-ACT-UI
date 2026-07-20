@@ -171,7 +171,28 @@ const disposalBarrier = Symbol('sao.disposalBarrier');
 
 function reportDisposalFailure(error) {
     const message = error && error.message ? error.message : String(error);
-    process_.stderr.write(`[shim] activation rollback dispose failed: ${message}\n`);
+    process_.stderr.write(`[shim] disposable cleanup failed: ${message}\n`);
+}
+
+async function settleDisposable(value) {
+    let disposalResult;
+    try {
+        disposalResult = value.dispose();
+    } catch (error) {
+        reportDisposalFailure(error);
+    }
+    try {
+        await Promise.resolve(disposalResult);
+    } catch (error) {
+        reportDisposalFailure(error);
+    }
+    try {
+        if (value[disposalBarrier]) {
+            await Promise.resolve(value[disposalBarrier]);
+        }
+    } catch (error) {
+        reportDisposalFailure(error);
+    }
 }
 
 function trackActivationDisposableFor(scope, value) {
@@ -215,14 +236,7 @@ async function rollbackActivation(scope) {
     scope.phase = 'rolling-back';
     while (scope.journal.length > 0) {
         const item = scope.journal.pop();
-        try {
-            await Promise.resolve(item.dispose());
-            if (item[disposalBarrier]) {
-                await Promise.resolve(item[disposalBarrier]);
-            }
-        } catch (error) {
-            reportDisposalFailure(error);
-        }
+        await settleDisposable(item);
     }
     scope.phase = 'failed';
 }
@@ -767,8 +781,13 @@ state.handlers.set('host.deactivate', async (params) => {
     if (entry.module && typeof entry.module.deactivate === 'function') {
         await Promise.resolve(entry.module.deactivate());
     }
+    const disposed = new Set();
     for (const sub of entry.context.subscriptions.slice().reverse()) {
-        try { sub && sub.dispose && sub.dispose(); } catch (e) { /* noop */ }
+        if (!sub || typeof sub.dispose !== 'function' || disposed.has(sub)) {
+            continue;
+        }
+        disposed.add(sub);
+        await settleDisposable(sub);
     }
     state.extensions.delete(extensionId);
     return { deactivated: true, extensionId };

@@ -18,7 +18,6 @@ namespace {
 
 constexpr uint32_t kMaxMessageBytes = 8U * 1024U * 1024U;
 constexpr uint32_t kMaxCommandLineBytes = 32U * 1024U;
-constexpr size_t kMaxTimedOutRequestIds = 256U;
 
 void join_worker(std::thread& worker) {
     if (!worker.joinable()) {
@@ -263,7 +262,6 @@ int32_t NodeRuntime::boot(const BootOptions& options) {
     {
         std::lock_guard<std::mutex> guard(pending_mutex_);
         pending_.clear();
-        timed_out_request_order_.clear();
         timed_out_request_ids_.clear();
     }
     stopping_.store(false, std::memory_order_release);
@@ -351,12 +349,7 @@ int32_t NodeRuntime::request(std::string_view method, const Json& params,
             std::future_status::ready) {
             std::lock_guard<std::mutex> guard(pending_mutex_);
             if (pending_.erase(id) != 0U) {
-                timed_out_request_order_.push_back(id);
                 timed_out_request_ids_.insert(id);
-                while (timed_out_request_order_.size() > kMaxTimedOutRequestIds) {
-                    timed_out_request_ids_.erase(timed_out_request_order_.front());
-                    timed_out_request_order_.pop_front();
-                }
             }
             return SAO_AI_EDITOR_ERR_TIMEOUT;
         }
@@ -705,7 +698,6 @@ void NodeRuntime::fail_pending(std::string_view message, int32_t status) {
         }
     }
     pending_.clear();
-    timed_out_request_order_.clear();
     timed_out_request_ids_.clear();
 }
 
