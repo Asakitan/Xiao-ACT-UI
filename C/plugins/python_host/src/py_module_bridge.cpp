@@ -162,6 +162,7 @@ struct PluginContextObject {
     PyObject_HEAD PyObject* weakreflist;
     void* opaque_handle;                      // SaoSdkContext* (borrowed)
     loader::plugin_context_t* loader_context; // loader-owned canonical ctx
+    bool loader_context_lease_held;
     PyObject* plugin_id;                      // str
     PyObject* base_dir;                       // str
     PyObject* assets_path;                    // str
@@ -194,6 +195,8 @@ struct PluginContextObject {
     bool tearing_down = false;
     bool teardown_deferred = false;
     bool controlled_test_shim = false;
+    bool retired = false;
+    PluginContextObject* retired_next = nullptr;
 };
 
 struct NativePanelBridge {
@@ -285,11 +288,15 @@ struct NativeMenuBridge {
 
 // forward decl
 extern PyTypeObject PluginContextType;
+void clear_callback_ledgers(PluginContextObject* self);
 
 // ── 内部小工具 ───────────────────────────────────────────────
 
-std::mutex g_mod_mu;
+// Bridge entry points remain callable during cross-TU global teardown.
+std::mutex& g_mod_mu = *new std::mutex();
 size_t g_sdk_method_count = 0; // 供 sao_plugins_pyhost_sdk_method_count 查
+std::mutex& g_retired_context_mutex = *new std::mutex();
+PluginContextObject* g_retired_contexts = nullptr;
 
 // 追加一个"记账" dict 到 list 里, 键值对由 (key, PyObject*) 组成, 参数以变长
 // 方式给, 结束用 nullptr sentinel。函数吸取 PyObject 引用 (steals)。
@@ -327,12 +334,20 @@ PyObject* append_record(PyObject* list, ...) {
     Py_RETURN_NONE;
 }
 
-void keep_callback_ref(PluginContextObject* self, PyObject* cb) {
+bool keep_callback_ref(PluginContextObject* self, PyObject* cb) {
     if (self == nullptr || cb == nullptr || cb == Py_None)
-        return;
+        return true;
     if (self->callback_refs == nullptr)
+        return false;
+    return PyList_Append(self->callback_refs, cb) == 0;
+}
+
+void truncate_list(PyObject* list, Py_ssize_t size) {
+    if (list == nullptr || !PyList_Check(list))
         return;
-    (void)PyList_Append(self->callback_refs, cb);
+    const Py_ssize_t current = PyList_GET_SIZE(list);
+    if (current > size && PyList_SetSlice(list, size, current, nullptr) != 0)
+        PyErr_Clear();
 }
 
 bool set_dict_item_steal(PyObject* dictionary, const char* key, PyObject* value) {
@@ -681,9 +696,71 @@ int32_t release_native_bridges(PluginContextObject* self) {
         }
         delete bridge;
     }
+    if (self->loader_context_lease_held && self->loader_context != nullptr) {
+        loader::plugin_context_release_host_lease(self->loader_context);
+        self->loader_context_lease_held = false;
+    }
     self->loader_context = nullptr;
     self->opaque_handle = nullptr;
     return SAO_OK;
+}
+
+void retire_plugin_context(PluginContextObject* self) noexcept {
+    if (self == nullptr || self->retired)
+        return;
+    self->retired = true;
+    Py_SET_REFCNT(reinterpret_cast<PyObject*>(self), 1);
+    try {
+        std::lock_guard lock(g_retired_context_mutex);
+        self->retired_next = g_retired_contexts;
+        g_retired_contexts = self;
+    } catch (...) {
+        self->retired_next = nullptr;
+    }
+}
+
+void drain_retired_contexts() noexcept {
+    PluginContextObject* pending = nullptr;
+    try {
+        std::lock_guard lock(g_retired_context_mutex);
+        pending = g_retired_contexts;
+        g_retired_contexts = nullptr;
+    } catch (...) {
+        return;
+    }
+
+    PluginContextObject* retry = nullptr;
+    while (pending != nullptr) {
+        PluginContextObject* context = pending;
+        pending = pending->retired_next;
+        context->retired_next = nullptr;
+        int32_t status = SAO_ERR_OS_CALL_FAILED;
+        try {
+            status = release_native_bridges(context);
+        } catch (...) {
+            status = SAO_ERR_OS_CALL_FAILED;
+        }
+        if (status == SAO_OK) {
+            clear_callback_ledgers(context);
+            context->retired = false;
+            Py_DECREF(reinterpret_cast<PyObject*>(context));
+            continue;
+        }
+        context->retired_next = retry;
+        retry = context;
+    }
+    if (retry == nullptr)
+        return;
+    try {
+        std::lock_guard lock(g_retired_context_mutex);
+        while (retry != nullptr) {
+            PluginContextObject* context = retry;
+            retry = retry->retired_next;
+            context->retired_next = g_retired_contexts;
+            g_retired_contexts = context;
+        }
+    } catch (...) {
+    }
 }
 
 void clear_callback_ledgers(PluginContextObject* self) {
@@ -713,8 +790,9 @@ void SAO_SDK_CALL native_panel_action(const char* action_key_utf8, const uint8_t
         bridge->callback, "sO", action_key_utf8 == nullptr ? "" : action_key_utf8, Py_None);
     Py_XDECREF(result);
     PyErr_Clear();
-    PyGILState_Release(gil);
     leave_callback(bridge->gate);
+    drain_retired_contexts();
+    PyGILState_Release(gil);
 }
 
 void SAO_SDK_CALL native_hotkey_action(sao_sdk_hotkey_id_t, void* user_data) {
@@ -726,8 +804,9 @@ void SAO_SDK_CALL native_hotkey_action(sao_sdk_hotkey_id_t, void* user_data) {
     PyObject* result = PyObject_CallNoArgs(bridge->callback);
     Py_XDECREF(result);
     PyErr_Clear();
-    PyGILState_Release(gil);
     leave_callback(bridge->gate);
+    drain_retired_contexts();
+    PyGILState_Release(gil);
 }
 
 void SAO_SDK_CALL native_event_action(const char* /*topic_utf8*/, const uint8_t* payload,
@@ -752,8 +831,9 @@ void SAO_SDK_CALL native_event_action(const char* /*topic_utf8*/, const uint8_t*
     Py_XDECREF(body);
     if (PyErr_Occurred())
         PyErr_WriteUnraisable(bridge->callback);
-    PyGILState_Release(gil);
     leave_callback(bridge->gate);
+    drain_retired_contexts();
+    PyGILState_Release(gil);
 }
 
 void SAO_PLUGINS_CALL native_loader_event_action(const char* topic_utf8,
@@ -839,6 +919,7 @@ void invoke_timer_callback(NativeTimerBridge* bridge) {
         unlink_timer_bridge(bridge->owner, bridge);
         delete_timer_bridge(bridge);
     }
+    drain_retired_contexts();
     PyGILState_Release(gil);
 }
 
@@ -1280,15 +1361,17 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(loader::entity_menu_row* rows, std
     PyGILState_STATE gil = PyGILState_Ensure();
     if (rows == nullptr && !build_menu_snapshot(bridge)) {
         PyErr_Clear();
-        PyGILState_Release(gil);
         leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
         return SAO_ERR_OS_CALL_FAILED;
     }
     *out_count = static_cast<std::uint32_t>(bridge->rows.size());
     *out_revision = bridge->revision;
     if (capacity < bridge->rows.size()) {
-        PyGILState_Release(gil);
         leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
         return SAO_ERR_BUFFER_TOO_SMALL;
     }
     for (std::size_t index = 0; index < bridge->rows.size(); ++index) {
@@ -1309,8 +1392,9 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(loader::entity_menu_row* rows, std
             {},
         };
     }
-    PyGILState_Release(gil);
     leave_callback(bridge->gate);
+    drain_retired_contexts();
+    PyGILState_Release(gil);
     return SAO_OK;
 }
 
@@ -1325,20 +1409,23 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
     PyGILState_STATE gil = PyGILState_Ensure();
     const auto found = bridge->actions.find(action_id_utf8);
     if (found == bridge->actions.end() || found->second == nullptr) {
-        PyGILState_Release(gil);
         leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
         return SAO_ERR_HANDLE_INVALID;
     }
     PyObject* result = PyObject_CallNoArgs(found->second);
     if (result == nullptr) {
         PyErr_Clear();
-        PyGILState_Release(gil);
         leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
         return SAO_ERR_OS_CALL_FAILED;
     }
     Py_DECREF(result);
-    PyGILState_Release(gil);
     leave_callback(bridge->gate);
+    drain_retired_contexts();
+    PyGILState_Release(gil);
     return SAO_OK;
 }
 #endif
@@ -1352,6 +1439,7 @@ PyObject* PluginContext_new(PyTypeObject* type, PyObject* /*args*/, PyObject* /*
     self->weakreflist = nullptr;
     self->opaque_handle = nullptr;
     self->loader_context = nullptr;
+    self->loader_context_lease_held = false;
     self->plugin_id = nullptr;
     self->base_dir = nullptr;
     self->assets_path = nullptr;
@@ -1400,6 +1488,8 @@ PyObject* PluginContext_new(PyTypeObject* type, PyObject* /*args*/, PyObject* /*
     self->next_python_token = 1;
     self->tearing_down = false;
     self->teardown_deferred = false;
+    self->retired = false;
+    self->retired_next = nullptr;
     if (self->plugin_id == nullptr || self->base_dir == nullptr || self->assets_path == nullptr ||
         self->web_path == nullptr || self->panels == nullptr || self->hotkeys == nullptr ||
         self->subscriptions == nullptr || self->published == nullptr || self->logs == nullptr ||
@@ -1482,8 +1572,12 @@ int PluginContext_traverse(PluginContextObject* self, visitproc visit, void* arg
 }
 
 int PluginContext_clear(PluginContextObject* self) {
-    if (release_native_bridges(self) != SAO_OK)
+    try {
+        if (release_native_bridges(self) != SAO_OK)
+            return 0;
+    } catch (...) {
         return 0;
+    }
     clear_callback_ledgers(self);
     Py_CLEAR(self->plugin_id);
     Py_CLEAR(self->base_dir);
@@ -1514,6 +1608,17 @@ void PluginContext_dealloc(PluginContextObject* self) {
     if (self->weakreflist != nullptr) {
         PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
     }
+    int32_t status = SAO_ERR_OS_CALL_FAILED;
+    try {
+        status = release_native_bridges(self);
+    } catch (...) {
+        status = SAO_ERR_OS_CALL_FAILED;
+    }
+    if (status != SAO_OK) {
+        retire_plugin_context(self);
+        return;
+    }
+    clear_callback_ledgers(self);
     (void)PluginContext_clear(self);
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
@@ -1632,62 +1737,110 @@ PyObject* PluginContext_register_ui_panel(PluginContextObject* self, PyObject* a
                                      &meta, &render, &on_action)) {
         return nullptr;
     }
-    keep_callback_ref(self, render);
-    keep_callback_ref(self, on_action);
+    if ((render != Py_None && !require_callable(render, "render")) ||
+        (on_action != Py_None && !require_callable(on_action, "on_action"))) {
+        return nullptr;
+    }
+
+    const Py_ssize_t panel_ledger_size = PyList_GET_SIZE(self->panels);
+    const Py_ssize_t callback_ledger_size = PyList_GET_SIZE(self->callback_refs);
+    PyObject* result = PyUnicode_FromString(panel_id);
+    PyObject* record = PyDict_New();
+    if (result == nullptr || record == nullptr ||
+        !set_dict_item_steal(record, "panel_id", PyUnicode_FromString(panel_id)) ||
+        PyDict_SetItemString(record, "meta", meta) != 0 ||
+        PyDict_SetItemString(record, "render", render) != 0 ||
+        PyDict_SetItemString(record, "on_action", on_action) != 0 ||
+        !set_dict_item_steal(record, "native_handle", PyLong_FromVoidPtr(nullptr)) ||
+        PyList_Append(self->panels, record) != 0 || !keep_callback_ref(self, render) ||
+        !keep_callback_ref(self, on_action)) {
+        truncate_list(self->callback_refs, callback_ledger_size);
+        truncate_list(self->panels, panel_ledger_size);
+        Py_XDECREF(record);
+        Py_XDECREF(result);
+        return nullptr;
+    }
 
     SaoSdkContext* ctx = native_context(self);
     sao_sdk_ui_panel_t native_panel = nullptr;
+    std::unique_ptr<NativePanelBridge> bridge;
     if (ctx != nullptr) {
         PyObject* json = json_stringify(meta);
-        if (json == nullptr)
+        if (json == nullptr) {
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->panels, panel_ledger_size);
+            Py_DECREF(record);
+            Py_DECREF(result);
             return nullptr;
+        }
         const char* json_utf8 = PyUnicode_AsUTF8(json);
         if (json_utf8 == nullptr) {
             Py_DECREF(json);
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->panels, panel_ledger_size);
+            Py_DECREF(record);
+            Py_DECREF(result);
             return nullptr;
         }
-        NativePanelBridge* bridge = nullptr;
-        if (on_action != Py_None && PyCallable_Check(on_action)) {
-            bridge = new (std::nothrow) NativePanelBridge{};
-            if (bridge == nullptr) {
-                Py_DECREF(json);
-                return PyErr_NoMemory();
-            }
-            bridge->callback = Py_NewRef(on_action);
+        bridge.reset(new (std::nothrow) NativePanelBridge{});
+        if (bridge == nullptr) {
+            Py_DECREF(json);
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->panels, panel_ledger_size);
+            Py_DECREF(record);
+            Py_DECREF(result);
+            return PyErr_NoMemory();
         }
+        if (on_action != Py_None)
+            bridge->callback = Py_NewRef(on_action);
         const sao_sdk_status_t rc = sao_sdk_ui_register_panel(
             ctx, panel_id, panel_id, reinterpret_cast<const uint8_t*>(json_utf8),
-            std::strlen(json_utf8), bridge == nullptr ? nullptr : native_panel_action, bridge,
-            &native_panel);
+            std::strlen(json_utf8), bridge->callback == nullptr ? nullptr : native_panel_action,
+            bridge.get(), &native_panel);
         Py_DECREF(json);
         if (rc != SAO_SDK_OK) {
-            if (bridge != nullptr) {
-                Py_DECREF(bridge->callback);
-                delete bridge;
-            }
+            Py_XDECREF(bridge->callback);
+            bridge->callback = nullptr;
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->panels, panel_ledger_size);
+            Py_DECREF(record);
+            Py_DECREF(result);
             PyErr_Format(PyExc_RuntimeError, "native panel registration failed: %d", rc);
             return nullptr;
         }
-        if (bridge != nullptr) {
-            bridge->panel = native_panel;
-            bridge->sequence = self->next_resource_sequence++;
-            bridge->next = self->native_panel_bridges;
-            self->native_panel_bridges = bridge;
-        }
+        bridge->panel = native_panel;
+        bridge->sequence = self->next_resource_sequence++;
+        bridge->next = self->native_panel_bridges;
+        self->native_panel_bridges = bridge.release();
     }
 
-    PyObject* rec = PyDict_New();
-    if (rec == nullptr)
+    PyObject* native_handle = PyLong_FromVoidPtr(native_panel);
+    if (native_handle == nullptr ||
+        PyDict_SetItemString(record, "native_handle", native_handle) != 0) {
+        Py_XDECREF(native_handle);
+        PyObject* error_type = nullptr;
+        PyObject* error_value = nullptr;
+        PyObject* error_traceback = nullptr;
+        PyErr_Fetch(&error_type, &error_value, &error_traceback);
+        if (self->native_panel_bridges != nullptr &&
+            self->native_panel_bridges->panel == native_panel) {
+            auto* rollback = self->native_panel_bridges;
+            self->native_panel_bridges = rollback->next;
+            if (ctx != nullptr && native_panel != nullptr)
+                (void)sao_sdk_unregister_ui_panel(ctx, native_panel);
+            Py_XDECREF(rollback->callback);
+            delete rollback;
+        }
+        truncate_list(self->callback_refs, callback_ledger_size);
+        truncate_list(self->panels, panel_ledger_size);
+        Py_DECREF(record);
+        Py_DECREF(result);
+        PyErr_Restore(error_type, error_value, error_traceback);
         return nullptr;
-    PyDict_SetItemString(rec, "panel_id", PyUnicode_FromString(panel_id));
-    PyDict_SetItemString(rec, "meta", meta);
-    PyDict_SetItemString(rec, "render", render);
-    PyDict_SetItemString(rec, "on_action", on_action);
-    PyDict_SetItemString(rec, "native_handle", PyLong_FromVoidPtr(native_panel));
-    PyList_Append(self->panels, rec);
-    Py_DECREF(rec);
-    // 返回一个 handle (str) 让插件可选保存
-    return PyUnicode_FromString(panel_id);
+    }
+    Py_DECREF(native_handle);
+    Py_DECREF(record);
+    return result;
 }
 
 // add_hotkey / register_hotkey(hotkey_id, callback[, default_key][, label])
@@ -1703,20 +1856,45 @@ PyObject* PluginContext_add_hotkey(PluginContextObject* self, PyObject* args, Py
                                      &callback, &default_key, &label)) {
         return nullptr;
     }
-    keep_callback_ref(self, callback);
+    if (!require_callable(callback, "callback"))
+        return nullptr;
 
     SaoSdkContext* ctx = native_context(self);
     sao_sdk_hotkey_id_t native_hotkey = 0;
+    uint32_t virtual_key = 0;
+    uint32_t modifiers = 0;
     if (ctx != nullptr) {
-        uint32_t virtual_key = 0;
-        uint32_t modifiers = 0;
         if (!parse_hotkey(default_key, &virtual_key, &modifiers)) {
             PyErr_SetString(PyExc_ValueError, "default_key must be a supported key chord");
             return nullptr;
         }
-        auto* bridge = new (std::nothrow) NativeHotkeyBridge{};
-        if (bridge == nullptr)
+    }
+
+    const Py_ssize_t hotkey_ledger_size = PyList_GET_SIZE(self->hotkeys);
+    const Py_ssize_t callback_ledger_size = PyList_GET_SIZE(self->callback_refs);
+    PyObject* record = PyDict_New();
+    if (record == nullptr ||
+        !set_dict_item_steal(record, "hotkey_id", PyUnicode_FromString(hotkey_id)) ||
+        !set_dict_item_steal(record, "default_key", PyUnicode_FromString(default_key)) ||
+        !set_dict_item_steal(record, "label", PyUnicode_FromString(label)) ||
+        PyDict_SetItemString(record, "callback", callback) != 0 ||
+        !set_dict_item_steal(record, "native_handle", PyLong_FromUnsignedLongLong(0)) ||
+        PyList_Append(self->hotkeys, record) != 0 || !keep_callback_ref(self, callback)) {
+        truncate_list(self->callback_refs, callback_ledger_size);
+        truncate_list(self->hotkeys, hotkey_ledger_size);
+        Py_XDECREF(record);
+        return nullptr;
+    }
+
+    std::unique_ptr<NativeHotkeyBridge> bridge;
+    if (ctx != nullptr) {
+        bridge.reset(new (std::nothrow) NativeHotkeyBridge{});
+        if (bridge == nullptr) {
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->hotkeys, hotkey_ledger_size);
+            Py_DECREF(record);
             return PyErr_NoMemory();
+        }
         bridge->callback = Py_NewRef(callback);
         SaoSdkHotkeySpec spec{};
         spec.binding_id_utf8 = hotkey_id;
@@ -1724,26 +1902,47 @@ PyObject* PluginContext_add_hotkey(PluginContextObject* self, PyObject* args, Py
         spec.modifiers = modifiers;
         spec.enforce_ctrl_prefix = (modifiers & (1u << 0)) != 0;
         const sao_sdk_status_t rc =
-            sao_sdk_register_hotkey(ctx, &spec, native_hotkey_action, bridge, &native_hotkey);
+            sao_sdk_register_hotkey(ctx, &spec, native_hotkey_action, bridge.get(), &native_hotkey);
         if (rc != SAO_SDK_OK) {
             Py_DECREF(bridge->callback);
-            delete bridge;
+            bridge->callback = nullptr;
+            truncate_list(self->callback_refs, callback_ledger_size);
+            truncate_list(self->hotkeys, hotkey_ledger_size);
+            Py_DECREF(record);
             PyErr_Format(PyExc_RuntimeError, "native hotkey registration failed: %d", rc);
             return nullptr;
         }
         bridge->token = native_hotkey;
         bridge->sequence = self->next_resource_sequence++;
         bridge->next = self->native_hotkey_bridges;
-        self->native_hotkey_bridges = bridge;
+        self->native_hotkey_bridges = bridge.release();
     }
-    PyObject* rec = PyDict_New();
-    PyDict_SetItemString(rec, "hotkey_id", PyUnicode_FromString(hotkey_id));
-    PyDict_SetItemString(rec, "default_key", PyUnicode_FromString(default_key));
-    PyDict_SetItemString(rec, "label", PyUnicode_FromString(label));
-    PyDict_SetItemString(rec, "callback", callback);
-    PyDict_SetItemString(rec, "native_handle", PyLong_FromUnsignedLongLong(native_hotkey));
-    PyList_Append(self->hotkeys, rec);
-    Py_DECREF(rec);
+
+    PyObject* native_handle = PyLong_FromUnsignedLongLong(native_hotkey);
+    if (native_handle == nullptr ||
+        PyDict_SetItemString(record, "native_handle", native_handle) != 0) {
+        Py_XDECREF(native_handle);
+        PyObject* error_type = nullptr;
+        PyObject* error_value = nullptr;
+        PyObject* error_traceback = nullptr;
+        PyErr_Fetch(&error_type, &error_value, &error_traceback);
+        if (self->native_hotkey_bridges != nullptr &&
+            self->native_hotkey_bridges->token == native_hotkey) {
+            auto* rollback = self->native_hotkey_bridges;
+            self->native_hotkey_bridges = rollback->next;
+            if (ctx != nullptr && native_hotkey != 0)
+                (void)sao_sdk_unregister_hotkey(ctx, native_hotkey);
+            Py_XDECREF(rollback->callback);
+            delete rollback;
+        }
+        truncate_list(self->callback_refs, callback_ledger_size);
+        truncate_list(self->hotkeys, hotkey_ledger_size);
+        Py_DECREF(record);
+        PyErr_Restore(error_type, error_value, error_traceback);
+        return nullptr;
+    }
+    Py_DECREF(native_handle);
+    Py_DECREF(record);
     Py_RETURN_NONE;
 }
 
@@ -3145,60 +3344,81 @@ sao_plugins_pyhost_free_wrapped_ctx(void* pyobject) {
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_teardown_native(void* pyobject) {
-    if (pyobject == nullptr || Py_IsInitialized() == 0)
-        return;
-    PyObject* obj = reinterpret_cast<PyObject*>(pyobject);
-    if (!PyObject_TypeCheck(obj, &PluginContextType))
-        return;
-    auto* context = reinterpret_cast<PluginContextObject*>(obj);
-    if (release_native_bridges(context) == SAO_OK)
-        clear_callback_ledgers(context);
+    try {
+        if (pyobject == nullptr || Py_IsInitialized() == 0)
+            return;
+        PyObject* obj = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(obj, &PluginContextType))
+            return;
+        auto* context = reinterpret_cast<PluginContextObject*>(obj);
+        if (release_native_bridges(context) == SAO_OK)
+            clear_callback_ledgers(context);
+    } catch (...) {
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject) {
-    if (pyobject == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    if (Py_IsInitialized() == 0)
-        return SAO_ERR_NOT_INITIALIZED;
-    PyObject* obj = reinterpret_cast<PyObject*>(pyobject);
-    if (!PyObject_TypeCheck(obj, &PluginContextType))
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* context = reinterpret_cast<PluginContextObject*>(obj);
-    const int32_t status = release_native_bridges(context);
-    if (status == SAO_OK)
-        clear_callback_ledgers(context);
-    return status;
+    try {
+        if (pyobject == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        PyObject* obj = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(obj, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        auto* context = reinterpret_cast<PluginContextObject*>(obj);
+        const int32_t status = release_native_bridges(context);
+        if (status == SAO_OK)
+            clear_callback_ledgers(context);
+        return status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context) {
-    if (pyobject == nullptr || loader_context == nullptr) {
-        return SAO_ERR_INVALID_ARGUMENT;
-    }
-    if (Py_IsInitialized() == 0)
-        return SAO_ERR_NOT_INITIALIZED;
-    PyObject* object = reinterpret_cast<PyObject*>(pyobject);
-    if (!PyObject_TypeCheck(object, &PluginContextType)) {
-        return SAO_ERR_INVALID_ARGUMENT;
-    }
-    auto* context = reinterpret_cast<PluginContextObject*>(object);
-    if (context->tearing_down)
-        return loader::SAO_PLUGINS_ERR_BUSY;
-    if (context->loader_context != nullptr)
-        return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
     auto* canonical = static_cast<loader::plugin_context_t*>(loader_context);
-    const char* loader_plugin_id = loader::sao_plugins_ctx_plugin_id(canonical);
-    const char* python_plugin_id = PyUnicode_AsUTF8(context->plugin_id);
-    if (python_plugin_id == nullptr) {
-        PyErr_Clear();
-        return SAO_ERR_INVALID_ARGUMENT;
+    bool lease_held = false;
+    try {
+        if (pyobject == nullptr || canonical == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        PyObject* object = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(object, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        auto* context = reinterpret_cast<PluginContextObject*>(object);
+        if (context->tearing_down)
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        if (context->loader_context != nullptr || context->loader_context_lease_held)
+            return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+
+        const int32_t retain_status = loader::plugin_context_retain_host_lease(canonical);
+        if (retain_status != SAO_OK)
+            return retain_status;
+        lease_held = true;
+
+        const char* loader_plugin_id = loader::sao_plugins_ctx_plugin_id(canonical);
+        const char* python_plugin_id = PyUnicode_AsUTF8(context->plugin_id);
+        if (python_plugin_id == nullptr) {
+            PyErr_Clear();
+            loader::plugin_context_release_host_lease(canonical);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        if (loader_plugin_id == nullptr || std::strcmp(loader_plugin_id, python_plugin_id) != 0) {
+            loader::plugin_context_release_host_lease(canonical);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        context->loader_context = canonical;
+        context->loader_context_lease_held = true;
+        return SAO_OK;
+    } catch (...) {
+        if (lease_held)
+            loader::plugin_context_release_host_lease(canonical);
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    if (loader_plugin_id == nullptr || std::strcmp(loader_plugin_id, python_plugin_id) != 0) {
-        return SAO_ERR_INVALID_ARGUMENT;
-    }
-    context->loader_context = canonical;
-    return SAO_OK;
 }
 
 extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL sao_plugins_pyhost_sdk_method_count(void) {

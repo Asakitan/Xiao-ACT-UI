@@ -61,7 +61,8 @@ struct py_loader_adapter_owner_s {
 
 namespace {
 
-std::mutex g_adapter_mutex;
+// Loader teardown can outlive ordinary static objects in this translation unit.
+std::mutex& g_adapter_mutex = *new std::mutex();
 py_loader_adapter_owner_s* g_adapter_owner = nullptr;
 
 #if defined(SAO_HAS_PYTHON_EMBED)
@@ -392,7 +393,24 @@ void finish_failed_load(py_loader_adapter_owner_s* owner, loader_plugin_handle_t
     if (owner != g_adapter_owner)
         return;
     owner->plugins.erase(plugin);
+    owner->requirements_reports.erase(plugin);
     owner->last_errors[plugin] = std::move(error);
+}
+
+void restore_failed_unload(py_loader_adapter_owner_s* owner, loader_plugin_handle_t plugin,
+                           py_plugin_handle_t python_plugin, const char* error) noexcept {
+    try {
+        std::lock_guard lock(g_adapter_mutex);
+        if (owner == nullptr || owner != g_adapter_owner || !owner->active)
+            return;
+        const auto found = owner->plugins.find(plugin);
+        if (found == owner->plugins.end() || found->second.python_plugin != python_plugin)
+            return;
+        found->second.lifecycle = adapter_plugin_record::state::ready;
+        if (error != nullptr)
+            owner->last_errors[plugin] = error;
+    } catch (...) {
+    }
 }
 
 int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
@@ -565,24 +583,16 @@ int32_t SAO_PLUGINS_CALL adapter_on_disable(loader_plugin_handle_t plugin, void*
 int32_t SAO_PLUGINS_CALL adapter_on_unload(loader_plugin_handle_t plugin, bool* allow_unload,
                                            void* host_user_data) {
     if (allow_unload != nullptr)
-        *allow_unload = true;
+        *allow_unload = false;
     try {
         return with_plugin(
             plugin, host_user_data, [allow_unload](py_plugin_handle_t python_plugin) -> int32_t {
                 if (!sao_plugins_pyhost_has_hook(python_plugin, "on_unload")) {
+                    if (allow_unload != nullptr)
+                        *allow_unload = true;
                     return SAO_OK;
                 }
-                char* result = nullptr;
-                const int32_t status =
-                    sao_plugins_pyhost_call_hook(python_plugin, "on_unload", nullptr, &result);
-                if (status == SAO_OK && result != nullptr && allow_unload != nullptr) {
-                    const json parsed = json::parse(result, nullptr, false);
-                    if (parsed.is_boolean() && !parsed.get<bool>()) {
-                        *allow_unload = false;
-                    }
-                }
-                sao_plugins_pyhost_free_string(result);
-                return status;
+                return sao_plugins_pyhost_call_on_unload(python_plugin, allow_unload);
             });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -590,9 +600,10 @@ int32_t SAO_PLUGINS_CALL adapter_on_unload(loader_plugin_handle_t plugin, bool* 
 }
 
 int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* host_user_data) {
+    py_loader_adapter_owner_s* owner = nullptr;
+    py_plugin_handle_t python_plugin = nullptr;
+    bool python_plugin_unloaded = false;
     try {
-        py_loader_adapter_owner_s* owner = nullptr;
-        py_plugin_handle_t python_plugin = nullptr;
         {
             std::lock_guard lock(g_adapter_mutex);
             owner = active_owner(host_user_data);
@@ -614,7 +625,8 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
         {
             gil_guard gil;
             status = sao_plugins_pyhost_unload_plugin(python_plugin);
-            if (status != SAO_OK)
+            python_plugin_unloaded = status == SAO_OK;
+            if (!python_plugin_unloaded)
                 error = copy_plugin_error(python_plugin);
         }
         std::lock_guard lock(g_adapter_mutex);
@@ -628,8 +640,24 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
         }
         if (found != owner->plugins.end())
             owner->plugins.erase(found);
+        owner->last_errors.erase(plugin);
+        owner->requirements_reports.erase(plugin);
         return SAO_OK;
     } catch (...) {
+        if (!python_plugin_unloaded) {
+            restore_failed_unload(owner, plugin, python_plugin, "Python plugin unload failed");
+        } else {
+            try {
+                std::lock_guard lock(g_adapter_mutex);
+                if (owner != nullptr && owner == g_adapter_owner) {
+                    owner->plugins.erase(plugin);
+                    owner->last_errors.erase(plugin);
+                    owner->requirements_reports.erase(plugin);
+                }
+                return SAO_OK;
+            } catch (...) {
+            }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
@@ -781,13 +809,20 @@ sao_plugins_pyhost_loader_adapter_get_last_error(py_loader_adapter_owner_t owner
         auto* plugin = static_cast<sao::plugins::loader::plugin_handle_s*>(loader_plugin_handle);
         std::string error;
         plugin_call_lease lease;
-        if (acquire_plugin(owner, plugin, lease) == SAO_OK) {
+        const bool active_plugin = acquire_plugin(owner, plugin, lease) == SAO_OK;
+        if (active_plugin) {
             gil_guard gil;
             error = copy_plugin_error(lease.python_plugin());
         }
+        const auto loader_state = sao::plugins::loader::sao_plugins_lifecycle_state(plugin);
         {
             std::lock_guard lock(g_adapter_mutex);
             if (owner == nullptr || owner != g_adapter_owner || !owner->active) {
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            if (!active_plugin && loader_state != sao::plugins::loader::lifecycle_state::failed) {
+                owner->last_errors.erase(plugin);
+                owner->requirements_reports.erase(plugin);
                 return SAO_ERR_HANDLE_INVALID;
             }
             const auto retained = owner->last_errors.find(plugin);
@@ -814,6 +849,10 @@ sao_plugins_pyhost_loader_adapter_get_requirements_report(py_loader_adapter_owne
         {
             std::lock_guard lock(g_adapter_mutex);
             if (owner == nullptr || owner != g_adapter_owner || !owner->active) {
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            if (!owner->plugins.contains(plugin)) {
+                owner->requirements_reports.erase(plugin);
                 return SAO_ERR_HANDLE_INVALID;
             }
             const auto found = owner->requirements_reports.find(plugin);

@@ -39,10 +39,14 @@ void case_py_host_init_and_shutdown_roundtrip() {
     py_host_handle_t h2 = nullptr;
     rc = sao_plugins_pyhost_init(&cfg, &h2);
     assert(rc == SAO_OK);
-    assert(h2 == h);
+    assert(h2 != nullptr);
+    assert(h2 != h);
 
     rc = sao_plugins_pyhost_shutdown(h2);
     assert(rc == SAO_OK);
+    assert(std::string(sao_plugins_pyhost_version(h2)).empty());
+    assert(sao_plugins_pyhost_shutdown(h2) == SAO_ERR_HANDLE_INVALID);
+    assert(!std::string(sao_plugins_pyhost_version(h)).empty());
 
     g_test_host = h;
     std::printf("  [OK] py_host_init_and_shutdown_roundtrip\n");
@@ -68,6 +72,8 @@ void case_py_host_reports_correct_version() {
 
     const int32_t rc = sao_plugins_pyhost_shutdown(h);
     assert(rc == SAO_OK);
+    assert(std::string(sao_plugins_pyhost_version(h)).empty());
+    assert(sao_plugins_pyhost_shutdown(h) == SAO_ERR_HANDLE_INVALID);
     g_test_host = nullptr;
 
     std::printf("  [OK] py_host_reports_correct_version (%s)\n", ver);

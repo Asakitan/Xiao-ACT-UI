@@ -70,8 +70,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject);
 
 // Binds the loader-owned canonical plugin_context_t to an already-created
-// Python PluginContext.  The binding is borrowed and remains valid until the
-// loader calls the host adapter's unload callback.
+// Python PluginContext. The bridge retains a loader host lease and releases it
+// only after every context-backed callback and native registration is detached.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context);
 

@@ -36,18 +36,31 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <atomic>
+#include <array>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
+#include <limits>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace sao::plugins::python_host {
+
+struct py_host_s {
+    uint64_t generation = 0;
+};
+
+struct py_plugin_s {
+    uint64_t generation = 0;
+};
 
 namespace {
 
@@ -60,12 +73,28 @@ struct py_host_state {
     std::wstring python_home;
     std::wstring platform_site_dir;
     bool controlled_test_shim = false;
+    size_t active_host_handles = 0;
     size_t active_plugins = 0;
 };
 
-std::mutex g_singleton_mu;
+struct host_handle_record {
+    uint64_t generation = 0;
+    py_host_state* state = nullptr;
+    size_t active_calls = 0;
+    bool live = false;
+    bool closing = false;
+};
+
+// Public C ABI handles can be queried by cross-TU teardown sentinels after
+// ordinary static destruction has begun, so these registries live for the process.
+std::mutex& g_singleton_mu = *new std::mutex();
+std::condition_variable& g_handle_idle = *new std::condition_variable();
 py_host_state* g_singleton = nullptr;
-std::atomic<int32_t> g_ref_count{0};
+bool g_runtime_transition = false;
+uint64_t g_next_host_generation = 1;
+uint64_t g_next_plugin_generation = 1;
+std::unordered_map<py_host_s*, host_handle_record>& g_host_handles =
+    *new std::unordered_map<py_host_s*, host_handle_record>();
 
 #if defined(SAO_HAS_PYTHON_EMBED)
 
@@ -93,6 +122,275 @@ struct py_plugin_state {
     SaoSdkContext* sdk_context = nullptr;
     bool owns_sdk_context = false;
 };
+
+struct plugin_handle_record {
+    uint64_t generation = 0;
+    py_plugin_state* state = nullptr;
+    size_t active_calls = 0;
+    bool live = false;
+    bool closing = false;
+};
+
+std::unordered_map<py_plugin_s*, plugin_handle_record>& g_plugin_handles =
+    *new std::unordered_map<py_plugin_s*, plugin_handle_record>();
+
+constexpr size_t kMaximumDirectApiNesting = 64;
+thread_local std::array<py_host_s*, kMaximumDirectApiNesting> g_active_host_handles{};
+thread_local size_t g_active_host_depth = 0;
+thread_local std::array<py_plugin_s*, kMaximumDirectApiNesting> g_active_plugin_handles{};
+thread_local size_t g_active_plugin_depth = 0;
+
+uint64_t next_generation(uint64_t& value) noexcept {
+    const uint64_t generation = value++;
+    if (value == 0)
+        value = 1;
+    return generation == 0 ? value++ : generation;
+}
+
+template <typename Handle, size_t Capacity>
+bool handle_active_on_current_thread(const std::array<Handle*, Capacity>& handles, size_t depth,
+                                     Handle* handle) noexcept {
+    return std::find(handles.begin(), handles.begin() + depth, handle) != handles.begin() + depth;
+}
+
+template <typename Handle, size_t Capacity>
+void pop_active_handle(std::array<Handle*, Capacity>& handles, size_t& depth,
+                       Handle* handle) noexcept {
+    if (depth == 0)
+        return;
+    if (handles[depth - 1] == handle) {
+        handles[--depth] = nullptr;
+        return;
+    }
+    for (size_t index = depth; index > 0; --index) {
+        if (handles[index - 1] != handle)
+            continue;
+        std::move(handles.begin() + index, handles.begin() + depth, handles.begin() + index - 1);
+        handles[--depth] = nullptr;
+        return;
+    }
+}
+
+class host_api_lease {
+  public:
+    ~host_api_lease() {
+        reset();
+    }
+
+    host_api_lease(const host_api_lease&) = delete;
+    host_api_lease& operator=(const host_api_lease&) = delete;
+    host_api_lease() = default;
+
+    int32_t acquire(py_host_handle_t handle) noexcept {
+        if (handle == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        try {
+            std::lock_guard lock(g_singleton_mu);
+            auto* token = static_cast<py_host_s*>(handle);
+            const auto found = g_host_handles.find(token);
+            if (found == g_host_handles.end() || !found->second.live || found->second.closing ||
+                found->second.state == nullptr || found->second.state != g_singleton ||
+                !found->second.state->initialized ||
+                token->generation != found->second.generation) {
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            if (g_active_host_depth == kMaximumDirectApiNesting)
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            ++found->second.active_calls;
+            g_active_host_handles[g_active_host_depth++] = token;
+            handle_ = token;
+            generation_ = found->second.generation;
+            state_ = found->second.state;
+            return SAO_OK;
+        } catch (...) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+    }
+
+    py_host_state* state() const noexcept {
+        return state_;
+    }
+
+  private:
+    void reset() noexcept {
+        if (handle_ == nullptr)
+            return;
+        pop_active_handle(g_active_host_handles, g_active_host_depth, handle_);
+        try {
+            std::lock_guard lock(g_singleton_mu);
+            const auto found = g_host_handles.find(handle_);
+            if (found != g_host_handles.end() && found->second.generation == generation_ &&
+                found->second.active_calls > 0) {
+                --found->second.active_calls;
+                if (found->second.active_calls == 0)
+                    g_handle_idle.notify_all();
+            }
+        } catch (...) {
+        }
+        handle_ = nullptr;
+        generation_ = 0;
+        state_ = nullptr;
+    }
+
+    py_host_s* handle_ = nullptr;
+    uint64_t generation_ = 0;
+    py_host_state* state_ = nullptr;
+};
+
+class plugin_api_lease {
+  public:
+    ~plugin_api_lease() {
+        reset();
+    }
+
+    plugin_api_lease(const plugin_api_lease&) = delete;
+    plugin_api_lease& operator=(const plugin_api_lease&) = delete;
+    plugin_api_lease() = default;
+
+    int32_t acquire(py_plugin_handle_t handle) noexcept {
+        if (handle == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        try {
+            std::lock_guard lock(g_singleton_mu);
+            auto* token = static_cast<py_plugin_s*>(handle);
+            const auto found = g_plugin_handles.find(token);
+            if (found == g_plugin_handles.end() || !found->second.live || found->second.closing ||
+                found->second.state == nullptr || token->generation != found->second.generation ||
+                found->second.state->host == nullptr || found->second.state->host != g_singleton ||
+                !found->second.state->host->initialized) {
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            if (g_active_plugin_depth == kMaximumDirectApiNesting)
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            ++found->second.active_calls;
+            g_active_plugin_handles[g_active_plugin_depth++] = token;
+            handle_ = token;
+            generation_ = found->second.generation;
+            state_ = found->second.state;
+            return SAO_OK;
+        } catch (...) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+    }
+
+    py_plugin_state* state() const noexcept {
+        return state_;
+    }
+
+  private:
+    void reset() noexcept {
+        if (handle_ == nullptr)
+            return;
+        pop_active_handle(g_active_plugin_handles, g_active_plugin_depth, handle_);
+        try {
+            std::lock_guard lock(g_singleton_mu);
+            const auto found = g_plugin_handles.find(handle_);
+            if (found != g_plugin_handles.end() && found->second.generation == generation_ &&
+                found->second.active_calls > 0) {
+                --found->second.active_calls;
+                if (found->second.active_calls == 0)
+                    g_handle_idle.notify_all();
+            }
+        } catch (...) {
+        }
+        handle_ = nullptr;
+        generation_ = 0;
+        state_ = nullptr;
+    }
+
+    py_plugin_s* handle_ = nullptr;
+    uint64_t generation_ = 0;
+    py_plugin_state* state_ = nullptr;
+};
+
+int32_t publish_host_handle_locked(py_host_state* state, py_host_handle_t* out_host) {
+    auto token = std::unique_ptr<py_host_s>(new (std::nothrow) py_host_s{});
+    if (token == nullptr)
+        return SAO_ERR_OS_CALL_FAILED;
+    token->generation = next_generation(g_next_host_generation);
+    const auto [_, inserted] = g_host_handles.emplace(
+        token.get(), host_handle_record{token->generation, state, 0, true, false});
+    if (!inserted)
+        return SAO_ERR_OS_CALL_FAILED;
+    ++state->active_host_handles;
+    *out_host = token.release();
+    return SAO_OK;
+}
+
+int32_t publish_plugin_handle(py_host_state* host, std::unique_ptr<py_plugin_state>& state,
+                              py_plugin_handle_t* out_plugin) {
+    auto token = std::unique_ptr<py_plugin_s>(new (std::nothrow) py_plugin_s{});
+    if (token == nullptr)
+        return SAO_ERR_OS_CALL_FAILED;
+    std::lock_guard lock(g_singleton_mu);
+    if (host == nullptr || host != g_singleton || !host->initialized)
+        return SAO_ERR_NOT_INITIALIZED;
+    token->generation = next_generation(g_next_plugin_generation);
+    const auto [_, inserted] = g_plugin_handles.emplace(
+        token.get(), plugin_handle_record{token->generation, state.get(), 0, true, false});
+    if (!inserted)
+        return SAO_ERR_OS_CALL_FAILED;
+    ++host->active_plugins;
+    *out_plugin = token.release();
+    state.release();
+    return SAO_OK;
+}
+
+int32_t begin_plugin_close(py_plugin_handle_t handle, py_plugin_state** out_state) noexcept {
+    if (out_state == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *out_state = nullptr;
+    if (handle == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        std::unique_lock lock(g_singleton_mu);
+        auto* token = static_cast<py_plugin_s*>(handle);
+        const auto found = g_plugin_handles.find(token);
+        if (found == g_plugin_handles.end() || !found->second.live ||
+            found->second.state == nullptr || token->generation != found->second.generation) {
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        if (found->second.closing || handle_active_on_current_thread(
+                                         g_active_plugin_handles, g_active_plugin_depth, token)) {
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        if (found->second.active_calls != 0)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        found->second.closing = true;
+        *out_state = found->second.state;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+void cancel_plugin_close(py_plugin_handle_t handle) noexcept {
+    try {
+        std::lock_guard lock(g_singleton_mu);
+        const auto found = g_plugin_handles.find(static_cast<py_plugin_s*>(handle));
+        if (found != g_plugin_handles.end() && found->second.live) {
+            found->second.closing = false;
+            g_handle_idle.notify_all();
+        }
+    } catch (...) {
+    }
+}
+
+void finish_plugin_close(py_plugin_handle_t handle, py_plugin_state* state) noexcept {
+    try {
+        std::lock_guard lock(g_singleton_mu);
+        const auto found = g_plugin_handles.find(static_cast<py_plugin_s*>(handle));
+        if (found == g_plugin_handles.end() || found->second.state != state)
+            return;
+        found->second.live = false;
+        found->second.closing = true;
+        found->second.state = nullptr;
+        if (state != nullptr && state->host != nullptr && state->host->active_plugins > 0)
+            --state->host->active_plugins;
+        g_handle_idle.notify_all();
+    } catch (...) {
+    }
+}
 
 namespace fs = std::filesystem;
 
@@ -549,69 +847,73 @@ sao_plugins_pyhost_init(const py_host_config* cfg, py_host_handle_t* out_host) {
         !cfg->isolated || !cfg->no_site || !cfg->ignore_pypath_env) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    std::lock_guard<std::mutex> lock(g_singleton_mu);
+    try {
+        std::lock_guard<std::mutex> lock(g_singleton_mu);
+        if (g_runtime_transition)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
 
-    if (g_singleton != nullptr && g_singleton->initialized) {
-        python_layout requested;
-        if (!discover_python_layout(cfg->python_home, requested) ||
-            normalized_path(requested.home) != normalized_path(g_singleton->python_home)) {
-            return SAO_ERR_INVALID_ARGUMENT;
+        if (g_singleton != nullptr && g_singleton->initialized) {
+            python_layout requested;
+            if (!discover_python_layout(cfg->python_home, requested) ||
+                normalized_path(requested.home) != normalized_path(g_singleton->python_home)) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            return publish_host_handle_locked(g_singleton, out_host);
         }
-        *out_host = reinterpret_cast<py_host_handle_t>(g_singleton);
-        g_ref_count.fetch_add(1);
-        return SAO_OK;
-    }
 
-    bool externally_initialized = (Py_IsInitialized() != 0);
+        const bool externally_initialized = (Py_IsInitialized() != 0);
+        const bool want_register = cfg->register_sao_sdk;
+        auto state = std::make_unique<py_host_state>();
 
-    // 若 Py 未 init: 在 init 前先注入 sao_sdk (PyImport_AppendInittab).
-    // 若已 init: 稍后在建 handle 后走 sys.modules 直接挂.
-    bool want_register = (cfg == nullptr || cfg->register_sao_sdk);
-    if (!externally_initialized && want_register) {
-        (void)sao_plugins_pyhost_register_native_module();
-    }
+        // 若 Py 未 init: 在 init 前先注入 sao_sdk (PyImport_AppendInittab).
+        // 若已 init: 稍后在建 handle 后走 sys.modules 直接挂.
+        if (!externally_initialized && want_register) {
+            (void)sao_plugins_pyhost_register_native_module();
+        }
 
-    if (!externally_initialized) {
-        if (!initialize_isolated_python(cfg)) {
+        if (!externally_initialized && !initialize_isolated_python(cfg)) {
             return SAO_ERR_OS_CALL_FAILED;
         }
-    }
 
-    PyObject* sys_mod = PyImport_ImportModule("sys");
-    if (sys_mod == nullptr) {
-        PyErr_Clear();
-        if (!externally_initialized) {
-            Py_FinalizeEx();
+        PyObject* sys_mod = PyImport_ImportModule("sys");
+        if (sys_mod == nullptr) {
+            PyErr_Clear();
+            if (!externally_initialized)
+                (void)Py_FinalizeEx();
+            return SAO_ERR_OS_CALL_FAILED;
         }
+        Py_DECREF(sys_mod);
+
+        // 已 init 状态下需要手动注入 sao_sdk (init 前 append_inittab 不生效).
+        if (externally_initialized && want_register) {
+            (void)sao_plugins_pyhost_register_native_module();
+        }
+        // 无论如何再挂 shim (幂等).
+        if (want_register) {
+            (void)sao_plugins_pyhost_register_shim_module();
+        }
+
+        state->initialized = true;
+        state->owns_finalize = !externally_initialized;
+        state->sao_sdk_registered = want_register;
+        state->python_home_utf8 = wchar_to_utf8(cfg->python_home);
+        state->python_home = cfg->python_home;
+        if (cfg->platform_site_dir != nullptr)
+            state->platform_site_dir = cfg->platform_site_dir;
+        state->controlled_test_shim = cfg->controlled_test_shim;
+
+        const int32_t publish_status = publish_host_handle_locked(state.get(), out_host);
+        if (publish_status != SAO_OK) {
+            if (state->owns_finalize)
+                (void)Py_FinalizeEx();
+            return publish_status;
+        }
+        g_singleton = state.release();
+        return SAO_OK;
+    } catch (...) {
+        *out_host = nullptr;
         return SAO_ERR_OS_CALL_FAILED;
     }
-    Py_DECREF(sys_mod);
-
-    // 已 init 状态下需要手动注入 sao_sdk (init 前 append_inittab 不生效).
-    if (externally_initialized && want_register) {
-        (void)sao_plugins_pyhost_register_native_module();
-    }
-    // 无论如何再挂 shim (幂等).
-    if (want_register) {
-        (void)sao_plugins_pyhost_register_shim_module();
-    }
-
-    g_singleton = new py_host_state();
-    g_singleton->initialized = true;
-    g_singleton->owns_finalize = !externally_initialized;
-    g_singleton->sao_sdk_registered = want_register;
-    if (cfg != nullptr && cfg->python_home != nullptr) {
-        g_singleton->python_home_utf8 = wchar_to_utf8(cfg->python_home);
-        g_singleton->python_home = cfg->python_home;
-    }
-    if (cfg != nullptr && cfg->platform_site_dir != nullptr) {
-        g_singleton->platform_site_dir = cfg->platform_site_dir;
-    }
-    g_singleton->controlled_test_shim = cfg != nullptr && cfg->controlled_test_shim;
-    g_ref_count.store(1);
-
-    *out_host = reinterpret_cast<py_host_handle_t>(g_singleton);
-    return SAO_OK;
 #endif
 }
 
@@ -623,30 +925,53 @@ sao_plugins_pyhost_shutdown(py_host_handle_t host) {
 #if !defined(SAO_HAS_PYTHON_EMBED)
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    std::lock_guard<std::mutex> lock(g_singleton_mu);
+    try {
+        std::unique_lock lock(g_singleton_mu);
+        auto* token = static_cast<py_host_s*>(host);
+        const auto found = g_host_handles.find(token);
+        if (found == g_host_handles.end() || !found->second.live ||
+            found->second.state == nullptr || token->generation != found->second.generation) {
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        if (found->second.closing ||
+            handle_active_on_current_thread(g_active_host_handles, g_active_host_depth, token)) {
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        if (found->second.active_calls != 0)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        found->second.closing = true;
+        py_host_state* state = found->second.state;
+        if (state != g_singleton || !state->initialized) {
+            found->second.closing = false;
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        if (state->active_plugins != 0) {
+            found->second.closing = false;
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        }
 
-    py_host_state* s = reinterpret_cast<py_host_state*>(host);
-    if (s != g_singleton)
-        return SAO_ERR_HANDLE_INVALID;
-    if (!s->initialized)
-        return SAO_ERR_NOT_INITIALIZED;
-    if (s->active_plugins != 0) {
-        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-    }
+        found->second.live = false;
+        found->second.state = nullptr;
+        if (state->active_host_handles > 0)
+            --state->active_host_handles;
+        if (state->active_host_handles != 0)
+            return SAO_OK;
 
-    int32_t remaining = g_ref_count.fetch_sub(1) - 1;
-    if (remaining > 0) {
+        state->initialized = false;
+        g_singleton = nullptr;
+        g_runtime_transition = true;
+        const bool owns_finalize = state->owns_finalize;
+        lock.unlock();
+        if (owns_finalize)
+            (void)Py_FinalizeEx();
+        delete state;
+        lock.lock();
+        g_runtime_transition = false;
+        g_handle_idle.notify_all();
         return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
-
-    if (s->owns_finalize) {
-        (void)Py_FinalizeEx();
-    }
-    s->initialized = false;
-
-    delete s;
-    g_singleton = nullptr;
-    return SAO_OK;
 #endif
 }
 
@@ -656,12 +981,12 @@ sao_plugins_pyhost_version(py_host_handle_t host) {
     (void)host;
     return "";
 #else
-    if (host == nullptr)
+    try {
+        host_api_lease lease;
+        return lease.acquire(host) == SAO_OK ? Py_GetVersion() : "";
+    } catch (...) {
         return "";
-    py_host_state* s = reinterpret_cast<py_host_state*>(host);
-    if (!s->initialized)
-        return "";
-    return Py_GetVersion();
+    }
 #endif
 }
 
@@ -671,8 +996,12 @@ sao_plugins_pyhost_available(const wchar_t* python_home) {
     (void)python_home;
     return false;
 #else
-    python_layout layout;
-    return discover_python_layout(python_home, layout);
+    try {
+        python_layout layout;
+        return discover_python_layout(python_home, layout);
+    } catch (...) {
+        return false;
+    }
 #endif
 }
 
@@ -695,244 +1024,246 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_load_plug
 #else
     if (host == nullptr || plugin_dir == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    py_host_state* s = reinterpret_cast<py_host_state*>(host);
-    if (s != g_singleton || !s->initialized)
-        return SAO_ERR_NOT_INITIALIZED;
+    py_plugin_state* pl = nullptr;
+    bool plugin_published = false;
+    try {
+        host_api_lease host_lease;
+        const int32_t host_status = host_lease.acquire(host);
+        if (host_status != SAO_OK)
+            return host_status;
+        py_host_state* s = host_lease.state();
 
-    auto* pl = new py_plugin_state();
-    pl->host = s;
-    ++s->active_plugins;
-    pl->plugin_dir_w = plugin_dir;
+        auto state = std::make_unique<py_plugin_state>();
+        pl = state.get();
+        pl->host = s;
+        pl->plugin_dir_w = plugin_dir;
+        const int32_t publish_status = publish_plugin_handle(s, state, out_plugin);
+        if (publish_status != SAO_OK)
+            return publish_status;
+        plugin_published = true;
 
-    // 1. 读 manifest (compat W1c).
-    std::wstring manifest_path = pl->plugin_dir_w;
-    if (!manifest_path.empty() && manifest_path.back() != L'/' && manifest_path.back() != L'\\') {
-        manifest_path.push_back(L'\\');
-    }
-    manifest_path += L"plugin.json";
-    char* err_utf8 = nullptr;
-    int32_t rc = sao::plugins::compat::sao_plugins_compat_load_manifest_file(
-        manifest_path.c_str(), &pl->manifest, &err_utf8);
-    if (rc != SAO_OK) {
-        if (err_utf8 != nullptr) {
-            pl->last_error = err_utf8;
-            sao::plugins::compat::sao_plugins_compat_free_string(err_utf8);
-        } else {
-            pl->last_error = "cannot open plugin.json";
+        // 1. 读 manifest (compat W1c).
+        std::wstring manifest_path = pl->plugin_dir_w;
+        if (!manifest_path.empty() && manifest_path.back() != L'/' &&
+            manifest_path.back() != L'\\') {
+            manifest_path.push_back(L'\\');
         }
-        // 若调用方给了 plugin_id 显式覆盖, 且没给 entry, 我们放弃—因为 manifest
-        // 读不出说明连 fallback 都不能靠。仍返回 handle (供 last_error 内省).
+        manifest_path += L"plugin.json";
+        char* err_utf8 = nullptr;
+        int32_t rc = sao::plugins::compat::sao_plugins_compat_load_manifest_file(
+            manifest_path.c_str(), &pl->manifest, &err_utf8);
+        if (rc != SAO_OK) {
+            if (err_utf8 != nullptr) {
+                pl->last_error = err_utf8;
+                sao::plugins::compat::sao_plugins_compat_free_string(err_utf8);
+            } else {
+                pl->last_error = "cannot open plugin.json";
+            }
+            // 若调用方给了 plugin_id 显式覆盖, 且没给 entry, 我们放弃—因为 manifest
+            // 读不出说明连 fallback 都不能靠。仍返回 handle (供 last_error 内省).
+            if (plugin_id_utf8 != nullptr && *plugin_id_utf8 != '\0') {
+                pl->plugin_id = plugin_id_utf8;
+            }
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        // normalize (补默认字段).
+        (void)sao::plugins::compat::sao_plugins_compat_normalize_v1_manifest(&pl->manifest,
+                                                                             nullptr);
+
+        // 2. 决定 plugin_id 与 entry_relative.
         if (plugin_id_utf8 != nullptr && *plugin_id_utf8 != '\0') {
             pl->plugin_id = plugin_id_utf8;
+        } else {
+            pl->plugin_id = pl->manifest.plugin_id;
         }
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_HANDLE_INVALID;
-    }
-    // normalize (补默认字段).
-    (void)sao::plugins::compat::sao_plugins_compat_normalize_v1_manifest(&pl->manifest, nullptr);
+        if (entry_relative != nullptr && *entry_relative != '\0') {
+            pl->entry_relative = entry_relative;
+        } else {
+            pl->entry_relative = pl->manifest.entry;
+        }
+        if (pl->entry_relative.empty())
+            pl->entry_relative = "plugin.py";
 
-    // 2. 决定 plugin_id 与 entry_relative.
-    if (plugin_id_utf8 != nullptr && *plugin_id_utf8 != '\0') {
-        pl->plugin_id = plugin_id_utf8;
-    } else {
-        pl->plugin_id = pl->manifest.plugin_id;
-    }
-    if (entry_relative != nullptr && *entry_relative != '\0') {
-        pl->entry_relative = entry_relative;
-    } else {
-        pl->entry_relative = pl->manifest.entry;
-    }
-    if (pl->entry_relative.empty())
-        pl->entry_relative = "plugin.py";
-
-    // ctx_ptr 可传入已绑定的 SaoSdkContext。有效上下文只借用，由调用方持有；
-    // 其他值保持兼容并回退为本 plugin 唯一的 host-owned SaoSdkContext。
-    if (ctx_ptr != nullptr) {
-        MEMORY_BASIC_INFORMATION memory{};
-        if (VirtualQuery(ctx_ptr, &memory, sizeof(memory)) == sizeof(memory) &&
-            memory.State == MEM_COMMIT && (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 &&
-            reinterpret_cast<uintptr_t>(ctx_ptr) + sizeof(SaoSdkContext) <=
-                reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize) {
-            auto* supplied = static_cast<SaoSdkContext*>(ctx_ptr);
-            if (supplied->abi_version == SAO_SDK_ABI_VERSION && supplied->ctx_impl != nullptr) {
-                pl->sdk_context = supplied;
+        // ctx_ptr 可传入已绑定的 SaoSdkContext。有效上下文只借用，由调用方持有；
+        // 其他值保持兼容并回退为本 plugin 唯一的 host-owned SaoSdkContext。
+        if (ctx_ptr != nullptr) {
+            MEMORY_BASIC_INFORMATION memory{};
+            if (VirtualQuery(ctx_ptr, &memory, sizeof(memory)) == sizeof(memory) &&
+                memory.State == MEM_COMMIT &&
+                (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 &&
+                reinterpret_cast<uintptr_t>(ctx_ptr) + sizeof(SaoSdkContext) <=
+                    reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize) {
+                auto* supplied = static_cast<SaoSdkContext*>(ctx_ptr);
+                if (supplied->abi_version == SAO_SDK_ABI_VERSION && supplied->ctx_impl != nullptr) {
+                    pl->sdk_context = supplied;
+                }
             }
         }
-    }
-    if (pl->sdk_context == nullptr) {
-        rc = sao_sdk_bind_context(pl->plugin_id.c_str(), pl->manifest.version.c_str(),
-                                  &pl->owned_sdk_context);
-        if (rc != SAO_SDK_OK) {
-            pl->last_error = "sao_sdk_bind_context failed";
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-            return rc;
+        if (pl->sdk_context == nullptr) {
+            rc = sao_sdk_bind_context(pl->plugin_id.c_str(), pl->manifest.version.c_str(),
+                                      &pl->owned_sdk_context);
+            if (rc != SAO_SDK_OK) {
+                pl->last_error = "sao_sdk_bind_context failed";
+                return rc;
+            }
+            pl->sdk_context = &pl->owned_sdk_context;
+            pl->owns_sdk_context = true;
+            rc = sao_sdk_context_bind_platform_services(pl->sdk_context);
+            if (rc != SAO_SDK_OK) {
+                pl->last_error = "sao_sdk_context_bind_platform_services failed";
+                return rc;
+            }
         }
-        pl->sdk_context = &pl->owned_sdk_context;
-        pl->owns_sdk_context = true;
-        rc = sao_sdk_context_bind_platform_services(pl->sdk_context);
-        if (rc != SAO_SDK_OK) {
-            pl->last_error = "sao_sdk_context_bind_platform_services failed";
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-            return rc;
-        }
-    }
 
-    // 3. 前插 sys.path: plugin_dir + libs/ + vendor/ + engine/ (W4b probe).
-    prepend_sys_path(pl->plugin_dir_w, pl->inserted_sys_paths);
-    sao::plugins::compat::discovered_deps_dirs deps;
-    (void)sao::plugins::compat::sao_plugins_compat_libs_vendor_probe(pl->plugin_dir_w.c_str(),
-                                                                     &deps);
-    // deps.ordered 是 engine → libs → vendor 顺序; 我们逆序前插以让 engine 在最前.
-    for (auto it = deps.ordered.rbegin(); it != deps.ordered.rend(); ++it) {
-        prepend_sys_path(*it, pl->inserted_sys_paths);
-    }
-    sao::plugins::compat::sao_plugins_compat_free_deps_dirs(&deps);
+        // 3. 前插 sys.path: plugin_dir + libs/ + vendor/ + engine/ (W4b probe).
+        prepend_sys_path(pl->plugin_dir_w, pl->inserted_sys_paths);
+        sao::plugins::compat::discovered_deps_dirs deps;
+        (void)sao::plugins::compat::sao_plugins_compat_libs_vendor_probe(pl->plugin_dir_w.c_str(),
+                                                                         &deps);
+        // deps.ordered 是 engine → libs → vendor 顺序; 我们逆序前插以让 engine 在最前.
+        for (auto it = deps.ordered.rbegin(); it != deps.ordered.rend(); ++it) {
+            prepend_sys_path(*it, pl->inserted_sys_paths);
+        }
+        sao::plugins::compat::sao_plugins_compat_free_deps_dirs(&deps);
 
-    // 4. wrap ctx: 用 sao_sdk.PluginContext (记账 shim).
-    {
-        PyObject* sao_sdk = PyImport_ImportModule("sao_sdk");
-        if (sao_sdk == nullptr) {
-            pl->last_error = capture_and_clear_pyerr();
-            if (pl->last_error.empty())
-                pl->last_error = "sao_sdk not importable";
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-        PyObject* pc_cls = PyObject_GetAttrString(sao_sdk, "PluginContext");
-        Py_DECREF(sao_sdk);
-        if (pc_cls == nullptr) {
-            pl->last_error = capture_and_clear_pyerr();
-            if (pl->last_error.empty())
-                pl->last_error = "sao_sdk.PluginContext not found";
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-        std::string dir_utf8 = wchar_to_utf8(pl->plugin_dir_w.c_str());
-        Py_ssize_t hnd = static_cast<Py_ssize_t>(reinterpret_cast<intptr_t>(pl->sdk_context));
-        PyObject* args = Py_BuildValue("(ssni)", pl->plugin_id.c_str(), dir_utf8.c_str(), hnd,
-                                       s->controlled_test_shim ? 1 : 0);
-        if (args == nullptr) {
+        // 4. wrap ctx: 用 sao_sdk.PluginContext (记账 shim).
+        {
+            PyObject* sao_sdk = PyImport_ImportModule("sao_sdk");
+            if (sao_sdk == nullptr) {
+                pl->last_error = capture_and_clear_pyerr();
+                if (pl->last_error.empty())
+                    pl->last_error = "sao_sdk not importable";
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            PyObject* pc_cls = PyObject_GetAttrString(sao_sdk, "PluginContext");
+            Py_DECREF(sao_sdk);
+            if (pc_cls == nullptr) {
+                pl->last_error = capture_and_clear_pyerr();
+                if (pl->last_error.empty())
+                    pl->last_error = "sao_sdk.PluginContext not found";
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            std::string dir_utf8 = wchar_to_utf8(pl->plugin_dir_w.c_str());
+            Py_ssize_t hnd = static_cast<Py_ssize_t>(reinterpret_cast<intptr_t>(pl->sdk_context));
+            PyObject* args = Py_BuildValue("(ssni)", pl->plugin_id.c_str(), dir_utf8.c_str(), hnd,
+                                           s->controlled_test_shim ? 1 : 0);
+            if (args == nullptr) {
+                Py_DECREF(pc_cls);
+                pl->last_error = capture_and_clear_pyerr();
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            pl->ctx = PyObject_CallObject(pc_cls, args);
+            Py_DECREF(args);
             Py_DECREF(pc_cls);
+            if (pl->ctx == nullptr) {
+                pl->last_error = capture_and_clear_pyerr();
+                if (pl->last_error.empty())
+                    pl->last_error = "PluginContext() failed";
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+        }
+
+        // 5. spec_from_file_location(f"act_plugin_{id}", <plugin_dir>/<entry>).
+        std::string module_name = "act_plugin_" + pl->plugin_id;
+        snapshot_module_names(pl->preexisting_modules);
+        // 老代码可能自己 import (相对), 我们用完整绝对路径避免混淆.
+        std::wstring entry_path = pl->plugin_dir_w;
+        if (!entry_path.empty() && entry_path.back() != L'/' && entry_path.back() != L'\\') {
+            entry_path.push_back(L'\\');
+        }
+        entry_path += utf8_to_wstring(pl->entry_relative.c_str());
+        std::string entry_utf8 = wchar_to_utf8(entry_path.c_str());
+
+        PyObject* importlib_util = PyImport_ImportModule("importlib.util");
+        if (importlib_util == nullptr) {
             pl->last_error = capture_and_clear_pyerr();
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        pl->ctx = PyObject_CallObject(pc_cls, args);
-        Py_DECREF(args);
-        Py_DECREF(pc_cls);
-        if (pl->ctx == nullptr) {
+        PyObject* spec_fn = PyObject_GetAttrString(importlib_util, "spec_from_file_location");
+        if (spec_fn == nullptr) {
+            Py_DECREF(importlib_util);
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        PyObject* spec =
+            PyObject_CallFunction(spec_fn, "ss", module_name.c_str(), entry_utf8.c_str());
+        Py_DECREF(spec_fn);
+        if (spec == nullptr || spec == Py_None) {
+            Py_XDECREF(spec);
+            Py_DECREF(importlib_util);
             pl->last_error = capture_and_clear_pyerr();
             if (pl->last_error.empty())
-                pl->last_error = "PluginContext() failed";
-            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
+                pl->last_error = "spec_from_file_location returned None";
             return SAO_ERR_OS_CALL_FAILED;
         }
-    }
-
-    // 5. spec_from_file_location(f"act_plugin_{id}", <plugin_dir>/<entry>).
-    std::string module_name = "act_plugin_" + pl->plugin_id;
-    snapshot_module_names(pl->preexisting_modules);
-    // 老代码可能自己 import (相对), 我们用完整绝对路径避免混淆.
-    std::wstring entry_path = pl->plugin_dir_w;
-    if (!entry_path.empty() && entry_path.back() != L'/' && entry_path.back() != L'\\') {
-        entry_path.push_back(L'\\');
-    }
-    entry_path += utf8_to_wstring(pl->entry_relative.c_str());
-    std::string entry_utf8 = wchar_to_utf8(entry_path.c_str());
-
-    PyObject* importlib_util = PyImport_ImportModule("importlib.util");
-    if (importlib_util == nullptr) {
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    PyObject* spec_fn = PyObject_GetAttrString(importlib_util, "spec_from_file_location");
-    if (spec_fn == nullptr) {
+        PyObject* mod_from_spec_fn = PyObject_GetAttrString(importlib_util, "module_from_spec");
         Py_DECREF(importlib_util);
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    PyObject* spec = PyObject_CallFunction(spec_fn, "ss", module_name.c_str(), entry_utf8.c_str());
-    Py_DECREF(spec_fn);
-    if (spec == nullptr || spec == Py_None) {
-        Py_XDECREF(spec);
-        Py_DECREF(importlib_util);
-        pl->last_error = capture_and_clear_pyerr();
-        if (pl->last_error.empty())
-            pl->last_error = "spec_from_file_location returned None";
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    PyObject* mod_from_spec_fn = PyObject_GetAttrString(importlib_util, "module_from_spec");
-    Py_DECREF(importlib_util);
-    if (mod_from_spec_fn == nullptr) {
-        Py_DECREF(spec);
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    pl->module = PyObject_CallOneArg(mod_from_spec_fn, spec);
-    Py_DECREF(mod_from_spec_fn);
-    if (pl->module == nullptr) {
-        Py_DECREF(spec);
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    // 挂 sys.modules[module_name] 让相对 import / 二次导入命中同一实例.
-    PyObject* sys_modules = PyImport_GetModuleDict();
-    if (sys_modules != nullptr) {
-        PyDict_SetItemString(sys_modules, module_name.c_str(), pl->module);
-    }
-    // exec_module.
-    PyObject* loader = PyObject_GetAttrString(spec, "loader");
-    Py_DECREF(spec);
-    if (loader == nullptr) {
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    PyObject* exec_fn = PyObject_GetAttrString(loader, "exec_module");
-    Py_DECREF(loader);
-    if (exec_fn == nullptr) {
-        pl->last_error = capture_and_clear_pyerr();
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    PyObject* exec_res = PyObject_CallOneArg(exec_fn, pl->module);
-    Py_DECREF(exec_fn);
-    if (exec_res == nullptr) {
-        // 模块 top-level 代码抛异常 (可能是 import cv2 等缺依赖) —— 记 traceback,
-        // 保 module 引用 (供 last_error 内省), 但视为加载失败.
-        pl->last_error = capture_and_clear_pyerr();
-        if (pl->last_error.empty())
-            pl->last_error = "exec_module failed";
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    Py_DECREF(exec_res);
-
-    // 6. 抽 hook (可选; 缺失不视为错误).
-    auto grab_hook = [&](const char* name) -> PyObject* {
-        PyObject* fn = PyObject_GetAttrString(pl->module, name);
-        if (fn == nullptr) {
-            PyErr_Clear();
-            return nullptr;
+        if (mod_from_spec_fn == nullptr) {
+            Py_DECREF(spec);
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
         }
-        if (!PyCallable_Check(fn)) {
-            Py_DECREF(fn);
-            return nullptr;
+        pl->module = PyObject_CallOneArg(mod_from_spec_fn, spec);
+        Py_DECREF(mod_from_spec_fn);
+        if (pl->module == nullptr) {
+            Py_DECREF(spec);
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
         }
-        return fn;
-    };
-    pl->hook_on_load = grab_hook("on_load");
-    pl->hook_on_enable = grab_hook("on_enable");
-    pl->hook_on_disable = grab_hook("on_disable");
-    pl->hook_on_unload = grab_hook("on_unload");
+        // 挂 sys.modules[module_name] 让相对 import / 二次导入命中同一实例.
+        PyObject* sys_modules = PyImport_GetModuleDict();
+        if (sys_modules != nullptr) {
+            PyDict_SetItemString(sys_modules, module_name.c_str(), pl->module);
+        }
+        // exec_module.
+        PyObject* loader = PyObject_GetAttrString(spec, "loader");
+        Py_DECREF(spec);
+        if (loader == nullptr) {
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        PyObject* exec_fn = PyObject_GetAttrString(loader, "exec_module");
+        Py_DECREF(loader);
+        if (exec_fn == nullptr) {
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        PyObject* exec_res = PyObject_CallOneArg(exec_fn, pl->module);
+        Py_DECREF(exec_fn);
+        if (exec_res == nullptr) {
+            // 模块 top-level 代码抛异常 (可能是 import cv2 等缺依赖) —— 记 traceback,
+            // 保 module 引用 (供 last_error 内省), 但视为加载失败.
+            pl->last_error = capture_and_clear_pyerr();
+            if (pl->last_error.empty())
+                pl->last_error = "exec_module failed";
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        Py_DECREF(exec_res);
 
-    *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-    return SAO_OK;
+        // 6. 抽 hook (可选; 缺失不视为错误).
+        auto grab_hook = [&](const char* name) -> PyObject* {
+            PyObject* fn = PyObject_GetAttrString(pl->module, name);
+            if (fn == nullptr) {
+                PyErr_Clear();
+                return nullptr;
+            }
+            if (!PyCallable_Check(fn)) {
+                Py_DECREF(fn);
+                return nullptr;
+            }
+            return fn;
+        };
+        pl->hook_on_load = grab_hook("on_load");
+        pl->hook_on_enable = grab_hook("on_enable");
+        pl->hook_on_disable = grab_hook("on_disable");
+        pl->hook_on_unload = grab_hook("on_unload");
+
+        return SAO_OK;
+    } catch (...) {
+        if (plugin_published && pl != nullptr)
+            pl->last_error = "Python plugin load failed";
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #endif
 }
 
@@ -965,6 +1296,31 @@ int32_t invoke_hook(py_plugin_state* pl, PyObject* hook, bool pass_ctx) {
     Py_DECREF(res);
     return SAO_OK;
 }
+
+int32_t invoke_unload_hook(py_plugin_state* pl, PyObject* hook, bool* out_allow_unload) {
+    if (pl == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (hook == nullptr)
+        return SAO_ERR_NOT_IMPLEMENTED;
+    PyObject* args = PyTuple_New(0);
+    if (args == nullptr) {
+        pl->last_error = capture_and_clear_pyerr();
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    PyObject* result = PyObject_CallObject(hook, args);
+    Py_DECREF(args);
+    if (result == nullptr) {
+        pl->last_error = capture_and_clear_pyerr();
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    bool allow_unload = true;
+    if (PyBool_Check(result))
+        allow_unload = result == Py_True;
+    Py_DECREF(result);
+    if (out_allow_unload != nullptr)
+        *out_allow_unload = allow_unload;
+    return SAO_OK;
+}
 } // namespace
 #endif
 
@@ -974,10 +1330,16 @@ extern "C" SAO_PLUGINS_API
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return invoke_hook(pl, pl->hook_on_load, /*pass_ctx=*/true);
+    try {
+        plugin_api_lease lease;
+        const int32_t status = lease.acquire(plugin);
+        if (status != SAO_OK)
+            return status;
+        auto* pl = lease.state();
+        return invoke_hook(pl, pl->hook_on_load, /*pass_ctx=*/true);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #endif
 }
 
@@ -987,11 +1349,17 @@ sao_plugins_pyhost_call_on_enable(py_plugin_handle_t plugin) {
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    // on_enable() 老插件不传 ctx (see hide_seek: on_disable(), on_unload()).
-    return invoke_hook(pl, pl->hook_on_enable, /*pass_ctx=*/false);
+    try {
+        plugin_api_lease lease;
+        const int32_t status = lease.acquire(plugin);
+        if (status != SAO_OK)
+            return status;
+        auto* pl = lease.state();
+        // on_enable() 老插件不传 ctx (see hide_seek: on_disable(), on_unload()).
+        return invoke_hook(pl, pl->hook_on_enable, /*pass_ctx=*/false);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #endif
 }
 
@@ -1001,25 +1369,37 @@ sao_plugins_pyhost_call_on_disable(py_plugin_handle_t plugin) {
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return invoke_hook(pl, pl->hook_on_disable, /*pass_ctx=*/false);
+    try {
+        plugin_api_lease lease;
+        const int32_t status = lease.acquire(plugin);
+        if (status != SAO_OK)
+            return status;
+        auto* pl = lease.state();
+        return invoke_hook(pl, pl->hook_on_disable, /*pass_ctx=*/false);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #endif
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_call_on_unload(py_plugin_handle_t plugin, bool* out_allow_unload) {
     if (out_allow_unload != nullptr)
-        *out_allow_unload = true;
+        *out_allow_unload = false;
 #if !defined(SAO_HAS_PYTHON_EMBED)
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return invoke_hook(pl, pl->hook_on_unload, /*pass_ctx=*/false);
+    try {
+        plugin_api_lease lease;
+        const int32_t status = lease.acquire(plugin);
+        if (status != SAO_OK)
+            return status;
+        auto* pl = lease.state();
+        return invoke_unload_hook(pl, pl->hook_on_unload, out_allow_unload);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #endif
 }
 
@@ -1029,62 +1409,73 @@ sao_plugins_pyhost_unload_plugin(py_plugin_handle_t plugin) {
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
+    py_plugin_state* pl = nullptr;
+    const int32_t close_status = begin_plugin_close(plugin, &pl);
+    if (close_status != SAO_OK)
+        return close_status;
+    try {
 
-    // Py 可能已被 finalize (host_shutdown 之后二次 unload). 只有 initialized
-    // 时才走 Py 侧清理.
-    if (Py_IsInitialized() != 0) {
-        const int32_t teardown_status = sao_plugins_pyhost_ctx_try_teardown_native(pl->ctx);
-        if (teardown_status != SAO_OK)
-            return teardown_status;
+        // Py 可能已被 finalize (host_shutdown 之后二次 unload). 只有 initialized
+        // 时才走 Py 侧清理.
+        if (Py_IsInitialized() != 0) {
+            const int32_t teardown_status = sao_plugins_pyhost_ctx_try_teardown_native(pl->ctx);
+            if (teardown_status != SAO_OK) {
+                cancel_plugin_close(plugin);
+                return teardown_status;
+            }
 
+            if (pl->owns_sdk_context && pl->sdk_context != nullptr) {
+                int32_t status = sao_sdk_context_try_destroy(pl->sdk_context);
+                if (status == SAO_SDK_ERR_BUSY)
+                    status = sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+                if (status != SAO_OK) {
+                    cancel_plugin_close(plugin);
+                    return status;
+                }
+                pl->sdk_context = nullptr;
+                pl->owns_sdk_context = false;
+            }
+
+            // 从 sys.modules 撕主模块以及本次加载新增且位于插件目录内的模块。
+            remove_plugin_modules(pl);
+            // DECREF hook + module + ctx.
+            Py_CLEAR(pl->hook_on_load);
+            Py_CLEAR(pl->hook_on_enable);
+            Py_CLEAR(pl->hook_on_disable);
+            Py_CLEAR(pl->hook_on_unload);
+            clear_module_context_refs(pl->module, pl->ctx);
+            Py_CLEAR(pl->module);
+            Py_CLEAR(pl->ctx);
+
+            // 恢复 sys.path.
+            remove_inserted_sys_paths(pl->inserted_sys_paths);
+        } else {
+            // Python 已 shutdown; PyObject 指针无效但内存已归还.
+            pl->hook_on_load = pl->hook_on_enable = pl->hook_on_disable = pl->hook_on_unload =
+                nullptr;
+            pl->module = nullptr;
+            pl->ctx = nullptr;
+            pl->inserted_sys_paths.clear();
+            pl->preexisting_modules.clear();
+        }
         if (pl->owns_sdk_context && pl->sdk_context != nullptr) {
             int32_t status = sao_sdk_context_try_destroy(pl->sdk_context);
             if (status == SAO_SDK_ERR_BUSY)
                 status = sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-            if (status != SAO_OK)
+            if (status != SAO_OK) {
+                cancel_plugin_close(plugin);
                 return status;
+            }
             pl->sdk_context = nullptr;
             pl->owns_sdk_context = false;
         }
-
-        // 从 sys.modules 撕主模块以及本次加载新增且位于插件目录内的模块。
-        remove_plugin_modules(pl);
-        // DECREF hook + module + ctx.
-        Py_CLEAR(pl->hook_on_load);
-        Py_CLEAR(pl->hook_on_enable);
-        Py_CLEAR(pl->hook_on_disable);
-        Py_CLEAR(pl->hook_on_unload);
-        clear_module_context_refs(pl->module, pl->ctx);
-        Py_CLEAR(pl->module);
-        Py_CLEAR(pl->ctx);
-
-        // 恢复 sys.path.
-        remove_inserted_sys_paths(pl->inserted_sys_paths);
-    } else {
-        // Python 已 shutdown; PyObject 指针无效但内存已归还.
-        pl->hook_on_load = pl->hook_on_enable = pl->hook_on_disable = pl->hook_on_unload = nullptr;
-        pl->module = nullptr;
-        pl->ctx = nullptr;
-        pl->inserted_sys_paths.clear();
-        pl->preexisting_modules.clear();
+        finish_plugin_close(plugin, pl);
+        delete pl;
+        return SAO_OK;
+    } catch (...) {
+        cancel_plugin_close(plugin);
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    if (pl->owns_sdk_context && pl->sdk_context != nullptr) {
-        int32_t status = sao_sdk_context_try_destroy(pl->sdk_context);
-        if (status == SAO_SDK_ERR_BUSY)
-            status = sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-        if (status != SAO_OK)
-            return status;
-        pl->sdk_context = nullptr;
-        pl->owns_sdk_context = false;
-    }
-    if (pl->host != nullptr && pl->host->active_plugins > 0) {
-        --pl->host->active_plugins;
-    }
-    delete pl;
-    return SAO_OK;
 #endif
 }
 
@@ -1095,28 +1486,35 @@ sao_plugins_pyhost_has_hook(py_plugin_handle_t plugin, const char* hook_name) {
     (void)hook_name;
     return false;
 #else
-    if (plugin == nullptr || hook_name == nullptr)
-        return false;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    if (std::strcmp(hook_name, "on_load") == 0)
-        return pl->hook_on_load != nullptr;
-    if (std::strcmp(hook_name, "on_enable") == 0)
-        return pl->hook_on_enable != nullptr;
-    if (std::strcmp(hook_name, "on_disable") == 0)
-        return pl->hook_on_disable != nullptr;
-    if (std::strcmp(hook_name, "on_unload") == 0)
-        return pl->hook_on_unload != nullptr;
-    // 任意 hook: 查 module attr.
-    if (pl->module == nullptr)
-        return false;
-    PyObject* attr = PyObject_GetAttrString(pl->module, hook_name);
-    if (attr == nullptr) {
-        PyErr_Clear();
+    try {
+        if (hook_name == nullptr)
+            return false;
+        plugin_api_lease lease;
+        if (lease.acquire(plugin) != SAO_OK)
+            return false;
+        auto* pl = lease.state();
+        if (std::strcmp(hook_name, "on_load") == 0)
+            return pl->hook_on_load != nullptr;
+        if (std::strcmp(hook_name, "on_enable") == 0)
+            return pl->hook_on_enable != nullptr;
+        if (std::strcmp(hook_name, "on_disable") == 0)
+            return pl->hook_on_disable != nullptr;
+        if (std::strcmp(hook_name, "on_unload") == 0)
+            return pl->hook_on_unload != nullptr;
+        // 任意 hook: 查 module attr.
+        if (pl->module == nullptr)
+            return false;
+        PyObject* attr = PyObject_GetAttrString(pl->module, hook_name);
+        if (attr == nullptr) {
+            PyErr_Clear();
+            return false;
+        }
+        const bool ok = PyCallable_Check(attr) != 0;
+        Py_DECREF(attr);
+        return ok;
+    } catch (...) {
         return false;
     }
-    bool ok = PyCallable_Check(attr) != 0;
-    Py_DECREF(attr);
-    return ok;
 #endif
 }
 
@@ -1131,145 +1529,155 @@ sao_plugins_pyhost_call_hook(py_plugin_handle_t plugin, const char* hook_name,
     (void)args_json_utf8;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr || hook_name == nullptr)
+    if (hook_name == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    if (pl->module == nullptr)
-        return SAO_ERR_NOT_INITIALIZED;
-
-    // 特殊 hook 名: 落到已 cached 的 hook.
-    PyObject* hook = nullptr;
-    if (std::strcmp(hook_name, "on_load") == 0)
-        hook = pl->hook_on_load;
-    else if (std::strcmp(hook_name, "on_enable") == 0)
-        hook = pl->hook_on_enable;
-    else if (std::strcmp(hook_name, "on_disable") == 0)
-        hook = pl->hook_on_disable;
-    else if (std::strcmp(hook_name, "on_unload") == 0)
-        hook = pl->hook_on_unload;
-
-    bool hook_needs_decref = false;
-    if (hook == nullptr) {
-        hook = PyObject_GetAttrString(pl->module, hook_name);
-        if (hook == nullptr) {
-            PyErr_Clear();
-            return SAO_ERR_HANDLE_INVALID;
-        }
-        if (!PyCallable_Check(hook)) {
-            Py_DECREF(hook);
-            return SAO_ERR_HANDLE_INVALID;
-        }
-        hook_needs_decref = true;
-    } else {
-        Py_INCREF(hook);
-        hook_needs_decref = true;
-    }
-
-    // 若 hook 是 on_load, 传 ctx; 否则传 args_json 反序列化 (或空 tuple).
-    PyObject* args_tuple = nullptr;
-    bool pass_ctx = (std::strcmp(hook_name, "on_load") == 0);
-    if (pass_ctx) {
-        if (pl->ctx == nullptr) {
-            Py_DECREF(hook);
+    try {
+        plugin_api_lease lease;
+        const int32_t lease_status = lease.acquire(plugin);
+        if (lease_status != SAO_OK)
+            return lease_status;
+        auto* pl = lease.state();
+        if (pl->module == nullptr)
             return SAO_ERR_NOT_INITIALIZED;
-        }
-        args_tuple = PyTuple_Pack(1, pl->ctx);
-    } else if (args_json_utf8 != nullptr && *args_json_utf8 != '\0') {
-        // JSON → PyObject (用 json.loads).
-        PyObject* json_mod = PyImport_ImportModule("json");
-        if (json_mod == nullptr) {
-            Py_DECREF(hook);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-        PyObject* loads = PyObject_GetAttrString(json_mod, "loads");
-        Py_DECREF(json_mod);
-        if (loads == nullptr) {
-            Py_DECREF(hook);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-        PyObject* parsed = PyObject_CallFunction(loads, "s", args_json_utf8);
-        Py_DECREF(loads);
-        if (parsed == nullptr) {
-            PyErr_Clear();
-            args_tuple = PyTuple_New(0);
-        } else if (PyTuple_Check(parsed)) {
-            args_tuple = parsed; // steal
-        } else if (PyList_Check(parsed)) {
-            args_tuple = PyList_AsTuple(parsed);
-            Py_DECREF(parsed);
-        } else {
-            args_tuple = PyTuple_Pack(1, parsed);
-            Py_DECREF(parsed);
-        }
-    } else {
-        args_tuple = PyTuple_New(0);
-    }
-    if (args_tuple == nullptr) {
-        Py_DECREF(hook);
-        pl->last_error = capture_and_clear_pyerr();
-        return SAO_ERR_OS_CALL_FAILED;
-    }
 
-    PyObject* res = PyObject_CallObject(hook, args_tuple);
-    Py_DECREF(args_tuple);
-    if (hook_needs_decref)
-        Py_DECREF(hook);
-    if (res == nullptr) {
-        pl->last_error = capture_and_clear_pyerr();
+        // 特殊 hook 名: 落到已 cached 的 hook.
+        PyObject* hook = nullptr;
+        if (std::strcmp(hook_name, "on_load") == 0)
+            hook = pl->hook_on_load;
+        else if (std::strcmp(hook_name, "on_enable") == 0)
+            hook = pl->hook_on_enable;
+        else if (std::strcmp(hook_name, "on_disable") == 0)
+            hook = pl->hook_on_disable;
+        else if (std::strcmp(hook_name, "on_unload") == 0)
+            hook = pl->hook_on_unload;
+
+        bool hook_needs_decref = false;
+        if (hook == nullptr) {
+            hook = PyObject_GetAttrString(pl->module, hook_name);
+            if (hook == nullptr) {
+                PyErr_Clear();
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            if (!PyCallable_Check(hook)) {
+                Py_DECREF(hook);
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            hook_needs_decref = true;
+        } else {
+            Py_INCREF(hook);
+            hook_needs_decref = true;
+        }
+
+        // 若 hook 是 on_load, 传 ctx; 否则传 args_json 反序列化 (或空 tuple).
+        PyObject* args_tuple = nullptr;
+        bool pass_ctx = (std::strcmp(hook_name, "on_load") == 0);
+        if (pass_ctx) {
+            if (pl->ctx == nullptr) {
+                Py_DECREF(hook);
+                return SAO_ERR_NOT_INITIALIZED;
+            }
+            args_tuple = PyTuple_Pack(1, pl->ctx);
+        } else if (args_json_utf8 != nullptr && *args_json_utf8 != '\0') {
+            // JSON → PyObject (用 json.loads).
+            PyObject* json_mod = PyImport_ImportModule("json");
+            if (json_mod == nullptr) {
+                Py_DECREF(hook);
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            PyObject* loads = PyObject_GetAttrString(json_mod, "loads");
+            Py_DECREF(json_mod);
+            if (loads == nullptr) {
+                Py_DECREF(hook);
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            PyObject* parsed = PyObject_CallFunction(loads, "s", args_json_utf8);
+            Py_DECREF(loads);
+            if (parsed == nullptr) {
+                PyErr_Clear();
+                args_tuple = PyTuple_New(0);
+            } else if (PyTuple_Check(parsed)) {
+                args_tuple = parsed; // steal
+            } else if (PyList_Check(parsed)) {
+                args_tuple = PyList_AsTuple(parsed);
+                Py_DECREF(parsed);
+            } else {
+                args_tuple = PyTuple_Pack(1, parsed);
+                Py_DECREF(parsed);
+            }
+        } else {
+            args_tuple = PyTuple_New(0);
+        }
+        if (args_tuple == nullptr) {
+            Py_DECREF(hook);
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+
+        PyObject* res = PyObject_CallObject(hook, args_tuple);
+        Py_DECREF(args_tuple);
+        if (hook_needs_decref)
+            Py_DECREF(hook);
+        if (res == nullptr) {
+            pl->last_error = capture_and_clear_pyerr();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        // 若调用方要 JSON: 用 json.dumps repr (fallback str).
+        if (out_result_json_utf8 != nullptr) {
+            PyObject* json_mod = PyImport_ImportModule("json");
+            std::string json_out;
+            bool ok = false;
+            if (json_mod != nullptr) {
+                PyObject* dumps = PyObject_GetAttrString(json_mod, "dumps");
+                Py_DECREF(json_mod);
+                if (dumps != nullptr) {
+                    PyObject* kw = PyDict_New();
+                    if (kw != nullptr)
+                        PyDict_SetItemString(kw, "default", Py_NewRef(Py_None));
+                    PyObject* dumps_args = PyTuple_Pack(1, res);
+                    PyObject* s = nullptr;
+                    if (dumps_args != nullptr) {
+                        // 忽略非法 obj (default=None fallback 会抛; 我们改用直接调 dumps(res))
+                        s = PyObject_CallOneArg(dumps, res);
+                        if (s == nullptr)
+                            PyErr_Clear();
+                        Py_DECREF(dumps_args);
+                    }
+                    Py_XDECREF(kw);
+                    Py_DECREF(dumps);
+                    if (s != nullptr && PyUnicode_Check(s)) {
+                        const char* c = PyUnicode_AsUTF8(s);
+                        if (c != nullptr) {
+                            json_out = c;
+                            ok = true;
+                        }
+                    }
+                    Py_XDECREF(s);
+                }
+            }
+            if (!ok) {
+                // fallback: str(res)
+                PyObject* s = PyObject_Str(res);
+                if (s != nullptr) {
+                    const char* c = PyUnicode_AsUTF8(s);
+                    if (c != nullptr)
+                        json_out = c;
+                    Py_DECREF(s);
+                }
+            }
+            char* buf = static_cast<char*>(std::malloc(json_out.size() + 1));
+            if (buf != nullptr) {
+                std::memcpy(buf, json_out.data(), json_out.size());
+                buf[json_out.size()] = '\0';
+                *out_result_json_utf8 = buf;
+            }
+        }
+        Py_DECREF(res);
+        return SAO_OK;
+    } catch (...) {
+        if (out_result_json_utf8 != nullptr)
+            *out_result_json_utf8 = nullptr;
         return SAO_ERR_OS_CALL_FAILED;
     }
-    // 若调用方要 JSON: 用 json.dumps repr (fallback str).
-    if (out_result_json_utf8 != nullptr) {
-        PyObject* json_mod = PyImport_ImportModule("json");
-        std::string json_out;
-        bool ok = false;
-        if (json_mod != nullptr) {
-            PyObject* dumps = PyObject_GetAttrString(json_mod, "dumps");
-            Py_DECREF(json_mod);
-            if (dumps != nullptr) {
-                PyObject* kw = PyDict_New();
-                if (kw != nullptr)
-                    PyDict_SetItemString(kw, "default", Py_NewRef(Py_None));
-                PyObject* dumps_args = PyTuple_Pack(1, res);
-                PyObject* s = nullptr;
-                if (dumps_args != nullptr) {
-                    // 忽略非法 obj (default=None fallback 会抛; 我们改用直接调 dumps(res))
-                    s = PyObject_CallOneArg(dumps, res);
-                    if (s == nullptr)
-                        PyErr_Clear();
-                    Py_DECREF(dumps_args);
-                }
-                Py_XDECREF(kw);
-                Py_DECREF(dumps);
-                if (s != nullptr && PyUnicode_Check(s)) {
-                    const char* c = PyUnicode_AsUTF8(s);
-                    if (c != nullptr) {
-                        json_out = c;
-                        ok = true;
-                    }
-                }
-                Py_XDECREF(s);
-            }
-        }
-        if (!ok) {
-            // fallback: str(res)
-            PyObject* s = PyObject_Str(res);
-            if (s != nullptr) {
-                const char* c = PyUnicode_AsUTF8(s);
-                if (c != nullptr)
-                    json_out = c;
-                Py_DECREF(s);
-            }
-        }
-        char* buf = static_cast<char*>(std::malloc(json_out.size() + 1));
-        if (buf != nullptr) {
-            std::memcpy(buf, json_out.data(), json_out.size());
-            buf[json_out.size()] = '\0';
-            *out_result_json_utf8 = buf;
-        }
-    }
-    Py_DECREF(res);
-    return SAO_OK;
 #endif
 }
 
@@ -1281,10 +1689,14 @@ sao_plugins_pyhost_get_ctx_pyobject(py_plugin_handle_t plugin) {
     (void)plugin;
     return nullptr;
 #else
-    if (plugin == nullptr)
+    try {
+        plugin_api_lease lease;
+        if (lease.acquire(plugin) != SAO_OK)
+            return nullptr;
+        return lease.state()->ctx;
+    } catch (...) {
         return nullptr;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return pl->ctx;
+    }
 #endif
 }
 
@@ -1294,10 +1706,14 @@ sao_plugins_pyhost_get_module_pyobject(py_plugin_handle_t plugin) {
     (void)plugin;
     return nullptr;
 #else
-    if (plugin == nullptr)
+    try {
+        plugin_api_lease lease;
+        if (lease.acquire(plugin) != SAO_OK)
+            return nullptr;
+        return lease.state()->module;
+    } catch (...) {
         return nullptr;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return pl->module;
+    }
 #endif
 }
 
@@ -1307,10 +1723,14 @@ sao_plugins_pyhost_get_manifest(py_plugin_handle_t plugin) {
     (void)plugin;
     return nullptr;
 #else
-    if (plugin == nullptr)
+    try {
+        plugin_api_lease lease;
+        if (lease.acquire(plugin) != SAO_OK)
+            return nullptr;
+        return &lease.state()->manifest;
+    } catch (...) {
         return nullptr;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return &pl->manifest;
+    }
 #endif
 }
 
@@ -1320,10 +1740,14 @@ sao_plugins_pyhost_get_sdk_context(py_plugin_handle_t plugin) {
     (void)plugin;
     return nullptr;
 #else
-    if (plugin == nullptr)
+    try {
+        plugin_api_lease lease;
+        if (lease.acquire(plugin) != SAO_OK)
+            return nullptr;
+        return lease.state()->sdk_context;
+    } catch (...) {
         return nullptr;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return pl->sdk_context;
+    }
 #endif
 }
 
@@ -1335,17 +1759,25 @@ sao_plugins_pyhost_get_last_error(py_plugin_handle_t plugin, char** out_utf8) {
     (void)plugin;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
-    if (plugin == nullptr || out_utf8 == nullptr)
+    if (out_utf8 == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    const std::string& s = pl->last_error;
-    char* buf = static_cast<char*>(std::malloc(s.size() + 1));
-    if (buf == nullptr)
+    try {
+        plugin_api_lease lease;
+        const int32_t lease_status = lease.acquire(plugin);
+        if (lease_status != SAO_OK)
+            return lease_status;
+        const std::string& error = lease.state()->last_error;
+        char* buffer = static_cast<char*>(std::malloc(error.size() + 1));
+        if (buffer == nullptr)
+            return SAO_ERR_OS_CALL_FAILED;
+        std::memcpy(buffer, error.data(), error.size());
+        buffer[error.size()] = '\0';
+        *out_utf8 = buffer;
+        return SAO_OK;
+    } catch (...) {
+        *out_utf8 = nullptr;
         return SAO_ERR_OS_CALL_FAILED;
-    std::memcpy(buf, s.data(), s.size());
-    buf[s.size()] = '\0';
-    *out_utf8 = buf;
-    return SAO_OK;
+    }
 #endif
 }
 

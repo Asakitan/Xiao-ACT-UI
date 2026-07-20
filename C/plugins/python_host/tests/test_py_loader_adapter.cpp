@@ -159,6 +159,8 @@ class GilGuard {
 };
 
 struct NativeBridgeTeardownProbe {
+    bool fail_panel_register = false;
+    bool fail_hotkey_register = false;
     bool fail_panel_unregister = true;
     bool fail_hotkey_unregister = true;
     bool fail_event_unsubscribe = true;
@@ -269,6 +271,8 @@ sao_sdk_status_t SAO_SDK_CALL bridge_test_register_panel(
     auto* probe = g_native_bridge_teardown_probe;
     if (probe == nullptr || callback == nullptr || out_panel == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (probe->fail_panel_register)
+        return SAO_SDK_ERR_INTERNAL;
     if (probe->panel_registered)
         return SAO_SDK_ERR_ALREADY_EXISTS;
     probe->panel_registered = true;
@@ -299,6 +303,8 @@ sao_sdk_status_t SAO_SDK_CALL bridge_test_register_hotkey(
     auto* probe = g_native_bridge_teardown_probe;
     if (probe == nullptr || callback == nullptr || out_id == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (probe->fail_hotkey_register)
+        return SAO_SDK_ERR_INTERNAL;
     if (probe->hotkey_registered)
         return SAO_SDK_ERR_ALREADY_EXISTS;
     probe->hotkey_registered = true;
@@ -792,6 +798,25 @@ PyMethodDef g_unload_method = {
     nullptr,
 };
 
+void* g_dealloc_context = nullptr;
+std::atomic_bool g_dealloc_callback_completed{false};
+
+PyObject* dealloc_context_from_callback(PyObject*, PyObject*) {
+    PyObject* context = reinterpret_cast<PyObject*>(g_dealloc_context);
+    g_dealloc_context = nullptr;
+    Py_XDECREF(context);
+    (void)PyGC_Collect();
+    g_dealloc_callback_completed.store(true);
+    Py_RETURN_NONE;
+}
+
+PyMethodDef g_dealloc_method = {
+    "dealloc_context_from_callback",
+    reinterpret_cast<PyCFunction>(dealloc_context_from_callback),
+    METH_NOARGS,
+    nullptr,
+};
+
 #if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
 struct MenuRowSnapshot {
     std::string label;
@@ -937,6 +962,53 @@ TEST_CASE("Python owned SDK context BUSY preserves unload ownership for retry",
     REQUIRE(sao_plugins_pyhost_shutdown(host) == SAO_OK);
 }
 
+TEST_CASE("canonical loader context binding holds a symmetric host lease",
+          "[plugins][python][adapter][context][lease]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+    py_host_config config = production_config();
+    py_host_handle_t direct_host = nullptr;
+    REQUIRE(sao_plugins_pyhost_init(&config, &direct_host) == SAO_OK);
+    REQUIRE(direct_host != nullptr);
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+    REQUIRE(owner != nullptr);
+
+    TempTree tree(L"canonical_context_host_lease");
+    write_text(tree.root / L"plugin.py", "value = 1\n");
+    plugin_manifest manifest = make_manifest(tree, "canonical_context_host_lease");
+    plugin_handle_t loader_plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &manifest, &loader_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(loader_plugin) == SAO_OK);
+
+    plugin_context_t* canonical_context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(loader_plugin, &canonical_context) == SAO_OK);
+    REQUIRE(canonical_context != nullptr);
+    py_plugin_handle_t extra_bridge = nullptr;
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_load_plugin(direct_host, tree.root.c_str(), "plugin.py",
+                                               "canonical_context_host_lease", nullptr,
+                                               &extra_bridge) == SAO_OK);
+        REQUIRE(extra_bridge != nullptr);
+        REQUIRE(sao_plugins_pyhost_ctx_bind_loader_context(
+                    sao_plugins_pyhost_get_ctx_pyobject(extra_bridge), canonical_context) ==
+                SAO_OK);
+    }
+
+    CHECK(sao_plugins_lifecycle_unload(loader_plugin) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(loader_plugin) == lifecycle_state::failed);
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_unload_plugin(extra_bridge) == SAO_OK);
+        extra_bridge = nullptr;
+    }
+    REQUIRE(sao_plugins_lifecycle_unload(loader_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, loader_plugin) == SAO_OK);
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_pyhost_shutdown(direct_host) == SAO_OK);
+}
+
 TEST_CASE("production Python loader adapter owns lifecycle and cleans failures",
           "[plugins][python][adapter]") {
     py_host_config invalid = production_config();
@@ -1024,6 +1096,14 @@ def on_unload():
         GilGuard gil;
         CHECK(loaded_module("adapter_good") == nullptr);
     }
+    report = reinterpret_cast<char*>(std::uintptr_t{1});
+    CHECK(sao_plugins_pyhost_loader_adapter_get_requirements_report(owner, good_plugin, &report) ==
+          SAO_ERR_HANDLE_INVALID);
+    CHECK(report == nullptr);
+    char* unloaded_error = reinterpret_cast<char*>(std::uintptr_t{1});
+    CHECK(sao_plugins_pyhost_loader_adapter_get_last_error(owner, good_plugin, &unloaded_error) ==
+          SAO_ERR_HANDLE_INVALID);
+    CHECK(unloaded_error == nullptr);
     REQUIRE(sao_plugins_registry_remove(registry, good_plugin) == SAO_OK);
 
     TempTree failed(L"failed");
@@ -1048,6 +1128,10 @@ def on_unload():
     CHECK(std::string(error).find("adapter fixture failure") != std::string::npos);
     sao_plugins_pyhost_free_string(error);
     REQUIRE(sao_plugins_registry_remove(registry, failed_plugin) == SAO_OK);
+    error = reinterpret_cast<char*>(std::uintptr_t{1});
+    CHECK(sao_plugins_pyhost_loader_adapter_get_last_error(owner, failed_plugin, &error) ==
+          SAO_ERR_HANDLE_INVALID);
+    CHECK(error == nullptr);
 
     TempTree dependencies(L"dependencies");
     REQUIRE(fs::create_directories(dependencies.root / L"engine" / L"dupmod"));
@@ -1185,6 +1269,8 @@ def on_load(ctx):
         "direct", "D", lambda: []))
     status = ctx.open_window("panel", 640, 480)
     results["open_window"] = not status["ok"]
+def on_unload():
+    return False
 )PY");
     (void)make_manifest(context_tree, "adapter_context");
     SaoSdkContext external_context{};
@@ -1210,7 +1296,43 @@ def on_load(ctx):
             CHECK(PyObject_IsTrue(value) == 1);
         }
         Py_DECREF(results);
+        bool allow_unload = true;
+        REQUIRE(sao_plugins_pyhost_call_on_unload(direct_plugin, &allow_unload) == SAO_OK);
+        CHECK_FALSE(allow_unload);
+        const py_plugin_handle_t stale_plugin = direct_plugin;
         REQUIRE(sao_plugins_pyhost_unload_plugin(direct_plugin) == SAO_OK);
+        direct_plugin = nullptr;
+
+        CHECK(sao_plugins_pyhost_call_on_load(stale_plugin) == SAO_ERR_HANDLE_INVALID);
+        CHECK(sao_plugins_pyhost_call_on_enable(stale_plugin) == SAO_ERR_HANDLE_INVALID);
+        CHECK(sao_plugins_pyhost_call_on_disable(stale_plugin) == SAO_ERR_HANDLE_INVALID);
+        allow_unload = true;
+        CHECK(sao_plugins_pyhost_call_on_unload(stale_plugin, &allow_unload) ==
+              SAO_ERR_HANDLE_INVALID);
+        CHECK_FALSE(allow_unload);
+        CHECK_FALSE(sao_plugins_pyhost_has_hook(stale_plugin, "on_load"));
+        char* stale_result = reinterpret_cast<char*>(std::uintptr_t{1});
+        CHECK(sao_plugins_pyhost_call_hook(stale_plugin, "on_load", nullptr, &stale_result) ==
+              SAO_ERR_HANDLE_INVALID);
+        CHECK(stale_result == nullptr);
+        CHECK(sao_plugins_pyhost_get_ctx_pyobject(stale_plugin) == nullptr);
+        CHECK(sao_plugins_pyhost_get_module_pyobject(stale_plugin) == nullptr);
+        CHECK(sao_plugins_pyhost_get_manifest(stale_plugin) == nullptr);
+        CHECK(sao_plugins_pyhost_get_sdk_context(stale_plugin) == nullptr);
+        char* stale_error = reinterpret_cast<char*>(std::uintptr_t{1});
+        CHECK(sao_plugins_pyhost_get_last_error(stale_plugin, &stale_error) ==
+              SAO_ERR_HANDLE_INVALID);
+        CHECK(stale_error == nullptr);
+        CHECK(sao_plugins_pyhost_unload_plugin(stale_plugin) == SAO_ERR_HANDLE_INVALID);
+
+        py_plugin_handle_t replacement_plugin = nullptr;
+        REQUIRE(sao_plugins_pyhost_load_plugin(direct_host, context_tree.root.c_str(), "plugin.py",
+                                               "adapter_context", &external_context,
+                                               &replacement_plugin) == SAO_OK);
+        REQUIRE(replacement_plugin != nullptr);
+        CHECK(replacement_plugin != stale_plugin);
+        REQUIRE(sao_plugins_pyhost_call_on_load(replacement_plugin) == SAO_OK);
+        REQUIRE(sao_plugins_pyhost_unload_plugin(replacement_plugin) == SAO_OK);
     }
     CHECK(external_context.ctx_impl != nullptr);
     CHECK(external_context.abi_version == SAO_SDK_ABI_VERSION);
@@ -2309,6 +2431,183 @@ def on_load(ctx):
     REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
 }
 #endif
+
+TEST_CASE("Python panel and hotkey registration failures roll back every ledger",
+          "[plugins][python][bridge][registration][transaction]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+    py_host_config config = production_config();
+    py_host_handle_t host = nullptr;
+    REQUIRE(sao_plugins_pyhost_init(&config, &host) == SAO_OK);
+    REQUIRE(host != nullptr);
+
+    NativeBridgeTeardownProbe probe;
+    probe.fail_panel_register = true;
+    probe.fail_hotkey_register = true;
+    probe.fail_panel_unregister = false;
+    probe.fail_hotkey_unregister = false;
+    NativeBridgeTeardownProbeScope probe_scope(probe);
+    SaoSdkContext external_context{};
+    REQUIRE(sao_sdk_bind_context("native_bridge_registration_transaction", "1.0",
+                                 &external_context) == SAO_SDK_OK);
+    auto provider = probe.provider();
+    REQUIRE(sao_sdk_context_bind_provider(&external_context, &provider) == SAO_SDK_OK);
+    const auto ui = bridge_test_ui_table();
+    const auto hotkey = bridge_test_hotkey_table();
+    external_context.ui = &ui;
+    external_context.hotkey = &hotkey;
+
+    TempTree tree(L"native_bridge_registration_transaction");
+    write_text(tree.root / L"plugin.py", R"PY(
+context = None
+errors = []
+
+def failed_callback(*args):
+    return None
+
+def retry_callback(*args):
+    return None
+
+def on_load(ctx):
+    global context
+    context = ctx
+    try:
+        ctx.register_ui_panel("transaction.panel", {"kind": "panel"}, None, failed_callback)
+    except RuntimeError:
+        errors.append("panel")
+    try:
+        ctx.add_hotkey("transaction.hotkey", failed_callback, "Ctrl+F11", "Transaction")
+    except RuntimeError:
+        errors.append("hotkey")
+
+def retry():
+    context.register_ui_panel("transaction.panel", {"kind": "panel"}, None, retry_callback)
+    context.add_hotkey("transaction.hotkey", retry_callback, "Ctrl+F11", "Transaction")
+)PY");
+    (void)make_manifest(tree, "native_bridge_registration_transaction");
+
+    py_plugin_handle_t plugin = nullptr;
+    {
+        GilGuard gil;
+        REQUIRE(sao_plugins_pyhost_load_plugin(host, tree.root.c_str(), "plugin.py",
+                                               "native_bridge_registration_transaction",
+                                               &external_context, &plugin) == SAO_OK);
+        REQUIRE(plugin != nullptr);
+        REQUIRE(sao_plugins_pyhost_call_on_load(plugin) == SAO_OK);
+        PyObject* module = loaded_module("native_bridge_registration_transaction");
+        REQUIRE(module != nullptr);
+        PyObject* context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_bridge_ledger_size(context, "panels", 0);
+        require_bridge_ledger_size(context, "hotkeys", 0);
+        require_bridge_ledger_size(context, "callback_refs", 0);
+        CHECK_FALSE(probe.panel_registered);
+        CHECK_FALSE(probe.hotkey_registered);
+
+        PyObject* errors = PyObject_GetAttrString(module, "errors");
+        REQUIRE(errors != nullptr);
+        REQUIRE(PyList_Check(errors));
+        CHECK(PyList_GET_SIZE(errors) == 2);
+        Py_DECREF(errors);
+
+        PyObject* weakref_module = PyImport_ImportModule("weakref");
+        REQUIRE(weakref_module != nullptr);
+        PyObject* weakref_ref = PyObject_GetAttrString(weakref_module, "ref");
+        Py_DECREF(weakref_module);
+        REQUIRE(weakref_ref != nullptr);
+        PyObject* failed_callback = PyObject_GetAttrString(module, "failed_callback");
+        REQUIRE(failed_callback != nullptr);
+        PyObject* failed_callback_weakref = PyObject_CallOneArg(weakref_ref, failed_callback);
+        Py_DECREF(failed_callback);
+        Py_DECREF(weakref_ref);
+        REQUIRE(failed_callback_weakref != nullptr);
+        REQUIRE(PyObject_DelAttrString(module, "failed_callback") == 0);
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(failed_callback_weakref) == Py_None);
+        Py_DECREF(failed_callback_weakref);
+
+        probe.fail_panel_register = false;
+        probe.fail_hotkey_register = false;
+        PyObject* retry = PyObject_GetAttrString(module, "retry");
+        REQUIRE(retry != nullptr);
+        PyObject* retry_result = PyObject_CallNoArgs(retry);
+        Py_DECREF(retry);
+        REQUIRE(retry_result != nullptr);
+        Py_DECREF(retry_result);
+        require_bridge_ledger_size(context, "panels", 1);
+        require_bridge_ledger_size(context, "hotkeys", 1);
+        require_bridge_ledger_size(context, "callback_refs", 2);
+        CHECK(probe.panel_registered);
+        CHECK(probe.hotkey_registered);
+        Py_DECREF(context);
+
+        REQUIRE(sao_plugins_pyhost_unload_plugin(plugin) == SAO_OK);
+        plugin = nullptr;
+    }
+
+    CHECK_FALSE(probe.panel_registered);
+    CHECK_FALSE(probe.hotkey_registered);
+    CHECK(probe.panel_unregister_calls == 1);
+    CHECK(probe.hotkey_unregister_calls == 1);
+    REQUIRE(sao_sdk_context_try_destroy(&external_context) == SAO_SDK_OK);
+    CHECK(probe.retain_calls == probe.release_calls);
+    REQUIRE(sao_plugins_pyhost_shutdown(host) == SAO_OK);
+}
+
+TEST_CASE("PluginContext dealloc inside its callback defers bridge finalization",
+          "[plugins][python][bridge][dealloc][busy]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+    py_host_config config = production_config();
+    py_host_handle_t host = nullptr;
+    REQUIRE(sao_plugins_pyhost_init(&config, &host) == SAO_OK);
+    REQUIRE(host != nullptr);
+
+    NativeBridgeTeardownProbe probe;
+    probe.fail_hotkey_unregister = false;
+    NativeBridgeTeardownProbeScope probe_scope(probe);
+    SaoSdkContext external_context{};
+    REQUIRE(sao_sdk_bind_context("native_bridge_dealloc_busy", "1.0", &external_context) ==
+            SAO_SDK_OK);
+    auto provider = probe.provider();
+    REQUIRE(sao_sdk_context_bind_provider(&external_context, &provider) == SAO_SDK_OK);
+    const auto hotkey = bridge_test_hotkey_table();
+    external_context.hotkey = &hotkey;
+
+    {
+        GilGuard gil;
+        void* context = nullptr;
+        REQUIRE(sao_plugins_pyhost_wrap_ctx(&external_context, &context) == SAO_OK);
+        REQUIRE(context != nullptr);
+        g_dealloc_context = context;
+        g_dealloc_callback_completed.store(false);
+
+        PyObject* callback = PyCFunction_NewEx(&g_dealloc_method, nullptr, nullptr);
+        REQUIRE(callback != nullptr);
+        PyObject* add_hotkey =
+            PyObject_GetAttrString(reinterpret_cast<PyObject*>(context), "add_hotkey");
+        REQUIRE(add_hotkey != nullptr);
+        PyObject* registration = PyObject_CallFunction(add_hotkey, "sOss", "dealloc.hotkey",
+                                                       callback, "Ctrl+F10", "Dealloc");
+        Py_DECREF(add_hotkey);
+        Py_DECREF(callback);
+        REQUIRE(registration != nullptr);
+        Py_DECREF(registration);
+        CHECK(probe.hotkey_registered);
+        REQUIRE(probe.hotkey_callback != nullptr);
+
+        probe.hotkey_callback(2001, probe.hotkey_user_data);
+        CHECK(g_dealloc_callback_completed.load());
+        CHECK(g_dealloc_context == nullptr);
+        CHECK_FALSE(probe.hotkey_registered);
+        CHECK(probe.hotkey_unregister_calls == 1);
+        CHECK(probe.hotkey_callback == nullptr);
+        CHECK(probe.hotkey_user_data == nullptr);
+        (void)PyGC_Collect();
+    }
+
+    REQUIRE(sao_sdk_context_try_destroy(&external_context) == SAO_SDK_OK);
+    CHECK(probe.retain_calls == probe.release_calls);
+    REQUIRE(sao_plugins_pyhost_shutdown(host) == SAO_OK);
+}
 
 TEST_CASE("Python native bridge teardown retries every failed unregister transactionally",
           "[plugins][python][bridge][teardown][retry]") {
