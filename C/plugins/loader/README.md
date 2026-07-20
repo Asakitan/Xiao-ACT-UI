@@ -41,7 +41,7 @@ UI panel / hotkey / data source 全部通过 SDK ABI 反向注册 (见
 ``sao_plugins_lifecycle_register_host_adapter(language, vtable)`` 注册自己
 的适配器。loader 里没有任何 ``if (language == python) …`` 分支。
 
-## Entity provider/root ABI（W21-B3c-D2）
+## Entity provider/root ABI
 
 ``entity_provider.h`` 提供 adapter-neutral ``context_entity_provider_descriptor``，可携带
 一个 descriptor-owned ``entity_root_contribution_descriptor``。脚本 host 只能在 canonical

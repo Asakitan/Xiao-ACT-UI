@@ -91,7 +91,6 @@ struct owned_provider_snapshot {
     uint64_t generation = 0;
     uint64_t revision = 0;
     uint32_t snapshot_abi_version = 0;
-    entity_snapshot_content_token_t producer_content_token = kInvalidEntitySnapshotContentToken;
     entity_snapshot_content_token_t content_token = kInvalidEntitySnapshotContentToken;
     size_t string_bytes = 0;
     std::vector<owned_entity_row> rows;
@@ -593,15 +592,17 @@ class content_hasher final {
     }
 
     void add_u32(uint32_t value) noexcept {
-        add_bytes(&value, sizeof(value));
+        for (uint32_t shift = 0; shift < 32; shift += 8)
+            add_u8(static_cast<uint8_t>(value >> shift));
     }
 
     void add_u64(uint64_t value) noexcept {
-        add_bytes(&value, sizeof(value));
+        for (uint32_t shift = 0; shift < 64; shift += 8)
+            add_u8(static_cast<uint8_t>(value >> shift));
     }
 
     void add_double(double value) noexcept {
-        add_u64(std::bit_cast<uint64_t>(value));
+        add_u64(value == 0.0 ? 0 : std::bit_cast<uint64_t>(value));
     }
 
     void add_string(std::string_view value) noexcept {
@@ -642,32 +643,27 @@ void hash_row(content_hasher& hasher, const owned_entity_row& row) noexcept {
 entity_snapshot_content_token_t
 compute_provider_content_token(const owned_provider_snapshot& snapshot) noexcept {
     content_hasher hasher;
-    hasher.add_u32(snapshot.snapshot_abi_version);
-    hasher.add_u64(snapshot.producer_content_token);
     hasher.add_string(snapshot.provider_id);
     hasher.add_string(snapshot.owner_plugin_id);
     hasher.add_u64(snapshot.generation);
-    hasher.add_u64(snapshot.revision);
     hasher.add_u64(static_cast<uint64_t>(snapshot.rows.size()));
     for (const auto& row : snapshot.rows)
         hash_row(hasher, row);
-    hasher.add_u8(static_cast<uint8_t>(snapshot.has_root_contribution));
+    hasher.add_u64(snapshot.has_root_contribution ? 1 : 0);
     if (snapshot.has_root_contribution) {
         hasher.add_string(snapshot.contribution_id);
         hasher.add_string(snapshot.root_id);
         hasher.add_string(snapshot.root_name);
         hasher.add_string(snapshot.root_icon);
         hasher.add_double(snapshot.root_priority);
+        hasher.add_u64(static_cast<uint64_t>(snapshot.rows.size()));
     }
     return hasher.finish();
 }
 
 entity_snapshot_content_token_t
-compute_catalog_content_token(uint64_t revision,
-                              const std::vector<owned_provider_snapshot>& snapshots) noexcept {
+compute_catalog_content_token(const std::vector<owned_provider_snapshot>& snapshots) noexcept {
     content_hasher hasher;
-    hasher.add_u32(kEntitySnapshotAbiVersion2);
-    hasher.add_u64(revision);
     hasher.add_u64(static_cast<uint64_t>(snapshots.size()));
     for (const auto& snapshot : snapshots)
         hasher.add_u64(snapshot.content_token);
@@ -813,7 +809,6 @@ int32_t copy_provider_snapshot_v2(const std::shared_ptr<entity_provider_state>& 
             candidate.generation = state->generation;
             candidate.revision = first_revision;
             candidate.snapshot_abi_version = kEntitySnapshotAbiVersion2;
-            candidate.producer_content_token = first_content_token;
             candidate.has_root_contribution = state->has_root_contribution;
             candidate.contribution_id = state->contribution_id;
             candidate.root_id = state->root_id;
@@ -875,7 +870,6 @@ int32_t copy_provider_snapshot_v2(const std::shared_ptr<entity_provider_state>& 
         candidate.generation = state->generation;
         candidate.revision = second_revision;
         candidate.snapshot_abi_version = kEntitySnapshotAbiVersion2;
-        candidate.producer_content_token = second_content_token;
         candidate.has_root_contribution = state->has_root_contribution;
         candidate.contribution_id = state->contribution_id;
         candidate.root_id = state->root_id;
@@ -1565,7 +1559,7 @@ extern "C" int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_snapshot_v2(
                 sizeof(entity_provider_catalog_view_v2),
                 kEntitySnapshotAbiVersion2,
                 catalog_revision,
-                compute_catalog_content_token(catalog_revision, snapshots),
+                compute_catalog_content_token(snapshots),
                 static_cast<uint32_t>(provider_views.size()),
                 sizeof(entity_provider_view_v2),
                 provider_views.empty() ? nullptr : provider_views.data(),

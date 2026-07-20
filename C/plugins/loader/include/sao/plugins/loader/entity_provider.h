@@ -61,11 +61,13 @@ using entity_snapshot_callback_fn = int32_t(SAO_PLUGINS_CALL*)(entity_menu_row* 
 
 // The v2 producer protocol also probes and fills a physical row stride. Probe
 // calls use rows == nullptr, capacity == 0, and row_stride_bytes == 0. A
-// zero-row probe must return SAO_OK, a zero stride, and a nonzero content token.
+// zero-row probe must return SAO_OK, a zero stride, and a nonzero producer token.
 // Non-empty probes may return SAO_OK or SAO_ERR_BUFFER_TOO_SMALL and must report
 // an aligned stride large enough for the v2 row required prefix. Fill receives
-// the probed count and stride and must reproduce count, revision, content token,
-// and stride exactly. Borrowed row strings follow the v1 snapshot lifetime.
+// the probed count and stride and must reproduce count, revision, producer token,
+// and stride exactly. The producer token is only a probe/fill consistency guard;
+// it is not exposed as the loader-derived canonical output content_token.
+// Borrowed row strings follow the v1 snapshot lifetime.
 using entity_snapshot_callback_v2_fn = int32_t(SAO_PLUGINS_CALL*)(
     void* rows, uint32_t capacity, uint32_t row_stride_bytes, uint32_t* out_count,
     uint64_t* out_revision, entity_snapshot_content_token_t* out_content_token,
@@ -82,8 +84,12 @@ struct native_entity_provider_descriptor {
     void* user_data;
 };
 
-// Native descriptor arrays are byte-packed. The loader advances each element
-// by that element's struct_size so append-only future tails remain iterable.
+// Native query descriptor arrays remain v1-only in this loader-first slice.
+// Native plugins that need Entity v2 can opt in through
+// sao_plugins_ctx_register_entity_provider_v2 during lifecycle callbacks; this
+// does not add a native v2 query-array format. Native v1 descriptor arrays are
+// byte-packed, and the loader advances each element by that element's
+// struct_size so append-only future tails remain iterable.
 
 // Adapter-neutral registration ABI. Script hosts register one provider per
 // dynamic root while the canonical plugin context is loading. Ownership,
@@ -146,7 +152,14 @@ static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize == 40);
 static_assert(kEntityRootContributionDescriptorRequiredPrefixSize == 48);
 static_assert(kContextEntityProviderDescriptorRequiredPrefixSize == 40);
 static_assert(kContextEntityProviderDescriptorV2RequiredPrefixSize == 40);
+static_assert(alignof(context_entity_provider_descriptor_v2) == 8);
 static_assert(sizeof(context_entity_provider_descriptor_v2) == 48);
+static_assert(offsetof(context_entity_provider_descriptor_v2, struct_size) == 0);
+static_assert(offsetof(context_entity_provider_descriptor_v2, provider_id_utf8) == 8);
+static_assert(offsetof(context_entity_provider_descriptor_v2, snapshot) == 16);
+static_assert(offsetof(context_entity_provider_descriptor_v2, action_handler) == 24);
+static_assert(offsetof(context_entity_provider_descriptor_v2, user_data) == 32);
+static_assert(offsetof(context_entity_provider_descriptor_v2, root_contribution) == 40);
 #endif
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider(
@@ -243,6 +256,11 @@ struct entity_provider_catalog_view_v2 {
     const void* root_contributions;
 };
 
+// Loader-produced v2 stride fields always report the documented known element
+// size, including when the corresponding count is zero and data pointer is
+// null. Producer-side future tails are accepted through the input stride, but
+// loader output copies and exposes only the known v2 prefix.
+
 // v1 output ABI contract: the catalog is a singleton whose struct_size may be
 // interpreted by required prefix. Providers, root contributions, rows, and
 // actions are typed fixed-stride arrays with frozen v1 element layouts. A
@@ -301,24 +319,115 @@ static_assert(kEntityProviderViewRequiredPrefixSize == 56);
 static_assert(kEntityRootContributionViewRequiredPrefixSize == 72);
 static_assert(kEntityRootActionRefViewRequiredPrefixSize == 24);
 static_assert(kEntityMenuRowRequiredPrefixSize == 75);
+
 static_assert(kEntityProviderCatalogViewV2RequiredPrefixSize == 56);
+static_assert(alignof(entity_provider_catalog_view_v2) == 8);
 static_assert(sizeof(entity_provider_catalog_view_v2) == 56);
+static_assert(offsetof(entity_provider_catalog_view_v2, struct_size) == 0);
+static_assert(offsetof(entity_provider_catalog_view_v2, abi_version) == 4);
+static_assert(offsetof(entity_provider_catalog_view_v2, revision) == 8);
+static_assert(offsetof(entity_provider_catalog_view_v2, content_token) == 16);
+static_assert(offsetof(entity_provider_catalog_view_v2, provider_count) == 24);
+static_assert(offsetof(entity_provider_catalog_view_v2, provider_stride_bytes) == 28);
+static_assert(offsetof(entity_provider_catalog_view_v2, providers) == 32);
+static_assert(offsetof(entity_provider_catalog_view_v2, root_contribution_count) == 40);
+static_assert(offsetof(entity_provider_catalog_view_v2, root_contribution_stride_bytes) == 44);
+static_assert(offsetof(entity_provider_catalog_view_v2, root_contributions) == 48);
+
 static_assert(kEntityProviderViewV2RequiredPrefixSize == 64);
+static_assert(alignof(entity_provider_view_v2) == 8);
 static_assert(sizeof(entity_provider_view_v2) == 64);
+static_assert(offsetof(entity_provider_view_v2, struct_size) == 0);
+static_assert(offsetof(entity_provider_view_v2, snapshot_abi_version) == 4);
+static_assert(offsetof(entity_provider_view_v2, provider_id_utf8) == 8);
+static_assert(offsetof(entity_provider_view_v2, owner_plugin_id_utf8) == 16);
+static_assert(offsetof(entity_provider_view_v2, generation) == 24);
+static_assert(offsetof(entity_provider_view_v2, revision) == 32);
+static_assert(offsetof(entity_provider_view_v2, content_token) == 40);
+static_assert(offsetof(entity_provider_view_v2, row_count) == 48);
+static_assert(offsetof(entity_provider_view_v2, row_stride_bytes) == 52);
+static_assert(offsetof(entity_provider_view_v2, rows) == 56);
+
 static_assert(kEntityRootContributionViewV2RequiredPrefixSize == 72);
+static_assert(alignof(entity_root_contribution_view_v2) == 8);
 static_assert(sizeof(entity_root_contribution_view_v2) == 72);
+static_assert(offsetof(entity_root_contribution_view_v2, struct_size) == 0);
+static_assert(offsetof(entity_root_contribution_view_v2, owner_plugin_id_utf8) == 8);
+static_assert(offsetof(entity_root_contribution_view_v2, contribution_id_utf8) == 16);
+static_assert(offsetof(entity_root_contribution_view_v2, root_id_utf8) == 24);
+static_assert(offsetof(entity_root_contribution_view_v2, name_utf8) == 32);
+static_assert(offsetof(entity_root_contribution_view_v2, icon_utf8) == 40);
+static_assert(offsetof(entity_root_contribution_view_v2, priority) == 48);
+static_assert(offsetof(entity_root_contribution_view_v2, action_count) == 56);
+static_assert(offsetof(entity_root_contribution_view_v2, action_stride_bytes) == 60);
+static_assert(offsetof(entity_root_contribution_view_v2, actions) == 64);
+
 static_assert(kEntityRootActionRefViewV2RequiredPrefixSize == 24);
+static_assert(alignof(entity_root_action_ref_view_v2) == 8);
 static_assert(sizeof(entity_root_action_ref_view_v2) == 24);
+static_assert(offsetof(entity_root_action_ref_view_v2, struct_size) == 0);
+static_assert(offsetof(entity_root_action_ref_view_v2, provider_id_utf8) == 8);
+static_assert(offsetof(entity_root_action_ref_view_v2, action_id_utf8) == 16);
+
 static_assert(kEntityMenuRowV2RequiredPrefixSize == 75);
+static_assert(alignof(entity_menu_row_v2) == 8);
 static_assert(sizeof(entity_menu_row_v2) == 80);
+static_assert(offsetof(entity_menu_row_v2, struct_size) == 0);
+static_assert(offsetof(entity_menu_row_v2, category_id_utf8) == 8);
+static_assert(offsetof(entity_menu_row_v2, category_label_utf8) == 16);
+static_assert(offsetof(entity_menu_row_v2, category_icon_utf8) == 24);
+static_assert(offsetof(entity_menu_row_v2, category_priority) == 32);
+static_assert(offsetof(entity_menu_row_v2, row_label_utf8) == 40);
+static_assert(offsetof(entity_menu_row_v2, row_icon_utf8) == 48);
+static_assert(offsetof(entity_menu_row_v2, action_id_utf8) == 56);
+static_assert(offsetof(entity_menu_row_v2, payload_json_utf8) == 64);
+static_assert(offsetof(entity_menu_row_v2, can_activate) == 72);
+static_assert(offsetof(entity_menu_row_v2, keep_menu_open) == 73);
+static_assert(offsetof(entity_menu_row_v2, close_menu_before) == 74);
+static_assert(offsetof(entity_menu_row_v2, reserved) == 75);
+static_assert(sizeof(entity_menu_row_v2) == sizeof(entity_menu_row));
+static_assert(alignof(entity_menu_row_v2) == alignof(entity_menu_row));
+static_assert(offsetof(entity_menu_row_v2, struct_size) == offsetof(entity_menu_row, struct_size));
+static_assert(offsetof(entity_menu_row_v2, category_id_utf8) ==
+              offsetof(entity_menu_row, category_id_utf8));
+static_assert(offsetof(entity_menu_row_v2, category_label_utf8) ==
+              offsetof(entity_menu_row, category_label_utf8));
+static_assert(offsetof(entity_menu_row_v2, category_icon_utf8) ==
+              offsetof(entity_menu_row, category_icon_utf8));
+static_assert(offsetof(entity_menu_row_v2, category_priority) ==
+              offsetof(entity_menu_row, category_priority));
+static_assert(offsetof(entity_menu_row_v2, row_label_utf8) ==
+              offsetof(entity_menu_row, row_label_utf8));
+static_assert(offsetof(entity_menu_row_v2, row_icon_utf8) ==
+              offsetof(entity_menu_row, row_icon_utf8));
+static_assert(offsetof(entity_menu_row_v2, action_id_utf8) ==
+              offsetof(entity_menu_row, action_id_utf8));
+static_assert(offsetof(entity_menu_row_v2, payload_json_utf8) ==
+              offsetof(entity_menu_row, payload_json_utf8));
+static_assert(offsetof(entity_menu_row_v2, can_activate) ==
+              offsetof(entity_menu_row, can_activate));
+static_assert(offsetof(entity_menu_row_v2, keep_menu_open) ==
+              offsetof(entity_menu_row, keep_menu_open));
+static_assert(offsetof(entity_menu_row_v2, close_menu_before) ==
+              offsetof(entity_menu_row, close_menu_before));
+static_assert(offsetof(entity_menu_row_v2, reserved) == offsetof(entity_menu_row, reserved));
 #endif
 
+// Output catalog views are borrowed snapshots. The catalog and every pointer
+// reachable from it are valid only while the corresponding callback executes;
+// callers must copy any data that needs to outlive the callback.
 using entity_provider_catalog_callback =
     int32_t(SAO_PLUGINS_CALL*)(const entity_provider_catalog_view* catalog, void* user_data);
 
-// Loader-derived v2 content tokens are deterministic, pointer-independent
-// non-cryptographic hashes. They are suitable only for equality/change checks;
-// callers must account for the theoretical possibility of collisions.
+// Loader-derived v2 content_token values are canonical identities of copied
+// known content. A provider token covers provider/owner identity, generation,
+// every copied known row field and flag, row/root counts, and copied root
+// metadata. It excludes provider revision, the producer consistency token, and
+// the producer snapshot ABI version. A catalog token covers the ordered
+// provider canonical tokens and provider count, and excludes catalog revision.
+// Tokens are deterministic, pointer-independent, nonzero, non-cryptographic
+// hashes suitable only for equality/change checks; callers must account for the
+// theoretical possibility of collisions.
 using entity_provider_catalog_callback_v2 =
     int32_t(SAO_PLUGINS_CALL*)(const entity_provider_catalog_view_v2* catalog, void* user_data);
 

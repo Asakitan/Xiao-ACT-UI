@@ -5,7 +5,7 @@
 //   - sao_plugins_pyhost_shutdown : Py_Finalize + 释放 handle
 //   - sao_plugins_pyhost_version : Py_GetVersion 字符串直接透传
 //   - sao_plugins_pyhost_available : PYTHON_HOME 探测
-//   - sao_plugins_pyhost_load_plugin : 用 W1c compat 读 manifest → W4b sys.path
+//   - sao_plugins_pyhost_load_plugin : 用 manifest compatibility 读取配置 → sys.path probe
 //     前插 libs/vendor → wrap_ctx → import 模块 → 抽 hook 函数
 //   - sao_plugins_pyhost_call_on_load / on_enable / on_disable / on_unload
 //   - sao_plugins_pyhost_unload_plugin : DECREF module + hook, 从 sys.modules 删
@@ -17,7 +17,7 @@
 // 关键设计:
 //   - 每个 py_plugin_handle_t 拥有: manifest 副本 + ctx PyObject + module PyObject
 //     + hook function PyObjects (on_load/on_enable/on_disable/on_unload)
-//   - "老插件不改一个字" 靠 W1c + W4b + sao_sdk 内置模块 三层配合;
+//   - "老插件不改一个字" 靠 manifest compatibility + sys.path probe + sao_sdk 内置模块三层配合;
 //     即使 on_load 抛异常 (缺依赖 / 缺游戏状态) 我们记 traceback 返回给宿主, 不 crash
 //   - sys.path 修改用"记录旧值 → 前插 → unload 时 pop"的对称模式, 避免污染
 
@@ -831,7 +831,7 @@ bool initialize_isolated_python(const py_host_config* cfg) {
 
 } // namespace
 
-// ── init / shutdown / version / available (W2c 原实装保留, 加 sao_sdk 挂载) ──
+// ── init / shutdown / version / available（保留宿主实现并挂载 sao_sdk）──
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_init(const py_host_config* cfg, py_host_handle_t* out_host) {
@@ -1042,7 +1042,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_load_plug
             return publish_status;
         plugin_published = true;
 
-        // 1. 读 manifest (compat W1c).
+        // 1. 通过 manifest compatibility 读取配置。
         std::wstring manifest_path = pl->plugin_dir_w;
         if (!manifest_path.empty() && manifest_path.back() != L'/' &&
             manifest_path.back() != L'\\') {
@@ -1115,7 +1115,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_load_plug
             }
         }
 
-        // 3. 前插 sys.path: plugin_dir + libs/ + vendor/ + engine/ (W4b probe).
+        // 3. 执行 sys.path probe：前插 plugin_dir + libs/ + vendor/ + engine/。
         prepend_sys_path(pl->plugin_dir_w, pl->inserted_sys_paths);
         sao::plugins::compat::discovered_deps_dirs deps;
         (void)sao::plugins::compat::sao_plugins_compat_libs_vendor_probe(pl->plugin_dir_w.c_str(),
