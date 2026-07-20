@@ -43,7 +43,7 @@ using the SDK to talk to the platform via the event bus + state store.
 | `core/`     | Runtime primitives (status/log/process/memory/window/…)   | `mem_probe/`, misc `sao_gui/` helpers |
 | `net/`      | Packet capture (Npcap), HTTP/WS/TLS clients               | `plugins/star_resonance_plugin/net/`  |
 | `engine/`   | Event bus, state store, UI spec, render hook (no game logic) | `act_platform/`                    |
-| `rt_io/`    | Game-agnostic kernel-IO bridge (main ↔ helper subprocess) | `mem_probe/rt_io.py`, `rt_io_proxy.py`|
+| `rt_io/`    | Game-agnostic kernel-IO bridge plus tokenized window RECT transactions (main ↔ helper subprocess) | `mem_probe/rt_io.py`, `rt_io_proxy.py`|
 | `ui/`       | Overlay host, compositor, widget kit, theme               | `render/`, `ui_gpu/`, `sao_theme/`    |
 | `sdk/`      | Single-header C ABI for plugins to link against           | `act_platform/plugins.py` surface     |
 | `scripting/`| Abstract `IScriptEngine` for 5 script hosts               | `act_platform/plugins.py` script side |
@@ -83,7 +83,7 @@ proceed if the ABI mismatches.
 | core        | `sao_core_abi_version()`     | 1.0     |
 | net         | `sao_net_abi_version()`      | 1.0     |
 | engine      | `sao_engine_abi_version()`   | 1.0     |
-| rt_io       | `sao_rt_io_abi_version()`    | 1.0     |
+| rt_io       | `sao_rt_io_abi_version()`    | 1.1     |
 | ui          | `sao_ui_abi_version()`       | 1.2     |
 | sdk         | `sao_sdk_abi_version()`      | 1.0     |
 | scripting   | `sao_scripting_abi_version()`| 1.0     |

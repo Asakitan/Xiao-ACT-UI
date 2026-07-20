@@ -312,29 +312,348 @@ if (SAO_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# Wave-specific implementation archives were temporary delivery scaffolding.
-# Their sources must live in stable production targets.  The repository naming
-# rule also forbids wave-named test executables; this legacy guard remains
-# narrowly scoped to temporary implementation libraries.  Fail during configure
-# if an implementation archive is reintroduced anywhere below the source root.
-function(sao_assert_no_wave_impl_libraries directory)
+# Iteration identifiers are delivery history, not feature names.  Configure
+# rejects them in persistent artifacts and build metadata while preserving the
+# published ABI aliases and the `w2s` world-to-screen domain abbreviation.
+set(_SAO_ITERATION_NAME_PATTERN
+    "(^|[^a-z0-9])(wave[0-9]+[a-z]?|w[0-9]+[a-z]?)([^a-z0-9]|$)")
+string(CONCAT _SAO_PUBLISHED_ITERATION_ABI_IDENTIFIER_PATTERN
+    "^sao_("
+    "(shell_crypter_wave8|(security_)?anti_debug_wave8|"
+    "security_anti_dump_wave8|security_shellcode_wave9|"
+    "rt_io_wave(12h|13e|13f))_[a-z0-9_]+"
+    "|engine_event_(wave5_callback_t|"
+    "bus_(create|subscribe|publish|publish_ex)_wave5))$")
+
+function(sao_value_has_iteration_name value out_has_iteration)
+    string(TOLOWER "${value}" _sao_candidate)
+    if (_sao_candidate MATCHES "${_SAO_ITERATION_NAME_PATTERN}")
+        set(${out_has_iteration} TRUE PARENT_SCOPE)
+    else()
+        set(${out_has_iteration} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(sao_is_published_iteration_abi value out_is_published_abi)
+    string(TOLOWER "${value}" _sao_value)
+    string(REGEX REPLACE "[^a-z0-9_]+" ";" _sao_identifiers "${_sao_value}")
+    set(_sao_has_iteration FALSE)
+    set(_sao_is_published TRUE)
+    foreach (_sao_identifier IN LISTS _sao_identifiers)
+        sao_value_has_iteration_name("${_sao_identifier}" _sao_identifier_has_iteration)
+        if (NOT _sao_identifier_has_iteration)
+            continue()
+        endif()
+        set(_sao_has_iteration TRUE)
+        if (NOT _sao_identifier MATCHES
+            "${_SAO_PUBLISHED_ITERATION_ABI_IDENTIFIER_PATTERN}")
+            set(_sao_is_published FALSE)
+            break()
+        endif()
+    endforeach()
+    if (NOT _sao_has_iteration)
+        set(_sao_is_published FALSE)
+    endif()
+    set(${out_is_published_abi} ${_sao_is_published} PARENT_SCOPE)
+endfunction()
+
+function(sao_assert_semantic_name value context allow_published_abi)
+    sao_value_has_iteration_name("${value}" _sao_has_iteration)
+    if (NOT _sao_has_iteration)
+        return()
+    endif()
+    if (allow_published_abi)
+        sao_is_published_iteration_abi("${value}" _sao_is_published_abi)
+        if (_sao_is_published_abi)
+            return()
+        endif()
+    endif()
+    message(FATAL_ERROR
+        "Iteration-named ${context} '${value}' is forbidden; use a semantic feature name")
+endfunction()
+
+function(sao_is_allowed_iteration_path relative_path out_is_allowed)
+    string(REPLACE "\\" "/" _sao_path "${relative_path}")
+    string(TOLOWER "${_sao_path}" _sao_path)
+    set(_sao_is_allowed FALSE)
+    if (_sao_path MATCHES
+        "^platform/gpu_hunt/(include/sao/gpu_hunt/w2s\\.h|src/w2s\\.cpp|tests/test_w2s\\.cpp)$")
+        set(_sao_is_allowed TRUE)
+    endif()
+    set(${out_is_allowed} ${_sao_is_allowed} PARENT_SCOPE)
+endfunction()
+
+function(sao_assert_no_iteration_artifact_paths root)
+    file(GLOB _sao_top_level_entries
+        LIST_DIRECTORIES TRUE
+        RELATIVE "${root}"
+        "${root}/*")
+    set(_sao_entries "")
+    foreach (_sao_top_level_entry IN LISTS _sao_top_level_entries)
+        string(TOLOWER "${_sao_top_level_entry}" _sao_top_level_entry_lower)
+        if (_sao_top_level_entry_lower MATCHES
+            "^(build|testing|cmakefiles|__pycache__|bin|obj|docs|\\.git|\\.vs|\\.cache)$" OR
+            _sao_top_level_entry_lower MATCHES
+            "^(plan\\.md|status\\.md|changelog\\.md)$")
+            continue()
+        endif()
+        list(APPEND _sao_entries "${_sao_top_level_entry}")
+        if (IS_DIRECTORY "${root}/${_sao_top_level_entry}")
+            file(GLOB_RECURSE _sao_nested_entries
+                LIST_DIRECTORIES TRUE
+                RELATIVE "${root}"
+                "${root}/${_sao_top_level_entry}/*")
+            list(APPEND _sao_entries ${_sao_nested_entries})
+        endif()
+    endforeach()
+    foreach (_sao_entry IN LISTS _sao_entries)
+        string(REPLACE "\\" "/" _sao_entry "${_sao_entry}")
+        string(TOLOWER "${_sao_entry}" _sao_entry_lower)
+        if (_sao_entry_lower MATCHES
+            "(^|/)(build|testing|cmakefiles|__pycache__|bin|obj|\\.git|\\.vs|\\.cache)(/|$)" OR
+            _sao_entry_lower MATCHES "^(docs/|plan\\.md$|status\\.md$|changelog\\.md$)")
+            continue()
+        endif()
+        sao_value_has_iteration_name("${_sao_entry}" _sao_has_iteration)
+        if (NOT _sao_has_iteration)
+            continue()
+        endif()
+        sao_is_allowed_iteration_path("${_sao_entry}" _sao_is_allowed)
+        if (NOT _sao_is_allowed)
+            message(FATAL_ERROR
+                "Iteration-named persistent artifact '${_sao_entry}' is forbidden; "
+                "rename the file or directory by feature")
+        endif()
+    endforeach()
+endfunction()
+
+function(sao_assert_no_iteration_cmake_source root)
+    file(GLOB _sao_top_level_entries
+        LIST_DIRECTORIES TRUE
+        RELATIVE "${root}"
+        "${root}/*")
+    set(_sao_cmake_files "")
+    foreach (_sao_top_level_entry IN LISTS _sao_top_level_entries)
+        string(TOLOWER "${_sao_top_level_entry}" _sao_top_level_entry_lower)
+        if (NOT IS_DIRECTORY "${root}/${_sao_top_level_entry}" OR
+            _sao_top_level_entry_lower MATCHES
+            "^(build|docs|testing|cmakefiles|__pycache__|bin|obj|\\.git|\\.vs|\\.cache)$")
+            continue()
+        endif()
+        file(GLOB_RECURSE _sao_nested_cmake_files
+            LIST_DIRECTORIES FALSE
+            RELATIVE "${root}"
+            "${root}/${_sao_top_level_entry}/CMakeLists.txt"
+            "${root}/${_sao_top_level_entry}/*.cmake")
+        list(APPEND _sao_cmake_files ${_sao_nested_cmake_files})
+    endforeach()
+    foreach (_sao_relative_file IN LISTS _sao_cmake_files)
+        string(REPLACE "\\" "/" _sao_relative_file "${_sao_relative_file}")
+        string(TOLOWER "${_sao_relative_file}" _sao_relative_file_lower)
+        if (_sao_relative_file_lower MATCHES "(^|/)(build|docs|testing)/")
+            continue()
+        endif()
+        file(STRINGS "${root}/${_sao_relative_file}" _sao_cmake_lines ENCODING UTF-8)
+        set(_sao_line_number 0)
+        set(_sao_metadata_command "")
+        set(_sao_set_property_is_compile_definitions FALSE)
+        foreach (_sao_line IN LISTS _sao_cmake_lines)
+            math(EXPR _sao_line_number "${_sao_line_number} + 1")
+            string(REGEX REPLACE "#.*$" "" _sao_code "${_sao_line}")
+            string(STRIP "${_sao_code}" _sao_code)
+            if (_sao_code STREQUAL "")
+                continue()
+            endif()
+            if (_sao_relative_file_lower STREQUAL "platform/gpu_hunt/cmakelists.txt")
+                string(REPLACE "src/w2s.cpp" "" _sao_code "${_sao_code}")
+            elseif (_sao_relative_file_lower STREQUAL
+                    "platform/gpu_hunt/tests/cmakelists.txt")
+                string(REPLACE "test_w2s.cpp" "" _sao_code "${_sao_code}")
+            endif()
+
+            if (_sao_code MATCHES
+                "^[ \t]*(target_compile_options|add_compile_options)\\(")
+                set(_sao_metadata_command "compile_options")
+                set(_sao_set_property_is_compile_definitions FALSE)
+            elseif (_sao_code MATCHES
+                "^[ \t]*(target_compile_definitions|add_compile_definitions)\\(")
+                set(_sao_metadata_command "compile_definitions")
+                set(_sao_set_property_is_compile_definitions FALSE)
+            elseif (_sao_code MATCHES "^[ \t]*set_property\\(")
+                set(_sao_metadata_command "set_property")
+                set(_sao_set_property_is_compile_definitions FALSE)
+            endif()
+            if (_sao_metadata_command STREQUAL "set_property" AND
+                _sao_code MATCHES
+                "(^|[ \t])(INTERFACE_)?COMPILE_DEFINITIONS([ \t)]|$)")
+                set(_sao_set_property_is_compile_definitions TRUE)
+            endif()
+            if (_sao_metadata_command STREQUAL "compile_options")
+                # `/W4`, `-W3`, and similar compiler warning switches are not
+                # iteration identifiers.
+                string(REGEX REPLACE "([/-])W[0-9]+" "" _sao_code "${_sao_code}")
+                string(REGEX REPLACE "([/-])w[0-9]+" "" _sao_code "${_sao_code}")
+            endif()
+
+            set(_sao_allow_published_abi FALSE)
+            if (_sao_metadata_command STREQUAL "compile_definitions" OR
+                _sao_set_property_is_compile_definitions)
+                set(_sao_allow_published_abi TRUE)
+            endif()
+            sao_assert_semantic_name(
+                "${_sao_code}"
+                "CMake metadata at ${_sao_relative_file}:${_sao_line_number}"
+                ${_sao_allow_published_abi})
+            if (NOT _sao_metadata_command STREQUAL "" AND
+                _sao_code MATCHES "\\)$")
+                set(_sao_metadata_command "")
+                set(_sao_set_property_is_compile_definitions FALSE)
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(sao_allowed_iteration_test_tag_limit relative_path tag out_limit)
+    string(REPLACE "\\" "/" _sao_path "${relative_path}")
+    string(TOLOWER "${_sao_path}" _sao_path)
+    string(TOLOWER "${tag}" _sao_tag)
+    set(_sao_limit 0)
+    if (_sao_path STREQUAL "platform/gpu_hunt/tests/test_w2s.cpp" AND
+            _sao_tag STREQUAL "w2s")
+        set(_sao_limit 5)
+    endif()
+    set(${out_limit} ${_sao_limit} PARENT_SCOPE)
+endfunction()
+
+function(sao_assert_no_iteration_test_tags root)
+    file(GLOB _sao_top_level_entries
+        LIST_DIRECTORIES TRUE
+        RELATIVE "${root}"
+        "${root}/*")
+    set(_sao_test_sources "")
+    foreach (_sao_top_level_entry IN LISTS _sao_top_level_entries)
+        string(TOLOWER "${_sao_top_level_entry}" _sao_top_level_entry_lower)
+        if (NOT IS_DIRECTORY "${root}/${_sao_top_level_entry}" OR
+            _sao_top_level_entry_lower MATCHES
+            "^(build|docs|testing|cmakefiles|__pycache__|bin|obj|\\.git|\\.vs|\\.cache)$")
+            continue()
+        endif()
+        file(GLOB_RECURSE _sao_nested_test_sources
+            LIST_DIRECTORIES FALSE
+            RELATIVE "${root}"
+            "${root}/${_sao_top_level_entry}/*.cc"
+            "${root}/${_sao_top_level_entry}/*.cpp"
+            "${root}/${_sao_top_level_entry}/*.cxx")
+        list(APPEND _sao_test_sources ${_sao_nested_test_sources})
+    endforeach()
+    foreach (_sao_test_source IN LISTS _sao_test_sources)
+        string(REPLACE "\\" "/" _sao_test_source "${_sao_test_source}")
+        string(TOLOWER "${_sao_test_source}" _sao_test_source_lower)
+        if (_sao_test_source_lower MATCHES "(^|/)(build|docs|testing)/" OR
+            NOT _sao_test_source_lower MATCHES "(^|/)tests?/")
+            continue()
+        endif()
+        file(READ "${root}/${_sao_test_source}" _sao_test_source_text)
+        string(TOLOWER "${_sao_test_source_text}" _sao_test_source_text)
+        string(REGEX MATCHALL
+            "\\[(wave[0-9]+[a-z]?|w[0-9]+[a-z]?)\\]"
+            _sao_iteration_tags
+            "${_sao_test_source_text}")
+        set(_sao_seen_tags "")
+        foreach (_sao_tag_match IN LISTS _sao_iteration_tags)
+            string(REGEX REPLACE "^\\[|\\]$" "" _sao_tag "${_sao_tag_match}")
+            string(TOLOWER "${_sao_tag}" _sao_tag)
+            list(APPEND _sao_seen_tags "${_sao_tag}")
+            sao_allowed_iteration_test_tag_limit(
+                "${_sao_test_source}" "${_sao_tag}" _sao_allowed_limit)
+            if (_sao_allowed_limit EQUAL 0)
+                message(FATAL_ERROR
+                    "Iteration-named Catch2 tag '[${_sao_tag}]' in "
+                    "${_sao_test_source} is forbidden; use a semantic tag")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _sao_seen_tags)
+        foreach (_sao_seen_tag IN LISTS _sao_seen_tags)
+            set(_sao_tag_count 0)
+            foreach (_sao_tag_match IN LISTS _sao_iteration_tags)
+                string(REGEX REPLACE "^\\[|\\]$" "" _sao_tag "${_sao_tag_match}")
+                string(TOLOWER "${_sao_tag}" _sao_tag)
+                if (_sao_tag STREQUAL _sao_seen_tag)
+                    math(EXPR _sao_tag_count "${_sao_tag_count} + 1")
+                endif()
+            endforeach()
+            sao_allowed_iteration_test_tag_limit(
+                "${_sao_test_source}" "${_sao_seen_tag}" _sao_allowed_limit)
+            if (_sao_tag_count GREATER _sao_allowed_limit)
+                message(FATAL_ERROR
+                    "New iteration-named Catch2 tag '[${_sao_seen_tag}]' in "
+                    "${_sao_test_source} exceeds the allowed domain baseline")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(sao_assert_no_iteration_metadata directory)
     get_property(_sao_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
     foreach (_sao_target IN LISTS _sao_targets)
-        get_target_property(_sao_target_type "${_sao_target}" TYPE)
-        if (_sao_target MATCHES "(^|_)wave[0-9]+[A-Za-z0-9_]*_impl$" AND
-            _sao_target_type MATCHES "^(STATIC|OBJECT|INTERFACE)_LIBRARY$")
-            message(FATAL_ERROR
-                "Temporary wave implementation library '${_sao_target}' is forbidden; "
-                "merge its sources into a stable production target")
-        endif()
+        sao_assert_semantic_name("${_sao_target}" "CMake target" FALSE)
+        foreach (_sao_definition_property IN ITEMS
+                COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
+            get_target_property(
+                _sao_definitions "${_sao_target}" "${_sao_definition_property}")
+            if (_sao_definitions AND NOT _sao_definitions MATCHES "-NOTFOUND$")
+                foreach (_sao_definition IN LISTS _sao_definitions)
+                    sao_assert_semantic_name(
+                        "${_sao_definition}"
+                        "compile definition on target ${_sao_target}"
+                        TRUE)
+                endforeach()
+            endif()
+        endforeach()
+    endforeach()
+
+    get_property(_sao_directory_definitions
+        DIRECTORY "${directory}" PROPERTY COMPILE_DEFINITIONS)
+    foreach (_sao_definition IN LISTS _sao_directory_definitions)
+        sao_assert_semantic_name(
+            "${_sao_definition}" "directory compile definition" TRUE)
+    endforeach()
+
+    get_property(_sao_tests DIRECTORY "${directory}" PROPERTY TESTS)
+    foreach (_sao_test IN LISTS _sao_tests)
+        sao_assert_semantic_name("${_sao_test}" "CTest test" FALSE)
+        get_property(_sao_labels
+            TEST "${_sao_test}" DIRECTORY "${directory}" PROPERTY LABELS)
+        foreach (_sao_label IN LISTS _sao_labels)
+            sao_assert_semantic_name(
+                "${_sao_label}" "CTest label on ${_sao_test}" FALSE)
+        endforeach()
     endforeach()
 
     get_property(_sao_subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
     foreach (_sao_subdirectory IN LISTS _sao_subdirectories)
-        sao_assert_no_wave_impl_libraries("${_sao_subdirectory}")
+        file(RELATIVE_PATH _sao_relative_subdirectory
+            "${CMAKE_SOURCE_DIR}" "${_sao_subdirectory}")
+        string(REPLACE "\\" "/" _sao_relative_subdirectory
+            "${_sao_relative_subdirectory}")
+        string(TOLOWER "${_sao_relative_subdirectory}"
+            _sao_relative_subdirectory_lower)
+        if (_sao_relative_subdirectory_lower MATCHES "^\\.\\." OR
+            _sao_relative_subdirectory_lower MATCHES "^(build|docs|testing)/")
+            continue()
+        endif()
+        sao_assert_no_iteration_metadata("${_sao_subdirectory}")
     endforeach()
 endfunction()
 
+# Keep the documented legacy entry point while applying the broader audit.
+function(sao_assert_no_wave_impl_libraries directory)
+    sao_assert_no_iteration_metadata("${directory}")
+endfunction()
+
+sao_assert_no_iteration_artifact_paths("${CMAKE_SOURCE_DIR}")
+sao_assert_no_iteration_cmake_source("${CMAKE_SOURCE_DIR}")
+sao_assert_no_iteration_test_tags("${CMAKE_SOURCE_DIR}")
 sao_assert_no_wave_impl_libraries("${CMAKE_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
