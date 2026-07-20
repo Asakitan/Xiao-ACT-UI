@@ -195,17 +195,6 @@ wchar_t* duplicate_wstring(const std::wstring& value) noexcept {
     }
 }
 
-bool valid_json(const char* text, json& output) {
-    if (text == nullptr)
-        return false;
-    try {
-        output = json::parse(text);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
 template <typename T>
 int32_t copy_external_entity_struct(const T* source, size_t required_prefix_size, T& out) noexcept {
     if (source == nullptr)
@@ -226,8 +215,8 @@ int32_t copy_external_entity_struct(const T* source, size_t required_prefix_size
 #endif
 }
 
-bool bounded_entity_provider_id_length(const char* value, size_t maximum_bytes,
-                                       size_t& out_length) noexcept {
+bool bounded_c_string_length(const char* value, size_t maximum_bytes,
+                             size_t& out_length) noexcept {
     if (value == nullptr)
         return false;
 #if defined(_MSC_VER)
@@ -236,7 +225,7 @@ bool bounded_entity_provider_id_length(const char* value, size_t maximum_bytes,
         size_t length = 0;
         while (length <= maximum_bytes && value[length] != '\0')
             ++length;
-        if (length == 0 || length > maximum_bytes)
+        if (length > maximum_bytes)
             return false;
         out_length = length;
         return true;
@@ -247,7 +236,7 @@ bool bounded_entity_provider_id_length(const char* value, size_t maximum_bytes,
 #endif
 }
 
-bool copy_entity_provider_id_bytes(char* destination, const char* source, size_t size) noexcept {
+bool copy_c_string_bytes(char* destination, const char* source, size_t size) noexcept {
 #if defined(_MSC_VER)
     __try {
 #endif
@@ -260,7 +249,7 @@ bool copy_entity_provider_id_bytes(char* destination, const char* source, size_t
 #endif
 }
 
-bool valid_entity_provider_id_utf8(std::string_view value) noexcept {
+bool valid_utf8(std::string_view value) noexcept {
     size_t offset = 0;
     while (offset < value.size()) {
         const auto first = static_cast<unsigned char>(value[offset]);
@@ -302,14 +291,120 @@ bool valid_entity_provider_id_utf8(std::string_view value) noexcept {
     return true;
 }
 
+constexpr size_t kMaximumContextJsonBytes = 1024 * 1024;
+constexpr size_t kMaximumJsonNestingDepth = 64;
+constexpr size_t kMaximumJsonNodes = 16384;
+
+class bounded_context_json_sax final : public json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_node();
+    }
+    bool number_float(number_float_t value, const string_t&) override {
+        return std::isfinite(value) && consume_node();
+    }
+    bool string(string_t&) override {
+        return consume_node();
+    }
+    bool binary(binary_t&) override {
+        return consume_node();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t&) override {
+        return true;
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumJsonNodes)
+            return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumJsonNestingDepth || !consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0)
+            return false;
+        --depth_;
+        return true;
+    }
+
+    size_t depth_ = 0;
+    size_t nodes_ = 0;
+};
+
+struct parsed_context_json {
+    std::string text;
+    json value;
+};
+
+bool parse_context_json(const char* text, parsed_context_json& output,
+                        bool allow_empty = false) noexcept {
+    if (text == nullptr)
+        return false;
+    try {
+        size_t length = 0;
+        if (!bounded_c_string_length(text, kMaximumContextJsonBytes, length))
+            return false;
+        std::string candidate_text(length, '\0');
+        if (length > 0 && !copy_c_string_bytes(candidate_text.data(), text, length))
+            return false;
+        if (!valid_utf8(candidate_text))
+            return false;
+        if (candidate_text.empty()) {
+            if (!allow_empty)
+                return false;
+            output = {std::move(candidate_text), json{}};
+            return true;
+        }
+        bounded_context_json_sax sax;
+        if (!json::sax_parse(candidate_text.begin(), candidate_text.end(), &sax))
+            return false;
+        auto candidate_value = json::parse(candidate_text.begin(), candidate_text.end());
+        output = {std::move(candidate_text), std::move(candidate_value)};
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 int32_t copy_entity_provider_id(const char* value, std::string& out) {
     constexpr size_t kMaximumEntityProviderIdBytes = 16 * 1024;
     size_t length = 0;
-    if (!bounded_entity_provider_id_length(value, kMaximumEntityProviderIdBytes, length))
+    if (!bounded_c_string_length(value, kMaximumEntityProviderIdBytes, length) || length == 0)
         return SAO_ERR_INVALID_ARGUMENT;
     std::string candidate(length, '\0');
-    if (!copy_entity_provider_id_bytes(candidate.data(), value, length) ||
-        !valid_entity_provider_id_utf8(candidate)) {
+    if (!copy_c_string_bytes(candidate.data(), value, length) || !valid_utf8(candidate)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     out = std::move(candidate);
@@ -993,9 +1088,10 @@ int32_t add_extension(plugin_context_t* ctx, extension_kind kind, const char* id
     if (ctx == nullptr || id == nullptr || id[0] == '\0' || payload == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     try {
-        json parsed;
-        if (!valid_json(payload, parsed))
+        parsed_context_json input;
+        if (!parse_context_json(payload, input))
             return SAO_ERR_INVALID_ARGUMENT;
+        const auto& parsed = input.value;
         extension_record record;
         record.kind = kind;
         record.id = id;
@@ -1416,23 +1512,27 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ctx_emit(plugin_context_t* ctx, const char* topic_utf8, const char* payload_json_utf8) {
     if (ctx == nullptr || topic_utf8 == nullptr || topic_utf8[0] == '\0')
         return SAO_ERR_INVALID_ARGUMENT;
-    json payload;
-    if (!valid_json(payload_json_utf8 ? payload_json_utf8 : "null", payload))
+    parsed_context_json input;
+    if (!parse_context_json(payload_json_utf8 ? payload_json_utf8 : "null", input))
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         std::vector<std::shared_ptr<event_subscription_state>> callbacks;
-        const json envelope = {{"topic", topic_utf8}, {"payload", payload}};
+        const json envelope = {{"topic", topic_utf8}, {"payload", input.value}};
         const auto serialized = envelope.dump();
         {
             std::lock_guard lock(ctx->mutex);
-            ctx->last_events[topic_utf8] = envelope;
-            ctx->recent_events.push_back(envelope);
-            if (ctx->recent_events.size() > 256)
-                ctx->recent_events.erase(ctx->recent_events.begin());
+            auto candidate_last_events = ctx->last_events;
+            auto candidate_recent_events = ctx->recent_events;
+            candidate_last_events[topic_utf8] = envelope;
+            candidate_recent_events.push_back(envelope);
+            if (candidate_recent_events.size() > 256)
+                candidate_recent_events.erase(candidate_recent_events.begin());
             for (const auto& subscription : ctx->subscriptions) {
                 if (subscription->topic == topic_utf8 || subscription->topic == "*")
                     callbacks.push_back(subscription);
             }
+            ctx->last_events.swap(candidate_last_events);
+            ctx->recent_events.swap(candidate_recent_events);
         }
         for (const auto& callback : callbacks) {
             const bool once = callback->once;
@@ -1535,12 +1635,14 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ctx_set_setting(plugin_context_t* ctx, const char* key, const char* value_json_utf8) {
     if (ctx == nullptr || key == nullptr || key[0] == '\0')
         return SAO_ERR_INVALID_ARGUMENT;
-    json value;
-    if (!valid_json(value_json_utf8, value))
+    parsed_context_json input;
+    if (!parse_context_json(value_json_utf8, input))
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         std::lock_guard lock(ctx->mutex);
-        ctx->settings[key] = std::move(value);
+        auto candidate = ctx->settings;
+        candidate.insert_or_assign(key, std::move(input.value));
+        ctx->settings.swap(candidate);
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1551,13 +1653,15 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ctx_set_defaults(plugin_context_t* ctx, const char* defaults_json_utf8) {
     if (ctx == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    json defaults;
-    if (!valid_json(defaults_json_utf8, defaults) || !defaults.is_object())
+    parsed_context_json input;
+    if (!parse_context_json(defaults_json_utf8, input) || !input.value.is_object())
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         std::lock_guard lock(ctx->mutex);
-        for (auto& [key, value] : defaults.items())
-            ctx->settings.try_emplace(key, value);
+        auto candidate = ctx->settings;
+        for (const auto& [key, value] : input.value.items())
+            candidate.try_emplace(key, value);
+        ctx->settings.swap(candidate);
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1658,8 +1762,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_overlay(
         spec_json_utf8 == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    json ignored;
-    if (!valid_json(spec_json_utf8, ignored))
+    parsed_context_json input;
+    if (!parse_context_json(spec_json_utf8, input))
         return SAO_ERR_INVALID_ARGUMENT;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
@@ -1678,7 +1782,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_overlay(
     int32_t status = SAO_ERR_OS_CALL_FAILED;
     try {
         status = provider.set_overlay(provider.user_data, lease.session(), surface_utf8,
-                                      spec_json_utf8, &provider_token);
+                                      input.text.c_str(), &provider_token);
     } catch (...) {
         status = SAO_ERR_OS_CALL_FAILED;
     }
@@ -2328,9 +2432,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_file(
     if (ctx == nullptr || out_selected_path == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    if (filters_json_utf8 != nullptr && filters_json_utf8[0] != '\0') {
-        json filters;
-        if (!valid_json(filters_json_utf8, filters)) {
+    parsed_context_json filters;
+    if (filters_json_utf8 != nullptr) {
+        if (!parse_context_json(filters_json_utf8, filters, true)) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
     }
@@ -2358,7 +2462,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_file(
 
     plugin_context_open_file_spec spec{};
     spec.struct_size = sizeof(spec);
-    spec.filters_json_utf8 = filters_json_utf8 == nullptr ? "" : filters_json_utf8;
+    spec.filters_json_utf8 = filters_json_utf8 == nullptr ? "" : filters.text.c_str();
     spec.title_utf8 = title_utf8 == nullptr ? "" : title_utf8;
     spec.initial_dir = initial_dir == nullptr ? L"" : initial_dir;
     spec.hwnd_owner = hwnd_owner;

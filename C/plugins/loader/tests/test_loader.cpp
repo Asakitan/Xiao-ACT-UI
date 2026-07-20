@@ -879,6 +879,162 @@ TEST_CASE("registry owns records and context implements settings and local event
     remove_plugin(handle);
 }
 
+TEST_CASE("generic context JSON inputs are bounded and preserve committed state",
+          "[plugins][loader][context][json][bounds][transaction][focused]") {
+    TempDirectory temp(L"context_json_bounds");
+    write_text(temp.path / L"plugin.emma", "entry");
+    auto handle = add_plugin(make_manifest("context_json_bounds", temp.path));
+    auto* context = sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    constexpr size_t kMaximumContextJsonBytes = 1024 * 1024;
+    const std::string maximum_depth = nested_array_json(64);
+    const std::string excessive_depth = nested_array_json(65);
+    const std::string maximum_nodes = flat_array_json(16383);
+    const std::string excessive_nodes = flat_array_json(16384);
+    const std::string maximum_bytes =
+        "\"" + std::string(kMaximumContextJsonBytes - 2, 'x') + "\"";
+    const std::string excessive_bytes =
+        "\"" + std::string(kMaximumContextJsonBytes - 1, 'x') + "\"";
+    std::string invalid_utf8 = "\"";
+    invalid_utf8.push_back(static_cast<char>(0xc3));
+    invalid_utf8 += "(\"";
+
+    REQUIRE(sao_plugins_ctx_set_setting(context, "depth", maximum_depth.c_str()) == SAO_OK);
+    CHECK(sao_plugins_ctx_set_setting(context, "depth", excessive_depth.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    char* setting = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, "depth", &setting) == SAO_OK);
+    CHECK(std::string(setting) == maximum_depth);
+    sao_plugins_ctx_free_string(setting);
+
+    REQUIRE(sao_plugins_ctx_set_setting(context, "nodes", maximum_nodes.c_str()) == SAO_OK);
+    CHECK(sao_plugins_ctx_set_setting(context, "nodes", excessive_nodes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    setting = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, "nodes", &setting) == SAO_OK);
+    REQUIRE(std::strlen(setting) == maximum_nodes.size());
+    CHECK(setting[0] == '[');
+    CHECK(setting[maximum_nodes.size() - 1] == ']');
+    sao_plugins_ctx_free_string(setting);
+
+    REQUIRE(sao_plugins_ctx_set_setting(context, "bytes", maximum_bytes.c_str()) == SAO_OK);
+    CHECK(sao_plugins_ctx_set_setting(context, "bytes", excessive_bytes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    setting = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, "bytes", &setting) == SAO_OK);
+    REQUIRE(std::strlen(setting) == maximum_bytes.size());
+    CHECK(setting[0] == '"');
+    CHECK(setting[maximum_bytes.size() - 1] == '"');
+    sao_plugins_ctx_free_string(setting);
+
+    REQUIRE(sao_plugins_ctx_set_setting(context, "scalar", "7") == SAO_OK);
+    CHECK(sao_plugins_ctx_set_setting(context, "scalar", invalid_utf8.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_set_setting(context, "scalar", "1e400") ==
+          SAO_ERR_INVALID_ARGUMENT);
+    setting = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, "scalar", &setting) == SAO_OK);
+    CHECK(std::string(setting) == "7");
+    sao_plugins_ctx_free_string(setting);
+
+    REQUIRE(sao_plugins_ctx_set_defaults(context, R"({"kept":1})") == SAO_OK);
+    const std::string invalid_defaults =
+        R"({"introduced":2,"nested":)" + excessive_depth + "}";
+    CHECK(sao_plugins_ctx_set_defaults(context, invalid_defaults.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    setting = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, "kept", &setting) == SAO_OK);
+    CHECK(std::string(setting) == "1");
+    sao_plugins_ctx_free_string(setting);
+    setting = reinterpret_cast<char*>(1);
+    CHECK(sao_plugins_ctx_get_setting(context, "introduced", &setting) ==
+          SAO_ERR_HANDLE_INVALID);
+    CHECK(setting == nullptr);
+
+    int callbacks = 0;
+    uint32_t token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(
+                context, "bounded-event",
+                +[](const char*, const char*, void* user_data) {
+                    ++*static_cast<int*>(user_data);
+                },
+                &callbacks, &token) == SAO_OK);
+    REQUIRE(sao_plugins_ctx_emit(context, "bounded-event", R"({"state":"old"})") == SAO_OK);
+    CHECK(sao_plugins_ctx_emit(context, "bounded-event", excessive_nodes.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(callbacks == 1);
+    char* snapshot = nullptr;
+    REQUIRE(sao_plugins_ctx_snapshot_value(context, "bounded-event", &snapshot) == SAO_OK);
+    REQUIRE(std::strlen(snapshot) == std::string_view(R"({"state":"old"})").size());
+    CHECK(std::string(snapshot) == R"({"state":"old"})");
+    sao_plugins_ctx_free_string(snapshot);
+
+    CHECK(sao_plugins_ctx_set_overlay(context, "bounded-overlay", excessive_depth.c_str()) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_set_overlay(context, "bounded-overlay", maximum_depth.c_str()) ==
+          SAO_PLUGINS_ERR_UNSUPPORTED);
+    wchar_t* selected_path = reinterpret_cast<wchar_t*>(1);
+    CHECK(sao_plugins_ctx_open_file(context, excessive_nodes.c_str(), nullptr, nullptr, 0,
+                                    &selected_path) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(selected_path == nullptr);
+    selected_path = reinterpret_cast<wchar_t*>(1);
+    CHECK(sao_plugins_ctx_open_file(context, maximum_nodes.c_str(), nullptr, nullptr, 0,
+                                    &selected_path) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(selected_path == nullptr);
+
+    REQUIRE(sao_plugins_ctx_register_ui_panel(context, "bounded-panel", R"({"title":"old"})",
+                                              nullptr, nullptr, nullptr) == SAO_OK);
+    REQUIRE(sao_plugins_ctx_register_extension(context, "formatter", "bounded-extension",
+                                               R"({"title":"old"})", nullptr, nullptr) ==
+            SAO_OK);
+    REQUIRE(sao_plugins_ctx_register_menu_surface(context, "bounded-surface",
+                                                  R"({"title":"old"})", 0.0F) == SAO_OK);
+    REQUIRE(sao_plugins_ctx_register_data_source(
+                context, "bounded-source", R"({"title":"old"})",
+                +[](void*) -> int32_t { return SAO_OK; },
+                +[](void*) -> int32_t { return SAO_OK; }, nullptr) == SAO_OK);
+
+    const std::string deep_metadata =
+        R"({"title":"new","value":)" + excessive_depth + "}";
+    const std::string node_metadata =
+        R"({"title":"new","value":)" + excessive_nodes + "}";
+    const std::string oversized_metadata =
+        R"({"title":")" + std::string(kMaximumContextJsonBytes, 'x') + R"("})";
+    CHECK(sao_plugins_ctx_register_ui_panel(context, "bounded-panel", invalid_utf8.c_str(),
+                                            nullptr, nullptr, nullptr) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_register_extension(context, "formatter", "bounded-extension",
+                                             deep_metadata.c_str(), nullptr, nullptr) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_register_menu_surface(context, "bounded-surface",
+                                                node_metadata.c_str(), 0.0F) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_register_data_source(
+              context, "bounded-source", oversized_metadata.c_str(),
+              +[](void*) -> int32_t { return SAO_OK; },
+              +[](void*) -> int32_t { return SAO_OK; }, nullptr) ==
+          SAO_ERR_INVALID_ARGUMENT);
+
+    for (const auto kind : {extension_kind::ui_panel, extension_kind::formatter,
+                            extension_kind::menu_category, extension_kind::data_source}) {
+        const auto extensions = snapshot_extensions(sao_plugins_registry_instance(), kind);
+        const auto preserved = std::find_if(
+            extensions.begin(), extensions.end(), [](const extension_record& record) {
+                return record.plugin_id == "context_json_bounds" &&
+                       (record.id == "bounded-panel" || record.id == "bounded-extension" ||
+                        record.id == "bounded-surface" || record.id == "bounded-source");
+            });
+        REQUIRE(preserved != extensions.end());
+        CHECK(preserved->title == "old");
+        CHECK(preserved->payload_json == R"({"title":"old"})");
+    }
+
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, token) == SAO_OK);
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(handle);
+}
+
 TEST_CASE("event subscription invocation leases drain concurrent unsubscribe",
           "[plugins][loader][context][event][concurrency][focused]") {
     TempDirectory temp(L"event_subscription_lease");
