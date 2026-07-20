@@ -11,8 +11,8 @@
 
 TEST_CASE("ui ABI and interop layouts are exact", "[ui][abi][interop]") {
     REQUIRE(SAO_UI_ABI_VERSION_MAJOR == 1u);
-    REQUIRE(SAO_UI_ABI_VERSION_MINOR == 5u);
-    REQUIRE(SAO_UI_ABI_VERSION == 0x00010005u);
+    REQUIRE(SAO_UI_ABI_VERSION_MINOR == 6u);
+    REQUIRE(SAO_UI_ABI_VERSION == 0x00010006u);
     REQUIRE(sao_ui_abi_version() == SAO_UI_ABI_VERSION);
 
     REQUIRE(SAO_UI_SOPF_MMF_MAGIC == 0x46504F53u);

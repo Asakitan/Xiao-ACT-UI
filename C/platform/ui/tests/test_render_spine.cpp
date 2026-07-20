@@ -144,7 +144,7 @@ class ScopedFileMapping {
 public:
     explicit ScopedFileMapping(size_t byte_count) {
         static std::atomic<uint32_t> next_id{0};
-        name = "Local\\SaoUiSopfW19_" +
+        name = "Local\\SaoUiSopfInterop_" +
             std::to_string(::GetCurrentProcessId()) + "_" +
             std::to_string(next_id.fetch_add(1, std::memory_order_relaxed));
         const uint64_t size = static_cast<uint64_t>(byte_count);
@@ -968,7 +968,7 @@ TEST_CASE("render_spine_sopf_v2_reads_latest_slot_and_skips_unchanged_generation
     write_mmf_v2_footer(mapping, slot_stride, 2, 2);
 
     UiInteropFixtureGuard fixture;
-    create_headless_mmf_layer("w19_sopf_v2_latest", &fixture);
+    create_headless_mmf_layer("sopf_v2_latest_slot", &fixture);
     REQUIRE(sao_ui_layer_set_mmf_source(
                 fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
     REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
@@ -1038,7 +1038,7 @@ TEST_CASE("render_spine_sopf_v2_transient_markers_keep_last_good_frame",
     write_mmf_v2_footer(mapping, slot_stride, 0, 2);
 
     UiInteropFixtureGuard fixture;
-    create_headless_mmf_layer("w19_sopf_v2_partial", &fixture);
+    create_headless_mmf_layer("sopf_v2_transient_markers", &fixture);
     REQUIRE(sao_ui_layer_set_mmf_source(
                 fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
     REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
@@ -1092,7 +1092,7 @@ TEST_CASE("render_spine_sopf_structural_errors_fail_closed",
     write_mmf_v2_footer(mapping, slot_stride, 0, 2);
 
     UiInteropFixtureGuard fixture;
-    create_headless_mmf_layer("w19_sopf_bad_structure", &fixture);
+    create_headless_mmf_layer("sopf_structural_validation", &fixture);
     REQUIRE(sao_ui_layer_set_mmf_source(
                 fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
     REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
@@ -1144,7 +1144,7 @@ TEST_CASE("render_spine_sopf_v1_keeps_python_legacy_read_slot",
     write_mmf_slot(mapping, slot_stride, 2, legacy_read_slot);
 
     UiInteropFixtureGuard fixture;
-    create_headless_mmf_layer("w19_sopf_v1_legacy", &fixture);
+    create_headless_mmf_layer("sopf_v1_legacy_read_slot", &fixture);
     REQUIRE(sao_ui_layer_set_mmf_source(
                 fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
     REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
@@ -1205,7 +1205,7 @@ TEST_CASE("render_spine_keyed_shared_texture_readback_and_contention_or_skip",
             fixture.host, &config, &fixture.compositor) != SAO_STATUS_OK) {
         SKIP("the D3D11 DirectComposition consumer is unavailable");
     }
-    SaoLayerConfig definition = layer_config("w19_keyed_shared");
+    SaoLayerConfig definition = layer_config("keyed_shared_texture");
     definition.width = 2;
     definition.height = 1;
     REQUIRE(sao_ui_layer_create(

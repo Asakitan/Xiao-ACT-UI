@@ -275,7 +275,7 @@ void require_phase_checkpoints(sao_ui_menu_handle_t menu, const nlohmann::json& 
 TEST_CASE("Entity NerveGear frames match Python authority exactly",
           "[ui][entity][parity][python_authority][pixel]") {
     const auto metadata = read_metadata();
-    REQUIRE(metadata.at("schema") == "sao.ui.python-authority.w19.entity.v1");
+    REQUIRE(metadata.at("schema") == "sao.ui.python-authority.entity.v1");
     REQUIRE(metadata.at("format") == "premultiplied-bgra");
     CHECK(find_frame(metadata, "idle").at("sha256") ==
           "4b881372a988999416307db106e2be0e4e42a0d8132eecb7b3f66a1e0eae90ff");

@@ -267,7 +267,7 @@ TEST_CASE("overlay_host_wm_windowposchanging_observes_without_z_mutation",
 TEST_CASE("overlay_host_wm_dpichanged_matches_topmost_race_fixture",
           "[ui][overlay_host][real_plugins][fixture]") {
     // ── Fixture parity anchor ──────────────────────────────────
-    // The W5b overlay fixture `topmost_race_deterministic.json`
+    // The canonical overlay fixture `topmost_race_deterministic.json`
     // records three "raise" ops on layers a/b/a.  The compositor
     // z_order values recorded in the fixture (303/302/300) prove
     // that the compositor bumps the top layer up by exactly one

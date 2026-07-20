@@ -18,8 +18,7 @@
 //   * subpixel_snap_matches_fixture_hint    — snapping a fractional
 //     `x` value from the overlay fixture's tick position yields the
 //     same integer the compositor would use downstream.  This is the
-//     required "at least one test uses W5b fixture" acceptance
-//     criterion.
+//     required fixture-parity acceptance criterion.
 
 #include <catch2/catch_test_macros.hpp>
 

@@ -143,7 +143,7 @@ def build_interaction_trace() -> dict[str, Any]:
 
 def main() -> None:
     metadata = {
-        "schema": "sao.ui.python-authority.w19.entity.v1",
+        "schema": "sao.ui.python-authority.entity.v1",
         "source": {
             "frame": "gui_modules.sao_gui_nervegear_button.render_button",
             "transport": "gui_modules.sao_gui_nervegear_button._premultiply_bgra",

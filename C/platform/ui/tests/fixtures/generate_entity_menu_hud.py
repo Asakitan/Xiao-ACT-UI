@@ -166,7 +166,7 @@ def main() -> None:
         )
 
     metadata = {
-        "schema": "sao.ui.python-authority.w20.entity-menu-hud.v1",
+        "schema": "sao.ui.python-authority.entity-menu-hud.v1",
         "format": "premultiplied-bgra",
         "dimensions": {
             "width": EXPECTED_WIDTH,

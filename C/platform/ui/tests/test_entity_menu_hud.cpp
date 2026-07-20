@@ -43,7 +43,7 @@ constexpr int32_t kMenuSlot = 70;
 constexpr int32_t kMenuColumnLeft = 40;
 constexpr int32_t kMenuColumnRight = 110;
 constexpr std::string_view kReviewedManifestSha256 =
-    "fc9c69d9eab08b2e42ff929b0b513a86ed8d9cbfb3610f4672fd8eb02f34b003";
+    "0e94f0266c3eab4fcea198040c5dc19e3af06800e67abbed3204f7cbc2f646ec";
 
 std::vector<uint8_t> read_bytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -234,7 +234,7 @@ TEST_CASE("Entity menu HUD resources retain reviewed Python authority",
     const auto manifest_bytes = read_bytes(metadata_path());
     REQUIRE(sha256_hex(manifest_bytes) == kReviewedManifestSha256);
     const auto metadata = nlohmann::json::parse(manifest_bytes.begin(), manifest_bytes.end());
-    REQUIRE(metadata.at("schema") == "sao.ui.python-authority.w20.entity-menu-hud.v1");
+    REQUIRE(metadata.at("schema") == "sao.ui.python-authority.entity-menu-hud.v1");
     REQUIRE(metadata.at("format") == "premultiplied-bgra");
     CHECK(metadata.at("dimensions").at("width") == kMenuWidth);
     CHECK(metadata.at("dimensions").at("height") == kMenuHeight);

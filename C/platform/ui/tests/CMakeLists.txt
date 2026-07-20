@@ -241,7 +241,7 @@ catch_discover_tests(sao_platform_ui_capability_tests)
 # so Windows-only regressions on the shared overlay/compositor suite
 # don't red the overlay capture/mutation tests.
 #
-# The subpixel test reads a W5b overlay fixture JSON via
+# The subpixel test reads a canonical overlay fixture JSON via
 # `docs/fixtures/overlay/present_tick_normal_dirty_flag.json` for
 # parity — the test walks up a few candidate roots so it works from
 # any CTest working-directory setting.
