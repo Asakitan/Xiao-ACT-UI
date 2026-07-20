@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -37,6 +38,9 @@ struct SubscriberEntry {
     sao_engine_event_priority_callback_t priority_callback = nullptr;
     void* user_data = nullptr;
     std::atomic<bool> active{true};
+    std::mutex callback_mutex;
+    std::condition_variable callback_idle;
+    size_t active_callbacks = 0;
 };
 
 struct RetainedEvent {
@@ -79,6 +83,71 @@ struct sao_engine_event_bus_s {
 };
 
 namespace {
+
+thread_local std::vector<const SubscriberEntry*> g_subscriber_callback_stack;
+
+size_t subscriber_callback_owned_count(const SubscriberEntry* subscriber) {
+    return static_cast<size_t>(std::count(g_subscriber_callback_stack.begin(),
+                                          g_subscriber_callback_stack.end(), subscriber));
+}
+
+class SubscriberCallbackScope final {
+  public:
+    explicit SubscriberCallbackScope(const SubscriberEntry* subscriber) {
+        g_subscriber_callback_stack.push_back(subscriber);
+    }
+
+    ~SubscriberCallbackScope() {
+        g_subscriber_callback_stack.pop_back();
+    }
+
+    SubscriberCallbackScope(const SubscriberCallbackScope&) = delete;
+    SubscriberCallbackScope& operator=(const SubscriberCallbackScope&) = delete;
+};
+
+class SubscriberDispatchLease final {
+  public:
+    explicit SubscriberDispatchLease(std::shared_ptr<SubscriberEntry> subscriber)
+        : subscriber_(std::move(subscriber)) {
+        std::lock_guard lock(subscriber_->callback_mutex);
+        if (!subscriber_->active.load(std::memory_order_acquire))
+            return;
+        ++subscriber_->active_callbacks;
+        active_ = true;
+    }
+
+    ~SubscriberDispatchLease() {
+        if (!active_)
+            return;
+        {
+            std::lock_guard lock(subscriber_->callback_mutex);
+            --subscriber_->active_callbacks;
+        }
+        subscriber_->callback_idle.notify_all();
+    }
+
+    SubscriberDispatchLease(const SubscriberDispatchLease&) = delete;
+    SubscriberDispatchLease& operator=(const SubscriberDispatchLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return active_;
+    }
+
+  private:
+    std::shared_ptr<SubscriberEntry> subscriber_;
+    bool active_ = false;
+};
+
+void deactivate_subscriber(const std::shared_ptr<SubscriberEntry>& subscriber) {
+    if (subscriber == nullptr)
+        return;
+    subscriber->active.store(false, std::memory_order_release);
+    const size_t owned_callbacks = subscriber_callback_owned_count(subscriber.get());
+    std::unique_lock lock(subscriber->callback_mutex);
+    subscriber->callback_idle.wait(lock, [&subscriber, owned_callbacks] {
+        return subscriber->active_callbacks <= owned_callbacks;
+    });
+}
 
 std::vector<std::shared_ptr<SubscriberEntry>> snapshot_subscribers(
     sao_engine_event_bus_handle_t handle,
@@ -170,13 +239,15 @@ sao_status_t dispatch_event(sao_engine_event_bus_handle_t handle,
             snapshot_subscribers(handle, event_type, include_wildcard);
 
         for (const auto& subscriber : snapshot) {
-            if (!subscriber->active.load(std::memory_order_acquire)) {
+            SubscriberDispatchLease callback_lease(subscriber);
+            if (!callback_lease) {
                 continue;
             }
 
             const auto started = std::chrono::steady_clock::now();
             int callback_result = SAO_ENGINE_EVENT_CONTINUE;
             try {
+                SubscriberCallbackScope callback_scope(subscriber.get());
                 if (subscriber->priority_callback != nullptr) {
                     callback_result = subscriber->priority_callback(
                         event_type_utf8, data_ptr, data_size,
@@ -320,29 +391,32 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_unsubscribe(
     }
 
     try {
-        std::unique_lock lock(handle->mutex);
-        const auto found = handle->subscriptions_by_token.find(subscription);
-        if (found == handle->subscriptions_by_token.end()) {
-            return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
-        }
+        std::shared_ptr<SubscriberEntry> subscriber;
+        {
+            std::unique_lock lock(handle->mutex);
+            const auto found = handle->subscriptions_by_token.find(subscription);
+            if (found == handle->subscriptions_by_token.end()) {
+                return SAO_STATUS_ERR_SUBSCRIPTION_GONE;
+            }
 
-        const auto subscriber = found->second;
-        subscriber->active.store(false, std::memory_order_release);
-        handle->subscriptions_by_token.erase(found);
+            subscriber = found->second;
+            handle->subscriptions_by_token.erase(found);
 
-        const auto bucket = handle->subscribers.find(subscriber->event_type);
-        if (bucket != handle->subscribers.end()) {
-            auto& entries = bucket->second;
-            entries.erase(
-                std::remove_if(entries.begin(), entries.end(),
-                               [subscription](const auto& entry) {
-                                   return entry->token == subscription;
-                               }),
-                entries.end());
-            if (entries.empty()) {
-                handle->subscribers.erase(bucket);
+            const auto bucket = handle->subscribers.find(subscriber->event_type);
+            if (bucket != handle->subscribers.end()) {
+                auto& entries = bucket->second;
+                entries.erase(
+                    std::remove_if(entries.begin(), entries.end(),
+                                   [subscription](const auto& entry) {
+                                       return entry->token == subscription;
+                                   }),
+                    entries.end());
+                if (entries.empty()) {
+                    handle->subscribers.erase(bucket);
+                }
             }
         }
+        deactivate_subscriber(subscriber);
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -363,33 +437,34 @@ sao_engine_event_bus_unsubscribe_owner(
     }
 
     try {
-        uint32_t removed = 0;
-        std::unique_lock lock(handle->mutex);
-        for (auto bucket = handle->subscribers.begin();
-             bucket != handle->subscribers.end();) {
-            auto& entries = bucket->second;
-            for (const auto& subscriber : entries) {
-                if (subscriber->owner_id == owner_id_utf8 &&
-                    subscriber->active.exchange(false,
-                                                std::memory_order_acq_rel)) {
-                    handle->subscriptions_by_token.erase(subscriber->token);
-                    ++removed;
+        std::vector<std::shared_ptr<SubscriberEntry>> removed_subscribers;
+        {
+            std::unique_lock lock(handle->mutex);
+            for (auto bucket = handle->subscribers.begin();
+                 bucket != handle->subscribers.end();) {
+                auto& entries = bucket->second;
+                for (const auto& subscriber : entries) {
+                    if (subscriber->owner_id == owner_id_utf8) {
+                        handle->subscriptions_by_token.erase(subscriber->token);
+                        removed_subscribers.push_back(subscriber);
+                    }
+                }
+                entries.erase(
+                    std::remove_if(entries.begin(), entries.end(),
+                                   [owner_id_utf8](const auto& subscriber) {
+                                       return subscriber->owner_id == owner_id_utf8;
+                                   }),
+                    entries.end());
+                if (entries.empty()) {
+                    bucket = handle->subscribers.erase(bucket);
+                } else {
+                    ++bucket;
                 }
             }
-            entries.erase(
-                std::remove_if(entries.begin(), entries.end(),
-                               [](const auto& subscriber) {
-                                   return !subscriber->active.load(
-                                       std::memory_order_acquire);
-                               }),
-                entries.end());
-            if (entries.empty()) {
-                bucket = handle->subscribers.erase(bucket);
-            } else {
-                ++bucket;
-            }
         }
-        *out_removed_count = removed;
+        for (const auto& subscriber : removed_subscribers)
+            deactivate_subscriber(subscriber);
+        *out_removed_count = static_cast<uint32_t>(removed_subscribers.size());
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;

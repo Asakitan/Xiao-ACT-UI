@@ -98,6 +98,11 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_unsubscribe(
     sao_engine_event_bus_handle_t handle,
     sao_engine_subscription_t subscription);
 
+// On successful return, callbacks for this subscription that started on
+// another thread have completed and no later callback can begin.  Calling
+// unsubscribe for the current subscription from inside its own callback is
+// supported and returns without waiting on itself.
+
 // Sweep every subscription with matching owner_id_utf8.  Returns the
 // count that was removed.
 SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_unsubscribe_owner(

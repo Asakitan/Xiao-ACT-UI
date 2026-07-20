@@ -13,8 +13,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <future>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "sao/engine/event_bus.h"
@@ -44,11 +49,61 @@ struct TaggedBag {
     int return_code;
 };
 
+struct BlockingSubscriber {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    std::atomic_int calls{0};
+};
+
+struct ReentrantDrainSubscriber {
+    sao_engine_event_bus_handle_t bus = nullptr;
+    sao_engine_subscription_t subscription = 0;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool first_entered = false;
+    bool second_entered = false;
+    bool release_first = false;
+    std::atomic_int calls{0};
+    sao_status_t unsubscribe_status{SAO_STATUS_ERR_UNKNOWN};
+};
+
 int taggedCallback(const char* /*topic*/, const uint8_t* /*data*/,
                    size_t /*data_size*/, void* user_data) {
     auto* tb = static_cast<TaggedBag*>(user_data);
     tb->bag->seen.push_back(tb->tag);
     return tb->return_code;
+}
+
+int blockingCallback(const char*, const uint8_t*, size_t, void* user_data) {
+    auto* state = static_cast<BlockingSubscriber*>(user_data);
+    state->calls.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->condition.notify_all();
+    state->condition.wait(lock, [state] { return state->release; });
+    return SAO_ENGINE_EVENT_CONTINUE;
+}
+
+int reentrantDrainCallback(const char*, const uint8_t*, size_t, void* user_data) {
+    auto* state = static_cast<ReentrantDrainSubscriber*>(user_data);
+    const int call = state->calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (call == 1) {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->first_entered = true;
+        state->condition.notify_all();
+        state->condition.wait(lock, [state] { return state->release_first; });
+    } else if (call == 2) {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->second_entered = true;
+        }
+        state->condition.notify_all();
+        state->unsubscribe_status =
+            sao_engine_event_bus_unsubscribe(state->bus, state->subscription);
+    }
+    return SAO_ENGINE_EVENT_CONTINUE;
 }
 
 }  // namespace
@@ -205,6 +260,84 @@ TEST_CASE("event_bus_unsubscribe_mid_fire",
     REQUIRE(bag.seen.size() == 1);
     REQUIRE(bag.seen[0] == "A_unsubs_B");
 
+    sao_engine_event_bus_destroy(bus);
+}
+
+TEST_CASE("event bus unsubscribe drains callbacks already dispatched on another thread",
+          "[engine][event_bus][priority][lifetime][concurrency]") {
+    sao_engine_event_bus_handle_t bus = nullptr;
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
+    BlockingSubscriber state;
+    sao_engine_subscription_t subscription = 0;
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "drain", 0, blockingCallback, &state,
+                                                    &subscription) == SAO_STATUS_OK);
+
+    auto publish = std::async(std::launch::async, [&] {
+        return sao_engine_event_bus_publish_priority(bus, "drain", nullptr, 0);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.entered; }));
+    }
+    auto unsubscribe = std::async(std::launch::async, [&] {
+        return sao_engine_event_bus_unsubscribe(bus, subscription);
+    });
+    CHECK(unsubscribe.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.release = true;
+    }
+    state.condition.notify_all();
+    REQUIRE(publish.get() == SAO_STATUS_OK);
+    REQUIRE(unsubscribe.get() == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "drain", nullptr, 0) == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+    sao_engine_event_bus_destroy(bus);
+}
+
+TEST_CASE("event bus self unsubscribe drains only callbacks owned by other threads",
+          "[engine][event_bus][priority][lifetime][concurrency][reentry]") {
+    sao_engine_event_bus_handle_t bus = nullptr;
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
+    ReentrantDrainSubscriber state;
+    state.bus = bus;
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "self-drain", 0,
+                                                    reentrantDrainCallback, &state,
+                                                    &state.subscription) == SAO_STATUS_OK);
+
+    auto first_publish = std::async(std::launch::async, [&] {
+        return sao_engine_event_bus_publish_priority(bus, "self-drain", nullptr, 0);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.first_entered; }));
+    }
+
+    auto second_publish = std::async(std::launch::async, [&] {
+        return sao_engine_event_bus_publish_priority(bus, "self-drain", nullptr, 0);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(2),
+                                         [&state] { return state.second_entered; }));
+    }
+    CHECK(second_publish.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.release_first = true;
+    }
+    state.condition.notify_all();
+    REQUIRE(first_publish.get() == SAO_STATUS_OK);
+    REQUIRE(second_publish.get() == SAO_STATUS_OK);
+    CHECK(state.unsubscribe_status == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 2);
+    REQUIRE(sao_engine_event_bus_publish_priority(bus, "self-drain", nullptr, 0) ==
+            SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 2);
     sao_engine_event_bus_destroy(bus);
 }
 
