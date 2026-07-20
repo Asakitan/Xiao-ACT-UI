@@ -1,4 +1,4 @@
-// SAO Auto — chart widgets first slice (Wave 4 / Agent d, G3.8).
+// SAO Auto — time-series chart widgets and ring-buffer storage.
 //
 // This slice implements the TimeSeriesChart portion of widget_chart.h:
 //   * sao_ui_time_series_chart_create / _set_lanes / _append / _set_zoom
@@ -922,7 +922,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_sparkline_get_range(sao_ui_widget_han
 }
 
 // ---------------------------------------------------------------------------
-// Wave 4 helper API — sample fetch, clear, axis auto-compute.
+// Time-series helper API — sample fetch, clear, axis auto-compute.
 // ---------------------------------------------------------------------------
 
 // Preferred ring capacity setter (0 → use spec.max_visible_points).

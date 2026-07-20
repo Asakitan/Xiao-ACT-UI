@@ -362,6 +362,73 @@ TEST_CASE("Entity shell dismisses menu before AI Editor action",
     sao_ui_entity_shell_destroy(shell);
 }
 
+TEST_CASE("Entity shell initial actions fail closed before launcher publication",
+          "[ui][entity_shell][authority][initial][focused]") {
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+    const auto click_child = [&](int32_t row) {
+        SaoUiEntityShellSnapshot state{};
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        const auto point = child_point(state, row);
+        send_left_click(shell, point[0], point[1]);
+    };
+
+    select_root(shell, 0);
+    click_child(0);
+    click_child(4);
+    click_child(5);
+    CHECK(actions.calls == 0);
+
+    click_child(1);
+    CHECK(actions.calls == 1);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR);
+    click_child(3);
+    CHECK(actions.calls == 2);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE);
+    click_child(7);
+    CHECK(actions.calls == 3);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_SAVE_SETTINGS);
+
+    select_root(shell, 1);
+    click_child(1);
+    click_child(2);
+    CHECK(actions.calls == 3);
+    click_child(0);
+    CHECK(actions.calls == 4);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR);
+
+    select_root(shell, 2);
+    click_child(0);
+    CHECK(actions.calls == 4);
+    click_child(1);
+    CHECK(actions.calls == 5);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS);
+
+    select_root(shell, 3);
+    click_child(0);
+    CHECK(actions.calls == 6);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT);
+    click_child(1);
+    CHECK(actions.calls == 7);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_SET_ALL_DARK);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const int32_t about_x = state.origin_x + state.menu_x + kMenuSlotCenter;
+    const int32_t about_y =
+        state.origin_y + state.menu_y + kMenuPad + 4 * kMenuSlot + kMenuSlot / 2;
+    send_left_click(shell, about_x, about_y);
+    CHECK(actions.calls == 8);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_OPEN_ABOUT);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+}
+
 TEST_CASE("Entity child viewport derives eight physical rows from fixed geometry",
           "[ui][entity_shell][viewport][geometry]") {
     for (const size_t row_count : {0U, 8U, 9U, 16U}) {

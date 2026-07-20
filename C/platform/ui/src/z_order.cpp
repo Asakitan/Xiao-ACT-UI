@@ -126,6 +126,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(
 #else
     HWND host_hwnd = reinterpret_cast<HWND>(host_value);
     HWND game = reinterpret_cast<HWND>(game_hwnd);
+    SaoOverlayHostClientRect desired{};
+    const sao_status_t bounds_status =
+        sao_ui_overlay_host_get_desired_bounds(handle->host, &desired);
+    if (bounds_status != SAO_STATUS_OK) return bounds_status;
     if (game != nullptr && !::IsWindow(game)) {
         game = nullptr;
         game_present = false;
@@ -146,26 +150,30 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(
     }
 
     if (handle->policy == SAO_UI_TOPMOST_NEVER) {
+        const BOOL restored = ::SetWindowPos(host_hwnd, nullptr, desired.x, desired.y,
+                                             desired.width, desired.height,
+                                             SWP_NOACTIVATE | SWP_NOZORDER);
         update_status(handle, host_hwnd, game, game_is_topmost, game_present);
-        return SAO_STATUS_OK;
+        return restored ? SAO_STATUS_OK : SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
     BOOL succeeded = FALSE;
     if (handle->policy == SAO_UI_TOPMOST_ALWAYS || (game_present && game != nullptr && game_is_topmost)) {
-        succeeded = ::SetWindowPos(host_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        succeeded = ::SetWindowPos(host_hwnd, HWND_TOPMOST, desired.x, desired.y,
+                                   desired.width, desired.height, SWP_NOACTIVATE);
         ++handle->status.branch_game_topmost_count;
     } else if (game_present && game != nullptr) {
-        succeeded = ::SetWindowPos(host_hwnd, game, 0, 0, 0, 0,
-                                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        succeeded = ::SetWindowPos(host_hwnd, game, desired.x, desired.y,
+                                   desired.width, desired.height, SWP_NOACTIVATE);
         ++handle->status.branch_game_normal_count;
     } else {
         // Clearing TOPMOST and placing the host above normal windows are two
         // different operations.  Keep them adjacent and only here.
-        const BOOL cleared = ::SetWindowPos(host_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        succeeded = cleared && ::SetWindowPos(host_hwnd, HWND_TOP, 0, 0, 0, 0,
-                                               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        const BOOL cleared = ::SetWindowPos(host_hwnd, HWND_NOTOPMOST, desired.x, desired.y,
+                                            desired.width, desired.height, SWP_NOACTIVATE);
+        succeeded = cleared &&
+            ::SetWindowPos(host_hwnd, HWND_TOP, desired.x, desired.y,
+                           desired.width, desired.height, SWP_NOACTIVATE);
         ++handle->status.branch_idle_count;
     }
     update_status(handle, host_hwnd, game, game_is_topmost, game_present);

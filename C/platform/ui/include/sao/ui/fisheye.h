@@ -128,7 +128,7 @@ SAO_UI_API int32_t SAO_UI_CALL sao_ui_fisheye_hit_test(
     size_t button_count,
     int32_t x, int32_t y);
 
-// ── Wave 4 stateful lens (G3.6 first slice) ───────────────────────
+// ── Stateful fisheye lens ─────────────────────────────────────────
 // The pure-function API above is fine when the caller owns the animation
 // clock (e.g. reads its own perf timer, feeds now_seconds).  For lens
 // consumers that only speak in dt_ms deltas (unit tests, script bindings)

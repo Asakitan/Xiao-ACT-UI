@@ -1,4 +1,4 @@
-// SAO Auto - fisheye focus math (Wave 4 / G3.6 first slice).
+// SAO Auto - fisheye focus math and stateful lens animation.
 //
 // 1:1 with sao_theme/menu_bar.py + sao_theme/circle_button.py:
 //   * ring / column layout populated by client, sizes computed here
@@ -14,7 +14,7 @@
 //   1. Pure-function API (sao_ui_fisheye_apply / _hit_test / _ring_layout /
 //      _column_layout) — the caller owns the clock and calls apply every
 //      frame with now_seconds.
-//   2. Wave 4 stateful lens (sao_ui_fisheye_create / _animate / _apply_
+//   2. Stateful lens (sao_ui_fisheye_create / _animate / _apply_
 //      column_layout / _destroy) — the handle owns the last hover state
 //      and blends via dt_ms.  Preferred for unit tests + script bindings.
 
@@ -275,7 +275,7 @@ extern "C" int32_t SAO_UI_CALL sao_ui_fisheye_hit_test(
     return hit;
 }
 
-// ── Wave 4 stateful lens ─────────────────────────────────────────
+// ── Stateful lens ─────────────────────────────────────────────────
 struct sao_ui_fisheye_s {
     std::mutex mu;
     SaoUiFisheyeConfig cfg = kDefaultConfig;

@@ -535,7 +535,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
 #endif
 }
 
-// ── GL interop / keyed mutex: Wave 5+ ─────────────────────────────
+// ── GL interop / keyed mutex compatibility gates ─────────────────
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_register_gl_interop(
     sao_ui_dcomp_bridge_handle_t, void*, uint32_t,
@@ -642,7 +642,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_get_state(
 }
 
 // ── test hook (internal) ────────────────────────────────────────
-// Not part of the public ABI header - used by test_dcomp_bridge_wave3.cpp
+// Not part of the public ABI header - used by test_dcomp_bridge.cpp
 // to verify create/destroy symmetry after N iterations without pulling
 // in a real COM leak detector.  Declared as a plain extern "C" symbol
 // so it can be exported without a header change; the test declares the

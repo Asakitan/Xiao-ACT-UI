@@ -125,13 +125,13 @@ std::vector<OwnedRootItem> make_default_roots(bool nervgear_mode) {
         10,
         true,
         {
-            {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, true},
+            {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, false},
             {nervgear_mode ? "NervGear: ON" : "NervGear: OFF", "◈",
              SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, true},
             {"──────────", "─", -1, false},
             {"Streaming Mode: OFF", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true},
-            {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, true},
-            {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, true},
+            {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, false},
+            {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, false},
             {"──────────", "─", -1, false},
             {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true},
         },
@@ -144,8 +144,8 @@ std::vector<OwnedRootItem> make_default_roots(bool nervgear_mode) {
         true,
         {
             {"AI Editor (LLM)", "✦", SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, true},
-            {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, true},
-            {"Process Selector", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, true},
+            {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, false},
+            {"Process Selector", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, false},
         },
     });
     roots.push_back({
@@ -155,7 +155,7 @@ std::vector<OwnedRootItem> make_default_roots(bool nervgear_mode) {
         12,
         true,
         {
-            {"插件管理面板 Manage", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, true},
+            {"插件管理面板 Manage", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, false},
             {"重载全部插件 Reload", "↻", SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, true},
             {"无已启用面板插件 (去 Manage 启用)", "·", -1, false},
         },

@@ -32,7 +32,7 @@ extern "C" {
 typedef struct sao_ui_theme_s* sao_ui_theme_handle_t;
 typedef uint64_t sao_ui_theme_owner_t;
 
-// ── Wave2 additions: canonical RGBA vector + change-callback handle ─
+// ── Canonical RGBA vector + change-callback handle ────────────────
 // Kept alongside the ARGB uint32_t path so both encodings are cheap.
 //
 // RGBA byte layout (r, g, b, a) mirrors 32-bit texture uploads and the
@@ -160,7 +160,7 @@ enum SaoUiColorToken : int32_t {
     SAO_UI_TOKEN_COUNT                      = 75,
 };
 
-// Wave2 canonical count alias (matches G3.1 spec vocabulary).
+// Canonical count alias (matches G3.1 spec vocabulary).
 #define SAO_UI_COLOR_TOKEN_COUNT SAO_UI_TOKEN_COUNT
 
 // ── Static color table (compile-time constant) ────────────────────
@@ -191,7 +191,7 @@ enum SaoUiMetricToken : int32_t {
     SAO_UI_METRIC_COUNT                     = 15,
 };
 
-// Wave2 canonical alias.
+// Canonical metric-count alias.
 #define SAO_UI_METRIC_TOKEN_COUNT SAO_UI_METRIC_COUNT
 
 struct SaoUiMetricTable {
@@ -286,14 +286,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_remove_listener(
     sao_ui_theme_changed_callback_t callback,
     void* user_data);
 
-// ── Wave2 handle-less flat-token API (G3.1) ───────────────────────
+// ── Handle-less flat-token API (G3.1) ─────────────────────────────
 // Zero-cost accessors over the compile-time tables + a process-wide
 // active theme + a change-callback registry.  Used by native panels
 // and tests that don't need per-instance handle state.
 //
 // Naming convention: `_by_id` / `_id` disambiguates from the handle
 // based API above (both live in the same C ABI translation unit).
-// All wave2 functions return `SAO_STATUS_OK` on success and
+// All flat-token functions return `SAO_STATUS_OK` on success and
 // `SAO_STATUS_ERR_INVALID_ARGUMENT` on out-of-range enum / null.
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_get_color_by_id(
@@ -344,7 +344,7 @@ SAO_UI_API int32_t SAO_UI_CALL sao_ui_theme_get_metric_token_count(void);
 }  // extern "C"
 #endif
 
-// ── Wave2 constexpr colour + metric tables ────────────────────────
+// ── Constexpr colour + metric tables ──────────────────────────────
 // Populated verbatim from `sao_theme/colors.py` (SAOColors class),
 // `sao_gui_bosshp.py` (RED gradient), and `assets/name_tables/
 // element.json` (EDamageProperty 0..8).  Alpha defaults to 0xFF for
@@ -371,7 +371,7 @@ SAO_UI_API int32_t SAO_UI_CALL sao_ui_theme_get_metric_token_count(void);
 
 namespace sao::ui {
 
-// Alias so the constexpr arrays below can name the wave2 type
+// Alias so the constexpr arrays below can name the RGBA type
 // without the C-style prefix in every entry.
 using SaoColorRgba = ::SaoColorRgba;
 
@@ -670,10 +670,10 @@ static_assert(std::size(kSaoThemeMetrics)     == SAO_UI_METRIC_TOKEN_COUNT,
 // Sentinel guard so a future refactor that renumbers the enums also
 // updates the sentinel here (light + glass never grew independently).
 static_assert(SAO_UI_COLOR_TOKEN_COUNT == 75,
-              "Wave2 tables were built against 75 tokens; update them "
+              "Theme tables were built against 75 tokens; update them "
               "before re-numbering SaoUiColorToken");
 static_assert(SAO_UI_METRIC_TOKEN_COUNT == 15,
-              "Wave2 metric table was built against 15 metrics; update "
+              "Theme metric table was built against 15 metrics; update "
               "kSaoThemeMetrics before re-numbering SaoUiMetricToken");
 
 // Table dispatch — inline so this is a single load in optimized builds.

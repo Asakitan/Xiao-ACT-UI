@@ -38,7 +38,7 @@ extern "C" {
 //
 // NB: the enum tag differs from d2d_widgets.h's `sao_ui_text_align_e`
 // on purpose — the two headers ship distinct enumerator sets
-// (SAO_UI_TEXT_ALIGN_* legacy vs. SAO_UI_ALIGN_* wave4 with JUSTIFY),
+// (SAO_UI_TEXT_ALIGN_* legacy vs. SAO_UI_ALIGN_* extended with JUSTIFY),
 // so both must coexist under different tags while keeping the same
 // int32_t underlying type.  Callers hand the enum value in through
 // the `int32_t align` field on each spec struct.

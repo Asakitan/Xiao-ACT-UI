@@ -1,9 +1,7 @@
-// SAO Auto - compositor, Wave 2 first-implementable slice.
+// SAO Auto - compositor layer ownership and production presentation paths.
 //
-// This is the *first* implementable slice on top of the Wave 1a deepened
-// header (`include/sao/ui/compositor.h`).  It implements ONLY the layer
-// bookkeeping in memory -- no bitmap uploads, no SetWindowRgn work, no
-// GL/D3D interop.  Concretely:
+// The layer bookkeeping contract is defined by
+// `include/sao/ui/compositor.h`.  Core lifecycle operations include:
 //
 //   * `sao_ui_compositor_create`      - allocate an opaque handle, keep a
 //                                       vector of layers, snapshot config.
@@ -18,9 +16,6 @@
 //   * `sao_ui_compositor_list_layers` - enumerate; NULL out_layers[] gives
 //                                       a size-query.  Task brief's
 //                                       "get_layer_count" idiom.
-//
-// The other 12 header-declared entry points remain SAO_STATUS_ERR_NOT_
-// IMPLEMENTED.  Wave 3 owns rendering / RGN sync / input proxy work.
 //
 // UTF-8 no BOM.  static_asserts guard the invariants the header banner
 // documents.
@@ -919,8 +914,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
     }
     *out_handle = nullptr;
     // Host can be null in headless/tests; the compositor holds a
-    // reference but this slice never dereferences it.  The RGN sync /
-    // present paths (Wave 3) will require host non-null.
+    // reference but headless paths never dereference it.  RGN sync /
+    // presentation paths require a non-null host.
 
     auto* comp = new (std::nothrow) sao_ui_compositor_s{};
     if (comp == nullptr) {
@@ -1100,8 +1095,7 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
 }
 
 // ---------------------------------------------------------------------------
-// Layer state mutators used by the tests.  The other setters remain
-// NOT_IMPLEMENTED so their Wave 3 owners can pick them up.
+// Layer state mutators used by production and tests.
 // ---------------------------------------------------------------------------
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_z_order(
@@ -1164,8 +1158,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_list_layers(
 }
 
 // ---------------------------------------------------------------------------
-// Everything below is deferred to Wave 3.  Keep the stubs so the DLL
-// exports match the header contract.
+// Pixel upload and layer-control exports matching the header contract.
 // ---------------------------------------------------------------------------
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_update_bgra(

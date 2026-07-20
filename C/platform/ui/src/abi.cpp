@@ -122,6 +122,64 @@ class WidgetLifecycleLease {
         bool acquired_{};
 };
 
+struct PaintContextRestoreStatuses {
+    sao_status_t opacity{SAO_STATUS_OK};
+    sao_status_t clip{SAO_STATUS_OK};
+};
+
+class PaintContextStateGuard {
+  public:
+    explicit PaintContextStateGuard(sao_ui_paint_ctx_handle_t context) noexcept
+        : context_(context) {}
+
+    ~PaintContextStateGuard() {
+        (void)restore();
+    }
+
+    PaintContextStateGuard(const PaintContextStateGuard&) = delete;
+    PaintContextStateGuard& operator=(const PaintContextStateGuard&) = delete;
+
+    sao_status_t push_clip(float x, float y, float width, float height) {
+        const sao_status_t status =
+            sao_ui_paint_ctx_push_clip(context_, x, y, width, height);
+        if (status == SAO_STATUS_OK) clip_pushed_ = true;
+        return status;
+    }
+
+    sao_status_t push_opacity(float opacity) {
+        const sao_status_t status =
+            sao_ui_paint_ctx_push_opacity(context_, opacity);
+        if (status == SAO_STATUS_OK) opacity_pushed_ = true;
+        return status;
+    }
+
+    PaintContextRestoreStatuses restore() noexcept {
+        PaintContextRestoreStatuses statuses{};
+        if (opacity_pushed_) {
+            opacity_pushed_ = false;
+            try {
+                statuses.opacity = sao_ui_paint_ctx_pop_opacity(context_);
+            } catch (...) {
+                statuses.opacity = SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+        if (clip_pushed_) {
+            clip_pushed_ = false;
+            try {
+                statuses.clip = sao_ui_paint_ctx_pop_clip(context_);
+            } catch (...) {
+                statuses.clip = SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+        return statuses;
+    }
+
+  private:
+    sao_ui_paint_ctx_handle_t context_{};
+    bool clip_pushed_{};
+    bool opacity_pushed_{};
+};
+
 bool event_handler_is_active(const WidgetEventHandler* handler) {
     for (const ActiveEventHandler* active = active_event_handler; active != nullptr;
          active = active->previous) {
@@ -689,46 +747,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
     WidgetLifecycleLease lifecycle(handle);
     if (!lifecycle)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    int32_t kind = -1;
-    const sao_status_t status = sao_ui_widget_get_kind(handle, &kind);
-    if (status != SAO_STATUS_OK) return status;
-    sao_status_t paint_status = sao_ui_paint_ctx_push_clip(
-        ctx, static_cast<float>(x), static_cast<float>(y),
-        static_cast<float>(width), static_cast<float>(height));
-    if (paint_status != SAO_STATUS_OK) return paint_status;
-    paint_status = sao_ui_paint_ctx_push_opacity(ctx, opacity_0_to_1);
-    if (paint_status != SAO_STATUS_OK) {
-        (void)sao_ui_paint_ctx_pop_clip(ctx);
-        return paint_status;
-    }
+    try {
+        int32_t kind = -1;
+        const sao_status_t status = sao_ui_widget_get_kind(handle, &kind);
+        if (status != SAO_STATUS_OK) return status;
 
-    if (kind <= SAO_UI_WIDGET_ICON) {
-        paint_status = sao_ui_widget_paint(
-            handle, ctx, static_cast<float>(x), static_cast<float>(y),
+        PaintContextStateGuard paint_context_state(ctx);
+        sao_status_t paint_status = paint_context_state.push_clip(
+            static_cast<float>(x), static_cast<float>(y),
             static_cast<float>(width), static_cast<float>(height));
-    } else if (kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
-        paint_status = sao_ui_script_canvas_paint_widget(
-            handle, ctx, static_cast<float>(x), static_cast<float>(y),
-            static_cast<float>(width), static_cast<float>(height));
-    } else {
-        WidgetRendererProvider provider{};
-        {
-            auto& registry = extension_registry();
-            std::lock_guard lock(registry.mutex);
-            const auto found = registry.renderers.find(kind);
-            if (found != registry.renderers.end()) provider = found->second;
+        if (paint_status != SAO_STATUS_OK) return paint_status;
+        paint_status = paint_context_state.push_opacity(opacity_0_to_1);
+        if (paint_status != SAO_STATUS_OK) return paint_status;
+
+        if (kind <= SAO_UI_WIDGET_ICON) {
+            paint_status = sao_ui_widget_paint(
+                handle, ctx, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height));
+        } else if (kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
+            paint_status = sao_ui_script_canvas_paint_widget(
+                handle, ctx, static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(width), static_cast<float>(height));
+        } else {
+            WidgetRendererProvider provider{};
+            {
+                auto& registry = extension_registry();
+                std::lock_guard lock(registry.mutex);
+                const auto found = registry.renderers.find(kind);
+                if (found != registry.renderers.end()) provider = found->second;
+            }
+            paint_status = provider.callback == nullptr
+                ? paint_extended_default(kind, ctx, x, y, width, height)
+                : provider.callback(handle, ctx, x, y, width, height,
+                                    provider.user_data);
         }
-        paint_status = provider.callback == nullptr
-            ? paint_extended_default(kind, ctx, x, y, width, height)
-            : provider.callback(handle, ctx, x, y, width, height,
-                                provider.user_data);
-    }
 
-    const sao_status_t opacity_status = sao_ui_paint_ctx_pop_opacity(ctx);
-    const sao_status_t clip_status = sao_ui_paint_ctx_pop_clip(ctx);
-    if (paint_status != SAO_STATUS_OK) return paint_status;
-    if (opacity_status != SAO_STATUS_OK) return opacity_status;
-    return clip_status;
+        const PaintContextRestoreStatuses restore_statuses =
+            paint_context_state.restore();
+        if (paint_status != SAO_STATUS_OK) return paint_status;
+        if (restore_statuses.opacity != SAO_STATUS_OK)
+            return restore_statuses.opacity;
+        return restore_statuses.clip;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL

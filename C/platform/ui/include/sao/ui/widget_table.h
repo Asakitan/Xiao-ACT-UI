@@ -28,6 +28,12 @@
 extern "C" {
 #endif
 
+// A callback changed or retired the widget while an outer dispatch was in
+// progress. The outer operation stops and callers may retry a live handle.
+#ifndef SAO_UI_STATUS_ERR_BUSY
+#define SAO_UI_STATUS_ERR_BUSY ((sao_status_t)-102)
+#endif
+
 // ─── Table — sortable / filterable / batched-update grid of rows ─────
 enum sao_ui_column_type_e : int32_t {
     SAO_UI_COL_TEXT     = 0,

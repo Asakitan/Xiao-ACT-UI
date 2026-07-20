@@ -1,4 +1,4 @@
-// SAO Auto — NerveGear button implementation (Wave 3, G3.3 first slice).
+// SAO Auto — NerveGear button state machine and Link Start timeline.
 //
 // This slice owns the 7-state state machine + the Link Start intro
 // timeline.  The visual disc render, Tk input proxy, drag physics, and
@@ -374,7 +374,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_nervegear_set_event_callback(
 }
 
 // ---------------------------------------------------------------------------
-// Wave3 helper API (exported for tests + future input path).
+// NerveGear helper API (exported for tests + future input path).
 //
 // These are not in nervegear.h; they cover the state-machine bring-up
 // tests and the mouse-driven transitions.  Once the Tk input proxy

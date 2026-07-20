@@ -1,6 +1,6 @@
 // SAO Auto — popup keyboard-nav + hierarchical hit-test first slice.
 //
-// Wave 3 / Agent e / G3.4 — logic only, no rendering.  Owns the entry
+// Logic only, no rendering.  Owns the entry
 // tree (with submenus), the selection state machine (UP/DOWN/LEFT/
 // RIGHT/ENTER/ESC) and the hit-test cursor→entry_id resolver.
 //

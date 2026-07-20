@@ -40,41 +40,39 @@ add_library(sao_platform_ui SHARED
     src/panel.cpp
     src/panel_layout.cpp
 
-    # ── Wave 3 first slices (G3.2 SAO menu, G3.3 NerveGear) ─
+    # ── SAO menu, NerveGear, and Entity root composition ─────
     src/menu.cpp               # gui_modules/sao_gui_menu_hud.py + menu_mixin.py
     src/nervegear.cpp          # gui_modules/sao_gui_nervegear_button.py + link_start.py
     src/entity_shell.cpp       # production Entity root composition
 
-    # ── Wave 3 (G3.4 popup nav + G3.7 animator + G3.9 layout) ─
+    # ── Popup navigation, animation, and panel layout ─────────
     src/animator.cpp           # sao_theme/animator.py + utils easing
 
-    # ── Wave 4 (G3.5 dialog + G3.6 fisheye first slices) ────
+    # ── Dialog state machine + fisheye focus math ─────────────
     src/dialog.cpp             # sao_theme/dialogs.py state machine
     src/fisheye.cpp             # sao_theme/menu_bar.py fisheye math
 
-    # ── Wave 4 / Agent e (G3.10 panel SDK + G3.11 input router +
-    #    G3.12 scriptable canvas) ─────────────────────────────────
+    # ── Panel SDK + input router + scriptable canvas ──────────────
     src/panel_sdk.cpp                # plugin_manager.register_panel
     src/input_router.cpp             # sao_gui_hotkey.py subset matcher
     src/sao_ui_scriptable_canvas.cpp # ui_spec.py CANVAS_OPS producer
 
-    # ── Wave 4 / Agent d (G3.8 widget_kit first 5 widgets +
-    #    time-display labels) ─────────────────────────────────────
+    # ── Widget kit + time-display labels ──────────────────────────
     src/widget_text.cpp        # Label + Clock/Rel/Dur time labels
     src/widget_input.cpp       # Button (action_button parity)
     src/widget_data.cpp        # ProgressBar (flat/hp_ramp/hp_trail/segments)
     src/widget_chart.cpp       # TimeSeriesChart (ring buffer + axis)
     src/widget_table.cpp       # Table (columns/sort/filter/virtual scroll)
 
-    # ── Wave 6 / Agent d (Phase 5 automation SDK batch 2) ─────
+    # ── Automation capabilities ───────────────────────────────
     src/auto_key.cpp           # game-agnostic SendInput / hold ledger
     src/alerts.cpp             # SAPI TTS + banner queue + winmm sound
     src/input_arbitration.cpp  # per-VK policy + reservation + conflict
 
-    # ── Wave 13 / Agent b (streaming-mode flow control) ────────
+    # ── Streaming-mode flow control ────────────────────────────
     # overlay_compositor.py streaming_mode: generation + accepting +
     # worker set + mode/threads locks + 2-phase teardown.  Orthogonal
-    # to capture_sync.cpp (Wave 5b) — that module owns render/capture
+    # to capture_sync.cpp — that module owns render/capture
     # contention; this one owns streaming-mode worker lifecycle.
     src/streaming_flow.cpp
 )
@@ -112,7 +110,7 @@ if (WIN32)
             gdi32
             dwmapi
             winmm
-            # Wave 6 / Agent d — SAPI TTS (sapi.lib) uses IIDs / CLSIDs
+            # SAPI TTS (sapi.lib) uses IIDs / CLSIDs
             # via the system SDK.  Every modern Windows SDK ships the
             # link import lib as `sapi.lib`.  No runtime dependency
             # beyond the SAPI COM inproc server that the OS provides

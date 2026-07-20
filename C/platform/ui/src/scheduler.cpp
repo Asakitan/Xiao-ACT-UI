@@ -1,4 +1,4 @@
-// SAO Auto — scheduler.  Wave 4 first-implementable slice.
+// SAO Auto — overlay scheduler and monotonic frame clock.
 //
 // Python authoritative: `sao_auto/python/render/overlay_scheduler.py`.
 //

@@ -14,7 +14,7 @@
 //   * SettingsManager gate           L2752-2760
 //
 // ── Why this exists ─────────────────────────────────────────
-//   Wave 5b already landed `capture_sync.cpp` for the render / capture
+//   `capture_sync.cpp` owns the render / capture
 //   contention path.  This module is the ORTHOGONAL lifecycle path for
 //   the streaming-mode toggle — the state that manages the background
 //   worker set that flips the host into "excluded from screen capture".

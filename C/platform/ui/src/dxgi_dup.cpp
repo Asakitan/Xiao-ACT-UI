@@ -1,10 +1,10 @@
-// SAO Auto - dxgi_dup first-implementable slice (Wave 3 / G1.4).
+// SAO Auto - DXGI Desktop Duplication lifecycle and frame details.
 //
 // 1:1 with `sao_auto/python/render/dxgi_duplication.py` DXGIDuplicator._init.
 //
 // Scope of THIS slice:
 //   - sao_ui_dxgi_dup_create : owns its own D3D11 device (matches Python;
-//     Wave 5 refactor lets callers reuse the shared d3d11_device module).
+//     callers can reuse the shared d3d11_device module separately).
 //     Chain: D3D11CreateDevice -> QI IDXGIDevice -> GetAdapter ->
 //     EnumOutputs(output_index) -> QI IDXGIOutput1 -> DuplicateOutput ->
 //     GetDesc.
@@ -13,7 +13,7 @@
 //     status mapping (WAIT_TIMEOUT -> ERR_TIMEOUT, ACCESS_LOST ->
 //     ERR_SURFACE_INVALID, DEVICE_* -> ERR_DEVICE_LOST).  QI
 //     ID3D11Texture2D and hand out a BORROWED pointer to the desktop
-//     texture; the CopyResource + Map (RGB tight-pack) is Wave 4.
+//     texture; copy_to_staging handles CopyResource + Map.
 //   - sao_ui_dxgi_dup_release_frame : IDXGIOutputDuplication::ReleaseFrame
 //     with a double-release guard.
 //   - sao_ui_dxgi_dup_get_desc : GetDesc snapshot.
@@ -24,7 +24,7 @@
 //   - Cursor shape handling
 //   - Auto-recover loop wrapped around acquire_frame
 //
-// Test invariants live in test_dxgi_dup_wave3.cpp.
+// Test invariants live in test_dxgi_dup.cpp and test_dxgi_dup_wgc.cpp.
 
 #include "sao/ui/dxgi_dup.h"
 
@@ -80,7 +80,7 @@ struct sao_ui_dxgi_dup_s {
     uint32_t                 acquire_timeout_ms = 16;
     bool                     auto_recover = true;
 
-    // Metrics returned by acquire_frame.  Wave 4 fills bgra_bytes from
+    // Metrics returned by acquire_frame.  copy_to_staging fills BGRA data from
     // the mapped staging texture; this slice hands back nullptr for the
     // pixel pointer and only asserts the acquire/release protocol.
     DXGI_OUTDUPL_DESC        desc = {};
@@ -93,7 +93,7 @@ struct sao_ui_dxgi_dup_s {
     bool                     frame_held = false;
     bool                     alive = false;
 
-    // ── Wave 7 additions ────────────────────────────────────────
+    // ── Held-frame metadata and staging resources ───────────────
     // The currently-held desktop texture (borrowed pointer valid
     // between acquire_frame and release_frame).  Kept as ID3D11-
     // Texture2D so copy_to_staging / cursor_info can operate without
@@ -314,7 +314,7 @@ extern "C" void SAO_UI_CALL sao_ui_dxgi_dup_destroy(
         d->dup->ReleaseFrame();
         d->frame_held = false;
     }
-    // Wave 7: staging texture + cursor shape cache.
+    // Staging texture + cursor shape cache.
     safe_release(&d->staging);
     if (d->cursor_shape_bytes != nullptr) {
         delete[] d->cursor_shape_bytes;
@@ -373,7 +373,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_acquire_frame(
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
-    // QI ID3D11Texture2D from the resource.  Wave 7 keeps both the
+    // QI ID3D11Texture2D from the resource.  Keep both the
     // resource + texture pointers alive for the duration of the held
     // frame (so copy_to_staging / cursor_info can operate without an
     // extra Acquire).  The resource is released in release_frame.
@@ -400,8 +400,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_acquire_frame(
         out_frame->origin_x    = d->desktop_rect.left;
         out_frame->origin_y    = d->desktop_rect.top;
         out_frame->rotation    = static_cast<uint32_t>(d->rotation);
-        out_frame->row_pitch   = 0;  // Wave 4/7 fills via copy_to_staging.
-        out_frame->bgra_bytes  = nullptr;  // Wave 4/7 via copy_to_staging.
+        out_frame->row_pitch   = 0;  // Filled by copy_to_staging.
+        out_frame->bgra_bytes  = nullptr;  // Available through copy_to_staging.
         out_frame->last_present_time =
             static_cast<uint64_t>(info.LastPresentTime.QuadPart);
         out_frame->accumulated_frames = info.AccumulatedFrames;
@@ -428,7 +428,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_release_frame(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     // Release the retained texture + resource pointers acquired
-    // during Wave 7's acquire_frame.  Order does not matter (both are
+    // during acquire_frame.  Order does not matter (both are
     // reference-counted) but reverse-of-acquire keeps the intent clear.
     safe_release(&d->held_texture);
     safe_release(&d->held_resource);
@@ -524,7 +524,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_reinit(
 #endif
 }
 
-// ── Wave 7: dirty-rects / move-rects / cursor / staging copy ────
+// ── Dirty-rects / move-rects / cursor / staging copy ────────────
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_get_dirty_rects(
     sao_ui_dxgi_dup_handle_t handle,

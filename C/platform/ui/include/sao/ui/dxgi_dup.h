@@ -128,7 +128,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_get_desc(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_reinit(
     sao_ui_dxgi_dup_handle_t handle);
 
-// ── Wave 7 additions (Phase 6 overlay live parity depth) ────────
+// ── Dirty/move rectangles, cursor metadata, and staging copy ─────
 //
 // Dirty-rect / move-rect / cursor / staging-copy APIs.  These are the
 // "full pipeline" pieces the Python authoritative source doesn't
@@ -136,7 +136,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dxgi_dup_reinit(
 // expose because non-fisheye consumers (overlay differential redraw,
 // screencap parity oracles) rely on them.
 //
-// All Wave 7 APIs require an actively-held frame (i.e. between a
+// All frame-detail APIs require an actively-held frame (i.e. between a
 // successful `acquire_frame` and its `release_frame`).  Calling
 // against no held frame returns SAO_STATUS_ERR_NOT_INITIALIZED.  This
 // matches IDXGIOutputDuplication semantics — DXGI itself validates

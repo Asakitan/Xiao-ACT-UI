@@ -507,7 +507,7 @@ sao_status_t dispatch_callbacks(InputLease<State>& lease, int32_t event_type, co
     return lease.transition_is_current(transition) ? SAO_STATUS_OK : SAO_UI_STATUS_ERR_BUSY;
 }
 
-// Fixed-width glyph model matches widget_text.cpp — Wave4 first slice
+// Fixed-width glyph model matches widget_text.cpp and
 // uses an 8-px advance so measurements are stable in unit tests.
 constexpr int32_t kAsciiGlyphAdvancePx = 8;
 
@@ -1249,7 +1249,7 @@ sao_ui_widget_input_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_
 }
 
 // ---------------------------------------------------------------------------
-// Wave 4 helper API — hit test + event dispatch + preferred-size query.
+// Button helper API — hit test + event dispatch + preferred-size query.
 // Not part of widget_input.h (yet); exposed for the test binary to
 // exercise the state machine without dragging in the compositor.
 // ---------------------------------------------------------------------------
@@ -1298,7 +1298,7 @@ sao_ui_widget_button_hit_test(sao_ui_widget_handle_t handle, SaoUiPointF point, 
     }
 }
 
-// Wave 4 event codes — locally aligned with widget_kit.h
+// Button event codes — locally aligned with widget_kit.h
 // SAO_UI_EVT_* range but redeclared to keep this TU independent.
 enum ButtonEvent : int32_t {
     kBtnEvtHoverEnter = 3,

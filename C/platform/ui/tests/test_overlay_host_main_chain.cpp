@@ -137,6 +137,15 @@ TEST_CASE("overlay host production main chain", "[ui][overlay_host][production]"
 	REQUIRE(sao_ui_overlay_host_set_visible(host, true) == SAO_STATUS_OK);
 	CHECK(::IsWindowVisible(render_hwnd) != FALSE);
 	CHECK(sao_ui_overlay_host_visible(host));
+	REQUIRE(::SetWindowPos(render_hwnd, nullptr, 0, 0, 1, 1,
+						   SWP_NOACTIVATE | SWP_NOZORDER));
+	REQUIRE(sao_ui_overlay_host_set_visible(host, true) == SAO_STATUS_OK);
+	RECT recovered_rect{};
+	REQUIRE(::GetWindowRect(render_hwnd, &recovered_rect));
+	CHECK(recovered_rect.left == config.origin_x);
+	CHECK(recovered_rect.top == config.origin_y);
+	CHECK(recovered_rect.right - recovered_rect.left == config.width);
+	CHECK(recovered_rect.bottom - recovered_rect.top == config.height);
 	SaoOverlayHostState host_state{};
 	REQUIRE(sao_ui_overlay_host_get_state(host, &host_state) == SAO_STATUS_OK);
 	CHECK(host_state.visible);
@@ -164,7 +173,14 @@ TEST_CASE("overlay host production main chain", "[ui][overlay_host][production]"
 	REQUIRE(sao_ui_z_order_status(z_order, &z_status) == SAO_STATUS_OK);
 	CHECK(z_status.policy == SAO_UI_TOPMOST_NEVER);
 	REQUIRE(sao_ui_z_order_set_policy(z_order, SAO_UI_TOPMOST_FOLLOW_GAME) == SAO_STATUS_OK);
+	REQUIRE(::SetWindowPos(render_hwnd, nullptr, 0, 0, 1, 1,
+						   SWP_NOACTIVATE | SWP_NOZORDER));
 	REQUIRE(sao_ui_z_order_enforce(z_order, nullptr, false, false) == SAO_STATUS_OK);
+	REQUIRE(::GetWindowRect(render_hwnd, &recovered_rect));
+	CHECK(recovered_rect.left == bounds.x);
+	CHECK(recovered_rect.top == bounds.y);
+	CHECK(recovered_rect.right - recovered_rect.left == bounds.width);
+	CHECK(recovered_rect.bottom - recovered_rect.top == bounds.height);
 	REQUIRE(sao_ui_z_order_check_leak_patterns(z_order, 0) == SAO_STATUS_OK);
 	CHECK(sao_ui_z_order_check_leak_patterns(z_order, SAO_UI_WS_EX_LAYERED) ==
 		  SAO_STATUS_ERR_INVALID_ARGUMENT);

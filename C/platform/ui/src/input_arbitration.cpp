@@ -1,4 +1,4 @@
-// SAO Auto — Wave 6 game-agnostic input arbitration.
+// SAO Auto — game-agnostic input arbitration.
 //
 // See `include/sao/ui/input_arbitration.h` for the ABI contract.
 //

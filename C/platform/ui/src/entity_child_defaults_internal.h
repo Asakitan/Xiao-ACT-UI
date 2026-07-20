@@ -9,15 +9,15 @@ namespace sao::ui::entity_child_defaults {
 
 inline sao_status_t apply_control(sao_ui_menu_handle_t menu, bool nervgear_mode) noexcept {
     const std::array<SaoUiMenuItem, 8> control{{
-        {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, true, {false, false, false}},
+        {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, false, {false, false, false}},
         {nervgear_mode ? "NervGear: ON" : "NervGear: OFF", "◈",
          SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, true, {false, false, false}},
         {"──────────", "─", -1, false, {false, false, false}},
         {"Streaming Mode: OFF", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true,
          {false, false, false}},
-        {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, true,
+        {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, false,
          {false, false, false}},
-        {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, true,
+        {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, false,
          {false, false, false}},
         {"──────────", "─", -1, false, {false, false, false}},
         {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true, {false, false, false}},
@@ -43,8 +43,8 @@ inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
 
     const std::array<SaoUiMenuItem, 3> tools{{
         {"AI Editor (LLM)", "✦", SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, true, {false, false, false}},
-        {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, true, {false, false, false}},
-        {"Process Selector", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, true,
+        {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, false, {false, false, false}},
+        {"Process Selector", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, false,
          {false, false, false}},
     }};
     status = sao_ui_menu_set_children(menu, "Tools", tools.data(), tools.size());
@@ -52,7 +52,7 @@ inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
         return status;
 
     const std::array<SaoUiMenuItem, 3> plugins{{
-        {"插件管理面板 Manage", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, true,
+        {"插件管理面板 Manage", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, false,
          {false, false, false}},
         {"重载全部插件 Reload", "↻", SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, true,
          {false, false, false}},

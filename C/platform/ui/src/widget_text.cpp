@@ -1,4 +1,4 @@
-// SAO Auto — text-family widgets (Wave 4 / Agent d, G3.8 first slice).
+// SAO Auto — text-family widgets and time-display labels.
 //
 // This slice owns the state + data-structure half of the Label family
 // and the three time-display labels (Clock / RelativeTime / Duration).
@@ -11,12 +11,12 @@
 //   * sao_ui_relative_time_label_create / _update
 //   * sao_ui_duration_label_create / _update
 //
-// The three time-display types use STRUCTURALLY-DIFFERENT wave4 helper
+// The three time-display types use STRUCTURALLY-DIFFERENT helper
 // formatters exported at the bottom (int64_t epoch_ms / int32_t
 // delta_seconds / uint64_t duration_ms) so callers get compile-time
 // prevention of the classic "wrong quantity to wrong widget" bug
 // documented in memory [ACT时间显示三类分开].  See
-// tests/test_widget_time_labels_wave4.cpp for the parity matrix.
+// tests/test_widget_time_labels.cpp for the parity matrix.
 //
 // UTF-8 no BOM.
 
@@ -46,19 +46,19 @@ static_assert(SAO_UI_FONT_SAO     == 0, "font slot enum drifted");
 static_assert(SAO_UI_FONT_MONO    == 2, "font slot enum drifted");
 
 // ---------------------------------------------------------------------------
-// Internal widget kinds (extends d2d_widgets kind enum via wave4 tag).
+// Internal widget kinds (extends the d2d_widgets kind enum).
 // ---------------------------------------------------------------------------
 
 namespace {
 
 // Fixed-width glyph approximation matches the memory-note "8px char"
-// first-slice contract — Wave 4a measures via the 8-px monospace grid
+// first-slice contract — measurements use the 8-px monospace grid
 // used by fmt_dur alignment inside star_resonance panels, plus a
 // per-font-slot multiplier for CJK / condensed SAO subtitle glyphs.
 constexpr int32_t kAsciiGlyphAdvancePx = 8;
 constexpr int32_t kCjkGlyphAdvancePx   = 16;
 
-// Wave4 widget-kind tag stored at head of every text-widget struct so
+// Widget-kind tag stored at head of every text-widget struct so
 // the shared dispatch (sao_ui_widget_get_kind / _paint) can identify
 // the concrete type without RTTI.  Values are aligned with the
 // widget_kit.h SAO_UI_WIDGET_* enum ranges but redeclared here so this
@@ -564,7 +564,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_duration_label_update(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 4 helper API (not part of widget_text.h yet).
+// Text-family helper API (not part of widget_text.h yet).
 //
 // The three formatters take STRUCTURALLY-DIFFERENT parameter types so
 // the compiler catches "wrong quantity to wrong widget" mismatches:
@@ -575,8 +575,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_duration_label_update(
 // The narrower parameter types (int32/uint64) don't cross-cast silently
 // from each other or from int64_t without a diagnostic on -Wnarrowing
 // / -Wsign-conversion / -Wconversion, giving callers the compile-time
-// gate the memory note demands.  These are the WAVE4 STRICT formatters
-// referenced by test_widget_time_labels_wave4.cpp; the label update
+// gate the memory note demands.  These are the strict formatters
+// referenced by test_widget_time_labels.cpp; the label update
 // paths call directly into fmt_*_into which take the same types.
 // ---------------------------------------------------------------------------
 
@@ -651,8 +651,8 @@ sao_ui_widget_format_duration_strict(
 
 // ---------------------------------------------------------------------------
 // Shared destroy — the dispatch tag tells us which struct to delete.
-// Exposed under the standard sao_ui_widget_destroy_wave4 name to avoid
-// colliding with the d2d_widgets.cpp stub (which returns NOT_IMPL).
+// Exposed under a text-family-specific name to avoid colliding with the
+// d2d_widgets.cpp stub (which returns NOT_IMPL).
 // ---------------------------------------------------------------------------
 
 extern "C" SAO_UI_API void SAO_UI_CALL

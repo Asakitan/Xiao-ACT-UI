@@ -573,7 +573,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_install_ll_hooks(
     sao_ui_input_router_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if !defined(_WIN32)
-    // Wave 17a CAPABILITY GATE: requires SetWindowsHookExW (user32.dll,
+    // CAPABILITY GATE: requires SetWindowsHookExW (user32.dll,
     // Windows-only WH_MOUSE_LL / WH_KEYBOARD_LL).  See PLAN.md §1.5.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #else
@@ -638,7 +638,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_uninstall_ll_hooks(
     sao_ui_input_router_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if !defined(_WIN32)
-    // Wave 17a CAPABILITY GATE: requires UnhookWindowsHookEx (user32.dll,
+    // CAPABILITY GATE: requires UnhookWindowsHookEx (user32.dll,
     // Windows-only).  See PLAN.md §1.5.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #else

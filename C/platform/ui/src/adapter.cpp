@@ -1327,7 +1327,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_create_overlay_window(
     return sao_ui_compositor_overlay_window_create(compositor, config, out_handle);
 }
 
-// ── Wave 6 test-only helpers (SAO_UI_API to export from DLL) ────
+// ── Adapter test-only helpers (SAO_UI_API to export from DLL) ───
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_adapter_test_call_count(sao_ui_compositor_overlay_window_handle_t handle) {
     if (handle == nullptr)

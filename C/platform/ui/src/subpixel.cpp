@@ -1,4 +1,4 @@
-// SAO Auto — subpixel.  Wave 6 first slice.
+// SAO Auto — subpixel compositing and fractional bar widths.
 //
 // 1:1 with `sao_auto/python/render/overlay_subpixel.py` (120 lines).
 //

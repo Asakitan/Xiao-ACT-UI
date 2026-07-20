@@ -63,6 +63,7 @@ struct sao_ui_overlay_host_s {
     void* mouse_user = nullptr;
 
     SaoOverlayHostClientRect client_rect{};
+    SaoOverlayHostClientRect desired_rect{};
     uint32_t current_dpi = 96;
     SaoOverlayHostWMCounters wm_counters{};
 
@@ -526,6 +527,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     MARGINS margins{-1, -1, -1, -1};
     ::DwmExtendFrameIntoClientArea(host->hwnd, &margins);
     host->client_rect = {x, y, width > 0 ? width : 1920, height > 0 ? height : 1080};
+    host->desired_rect = host->client_rect;
     host->current_dpi = query_window_dpi(host->hwnd);
     OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
     if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
@@ -624,12 +626,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
             reinterpret_cast<const uint8_t*>(args.data()), args.size());
         if (submit_status != SAO_STATUS_OK) return submit_status;
     }
-    if (!::SetWindowPos(handle->hwnd, nullptr, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER)) {
+    if (!win32_api().set_window_pos(handle->hwnd, nullptr, x, y, width, height,
+                                    SWP_NOACTIVATE | SWP_NOZORDER)) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     std::lock_guard<std::mutex> lock(handle->state_mu);
     handle->client_rect = {x, y, width, height};
+    handle->desired_rect = handle->client_rect;
     handle->current_dpi = query_window_dpi(handle->hwnd);
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
+    sao_ui_overlay_host_handle_t handle, SaoOverlayHostClientRect* out_rect) {
+    if (out_rect != nullptr) std::memset(out_rect, 0, sizeof(*out_rect));
+    if (handle == nullptr || handle->hwnd == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_rect == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(handle->state_mu);
+    *out_rect = handle->desired_rect;
     return SAO_STATUS_OK;
 }
 
@@ -638,8 +652,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_visible(
     if (handle == nullptr || handle->hwnd == nullptr || handle->control_hwnd == nullptr) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
+    if (visible) {
+        SaoOverlayHostClientRect desired{};
+        {
+            std::lock_guard<std::mutex> lock(handle->state_mu);
+            desired = handle->desired_rect;
+        }
+        if (!win32_api().set_window_pos(handle->hwnd, nullptr, desired.x, desired.y,
+                                        desired.width, desired.height,
+                                        SWP_NOACTIVATE | SWP_NOZORDER)) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+    }
     ::ShowWindow(handle->hwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
     ::ShowWindow(handle->control_hwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    if (visible) (void)::DwmFlush();
     std::lock_guard<std::mutex> lock(handle->state_mu);
     handle->visible = visible;
     return SAO_STATUS_OK;
@@ -784,7 +811,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_state(
     return SAO_STATUS_OK;
 }
 
-// Wave 17a CLASS C (LEGACY): the WGL make-current / release-current /
+// LEGACY classification: the WGL make-current / release-current /
 // swap-buffers surface is intentionally stubbed on the D3D/DComp
 // production compositor.  overlay_host.h line 213-214 declares them as
 // "Legacy WGL operations ... return SAO_STATUS_ERR_NOT_IMPLEMENTED in

@@ -164,6 +164,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
     sao_ui_overlay_host_handle_t handle,
     int32_t x, int32_t y, int32_t width, int32_t height);
 
+// Returns the last successfully requested on-screen geometry.  This remains
+// stable when an external tagWND rcWindow scrub makes WM_SIZE/WM_MOVE report
+// a decoy rectangle, so the z-order authority can re-assert the real DWM
+// presentation bounds on its next tick.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
+    sao_ui_overlay_host_handle_t handle,
+    struct SaoOverlayHostClientRect* out_rect);
+
 // Show/hide.  ShowWindow(hRender, SW_SHOWNOACTIVATE) — never
 // SW_SHOW/SW_SHOWNORMAL (would activate).  hControl gets the same
 // treatment; owner stays hidden.
@@ -285,9 +293,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_mouse(
     sao_ui_overlay_host_handle_t handle,
     sao_ui_mouse_fn_t fn, void* user_data);
 
-// ── Wave 7 additions (Phase 6 overlay live parity depth) ────────
+// ── Window-message completion handlers ───────────────────────────
 //
-// Additional WM_ handlers past the Wave 2 slice: WM_SIZE, WM_MOVE,
+// Additional WM_ handlers beyond the base host lifecycle: WM_SIZE, WM_MOVE,
 // WM_ACTIVATE, WM_WINDOWPOSCHANGING, WM_DPICHANGED, WM_DISPLAYCHANGE.
 //
 // Each handler MAY invoke a caller-supplied callback so consumers

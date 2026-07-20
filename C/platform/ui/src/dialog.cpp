@@ -1,4 +1,4 @@
-// SAO Auto - modal dialog state machine + logic (Wave 4 / G3.5 first slice).
+// SAO Auto - modal dialog state machine, focus, and keyboard logic.
 //
 // 1:1 with sao_theme/dialogs.py:
 //   * SAODialog._show orchestrates EXPANDING (500ms width lerp) then

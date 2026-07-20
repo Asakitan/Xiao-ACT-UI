@@ -1252,7 +1252,7 @@ sao_status_t sao::ui::menu_visual::restore_child_menu_snapshot(
 }
 
 // ---------------------------------------------------------------------------
-// Wave3 helper API (exported for tests + future compose path).
+// Menu-layout helper API (exported for tests + future compose path).
 //
 // These are NOT in menu.h — they are internal helpers that the state-
 // machine test suite needs to hit.  Kept extern "C" + SAO_UI_API so

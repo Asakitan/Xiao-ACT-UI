@@ -1,9 +1,9 @@
-// SAO Auto — theme implementation (Wave2 flat-token tables + handle stub).
+// SAO Auto — theme implementation (flat-token tables + handle API).
 //
-// The Wave2 API is production-ready: three constexpr colour tables
+// The flat-token API is production-ready: three constexpr colour tables
 // (dark / light / glass) + one metric table live in theme.h, and all
 // runtime accessors below just read from them.  The handle-based API
-// remains a skeleton — Wave3 will layer per-panel overrides on top.
+// also layers per-panel overrides on top.
 
 #include "sao/ui/theme.h"
 
@@ -36,7 +36,7 @@ struct sao_ui_theme_s {
     std::mutex mutex;
 };
 
-// ── Wave2 static state ────────────────────────────────────────────
+// ── Process-wide flat-token state ────────────────────────────────
 namespace {
 
 // Process-wide active theme id.  atomic so the getter is lock-free;
@@ -63,7 +63,7 @@ std::vector<ThemeCallbackSlot>& callbacks_storage() {
 std::atomic<uint64_t> g_next_callback_handle{1};
 
 // Compile-time RGBA -> ARGB shim: keeps the pre-existing
-// SaoUiColorTable / resolve_color pipeline compatible with the wave2
+// SaoUiColorTable / resolve_color pipeline compatible with the RGBA
 // tables in theme.h.  ARGB byte layout is 0xAA_RR_GG_BB.
 constexpr uint32_t rgba_to_argb(SaoColorRgba c) {
     return (static_cast<uint32_t>(c.a) << 24) |
@@ -186,7 +186,7 @@ extern "C" int32_t SAO_UI_CALL sao_ui_theme_resolve_metric(
     return kMetricTables[theme_id].values[metric];
 }
 
-// ── Wave2 handle-less API (G3.1 delivery) ─────────────────────────
+// ── Handle-less flat-token API (G3.1) ─────────────────────────────
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_color_by_id(
     SaoUiThemeId theme_id,
     SaoUiColorToken token,
@@ -209,7 +209,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_metric_by_id(
         *out_value = 0;
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    // Metrics are theme-agnostic in Wave2, so we ignore theme_id past
+    // Metrics are theme-agnostic, so we ignore theme_id past
     // the range check (the enum-count-3 table is identical per row).
     *out_value = sao::ui::kSaoThemeMetrics[metric];
     return SAO_STATUS_OK;

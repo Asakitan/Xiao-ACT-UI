@@ -121,7 +121,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_state(
     sao_ui_gpu_capture_handle_t handle,
     int32_t* out_state);
 
-// ── Wave 7 additions (Phase 6 overlay live parity depth) ────────
+// ── Stateless BGRA readback, premultiplication, and hashing ───────
 //
 // Pixel-plumbing pieces the Python authoritative source doesn't need
 // (its recognition loop consumes numpy arrays directly) but that

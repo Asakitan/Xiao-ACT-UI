@@ -1,4 +1,4 @@
-// SAO Auto — deepened input router (G3.11, Wave 4).
+// SAO Auto — typed input router, focus stack, and hotkey matching.
 //
 // Implements the widget-facing side of input routing that the coarse
 // legacy `input.h` doesn't cover: typed event dispatch, focus stack,

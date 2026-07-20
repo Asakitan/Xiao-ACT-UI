@@ -1,4 +1,4 @@
-// SAO Auto — capture_sync.  Wave 6 first slice.
+// SAO Auto — reentrant render/capture synchronization.
 //
 // 1:1 with `sao_auto/python/render/render_capture_sync.py` (54 lines).
 //

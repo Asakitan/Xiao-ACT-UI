@@ -1,4 +1,4 @@
-// SAO Auto — overlay compositor streaming-mode flow control (Wave 13b).
+// SAO Auto — overlay compositor streaming-mode flow control.
 //
 // 1:1 with `sao_auto/python/render/overlay_compositor.py`:
 //   * `_streaming_lock` / `_streaming_threads_lock` /

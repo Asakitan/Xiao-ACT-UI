@@ -1,4 +1,4 @@
-// SAO Auto — panel SDK descriptor path (G3.10, Wave 4).
+// SAO Auto — panel SDK descriptor and body-mutation path.
 //
 // Modern registration path for plugin panels.  Plugins fill a
 // SaoPanelDescriptor, call sao_ui_panel_register, then interact with

@@ -1,14 +1,14 @@
-// SAO Auto — gpu_capture Wave 3 stub + Wave 7 BGRA readback / hash
-// slice.  1:1 with `render/gpu_capture.py`.
+// SAO Auto — gpu_capture lifecycle gates + BGRA readback / hash helpers.
+// 1:1 with `render/gpu_capture.py`.
 //
-// Wave 3 left the WGC session lifecycle stubbed (not implemented) —
+// The WGC session lifecycle remains stubbed (not implemented) —
 // the recognition path in the Python auth source relies on the
 // `windows_capture` pyo3 module which we have no equivalent for in
 // pure C++.  We keep the stubs so callers get an unambiguous
 // SAO_STATUS_ERR_NOT_INITIALIZED and fall back to their PrintWindow
 // path.
 //
-// Wave 7 adds the stateless "raw pixels" plumbing that the Python
+// Stateless helpers add the "raw pixels" plumbing that the Python
 // auth source doesn't require (it consumes numpy arrays directly):
 //   * sao_ui_gpu_capture_bgra_from_texture — D3D11 CopyResource + Map
 //   * sao_ui_gpu_capture_premultiply_bgra  — straight → premultiplied
@@ -453,7 +453,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_state(
 #endif
 }
 
-// ── Wave 7: BGRA readback + premultiply + hash ──────────────────
+// ── BGRA readback + premultiply + hash ──────────────────────────
 
 #if defined(_WIN32)
 

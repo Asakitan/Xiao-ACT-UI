@@ -1,9 +1,9 @@
-// SAO Auto — data-display widgets first slice (Wave 4 / Agent d, G3.8).
+// SAO Auto — data-display widgets and progress-bar behavior.
 //
 // This slice implements the ProgressBar portion of widget_data.h:
 //   * sao_ui_progress_bar_create / _set_value / _set_max
 //
-// Plus wave4 helper API for style-driven fill-ratio, HP-ramp colour
+// Plus helper APIs for style-driven fill-ratio, HP-ramp colour
 // resolution, and the HP_TRAIL animation tick.  Gauge / badge / tooltip
 // / more_indicator are stubbed to NOT_IMPLEMENTED for later slices.
 //
@@ -442,7 +442,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_empty_state_get_detail(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 4 helper API — fill ratio, style-aware colour resolution, and
+// Progress-bar helper API — fill ratio, style-aware colour resolution, and
 // the HP_TRAIL animation tick.  Not part of widget_data.h yet.
 // ---------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-// SAO Auto — Wave 6 game-agnostic alerts / TTS / banner / sound.
+// SAO Auto — game-agnostic alerts / TTS / banner / sound.
 //
 // See `include/sao/ui/alerts.h` for the ABI contract.
 

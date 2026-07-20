@@ -1,6 +1,6 @@
 // SAO Auto — panel_layout engine first slice.
 //
-// Wave 3 / Agent e / G3.9.  Two-phase measure→arrange with 6 layout
+// Two-phase measure→arrange with 6 layout
 // modes (vertical, horizontal, grid, absolute, flex, dock) and per-
 // node dirty flags.  1:1 with tk pack/grid/place + CSS flex/grid.
 //

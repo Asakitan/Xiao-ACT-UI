@@ -137,6 +137,12 @@ sao_status_t SAO_UI_CALL render_red(
         static_cast<float>(width), static_cast<float>(height), 0xffff0000U);
 }
 
+sao_status_t SAO_UI_CALL throw_renderer(
+    sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t,
+    int32_t, int32_t, int32_t, int32_t, void*) {
+    throw std::runtime_error("renderer callback failure");
+}
+
 struct ProviderGuard {
     uint64_t token{};
 
@@ -586,6 +592,52 @@ TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
     float ratio = 0.0F;
     REQUIRE(sao_ui_gauge_get_ratio(gauge, &ratio) == SAO_STATUS_OK);
     CHECK(ratio == 0.25F);
+
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+    sao_ui_widget_destroy(gauge);
+}
+
+TEST_CASE("paint_at contains renderer exceptions and restores paint state",
+          "[ui][widget_extension][paint][exception]") {
+    SaoUiGaugeSpec gauge_spec{};
+    gauge_spec.value = 25.0F;
+    gauge_spec.max_value = 100.0F;
+    sao_ui_widget_handle_t gauge = nullptr;
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) ==
+            SAO_STATUS_OK);
+
+    ProviderGuard provider;
+    REQUIRE(sao_ui_widget_register_renderer_provider(
+                SAO_UI_WIDGET_GAUGE, throw_renderer, nullptr,
+                &provider.token) == SAO_STATUS_OK);
+
+    SaoUiOffscreenRasterDesc raster_desc{8, 8, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) ==
+            SAO_STATUS_OK);
+
+    CHECK(sao_ui_widget_paint_at(
+              gauge, context, 2, 2, 4, 4, 0.25F) ==
+          SAO_STATUS_ERR_UNKNOWN);
+    REQUIRE(sao_ui_paint_ctx_fill_rect(
+                context, 0.0F, 0.0F, 8.0F, 8.0F, 0xff00ff00U) ==
+            SAO_STATUS_OK);
+
+    const auto pixels = snapshot(raster);
+    for (const Pixel pixel : pixels) {
+        CHECK(pixel.b == 0);
+        CHECK(pixel.g == 255);
+        CHECK(pixel.r == 0);
+        CHECK(pixel.a == 255);
+    }
+    CHECK(sao_ui_paint_ctx_pop_opacity(context) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_paint_ctx_pop_clip(context) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
 
     sao_ui_paint_ctx_destroy(context);
     sao_ui_offscreen_raster_destroy(raster);

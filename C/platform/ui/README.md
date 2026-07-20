@@ -216,7 +216,7 @@ control decoy while the render side is excluded).
 All Windows-stock system libraries — no vendored dependencies needed
 in the platform tier.
 
-## Wave 1 Agent a deliverables (this batch — overlay + anti-screencap 1:1)
+## Overlay + anti-screencap deliverables
 
 Existing headers deepened (10):
 - `overlay_host.h` — 220 lines: full config struct, dual HWND semantics
@@ -306,7 +306,7 @@ header banners):
    `dcomp_bridge_lock_texture` / `unlock_texture` documented
    pattern.
 
-## Wave 1 Agent e deliverables (this batch — game-agnostic widget kit)
+## Game-agnostic widget-kit deliverables
 
 Eight new headers, one lightly amended (`panel.h` grew two lines to
 point at `panel_sdk.h`):
@@ -368,7 +368,7 @@ Summary: 8 new headers + 1 lightly amended (`panel.h`).  Line counts:
 `render_hook.h` 221, `input_router.h` 309,
 `sao_ui_scriptable_canvas.h` 303.  Every header ≤ 350 lines.
 
-## Wave 1 Agent d deliverables (this batch)
+## Theme and interaction deliverables
 
 Extended headers (7 new / deepened):
 

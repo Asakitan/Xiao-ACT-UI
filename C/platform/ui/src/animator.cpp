@@ -1,6 +1,6 @@
 // SAO Auto — animator curve library + 60Hz scheduler first slice.
 //
-// Wave 3 / Agent e / G3.7.  Mirrors `sao_theme/utils.py` easing
+// Mirrors `sao_theme/utils.py` easing
 // functions verbatim and the `sao_theme/animator.py` scheduler.
 // Coupled with scheduler.h (Agent a) — this file exposes the pure
 // math and the per-handle animation registry; the actual 60Hz pump

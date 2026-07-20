@@ -956,7 +956,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_stats(
     return SAO_STATUS_OK;
 }
 
-// ── Wave 6 test-only helpers (marked SAO_UI_API so the DLL exports
+// ── Mutation-coordinator test-only helpers (SAO_UI_API exports
 // them; header declarations live in the individual test files as
 // forward externs to avoid churning the public ABI headers) ─────
 extern "C" SAO_UI_API size_t SAO_UI_CALL

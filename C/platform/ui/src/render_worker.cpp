@@ -1,4 +1,4 @@
-// SAO Auto — render worker.  Wave 4 first-implementable slice.
+// SAO Auto — render worker pool and thread-affine lanes.
 //
 // Python authoritative: `sao_auto/python/render/overlay_render_worker.py`.
 //

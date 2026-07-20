@@ -1,4 +1,4 @@
-// SAO Auto — Wave 6 game-agnostic auto-key implementation.
+// SAO Auto — game-agnostic auto-key implementation.
 //
 // See `include/sao/ui/auto_key.h` for the ABI contract.  This slice is
 // concerned only with the platform mechanics: SendInput batching, timed
@@ -266,7 +266,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_auto_key_send_key(
     return SAO_STATUS_OK;
 #else
     (void)virtual_key; (void)modifiers_mask; (void)hold_ms;
-    // Wave 17a CAPABILITY GATE: requires SendInput (Windows user32.dll).
+    // CAPABILITY GATE: requires SendInput (Windows user32.dll).
     // The Windows branch above is the real implementation.  See PLAN.md §1.5.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
@@ -305,7 +305,7 @@ sao_ui_auto_key_send_key_combo(
     return SAO_STATUS_OK;
 #else
     (void)vk_array; (void)count; (void)hold_ms;
-    // Wave 17a CAPABILITY GATE: SendInput combo (Windows user32.dll).
+    // CAPABILITY GATE: SendInput combo (Windows user32.dll).
     // See PLAN.md §1.5 for gate classification.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
@@ -347,7 +347,7 @@ sao_ui_auto_key_send_text(
     return SAO_STATUS_OK;
 #else
     (void)text_utf16; (void)count;
-    // Wave 17a CAPABILITY GATE: SendInput KEYEVENTF_UNICODE (Windows user32.dll).
+    // CAPABILITY GATE: SendInput KEYEVENTF_UNICODE (Windows user32.dll).
     // See PLAN.md §1.5 for gate classification.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
@@ -434,7 +434,7 @@ sao_ui_auto_key_send_mouse_click(
     return SAO_STATUS_OK;
 #else
     (void)x_screen_px; (void)y_screen_px; (void)button;
-    // Wave 17a CAPABILITY GATE: SendInput MOUSEEVENTF_* + GetSystemMetrics
+    // CAPABILITY GATE: SendInput MOUSEEVENTF_* + GetSystemMetrics
     // (Windows user32.dll).  See PLAN.md §1.5 for gate classification.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
@@ -456,7 +456,7 @@ sao_ui_auto_key_get_key_state(
 #else
     (void)virtual_key;
     *is_down_out = false;
-    // Wave 17a CAPABILITY GATE: GetAsyncKeyState (Windows user32.dll).
+    // CAPABILITY GATE: GetAsyncKeyState (Windows user32.dll).
     // See PLAN.md §1.5 for gate classification.
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
