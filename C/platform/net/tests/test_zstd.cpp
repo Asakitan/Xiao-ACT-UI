@@ -32,7 +32,7 @@ bool zstd_present() {
 }  // namespace
 
 TEST_CASE("zstd_compress_decompress_roundtrip_small",
-          "[net][zstd][wave6]") {
+          "[net][zstd][automation]") {
     if (!zstd_present()) {
         SKIP("zstd not compiled in - skipping roundtrip");
     }
@@ -71,7 +71,7 @@ TEST_CASE("zstd_compress_decompress_roundtrip_small",
 }
 
 TEST_CASE("zstd_decompress_invalid_returns_error",
-          "[net][zstd][wave6]") {
+          "[net][zstd][automation]") {
     if (!zstd_present()) {
         SKIP("zstd not compiled in - skipping invalid-input check");
     }
@@ -97,7 +97,7 @@ TEST_CASE("zstd_decompress_invalid_returns_error",
 }
 
 TEST_CASE("zstd_compress_level_1_and_22",
-          "[net][zstd][wave6]") {
+          "[net][zstd][automation]") {
     if (!zstd_present()) {
         SKIP("zstd not compiled in - skipping level probe");
     }
@@ -149,7 +149,7 @@ TEST_CASE("zstd_compress_level_1_and_22",
 }
 
 TEST_CASE("varint_decode_1_byte_and_multi_byte",
-          "[net][protobuf][varint][wave6]") {
+          "[net][protobuf][varint][automation]") {
     // Single-byte varint (value < 128).
     const uint8_t one[] = {0x2A};  // 42
     uint64_t value = 0;

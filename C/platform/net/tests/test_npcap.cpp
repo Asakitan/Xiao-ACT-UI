@@ -22,7 +22,7 @@ bool npcap_installed() {
 }
 }  // namespace
 
-TEST_CASE("npcap_available_matches_installed", "[net][wave6][npcap]") {
+TEST_CASE("npcap_available_matches_installed", "[net][automation][npcap]") {
     // Contract: sao_net_npcap_available NEVER returns an error status.
     // It always returns SAO_STATUS_OK and reports its verdict via the
     // bool out-param.  This test asserts both halves.
@@ -42,7 +42,7 @@ TEST_CASE("npcap_available_matches_installed", "[net][wave6][npcap]") {
             SAO_STATUS_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("npcap_list_devices_returns_nonempty", "[net][wave6][npcap]") {
+TEST_CASE("npcap_list_devices_returns_nonempty", "[net][automation][npcap]") {
     if (!npcap_installed()) {
         // Sizing probe still returns NOT_FOUND, not garbage.
         size_t count = 42;
@@ -69,7 +69,7 @@ TEST_CASE("npcap_list_devices_returns_nonempty", "[net][wave6][npcap]") {
     }
 }
 
-TEST_CASE("npcap_open_close_localhost", "[net][wave6][npcap]") {
+TEST_CASE("npcap_open_close_localhost", "[net][automation][npcap]") {
     if (!npcap_installed()) {
         SKIP("Npcap not installed on this runner");
         return;
@@ -97,7 +97,7 @@ TEST_CASE("npcap_open_close_localhost", "[net][wave6][npcap]") {
     sao_net_npcap_close(nullptr);
 }
 
-TEST_CASE("npcap_set_filter_valid_expr", "[net][wave6][npcap]") {
+TEST_CASE("npcap_set_filter_valid_expr", "[net][automation][npcap]") {
     if (!npcap_installed()) {
         SKIP("Npcap not installed on this runner");
         return;

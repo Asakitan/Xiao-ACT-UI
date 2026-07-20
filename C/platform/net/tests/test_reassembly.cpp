@@ -123,7 +123,7 @@ const FlowKey kFlowB{
 
 }  // namespace
 
-TEST_CASE("reasm_single_segment_pass_through", "[net][wave6][reasm]") {
+TEST_CASE("reasm_single_segment_pass_through", "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     sao_net_reassembler_handle_t r = nullptr;
     REQUIRE(sao_net_reassembler_create(&cfg, &r) == SAO_STATUS_OK);
@@ -150,7 +150,7 @@ TEST_CASE("reasm_single_segment_pass_through", "[net][wave6][reasm]") {
 }
 
 TEST_CASE("reasm_two_segments_in_order_reassembled",
-          "[net][wave6][reasm]") {
+          "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     sao_net_reassembler_handle_t r = nullptr;
     REQUIRE(sao_net_reassembler_create(&cfg, &r) == SAO_STATUS_OK);
@@ -183,7 +183,7 @@ TEST_CASE("reasm_two_segments_in_order_reassembled",
     sao_net_reassembler_destroy(r);
 }
 
-TEST_CASE("reasm_out_of_order_segments_wait", "[net][wave6][reasm]") {
+TEST_CASE("reasm_out_of_order_segments_wait", "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     sao_net_reassembler_handle_t r = nullptr;
     REQUIRE(sao_net_reassembler_create(&cfg, &r) == SAO_STATUS_OK);
@@ -251,7 +251,7 @@ TEST_CASE("reasm_out_of_order_segments_wait", "[net][wave6][reasm]") {
     sao_net_reassembler_destroy(r);
 }
 
-TEST_CASE("reasm_retransmit_dedup", "[net][wave6][reasm]") {
+TEST_CASE("reasm_retransmit_dedup", "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     sao_net_reassembler_handle_t r = nullptr;
     REQUIRE(sao_net_reassembler_create(&cfg, &r) == SAO_STATUS_OK);
@@ -280,7 +280,7 @@ TEST_CASE("reasm_retransmit_dedup", "[net][wave6][reasm]") {
     sao_net_reassembler_destroy(r);
 }
 
-TEST_CASE("reasm_timeout_flushes_stale", "[net][wave6][reasm]") {
+TEST_CASE("reasm_timeout_flushes_stale", "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     cfg.timeout_ms = 100;  // 100 ms — small so the test is fast
     sao_net_reassembler_handle_t r = nullptr;
@@ -318,7 +318,7 @@ TEST_CASE("reasm_timeout_flushes_stale", "[net][wave6][reasm]") {
     sao_net_reassembler_destroy(r);
 }
 
-TEST_CASE("reasm_multi_flow_isolation", "[net][wave6][reasm]") {
+TEST_CASE("reasm_multi_flow_isolation", "[net][automation][reasm]") {
     SaoReassemblerConfig cfg{};
     sao_net_reassembler_handle_t r = nullptr;
     REQUIRE(sao_net_reassembler_create(&cfg, &r) == SAO_STATUS_OK);

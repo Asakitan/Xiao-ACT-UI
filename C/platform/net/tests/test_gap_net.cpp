@@ -24,14 +24,14 @@
 #include "sao/net/npcap_capture.h"
 #include "sao/net/proto_zstd.h"
 
-#include "wave17c_support.h"
+#include "core_gap_support.h"
 
-using sao::wave17c::GapKind;
-using sao::wave17c::make_pattern_bytes;
-using sao::wave17c::matches_gap_kind;
+using sao::core_gap::GapKind;
+using sao::core_gap::make_pattern_bytes;
+using sao::core_gap::matches_gap_kind;
 
-TEST_CASE("wave17c net: zstd availability probe reports coherently",
-          "[wave17c][net][zstd]") {
+TEST_CASE("net gap: zstd availability probe reports coherently",
+          "[gap_closure][net][zstd]") {
     bool available = false;
     REQUIRE(sao_net_zstd_available(&available) == SAO_STATUS_OK);
 
@@ -76,8 +76,8 @@ TEST_CASE("wave17c net: zstd availability probe reports coherently",
     }
 }
 
-TEST_CASE("wave17c net: protobuf varint remains a real implementation",
-          "[wave17c][net][protobuf]") {
+TEST_CASE("net gap: protobuf varint remains a real implementation",
+          "[gap_closure][net][protobuf]") {
     // 300 encodes as 0xAC 0x02 in protobuf varint.  Choosing a known
     // fixture avoids any state that could depend on external tooling.
     const std::array<std::uint8_t, 2> encoded{0xAC, 0x02};
@@ -102,8 +102,8 @@ TEST_CASE("wave17c net: protobuf varint remains a real implementation",
     CHECK(truncated_consumed == 0);
 }
 
-TEST_CASE("wave17c net: npcap availability probe is stable",
-          "[wave17c][net][npcap]") {
+TEST_CASE("net gap: npcap availability probe is stable",
+          "[gap_closure][net][npcap]") {
     // Hermetic — the availability probe returns SAO_STATUS_OK regardless
     // of whether wpcap.dll is present on the CI host.  We just need to
     // confirm it never regresses to NOT_IMPLEMENTED.
@@ -116,8 +116,8 @@ TEST_CASE("wave17c net: npcap availability probe is stable",
           SAO_STATUS_ERR_INVALID_ARGUMENT);
 }
 
-TEST_CASE("wave17c net: npcap dispatch capability gate on a null handle",
-          "[wave17c][net][npcap]") {
+TEST_CASE("net gap: npcap dispatch capability gate on a null handle",
+          "[gap_closure][net][npcap]") {
     // Passing a null handle short-circuits before we touch the dispatch
     // symbol; we still exercise the entry point and prove it doesn't
     // regress to NOT_IMPLEMENTED.  Real dispatch requires opening a
@@ -132,8 +132,8 @@ TEST_CASE("wave17c net: npcap dispatch capability gate on a null handle",
     CHECK(delivered == 0);
 }
 
-TEST_CASE("wave17c net: status taxonomy exposes the same codes for net callers",
-          "[wave17c][net][status]") {
+TEST_CASE("net gap: status taxonomy exposes the same codes for net callers",
+          "[gap_closure][net][status]") {
     // A drive-by check that the shared status vocabulary still resolves;
     // the net DLL statically links against sao::core so this exercises
     // the wiring end-to-end.
