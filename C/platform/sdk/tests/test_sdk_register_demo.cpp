@@ -114,7 +114,7 @@ SaoSdkWidgetSpec progress_widget(const char* id, float value, float maxv) {
 // ─── CASE 1: register panel with label + progress bar ────────────────
 
 TEST_CASE("demo_plugin_registers_panel_with_label_and_progress_bar",
-          "[sdk][wave7][register]") {
+          "[sdk][real_plugins][register]") {
     auto* ctx = make_ctx("demo.plugin.a");
 
     // "Plugin" side: build descriptor + register.
@@ -148,7 +148,7 @@ TEST_CASE("demo_plugin_registers_panel_with_label_and_progress_bar",
 // ─── CASE 2: widget updates through the SDK ─────────────────────────
 
 TEST_CASE("demo_plugin_updates_widget_via_sdk_call",
-          "[sdk][wave7][update]") {
+          "[sdk][real_plugins][update]") {
     auto* ctx = make_ctx("demo.plugin.b");
     const auto d = default_panel("demo.panel.update", "Update Test");
     sao_sdk_ui_panel_t panel = nullptr;
@@ -176,7 +176,7 @@ TEST_CASE("demo_plugin_updates_widget_via_sdk_call",
 // ─── CASE 3: remove widget then re-register ──────────────────────────
 
 TEST_CASE("demo_plugin_removes_widget_and_reregisters",
-          "[sdk][wave7][remove]") {
+          "[sdk][real_plugins][remove]") {
     auto* ctx = make_ctx("demo.plugin.c");
     const auto d = default_panel("demo.panel.remove", "Remove Test");
     sao_sdk_ui_panel_t panel = nullptr;
@@ -223,7 +223,7 @@ void SAO_SDK_CALL event_probe_cb(const char* topic_utf8,
 }  // namespace
 
 TEST_CASE("demo_plugin_subscribes_event_and_receives_publish",
-          "[sdk][wave7][event]") {
+          "[sdk][real_plugins][event]") {
     auto* ctx = make_ctx("demo.plugin.d");
 
     EventProbe probe;
@@ -279,7 +279,7 @@ constexpr uint32_t MOD_CTRL_BIT = 1u << 0;
 }  // namespace
 
 TEST_CASE("demo_plugin_registers_hotkey_and_router_matches",
-          "[sdk][wave7][hotkey]") {
+          "[sdk][real_plugins][hotkey]") {
     auto* ctx = make_ctx("demo.plugin.e");
 
     HotkeyProbe probe;
@@ -346,7 +346,7 @@ sao_sdk_status_t SAO_SDK_CALL hook_probe_cb(
 }  // namespace
 
 TEST_CASE("demo_plugin_render_hook_fires_at_correct_clock_point",
-          "[sdk][wave7][render_hook]") {
+          "[sdk][real_plugins][render_hook]") {
     auto* ctx = make_ctx("demo.plugin.f");
 
     HookProbe probe;
@@ -374,7 +374,7 @@ TEST_CASE("demo_plugin_render_hook_fires_at_correct_clock_point",
 // ─── CASE 7: unregister-all-on-shutdown clean ────────────────────────
 
 TEST_CASE("demo_plugin_unregister_all_on_shutdown_clean",
-          "[sdk][wave7][shutdown]") {
+          "[sdk][real_plugins][shutdown]") {
     auto* ctx = make_ctx("demo.plugin.g");
 
     // Register: 1 panel + 3 widgets + 2 hotkeys + 1 event sub +
@@ -436,7 +436,7 @@ TEST_CASE("demo_plugin_unregister_all_on_shutdown_clean",
 // ─── CASE 8: two plugins isolated / z-ordering ───────────────────────
 
 TEST_CASE("demo_two_plugins_isolated_z_ordering",
-          "[sdk][wave7][isolation]") {
+          "[sdk][real_plugins][isolation]") {
     auto* ctx_a = make_ctx("demo.plugin.h1");
     auto* ctx_b = make_ctx("demo.plugin.h2");
 
@@ -513,7 +513,7 @@ TEST_CASE("demo_two_plugins_isolated_z_ordering",
 // ─── Sanity: context lifecycle basics ────────────────────────────────
 
 TEST_CASE("sdk_context_create_rejects_null_plugin_id",
-          "[sdk][wave7][context]") {
+          "[sdk][real_plugins][context]") {
     SaoSdkContext* ctx = nullptr;
     REQUIRE(sao_sdk_context_create("C:/tmp", nullptr, &ctx) ==
             SAO_SDK_ERR_INVALID_ARGUMENT);

@@ -8,7 +8,7 @@ add_executable(sao_platform_sdk_tests
     test_sdk_net_provider.cpp
     test_sdk_provider.cpp
     test_render_clock_integration.cpp
-    test_sdk_register_demo_wave7.cpp
+    test_sdk_register_demo.cpp
 )
 
 target_sources(sao_platform_sdk_tests PRIVATE ${SAO_PLATFORM_SDK_SOURCES})

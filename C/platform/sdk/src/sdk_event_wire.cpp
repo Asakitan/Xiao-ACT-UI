@@ -1,10 +1,10 @@
-// SAO Auto — Wave 7 SDK event-bus wire.
+// SAO Auto — SDK event-bus wire.
 //
-// Forwards `SaoSdkContext::event->*` into the platform's Wave 5 event
-// bus (`sao_engine_event_bus_*_wave5`).  Plugins never link the engine
+// Forwards `SaoSdkContext::event->*` into the platform's priority event
+// bus (`sao_engine_event_bus_*_priority`).  Plugins never link the engine
 // module directly; they see only the SDK vtable.
 //
-// The Wave 5 callback signature is `int(topic, data, size, ud)` — we
+// The priority callback signature is `int(topic, data, size, ud)` — we
 // wrap the plugin's void-returning `sao_sdk_event_callback_t` in a
 // bridge that returns SAO_ENGINE_EVENT_CONTINUE unconditionally.
 
@@ -53,10 +53,10 @@ void release_unpublished_event_owner(const std::shared_ptr<EventSubscriptionOwne
     }
 }
 
-// Bridge — invoked by the Wave 5 bus.  user_data is the
+// Bridge — invoked by the priority bus.  user_data is the
 // stable owner stashed at subscribe time. Retired owners remain valid
 // because an already-copied bus snapshot may still hold this pointer.
-int SAO_ENGINE_CALL wave5_bridge(const char* topic_utf8, const uint8_t* data_ptr, size_t data_size,
+int SAO_ENGINE_CALL priority_bridge(const char* topic_utf8, const uint8_t* data_ptr, size_t data_size,
                                  void* user_data) {
     auto* owner = static_cast<EventSubscriptionOwner*>(user_data);
     if (owner != nullptr) {
@@ -108,8 +108,8 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
     }
 
     sao_engine_subscription_t bus_token = 0;
-    const sao_status_t rc = sao_engine_event_bus_subscribe_wave5(
-        rt.event_bus, topic_utf8, /*priority=*/0, wave5_bridge, owner.get(), &bus_token);
+    const sao_status_t rc = sao_engine_event_bus_subscribe_priority(
+        rt.event_bus, topic_utf8, /*priority=*/0, priority_bridge, owner.get(), &bus_token);
     if (rc != SAO_STATUS_OK) {
         owner->callback_activity.retire_and_wait();
         release_unpublished_event_owner(owner);
@@ -205,7 +205,7 @@ sao_sdk_status_t SAO_SDK_CALL event_publish(void* ctx_impl, const char* topic_ut
     auto& rt = SharedRuntime::instance();
     if (rt.event_bus == nullptr)
         return SAO_SDK_ERR_NOT_INITIALIZED;
-    const sao_status_t rc = sao_engine_event_bus_publish_wave5(rt.event_bus, topic_utf8,
+    const sao_status_t rc = sao_engine_event_bus_publish_priority(rt.event_bus, topic_utf8,
                                                                json_payload_utf8, payload_len);
     if (rc != SAO_STATUS_OK)
         return static_cast<sao_sdk_status_t>(rc);
@@ -276,7 +276,7 @@ extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data) {
     static constexpr char kTopic[] = "sdk.test.snapshot";
-    (void)wave5_bridge(kTopic, nullptr, 0, snapshot_user_data);
+    (void)priority_bridge(kTopic, nullptr, 0, snapshot_user_data);
 }
 #endif
 

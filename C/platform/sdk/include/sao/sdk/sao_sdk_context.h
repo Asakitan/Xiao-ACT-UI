@@ -590,6 +590,51 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* set_locator_profile)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         uint32_t profile);
+
+    // ABI 1.11 extension: view/proj 分离锁.
+    //
+    // Optim 28 replaces the single-lock get_view_proj() model with two
+    // independent locks — view* alone and projection alone can be
+    // acquired, persisted, and reported separately, so a plugin can
+    // continue rendering ESP from a stable projection lock while the
+    // view matrix re-locks after a camera cut.  camera_world_pos gives
+    // callers a direct camera position in world space (no need to
+    // decompose the view matrix themselves).  split_lock_info returns
+    // per-matrix heap coordinates so the caller can persist and re-
+    // apply each lock independently across sessions.
+
+    // Fetch just the locked view matrix (16 floats, column-major).
+    // `*out_locked` = 1 if the view lock is present, 0 otherwise; the
+    // matrix contents are undefined when locked=0.
+    sao_sdk_status_t(SAO_SDK_CALL* get_view_matrix)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float out_matrix[16], uint8_t* out_locked);
+
+    // Fetch just the locked projection matrix (16 floats, column-major).
+    // `*out_locked` = 1 if the projection lock is present, 0 otherwise;
+    // the matrix contents are undefined when locked=0.
+    sao_sdk_status_t(SAO_SDK_CALL* get_proj_matrix)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float out_matrix[16], uint8_t* out_locked);
+
+    // Fetch the camera world position (3 floats).  Unlike the older
+    // get_camera_pos which required a combined view*proj lock, this
+    // slot is populated as soon as the view matrix alone is locked.
+    // Sets `out_pos` to zeros and returns SAO_SDK_ERR_NOT_INITIALIZED
+    // when the view lock is not present.
+    sao_sdk_status_t(SAO_SDK_CALL* get_camera_world_pos)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float out_pos[3]);
+
+    // Snapshot the split view/proj lock coordinates for cross-session
+    // persistence.  Each matrix has its own {heap_base, offset,
+    // locked} triple; when neither is locked all outputs are 0.  Any
+    // output pointer may be NULL to skip that field.
+    sao_sdk_status_t(SAO_SDK_CALL* get_split_lock_info)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t* out_view_heap_base, uint32_t* out_view_offset,
+        uint64_t* out_proj_heap_base, uint32_t* out_proj_offset,
+        uint8_t* out_view_locked, uint8_t* out_proj_locked);
 };
 
 // HeapLocatorProfile constants (ABI 1.10).  Append-only; existing

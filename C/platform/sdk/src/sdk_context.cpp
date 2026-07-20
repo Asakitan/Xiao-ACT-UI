@@ -54,7 +54,7 @@ void SharedRuntime::ensure_started() {
         (void)sao_ui_compositor_create(nullptr, &cfg, &compositor);
     }
     if (event_bus == nullptr) {
-        (void)sao_engine_event_bus_create_wave5(&event_bus);
+        (void)sao_engine_event_bus_create_priority(&event_bus);
     }
     if (render_registry == nullptr) {
         (void)sao_engine_render_hook_registry_create(&render_registry);

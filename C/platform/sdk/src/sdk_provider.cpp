@@ -1334,6 +1334,9 @@ void test_fail_next_overlay_state_insertion() noexcept {
 sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* provider) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
+    if (state->provider_bind_transaction.load(std::memory_order_acquire)) {
+        return SAO_SDK_ERR_BUSY;
+    }
     if (state->destroying.load(std::memory_order_acquire) ||
         state->destroy_quarantined.load(std::memory_order_acquire))
         return SAO_SDK_ERR_BUSY;
@@ -1393,6 +1396,61 @@ sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* 
 sao_sdk_status_t bind_platform_provider(ContextState* state) {
     SharedRuntime::instance().ensure_started();
     return bind_provider(state, platform_provider());
+}
+
+sao_sdk_status_t prepare_platform_provider_binding(ContextState* state,
+                                                   ProviderBindingCandidate* out_candidate) {
+    if (state == nullptr)
+        return SAO_SDK_ERR_HANDLE_INVALID;
+    if (out_candidate == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    *out_candidate = {};
+    SharedRuntime::instance().ensure_started();
+    out_candidate->provider = *platform_provider();
+    if (out_candidate->provider.retain == nullptr)
+        return SAO_SDK_OK;
+    const auto status = invoke_provider_callback(state, [&] {
+        out_candidate->provider.retain(out_candidate->provider.user_data);
+        return SAO_SDK_OK;
+    });
+    if (status != SAO_SDK_OK)
+        return status;
+    out_candidate->retained = true;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t discard_provider_binding_candidate(
+    ContextState* state, ProviderBindingCandidate* candidate) {
+    if (state == nullptr)
+        return SAO_SDK_ERR_HANDLE_INVALID;
+    if (candidate == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (!candidate->retained || candidate->provider.release == nullptr) {
+        *candidate = {};
+        return SAO_SDK_OK;
+    }
+    const auto status = invoke_provider_callback(state, [&] {
+        candidate->provider.release(candidate->provider.user_data);
+        return SAO_SDK_OK;
+    });
+    if (status != SAO_SDK_OK) {
+        try {
+            std::lock_guard<std::mutex> lock(state->mu);
+            state->provider_release_quarantine.push_back(candidate->provider);
+        } catch (...) {
+            return SAO_SDK_ERR_INTERNAL;
+        }
+    }
+    *candidate = {};
+    return status;
+}
+
+bool platform_provider_bound(const ContextState* state) {
+    if (state == nullptr)
+        return false;
+    std::lock_guard<std::mutex> lock(const_cast<ContextState*>(state)->mu);
+    return state->provider_bound &&
+           state->provider.user_data == platform_provider()->user_data;
 }
 
 sao_sdk_status_t provider_status(const ContextState* state) {
@@ -2223,12 +2281,8 @@ sao_sdk_context_bind_platform_services(SaoSdkContext* ctx) {
     sao_sdk_internal::ContextApiLease lease(ctx);
     if (!lease)
         return lease.status();
-    return sao_sdk_internal::invoke_callback_barrier([&] {
-        const auto bind_status = sao_sdk_internal::bind_platform_provider(lease.state());
-        if (bind_status != SAO_SDK_OK)
-            return bind_status;
-        return sao_sdk_internal::bind_process_providers(lease.state());
-    });
+    return sao_sdk_internal::invoke_callback_barrier(
+        [&] { return sao_sdk_internal::bind_platform_services(lease.state()); });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL

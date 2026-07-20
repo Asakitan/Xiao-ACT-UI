@@ -96,9 +96,9 @@ struct RenderHookEntry {
     void* legacy_callback = nullptr;
 };
 
-// Wave7 SDK subscription — owned by the context so unloading a plugin
-// unsubscribes automatically.  Also wraps the wave5 callback signature
-// so plugins can register `sao_sdk_event_callback_t` (void return).
+// SDK event subscription — owned by the context so unloading a plugin
+// unsubscribes automatically.  Also wraps the priority-bus callback
+// signature so plugins can register `sao_sdk_event_callback_t` (void return).
 //
 struct EventSubscriptionOwner {
     std::shared_ptr<ContextCallbackGate> callback_gate;
@@ -111,8 +111,8 @@ struct EventSubscription {
     EventSubscription() = default;
 
     EventSubscription(EventSubscription&& other) noexcept
-                : sdk_token(other.sdk_token), bus_token(other.bus_token), owner(std::move(other.owner)),
-                    unregistering(other.unregistering) {}
+                                : sdk_token(other.sdk_token), bus_token(other.bus_token), owner(std::move(other.owner)),
+                                        unregistering(other.unregistering) {}
 
     EventSubscription& operator=(EventSubscription&& other) noexcept {
         if (this == &other)
@@ -138,7 +138,7 @@ struct EventSubscription {
     }
 
     sao_sdk_subscription_t sdk_token = 0;
-    sao_engine_subscription_t bus_token = 0; // wave5 token
+    sao_engine_subscription_t bus_token = 0; // priority-bus token
     std::shared_ptr<EventSubscriptionOwner> owner;
     bool unregistering = false;
 };
@@ -171,7 +171,74 @@ struct CapabilityRegistration {
     bool unregistering = false;
 };
 
+struct ProviderBindingCandidate {
+    SaoSdkProviderVTable provider{};
+    bool retained = false;
+};
+
 struct NetProviderSession;
+
+template <typename Session> class ProviderSessionSlot {
+  public:
+    using Pointer = std::shared_ptr<Session>;
+
+    ProviderSessionSlot() = default;
+    ProviderSessionSlot(const ProviderSessionSlot&) = delete;
+    ProviderSessionSlot& operator=(const ProviderSessionSlot&) = delete;
+
+    operator Pointer() const {
+        return active_staging_slot_ == this ? staged_ : published_;
+    }
+
+    ProviderSessionSlot& operator=(Pointer value) {
+        current() = std::move(value);
+        return *this;
+    }
+
+    bool operator==(const Pointer& value) const {
+        return current() == value;
+    }
+
+    void reset() {
+        current().reset();
+    }
+
+    bool begin_staging(Pointer initial = {}) {
+        if (active_staging_slot_ != nullptr)
+            return false;
+        staged_ = std::move(initial);
+        active_staging_slot_ = this;
+        return true;
+    }
+
+    Pointer take_staged() {
+        if (active_staging_slot_ != this)
+            return {};
+        active_staging_slot_ = nullptr;
+        return std::exchange(staged_, {});
+    }
+
+    Pointer published() const {
+        return published_;
+    }
+
+    void publish(Pointer value) {
+        published_ = std::move(value);
+    }
+
+  private:
+    Pointer& current() {
+        return active_staging_slot_ == this ? staged_ : published_;
+    }
+
+    const Pointer& current() const {
+        return active_staging_slot_ == this ? staged_ : published_;
+    }
+
+    Pointer published_;
+    Pointer staged_;
+    inline static thread_local ProviderSessionSlot* active_staging_slot_ = nullptr;
+};
 
 struct MemoryProviderSession {
     ContextState* owner = nullptr;
@@ -246,13 +313,19 @@ struct ContextState {
     std::condition_variable provider_idle;
     std::recursive_mutex provider_lifecycle_mutex;
 
-    std::shared_ptr<MemoryProviderSession> memory_provider;
+    ProviderSessionSlot<MemoryProviderSession> memory_provider;
     std::vector<std::shared_ptr<MemoryProviderSession>> memory_quarantine;
+    std::weak_ptr<MemoryProviderSession> process_memory_session;
+    const void* process_memory_owner_tag = nullptr;
     std::mutex memory_lifecycle_mutex;
 
-    std::shared_ptr<NetProviderSession> net_provider;
+    ProviderSessionSlot<NetProviderSession> net_provider;
     std::vector<std::shared_ptr<NetProviderSession>> net_quarantine;
+    std::weak_ptr<NetProviderSession> process_net_session;
+    const void* process_net_owner_tag = nullptr;
     std::mutex net_lifecycle_mutex;
+
+    std::atomic_bool provider_bind_transaction = false;
 
     // Public struct fields for plugins to peek at.
     SaoSdkContext public_ctx{};
@@ -278,7 +351,7 @@ inline thread_local ContextState* g_context_api_owner = nullptr;
 class ContextApiLease {
   public:
     explicit ContextApiLease(const SaoSdkContext* context) noexcept;
-        explicit ContextApiLease(ContextState* state) noexcept;
+                explicit ContextApiLease(ContextState* state) noexcept;
     ~ContextApiLease();
 
     ContextApiLease(const ContextApiLease&) = delete;
@@ -343,7 +416,7 @@ class PluginCallbackLease {
     }
 
   private:
-        std::shared_ptr<ContextCallbackGate> callback_gate_;
+                std::shared_ptr<ContextCallbackGate> callback_gate_;
     ContextState* state_ = nullptr;
     ContextState* previous_owner_ = nullptr;
     bool active_ = false;
@@ -386,6 +459,11 @@ void populate_context(ContextState* state, SaoSdkContext* out_ctx, const char* p
 
 sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* provider);
 sao_sdk_status_t bind_platform_provider(ContextState* state);
+sao_sdk_status_t prepare_platform_provider_binding(ContextState* state,
+                                                   ProviderBindingCandidate* out_candidate);
+sao_sdk_status_t discard_provider_binding_candidate(
+    ContextState* state, ProviderBindingCandidate* candidate);
+bool platform_provider_bound(const ContextState* state);
 sao_sdk_status_t provider_status(const ContextState* state);
 sao_sdk_status_t provider_cleanup(ContextState* state);
 bool provider_callback_reentered(ContextState* state) noexcept;
@@ -442,6 +520,7 @@ sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* 
 sao_sdk_status_t configure_process_memory_provider(const SaoSdkMemoryProviderVTable* provider);
 sao_sdk_status_t configure_process_net_provider(const SaoSdkNetProviderVTable* provider);
 sao_sdk_status_t bind_process_providers(ContextState* state);
+sao_sdk_status_t bind_platform_services(ContextState* state);
 
 inline bool plugin_callback_reentered(ContextState* state) noexcept {
     return state != nullptr && g_plugin_callback_owner == state;
@@ -463,6 +542,7 @@ enum class ContextApiTestPoint : uint32_t {
     event_unsubscribe_unlocked = 2,
     panel_registered = 3,
     panel_operation_unlocked = 4,
+    gpu_runtime_toggles_leased = 5,
 };
 
 void pause_context_api_test_point(ContextApiTestPoint point);
