@@ -1,4 +1,4 @@
-// Wave 9 / Agent e - event_bus fixture parity, Phase 0 deep dive.
+// EventBus fixture parity for the canonical Python scenarios.
 //
 // The freeze at docs/fixtures/event_bus/*.json captures the 8 canonical
 // scenarios ``act_platform.event_bus.EventBus`` runs to completion in
@@ -13,8 +13,8 @@
 //   * recent_topics                    - present for ephemeral scenarios
 //   * callback_failures                - present when a callback raises
 //
-// This test drives ``sao_engine_event_bus_*_wave5`` (subscribe/publish/
-// unsubscribe/cancel) through a thin harness that adds:
+// This test drives the canonical ``sao_engine_event_bus_*_priority`` API
+// (subscribe/publish/unsubscribe/cancel) through a thin harness that adds:
 //   * envelope construction (topic/payload/source as JSON bytes)
 //   * wildcard "*" fan-out — the priority API treats "*" as a plain topic;
 //     the fixture semantics require it to catch every publish
@@ -73,7 +73,7 @@ std::optional<std::string> load_event_bus_fixture(const std::string& name) {
     return std::nullopt;
 }
 
-// Fixture harness.  Wraps a priority bus bus with the fixture-required semantics
+// Fixture harness.  Wraps a priority bus with the fixture-required semantics
 // the raw bus doesn't cover: source envelope, ephemeral topics, retained
 // counter, wildcard fan-out, callback failures.  The fixture generator
 // runs against a full EventBus in Python; we're rebuilding just enough
@@ -104,7 +104,7 @@ struct Harness {
     void set_max_recent(uint32_t n) { max_recent = n; }
 
     // A subscriber that appends to logs[owner] and (optionally) simulates
-    // a "raiser" callback that increments callback_failures.  The wave5
+    // a "raiser" callback that increments callback_failures.  The priority
     // callback signature has no exception path across the ABI boundary,
     // so we model the raise as a return-code that the harness counts.
     void subscribe(const std::string& topic, const std::string& owner,

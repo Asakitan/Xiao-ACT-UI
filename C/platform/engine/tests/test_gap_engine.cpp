@@ -1,4 +1,4 @@
-// SAO Auto — Wave 17c gap tests for platform/engine.
+// SAO Auto — gap-closure tests for platform/engine.
 //
 // Coverage:
 //   A. capability gate — render_hook provider_status + GPU_PRESENT
@@ -208,8 +208,9 @@ TEST_CASE("engine gap: shipping EventBus dispatches and retains",
 
 TEST_CASE("engine gap: shipping EventBus exposes the priority extension",
           "[gap_closure][engine][event_bus][priority]") {
-    // The base and _wave5 APIs are both exported by the production adapter;
-    // the dedicated Wave 5 suite exercises priority and cancel semantics.
+    // The canonical priority API is the functional surface under test.
+    // Compatibility note: the production adapter also exports the legacy
+    // _wave5 symbols solely to preserve the published compatibility ABI.
     sao_engine_event_bus_handle_t handle = nullptr;
     REQUIRE(sao_engine_event_bus_create_priority(&handle) == SAO_STATUS_OK);
     REQUIRE(handle != nullptr);
@@ -222,7 +223,7 @@ TEST_CASE("engine gap: render_hook provider_status advertises capability gap",
     REQUIRE(sao_engine_render_hook_registry_create(&registry) == SAO_STATUS_OK);
     REQUIRE(registry != nullptr);
 
-    // Wave 17c contract — was NOT_IMPLEMENTED, is now CAPABILITY_MISSING.
+    // Capability-gate contract — was NOT_IMPLEMENTED, is now CAPABILITY_MISSING.
     const sao_status_t status = sao_engine_render_hook_provider_status(registry);
     CAPTURE(status);
     CHECK(matches_gap_kind(status, GapKind::CapabilityGate));

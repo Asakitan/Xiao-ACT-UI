@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/tests/test_state_machine.cpp
 //
-// Wave 6 / Phase 5 — generic state machine coverage.
+// Generic state machine coverage.
 //
 // Six scenarios exercise the game-agnostic contract:
 //   * create + get_current returns the initial state

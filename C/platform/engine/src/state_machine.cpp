@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/src/state_machine.cpp
 //
-// Wave 6 / Phase 5 — generic state machine.
+// Generic state machine.
 //
 // The engine layer never hard-codes any game concept.  All state names,
 // transition events and initial state come in through a JSON config

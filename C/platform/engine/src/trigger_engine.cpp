@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/src/trigger_engine.cpp
 //
-// Wave 6 / Phase 5 — game-agnostic trigger engine.
+// Game-agnostic trigger engine.
 //
 // The engine understands six built-in condition families (event_match,
 // state_enter, state_leave, history_pattern, timer, combo) and treats

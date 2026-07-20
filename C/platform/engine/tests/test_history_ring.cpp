@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/tests/test_history_ring.cpp
 //
-// Wave 6 / Phase 5 — generic history ring buffer coverage.
+// Generic history ring buffer coverage.
 //
 // Six scenarios exercise the game-agnostic contract:
 //   * push + get returns the newest entry at index 0

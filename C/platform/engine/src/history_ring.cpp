@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/src/history_ring.cpp
 //
-// Wave 6 / Phase 5 — game-agnostic history ring buffer.
+// Game-agnostic history ring buffer.
 //
 // The ring is a plain fixed-capacity vector with a head cursor and a
 // filled flag.  Push overwrites the oldest entry when full; get maps

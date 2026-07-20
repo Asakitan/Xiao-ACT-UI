@@ -1,6 +1,6 @@
 // SAO Auto — generic history ring.
 //
-// Wave 6 / Phase 5 — a fixed-capacity time-stamped ring buffer used by
+// A fixed-capacity time-stamped ring buffer used by
 // plugins that need to keep a sliding window of arbitrary payloads.
 //
 // Ports the platform-generic ``HistoryRing`` primitive: capacity is

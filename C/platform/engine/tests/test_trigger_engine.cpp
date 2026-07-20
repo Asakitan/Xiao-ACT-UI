@@ -1,6 +1,6 @@
 // SAO Auto — platform/engine/tests/test_trigger_engine.cpp
 //
-// Wave 6 / Phase 5 — game-agnostic trigger engine coverage.
+// Game-agnostic trigger engine coverage.
 //
 // Twelve scenarios exercise the built-in condition families without
 // referring to any specific game concept:

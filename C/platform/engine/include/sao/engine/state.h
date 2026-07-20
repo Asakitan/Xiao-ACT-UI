@@ -125,7 +125,7 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_state_unsubscribe(
     sao_engine_state_subscription_t subscription);
 
 // ---------------------------------------------------------------------------
-// Wave 6 / Phase 5 — generic finite state machine.
+// Generic finite state machine.
 //
 // Ports the platform-generic ``StateMachine`` primitive. Config is a JSON
 // blob supplied by the caller so the engine layer stays completely

@@ -25,7 +25,7 @@ add_library(sao_platform_engine SHARED
     src/ui_spec.cpp
     src/render_hook.cpp
     src/runtime.cpp
-    # Wave 6 / Phase 5 — generic automation SDK primitives.  All three
+    # Generic automation SDK primitives.  All three
     # sources are game-agnostic: state names, history entry shapes and
     # trigger condition parameters are supplied by the caller (or the
     # plugin that owns the trigger) as opaque data.
@@ -43,7 +43,7 @@ target_include_directories(sao_platform_engine
 
 target_compile_features(sao_platform_engine PUBLIC cxx_std_20)
 
-# Wave 6 primitives parse condition_params / state-machine config JSON
+# Automation primitives parse condition_params / state-machine config JSON
 # via nlohmann::json.  Header-only so it stays a PRIVATE dep.
 find_package(nlohmann_json 3 CONFIG REQUIRED)
 target_link_libraries(sao_platform_engine

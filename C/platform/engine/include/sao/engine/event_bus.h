@@ -219,8 +219,8 @@ SAO_ENGINE_API sao_status_t SAO_ENGINE_CALL sao_engine_event_bus_publish_ex_prio
 // ---------------------------------------------------------------------------
 // Backward-compatibility aliases.
 //
-// Historical code bound against the ``_wave5`` names.  The wave tag was
-// an iteration-batch label, not a feature name, so the primary symbols are
+// Historical code bound against the ``_wave5`` names.  That suffix was an
+// iteration-batch label, not a feature name, so the primary symbols are
 // now ``_priority``.  These aliases keep existing consumers building
 // without touching call sites; new code should bind against ``_priority``.
 // ---------------------------------------------------------------------------

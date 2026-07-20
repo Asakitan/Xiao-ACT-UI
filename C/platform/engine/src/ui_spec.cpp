@@ -7,9 +7,9 @@
 // the same normalized shape -- a divergent C++ normalizer would silently
 // produce different panels.
 //
-// The Wave 5b freeze at ``docs/fixtures/ui_spec/*.json`` captures eight
-// canonical scenarios (normal / nested / mutation / invalid_ref).  Wave
-// 8c drives these through this normalizer to prove parity.
+// The frozen ``docs/fixtures/ui_spec/*.json`` set captures eight canonical
+// scenarios (normal / nested / mutation / invalid_ref).  Fixture-parity
+// coverage drives them through this normalizer.
 //
 // Design notes:
 //   * `nlohmann::json` with default ``std::map<std::string, ...>`` storage

@@ -1,6 +1,6 @@
 // SAO Auto — generic trigger engine.
 //
-// Wave 6 / Phase 5 — a game-agnostic condition/action dispatcher.
+// A game-agnostic condition/action dispatcher.
 //
 // The engine only knows six built-in condition families, and every one
 // of them is expressed via opaque JSON parameters that the trigger

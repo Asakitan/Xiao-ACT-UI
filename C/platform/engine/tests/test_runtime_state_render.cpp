@@ -196,8 +196,8 @@ TEST_CASE("state snapshot and callbacks are reentrant") {
 TEST_CASE("render hooks use stable priority and support mid-dispatch removal") {
     sao_engine_render_hook_registry_handle_t registry = nullptr;
     REQUIRE(sao_engine_render_hook_registry_create(&registry) == SAO_STATUS_OK);
-    // Wave 17c: reclassified from NOT_IMPLEMENTED to CAPABILITY_MISSING —
-    // no external render provider is bound to the registry.
+    // An unbound external render provider reports CAPABILITY_MISSING rather
+    // than the historical NOT_IMPLEMENTED placeholder.
     CHECK(sao_engine_render_hook_provider_status(registry) ==
           SAO_STATUS_ERR_CAPABILITY_MISSING);
 
@@ -347,9 +347,9 @@ TEST_CASE("render clock is explicitly pumped and remains GPU gated") {
               2'999'999u, 0, 0, 640, 480,
               SAO_ENGINE_RENDER_DISPATCH_LOGICAL_TICK) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
-    // Wave 17c: GPU_PRESENT dispatch reclassified from NOT_IMPLEMENTED to
-    // CAPABILITY_MISSING — the real GPU-present hook still requires an
-    // OS-side D3D11/DXGI provider that this registry never installed.
+    // GPU_PRESENT dispatch reports CAPABILITY_MISSING rather than the
+    // historical NOT_IMPLEMENTED placeholder because the real hook still
+    // requires an OS-side D3D11/DXGI provider that this registry never installed.
     CHECK(sao_engine_runtime_render_dispatch(
               runtime, "clock.hud", SAO_ENGINE_RENDER_BEFORE_PRESENT,
               4'000'000u, 0, 0, 640, 480,

@@ -2,10 +2,12 @@
 //
 // Priority API event-bus coverage.
 //
-// Six deterministic scenarios that pin the Python-equivalent semantics:
+// Deterministic scenarios that pin the Python-equivalent semantics:
 //   * subscribe / publish delivery
 //   * priority ordering (three subscribers)
 //   * cancellation stops propagation
+//   * compatibility ABI wrappers link and forward
+//   * publish_ex options preserve synchronous priority/cancel behavior
 //   * unsubscribe-during-fire behaves sanely
 //   * publish to an empty topic is OK
 //   * recursive publish (a subscriber publishes another event) works
@@ -20,11 +22,16 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "sao/engine/event_bus.h"
 
 namespace {
+
+static_assert(
+    std::is_same_v<sao_engine_event_wave5_callback_t, sao_engine_event_priority_callback_t>);
+static_assert(std::is_same_v<SaoEngineWave5PublishOptions, SaoEnginePriorityPublishOptions>);
 
 struct Bag {
     // Ordered record of "which subscriber fired" so tests can assert
@@ -45,6 +52,18 @@ int recordCallback(const char* topic, const uint8_t* /*data*/,
 
 struct TaggedBag {
     Bag* bag;
+    std::string tag;
+    int return_code;
+};
+
+struct PublishExTrace {
+    std::vector<std::string> seen;
+    std::thread::id caller_thread;
+    bool all_callbacks_on_caller_thread = true;
+};
+
+struct PublishExSubscriber {
+    PublishExTrace* trace;
     std::string tag;
     int return_code;
 };
@@ -74,6 +93,16 @@ int taggedCallback(const char* /*topic*/, const uint8_t* /*data*/,
     auto* tb = static_cast<TaggedBag*>(user_data);
     tb->bag->seen.push_back(tb->tag);
     return tb->return_code;
+}
+
+int publishExTraceCallback(const char* /*topic*/, const uint8_t* /*data*/, size_t /*data_size*/,
+                           void* user_data) {
+    auto* subscriber = static_cast<PublishExSubscriber*>(user_data);
+    subscriber->trace->all_callbacks_on_caller_thread =
+        subscriber->trace->all_callbacks_on_caller_thread &&
+        std::this_thread::get_id() == subscriber->trace->caller_thread;
+    subscriber->trace->seen.push_back(subscriber->tag);
+    return subscriber->return_code;
 }
 
 int blockingCallback(const char*, const uint8_t*, size_t, void* user_data) {
@@ -125,6 +154,32 @@ TEST_CASE("event_bus_subscribe_publish_delivers_to_subscriber",
                                                 nullptr, 0) == SAO_STATUS_OK);
     REQUIRE(bag.seen.size() == 1);
     REQUIRE(bag.seen[0] == "sub_a");
+
+    sao_engine_event_bus_destroy(bus);
+}
+
+TEST_CASE("event_bus_legacy_compatibility_symbols_link_and_forward",
+          "[engine][event_bus][priority][compatibility]") {
+    const auto create_compat = &sao_engine_event_bus_create_wave5;
+    const auto subscribe_compat = &sao_engine_event_bus_subscribe_wave5;
+    const auto publish_compat = &sao_engine_event_bus_publish_wave5;
+    const auto publish_ex_compat = &sao_engine_event_bus_publish_ex_wave5;
+
+    sao_engine_event_bus_handle_t bus = nullptr;
+    REQUIRE(create_compat(&bus) == SAO_STATUS_OK);
+
+    Bag bag;
+    TaggedBag subscriber{&bag, "compat", SAO_ENGINE_EVENT_CONTINUE};
+    sao_engine_event_wave5_callback_t callback = &taggedCallback;
+    sao_engine_subscription_t subscription = 0;
+    REQUIRE(subscribe_compat(bus, "compat.topic", 7, callback, &subscriber, &subscription) ==
+            SAO_STATUS_OK);
+    REQUIRE(subscription != 0);
+
+    REQUIRE(publish_compat(bus, "compat.topic", nullptr, 0) == SAO_STATUS_OK);
+    SaoEngineWave5PublishOptions options{1};
+    REQUIRE(publish_ex_compat(bus, "compat.topic", nullptr, 0, &options) == SAO_STATUS_OK);
+    CHECK(bag.seen == std::vector<std::string>{"compat", "compat"});
 
     sao_engine_event_bus_destroy(bus);
 }
@@ -187,6 +242,57 @@ TEST_CASE("event_bus_cancel_stops_propagation",
     REQUIRE(bag.seen.size() == 2);
     REQUIRE(bag.seen[0] == "first");
     REQUIRE(bag.seen[1] == "second");
+
+    sao_engine_event_bus_destroy(bus);
+}
+
+TEST_CASE("event_bus_publish_ex_options_remain_synchronous_with_priority_cancel",
+          "[engine][event_bus][priority]") {
+    sao_engine_event_bus_handle_t bus = nullptr;
+    REQUIRE(sao_engine_event_bus_create_priority(&bus) == SAO_STATUS_OK);
+
+    PublishExTrace trace;
+    PublishExSubscriber low{&trace, "low", SAO_ENGINE_EVENT_CONTINUE};
+    PublishExSubscriber cancel{&trace, "cancel", SAO_ENGINE_EVENT_CANCELLED};
+    PublishExSubscriber high{&trace, "high", SAO_ENGINE_EVENT_CONTINUE};
+    sao_engine_subscription_t low_subscription = 0;
+    sao_engine_subscription_t cancel_subscription = 0;
+    sao_engine_subscription_t high_subscription = 0;
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "publish_ex.topic", 1,
+                                                    &publishExTraceCallback, &low,
+                                                    &low_subscription) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "publish_ex.topic", 5,
+                                                    &publishExTraceCallback, &cancel,
+                                                    &cancel_subscription) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_event_bus_subscribe_priority(bus, "publish_ex.topic", 10,
+                                                    &publishExTraceCallback, &high,
+                                                    &high_subscription) == SAO_STATUS_OK);
+
+    const std::vector<std::string> expected{"high", "cancel"};
+
+    trace.caller_thread = std::this_thread::get_id();
+    REQUIRE(sao_engine_event_bus_publish_ex_priority(bus, "publish_ex.topic", nullptr, 0,
+                                                     nullptr) == SAO_STATUS_OK);
+    CHECK(trace.all_callbacks_on_caller_thread);
+    CHECK(trace.seen == expected);
+
+    trace.seen.clear();
+    trace.all_callbacks_on_caller_thread = true;
+    trace.caller_thread = std::this_thread::get_id();
+    const SaoEnginePriorityPublishOptions synchronous_options{0};
+    REQUIRE(sao_engine_event_bus_publish_ex_priority(bus, "publish_ex.topic", nullptr, 0,
+                                                     &synchronous_options) == SAO_STATUS_OK);
+    CHECK(trace.all_callbacks_on_caller_thread);
+    CHECK(trace.seen == expected);
+
+    trace.seen.clear();
+    trace.all_callbacks_on_caller_thread = true;
+    trace.caller_thread = std::this_thread::get_id();
+    const SaoEnginePriorityPublishOptions asynchronous_options{1};
+    REQUIRE(sao_engine_event_bus_publish_ex_priority(bus, "publish_ex.topic", nullptr, 0,
+                                                     &asynchronous_options) == SAO_STATUS_OK);
+    CHECK(trace.all_callbacks_on_caller_thread);
+    CHECK(trace.seen == expected);
 
     sao_engine_event_bus_destroy(bus);
 }
