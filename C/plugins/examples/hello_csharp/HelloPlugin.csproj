@@ -6,7 +6,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- Wave 8 first slice: unmanaged callers only, no runtime IL emission -->
+    <!-- Unmanaged host entry points only; no runtime IL emission. -->
     <PublishAot>false</PublishAot>
     <!-- 输出到 prebuilt/, 让 plugin.json entry 指到 prebuilt/HelloPlugin.dll -->
     <OutputPath>prebuilt\</OutputPath>

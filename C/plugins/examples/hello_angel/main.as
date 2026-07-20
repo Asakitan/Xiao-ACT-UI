@@ -1,4 +1,4 @@
-// main.as — Wave 8 hello_angel plugin
+// main.as — hello_angel 生命周期示例插件
 //
 // 演示 angel_host 加载 AngelScript 插件全流程:
 //   1. on_load()  — 调 log_info, register_ui_panel("AS Hello"), register_hotkey("greet", "F9")

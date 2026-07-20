@@ -194,6 +194,9 @@ public:
     ~RuntimeFixture() { sao_ai_editor_runtime_destroy(runtime_); }
 
     sao_ai_editor_runtime_t get() const noexcept { return runtime_; }
+    sao_ai_editor_runtime_t release() noexcept {
+        return std::exchange(runtime_, nullptr);
+    }
     const std::filesystem::path& workspace() const noexcept {
         return workspace_;
     }
@@ -2213,6 +2216,56 @@ TEST_CASE("AI Editor NativeRuntime surfaces MCP notifications as sao.event "
 
     REQUIRE(dispatch(runtime, "mcp.close_server",
                      {{"name", "runtime-notif"}}).contains("result"));
+}
+
+TEST_CASE("AI Editor NativeRuntime destroy waits for active MCP notification "
+          "reader callbacks",
+          "[plugins][ai_editor][native][lifecycle][mcp][notification]"
+          "[integration]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json register_result = dispatch(
+        runtime, "mcp.register_server",
+        {{"name", "runtime-destroy-notif"},
+         {"command", SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE},
+         {"args", Json::array({"--notify-count", "50000",
+                                "--notify-method",
+                                "notifications/resources/updated",
+                                "--hold-open-ms", "5000"})}});
+    REQUIRE(register_result.contains("result"));
+
+    bool saw_notification = false;
+    const auto notification_deadline = std::chrono::steady_clock::now() +
+                                       std::chrono::seconds(4);
+    while (!saw_notification &&
+           std::chrono::steady_clock::now() < notification_deadline) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            runtime, nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        REQUIRE(queried == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL);
+        std::vector<char> event(static_cast<size_t>(required) + 1U);
+        REQUIRE(sao_ai_editor_runtime_next_event(
+                    runtime, event.data(),
+                    static_cast<uint32_t>(event.size()), &required) ==
+                SAO_AI_EDITOR_OK);
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        const Json params = notification.value("params", Json::object());
+        saw_notification =
+            notification.value("method", "") == "sao.event" &&
+            params.value("event", "") == "mcp.notification";
+    }
+    REQUIRE(saw_notification);
+
+    runtime = fixture.release();
+    const auto started = std::chrono::steady_clock::now();
+    sao_ai_editor_runtime_destroy(runtime);
+    CHECK(std::chrono::steady_clock::now() - started <
+          std::chrono::seconds(6));
 }
 
 TEST_CASE("SaoAiEditor.exe --cli --cli-method dispatches JSON-RPC and exits",
@@ -4608,6 +4661,45 @@ Json wait_for_workflow_status(sao_ai_editor_runtime_t runtime,
         Sleep(20);
     } while (GetTickCount64() - started < timeout_ms);
     return status;
+}
+
+TEST_CASE("AI Editor NativeRuntime destroy cancels and joins a workflow "
+          "waiting for confirmation",
+          "[plugins][ai_editor][native][lifecycle][workflows]") {
+    RuntimeFixture fixture;
+    const Json workflow_def{
+        {"id", "destroy-waiting-workflow"},
+        {"name", "Destroy Waiting Workflow"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                            {"prompt", "gated({{input}})"},
+                            {"output_var", "gated"},
+                            {"label", "Gated"},
+                            {"requires_confirmation", true}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_def}})
+                .contains("result"));
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "destroy-waiting-workflow"},
+         {"provider", {{"id", "destroy-fixture"},
+                        {"endpoint",
+                         "http://127.0.0.1:1/v1/chat/completions"}}},
+         {"model", "fixture-model"},
+         {"input", "payload"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    const Json waiting = wait_for_workflow_status(
+        fixture.get(), execution_id, "waiting_confirmation", 5'000);
+    REQUIRE(waiting["status"] == "waiting_confirmation");
+
+    const auto runtime = fixture.release();
+    const auto started = std::chrono::steady_clock::now();
+    sao_ai_editor_runtime_destroy(runtime);
+    CHECK(std::chrono::steady_clock::now() - started <
+          std::chrono::seconds(2));
 }
 
 TEST_CASE("AI Editor workflow.skip_step at waiting_confirmation advances past "
@@ -9397,7 +9489,7 @@ TEST_CASE("tool cache: runInTerminal-style side-effect tool flushes readFile",
 // -----------------------------------------------------------------------------
 // chat.set_pricing / chat.get_pricing / chat.list_pricing / chat.cost_stats
 //
-// R15 wave: LLM token pricing rules + per-model cost aggregation.  Storage is
+// LLM token pricing rules and per-model cost aggregation.  Storage is
 // in-process (map<"provider|model", rule>) so the round-trip test asserts
 // both the write shape (returned rule mirrors what the caller sent, missing
 // fields dropped) and the read-back shape (found:true carries the same rule
@@ -10276,9 +10368,125 @@ TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
     REQUIRE(listed_after["result"]["totalCreated"].get<int64_t>() >= 2);
 }
 
+TEST_CASE("ExtensionHost rolls back failed activation side effects in reverse order",
+          "[plugins][ai_editor][native][extensions][node][activation_rollback]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"rollback-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    const auto source_path = extension / L"extension.js";
+    const auto rollback_path = extension / L"rollback-order.txt";
+    {
+        std::ofstream source(source_path);
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+const fs = require('fs');
+const vscode = require('vscode');
+exports.activate = (context) => {
+    const record = (value) => fs.appendFileSync(
+        context.asAbsolutePath('rollback-order.txt'), value + '\n');
+    context.subscriptions.push({ dispose() { record('custom'); } });
+
+    const command = vscode.commands.registerCommand(
+        'sao.test.failedActivation', () => 'leaked-command');
+    const disposeCommand = command.dispose.bind(command);
+    command.dispose = () => { record('command'); disposeCommand(); };
+    context.subscriptions.push(command);
+
+    const provider = vscode.window.registerWebviewViewProvider(
+        'sao.test.failedView', { resolveWebviewView() {} });
+    const disposeProvider = provider.dispose.bind(provider);
+    provider.dispose = () => { record('provider'); disposeProvider(); };
+    context.subscriptions.push(provider);
+
+    const panel = vscode.window.createWebviewPanel(
+        'sao.test.failedPanel', 'Failed Panel', vscode.ViewColumn.One, {});
+    const disposePanel = panel.dispose.bind(panel);
+    panel.dispose = () => { record('panel'); disposePanel(); };
+    context.subscriptions.push(panel);
+    throw new Error('intentional activation failure');
+};
+)JS";
+    }
+
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "extensions.configure_host",
+                     {{"nodeExecutable", node},
+                      {"entryScript", shim},
+                      {"workingDirectory", utf8_path(extension)},
+                      {"startupMs", 5000}})
+                .contains("result"));
+    const Json manifest{{"name", "rollback"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.rollback";
+    REQUIRE(dispatch(runtime, "extensions.register",
+                     {{"manifest", manifest}, {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+
+    const Json failed = dispatch(runtime, "extensions.activate",
+                                 {{"extensionId", extension_id}, {"timeoutMs", 5000}});
+    REQUIRE(failed.contains("error"));
+
+    std::ifstream rollback_stream(rollback_path);
+    REQUIRE(rollback_stream.good());
+    const std::string rollback_order{std::istreambuf_iterator<char>(rollback_stream),
+                                     std::istreambuf_iterator<char>()};
+    REQUIRE(rollback_order == "panel\nprovider\ncommand\ncustom\n");
+
+    const Json leaked_command = dispatch(runtime, "extensions.execute_command",
+                                         {{"command", "sao.test.failedActivation"},
+                                          {"arguments", Json::array()},
+                                          {"timeoutMs", 1000}});
+    REQUIRE(leaked_command.contains("error"));
+
+    bool panels_empty = false;
+    for (int attempt = 0; attempt < 50 && !panels_empty; ++attempt) {
+        const Json panels = dispatch(runtime, "vscode.window.listWebviewPanels");
+        panels_empty = panels.contains("result") && panels["result"]["panels"].empty();
+        if (!panels_empty) {
+            Sleep(10);
+        }
+    }
+    REQUIRE(panels_empty);
+
+    const Json listed = dispatch(runtime, "extensions.list")["result"];
+    REQUIRE(listed["items"][0]["activated"] == false);
+    REQUIRE(listed["items"][0]["operation"] == "idle");
+
+    {
+        std::ofstream source(source_path, std::ios::trunc);
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+const vscode = require('vscode');
+exports.activate = (context) => {
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.failedActivation', () => 'healthy-command'));
+    return { ready: true };
+};
+)JS";
+    }
+    REQUIRE(dispatch(runtime, "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000}})
+                .contains("result"));
+    const Json healthy = dispatch(runtime, "extensions.execute_command",
+                                  {{"command", "sao.test.failedActivation"},
+                                   {"arguments", Json::array()},
+                                   {"timeoutMs", 1000}});
+    REQUIRE(healthy["result"] == "healthy-command");
+    REQUIRE(dispatch(runtime, "extensions.deactivate", {{"extensionId", extension_id}})
+                .contains("result"));
+}
+
 TEST_CASE("ExtensionHost handles reentrant callbacks, malformed frames, "
           "disposed panels, and restart",
-          "[plugins][ai_editor][native][extensions][node][reentrant][protocol]") {
+          "[plugins][ai_editor][native][extensions][node][reentrant][protocol]"
+          "[late_response]") {
     const std::string node = node_executable_path();
     const std::string shim = extension_host_shim_path();
     REQUIRE_FALSE(node.empty());
@@ -10321,6 +10529,21 @@ exports.activate = (context) => {
         }));
     context.subscriptions.push(vscode.commands.registerCommand(
         'sao.test.inboundMessages', () => inboundMessages.slice()));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.lateResponse', (delayMs) => new Promise((resolve) => {
+            setTimeout(() => resolve({ late: true }), Number(delayMs) || 0);
+        })));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.unknownResponse', () => {
+            const body = Buffer.from(JSON.stringify({
+                jsonrpc: '2.0', id: 900000000, result: { unknown: true },
+            }), 'utf8');
+            process.stdout.write(Buffer.concat([
+                Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'),
+                body,
+            ]));
+            return new Promise(() => {});
+        }));
     context.subscriptions.push(vscode.commands.registerCommand(
         'sao.test.malformed', () => {
             const body = Buffer.from('{invalid-json', 'utf8');
@@ -10424,6 +10647,33 @@ exports.deactivate = () => {
     REQUIRE(inbound_messages["result"][0]["kind"] ==
             "native-to-extension");
     REQUIRE(inbound_messages["result"][0]["value"] == 42);
+
+    const Json timed_out = dispatch(runtime, "extensions.execute_command",
+                                    {{"command", "sao.test.lateResponse"},
+                                     {"arguments", Json::array({150})},
+                                     {"timeoutMs", 25}});
+    REQUIRE(timed_out.contains("error"));
+    REQUIRE(timed_out["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_TIMEOUT);
+    Sleep(250);
+    REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] == true);
+    const Json after_late_response = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.reentrant"}, {"arguments", Json::array()}, {"timeoutMs", 5000}});
+    REQUIRE(after_late_response.contains("result"));
+    REQUIRE(after_late_response["result"]["hasCpp"] == true);
+
+    const auto unknown_started = std::chrono::steady_clock::now();
+    const Json unknown_response = dispatch(runtime, "extensions.execute_command",
+                                           {{"command", "sao.test.unknownResponse"},
+                                            {"arguments", Json::array()},
+                                            {"timeoutMs", 5000}});
+    REQUIRE(unknown_response.contains("error"));
+    REQUIRE(unknown_response["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_PROTOCOL);
+    REQUIRE(std::chrono::steady_clock::now() - unknown_started < std::chrono::seconds(2));
+
+    const Json restarted_after_unknown = dispatch(
+        runtime, "extensions.activate", {{"extensionId", extension_id}, {"timeoutMs", 5000}});
+    REQUIRE(restarted_after_unknown.contains("result"));
 
     const auto malformed_started = std::chrono::steady_clock::now();
     const Json malformed = dispatch(

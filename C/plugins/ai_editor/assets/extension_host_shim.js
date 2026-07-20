@@ -15,6 +15,7 @@
 const path = require('path');
 const Module = require('module');
 const process_ = require('process');
+const { AsyncLocalStorage } = require('async_hooks');
 
 const stdin = process_.stdin;
 const stdout = process_.stdout;
@@ -30,6 +31,7 @@ const state = {
     writeActive: false,
     handlers: new Map(),
     commands: new Map(),
+    commandRegistrations: new Map(),
     outputChannels: new Map(),
     extensions: new Map(),
     disposables: [],
@@ -164,7 +166,78 @@ stdout.on('close', () => {
 
 // ----- vscode module polyfill --------------------------------------------
 
-const disposable = (dispose) => ({ dispose: () => { try { dispose && dispose(); } catch (e) { /* noop */ } } });
+const activationStorage = new AsyncLocalStorage();
+const disposalBarrier = Symbol('sao.disposalBarrier');
+
+function reportDisposalFailure(error) {
+    const message = error && error.message ? error.message : String(error);
+    process_.stderr.write(`[shim] activation rollback dispose failed: ${message}\n`);
+}
+
+function trackActivationDisposableFor(scope, value) {
+    if (!scope || !value || typeof value.dispose !== 'function' ||
+        scope.seen.has(value)) {
+        return value;
+    }
+    if (scope.phase === 'failed') {
+        scope.seen.add(value);
+        try {
+            Promise.resolve(value.dispose()).catch(reportDisposalFailure);
+        } catch (error) {
+            reportDisposalFailure(error);
+        }
+        return value;
+    }
+    if (scope.phase !== 'active' && scope.phase !== 'rolling-back') {
+        return value;
+    }
+    scope.seen.add(value);
+    scope.journal.push(value);
+    return value;
+}
+
+function trackActivationDisposable(value) {
+    return trackActivationDisposableFor(activationStorage.getStore(), value);
+}
+
+function makeActivationSubscriptions(scope) {
+    const subscriptions = [];
+    subscriptions.push = function (...items) {
+        for (const item of items) {
+            trackActivationDisposableFor(scope, item);
+        }
+        return Array.prototype.push.apply(this, items);
+    };
+    return subscriptions;
+}
+
+async function rollbackActivation(scope) {
+    scope.phase = 'rolling-back';
+    while (scope.journal.length > 0) {
+        const item = scope.journal.pop();
+        try {
+            await Promise.resolve(item.dispose());
+            if (item[disposalBarrier]) {
+                await Promise.resolve(item[disposalBarrier]);
+            }
+        } catch (error) {
+            reportDisposalFailure(error);
+        }
+    }
+    scope.phase = 'failed';
+}
+
+const disposable = (dispose) => {
+    let disposed = false;
+    return trackActivationDisposable({
+        dispose() {
+            if (disposed) return undefined;
+            disposed = true;
+            try { return dispose ? dispose() : undefined; }
+            catch (e) { return undefined; }
+        },
+    });
+};
 
 const Uri = {
     file(fsPath) {
@@ -333,7 +406,8 @@ function makeMockPanel(panelId, viewType, title, showOptions, options) {
         dispose() {
             if (!state.webviewPanels.has(panelId)) return;
             state.webviewPanels.delete(panelId);
-            callHost('vscode.window.disposeWebviewPanel', { panelId })
+            panel[disposalBarrier] = callHost(
+                'vscode.window.disposeWebviewPanel', { panelId })
                 .catch((err) => {
                     process_.stderr.write(
                         `[shim] webviewPanel.dispose failed: ${err.message}\n`);
@@ -412,10 +486,22 @@ const window = {
         if (!key) {
             throw new Error('registerWebviewViewProvider requires a viewId');
         }
-        state.webviewViewProviders.set(key, { provider, options: options || {} });
+        const previous = state.webviewViewProviders.get(key);
+        const registration = {
+            provider,
+            options: options || {},
+            active: true,
+        };
+        state.webviewViewProviders.set(key, registration);
         return disposable(() => {
-            state.webviewViewProviders.delete(key);
-            state.webviewViews.delete(key);
+            registration.active = false;
+            if (state.webviewViewProviders.get(key) !== registration) return;
+            if (previous && previous.active !== false) {
+                state.webviewViewProviders.set(key, previous);
+            } else {
+                state.webviewViewProviders.delete(key);
+                state.webviewViews.delete(key);
+            }
         });
     },
     createWebviewPanel(viewType, title, showOptions, options) {
@@ -437,18 +523,48 @@ const window = {
             process_.stderr.write(
                 `[shim] createWebviewPanel failed: ${err.message}\n`);
         });
-        return panel;
+        return trackActivationDisposable(panel);
     },
 };
 
 const commands = {
     registerCommand(commandId, handler) {
+        const previous = state.commandRegistrations.get(commandId);
+        const registration = { handler, active: true };
+        state.commandRegistrations.set(commandId, registration);
         state.commands.set(commandId, handler);
-        return disposable(() => state.commands.delete(commandId));
+        return disposable(() => {
+            registration.active = false;
+            if (state.commandRegistrations.get(commandId) !== registration) {
+                return;
+            }
+            if (previous && previous.active) {
+                state.commandRegistrations.set(commandId, previous);
+                state.commands.set(commandId, previous.handler);
+            } else {
+                state.commandRegistrations.delete(commandId);
+                state.commands.delete(commandId);
+            }
+        });
     },
     registerTextEditorCommand(commandId, handler) {
+        const previous = state.commandRegistrations.get(commandId);
+        const registration = { handler, active: true };
+        state.commandRegistrations.set(commandId, registration);
         state.commands.set(commandId, handler);
-        return disposable(() => state.commands.delete(commandId));
+        return disposable(() => {
+            registration.active = false;
+            if (state.commandRegistrations.get(commandId) !== registration) {
+                return;
+            }
+            if (previous && previous.active) {
+                state.commandRegistrations.set(commandId, previous);
+                state.commands.set(commandId, previous.handler);
+            } else {
+                state.commandRegistrations.delete(commandId);
+                state.commands.delete(commandId);
+            }
+        });
     },
     getCommands(_filterInternal) {
         return Promise.resolve(Array.from(state.commands.keys()));
@@ -531,8 +647,16 @@ const vscodeModule = {
     EventEmitter,
     Disposable: class {
         static from(...ds) { return disposable(() => ds.forEach((d) => d && d.dispose && d.dispose())); }
-        constructor(dispose) { this._dispose = dispose; }
-        dispose() { try { this._dispose && this._dispose(); } catch (e) { /* noop */ } }
+        constructor(dispose) {
+            this._dispose = dispose;
+            trackActivationDisposable(this);
+        }
+        dispose() {
+            const callback = this._dispose;
+            this._dispose = undefined;
+            try { return callback ? callback() : undefined; }
+            catch (e) { return undefined; }
+        }
     },
     workspace,
     window,
@@ -578,16 +702,13 @@ state.handlers.set('host.activate', async (params) => {
     const resolved = path.isAbsolute(mainRelative)
         ? mainRelative
         : path.join(extensionPath, mainRelative || 'extension.js');
-    let mod;
-    try {
-        // Clear cache so hot-reload works.
-        delete require.cache[require.resolve(resolved)];
-        mod = require(resolved);
-    } catch (err) {
-        throw new Error(`activate failed: ${err.stack || err.message}`);
-    }
+    const activation = {
+        phase: 'active',
+        journal: [],
+        seen: new WeakSet(),
+    };
     const context = {
-        subscriptions: [],
+        subscriptions: makeActivationSubscriptions(activation),
         extensionPath,
         extensionUri: Uri.file(extensionPath),
         workspaceState: makeMemento(),
@@ -606,15 +727,35 @@ state.handlers.set('host.activate', async (params) => {
         logPath: extensionPath,
         extensionMode: vscodeModule.ExtensionMode.Production,
     };
-    let activationResult;
-    if (mod && typeof mod.activate === 'function') {
-        activationResult = await Promise.resolve(mod.activate(context));
+    let activated;
+    try {
+        activated = await activationStorage.run(activation, async () => {
+            let mod;
+            try {
+                // Clear cache so hot-reload works.
+                delete require.cache[require.resolve(resolved)];
+                mod = require(resolved);
+            } catch (err) {
+                throw new Error(`activate failed: ${err.stack || err.message}`);
+            }
+            let activationResult;
+            if (mod && typeof mod.activate === 'function') {
+                activationResult = await Promise.resolve(mod.activate(context));
+            }
+            return { mod, activationResult };
+        });
+    } catch (error) {
+        await rollbackActivation(activation);
+        throw error;
     }
-    state.extensions.set(extensionId, { module: mod, context });
+    activation.phase = 'committed';
+    activation.journal.length = 0;
+    state.extensions.set(extensionId, { module: activated.mod, context });
     return {
         activated: true,
         extensionId,
-        exports: activationResult === undefined ? null : activationResult,
+        exports: activated.activationResult === undefined
+            ? null : activated.activationResult,
         subscriptionCount: context.subscriptions.length,
     };
 });

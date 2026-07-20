@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "entry": "prebuilt/HelloPlugin.dll",
   "language": "csharp",
-  "description": "Wave 8 C# 插件宿主 smoke — 用 hostfxr load_assembly_and_get_function_pointer 拿 OnLoad/OnTick/OnUnload 三个 UnmanagedCallersOnly 入口, 调 SDK 桥的 LogInfo/RegisterUiPanel/RegisterHotkey.",
+  "description": "C# 插件宿主 lifecycle smoke — 用 hostfxr load_assembly_and_get_function_pointer 拿 OnLoad/OnTick/OnUnload 三个入口, 调 SDK 桥的 LogInfo/RegisterUiPanel/RegisterHotkey.",
   "enabled": false,
   "capabilities": [
     {"id": "ui_panels", "title": "C# Hello", "actions": ["greet"]}

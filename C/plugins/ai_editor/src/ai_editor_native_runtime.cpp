@@ -200,25 +200,57 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 NativeRuntime::~NativeRuntime() {
     set_webview_post_message_handler({});
     extension_host_.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(event_mutex_);
+        stopping_ = true;
+    }
+    event_ready_.notify_all();
+
+    std::vector<std::shared_ptr<WorkflowExecution>> workflows;
+    {
+        std::lock_guard<std::mutex> lock(workflow_mutex_);
+        workflows.reserve(workflow_executions_.size());
+        for (const auto& [id, execution] : workflow_executions_) {
+            (void)id;
+            workflows.push_back(execution);
+        }
+    }
+    for (const auto& execution : workflows) {
+        execution->request_cancel();
+    }
+
     std::vector<std::shared_ptr<RunState>> runs;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
+        runs.reserve(runs_.size());
         for (const auto& [id, run] : runs_) {
             (void)id;
             runs.push_back(run);
             run->cancellation->cancel();
         }
     }
-    {
-        std::lock_guard<std::mutex> lock(event_mutex_);
-        stopping_ = true;
+
+    if (mcp_client_ != nullptr) {
+        (void)sao_ai_editor_mcp_client_set_notification_forwarder(
+            mcp_client_.get(), nullptr, nullptr);
+        (void)sao_ai_editor_mcp_client_close(mcp_client_.get(), nullptr);
     }
-    event_ready_.notify_all();
+
+    for (const auto& execution : workflows) {
+        execution->join();
+    }
     for (const auto& run : runs) {
         if (run->worker.joinable()) {
             run->worker.join();
         }
     }
+
+    {
+        std::lock_guard<std::mutex> lock(workflow_mutex_);
+        workflow_executions_.clear();
+    }
+    mcp_client_.reset();
 }
 
 void NativeRuntime::set_webview_post_message_handler(

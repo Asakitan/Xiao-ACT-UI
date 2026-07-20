@@ -1,4 +1,4 @@
-// HelloPlugin.cs — Wave 8 C# 插件宿主 smoke
+// HelloPlugin.cs — C# 插件宿主生命周期 smoke
 //
 // hostfxr load_assembly_and_get_function_pointer 默认 signature:
 //   public delegate int ComponentEntryPoint(IntPtr args, int sizeBytes);

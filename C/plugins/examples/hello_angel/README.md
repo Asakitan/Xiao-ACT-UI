@@ -1,7 +1,7 @@
 # hello_angel — AngelScript 插件宿主 smoke test
 
-Wave 8 / Agent d Phase 8 首切片。这个插件的唯一职责是**在 `angel_host` 里真的跑起来**,
-让 `plugins/angel_host/tests/test_hello_angel_wave8.cpp` 观察到:
+这个插件的唯一职责是**在 `angel_host` 里真的跑起来**,
+让 `plugins/angel_host/tests/test_hello_angel.cpp` 观察到:
 
 - 引擎初始化后 SDK 3 条 API (`log_info` / `register_ui_panel` / `register_hotkey`) 都被注册进 `asIScriptEngine`
 - 加载 `main.as` 编译不报错
@@ -13,5 +13,5 @@ Wave 8 / Agent d Phase 8 首切片。这个插件的唯一职责是**在 `angel_
 故意**不引** `PluginContext@` 或 `dictionary` 这些复杂类型 — 让本插件跑通不依赖
 `sdk_binding/binding_angel` 的全量 SDK 注册, 只需要 `angel_host` 自己暴露的 3 条 C 函数即可.
 
-后续 wave 深化 SDK binding 到全类型强绑 (对齐 `plugins/examples/example_angelscript_plugin/`)
-时, 这个插件仍然可跑, 作为向后兼容的最小基线.
+SDK binding 扩展到全类型强绑 (对齐 `plugins/examples/example_angelscript_plugin/`)
+后, 这个插件仍然可跑, 作为向后兼容的最小基线.

@@ -34,7 +34,7 @@ extern "C" {
 typedef struct SaoAiEditorIpc* sao_ai_editor_ipc_t;
 
 // Enumerate the supported IPC transports.  The launcher currently
-// only accepts NAMED_PIPE; future waves may add UDS or WebSocket.
+// only accepts NAMED_PIPE; future transports may include UDS or WebSocket.
 enum SaoAiEditorIpcTransport : int32_t {
     SAO_AI_EDITOR_IPC_NAMED_PIPE = 1,
     SAO_AI_EDITOR_IPC_STDIO      = 2,  // reserved

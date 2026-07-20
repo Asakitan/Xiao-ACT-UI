@@ -17,7 +17,7 @@ target_compile_features(sao_plugin_ai_editor_mcp_notification_fixture PRIVATE
     cxx_std_20
 )
 
-add_executable(sao_plugin_ai_editor_wave7_tests
+add_executable(sao_plugin_ai_editor_tests
     ai_editor_native_test.cpp
     ai_editor_process_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/chat_provider_router.cpp
@@ -30,27 +30,27 @@ add_executable(sao_plugin_ai_editor_wave7_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_result_filter.cpp
 )
 
-target_link_libraries(sao_plugin_ai_editor_wave7_tests PRIVATE
+target_link_libraries(sao_plugin_ai_editor_tests PRIVATE
     sao::plugin_ai_editor
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
     ws2_32
 )
-target_include_directories(sao_plugin_ai_editor_wave7_tests PRIVATE
+target_include_directories(sao_plugin_ai_editor_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/plugins/ai_editor/src
 )
 if (SAO_BUILD_WEBVIEW_BRIDGE)
-    target_compile_definitions(sao_plugin_ai_editor_wave7_tests PRIVATE
+    target_compile_definitions(sao_plugin_ai_editor_tests PRIVATE
         SAO_AI_EDITOR_HAS_WEBVIEW=1)
 endif()
 
-target_compile_features(sao_plugin_ai_editor_wave7_tests PRIVATE cxx_std_20)
-target_compile_definitions(sao_plugin_ai_editor_wave7_tests PRIVATE
+target_compile_features(sao_plugin_ai_editor_tests PRIVATE cxx_std_20)
+target_compile_definitions(sao_plugin_ai_editor_tests PRIVATE
     SAO_AI_EDITOR_CHILD_FIXTURE="$<TARGET_FILE:sao_plugin_ai_editor_child_fixture>"
     SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE="$<TARGET_FILE:sao_ai_editor>"
     SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE="$<TARGET_FILE:sao_plugin_ai_editor_mcp_notification_fixture>"
 )
-add_dependencies(sao_plugin_ai_editor_wave7_tests
+add_dependencies(sao_plugin_ai_editor_tests
     sao_plugin_ai_editor_child_fixture
     sao_plugin_ai_editor_mcp_notification_fixture
     sao_ai_editor
@@ -105,7 +105,7 @@ target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_plugin_ai_editor_wave7_tests
+catch_discover_tests(sao_plugin_ai_editor_tests
     TEST_PREFIX "plugins_ai_editor."
     PROPERTIES LABELS "plugins;ai_editor"
 )

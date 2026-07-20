@@ -1,8 +1,8 @@
 #pragma once
 
 #include <atomic>
-#include <cstdint>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <future>
 #include <memory>
@@ -11,6 +11,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "native_utils.h"
@@ -97,6 +98,8 @@ private:
     std::mutex write_mutex_;
     mutable std::mutex pending_mutex_;
     std::unordered_map<int64_t, std::shared_ptr<Pending>> pending_;
+    std::deque<int64_t> timed_out_request_order_;
+    std::unordered_set<int64_t> timed_out_request_ids_;
     std::atomic<int64_t> next_id_{1};
 
     std::atomic<NativeRuntime*> native_runtime_{nullptr};
