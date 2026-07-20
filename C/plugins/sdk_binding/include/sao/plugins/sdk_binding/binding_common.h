@@ -328,8 +328,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_sdk_context_disp
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx, sdk_method_id method_id);
 
-// 测试用: 查询绑定层是否记录了 add_hotkey 注册 (name key)。
-// Wave 4 用来给 test_sdk_bind_wave4 验证 dispatch 命中。
+// 测试用: 查询绑定层是否记录了 add_hotkey 注册 (name key)，验证 dispatch 命中。
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
 sao_plugins_binding_test_has_hotkey(plugin_binding_handle_t plugin, const char* hotkey_id);
 

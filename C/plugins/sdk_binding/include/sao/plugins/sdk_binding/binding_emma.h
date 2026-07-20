@@ -95,7 +95,7 @@ sao_plugins_binding_emma_get_method_table(sdk_method_id* out_ids,
                                           emma_ctx_method_fn* out_fns,
                                           size_t* inout_count);
 
-// ── Wave 4 新增: 激活 Emma 侧 binding ────────────────────────
+// ── 激活 Emma 侧 binding ────────────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_emma_activate(plugin_context_ptr plugin_ctx,
                                   emma_interpreter_ptr interp,

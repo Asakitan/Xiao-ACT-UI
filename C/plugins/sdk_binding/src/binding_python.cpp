@@ -1,7 +1,6 @@
-// binding_python.cpp — Wave 4 首切片
+// binding_python.cpp — Python SDK binding provider facade
 //
-// activate() 把 plugin_context_t* 注入 Python sao_sdk 模块 state (概念),
-// Wave 4 实际记账在 plugin_binding_s 里。真 PyModule state 集成留 Wave 5。
+// 兼容入口转发到 Python provider；activate/deactivate 复用共享插件生命周期。
 
 #include "sao/plugins/sdk_binding/binding_python.h"
 
@@ -18,7 +17,7 @@ plugin_binding_handle_t make_binding(void* ctx,
 void free_binding(plugin_binding_handle_t plugin);
 } // namespace detail
 
-// 保留旧 stub (未改签名)
+// 保留旧签名并转发到 provider。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_python_register_module(void) {
     language_binding_request request{};
@@ -83,7 +82,7 @@ sao_plugins_binding_python_pyobject_to_json(PyObject* obj, char** out_json_utf8)
         &request);
 }
 
-// Wave 4 新增: activate / deactivate
+// 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_python_activate(plugin_context_ptr plugin_ctx,

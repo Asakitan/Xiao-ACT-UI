@@ -233,7 +233,7 @@ sao_csharp_ctx_ensure_requirements(void* ctx, bool install, char** out_json);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_csharp_ctx_load_local(void* ctx, const char* relative, wchar_t** out_path);
 
-// ── Wave 4 新增: 激活 C# 侧 binding (Wave 4 阶段 stub) ───────
+// ── 激活 C# 侧 binding ──────────────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_csharp_activate(plugin_context_ptr plugin_ctx,
                                     csharp_domain_ptr domain,

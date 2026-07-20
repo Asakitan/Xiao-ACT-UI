@@ -1,7 +1,6 @@
-// binding_csharp.cpp — Wave 4 首切片
+// binding_csharp.cpp — C# SDK binding provider facade
 //
-// C# 侧的 activate 目前 stub (真 hostfxr + Roslyn 集成还未做), 只做记账。
-// Wave 5+ 会真编译 SaoPluginContext.cs wrapper class 并挂 domain。
+// C# context、静态调用和 delegate 包装转发到 provider；插件生命周期走共享 binding。
 
 #include "sao/plugins/sdk_binding/binding_csharp.h"
 
@@ -14,7 +13,7 @@ plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang);
 void free_binding(plugin_binding_handle_t plugin);
 } // namespace detail
 
-// 保留旧 stub
+// 保留旧签名并转发到 provider。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_csharp_bind_ctx(csharp_domain_ptr domain, plugin_context_ptr ctx) {
     if (domain == nullptr || ctx == nullptr)
@@ -71,7 +70,7 @@ sao_plugins_binding_csharp_release_delegate(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::csharp, user_data);
 }
 
-// Wave 4 新增: activate / deactivate (stub — 只记账, 真 domain 集成待 Wave 5)
+// 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_csharp_activate(
     plugin_context_ptr plugin_ctx, csharp_domain_ptr domain, plugin_binding_handle_t* out_plugin) {

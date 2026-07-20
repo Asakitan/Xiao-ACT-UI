@@ -1,7 +1,6 @@
-// binding_angel.cpp — Wave 4 首切片
+// binding_angel.cpp — AngelScript SDK binding provider facade
 //
-// activate() 概念: RegisterGlobalProperty 塞 ctx 到 g_ctx。Wave 4 只记账,
-// 真 AS RegisterGlobalProperty 集成留 Wave 5。
+// AngelScript runtime、context、值转换和回调包装转发到 provider。
 
 #include "sao/plugins/sdk_binding/binding_angel.h"
 
@@ -14,7 +13,7 @@ plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang);
 void free_binding(plugin_binding_handle_t plugin);
 } // namespace detail
 
-// 保留旧 stub
+// 保留旧签名并转发到 provider。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_angel_register_sdk(asIScriptEngine* engine) {
     if (engine == nullptr)
@@ -91,7 +90,7 @@ sao_plugins_binding_angel_json_to_dict(asIScriptEngine* engine, const char* utf8
                : nullptr;
 }
 
-// Wave 4 新增: activate / deactivate
+// 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_angel_activate(
     plugin_context_ptr plugin_ctx, asIScriptEngine* engine, plugin_binding_handle_t* out_plugin) {

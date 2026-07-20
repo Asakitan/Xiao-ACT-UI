@@ -155,7 +155,7 @@ extern "C" PyObject* py_ctx_load_local(PyObject* self, PyObject* args);
 extern "C" SAO_PLUGINS_API const struct PyMethodDef* SAO_PLUGINS_CALL
 sao_plugins_binding_python_method_defs(size_t* out_count);
 
-// ── Wave 4 新增: 激活 Python 侧 binding (返 opaque plugin binding) ─────
+// ── 激活 Python 侧 binding (返 opaque plugin binding) ─────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_python_activate(plugin_context_ptr plugin_ctx,
                                     void* py_host_state,

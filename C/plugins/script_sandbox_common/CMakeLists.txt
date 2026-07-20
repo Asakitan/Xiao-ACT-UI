@@ -20,7 +20,7 @@ target_include_directories(sao_script_sandbox_common_lib PUBLIC
 
 target_compile_features(sao_script_sandbox_common_lib PUBLIC cxx_std_20)
 
-# 与 wave10 SAO_ENC_STR 一致的严格 warning: 不打断构建, 但保持整洁.
+# SAO_ENC_STR 公共沙箱代码使用严格 warning，不打断构建。
 if (MSVC)
     target_compile_options(sao_script_sandbox_common_lib PRIVATE /W3 /permissive-)
 endif()

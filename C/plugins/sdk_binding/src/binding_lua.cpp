@@ -1,7 +1,6 @@
-// binding_lua.cpp — Wave 4 首切片
+// binding_lua.cpp — Lua SDK binding provider facade
 //
-// activate() 概念: lua_newuserdata 塞 ctx_ptr + metatable。Wave 4 只记账,
-// 真 Lua userdata 集成留 Wave 5。
+// Lua 值转换、回调包装和 runtime 注册转发到 provider；插件生命周期走共享 binding。
 
 #include "sao/plugins/sdk_binding/binding_lua.h"
 
@@ -14,7 +13,7 @@ plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang);
 void free_binding(plugin_binding_handle_t plugin);
 } // namespace detail
 
-// 保留旧 stub
+// 保留旧签名并转发到 provider。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_lua_register_sdk(lua_State* L, plugin_context_ptr ctx) {
     if (L == nullptr || ctx == nullptr)
@@ -75,7 +74,7 @@ sao_plugins_binding_lua_release_callback(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::lua, user_data);
 }
 
-// Wave 4 新增: activate / deactivate
+// 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_lua_activate(
     plugin_context_ptr plugin_ctx, lua_State* L, plugin_binding_handle_t* out_plugin) {

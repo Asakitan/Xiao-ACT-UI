@@ -188,7 +188,7 @@ extern "C" void* as_ctx_call_engine(void* self, const void* engine_name,
 extern "C" void as_ctx_ensure_requirements(void* self, bool install);
 extern "C" void* as_ctx_load_local(void* self, const void* relative);
 
-// ── Wave 4 新增: 激活 AngelScript 侧 binding ─────────────────
+// ── 激活 AngelScript 侧 binding ─────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_angel_activate(plugin_context_ptr plugin_ctx,
                                    asIScriptEngine* engine,

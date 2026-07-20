@@ -1,10 +1,10 @@
-// binding_common.cpp — Wave 4 首切片
+// binding_common.cpp — 多语言 SDK binding 共享实现
 //
 // 提供:
-//   1. json_node 基础栈 (stub → Wave 5 真解析)
-//   2. barrier 屏障 (直接同步调用, 后续 wave 加 SEH)
+//   1. json_node 与 JSON 文本双向转换
+//   2. provider 调用与跨语言回调生命周期保护
 //   3. plugin_binding_s 定义 (5 语言共享的 runtime binding 状态)
-//   4. sao_plugins_sdk_bind_call 中央 dispatcher (5 method 实装)
+//   4. sao_plugins_sdk_bind_call 中央 dispatcher
 //   5. test 辅助 API (has_hotkey / event_count / last_log)
 
 #include "sao/plugins/sdk_binding/binding_common.h"
@@ -132,16 +132,16 @@ struct plugin_binding_s {
     // 关联的语言侧 handle (PyObject*/lua_State*/asIScriptEngine*/...)
     void* lang_state = nullptr;
 
-    // 记录 add_hotkey 注册 (Wave 4 shim, 未来对接真 hotkey manager)
+    // 记录 add_hotkey 注册，供兼容查询与测试内省。
     std::unordered_set<std::string> hotkeys;
 
-    // 记录 publish_event: topic → count (Wave 4 shim, 未来对接真 event bus)
+    // 记录 publish_event: topic → count。
     std::unordered_map<std::string, uint32_t> event_counts;
 
-    // 最近一条 log (Wave 4 shim, 供 test 抓命中)
+    // 最近一条 log，供测试内省。
     std::string last_log;
 
-    // 记录 last plugin_id 请求返回过什么 (Wave 4 shim)
+    // 记录最近一次 plugin_id 查询结果。
     std::string last_plugin_id_query;
 
     struct callback_record {
@@ -1344,7 +1344,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_dispatch
     }
 }
 
-// ── 中央 dispatcher (Wave 4 实装 5 method) ──────────────────
+// ── 中央 dispatcher ─────────────────────────────────────────
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_sdk_bind_call(plugin_binding_handle_t plugin, sdk_method_id method_id,
@@ -1471,7 +1471,7 @@ extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
 sao_plugins_binding_test_last_log(plugin_binding_handle_t plugin) {
     if (plugin == nullptr)
         return "";
-    // 注意: 返回内部 string 引用, 调用方不能修改。Wave 4 shim。
+    // 注意: 返回内部 string 引用, 调用方不能修改。
     return plugin->last_log.c_str();
 }
 

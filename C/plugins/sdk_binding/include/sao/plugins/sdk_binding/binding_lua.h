@@ -146,7 +146,7 @@ extern "C" int lua_ctx_call_runtime(lua_State* L);
 extern "C" int lua_ctx_ensure_requirements(lua_State* L);
 extern "C" int lua_ctx_load_local(lua_State* L);
 
-// ── Wave 4 新增: 激活 Lua 侧 binding ─────────────────────────
+// ── 激活 Lua 侧 binding ─────────────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_lua_activate(plugin_context_ptr plugin_ctx,
                                  lua_State* L,

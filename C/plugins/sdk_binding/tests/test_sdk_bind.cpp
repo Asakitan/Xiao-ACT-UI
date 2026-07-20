@@ -1,4 +1,4 @@
-// test_sdk_bind_wave4.cpp — G2.7 sdk_binding runtime 首切片单测
+// test_sdk_bind.cpp — sdk_binding runtime dispatcher 单测
 //
 // 4 CASE:
 //   1. sdk_bind_log_info_dispatches
@@ -21,7 +21,7 @@ using namespace sao::plugins::sdk_binding;
 namespace {
 
 plugin_binding_handle_t make_test_binding() {
-    // 传一个"占位 ctx"指针 (unit test 不解引用). Wave 4 shim 只记账。
+    // 传一个"占位 ctx"指针；本单测只验证绑定层记账，不解引用它。
     static int dummy_ctx_state = 0;
     plugin_binding_handle_t plugin = nullptr;
     int32_t rc = sao_plugins_binding_emma_activate(
@@ -41,7 +41,7 @@ void free_test_binding(plugin_binding_handle_t plugin) {
 // CASE 1: log 派发
 void case_sdk_bind_log_info_dispatches() {
     plugin_binding_handle_t plugin = make_test_binding();
-    const char* msg = "hello wave4";
+    const char* msg = "hello sdk-binding";
     int32_t rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_log,
         msg, std::strlen(msg),
@@ -49,7 +49,7 @@ void case_sdk_bind_log_info_dispatches() {
     assert(rc == SAO_OK);
     const char* logged = sao_plugins_binding_test_last_log(plugin);
     assert(logged != nullptr);
-    assert(std::strcmp(logged, "hello wave4") == 0);
+    assert(std::strcmp(logged, "hello sdk-binding") == 0);
     free_test_binding(plugin);
     std::printf("  [OK] sdk_bind_log_info_dispatches\n");
 }
@@ -57,7 +57,7 @@ void case_sdk_bind_log_info_dispatches() {
 // CASE 2: 未实装 method → METHOD_NOT_IMPLEMENTED
 void case_sdk_bind_unknown_method_returns_error() {
     plugin_binding_handle_t plugin = make_test_binding();
-    // method_notify (Wave 5 才实装) → METHOD_NOT_IMPLEMENTED
+    // method_notify 不在当前中央 dispatcher 的直接实现集合中。
     int32_t rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_notify,
         nullptr, 0, nullptr, 0);
@@ -76,7 +76,7 @@ void case_sdk_bind_unknown_method_returns_error() {
 // CASE 3: add_hotkey (method_register_hotkey) 命中
 void case_sdk_bind_add_hotkey_records_registration() {
     plugin_binding_handle_t plugin = make_test_binding();
-    // 记 hotkey_id = "F5" (Wave 4 shim: 整段 args 当 key)
+    // 记 hotkey_id = "F5" (整段 args 作为 key)
     const char* hotkey_id = "F5";
     int32_t rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_register_hotkey,
@@ -117,7 +117,7 @@ void case_sdk_bind_publish_event_dispatches() {
     std::printf("  [OK] sdk_bind_publish_event_dispatches\n");
 }
 
-// bonus: plugin_id 属性也走同一 dispatcher (Wave 4 shim 记账)
+// bonus: plugin_id 属性也走同一 dispatcher 记账
 void case_sdk_bind_plugin_id_returns_shim() {
     plugin_binding_handle_t plugin = make_test_binding();
     char buf[64] = {};
@@ -126,7 +126,7 @@ void case_sdk_bind_plugin_id_returns_shim() {
         nullptr, 0,
         buf, sizeof(buf));
     assert(rc == SAO_OK);
-    // Wave 4 shim: "ctx@0x..." 格式
+    // 兼容 binding 返回 "ctx@0x..." 格式
     assert(std::strncmp(buf, "ctx@", 4) == 0);
     free_test_binding(plugin);
     std::printf("  [OK] sdk_bind_plugin_id_returns_shim (bonus)\n");
@@ -149,13 +149,13 @@ void case_sdk_bind_method_name_roundtrip() {
 } // namespace
 
 int main() {
-    std::printf("test_sdk_bind_wave4:\n");
+    std::printf("test_sdk_bind:\n");
     case_sdk_bind_log_info_dispatches();
     case_sdk_bind_unknown_method_returns_error();
     case_sdk_bind_add_hotkey_records_registration();
     case_sdk_bind_publish_event_dispatches();
     case_sdk_bind_plugin_id_returns_shim();
     case_sdk_bind_method_name_roundtrip();
-    std::printf("test_sdk_bind_wave4: 6 cases passed\n");
+    std::printf("test_sdk_bind: 6 cases passed\n");
     return 0;
 }
