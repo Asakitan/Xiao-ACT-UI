@@ -346,10 +346,15 @@ int32_t load_native(plugin_handle_t plugin, const plugin_manifest& manifest) {
             return SAO_PLUGINS_ERR_BUSY;
         }
     }
-    const auto dll_path = std::filesystem::u8path(manifest.source_path) /
-                          std::filesystem::u8path(manifest.native_entry);
+    const auto plugin_root = std::filesystem::u8path(manifest.source_path);
+    const auto dll_path = plugin_root / std::filesystem::u8path(manifest.native_entry);
+    std::filesystem::path resolved_dll_path;
+    const int32_t path_status =
+        resolve_contained_existing_path(plugin_root, dll_path, resolved_dll_path);
+    if (path_status != SAO_OK)
+        return path_status;
     auto module =
-        LoadLibraryExW(dll_path.c_str(), nullptr,
+        LoadLibraryExW(resolved_dll_path.c_str(), nullptr,
                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (module == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
@@ -778,8 +783,10 @@ sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
             unload_hook_completed = plugin->unload_hook_completed;
             host_adapter_unloaded = plugin->host_adapter_unloaded;
             dependency_session = plugin->dependency_session;
-            if (plugin_context_platform_is_current_thread(context))
+            if (plugin_context_event_is_current_thread(context) ||
+                plugin_context_platform_is_current_thread(context)) {
                 return SAO_PLUGINS_ERR_BUSY;
+            }
             previous_state = plugin->state;
             plugin->state = lifecycle_state::unloading;
         }

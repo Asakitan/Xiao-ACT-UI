@@ -1,10 +1,12 @@
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "plugin_internal.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -14,6 +16,140 @@ namespace sao::plugins::loader {
 namespace {
 
 using json = nlohmann::json;
+
+class bounded_manifest_json_sax final : public json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_node();
+    }
+    bool number_float(number_float_t value, const string_t&) override {
+        return std::isfinite(value) && consume_node();
+    }
+    bool string(string_t& value) override {
+        return consume_string(value) && consume_node();
+    }
+    bool binary(binary_t&) override {
+        return consume_node();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t& value) override {
+        return consume_string(value);
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&,
+                     const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumManifestJsonNodes)
+            return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool consume_string(const string_t& value) noexcept {
+        if (value.size() > kMaximumManifestStringBytes ||
+            string_bytes_ > kMaximumManifestAggregateStringBytes ||
+            value.size() > kMaximumManifestAggregateStringBytes - string_bytes_) {
+            return false;
+        }
+        string_bytes_ += value.size();
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumManifestJsonDepth || !consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0)
+            return false;
+        --depth_;
+        return true;
+    }
+
+    size_t depth_ = 0;
+    size_t nodes_ = 0;
+    size_t string_bytes_ = 0;
+};
+
+std::wstring normalized_final_path(HANDLE handle) {
+    const DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+    const DWORD required = GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
+    if (required == 0)
+        return {};
+    std::vector<wchar_t> buffer(required);
+    const DWORD written = GetFinalPathNameByHandleW(handle, buffer.data(), required, flags);
+    if (written == 0 || written >= required)
+        return {};
+    std::wstring result(buffer.data(), written);
+    constexpr std::wstring_view kUncPrefix = LR"(\\?\UNC\)";
+    constexpr std::wstring_view kDosPrefix = LR"(\\?\)";
+    if (result.starts_with(kUncPrefix)) {
+        result = LR"(\\)" + result.substr(kUncPrefix.size());
+    } else if (result.starts_with(kDosPrefix)) {
+        result.erase(0, kDosPrefix.size());
+    }
+    return result;
+}
+
+bool resolve_existing_path(const std::filesystem::path& path,
+                           std::filesystem::path& output) noexcept {
+    const HANDLE handle = CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        return false;
+    const auto final_path = normalized_final_path(handle);
+    CloseHandle(handle);
+    if (final_path.empty())
+        return false;
+    output = std::filesystem::path(final_path).lexically_normal();
+    return true;
+}
+
+bool same_path_component(const std::filesystem::path& left,
+                         const std::filesystem::path& right) noexcept {
+    return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool path_is_within(const std::filesystem::path& root,
+                    const std::filesystem::path& candidate) noexcept {
+    auto root_iterator = root.begin();
+    auto candidate_iterator = candidate.begin();
+    for (; root_iterator != root.end(); ++root_iterator, ++candidate_iterator) {
+        if (candidate_iterator == candidate.end() ||
+            !same_path_component(*root_iterator, *candidate_iterator)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 std::string lower_ascii(std::string_view value) {
     std::string result(value);
@@ -211,6 +347,26 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
 
 } // namespace
 
+int32_t resolve_contained_existing_path(const std::filesystem::path& root,
+                                        const std::filesystem::path& candidate,
+                                        std::filesystem::path& out_resolved) noexcept {
+    out_resolved.clear();
+    try {
+        std::filesystem::path resolved_root;
+        std::filesystem::path resolved_candidate;
+        if (!resolve_existing_path(root, resolved_root) ||
+            !resolve_existing_path(candidate, resolved_candidate) ||
+            !path_is_within(resolved_root, resolved_candidate)) {
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        out_resolved = std::move(resolved_candidate);
+        return SAO_OK;
+    } catch (...) {
+        out_resolved.clear();
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_manifest_parse(const char* utf8_json_ptr,
                            size_t utf8_json_len,
@@ -219,13 +375,29 @@ sao_plugins_manifest_parse(const char* utf8_json_ptr,
         return SAO_ERR_INVALID_ARGUMENT;
     }
     *out_manifest = plugin_manifest{};
+    if (utf8_json_len > kMaximumManifestRawBytes) {
+        out_manifest->parse_error = "manifest exceeds raw byte budget";
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     try {
-        auto begin = utf8_json_ptr;
+        const char* begin = utf8_json_ptr;
         if (utf8_json_len >= 3 && static_cast<unsigned char>(begin[0]) == 0xef &&
             static_cast<unsigned char>(begin[1]) == 0xbb &&
             static_cast<unsigned char>(begin[2]) == 0xbf) begin += 3;
+        bounded_manifest_json_sax sax;
+        if (!json::sax_parse(begin, utf8_json_ptr + utf8_json_len, &sax)) {
+            out_manifest->parse_error = "manifest exceeds JSON budget or is malformed";
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         const auto root = json::parse(begin, utf8_json_ptr + utf8_json_len);
-        return populate_manifest(root, *out_manifest);
+        plugin_manifest candidate;
+        const int32_t status = populate_manifest(root, candidate);
+        if (status != SAO_OK) {
+            out_manifest->parse_error = "manifest root must be an object";
+            return status;
+        }
+        *out_manifest = std::move(candidate);
+        return SAO_OK;
     } catch (const std::exception& error) {
         out_manifest->parse_error = error.what();
         return SAO_ERR_INVALID_ARGUMENT;
@@ -242,14 +414,66 @@ sao_plugins_manifest_load_from_file(const wchar_t* manifest_path,
     *out_manifest = plugin_manifest{};
     try {
         const auto path = std::filesystem::path(manifest_path);
-        std::ifstream input(path, std::ios::binary);
+        const auto path_root = path.has_parent_path() ? path.parent_path()
+                                                      : std::filesystem::current_path();
+        std::filesystem::path resolved_path;
+        const int32_t containment_status =
+            resolve_contained_existing_path(path_root, path, resolved_path);
+        if (containment_status != SAO_OK)
+            return containment_status;
+        std::error_code error;
+        const auto file_size = std::filesystem::file_size(resolved_path, error);
+        if (error)
+            return SAO_ERR_HANDLE_INVALID;
+        if (file_size > kMaximumManifestRawBytes) {
+            out_manifest->parse_error = "manifest exceeds raw byte budget";
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        std::ifstream input(resolved_path, std::ios::binary);
         if (!input) return SAO_ERR_HANDLE_INVALID;
-        std::ostringstream stream;
-        stream << input.rdbuf();
-        const auto content = stream.str();
-        const auto status = sao_plugins_manifest_parse(content.data(), content.size(), out_manifest);
-        if (status == SAO_OK) out_manifest->source_path = path_utf8(path.parent_path());
-        return status;
+        std::string content(static_cast<size_t>(file_size), '\0');
+        if (file_size > 0) {
+            input.read(content.data(), static_cast<std::streamsize>(file_size));
+            if (input.gcount() != static_cast<std::streamsize>(file_size))
+                return SAO_ERR_OS_CALL_FAILED;
+        }
+        if (input.peek() != std::char_traits<char>::eof()) {
+            out_manifest->parse_error = "manifest changed while being read";
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        plugin_manifest candidate;
+        const int32_t status =
+            sao_plugins_manifest_parse(content.data(), content.size(), &candidate);
+        if (status != SAO_OK) {
+            *out_manifest = std::move(candidate);
+            return status;
+        }
+        const auto plugin_root = resolved_path.parent_path();
+        for (const auto& entry : {candidate.entry, candidate.native_entry}) {
+            if (entry.empty())
+                continue;
+            if (!valid_relative_entry(entry)) {
+                out_manifest->parse_error = "manifest entry path is invalid";
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            const auto entry_path = plugin_root / std::filesystem::u8path(entry);
+            error.clear();
+            if (!std::filesystem::exists(entry_path, error)) {
+                if (error)
+                    return SAO_ERR_OS_CALL_FAILED;
+                continue;
+            }
+            std::filesystem::path resolved_entry;
+            const int32_t entry_status =
+                resolve_contained_existing_path(plugin_root, entry_path, resolved_entry);
+            if (entry_status != SAO_OK)
+                return entry_status;
+        }
+        candidate.source_path = path_utf8(plugin_root);
+        if (candidate.source_path.empty())
+            return SAO_ERR_OS_CALL_FAILED;
+        *out_manifest = std::move(candidate);
+        return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

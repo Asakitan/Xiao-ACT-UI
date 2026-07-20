@@ -36,8 +36,11 @@ struct provider_probe {
     std::unordered_map<uint64_t, std::string> layers;
     plugin_context_t* reentry_context = nullptr;
     bool invoke_cursor_callback = false;
+    bool reenter_create = false;
+    bool create_reentered = false;
     bool reenter_destroy = false;
     bool destroy_reentered = false;
+    int32_t nested_create_status = SAO_ERR_NOT_INITIALIZED;
     int32_t nested_destroy_status = SAO_OK;
     int32_t create_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
     int32_t upload_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
@@ -113,6 +116,12 @@ provider_create_compositor_layer(void*, plugin_context_platform_session_t sessio
     probe->calls.push_back("layer.create:" + state->plugin_id + ":" + spec->name_utf8);
     if (probe->create_status != SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK) {
         return probe->create_status;
+    }
+    if (probe->reenter_create && !probe->create_reentered) {
+        probe->create_reentered = true;
+        probe->nested_create_status = sao_plugins_ctx_create_compositor_layer(
+            probe->reentry_context, spec->name_utf8, spec->width, spec->height, spec->x, spec->y,
+            spec->z, spec->click_through, spec->high_fps, spec->target_fps);
     }
     const uint64_t token = ++probe->next_token;
     probe->layers.emplace(token, state->plugin_id + ":" + spec->name_utf8);
@@ -347,6 +356,36 @@ TEST_CASE("plugin context compositor forwards owned tokens and tolerates callbac
     CHECK(probe.destroy_session_calls == 1);
     CHECK(probe.retain_calls == 1);
     CHECK(probe.release_calls == 1);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+    remove_context_plugin(handle);
+}
+
+TEST_CASE("compositor create preserves retryable ownership when local publication rollback fails",
+          "[plugins][loader][context][compositor][create][rollback][ownership][hardening][focused]") {
+    provider_probe probe;
+    auto provider = make_provider(probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&provider) == SAO_OK);
+
+    auto handle = add_context_plugin("compositor_create_rollback");
+    auto* context = sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+    probe.reentry_context = context;
+    probe.reenter_create = true;
+    probe.destroy_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_OS_CALL_FAILED;
+
+    CHECK(sao_plugins_ctx_create_compositor_layer(context, "race", 2, 2, 0, 0, 0, true, false,
+                                                  0) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(probe.create_reentered);
+    CHECK(probe.nested_create_status == SAO_OK);
+    CHECK(probe.layers.size() == 2);
+
+    probe.destroy_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    sao_plugins_ctx_destroy(context);
+    CHECK(probe.layers.empty());
+    CHECK(static_cast<size_t>(std::count_if(probe.calls.begin(), probe.calls.end(),
+                                            [](const std::string& call) {
+                                                return call.starts_with("layer.destroy:");
+                                            })) == 3);
     REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
     remove_context_plugin(handle);
 }

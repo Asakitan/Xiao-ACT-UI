@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -34,7 +35,9 @@ struct entity_provider_state {
     std::string provider_id;
     std::string owner_plugin_id;
     uint64_t generation = 0;
-    entity_snapshot_callback_fn snapshot = nullptr;
+    uint32_t snapshot_abi_version = 0;
+    entity_snapshot_callback_fn snapshot_v1 = nullptr;
+    entity_snapshot_callback_v2_fn snapshot_v2 = nullptr;
     entity_action_handler_fn action_handler = nullptr;
     void* user_data = nullptr;
     bool has_root_contribution = false;
@@ -59,6 +62,7 @@ constexpr size_t kMaximumProviderIdBytes = 1024;
 constexpr size_t kMaximumRootIdBytes = 63;
 constexpr size_t kMaximumStringBytes = 16384;
 constexpr size_t kMaximumSnapshotStringBytes = 8 * 1024 * 1024;
+constexpr size_t kMaximumProviderRawRowBytes = 16 * 1024 * 1024;
 constexpr size_t kMaximumCatalogRows = 16384;
 constexpr size_t kMaximumCatalogStringBytes = 32 * 1024 * 1024;
 constexpr size_t kMaximumInvokePayloadBytes = 1024 * 1024;
@@ -86,6 +90,9 @@ struct owned_provider_snapshot {
     std::string owner_plugin_id;
     uint64_t generation = 0;
     uint64_t revision = 0;
+    uint32_t snapshot_abi_version = 0;
+    entity_snapshot_content_token_t producer_content_token = kInvalidEntitySnapshotContentToken;
+    entity_snapshot_content_token_t content_token = kInvalidEntitySnapshotContentToken;
     size_t string_bytes = 0;
     std::vector<owned_entity_row> rows;
     bool has_root_contribution = false;
@@ -185,6 +192,36 @@ int32_t call_snapshot(entity_snapshot_callback_fn callback, entity_menu_row* row
 #endif
 }
 
+int32_t call_snapshot_v2_cpp(entity_snapshot_callback_v2_fn callback, void* rows, uint32_t capacity,
+                             uint32_t row_stride_bytes, uint32_t* out_count, uint64_t* out_revision,
+                             entity_snapshot_content_token_t* out_content_token,
+                             uint32_t* out_row_stride_bytes, void* user_data) noexcept {
+    try {
+        return callback(rows, capacity, row_stride_bytes, out_count, out_revision,
+                        out_content_token, out_row_stride_bytes, user_data);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t call_snapshot_v2(entity_snapshot_callback_v2_fn callback, void* rows, uint32_t capacity,
+                         uint32_t row_stride_bytes, uint32_t* out_count, uint64_t* out_revision,
+                         entity_snapshot_content_token_t* out_content_token,
+                         uint32_t* out_row_stride_bytes, void* user_data) noexcept {
+#if defined(_MSC_VER)
+    __try {
+        return call_snapshot_v2_cpp(callback, rows, capacity, row_stride_bytes, out_count,
+                                    out_revision, out_content_token, out_row_stride_bytes,
+                                    user_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+#else
+    return call_snapshot_v2_cpp(callback, rows, capacity, row_stride_bytes, out_count, out_revision,
+                                out_content_token, out_row_stride_bytes, user_data);
+#endif
+}
+
 int32_t call_action_cpp(entity_action_handler_fn callback, const char* action_id,
                         const char* payload, void* user_data) noexcept {
     try {
@@ -226,6 +263,29 @@ int32_t call_catalog(entity_provider_catalog_callback callback,
     }
 #else
     return call_catalog_cpp(callback, catalog, user_data);
+#endif
+}
+
+int32_t call_catalog_v2_cpp(entity_provider_catalog_callback_v2 callback,
+                            const entity_provider_catalog_view_v2* catalog,
+                            void* user_data) noexcept {
+    try {
+        return callback(catalog, user_data);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t call_catalog_v2(entity_provider_catalog_callback_v2 callback,
+                        const entity_provider_catalog_view_v2* catalog, void* user_data) noexcept {
+#if defined(_MSC_VER)
+    __try {
+        return call_catalog_v2_cpp(callback, catalog, user_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+#else
+    return call_catalog_v2_cpp(callback, catalog, user_data);
 #endif
 }
 
@@ -502,6 +562,125 @@ int32_t copy_row(const entity_menu_row& row, size_t& total_bytes, owned_entity_r
     return SAO_OK;
 }
 
+int32_t copy_row_v2(const entity_menu_row_v2& row, size_t& total_bytes, owned_entity_row& out) {
+    entity_menu_row_v2 current{};
+    const int32_t copy_status =
+        copy_external_struct(&row, kEntityMenuRowV2RequiredPrefixSize, current);
+    if (copy_status != SAO_OK)
+        return copy_status;
+    const entity_menu_row canonical{
+        sizeof(entity_menu_row),
+        current.category_id_utf8,
+        current.category_label_utf8,
+        current.category_icon_utf8,
+        current.category_priority,
+        current.row_label_utf8,
+        current.row_icon_utf8,
+        current.action_id_utf8,
+        current.payload_json_utf8,
+        current.can_activate,
+        current.keep_menu_open,
+        current.close_menu_before,
+        {},
+    };
+    return copy_row(canonical, total_bytes, out);
+}
+
+class content_hasher final {
+  public:
+    void add_u8(uint8_t value) noexcept {
+        add_bytes(&value, sizeof(value));
+    }
+
+    void add_u32(uint32_t value) noexcept {
+        add_bytes(&value, sizeof(value));
+    }
+
+    void add_u64(uint64_t value) noexcept {
+        add_bytes(&value, sizeof(value));
+    }
+
+    void add_double(double value) noexcept {
+        add_u64(std::bit_cast<uint64_t>(value));
+    }
+
+    void add_string(std::string_view value) noexcept {
+        add_u64(static_cast<uint64_t>(value.size()));
+        add_bytes(value.data(), value.size());
+    }
+
+    entity_snapshot_content_token_t finish() const noexcept {
+        return value_ == kInvalidEntitySnapshotContentToken ? 1 : value_;
+    }
+
+  private:
+    void add_bytes(const void* data, size_t size) noexcept {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        for (size_t index = 0; index < size; ++index) {
+            value_ ^= bytes[index];
+            value_ *= 1099511628211ULL;
+        }
+    }
+
+    uint64_t value_ = 14695981039346656037ULL;
+};
+
+void hash_row(content_hasher& hasher, const owned_entity_row& row) noexcept {
+    hasher.add_string(row.category_id);
+    hasher.add_string(row.category_label);
+    hasher.add_string(row.category_icon);
+    hasher.add_double(row.category_priority);
+    hasher.add_string(row.row_label);
+    hasher.add_string(row.row_icon);
+    hasher.add_string(row.action_id);
+    hasher.add_string(row.payload_json);
+    hasher.add_u8(static_cast<uint8_t>(row.can_activate));
+    hasher.add_u8(static_cast<uint8_t>(row.keep_menu_open));
+    hasher.add_u8(static_cast<uint8_t>(row.close_menu_before));
+}
+
+entity_snapshot_content_token_t
+compute_provider_content_token(const owned_provider_snapshot& snapshot) noexcept {
+    content_hasher hasher;
+    hasher.add_u32(snapshot.snapshot_abi_version);
+    hasher.add_u64(snapshot.producer_content_token);
+    hasher.add_string(snapshot.provider_id);
+    hasher.add_string(snapshot.owner_plugin_id);
+    hasher.add_u64(snapshot.generation);
+    hasher.add_u64(snapshot.revision);
+    hasher.add_u64(static_cast<uint64_t>(snapshot.rows.size()));
+    for (const auto& row : snapshot.rows)
+        hash_row(hasher, row);
+    hasher.add_u8(static_cast<uint8_t>(snapshot.has_root_contribution));
+    if (snapshot.has_root_contribution) {
+        hasher.add_string(snapshot.contribution_id);
+        hasher.add_string(snapshot.root_id);
+        hasher.add_string(snapshot.root_name);
+        hasher.add_string(snapshot.root_icon);
+        hasher.add_double(snapshot.root_priority);
+    }
+    return hasher.finish();
+}
+
+entity_snapshot_content_token_t
+compute_catalog_content_token(uint64_t revision,
+                              const std::vector<owned_provider_snapshot>& snapshots) noexcept {
+    content_hasher hasher;
+    hasher.add_u32(kEntitySnapshotAbiVersion2);
+    hasher.add_u64(revision);
+    hasher.add_u64(static_cast<uint64_t>(snapshots.size()));
+    for (const auto& snapshot : snapshots)
+        hasher.add_u64(snapshot.content_token);
+    return hasher.finish();
+}
+
+bool checked_raw_row_bytes(uint32_t count, uint32_t stride, size_t& out_bytes) noexcept {
+    if (stride == 0 || count > kMaximumProviderRawRowBytes / stride)
+        return false;
+    out_bytes = static_cast<size_t>(count) * stride;
+    return out_bytes <= kMaximumProviderRawRowBytes;
+}
+
 int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& state,
                                owned_provider_snapshot& out) {
     provider_lease lease;
@@ -512,7 +691,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
     for (uint32_t attempt = 0; attempt < kMaximumSnapshotAttempts; ++attempt) {
         uint32_t required_count = 0;
         uint64_t first_revision = 0;
-        int32_t status = call_snapshot(state->snapshot, nullptr, 0, &required_count,
+        int32_t status = call_snapshot(state->snapshot_v1, nullptr, 0, &required_count,
                                        &first_revision, state->user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL) {
             return status;
@@ -529,6 +708,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
             candidate.owner_plugin_id = state->owner_plugin_id;
             candidate.generation = state->generation;
             candidate.revision = first_revision;
+            candidate.snapshot_abi_version = kEntitySnapshotAbiVersion1;
             candidate.has_root_contribution = state->has_root_contribution;
             candidate.contribution_id = state->contribution_id;
             candidate.root_id = state->root_id;
@@ -545,6 +725,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
                 return SAO_ERR_INVALID_ARGUMENT;
             }
             candidate.string_bytes = total_bytes;
+            candidate.content_token = compute_provider_content_token(candidate);
             out = std::move(candidate);
             return SAO_OK;
         }
@@ -554,7 +735,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
             row.struct_size = sizeof(entity_menu_row);
         uint32_t written_count = required_count;
         uint64_t second_revision = 0;
-        status = call_snapshot(state->snapshot, rows.empty() ? nullptr : rows.data(),
+        status = call_snapshot(state->snapshot_v1, rows.empty() ? nullptr : rows.data(),
                                required_count, &written_count, &second_revision, state->user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
             return status;
@@ -569,6 +750,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         candidate.owner_plugin_id = state->owner_plugin_id;
         candidate.generation = state->generation;
         candidate.revision = second_revision;
+        candidate.snapshot_abi_version = kEntitySnapshotAbiVersion1;
         candidate.has_root_contribution = state->has_root_contribution;
         candidate.contribution_id = state->contribution_id;
         candidate.root_id = state->root_id;
@@ -593,10 +775,156 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
             candidate.rows.push_back(std::move(copied));
         }
         candidate.string_bytes = total_bytes;
+        candidate.content_token = compute_provider_content_token(candidate);
         out = std::move(candidate);
         return SAO_OK;
     }
     return SAO_PLUGINS_ERR_BUSY;
+}
+
+int32_t copy_provider_snapshot_v2(const std::shared_ptr<entity_provider_state>& state,
+                                  owned_provider_snapshot& out) {
+    provider_lease lease;
+    const int32_t lease_status = lease.acquire(state);
+    if (lease_status != SAO_OK)
+        return lease_status;
+
+    for (uint32_t attempt = 0; attempt < kMaximumSnapshotAttempts; ++attempt) {
+        uint32_t required_count = 0;
+        uint64_t first_revision = 0;
+        entity_snapshot_content_token_t first_content_token = kInvalidEntitySnapshotContentToken;
+        uint32_t required_stride = 0;
+        int32_t status =
+            call_snapshot_v2(state->snapshot_v2, nullptr, 0, 0, &required_count, &first_revision,
+                             &first_content_token, &required_stride, state->user_data);
+        if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
+            return status;
+        if (first_content_token == kInvalidEntitySnapshotContentToken ||
+            required_count > kMaximumProviderRows) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+
+        if (required_count == 0) {
+            if (status != SAO_OK || required_stride != 0)
+                return SAO_ERR_INVALID_ARGUMENT;
+            owned_provider_snapshot candidate;
+            candidate.provider_id = state->provider_id;
+            candidate.owner_plugin_id = state->owner_plugin_id;
+            candidate.generation = state->generation;
+            candidate.revision = first_revision;
+            candidate.snapshot_abi_version = kEntitySnapshotAbiVersion2;
+            candidate.producer_content_token = first_content_token;
+            candidate.has_root_contribution = state->has_root_contribution;
+            candidate.contribution_id = state->contribution_id;
+            candidate.root_id = state->root_id;
+            candidate.root_name = state->root_name;
+            candidate.root_icon = state->root_icon;
+            candidate.root_priority = state->root_priority;
+            size_t total_bytes = 0;
+            if (!add_snapshot_string_bytes(total_bytes, candidate.provider_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.owner_plugin_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.contribution_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_id.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_name.size()) ||
+                !add_snapshot_string_bytes(total_bytes, candidate.root_icon.size())) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            candidate.string_bytes = total_bytes;
+            candidate.content_token = compute_provider_content_token(candidate);
+            out = std::move(candidate);
+            return SAO_OK;
+        }
+
+        if (required_stride < kEntityMenuRowV2RequiredPrefixSize)
+            return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        if (required_stride % alignof(entity_menu_row_v2) != 0)
+            return SAO_ERR_INVALID_ARGUMENT;
+        size_t raw_row_bytes = 0;
+        if (!checked_raw_row_bytes(required_count, required_stride, raw_row_bytes))
+            return SAO_ERR_INVALID_ARGUMENT;
+
+        const size_t storage_elements =
+            (raw_row_bytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
+        std::vector<std::max_align_t> raw_storage(storage_elements);
+        auto* raw_rows = reinterpret_cast<std::byte*>(raw_storage.data());
+        for (uint32_t row_index = 0; row_index < required_count; ++row_index) {
+            entity_menu_row_v2 initial{};
+            initial.struct_size = sizeof(entity_menu_row_v2);
+            std::memcpy(raw_rows + static_cast<size_t>(row_index) * required_stride, &initial,
+                        sizeof(initial));
+        }
+
+        uint32_t written_count = required_count;
+        uint64_t second_revision = 0;
+        entity_snapshot_content_token_t second_content_token = kInvalidEntitySnapshotContentToken;
+        uint32_t written_stride = 0;
+        status = call_snapshot_v2(state->snapshot_v2, raw_rows, required_count, required_stride,
+                                  &written_count, &second_revision, &second_content_token,
+                                  &written_stride, state->user_data);
+        if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
+            return status;
+        if (status == SAO_ERR_BUFFER_TOO_SMALL || written_count != required_count ||
+            second_revision != first_revision || second_content_token != first_content_token ||
+            written_stride != required_stride) {
+            continue;
+        }
+
+        owned_provider_snapshot candidate;
+        candidate.provider_id = state->provider_id;
+        candidate.owner_plugin_id = state->owner_plugin_id;
+        candidate.generation = state->generation;
+        candidate.revision = second_revision;
+        candidate.snapshot_abi_version = kEntitySnapshotAbiVersion2;
+        candidate.producer_content_token = second_content_token;
+        candidate.has_root_contribution = state->has_root_contribution;
+        candidate.contribution_id = state->contribution_id;
+        candidate.root_id = state->root_id;
+        candidate.root_name = state->root_name;
+        candidate.root_icon = state->root_icon;
+        candidate.root_priority = state->root_priority;
+        candidate.rows.reserve(written_count);
+        size_t total_bytes = 0;
+        if (!add_snapshot_string_bytes(total_bytes, candidate.provider_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.owner_plugin_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.contribution_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_id.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_name.size()) ||
+            !add_snapshot_string_bytes(total_bytes, candidate.root_icon.size())) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        for (uint32_t row_index = 0; row_index < written_count; ++row_index) {
+            const auto* source = raw_rows + static_cast<size_t>(row_index) * written_stride;
+            uint32_t struct_size = 0;
+            std::memcpy(&struct_size, source, sizeof(struct_size));
+            if (struct_size < kEntityMenuRowV2RequiredPrefixSize || struct_size > written_stride) {
+                return SAO_PLUGINS_ERR_ABI_MISMATCH;
+            }
+            entity_menu_row_v2 row{};
+            std::memcpy(&row, source, (std::min)(static_cast<size_t>(struct_size), sizeof(row)));
+            owned_entity_row copied;
+            status = copy_row_v2(row, total_bytes, copied);
+            if (status != SAO_OK)
+                return status;
+            candidate.rows.push_back(std::move(copied));
+        }
+        candidate.string_bytes = total_bytes;
+        candidate.content_token = compute_provider_content_token(candidate);
+        out = std::move(candidate);
+        return SAO_OK;
+    }
+    return SAO_PLUGINS_ERR_BUSY;
+}
+
+int32_t copy_provider_snapshot_for_catalog(const std::shared_ptr<entity_provider_state>& state,
+                                           owned_provider_snapshot& out) {
+    switch (state->snapshot_abi_version) {
+    case kEntitySnapshotAbiVersion1:
+        return copy_provider_snapshot(state, out);
+    case kEntitySnapshotAbiVersion2:
+        return copy_provider_snapshot_v2(state, out);
+    default:
+        return SAO_PLUGINS_ERR_ABI_MISMATCH;
+    }
 }
 
 } // namespace
@@ -614,15 +942,19 @@ void entity_provider_set_counters_for_testing(entity_provider_test_counters coun
 }
 #endif
 
-int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
-                                 const std::string& owner_plugin_id, const char* provider_id_utf8,
-                                 entity_snapshot_callback_fn snapshot,
-                                 entity_action_handler_fn action_handler, void* user_data,
-                                 const entity_root_contribution_descriptor* root_contribution,
-                                 std::shared_ptr<entity_provider_state>& out) noexcept {
+namespace {
+
+int32_t register_entity_provider_core(const std::shared_ptr<plugin_handle_s>& owner,
+                                      const std::string& owner_plugin_id,
+                                      const char* provider_id_utf8,
+                                      entity_snapshot_callback_fn snapshot_v1,
+                                      entity_snapshot_callback_v2_fn snapshot_v2,
+                                      entity_action_handler_fn action_handler, void* user_data,
+                                      const entity_root_contribution_descriptor* root_contribution,
+                                      std::shared_ptr<entity_provider_state>& out) noexcept {
     out.reset();
     if (owner == nullptr || owner_plugin_id.empty() || provider_id_utf8 == nullptr ||
-        snapshot == nullptr || action_handler == nullptr) {
+        (snapshot_v1 == nullptr) == (snapshot_v2 == nullptr) || action_handler == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -639,7 +971,10 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
         state->provider_id = owner_plugin_id + "/" + local_provider_id;
         if (!allocate_generation(state->generation))
             return SAO_ERR_OS_CALL_FAILED;
-        state->snapshot = snapshot;
+        state->snapshot_abi_version =
+            snapshot_v1 != nullptr ? kEntitySnapshotAbiVersion1 : kEntitySnapshotAbiVersion2;
+        state->snapshot_v1 = snapshot_v1;
+        state->snapshot_v2 = snapshot_v2;
         state->action_handler = action_handler;
         state->user_data = user_data;
         if (root_contribution != nullptr) {
@@ -695,6 +1030,31 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
+}
+
+} // namespace
+
+int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
+                                 const std::string& owner_plugin_id, const char* provider_id_utf8,
+                                 entity_snapshot_callback_fn snapshot,
+                                 entity_action_handler_fn action_handler, void* user_data,
+                                 const entity_root_contribution_descriptor* root_contribution,
+                                 std::shared_ptr<entity_provider_state>& out) noexcept {
+    return register_entity_provider_core(owner, owner_plugin_id, provider_id_utf8, snapshot,
+                                         nullptr, action_handler, user_data, root_contribution,
+                                         out);
+}
+
+int32_t register_entity_provider_v2(const std::shared_ptr<plugin_handle_s>& owner,
+                                    const std::string& owner_plugin_id,
+                                    const char* provider_id_utf8,
+                                    entity_snapshot_callback_v2_fn snapshot,
+                                    entity_action_handler_fn action_handler, void* user_data,
+                                    const entity_root_contribution_descriptor* root_contribution,
+                                    std::shared_ptr<entity_provider_state>& out) noexcept {
+    return register_entity_provider_core(owner, owner_plugin_id, provider_id_utf8, nullptr,
+                                         snapshot, action_handler, user_data, root_contribution,
+                                         out);
 }
 
 bool entity_provider_is_current_thread(
@@ -914,7 +1274,8 @@ int32_t destroy_entity_providers(
             }
             provider->destroyed = true;
             provider->owner.reset();
-            provider->snapshot = nullptr;
+            provider->snapshot_v1 = nullptr;
+            provider->snapshot_v2 = nullptr;
             provider->action_handler = nullptr;
             provider->user_data = nullptr;
         }
@@ -968,7 +1329,7 @@ sao_plugins_entity_provider_snapshot(entity_provider_catalog_callback callback, 
             size_t total_string_bytes = 0;
             for (const auto& provider : providers) {
                 owned_provider_snapshot snapshot;
-                const int32_t status = copy_provider_snapshot(provider, snapshot);
+                const int32_t status = copy_provider_snapshot_for_catalog(provider, snapshot);
                 if (status == SAO_PLUGINS_ERR_BUSY) {
                     retry = true;
                     break;
@@ -1065,6 +1426,154 @@ sao_plugins_entity_provider_snapshot(entity_provider_catalog_callback callback, 
                 root_views.empty() ? nullptr : root_views.data(),
             };
             const int32_t callback_status = call_catalog(callback, &catalog, user_data);
+            {
+                std::lock_guard lock(g_catalog_mutex);
+                if (catalog_revision != g_catalog_revision)
+                    return SAO_PLUGINS_ERR_BUSY;
+            }
+            return callback_status;
+        }
+        return SAO_PLUGINS_ERR_BUSY;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_snapshot_v2(
+    entity_provider_catalog_callback_v2 callback, void* user_data) {
+    if (callback == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        for (uint32_t attempt = 0; attempt < kMaximumSnapshotAttempts; ++attempt) {
+            uint64_t catalog_revision = 0;
+            std::vector<std::shared_ptr<entity_provider_state>> providers;
+            {
+                std::lock_guard lock(g_catalog_mutex);
+                if (g_catalog.size() > kMaximumEntityProvidersPerCatalog) {
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                catalog_revision = g_catalog_revision;
+                providers.reserve(g_catalog.size());
+                for (const auto& [_, provider] : g_catalog) {
+                    providers.push_back(provider);
+                }
+            }
+            std::sort(providers.begin(), providers.end(), [](const auto& left, const auto& right) {
+                return left->provider_id < right->provider_id;
+            });
+
+            std::vector<owned_provider_snapshot> snapshots;
+            snapshots.reserve(providers.size());
+            bool retry = false;
+            size_t total_rows = 0;
+            size_t total_string_bytes = 0;
+            for (const auto& provider : providers) {
+                owned_provider_snapshot snapshot;
+                const int32_t status = copy_provider_snapshot_for_catalog(provider, snapshot);
+                if (status == SAO_PLUGINS_ERR_BUSY) {
+                    retry = true;
+                    break;
+                }
+                if (status != SAO_OK)
+                    return status;
+                if (total_rows > kMaximumCatalogRows ||
+                    snapshot.rows.size() > kMaximumCatalogRows - total_rows ||
+                    total_string_bytes > kMaximumCatalogStringBytes ||
+                    snapshot.string_bytes > kMaximumCatalogStringBytes - total_string_bytes) {
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                total_rows += snapshot.rows.size();
+                total_string_bytes += snapshot.string_bytes;
+                snapshots.push_back(std::move(snapshot));
+            }
+            {
+                std::lock_guard lock(g_catalog_mutex);
+                if (catalog_revision != g_catalog_revision)
+                    retry = true;
+            }
+            if (retry)
+                continue;
+
+            std::vector<std::vector<entity_menu_row_v2>> row_views;
+            std::vector<entity_provider_view_v2> provider_views;
+            std::vector<std::vector<entity_root_action_ref_view_v2>> root_action_views;
+            std::vector<entity_root_contribution_view_v2> root_views;
+            row_views.resize(snapshots.size());
+            provider_views.reserve(snapshots.size());
+            root_action_views.reserve(snapshots.size());
+            root_views.reserve(snapshots.size());
+            for (size_t provider_index = 0; provider_index < snapshots.size(); ++provider_index) {
+                auto& snapshot = snapshots[provider_index];
+                auto& rows = row_views[provider_index];
+                rows.reserve(snapshot.rows.size());
+                for (const auto& row : snapshot.rows) {
+                    rows.push_back({
+                        sizeof(entity_menu_row_v2),
+                        row.category_id.c_str(),
+                        row.category_label.c_str(),
+                        row.category_icon.c_str(),
+                        row.category_priority,
+                        row.row_label.c_str(),
+                        row.row_icon.c_str(),
+                        row.action_id.c_str(),
+                        row.payload_json.c_str(),
+                        static_cast<uint8_t>(row.can_activate),
+                        static_cast<uint8_t>(row.keep_menu_open),
+                        static_cast<uint8_t>(row.close_menu_before),
+                        {},
+                    });
+                }
+                provider_views.push_back({
+                    sizeof(entity_provider_view_v2),
+                    snapshot.snapshot_abi_version,
+                    snapshot.provider_id.c_str(),
+                    snapshot.owner_plugin_id.c_str(),
+                    snapshot.generation,
+                    snapshot.revision,
+                    snapshot.content_token,
+                    static_cast<uint32_t>(rows.size()),
+                    sizeof(entity_menu_row_v2),
+                    rows.empty() ? nullptr : rows.data(),
+                });
+                if (snapshot.has_root_contribution) {
+                    std::vector<entity_root_action_ref_view_v2> actions;
+                    actions.reserve(snapshot.rows.size());
+                    for (const auto& row : snapshot.rows) {
+                        actions.push_back({
+                            sizeof(entity_root_action_ref_view_v2),
+                            snapshot.provider_id.c_str(),
+                            row.action_id.c_str(),
+                        });
+                    }
+                    root_action_views.push_back(std::move(actions));
+                    const auto& stored_actions = root_action_views.back();
+                    root_views.push_back({
+                        sizeof(entity_root_contribution_view_v2),
+                        snapshot.owner_plugin_id.c_str(),
+                        snapshot.contribution_id.c_str(),
+                        snapshot.root_id.c_str(),
+                        snapshot.root_name.c_str(),
+                        snapshot.root_icon.c_str(),
+                        snapshot.root_priority,
+                        static_cast<uint32_t>(stored_actions.size()),
+                        sizeof(entity_root_action_ref_view_v2),
+                        stored_actions.empty() ? nullptr : stored_actions.data(),
+                    });
+                }
+            }
+            const entity_provider_catalog_view_v2 catalog{
+                sizeof(entity_provider_catalog_view_v2),
+                kEntitySnapshotAbiVersion2,
+                catalog_revision,
+                compute_catalog_content_token(catalog_revision, snapshots),
+                static_cast<uint32_t>(provider_views.size()),
+                sizeof(entity_provider_view_v2),
+                provider_views.empty() ? nullptr : provider_views.data(),
+                static_cast<uint32_t>(root_views.size()),
+                sizeof(entity_root_contribution_view_v2),
+                root_views.empty() ? nullptr : root_views.data(),
+            };
+            const int32_t callback_status = call_catalog_v2(callback, &catalog, user_data);
             {
                 std::lock_guard lock(g_catalog_mutex);
                 if (catalog_revision != g_catalog_revision)

@@ -29,6 +29,14 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
                                  const entity_root_contribution_descriptor* root_contribution,
                                  std::shared_ptr<entity_provider_state>& out) noexcept;
 
+int32_t register_entity_provider_v2(const std::shared_ptr<plugin_handle_s>& owner,
+                                    const std::string& owner_plugin_id,
+                                    const char* provider_id_utf8,
+                                    entity_snapshot_callback_v2_fn snapshot,
+                                    entity_action_handler_fn action_handler, void* user_data,
+                                    const entity_root_contribution_descriptor* root_contribution,
+                                    std::shared_ptr<entity_provider_state>& out) noexcept;
+
 bool entity_provider_is_current_thread(
     const std::vector<std::shared_ptr<entity_provider_state>>& providers) noexcept;
 

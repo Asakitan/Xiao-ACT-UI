@@ -1,5 +1,6 @@
 #include "sao/plugins/loader/plugin_deps.h"
 #include "sao/plugins/loader/loader_status.h"
+#include "plugin_internal.h"
 
 #include <algorithm>
 #include <array>
@@ -198,12 +199,47 @@ std::string distribution_name(std::string requirement) {
     return requirement;
 }
 
-bool dependency_present(const fs::path& root, std::string_view import_name) {
-    std::error_code error;
-    const auto package = root / fs::u8path(import_name);
-    return fs::exists(package, error) || fs::exists(package.wstring() + L".py", error) ||
-           fs::exists(package.wstring() + L".pyd", error) ||
-           fs::exists(package.wstring() + L".dll", error);
+bool valid_distribution_name(std::string_view value) noexcept {
+    constexpr size_t kMaximumDistributionNameBytes = 255;
+    if (value.empty() || value.size() > kMaximumDistributionNameBytes || value == "." ||
+        value == ".." || value.find('/') != std::string_view::npos ||
+        value.find('\\') != std::string_view::npos) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isalnum(ch) != 0 || ch == '-' || ch == '_' || ch == '.';
+    });
+}
+
+int32_t dependency_present(const fs::path& root, std::string_view import_name,
+                           bool& out_present) noexcept {
+    out_present = false;
+    try {
+        const auto package = root / fs::u8path(import_name);
+        const std::array candidates = {
+            package,
+            fs::path(package.wstring() + L".py"),
+            fs::path(package.wstring() + L".pyd"),
+            fs::path(package.wstring() + L".dll"),
+        };
+        for (const auto& candidate : candidates) {
+            std::error_code error;
+            if (!fs::exists(candidate, error)) {
+                if (error)
+                    return SAO_ERR_OS_CALL_FAILED;
+                continue;
+            }
+            fs::path resolved;
+            const int32_t status = resolve_contained_existing_path(root, candidate, resolved);
+            if (status != SAO_OK)
+                return status == SAO_ERR_OS_CALL_FAILED ? status : SAO_ERR_INVALID_ARGUMENT;
+            out_present = true;
+            return SAO_OK;
+        }
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 } // namespace
@@ -411,19 +447,36 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_deps_ensure(
         std::error_code error;
         if (!fs::is_directory(root, error))
             return SAO_ERR_HANDLE_INVALID;
+        deps_bootstrap_record candidate;
         std::vector<fs::path> search_roots;
         for (const auto* name : {L"libs", L"vendor", L"engine"}) {
             const auto path = root / name;
-            if (fs::is_directory(path, error)) {
-                search_roots.push_back(path);
-                out_record->added_paths.push_back(fs::weakly_canonical(path, error).native());
+            const bool is_directory = fs::is_directory(path, error);
+            if (is_directory) {
+                fs::path resolved;
+                const int32_t status = resolve_contained_existing_path(root, path, resolved);
+                if (status != SAO_OK)
+                    return status == SAO_ERR_OS_CALL_FAILED ? status : SAO_ERR_INVALID_ARGUMENT;
+                search_roots.push_back(resolved);
+                candidate.added_paths.push_back(resolved.native());
             }
             error.clear();
         }
         const auto requirements = root / L"requirements.txt";
-        if (!fs::is_regular_file(requirements, error))
+        const bool has_requirements = fs::is_regular_file(requirements, error);
+        if (!has_requirements) {
+            *out_record = std::move(candidate);
             return SAO_OK;
-        std::ifstream input(requirements);
+        }
+        fs::path resolved_requirements;
+        const int32_t requirements_status =
+            resolve_contained_existing_path(root, requirements, resolved_requirements);
+        if (requirements_status != SAO_OK) {
+            return requirements_status == SAO_ERR_OS_CALL_FAILED
+                       ? requirements_status
+                       : SAO_ERR_INVALID_ARGUMENT;
+        }
+        std::ifstream input(resolved_requirements);
         if (!input)
             return SAO_ERR_HANDLE_INVALID;
         std::string line;
@@ -431,22 +484,35 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_deps_ensure(
             auto distribution = distribution_name(line);
             if (distribution.empty() || distribution[0] == '-')
                 continue;
+            if (!valid_distribution_name(distribution))
+                return SAO_ERR_INVALID_ARGUMENT;
             const auto map_iterator = dist_to_import_name_map().find(distribution);
             const auto import_name = map_iterator == dist_to_import_name_map().end()
                                          ? distribution
                                          : map_iterator->second;
-            auto found = std::find_if(search_roots.begin(), search_roots.end(),
-                                      [&import_name](const fs::path& path) {
-                                          return dependency_present(path, import_name);
-                                      });
+            if (!valid_distribution_name(import_name))
+                return SAO_ERR_INVALID_ARGUMENT;
+            auto found = search_roots.end();
+            for (auto iterator = search_roots.begin(); iterator != search_roots.end(); ++iterator) {
+                bool present = false;
+                const int32_t status = dependency_present(*iterator, import_name, present);
+                if (status != SAO_OK)
+                    return status;
+                if (present) {
+                    found = iterator;
+                    break;
+                }
+            }
             if (found == search_roots.end()) {
-                out_record->deps_summary[distribution] = "missing";
+                candidate.deps_summary[distribution] = "missing";
+                *out_record = std::move(candidate);
                 return allow_pip_install ? SAO_PLUGINS_ERR_UNSUPPORTED
                                          : SAO_PLUGINS_ERR_DEPENDENCY_MISSING;
             }
-            out_record->deps_summary[distribution] =
+            candidate.deps_summary[distribution] =
                 _wcsicmp(found->filename().c_str(), L"libs") == 0 ? "libs" : "vendor";
         }
+        *out_record = std::move(candidate);
         return SAO_OK;
     } catch (...) {
         *out_record = deps_bootstrap_record{};

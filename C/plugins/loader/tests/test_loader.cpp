@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "entity_provider_internal.h"
+#include "plugin_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_deps.h"
@@ -80,6 +81,62 @@ struct entity_provider_catalog_snapshot {
     std::vector<entity_root_snapshot_record> roots;
 };
 
+struct entity_provider_row_snapshot_v2 {
+    uint32_t struct_size = 0;
+    std::string category_id;
+    std::string category_label;
+    std::string category_icon;
+    double category_priority = 0.0;
+    std::string row_label;
+    std::string row_icon;
+    std::string action_id;
+    std::string payload_json;
+    bool can_activate = true;
+    bool keep_menu_open = false;
+    bool close_menu_before = false;
+};
+
+struct entity_provider_snapshot_record_v2 {
+    uint32_t struct_size = 0;
+    uint32_t snapshot_abi_version = 0;
+    std::string provider_id;
+    std::string owner_plugin_id;
+    uint64_t generation = 0;
+    uint64_t revision = 0;
+    entity_snapshot_content_token_t content_token = kInvalidEntitySnapshotContentToken;
+    uint32_t row_stride_bytes = 0;
+    std::vector<entity_provider_row_snapshot_v2> rows;
+};
+
+struct entity_root_action_snapshot_record_v2 {
+    uint32_t struct_size = 0;
+    std::string provider_id;
+    std::string action_id;
+};
+
+struct entity_root_snapshot_record_v2 {
+    uint32_t struct_size = 0;
+    std::string owner_plugin_id;
+    std::string contribution_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0.0;
+    uint32_t action_stride_bytes = 0;
+    std::vector<entity_root_action_snapshot_record_v2> actions;
+};
+
+struct entity_provider_catalog_snapshot_v2 {
+    uint32_t struct_size = 0;
+    uint32_t abi_version = 0;
+    uint64_t revision = 0;
+    entity_snapshot_content_token_t content_token = kInvalidEntitySnapshotContentToken;
+    uint32_t provider_stride_bytes = 0;
+    uint32_t root_contribution_stride_bytes = 0;
+    std::vector<entity_provider_snapshot_record_v2> providers;
+    std::vector<entity_root_snapshot_record_v2> roots;
+};
+
 struct adapter_probe {
     plugin_context_t* load_context = nullptr;
     plugin_context_t* unload_context = nullptr;
@@ -154,6 +211,125 @@ int32_t SAO_PLUGINS_CALL copy_entity_provider_catalog(const entity_provider_cata
 
 int32_t snapshot_entity_providers(entity_provider_catalog_snapshot& out) {
     return sao_plugins_entity_provider_snapshot(copy_entity_provider_catalog, &out);
+}
+
+template <typename T>
+const T* stride_element(const void* base, uint32_t stride_bytes, uint32_t index) {
+    const auto* bytes = static_cast<const std::byte*>(base);
+    return reinterpret_cast<const T*>(bytes + static_cast<size_t>(index) * stride_bytes);
+}
+
+int32_t SAO_PLUGINS_CALL
+copy_entity_provider_catalog_v2(const entity_provider_catalog_view_v2* catalog, void* user_data) {
+    if (catalog == nullptr || user_data == nullptr ||
+        catalog->struct_size < kEntityProviderCatalogViewV2RequiredPrefixSize ||
+        catalog->abi_version != kEntitySnapshotAbiVersion2 ||
+        catalog->content_token == kInvalidEntitySnapshotContentToken) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if ((catalog->provider_count > 0 && catalog->providers == nullptr) ||
+        catalog->provider_stride_bytes < kEntityProviderViewV2RequiredPrefixSize ||
+        catalog->provider_stride_bytes % alignof(entity_provider_view_v2) != 0 ||
+        (catalog->root_contribution_count > 0 && catalog->root_contributions == nullptr) ||
+        catalog->root_contribution_stride_bytes < kEntityRootContributionViewV2RequiredPrefixSize ||
+        catalog->root_contribution_stride_bytes % alignof(entity_root_contribution_view_v2) != 0) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+
+    auto& out = *static_cast<entity_provider_catalog_snapshot_v2*>(user_data);
+    entity_provider_catalog_snapshot_v2 candidate;
+    candidate.struct_size = catalog->struct_size;
+    candidate.abi_version = catalog->abi_version;
+    candidate.revision = catalog->revision;
+    candidate.content_token = catalog->content_token;
+    candidate.provider_stride_bytes = catalog->provider_stride_bytes;
+    candidate.root_contribution_stride_bytes = catalog->root_contribution_stride_bytes;
+    candidate.providers.reserve(catalog->provider_count);
+    for (uint32_t provider_index = 0; provider_index < catalog->provider_count; ++provider_index) {
+        const auto* provider = stride_element<entity_provider_view_v2>(
+            catalog->providers, catalog->provider_stride_bytes, provider_index);
+        if (provider->struct_size < kEntityProviderViewV2RequiredPrefixSize ||
+            provider->struct_size > catalog->provider_stride_bytes ||
+            provider->content_token == kInvalidEntitySnapshotContentToken ||
+            (provider->row_count > 0 && provider->rows == nullptr) ||
+            provider->row_stride_bytes < kEntityMenuRowV2RequiredPrefixSize ||
+            provider->row_stride_bytes % alignof(entity_menu_row_v2) != 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        entity_provider_snapshot_record_v2 copied;
+        copied.struct_size = provider->struct_size;
+        copied.snapshot_abi_version = provider->snapshot_abi_version;
+        copied.provider_id = provider->provider_id_utf8;
+        copied.owner_plugin_id = provider->owner_plugin_id_utf8;
+        copied.generation = provider->generation;
+        copied.revision = provider->revision;
+        copied.content_token = provider->content_token;
+        copied.row_stride_bytes = provider->row_stride_bytes;
+        copied.rows.reserve(provider->row_count);
+        for (uint32_t row_index = 0; row_index < provider->row_count; ++row_index) {
+            const auto* row = stride_element<entity_menu_row_v2>(
+                provider->rows, provider->row_stride_bytes, row_index);
+            if (row->struct_size < kEntityMenuRowV2RequiredPrefixSize ||
+                row->struct_size > provider->row_stride_bytes) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            copied.rows.push_back({
+                row->struct_size,
+                row->category_id_utf8,
+                row->category_label_utf8,
+                row->category_icon_utf8,
+                row->category_priority,
+                row->row_label_utf8,
+                row->row_icon_utf8,
+                row->action_id_utf8,
+                row->payload_json_utf8,
+                row->can_activate != 0,
+                row->keep_menu_open != 0,
+                row->close_menu_before != 0,
+            });
+        }
+        candidate.providers.push_back(std::move(copied));
+    }
+
+    candidate.roots.reserve(catalog->root_contribution_count);
+    for (uint32_t root_index = 0; root_index < catalog->root_contribution_count; ++root_index) {
+        const auto* root = stride_element<entity_root_contribution_view_v2>(
+            catalog->root_contributions, catalog->root_contribution_stride_bytes, root_index);
+        if (root->struct_size < kEntityRootContributionViewV2RequiredPrefixSize ||
+            root->struct_size > catalog->root_contribution_stride_bytes ||
+            (root->action_count > 0 && root->actions == nullptr) ||
+            root->action_stride_bytes < kEntityRootActionRefViewV2RequiredPrefixSize ||
+            root->action_stride_bytes % alignof(entity_root_action_ref_view_v2) != 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        entity_root_snapshot_record_v2 copied;
+        copied.struct_size = root->struct_size;
+        copied.owner_plugin_id = root->owner_plugin_id_utf8;
+        copied.contribution_id = root->contribution_id_utf8;
+        copied.root_id = root->root_id_utf8;
+        copied.name = root->name_utf8;
+        copied.icon = root->icon_utf8;
+        copied.priority = root->priority;
+        copied.action_stride_bytes = root->action_stride_bytes;
+        copied.actions.reserve(root->action_count);
+        for (uint32_t action_index = 0; action_index < root->action_count; ++action_index) {
+            const auto* action = stride_element<entity_root_action_ref_view_v2>(
+                root->actions, root->action_stride_bytes, action_index);
+            if (action->struct_size < kEntityRootActionRefViewV2RequiredPrefixSize ||
+                action->struct_size > root->action_stride_bytes) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            copied.actions.push_back(
+                {action->struct_size, action->provider_id_utf8, action->action_id_utf8});
+        }
+        candidate.roots.push_back(std::move(copied));
+    }
+    out = std::move(candidate);
+    return SAO_OK;
+}
+
+int32_t snapshot_entity_providers_v2(entity_provider_catalog_snapshot_v2& out) {
+    return sao_plugins_entity_provider_snapshot_v2(copy_entity_provider_catalog_v2, &out);
 }
 
 int32_t SAO_PLUGINS_CALL probe_adapter_load(plugin_handle_t plugin, const plugin_manifest*,
@@ -270,6 +446,14 @@ void write_text(const fs::path& path, std::string_view text) {
     REQUIRE(output.good());
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(output.good());
+}
+
+bool create_test_symlink(const fs::path& link, const fs::path& target, bool directory = false) {
+    fs::create_directories(link.parent_path());
+    constexpr DWORD kAllowUnprivilegedCreate = 0x2;
+    const DWORD flags = (directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0) |
+                        kAllowUnprivilegedCreate;
+    return CreateSymbolicLinkW(link.c_str(), target.c_str(), flags) != FALSE;
 }
 
 plugin_manifest make_manifest(std::string id, const fs::path& source,
@@ -465,6 +649,233 @@ int32_t SAO_PLUGINS_CALL snapshot_protocol_callback(entity_menu_row* rows, uint3
 }
 
 int32_t SAO_PLUGINS_CALL snapshot_protocol_action(const char*, const char*, void*) {
+    return SAO_OK;
+}
+
+enum class entity_snapshot_v2_mode {
+    stable,
+    token_mismatch,
+    stride_mismatch,
+    zero_token,
+    short_stride,
+    misaligned_stride,
+    oversized_stride,
+    short_row_struct,
+    zero_rows_nonzero_stride,
+};
+
+struct alignas(entity_menu_row_v2) physical_entity_menu_row_v2 {
+    entity_menu_row_v2 row{};
+    std::array<uint64_t, 4> future_tail{};
+};
+
+static_assert(sizeof(physical_entity_menu_row_v2) > sizeof(entity_menu_row_v2));
+static_assert(sizeof(physical_entity_menu_row_v2) % alignof(entity_menu_row_v2) == 0);
+
+struct entity_provider_v2_probe {
+    entity_snapshot_v2_mode mode = entity_snapshot_v2_mode::stable;
+    std::atomic_int snapshot_calls{0};
+    std::atomic_int actions{0};
+    uint64_t revision = 0xd1501;
+    entity_snapshot_content_token_t source_content_token = 0xd1502;
+    uint32_t fill_input_stride = 0;
+    uint32_t fill_output_stride = 0;
+    uint64_t fill_revision = 0;
+    entity_snapshot_content_token_t fill_content_token = kInvalidEntitySnapshotContentToken;
+    std::string last_payload;
+};
+
+void set_v2_physical_row(physical_entity_menu_row_v2& row, uint32_t struct_size,
+                         const char* category_id, const char* category_label,
+                         double category_priority, const char* row_label, const char* action_id,
+                         const char* payload_json, uint8_t can_activate, uint8_t keep_menu_open,
+                         uint8_t close_menu_before) {
+    row = {};
+    row.row = {
+        struct_size,
+        category_id,
+        category_label,
+        "future-icon",
+        category_priority,
+        row_label,
+        "row-icon",
+        action_id,
+        payload_json,
+        can_activate,
+        keep_menu_open,
+        close_menu_before,
+        {},
+    };
+    row.future_tail = {0xd1500001, 0xd1500002, 0xd1500003, 0xd1500004};
+}
+
+int32_t SAO_PLUGINS_CALL entity_provider_v2_snapshot(
+    void* rows, uint32_t capacity, uint32_t row_stride_bytes, uint32_t* out_count,
+    uint64_t* out_revision, entity_snapshot_content_token_t* out_content_token,
+    uint32_t* out_row_stride_bytes, void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
+        out_row_stride_bytes == nullptr || user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& probe = *static_cast<entity_provider_v2_probe*>(user_data);
+    ++probe.snapshot_calls;
+    const bool is_probe = rows == nullptr && capacity == 0 && row_stride_bytes == 0;
+    *out_revision = probe.revision;
+    *out_content_token = probe.mode == entity_snapshot_v2_mode::zero_token
+                             ? kInvalidEntitySnapshotContentToken
+                             : probe.source_content_token;
+    if (probe.mode == entity_snapshot_v2_mode::zero_rows_nonzero_stride) {
+        *out_count = 0;
+        *out_row_stride_bytes = sizeof(physical_entity_menu_row_v2);
+        return SAO_OK;
+    }
+
+    *out_count = 2;
+    switch (probe.mode) {
+    case entity_snapshot_v2_mode::short_stride:
+        *out_row_stride_bytes = static_cast<uint32_t>(kEntityMenuRowV2RequiredPrefixSize - 1);
+        break;
+    case entity_snapshot_v2_mode::misaligned_stride:
+        *out_row_stride_bytes = sizeof(entity_menu_row_v2) + 1;
+        break;
+    case entity_snapshot_v2_mode::oversized_stride:
+        *out_row_stride_bytes = 32U * 1024U * 1024U;
+        break;
+    default:
+        *out_row_stride_bytes = sizeof(physical_entity_menu_row_v2);
+        break;
+    }
+    if (is_probe)
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    if (rows == nullptr || capacity < 2 || row_stride_bytes < sizeof(physical_entity_menu_row_v2)) {
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    }
+
+    probe.fill_input_stride = row_stride_bytes;
+    if (probe.mode == entity_snapshot_v2_mode::token_mismatch)
+        *out_content_token = probe.source_content_token + 1;
+    if (probe.mode == entity_snapshot_v2_mode::stride_mismatch)
+        *out_row_stride_bytes = row_stride_bytes + alignof(entity_menu_row_v2);
+    probe.fill_output_stride = *out_row_stride_bytes;
+    probe.fill_revision = *out_revision;
+    probe.fill_content_token = *out_content_token;
+
+    physical_entity_menu_row_v2 first;
+    physical_entity_menu_row_v2 second;
+    const uint32_t row_struct_size =
+        probe.mode == entity_snapshot_v2_mode::short_row_struct
+            ? static_cast<uint32_t>(kEntityMenuRowV2RequiredPrefixSize - 1)
+            : sizeof(physical_entity_menu_row_v2);
+    set_v2_physical_row(first, row_struct_size, "v2-tools", "V2 Tools", 15.25, "First V2", "first",
+                        R"({"index":1})", 1, 1, 0);
+    set_v2_physical_row(second, row_struct_size, "v2-tools", "V2 Tools", 15.25, "Second V2",
+                        "second", R"({"index":2})", 0, 0, 1);
+    auto* raw_rows = static_cast<std::byte*>(rows);
+    std::memcpy(raw_rows, &first, sizeof(first));
+    std::memcpy(raw_rows + row_stride_bytes, &second, sizeof(second));
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL entity_provider_v2_action(const char*, const char* payload_json,
+                                                   void* user_data) {
+    auto& probe = *static_cast<entity_provider_v2_probe*>(user_data);
+    ++probe.actions;
+    probe.last_payload = payload_json == nullptr ? "" : payload_json;
+    return SAO_OK;
+}
+
+struct counting_v2_catalog_context {
+    std::atomic_int calls{0};
+    entity_provider_catalog_snapshot_v2 snapshot;
+};
+
+int32_t SAO_PLUGINS_CALL count_and_copy_entity_provider_catalog_v2(
+    const entity_provider_catalog_view_v2* catalog, void* user_data) {
+    auto& context = *static_cast<counting_v2_catalog_context*>(user_data);
+    ++context.calls;
+    return copy_entity_provider_catalog_v2(catalog, &context.snapshot);
+}
+
+struct v1_content_token_probe {
+    std::atomic_int calls{0};
+    bool content_b = false;
+    uint64_t revision = 0xd1503;
+};
+
+int32_t SAO_PLUGINS_CALL v1_content_token_snapshot(entity_menu_row* rows, uint32_t capacity,
+                                                   uint32_t* out_count, uint64_t* out_revision,
+                                                   void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& probe = *static_cast<v1_content_token_probe*>(user_data);
+    ++probe.calls;
+    *out_count = 1;
+    *out_revision = probe.revision;
+    if (rows == nullptr && capacity == 0)
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    if (rows == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (capacity < 1)
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    rows[0] = {
+        sizeof(entity_menu_row),
+        "v1-token",
+        "V1 Token",
+        "",
+        1.0,
+        probe.content_b ? "Content B" : "Content A",
+        "",
+        "replace",
+        probe.content_b ? R"({"content":"B"})" : R"({"content":"A"})",
+        1,
+        0,
+        0,
+        {},
+    };
+    return SAO_OK;
+}
+
+struct same_revision_content_probe {
+    std::atomic_int calls{0};
+    uint64_t revision = 0xd14;
+    entity_menu_row row{
+        sizeof(entity_menu_row),
+        "same-revision",
+        "Same Revision",
+        "",
+        0.0,
+        "Probe content A",
+        "",
+        "replace",
+        R"({"content":"A"})",
+        1,
+        0,
+        0,
+        {},
+    };
+};
+
+int32_t SAO_PLUGINS_CALL same_revision_content_snapshot(entity_menu_row* rows, uint32_t capacity,
+                                                        uint32_t* out_count, uint64_t* out_revision,
+                                                        void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& probe = *static_cast<same_revision_content_probe*>(user_data);
+    ++probe.calls;
+    *out_count = 1;
+    *out_revision = probe.revision;
+    if (rows == nullptr && capacity == 0) {
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    }
+    if (capacity < 1)
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    if (rows == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    // Characterization of the v1 limitation: revision is metadata, not an immutable content
+    // token, so the provider can replace content at fill time without changing revision.
+    probe.row.row_label_utf8 = "Fill replacement B";
+    probe.row.payload_json_utf8 = R"({"content":"B"})";
+    rows[0] = probe.row;
     return SAO_OK;
 }
 
@@ -743,6 +1154,23 @@ void reentrant_event_callback(const char*, const char*, void* user_data) {
     probe.unsubscribe_status = sao_plugins_ctx_unsubscribe(probe.context, probe.token);
 }
 
+struct event_unload_probe {
+    plugin_handle_t plugin = nullptr;
+    plugin_context_t* context = nullptr;
+    std::atomic_int calls{0};
+    int32_t unload_status = SAO_ERR_OS_CALL_FAILED;
+    lifecycle_state state = lifecycle_state::unknown;
+    bool should_stop = true;
+};
+
+void event_unload_callback(const char*, const char*, void* user_data) {
+    auto& probe = *static_cast<event_unload_probe*>(user_data);
+    ++probe.calls;
+    probe.unload_status = sao_plugins_lifecycle_unload(probe.plugin);
+    probe.state = sao_plugins_lifecycle_state(probe.plugin);
+    probe.should_stop = sao_plugins_ctx_should_stop(probe.context);
+}
+
 void install_emma_adapter() {
     host_adapter_vtable adapter{};
     adapter.load_plugin = adapter_load;
@@ -756,7 +1184,8 @@ void install_emma_adapter() {
 
 } // namespace
 
-TEST_CASE("manifest parses and validates normalized fields", "[plugins][loader][manifest]") {
+TEST_CASE("manifest parses and validates normalized fields",
+          "[plugins][loader][manifest][hardening]") {
     const std::string text = R"({
         "id":"loader_manifest_case","name":"Loader","version":"2.1.0",
         "entry":"main.lua","language":"lua","enabled":true,"abi_version":2,
@@ -780,6 +1209,104 @@ TEST_CASE("manifest parses and validates normalized fields", "[plugins][loader][
     manifest = make_manifest("safe_id", fs::path{});
     manifest.entry = "../entry.dll";
     REQUIRE(validate_manifest(manifest) == SAO_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("manifest parse and load enforce bounded candidate transactions",
+          "[plugins][loader][manifest][json][bounds][transaction][hardening][focused]") {
+    const auto with_payload = [](std::string payload) {
+        return std::string(
+                   R"({"id":"manifest_budget","entry":"plugin.emma","language":"emma","payload":)") +
+               std::move(payload) + "}";
+    };
+
+    plugin_manifest manifest;
+    const std::string maximum_depth = with_payload(nested_array_json(63));
+    const std::string excessive_depth = with_payload(nested_array_json(64));
+    REQUIRE(sao_plugins_manifest_parse(maximum_depth.data(), maximum_depth.size(), &manifest) ==
+            SAO_OK);
+    CHECK(manifest.plugin_id == "manifest_budget");
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_parse(excessive_depth.data(), excessive_depth.size(), &manifest) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
+
+    const std::string maximum_nodes = with_payload(flat_array_json(16379));
+    const std::string excessive_nodes = with_payload(flat_array_json(16380));
+    REQUIRE(sao_plugins_manifest_parse(maximum_nodes.data(), maximum_nodes.size(), &manifest) ==
+            SAO_OK);
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_parse(excessive_nodes.data(), excessive_nodes.size(), &manifest) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
+
+    const std::string maximum_string =
+        with_payload("\"" + std::string(kMaximumManifestStringBytes, 'x') + "\"");
+    const std::string excessive_string =
+        with_payload("\"" + std::string(kMaximumManifestStringBytes + 1, 'x') + "\"");
+    REQUIRE(sao_plugins_manifest_parse(maximum_string.data(), maximum_string.size(), &manifest) ==
+            SAO_OK);
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_parse(excessive_string.data(), excessive_string.size(), &manifest) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
+
+    const auto aggregate_strings = [&](size_t final_string_bytes) {
+        std::string payload = "[";
+        for (size_t index = 0; index < 7; ++index) {
+            if (index != 0)
+                payload += ',';
+            payload += "\"" + std::string(kMaximumManifestStringBytes, 'x') + "\"";
+        }
+        payload += ",\"" + std::string(final_string_bytes, 'x') + "\"]";
+        return with_payload(std::move(payload));
+    };
+    constexpr size_t kManifestFixedStringBytes = 52;
+    constexpr size_t kFinalAggregateStringBytes =
+        kMaximumManifestAggregateStringBytes -
+        (7 * kMaximumManifestStringBytes) - kManifestFixedStringBytes;
+    const std::string maximum_aggregate =
+        aggregate_strings(kFinalAggregateStringBytes);
+    const std::string excessive_aggregate =
+        aggregate_strings(kFinalAggregateStringBytes + 1);
+    REQUIRE(sao_plugins_manifest_parse(maximum_aggregate.data(), maximum_aggregate.size(),
+                                       &manifest) == SAO_OK);
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_parse(excessive_aggregate.data(), excessive_aggregate.size(),
+                                     &manifest) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
+
+    std::string maximum_bytes =
+        R"({"id":"manifest_raw","entry":"plugin.emma","language":"emma"})";
+    REQUIRE(maximum_bytes.size() < kMaximumManifestRawBytes);
+    maximum_bytes.append(kMaximumManifestRawBytes - maximum_bytes.size(), ' ');
+    REQUIRE(sao_plugins_manifest_parse(maximum_bytes.data(), maximum_bytes.size(), &manifest) ==
+            SAO_OK);
+    CHECK(manifest.plugin_id == "manifest_raw");
+    const std::string excessive_bytes = maximum_bytes + " ";
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_parse(excessive_bytes.data(), excessive_bytes.size(), &manifest) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
+
+    TempDirectory temp(L"manifest_budget");
+    write_text(temp.path / L"plugin.emma", "entry");
+    write_text(temp.path / L"plugin.json", maximum_bytes);
+    REQUIRE(sao_plugins_manifest_load_from_file((temp.path / L"plugin.json").c_str(),
+                                                &manifest) == SAO_OK);
+    CHECK(manifest.plugin_id == "manifest_raw");
+    CHECK(fs::equivalent(fs::u8path(manifest.source_path), temp.path));
+
+    write_text(temp.path / L"plugin.json", excessive_bytes);
+    manifest = make_manifest("sentinel", fs::path{});
+    CHECK(sao_plugins_manifest_load_from_file((temp.path / L"plugin.json").c_str(),
+                                              &manifest) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(manifest.plugin_id.empty());
+    CHECK_FALSE(manifest.parse_error.empty());
 }
 
 TEST_CASE("native-only manifest uses its native entry without a script entry",
@@ -834,8 +1361,39 @@ TEST_CASE("scanner discovers valid directories and computes a changing signature
     sao_plugins_scanner_free_wstring(workspace);
 }
 
+TEST_CASE("scanner rejects entry and native reparse targets outside the plugin root",
+          "[plugins][loader][scanner][containment][reparse][hardening][focused]") {
+    TempDirectory temp(L"scanner_reparse");
+    const auto outside_entry = temp.path / L"outside" / L"entry.emma";
+    const auto outside_native = temp.path / L"outside" / L"native.dll";
+    write_text(outside_entry, "entry");
+    write_text(outside_native, "native");
+
+    const auto script_plugin = temp.path / L"plugins" / L"script";
+    write_text(script_plugin / L"plugin.json",
+               R"({"id":"scanner_reparse_script","entry":"plugin.emma","language":"emma"})");
+    if (create_test_symlink(script_plugin / L"plugin.emma", outside_entry)) {
+        scanned_plugin scanned;
+        CHECK(sao_plugins_scanner_refresh_one(script_plugin.c_str(), &scanned) ==
+              SAO_ERR_HANDLE_INVALID);
+    } else {
+        WARN("file symlink creation unavailable; script reparse assertion skipped");
+    }
+
+    const auto native_plugin = temp.path / L"plugins" / L"native";
+    write_text(native_plugin / L"plugin.json",
+               R"({"id":"scanner_reparse_native","native_entry":"native.dll","native_abi":"sao_plugin_v2","abi_version":2})");
+    if (create_test_symlink(native_plugin / L"native.dll", outside_native)) {
+        scanned_plugin scanned;
+        CHECK(sao_plugins_scanner_refresh_one(native_plugin.c_str(), &scanned) ==
+              SAO_ERR_HANDLE_INVALID);
+    } else {
+        WARN("file symlink creation unavailable; native reparse assertion skipped");
+    }
+}
+
 TEST_CASE("registry owns records and context implements settings and local events",
-          "[plugins][loader][context]") {
+          "[plugins][loader][context][lifetime][hardening]") {
     TempDirectory temp(L"context");
     write_text(temp.path / L"plugin.emma", "entry");
     auto handle = add_plugin(make_manifest("context_case", temp.path));
@@ -875,6 +1433,7 @@ TEST_CASE("registry owns records and context implements settings and local event
                                               nullptr) == SAO_PLUGINS_ERR_UNSUPPORTED);
     REQUIRE(sao_plugins_ctx_set_timeout(context, nullptr, 1.0, nullptr, nullptr) ==
             SAO_PLUGINS_ERR_UNSUPPORTED);
+    sao_plugins_ctx_destroy(context);
     sao_plugins_ctx_destroy(context);
     remove_plugin(handle);
 }
@@ -1118,6 +1677,38 @@ TEST_CASE("event subscription rejects callback-thread teardown and serializes on
     remove_plugin(handle);
 }
 
+TEST_CASE("direct event callback unload is busy before lifecycle state mutation",
+          "[plugins][loader][context][event][lifecycle][reentry][hardening][focused]") {
+    TempDirectory temp(L"event_unload_reentry");
+    write_text(temp.path / L"plugin.emma", "entry");
+    auto manifest = make_manifest("event_unload_reentry", temp.path);
+    manifest.enabled = true;
+    auto handle = add_plugin(manifest);
+    install_emma_adapter();
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+    event_unload_probe probe{handle, context};
+    uint32_t token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "unload", event_unload_callback, &probe, &token) ==
+            SAO_OK);
+    REQUIRE(sao_plugins_ctx_emit(context, "unload", "{}") == SAO_OK);
+    CHECK(probe.calls.load() == 1);
+    CHECK(probe.unload_status == SAO_PLUGINS_ERR_BUSY);
+    CHECK(probe.state == lifecycle_state::loaded_active);
+    CHECK_FALSE(probe.should_stop);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+    CHECK_FALSE(sao_plugins_ctx_should_stop(context));
+
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, token) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::emma) == SAO_OK);
+    remove_plugin(handle);
+}
+
 TEST_CASE("dependency bootstrap is local-only and fails closed for missing installs",
           "[plugins][loader][deps]") {
     TempDirectory temp(L"deps");
@@ -1130,6 +1721,44 @@ TEST_CASE("dependency bootstrap is local-only and fails closed for missing insta
     REQUIRE(record.deps_summary.at("missing-dist") == "missing");
     REQUIRE(sao_plugins_deps_ensure(temp.path.c_str(), true, &record) ==
             SAO_PLUGINS_ERR_UNSUPPORTED);
+}
+
+TEST_CASE("dependency requirements reject path names and escaped package targets",
+          "[plugins][loader][deps][requirements][containment][hardening][focused]") {
+    TempDirectory temp(L"deps_containment");
+    fs::create_directories(temp.path / L"libs");
+    const std::vector<std::string> invalid_requirements = {
+        ".",
+        "..",
+        "../escape",
+        "nested/package",
+        "nested\\package",
+        "C:\\absolute",
+        "/absolute",
+        std::string(256, 'a'),
+    };
+    for (const auto& requirement : invalid_requirements) {
+        INFO("requirement=" << requirement);
+        write_text(temp.path / L"requirements.txt", requirement + "\n");
+        deps_bootstrap_record record;
+        CHECK(sao_plugins_deps_ensure(temp.path.c_str(), false, &record) ==
+              SAO_ERR_INVALID_ARGUMENT);
+        CHECK(record.added_paths.empty());
+        CHECK(record.deps_summary.empty());
+    }
+
+    const auto outside = temp.path / L"outside" / L"escaped";
+    fs::create_directories(outside);
+    if (create_test_symlink(temp.path / L"libs" / L"escaped", outside, true)) {
+        write_text(temp.path / L"requirements.txt", "escaped\n");
+        deps_bootstrap_record record;
+        CHECK(sao_plugins_deps_ensure(temp.path.c_str(), false, &record) ==
+              SAO_ERR_INVALID_ARGUMENT);
+        CHECK(record.added_paths.empty());
+        CHECK(record.deps_summary.empty());
+    } else {
+        WARN("directory symlink creation unavailable; dependency reparse assertion skipped");
+    }
 }
 
 TEST_CASE("topological ordering rejects missing dependencies and cycles",
@@ -1604,6 +2233,466 @@ TEST_CASE("entity provider snapshot rejects contradictory probe and fill results
     }
 
     probe.mode = snapshot_protocol_mode::stable;
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider same-revision content replacement characterizes v1 limitation",
+          "[plugins][loader][entity-provider][same-revision][focused]") {
+    TempDirectory temp(L"same_revision_content_replacement");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("same_revision_content_replacement", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    same_revision_content_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    context_entity_provider_descriptor descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "same-revision-provider";
+    descriptor.snapshot = same_revision_content_snapshot;
+    descriptor.action_handler = snapshot_protocol_action;
+    descriptor.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    const uint64_t declared_catalog_revision =
+        entity_provider_get_counters_for_testing().catalog_revision;
+
+    entity_provider_catalog_snapshot catalog;
+    REQUIRE(snapshot_entity_providers(catalog) == SAO_OK);
+    CHECK(probe.calls == 2);
+    CHECK(catalog.revision == declared_catalog_revision);
+    REQUIRE(catalog.providers.size() == 1);
+    const auto& provider = catalog.providers[0];
+    CHECK(provider.provider_id == "same_revision_content_replacement/same-revision-provider");
+    CHECK(provider.revision == probe.revision);
+    REQUIRE(provider.rows.size() == 1);
+    CHECK(provider.rows[0].category_id == "same-revision");
+    CHECK(provider.rows[0].row_label == "Fill replacement B");
+    CHECK(provider.rows[0].action_id == "replace");
+    CHECK(provider.rows[0].payload_json == R"({"content":"B"})");
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity provider v1 ABI offsets remain frozen",
+          "[plugins][loader][entity-provider][v1][abi][focused]") {
+#if INTPTR_MAX == INT64_MAX
+    STATIC_REQUIRE(sizeof(native_entity_provider_descriptor) == 40);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, snapshot) == 16);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, action_handler) == 24);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, user_data) == 32);
+
+    STATIC_REQUIRE(sizeof(entity_root_contribution_descriptor) == 48);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_descriptor, contribution_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_descriptor, root_id_utf8) == 16);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_descriptor, name_utf8) == 24);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_descriptor, icon_utf8) == 32);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_descriptor, priority) == 40);
+
+    STATIC_REQUIRE(sizeof(context_entity_provider_descriptor) == 48);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor, snapshot) == 16);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor, action_handler) == 24);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor, user_data) == 32);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor, root_contribution) == 40);
+
+    STATIC_REQUIRE(sizeof(entity_menu_row) == 80);
+    STATIC_REQUIRE(offsetof(entity_menu_row, category_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(entity_menu_row, category_label_utf8) == 16);
+    STATIC_REQUIRE(offsetof(entity_menu_row, category_icon_utf8) == 24);
+    STATIC_REQUIRE(offsetof(entity_menu_row, category_priority) == 32);
+    STATIC_REQUIRE(offsetof(entity_menu_row, row_label_utf8) == 40);
+    STATIC_REQUIRE(offsetof(entity_menu_row, row_icon_utf8) == 48);
+    STATIC_REQUIRE(offsetof(entity_menu_row, action_id_utf8) == 56);
+    STATIC_REQUIRE(offsetof(entity_menu_row, payload_json_utf8) == 64);
+    STATIC_REQUIRE(offsetof(entity_menu_row, can_activate) == 72);
+    STATIC_REQUIRE(offsetof(entity_menu_row, keep_menu_open) == 73);
+    STATIC_REQUIRE(offsetof(entity_menu_row, close_menu_before) == 74);
+    STATIC_REQUIRE(offsetof(entity_menu_row, reserved) == 75);
+
+    STATIC_REQUIRE(sizeof(entity_provider_view) == 56);
+    STATIC_REQUIRE(offsetof(entity_provider_view, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(entity_provider_view, owner_plugin_id_utf8) == 16);
+    STATIC_REQUIRE(offsetof(entity_provider_view, generation) == 24);
+    STATIC_REQUIRE(offsetof(entity_provider_view, revision) == 32);
+    STATIC_REQUIRE(offsetof(entity_provider_view, row_count) == 40);
+    STATIC_REQUIRE(offsetof(entity_provider_view, rows) == 48);
+
+    STATIC_REQUIRE(sizeof(entity_root_action_ref_view) == 24);
+    STATIC_REQUIRE(offsetof(entity_root_action_ref_view, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(entity_root_action_ref_view, action_id_utf8) == 16);
+
+    STATIC_REQUIRE(sizeof(entity_root_contribution_view) == 72);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, owner_plugin_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, contribution_id_utf8) == 16);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, root_id_utf8) == 24);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, name_utf8) == 32);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, icon_utf8) == 40);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, priority) == 48);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, action_count) == 56);
+    STATIC_REQUIRE(offsetof(entity_root_contribution_view, actions) == 64);
+
+    STATIC_REQUIRE(sizeof(entity_provider_catalog_view) == 48);
+    STATIC_REQUIRE(offsetof(entity_provider_catalog_view, revision) == 8);
+    STATIC_REQUIRE(offsetof(entity_provider_catalog_view, provider_count) == 16);
+    STATIC_REQUIRE(offsetof(entity_provider_catalog_view, providers) == 24);
+    STATIC_REQUIRE(offsetof(entity_provider_catalog_view, root_contribution_count) == 32);
+    STATIC_REQUIRE(offsetof(entity_provider_catalog_view, root_contributions) == 40);
+#endif
+    SUCCEED();
+}
+
+TEST_CASE("entity snapshot v2 copies future-tail producer rows and lifecycle roots",
+          "[plugins][loader][entity-provider][v2][focused]") {
+    static_assert(kContextEntityProviderDescriptorV2RequiredPrefixSize == 40);
+    static_assert(sizeof(context_entity_provider_descriptor_v2) == 48);
+    static_assert(kEntityProviderCatalogViewV2RequiredPrefixSize == 56);
+    static_assert(kEntityProviderViewV2RequiredPrefixSize == 64);
+    static_assert(kEntityRootContributionViewV2RequiredPrefixSize == 72);
+    static_assert(kEntityRootActionRefViewV2RequiredPrefixSize == 24);
+    static_assert(kEntityMenuRowV2RequiredPrefixSize == 75);
+
+    TempDirectory temp(L"entity_snapshot_v2_stable");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_snapshot_v2_stable", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    entity_provider_v2_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    entity_root_contribution_descriptor root{};
+    root.struct_size = sizeof(root);
+    root.contribution_id_utf8 = "v2-root";
+    root.root_id_utf8 = "plugin:entity-snapshot-v2";
+    root.name_utf8 = "V2 Root";
+    root.icon_utf8 = "V2";
+    root.priority = 15.25;
+    context_entity_provider_descriptor_v2 descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "future-stride";
+    descriptor.snapshot = entity_provider_v2_snapshot;
+    descriptor.action_handler = entity_provider_v2_action;
+    descriptor.user_data = &probe;
+    descriptor.root_contribution = &root;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v2(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    CHECK(probe.snapshot_calls == 2);
+    CHECK(probe.fill_input_stride == sizeof(physical_entity_menu_row_v2));
+    CHECK(probe.fill_output_stride == sizeof(physical_entity_menu_row_v2));
+    CHECK(probe.fill_revision == probe.revision);
+    CHECK(probe.fill_content_token == probe.source_content_token);
+    CHECK(sizeof(physical_entity_menu_row_v2) > sizeof(entity_menu_row_v2));
+
+    CHECK(catalog.struct_size == sizeof(entity_provider_catalog_view_v2));
+    CHECK(catalog.abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(catalog.content_token != kInvalidEntitySnapshotContentToken);
+    CHECK(catalog.provider_stride_bytes == sizeof(entity_provider_view_v2));
+    CHECK(catalog.root_contribution_stride_bytes == sizeof(entity_root_contribution_view_v2));
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.roots.size() == 1);
+    const auto& provider = catalog.providers[0];
+    CHECK(provider.struct_size == sizeof(entity_provider_view_v2));
+    CHECK(provider.snapshot_abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(provider.provider_id == "entity_snapshot_v2_stable/future-stride");
+    CHECK(provider.owner_plugin_id == "entity_snapshot_v2_stable");
+    CHECK(provider.generation != 0);
+    CHECK(provider.revision == probe.revision);
+    CHECK(provider.content_token != kInvalidEntitySnapshotContentToken);
+    CHECK(provider.row_stride_bytes == sizeof(entity_menu_row_v2));
+    REQUIRE(provider.rows.size() == 2);
+    CHECK(provider.rows[0].struct_size == sizeof(entity_menu_row_v2));
+    CHECK(provider.rows[0].category_id == "v2-tools");
+    CHECK(provider.rows[0].category_label == "V2 Tools");
+    CHECK(provider.rows[0].category_icon == "future-icon");
+    CHECK(provider.rows[0].category_priority == 15.25);
+    CHECK(provider.rows[0].row_label == "First V2");
+    CHECK(provider.rows[0].row_icon == "row-icon");
+    CHECK(provider.rows[0].action_id == "first");
+    CHECK(provider.rows[0].payload_json == R"({"index":1})");
+    CHECK(provider.rows[0].can_activate);
+    CHECK(provider.rows[0].keep_menu_open);
+    CHECK_FALSE(provider.rows[0].close_menu_before);
+    CHECK(provider.rows[1].row_label == "Second V2");
+    CHECK(provider.rows[1].action_id == "second");
+    CHECK(provider.rows[1].payload_json == R"({"index":2})");
+    CHECK_FALSE(provider.rows[1].can_activate);
+    CHECK_FALSE(provider.rows[1].keep_menu_open);
+    CHECK(provider.rows[1].close_menu_before);
+
+    const auto& copied_root = catalog.roots[0];
+    CHECK(copied_root.struct_size == sizeof(entity_root_contribution_view_v2));
+    CHECK(copied_root.owner_plugin_id == "entity_snapshot_v2_stable");
+    CHECK(copied_root.contribution_id == "v2-root");
+    CHECK(copied_root.root_id == "plugin:entity-snapshot-v2");
+    CHECK(copied_root.name == "V2 Root");
+    CHECK(copied_root.icon == "V2");
+    CHECK(copied_root.priority == 15.25);
+    CHECK(copied_root.action_stride_bytes == sizeof(entity_root_action_ref_view_v2));
+    REQUIRE(copied_root.actions.size() == 2);
+    CHECK(copied_root.actions[0].struct_size == sizeof(entity_root_action_ref_view_v2));
+    CHECK(copied_root.actions[0].provider_id == provider.provider_id);
+    CHECK(copied_root.actions[0].action_id == "first");
+    CHECK(copied_root.actions[1].provider_id == provider.provider_id);
+    CHECK(copied_root.actions[1].action_id == "second");
+
+    entity_provider_catalog_snapshot legacy_catalog;
+    REQUIRE(snapshot_entity_providers(legacy_catalog) == SAO_OK);
+    CHECK(probe.snapshot_calls == 4);
+    REQUIRE(legacy_catalog.providers.size() == 1);
+    REQUIRE(legacy_catalog.roots.size() == 1);
+    CHECK(legacy_catalog.providers[0].provider_id == provider.provider_id);
+    CHECK(legacy_catalog.providers[0].owner_plugin_id == provider.owner_plugin_id);
+    CHECK(legacy_catalog.providers[0].generation == provider.generation);
+    CHECK(legacy_catalog.providers[0].revision == provider.revision);
+    REQUIRE(legacy_catalog.providers[0].rows.size() == 2);
+    CHECK(legacy_catalog.providers[0].rows[0].row_label == "First V2");
+    CHECK(legacy_catalog.providers[0].rows[1].row_label == "Second V2");
+    REQUIRE(legacy_catalog.roots[0].actions.size() == 2);
+    CHECK(legacy_catalog.roots[0].actions[0] ==
+          std::pair{provider.provider_id, std::string("first")});
+    CHECK(legacy_catalog.roots[0].actions[1] ==
+          std::pair{provider.provider_id, std::string("second")});
+
+    const auto first_provider_content_token = provider.content_token;
+    const auto first_catalog_content_token = catalog.content_token;
+    ++probe.source_content_token;
+    entity_provider_catalog_snapshot_v2 token_changed_catalog;
+    REQUIRE(snapshot_entity_providers_v2(token_changed_catalog) == SAO_OK);
+    CHECK(probe.snapshot_calls == 6);
+    REQUIRE(token_changed_catalog.providers.size() == 1);
+    CHECK(token_changed_catalog.revision == catalog.revision);
+    CHECK(token_changed_catalog.providers[0].revision == provider.revision);
+    CHECK(token_changed_catalog.providers[0].content_token != first_provider_content_token);
+    CHECK(token_changed_catalog.content_token != first_catalog_content_token);
+    CHECK(token_changed_catalog.providers[0].rows[0].row_label == "First V2");
+    CHECK(token_changed_catalog.providers[0].rows[1].row_label == "Second V2");
+
+    const uint64_t generation = provider.generation;
+    REQUIRE(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), generation, "first",
+                                               R"({"from":"v2"})") == SAO_OK);
+    CHECK(probe.actions == 1);
+    CHECK(probe.last_payload == R"({"from":"v2"})");
+
+    REQUIRE(sao_plugins_lifecycle_disable(handle) == SAO_OK);
+    catalog = {};
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_entity_provider_invoke("entity_snapshot_v2_stable/future-stride", generation,
+                                             "first", "{}") == SAO_PLUGINS_ERR_BUSY);
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke("entity_snapshot_v2_stable/future-stride", generation,
+                                             "first", "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity snapshot v2 token and stride mismatches exhaust nested retry",
+          "[plugins][loader][entity-provider][v2][focused]") {
+    TempDirectory temp(L"entity_snapshot_v2_retry");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_snapshot_v2_retry", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    entity_provider_v2_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    context_entity_provider_descriptor_v2 descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "retry";
+    descriptor.snapshot = entity_provider_v2_snapshot;
+    descriptor.action_handler = entity_provider_v2_action;
+    descriptor.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v2(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    for (const auto mode :
+         {entity_snapshot_v2_mode::token_mismatch, entity_snapshot_v2_mode::stride_mismatch}) {
+        INFO("mode=" << static_cast<int>(mode));
+        probe.mode = mode;
+        probe.snapshot_calls = 0;
+        counting_v2_catalog_context callback_context;
+        callback_context.snapshot.revision = 0xd15f1;
+        callback_context.snapshot.content_token = 0xd15f2;
+        CHECK(sao_plugins_entity_provider_snapshot_v2(count_and_copy_entity_provider_catalog_v2,
+                                                      &callback_context) == SAO_PLUGINS_ERR_BUSY);
+        CHECK(probe.snapshot_calls == 18);
+        CHECK(callback_context.calls == 0);
+        CHECK(callback_context.snapshot.revision == 0xd15f1);
+        CHECK(callback_context.snapshot.content_token == 0xd15f2);
+        CHECK(callback_context.snapshot.providers.empty());
+    }
+
+    probe.mode = entity_snapshot_v2_mode::stable;
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity snapshot v2 rejects invalid token stride and row layouts atomically",
+          "[plugins][loader][entity-provider][v2][focused]") {
+    TempDirectory temp(L"entity_snapshot_v2_invalid");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_snapshot_v2_invalid", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    entity_provider_v2_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    context_entity_provider_descriptor_v2 descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "invalid";
+    descriptor.snapshot = entity_provider_v2_snapshot;
+    descriptor.action_handler = entity_provider_v2_action;
+    descriptor.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v2(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    struct invalid_case {
+        entity_snapshot_v2_mode mode;
+        int32_t expected_status;
+        int expected_calls;
+    };
+    const std::array cases{
+        invalid_case{entity_snapshot_v2_mode::zero_token, SAO_ERR_INVALID_ARGUMENT, 1},
+        invalid_case{entity_snapshot_v2_mode::short_stride, SAO_PLUGINS_ERR_ABI_MISMATCH, 1},
+        invalid_case{entity_snapshot_v2_mode::misaligned_stride, SAO_ERR_INVALID_ARGUMENT, 1},
+        invalid_case{entity_snapshot_v2_mode::oversized_stride, SAO_ERR_INVALID_ARGUMENT, 1},
+        invalid_case{entity_snapshot_v2_mode::short_row_struct, SAO_PLUGINS_ERR_ABI_MISMATCH, 2},
+        invalid_case{entity_snapshot_v2_mode::zero_rows_nonzero_stride, SAO_ERR_INVALID_ARGUMENT,
+                     1},
+    };
+    for (const auto& invalid : cases) {
+        INFO("mode=" << static_cast<int>(invalid.mode));
+        probe.mode = invalid.mode;
+        probe.snapshot_calls = 0;
+        counting_v2_catalog_context callback_context;
+        callback_context.snapshot.revision = 0xd15e1;
+        callback_context.snapshot.content_token = 0xd15e2;
+        CHECK(sao_plugins_entity_provider_snapshot_v2(count_and_copy_entity_provider_catalog_v2,
+                                                      &callback_context) ==
+              invalid.expected_status);
+        CHECK(probe.snapshot_calls == invalid.expected_calls);
+        CHECK(callback_context.calls == 0);
+        CHECK(callback_context.snapshot.revision == 0xd15e1);
+        CHECK(callback_context.snapshot.content_token == 0xd15e2);
+        CHECK(callback_context.snapshot.providers.empty());
+    }
+
+    probe.mode = entity_snapshot_v2_mode::stable;
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("entity snapshot v2 maps v1 content changes to canonical tokens",
+          "[plugins][loader][entity-provider][v2][focused]") {
+    TempDirectory temp(L"entity_snapshot_v2_v1_token");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_snapshot_v2_v1_token", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    v1_content_token_probe probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    context_entity_provider_descriptor descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "v1-source";
+    descriptor.snapshot = v1_content_token_snapshot;
+    descriptor.action_handler = snapshot_protocol_action;
+    descriptor.user_data = &probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    entity_provider_catalog_snapshot legacy_a;
+    REQUIRE(snapshot_entity_providers(legacy_a) == SAO_OK);
+    REQUIRE(legacy_a.providers.size() == 1);
+    REQUIRE(legacy_a.providers[0].rows.size() == 1);
+    CHECK(legacy_a.providers[0].rows[0].row_label == "Content A");
+    CHECK(legacy_a.providers[0].rows[0].payload_json == R"({"content":"A"})");
+
+    entity_provider_catalog_snapshot_v2 v2_a;
+    REQUIRE(snapshot_entity_providers_v2(v2_a) == SAO_OK);
+    REQUIRE(v2_a.providers.size() == 1);
+    REQUIRE(v2_a.providers[0].rows.size() == 1);
+    CHECK(v2_a.providers[0].snapshot_abi_version == kEntitySnapshotAbiVersion1);
+    CHECK(v2_a.providers[0].rows[0].row_label == "Content A");
+    CHECK(v2_a.providers[0].content_token != kInvalidEntitySnapshotContentToken);
+    CHECK(v2_a.content_token != kInvalidEntitySnapshotContentToken);
+
+    probe.content_b = true;
+    entity_provider_catalog_snapshot_v2 v2_b;
+    REQUIRE(snapshot_entity_providers_v2(v2_b) == SAO_OK);
+    REQUIRE(v2_b.providers.size() == 1);
+    REQUIRE(v2_b.providers[0].rows.size() == 1);
+    CHECK(v2_b.providers[0].snapshot_abi_version == kEntitySnapshotAbiVersion1);
+    CHECK(v2_b.providers[0].rows[0].row_label == "Content B");
+    CHECK(v2_b.providers[0].rows[0].payload_json == R"({"content":"B"})");
+    CHECK(v2_b.revision == v2_a.revision);
+    CHECK(v2_b.providers[0].provider_id == v2_a.providers[0].provider_id);
+    CHECK(v2_b.providers[0].owner_plugin_id == v2_a.providers[0].owner_plugin_id);
+    CHECK(v2_b.providers[0].generation == v2_a.providers[0].generation);
+    CHECK(v2_b.providers[0].revision == v2_a.providers[0].revision);
+    CHECK(v2_b.providers[0].content_token != v2_a.providers[0].content_token);
+    CHECK(v2_b.content_token != v2_a.content_token);
+
+    entity_provider_catalog_snapshot legacy_b;
+    REQUIRE(snapshot_entity_providers(legacy_b) == SAO_OK);
+    REQUIRE(legacy_b.providers.size() == 1);
+    REQUIRE(legacy_b.providers[0].rows.size() == 1);
+    CHECK(legacy_b.revision == legacy_a.revision);
+    CHECK(legacy_b.providers[0].provider_id == legacy_a.providers[0].provider_id);
+    CHECK(legacy_b.providers[0].owner_plugin_id == legacy_a.providers[0].owner_plugin_id);
+    CHECK(legacy_b.providers[0].generation == legacy_a.providers[0].generation);
+    CHECK(legacy_b.providers[0].revision == legacy_a.providers[0].revision);
+    CHECK(legacy_b.providers[0].rows[0].row_label == "Content B");
+    CHECK(legacy_b.providers[0].rows[0].payload_json == R"({"content":"B"})");
+
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
     remove_plugin(handle);
@@ -2164,6 +3253,27 @@ TEST_CASE("host adapter register and unregister reject duplicate operations",
             SAO_ERR_HANDLE_INVALID);
     REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::csharp, &second) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::csharp) == SAO_OK);
+}
+
+TEST_CASE("native lifecycle rejects a reparse entry escaping the plugin root",
+          "[plugins][loader][lifecycle][native][containment][reparse][hardening][focused]") {
+    TempDirectory temp(L"native_reparse");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    if (!create_test_symlink(temp.path / L"native_fixture.dll", fixture)) {
+        WARN("file symlink creation unavailable; native lifecycle reparse assertion skipped");
+        return;
+    }
+    write_text(temp.path / L"plugin.emma", "entry");
+    auto manifest = make_manifest("native_reparse_escape", temp.path);
+    manifest.native_entry = "native_fixture.dll";
+    manifest.native_abi = "sao_plugin_v2";
+    manifest.capabilities.push_back({"native_test"});
+    auto handle = add_plugin(manifest);
+
+    CHECK(sao_plugins_lifecycle_load(handle) == SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+    remove_plugin(handle);
 }
 
 TEST_CASE("native DLL lifecycle validates ABI and capabilities then frees the module",

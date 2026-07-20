@@ -3,6 +3,8 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -15,6 +17,12 @@
 #include "sao/plugins/loader/plugin_lifecycle.h"
 
 namespace sao::plugins::loader {
+
+inline constexpr size_t kMaximumManifestRawBytes = 1024 * 1024;
+inline constexpr size_t kMaximumManifestJsonDepth = 64;
+inline constexpr size_t kMaximumManifestJsonNodes = 16384;
+inline constexpr size_t kMaximumManifestStringBytes = 64 * 1024;
+inline constexpr size_t kMaximumManifestAggregateStringBytes = 512 * 1024;
 
 struct plugin_context_s;
 
@@ -58,11 +66,15 @@ int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
                                                  const native_entity_provider_descriptor* providers,
                                                  size_t count) noexcept;
 bool plugin_context_entity_provider_is_current_thread(plugin_context_t* ctx) noexcept;
+bool plugin_context_event_is_current_thread(plugin_context_t* ctx) noexcept;
 bool plugin_context_platform_is_current_thread(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_quiesce_entity_providers(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_quiesce_platform(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_resume_entity_providers(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_destroy(plugin_context_t* ctx) noexcept;
+int32_t resolve_contained_existing_path(const std::filesystem::path& root,
+                                        const std::filesystem::path& candidate,
+                                        std::filesystem::path& out_resolved) noexcept;
 
 } // namespace sao::plugins::loader
