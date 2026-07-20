@@ -68,7 +68,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Wave 5 / Phase 1 — headless init pipeline entry point.
+// Headless init pipeline entry point.
 //
 // Kept in the same TU as the fail-closed subsystem stubs so unit tests can
 // link a single file and inject only the providers under test.
@@ -203,7 +203,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     using namespace sao::launcher;
 
     // ------------------------------------------------------------------
-    // Step 0 (Phase 12) — read dual_run.json + decide dispatch.  When the
+    // Step 0 — read dual_run.json + decide dispatch.  When the
     // config picks python_only we spawn Python and hand off; the launcher
     // exits with SAO_EXIT_HANDOFF_TO_PYTHON.  Side-by-side spawns Python
     // and keeps going with the CPP pipeline.  cpp_preferred_python_fallback
@@ -268,7 +268,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     }
     base_dir_resolved = true;
 
-    // Publish base_dir globally (Wave 5 addition).  A defensive copy so
+    // Publish base_dir globally for downstream providers.  A defensive copy so
     // downstream callers don't accidentally hold a pointer into AppState.
     lstrcpynW(SaoLauncherBaseDir, state.base_dir, 260);
 
@@ -1075,7 +1075,8 @@ sao_status_t refresh_entity(void* user_data) {
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
     const sao_status_t status = sao::launcher::entity_provider_publication::refresh(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
-        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
+        &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
         &sao_ui_entity_shell_set_roots);
     if (status != SAO_STATUS_OK) {
         ctx->builtin_action_state.authority.publication_available = false;
@@ -1618,6 +1619,7 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
             ? sao::launcher::entity_provider_publication::poll(
                   ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
                   elapsed_ms, ctx->nervgear_mode,
+                  &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
                   &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
                   &sao_ui_entity_shell_set_roots)
             : refresh_entity(ctx);

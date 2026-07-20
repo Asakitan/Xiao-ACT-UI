@@ -1,6 +1,6 @@
 // SAO Auto — launcher/tests/test_cutover_diff_phase12.cpp
 //
-// Wave 8 / Phase 12 — tools/cutover_diff stability check.
+// tools/cutover_diff deterministic-output stability check.
 //
 // The tool must emit byte-identical output on two consecutive runs against
 // the same tree.  This test spawns the built cutover_diff twice, captures

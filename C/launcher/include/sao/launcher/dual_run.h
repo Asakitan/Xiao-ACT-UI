@@ -1,6 +1,6 @@
 // SAO Auto — launcher/dual_run.h
 //
-// Phase 12 (cutover) — dual-run mode.
+// Dual-run cutover mode.
 //
 // The Python platform (sao_auto/python/main.py) and the native C++ platform
 // (SaoAuto.exe) can coexist on a user's machine.  While cutover is in flight
@@ -26,7 +26,7 @@
 // -----------
 // The launcher reads ``%APPDATA%\SaoAuto\dual_run.json`` at startup.  The
 // file is optional; when absent the launcher falls back to
-// ``CPP_PREFERRED_PYTHON_FALLBACK`` (safest during Phase 12 cutover — try
+// ``CPP_PREFERRED_PYTHON_FALLBACK`` (safest during cutover — try
 // the new platform first, silently fall back to Python if it faults).
 //
 // {

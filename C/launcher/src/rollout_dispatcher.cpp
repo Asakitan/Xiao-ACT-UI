@@ -1,6 +1,6 @@
 // SAO Auto - launcher/rollout_dispatcher.cpp
 //
-// Wave 10 / Agent a - Phase 12 rollout dispatcher.
+// Rollout policy dispatcher.
 //
 // Sits between the launcher's init pipeline and dual_run.cpp.  Given the
 // anon_id + the dual_run config, decides which mode the current process

@@ -1,19 +1,19 @@
 // SAO Auto - launcher/rollout_manager.cpp
 //
-// Wave 10 / Agent a - Phase 12 rollout system core.
+// Telemetry-driven rollout configuration, stats, and auto-retreat core.
 //
 // See rollout.h for the contract.  Everything here is Win32 + C runtime
 // plus (optionally) the telemetry_client static library.  We roll a
 // tiny hand-written JSON parser/writer to keep the launcher's link
 // posture minimal (matches dual_run.cpp's style).
 //
-// This file does NOT modify any of the Wave 8a APIs defined in
-// dual_run.cpp; it lives entirely alongside them.
+// This file leaves the static-mode APIs in dual_run.cpp unchanged and
+// layers rollout policy alongside them.
 
 #include "sao/launcher/rollout.h"
 #include "sao/launcher/working_dir.h"
 
-// Wave 9b telemetry_client is an optional dependency.  When the launcher
+// The freetier telemetry_client is an optional dependency.  When the launcher
 // is built with SAO_BUILD_SERVER=OFF we still need this file to compile;
 // the emit_telemetry() helper then no-ops.  When the target IS available
 // the CMake wiring sets SAO_LAUNCHER_HAS_TELEMETRY_CLIENT=1.

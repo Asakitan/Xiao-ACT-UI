@@ -1,6 +1,6 @@
 // SAO Auto — launcher/tests/test_dual_run_phase12.cpp
 //
-// Wave 8 / Phase 12 — dual-run mode.  Covers config round-trip, python probe,
+// Dual-run mode coverage: config round-trip, Python probe,
 // spawn, status registry, driver mutex, and step-zero dispatch.
 
 #include <catch2/catch_test_macros.hpp>

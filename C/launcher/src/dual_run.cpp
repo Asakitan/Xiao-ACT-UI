@@ -1,6 +1,6 @@
 // SAO Auto — launcher/dual_run.cpp
 //
-// Phase 12 (cutover) — dual-run mode implementation.
+// Dual-run cutover mode implementation.
 //
 // See dual_run.h for contract.  Everything here is Win32 + C runtime.  No
 // Python.h, no pybind11, no nlohmann::json — we roll a tiny hand-written

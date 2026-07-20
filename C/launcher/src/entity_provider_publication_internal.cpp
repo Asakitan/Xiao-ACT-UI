@@ -534,10 +534,47 @@ sao_status_t first_failure(sao_status_t current, sao_status_t candidate) noexcep
 
 void reset_published_state(EntityProviderPublicationState& state) noexcept {
     state.catalog_revision = 0;
+    state.catalog_content_token =
+        sao::plugins::loader::kInvalidEntitySnapshotContentToken;
     state.has_catalog_revision = false;
+    state.has_catalog_content_token = false;
     state.published_catalog = {};
+    state.published_route_revision = 0;
+    state.has_publication_inputs = false;
+    state.published_nervgear_mode = false;
+    state.published_topmost = false;
+    state.published_streaming_mode = false;
+    state.published_builtin_authority = {};
     std::lock_guard lock(state.root_contribution_mutex);
     state.published_root_contribution_revision = 0;
+}
+
+bool has_v2_content_identity(
+    const entity_provider_catalog::OwnedEntityProviderCatalog& catalog) noexcept {
+    return catalog.abi_version == sao::plugins::loader::kEntitySnapshotAbiVersion2 &&
+           catalog.content_token !=
+               sao::plugins::loader::kInvalidEntitySnapshotContentToken;
+}
+
+bool publication_inputs_match(const EntityProviderPublicationState& state, bool nervgear_mode,
+                              std::uint64_t contribution_revision,
+                              std::uint64_t route_revision) noexcept {
+    return state.has_publication_inputs && state.published_nervgear_mode == nervgear_mode &&
+           state.published_topmost == state.topmost &&
+           state.published_streaming_mode == state.streaming_mode &&
+           state.published_builtin_authority == state.builtin_authority &&
+           state.published_root_contribution_revision == contribution_revision &&
+           state.published_route_revision == route_revision;
+}
+
+void remember_publication_inputs(EntityProviderPublicationState& state, bool nervgear_mode,
+                                 std::uint64_t route_revision) noexcept {
+    state.has_publication_inputs = true;
+    state.published_nervgear_mode = nervgear_mode;
+    state.published_topmost = state.topmost;
+    state.published_streaming_mode = state.streaming_mode;
+    state.published_builtin_authority = state.builtin_authority;
+    state.published_route_revision = route_revision;
 }
 
 sao_status_t publish_fail_closed_roots(sao_ui_entity_shell_handle_t shell,
@@ -698,30 +735,26 @@ sao_status_t clear_root_contributions_for_owner(EntityProviderPublicationState& 
 sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                      entity_action_routes::EntityActionRouteStore& routes,
                      EntityProviderPublicationState& state, bool nervgear_mode,
-                     SnapshotCatalogFn snapshot_fn, SetRootsFn set_roots_fn) noexcept {
-    if (shell == nullptr || snapshot_fn == nullptr || set_roots_fn == nullptr) {
+                     SnapshotCatalogV2Fn snapshot_v2_fn, SnapshotCatalogFn snapshot_v1_fn,
+                     SetRootsFn set_roots_fn) noexcept {
+    if (shell == nullptr || (snapshot_v2_fn == nullptr && snapshot_v1_fn == nullptr) ||
+        set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        sao_status_t status = routes.close_invocation_gate();
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-        reset_published_state(state);
         entity_provider_catalog::OwnedEntityProviderCatalog catalog;
-        status = SAO_STATUS_OK;
-        if (state.builtin_authority.plugin_runtime ==
-            PluginRuntimePublicationStatus::degraded_internal) {
+        sao_status_t status = SAO_STATUS_OK;
+        const bool plugin_runtime_degraded =
+            state.builtin_authority.plugin_runtime ==
+            PluginRuntimePublicationStatus::degraded_internal;
+        if (plugin_runtime_degraded) {
             catalog = {};
         } else {
-            status = entity_provider_catalog::snapshot(snapshot_fn, catalog);
+            status = entity_provider_catalog::snapshot_v2_first(snapshot_v2_fn, snapshot_v1_fn,
+                                                                 catalog);
             if (status != SAO_STATUS_OK)
                 return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
         }
-        std::vector<entity_action_routes::EntityActionRouteSpec> rows;
-        status = entity_provider_catalog::build_routes(catalog, rows);
-        if (status != SAO_STATUS_OK)
-            return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
         std::vector<EntityRootContributionSpec> contributions;
         std::uint64_t contribution_revision = 0;
         {
@@ -729,6 +762,28 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
             contributions = state.root_contributions;
             contribution_revision = state.root_contribution_revision;
         }
+        entity_action_routes::EntityActionRouteSnapshot current_routes;
+        status = routes.snapshot(current_routes);
+        if (status != SAO_STATUS_OK)
+            return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
+        if (!plugin_runtime_degraded && has_v2_content_identity(catalog) &&
+            state.has_catalog_revision && state.has_catalog_content_token &&
+            state.catalog_revision == catalog.revision &&
+            state.catalog_content_token == catalog.content_token &&
+            publication_inputs_match(state, nervgear_mode, contribution_revision,
+                                     current_routes.revision)) {
+            return SAO_STATUS_OK;
+        }
+
+        status = routes.close_invocation_gate();
+        if (status != SAO_STATUS_OK) {
+            return status;
+        }
+        reset_published_state(state);
+        std::vector<entity_action_routes::EntityActionRouteSpec> rows;
+        status = entity_provider_catalog::build_routes(catalog, rows);
+        if (status != SAO_STATUS_OK)
+            return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
         status = append_loader_root_contributions(catalog, contributions);
         if (status != SAO_STATUS_OK)
             return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
@@ -742,16 +797,25 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                                        set_roots_fn, RouteCommitMode::open_gate_on_success);
         if (status != SAO_STATUS_OK)
             return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
-        if (state.builtin_authority.plugin_runtime !=
-            PluginRuntimePublicationStatus::degraded_internal) {
+        entity_action_routes::EntityActionRouteSnapshot published_routes;
+        status = routes.snapshot(published_routes);
+        if (status != SAO_STATUS_OK)
+            return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
+        if (!plugin_runtime_degraded) {
             state.catalog_revision = catalog.revision;
             state.has_catalog_revision = true;
+            state.catalog_content_token = catalog.content_token;
+            state.has_catalog_content_token = has_v2_content_identity(catalog);
             state.published_catalog = std::move(catalog);
         } else {
             state.catalog_revision = 0;
+            state.catalog_content_token =
+                sao::plugins::loader::kInvalidEntitySnapshotContentToken;
             state.has_catalog_revision = false;
+            state.has_catalog_content_token = false;
             state.published_catalog = {};
         }
+        remember_publication_inputs(state, nervgear_mode, published_routes.revision);
         {
             std::lock_guard lock(state.root_contribution_mutex);
             if (state.root_contribution_revision == contribution_revision) {
@@ -768,9 +832,11 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
 sao_status_t poll(sao_ui_entity_shell_handle_t shell,
                   entity_action_routes::EntityActionRouteStore& routes,
                   EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
-                  bool nervgear_mode, SnapshotCatalogFn snapshot_fn,
+                  bool nervgear_mode, SnapshotCatalogV2Fn snapshot_v2_fn,
+                  SnapshotCatalogFn snapshot_v1_fn,
                   SetRootsFn set_roots_fn) noexcept {
-    if (shell == nullptr || snapshot_fn == nullptr || set_roots_fn == nullptr) {
+    if (shell == nullptr || (snapshot_v2_fn == nullptr && snapshot_v1_fn == nullptr) ||
+        set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const auto remaining = std::numeric_limits<std::uint32_t>::max() - state.refresh_elapsed_ms;
@@ -779,7 +845,8 @@ sao_status_t poll(sao_ui_entity_shell_handle_t shell,
         return SAO_STATUS_OK;
     }
     state.refresh_elapsed_ms = 0;
-    return refresh(shell, routes, state, nervgear_mode, snapshot_fn, set_roots_fn);
+    return refresh(shell, routes, state, nervgear_mode, snapshot_v2_fn, snapshot_v1_fn,
+                   set_roots_fn);
 }
 
 sao_status_t clear(sao_ui_entity_shell_handle_t shell,
@@ -799,14 +866,8 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
             state.builtin_authority, set_roots_fn, RouteCommitMode::resync_on_failure);
         if (status != SAO_STATUS_OK)
             return status;
-        state.catalog_revision = 0;
         state.refresh_elapsed_ms = 0;
-        state.has_catalog_revision = false;
-        state.published_catalog = {};
-        {
-            std::lock_guard lock(state.root_contribution_mutex);
-            state.published_root_contribution_revision = 0;
-        }
+        reset_published_state(state);
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;

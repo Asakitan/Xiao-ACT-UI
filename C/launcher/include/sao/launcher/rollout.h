@@ -1,6 +1,6 @@
 // SAO Auto - launcher/rollout.h
 //
-// Wave 10 / Agent a - Phase 12 (cutover) rollout system.
+// Telemetry-driven gradual rollout and auto-retreat system.
 //
 // Layered on top of dual_run.h.  Whereas dual_run picks between C++ and
 // Python for a single machine based on a static config, rollout adds a
@@ -21,7 +21,7 @@
 // * State lives at %APPDATA%\SaoAuto\rollout.json (config) and
 //   %APPDATA%\SaoAuto\rollout_stats.json (recent-run window).
 // * Telemetry events published via
-//   sao::server::freetier::telemetry_client (Wave 9b).  When
+//   sao::server::freetier::telemetry_client.  When
 //   telemetry_init has NOT been called the record_* calls degrade
 //   silently to updating local counters only.
 // * Bucket derivation is process-agnostic: same anon_id + same salt

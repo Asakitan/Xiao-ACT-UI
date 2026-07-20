@@ -74,7 +74,7 @@ bool parseCommandLineFromArgv(int argc,
             state.safe_mode = true;
             continue;
         }
-        // Wave 10 integration harness.  ``--smoke`` promotes the launcher
+        // Full-stack integration harness.  ``--smoke`` promotes the launcher
         // into a console-friendly mode (init pipeline still runs but the
         // process no longer sits on the message loop).  Combined with
         // ``--exit-after-init`` the launcher prints a literal ``READY``
@@ -132,10 +132,9 @@ void printHelp() noexcept {
         L"SaoAuto.exe [options]\r\n\r\n"
         L"  --safe-mode           Skip plugin discovery, load core UI only\r\n"
         L"  --no-license          Bypass license verification (dev only)\r\n"
-        L"  --smoke               Wave 10 integration harness: attach console,\r\n"
+        L"  --smoke               Enable console-attached full-stack smoke mode;\r\n"
         L"                        skip GUI message loop, print READY on stdout\r\n"
-        L"  --exit-after-init     Wave 10 integration harness: return once the\r\n"
-        L"                        init pipeline reports platform ready\r\n"
+        L"  --exit-after-init     With --smoke, return after platform init is ready\r\n"
         L"  --config=<path>       Override config file location\r\n"
         L"  --log-level=<lvl>     trace|debug|info|warn|error|critical\r\n"
         L"  --version, -v         Print version and exit\r\n"

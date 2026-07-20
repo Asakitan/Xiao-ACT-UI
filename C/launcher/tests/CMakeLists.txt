@@ -23,7 +23,7 @@ set(_sao_launcher_test_sources
     test_settings_owner_focused.cpp
     test_tool_launch_focused.cpp
 )
-# Phase 12 rollout tests join the same discovery scheme
+# Rollout tests join the same discovery scheme
 # so an operator building a slim launcher can drop them without CMake edits.
 foreach (_maybe
     test_dual_run_phase12.cpp
@@ -58,13 +58,13 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/working_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/crash_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/app.cpp
-    # Phase 1 — headless init pipeline + shutdown so the
+    # Headless init pipeline + shutdown so the
     # init pipeline tests can drive the full sequence with fail-closed stubs.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/init_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/shutdown.cpp
-    # Phase 12 — dual-run driver.
+    # Dual-run driver.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/dual_run.cpp
-    # Phase 12 rollout manager + dispatcher.
+    # Rollout manager + dispatcher.
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/rollout_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/rollout_dispatcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
@@ -82,7 +82,7 @@ target_sources(sao_launcher_tests PRIVATE
 target_compile_definitions(sao_launcher_tests PRIVATE
     SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER=1)
 
-# Phase 12 tests need the tools/cutover_diff exe path baked in so
+# Cutover tests need the tools/cutover_diff exe path baked in so
 # ``test_cutover_diff_phase12`` can spawn and diff two runs.  When the
 # tools tree isn't built (SAO_BUILD_TOOLS=OFF), fall back to a name-only
 # lookup — the cutover_diff test will WARN + skip its subprocess assertions.

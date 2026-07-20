@@ -14,6 +14,7 @@
 namespace sao::launcher::entity_provider_publication {
 
 using SnapshotCatalogFn = entity_provider_catalog::SnapshotCatalogFn;
+using SnapshotCatalogV2Fn = entity_provider_catalog::SnapshotCatalogV2Fn;
 using InvokeProviderFn = std::int32_t(SAO_PLUGINS_CALL*)(const char* provider_id_utf8,
                                                          std::uint64_t expected_generation,
                                                          const char* action_id_utf8,
@@ -71,6 +72,8 @@ struct EntityBuiltinAuthorityState {
     PluginRuntimePublicationStatus plugin_runtime = PluginRuntimePublicationStatus::not_applicable;
     ControlPublicationStatus controls = ControlPublicationStatus::ready;
     TopmostPublicationStatus topmost_status = TopmostPublicationStatus::not_applicable;
+
+    bool operator==(const EntityBuiltinAuthorityState&) const = default;
 };
 
 struct EntityRootContributionActionRef {
@@ -94,14 +97,23 @@ struct EntityRootContributionSpec {
 
 struct EntityProviderPublicationState {
     std::uint64_t catalog_revision = 0;
+    sao::plugins::loader::entity_snapshot_content_token_t catalog_content_token =
+        sao::plugins::loader::kInvalidEntitySnapshotContentToken;
     std::uint32_t refresh_elapsed_ms = 0;
     bool has_catalog_revision = false;
+    bool has_catalog_content_token = false;
     bool topmost = false;
     bool streaming_mode = false;
     EntityBuiltinAuthorityState builtin_authority;
     entity_provider_catalog::OwnedEntityProviderCatalog published_catalog;
     std::uint64_t root_contribution_revision = 0;
     std::uint64_t published_root_contribution_revision = 0;
+    std::uint64_t published_route_revision = 0;
+    bool has_publication_inputs = false;
+    bool published_nervgear_mode = false;
+    bool published_topmost = false;
+    bool published_streaming_mode = false;
+    EntityBuiltinAuthorityState published_builtin_authority;
     std::vector<EntityRootContributionSpec> root_contributions;
     mutable std::mutex root_contribution_mutex;
 };
@@ -120,13 +132,32 @@ sao_status_t clear_root_contributions_for_owner(EntityProviderPublicationState& 
 sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                      entity_action_routes::EntityActionRouteStore& routes,
                      EntityProviderPublicationState& state, bool nervgear_mode,
-                     SnapshotCatalogFn snapshot_fn, SetRootsFn set_roots_fn) noexcept;
+                     SnapshotCatalogV2Fn snapshot_v2_fn, SnapshotCatalogFn snapshot_v1_fn,
+                     SetRootsFn set_roots_fn) noexcept;
+
+inline sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
+                            entity_action_routes::EntityActionRouteStore& routes,
+                            EntityProviderPublicationState& state, bool nervgear_mode,
+                            SnapshotCatalogFn snapshot_fn, SetRootsFn set_roots_fn) noexcept {
+    return refresh(shell, routes, state, nervgear_mode,
+                   static_cast<SnapshotCatalogV2Fn>(nullptr), snapshot_fn, set_roots_fn);
+}
 
 sao_status_t poll(sao_ui_entity_shell_handle_t shell,
                   entity_action_routes::EntityActionRouteStore& routes,
                   EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
-                  bool nervgear_mode, SnapshotCatalogFn snapshot_fn,
+                  bool nervgear_mode, SnapshotCatalogV2Fn snapshot_v2_fn,
+                  SnapshotCatalogFn snapshot_v1_fn,
                   SetRootsFn set_roots_fn) noexcept;
+
+inline sao_status_t poll(sao_ui_entity_shell_handle_t shell,
+                         entity_action_routes::EntityActionRouteStore& routes,
+                         EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
+                         bool nervgear_mode, SnapshotCatalogFn snapshot_fn,
+                         SetRootsFn set_roots_fn) noexcept {
+    return poll(shell, routes, state, elapsed_ms, nervgear_mode,
+                static_cast<SnapshotCatalogV2Fn>(nullptr), snapshot_fn, set_roots_fn);
+}
 
 sao_status_t clear(sao_ui_entity_shell_handle_t shell,
                    entity_action_routes::EntityActionRouteStore& routes,

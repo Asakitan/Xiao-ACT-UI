@@ -33,7 +33,7 @@ set(SAO_LAUNCHER_HEADERS
     include/sao/launcher/init_pipeline.h
     include/sao/launcher/shutdown.h
     include/sao/launcher/dual_run.h
-    # rollout slice — Phase 12 rollout system.
+    # Rollout system.
     include/sao/launcher/rollout.h
     include/sao/launcher/provider_config.h
     include/sao/launcher/user_menu.h
@@ -55,7 +55,7 @@ set(SAO_LAUNCHER_SOURCES
     src/init_pipeline.cpp
     src/shutdown.cpp
     src/dual_run.cpp
-    # rollout slice — Phase 12 rollout system.
+    # Rollout system.
     src/rollout_manager.cpp
     src/rollout_dispatcher.cpp
     src/provider_config.cpp
@@ -269,7 +269,7 @@ target_link_libraries(SaoAuto PRIVATE
     dbghelp        # for minidump generation in crash_handler
     version
     shlwapi
-    bcrypt         # HMAC-SHA-256 for rollout bucketing (Wave 10 Phase 12)
+    bcrypt         # HMAC-SHA-256 for deterministic rollout bucketing
     crypt32        # current-user DPAPI for secure settings envelopes
 )
 

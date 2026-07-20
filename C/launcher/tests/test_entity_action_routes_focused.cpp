@@ -6,10 +6,13 @@
 #include "tool_launch_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <numeric>
@@ -209,6 +212,199 @@ fake_catalog_snapshot(loader::entity_provider_catalog_callback callback, void* u
     return callback(&g_catalog_fixture->catalog, user_data);
 }
 
+template <typename View>
+struct alignas(View) FutureStrideView {
+    View view{};
+    std::array<std::byte, 16> future{};
+};
+
+using PhysicalEntityMenuRowV2 = FutureStrideView<loader::entity_menu_row_v2>;
+using PhysicalEntityProviderV2 = FutureStrideView<loader::entity_provider_view_v2>;
+using PhysicalEntityRootActionV2 = FutureStrideView<loader::entity_root_action_ref_view_v2>;
+using PhysicalEntityRootV2 = FutureStrideView<loader::entity_root_contribution_view_v2>;
+
+struct CatalogV2Fixture {
+    std::array<std::string, 2> provider_ids;
+    std::array<std::string, 2> owner_ids;
+    std::array<std::string, 2> category_ids;
+    std::array<std::string, 2> category_labels;
+    std::array<std::string, 2> category_icons;
+    std::array<std::string, 2> row_labels;
+    std::array<std::string, 2> row_icons;
+    std::array<std::string, 2> action_ids;
+    std::array<std::string, 2> payloads;
+    std::array<std::string, 2> root_owner_ids;
+    std::array<std::string, 2> root_contribution_ids;
+    std::array<std::string, 2> root_ids;
+    std::array<std::string, 2> root_names;
+    std::array<std::string, 2> root_icons;
+    std::array<PhysicalEntityMenuRowV2, 2> rows;
+    std::array<PhysicalEntityProviderV2, 2> providers;
+    std::array<PhysicalEntityRootActionV2, 3> root_actions;
+    std::array<PhysicalEntityRootV2, 2> roots;
+    loader::entity_provider_catalog_view_v2 catalog{};
+
+    CatalogV2Fixture() {
+        reset();
+    }
+
+    void reset() {
+        provider_ids = {"provider-a", "provider-b"};
+        owner_ids = {"owner-a", "owner-b"};
+        category_ids = {"category-a", "category-b"};
+        category_labels = {"Category A", "Category B"};
+        category_icons = {"A", "B"};
+        row_labels = {"Row A", "Row B"};
+        row_icons = {"1", "2"};
+        action_ids = {"action-a", "action-b"};
+        payloads = {R"({"content":"A"})", R"({"content":"B"})"};
+        root_owner_ids = {"owner-a", "owner-b"};
+        root_contribution_ids = {"root-contribution-a", "root-contribution-b"};
+        root_ids = {"dynamic:a", "dynamic:b"};
+        root_names = {"Dynamic A", "Dynamic B"};
+        root_icons = {"A", "B"};
+        rows = {};
+        providers = {};
+        root_actions = {};
+        roots = {};
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            rows[index].view = {
+                sizeof(PhysicalEntityMenuRowV2),
+                category_ids[index].c_str(),
+                category_labels[index].c_str(),
+                category_icons[index].c_str(),
+                static_cast<double>(index),
+                row_labels[index].c_str(),
+                row_icons[index].c_str(),
+                action_ids[index].c_str(),
+                payloads[index].c_str(),
+                1,
+                0,
+                0,
+                {},
+            };
+        }
+        providers[0].view = {
+            sizeof(PhysicalEntityProviderV2),
+            loader::kEntitySnapshotAbiVersion1,
+            provider_ids[0].c_str(),
+            owner_ids[0].c_str(),
+            41,
+            101,
+            0x101,
+            2,
+            sizeof(PhysicalEntityMenuRowV2),
+            rows.data(),
+        };
+        providers[1].view = {
+            sizeof(PhysicalEntityProviderV2),
+            loader::kEntitySnapshotAbiVersion2,
+            provider_ids[1].c_str(),
+            owner_ids[1].c_str(),
+            42,
+            102,
+            0x102,
+            1,
+            sizeof(PhysicalEntityMenuRowV2),
+            rows.data() + 1,
+        };
+        root_actions[0].view = {sizeof(PhysicalEntityRootActionV2),
+                                provider_ids[0].c_str(), action_ids[0].c_str()};
+        root_actions[1].view = {sizeof(PhysicalEntityRootActionV2),
+                                provider_ids[0].c_str(), action_ids[1].c_str()};
+        root_actions[2].view = {sizeof(PhysicalEntityRootActionV2),
+                                provider_ids[1].c_str(), action_ids[1].c_str()};
+        roots[0].view = {
+            sizeof(PhysicalEntityRootV2),
+            root_owner_ids[0].c_str(),
+            root_contribution_ids[0].c_str(),
+            root_ids[0].c_str(),
+            root_names[0].c_str(),
+            root_icons[0].c_str(),
+            1.0,
+            2,
+            sizeof(PhysicalEntityRootActionV2),
+            root_actions.data(),
+        };
+        roots[1].view = {
+            sizeof(PhysicalEntityRootV2),
+            root_owner_ids[1].c_str(),
+            root_contribution_ids[1].c_str(),
+            root_ids[1].c_str(),
+            root_names[1].c_str(),
+            root_icons[1].c_str(),
+            2.0,
+            1,
+            sizeof(PhysicalEntityRootActionV2),
+            root_actions.data() + 2,
+        };
+        catalog = {
+            sizeof(loader::entity_provider_catalog_view_v2) + 16,
+            loader::kEntitySnapshotAbiVersion2,
+            501,
+            0x1001,
+            2,
+            sizeof(PhysicalEntityProviderV2),
+            providers.data(),
+            2,
+            sizeof(PhysicalEntityRootV2),
+            roots.data(),
+        };
+    }
+
+    void sync_string_pointers() {
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            rows[index].view.category_id_utf8 = category_ids[index].c_str();
+            rows[index].view.category_label_utf8 = category_labels[index].c_str();
+            rows[index].view.category_icon_utf8 = category_icons[index].c_str();
+            rows[index].view.row_label_utf8 = row_labels[index].c_str();
+            rows[index].view.row_icon_utf8 = row_icons[index].c_str();
+            rows[index].view.action_id_utf8 = action_ids[index].c_str();
+            rows[index].view.payload_json_utf8 = payloads[index].c_str();
+            providers[index].view.provider_id_utf8 = provider_ids[index].c_str();
+            providers[index].view.owner_plugin_id_utf8 = owner_ids[index].c_str();
+            root_actions[index].view.provider_id_utf8 = provider_ids[0].c_str();
+            root_actions[index].view.action_id_utf8 = action_ids[index].c_str();
+            roots[index].view.owner_plugin_id_utf8 = root_owner_ids[index].c_str();
+            roots[index].view.contribution_id_utf8 = root_contribution_ids[index].c_str();
+            roots[index].view.root_id_utf8 = root_ids[index].c_str();
+            roots[index].view.name_utf8 = root_names[index].c_str();
+            roots[index].view.icon_utf8 = root_icons[index].c_str();
+        }
+        root_actions[2].view.provider_id_utf8 = provider_ids[1].c_str();
+        root_actions[2].view.action_id_utf8 = action_ids[1].c_str();
+    }
+
+    void use_single_provider_without_roots() {
+        providers[0].view.row_count = 1;
+        catalog.provider_count = 1;
+        catalog.root_contribution_count = 0;
+        catalog.root_contributions = nullptr;
+    }
+};
+
+CatalogV2Fixture* g_catalog_v2_fixture = nullptr;
+std::size_t g_catalog_v2_snapshot_calls = 0;
+std::size_t g_catalog_v1_snapshot_calls = 0;
+std::int32_t g_catalog_v2_entry_status = SAO_OK;
+
+std::int32_t SAO_PLUGINS_CALL
+fake_catalog_snapshot_v2(loader::entity_provider_catalog_callback_v2 callback, void* user_data) {
+    ++g_catalog_v2_snapshot_calls;
+    if (g_catalog_v2_entry_status != SAO_OK) {
+        return g_catalog_v2_entry_status;
+    }
+    if (g_catalog_v2_fixture == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    return callback(&g_catalog_v2_fixture->catalog, user_data);
+}
+
+std::int32_t SAO_PLUGINS_CALL
+counted_catalog_snapshot_v1(loader::entity_provider_catalog_callback callback, void* user_data) {
+    ++g_catalog_v1_snapshot_calls;
+    return fake_catalog_snapshot(callback, user_data);
+}
+
 OwnedEntityProviderCatalog make_catalog_sentinel() {
     OwnedEntityProviderCatalog catalog;
     catalog.revision = 9001;
@@ -236,6 +432,18 @@ void check_catalog_snapshot_rejected_transactionally(CatalogFixture& fixture) {
           SAO_STATUS_ERR_INVALID_ARGUMENT);
     CHECK(catalog == before);
     g_catalog_fixture = nullptr;
+}
+
+void check_catalog_snapshot_v2_rejected_transactionally(CatalogV2Fixture& fixture,
+                                                         sao_status_t expected) {
+    g_catalog_v2_fixture = &fixture;
+    g_catalog_v2_entry_status = SAO_OK;
+    auto catalog = make_catalog_sentinel();
+    const auto before = catalog;
+    CHECK(sao::launcher::entity_provider_catalog::snapshot_v2(&fake_catalog_snapshot_v2,
+                                                              catalog) == expected);
+    CHECK(catalog == before);
+    g_catalog_v2_fixture = nullptr;
 }
 
 struct PublishedMenuRow {
@@ -769,6 +977,280 @@ TEST_CASE("Entity provider catalog keeps wide input until route publication vali
     CHECK(sao::launcher::entity_provider_catalog::build_routes(catalog, routes) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
     CHECK(routes == before);
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider catalog v2 deep copies physical future strides",
+          "[launcher][entity_provider][v2][stride][focused]") {
+    STATIC_REQUIRE(sizeof(PhysicalEntityMenuRowV2) > sizeof(loader::entity_menu_row_v2));
+    STATIC_REQUIRE(sizeof(PhysicalEntityProviderV2) > sizeof(loader::entity_provider_view_v2));
+    STATIC_REQUIRE(sizeof(PhysicalEntityRootActionV2) >
+                   sizeof(loader::entity_root_action_ref_view_v2));
+    STATIC_REQUIRE(sizeof(PhysicalEntityRootV2) >
+                   sizeof(loader::entity_root_contribution_view_v2));
+
+    CatalogV2Fixture fixture;
+    g_catalog_v2_fixture = &fixture;
+    g_catalog_v2_entry_status = SAO_OK;
+    OwnedEntityProviderCatalog catalog;
+    REQUIRE(sao::launcher::entity_provider_catalog::snapshot_v2(&fake_catalog_snapshot_v2,
+                                                                 catalog) == SAO_STATUS_OK);
+
+    CHECK(catalog.abi_version == loader::kEntitySnapshotAbiVersion2);
+    CHECK(catalog.revision == 501);
+    CHECK(catalog.content_token == 0x1001);
+    CHECK(catalog.provider_stride_bytes == sizeof(PhysicalEntityProviderV2));
+    CHECK(catalog.root_contribution_stride_bytes == sizeof(PhysicalEntityRootV2));
+    REQUIRE(catalog.providers.size() == 2);
+    CHECK(catalog.providers[0].snapshot_abi_version == loader::kEntitySnapshotAbiVersion1);
+    CHECK(catalog.providers[1].snapshot_abi_version == loader::kEntitySnapshotAbiVersion2);
+    CHECK(catalog.providers[0].content_token == 0x101);
+    CHECK(catalog.providers[1].content_token == 0x102);
+    CHECK(catalog.providers[0].row_stride_bytes == sizeof(PhysicalEntityMenuRowV2));
+    REQUIRE(catalog.providers[0].rows.size() == 2);
+    REQUIRE(catalog.providers[1].rows.size() == 1);
+    CHECK(catalog.providers[0].rows[1].row_label == "Row B");
+    CHECK(catalog.providers[1].rows[0].payload_json == R"({"content":"B"})");
+    REQUIRE(catalog.root_contributions.size() == 2);
+    REQUIRE(catalog.root_contributions[0].actions.size() == 2);
+    REQUIRE(catalog.root_contributions[1].actions.size() == 1);
+    CHECK(catalog.root_contributions[0].name == "Dynamic A");
+    CHECK(catalog.root_contributions[0].actions[1].action_id == "action-b");
+    CHECK(catalog.root_contributions[1].actions[0].provider_id == "provider-b");
+
+    fixture.provider_ids[0] = "mutated-provider";
+    fixture.row_labels[1] = "mutated-row";
+    fixture.payloads[1] = R"({"content":"mutated"})";
+    fixture.root_names[0] = "mutated-root";
+    fixture.action_ids[1] = "mutated-action";
+    fixture.sync_string_pointers();
+
+    std::vector<EntityActionRouteSpec> routes;
+    REQUIRE(sao::launcher::entity_provider_catalog::build_routes(catalog, routes) ==
+            SAO_STATUS_OK);
+    REQUIRE(routes.size() == 3);
+    CHECK(routes[0].provider_id == "provider-a");
+    CHECK(routes[1].row_label == "Row B");
+    CHECK(routes[1].payload_json == R"({"content":"B"})");
+    CHECK(catalog.root_contributions[0].name == "Dynamic A");
+    CHECK(catalog.root_contributions[0].actions[1].action_id == "action-b");
+    g_catalog_v2_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider catalog v2 rejects malformed ABI and strides atomically",
+          "[launcher][entity_provider][v2][negative][focused]") {
+    CatalogV2Fixture fixture;
+
+    SECTION("catalog prefix truncated") {
+        fixture.catalog.struct_size = loader::kEntityProviderCatalogViewV2RequiredPrefixSize - 1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("catalog version unsupported") {
+        fixture.catalog.abi_version = loader::kEntitySnapshotAbiVersion1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("catalog token zero") {
+        fixture.catalog.content_token = loader::kInvalidEntitySnapshotContentToken;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("provider token zero") {
+        fixture.providers[0].view.content_token = loader::kInvalidEntitySnapshotContentToken;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("provider snapshot version unsupported") {
+        fixture.providers[0].view.snapshot_abi_version = 3;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+
+    SECTION("provider stride too small") {
+        fixture.catalog.provider_stride_bytes =
+            static_cast<std::uint32_t>(loader::kEntityProviderViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("root stride too small") {
+        fixture.catalog.root_contribution_stride_bytes = static_cast<std::uint32_t>(
+            loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("row stride too small") {
+        fixture.providers[0].view.row_stride_bytes =
+            static_cast<std::uint32_t>(loader::kEntityMenuRowV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("action stride too small") {
+        fixture.roots[0].view.action_stride_bytes = static_cast<std::uint32_t>(
+            loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+
+    SECTION("provider stride misaligned") {
+        ++fixture.catalog.provider_stride_bytes;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("root stride misaligned") {
+        ++fixture.catalog.root_contribution_stride_bytes;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("row stride misaligned") {
+        ++fixture.providers[0].view.row_stride_bytes;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("action stride misaligned") {
+        ++fixture.roots[0].view.action_stride_bytes;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+
+    SECTION("provider prefix truncated") {
+        fixture.providers[0].view.struct_size =
+            static_cast<std::uint32_t>(loader::kEntityProviderViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("root prefix truncated") {
+        fixture.roots[0].view.struct_size = static_cast<std::uint32_t>(
+            loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("row prefix truncated") {
+        fixture.rows[0].view.struct_size =
+            static_cast<std::uint32_t>(loader::kEntityMenuRowV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("action prefix truncated") {
+        fixture.root_actions[0].view.struct_size = static_cast<std::uint32_t>(
+            loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+
+    SECTION("provider struct size exceeds stride") {
+        fixture.providers[0].view.struct_size = fixture.catalog.provider_stride_bytes + 1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("root struct size exceeds stride") {
+        fixture.roots[0].view.struct_size = fixture.catalog.root_contribution_stride_bytes + 1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("row struct size exceeds stride") {
+        fixture.rows[0].view.struct_size = fixture.providers[0].view.row_stride_bytes + 1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("action struct size exceeds stride") {
+        fixture.root_actions[0].view.struct_size = fixture.roots[0].view.action_stride_bytes + 1;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+
+    SECTION("provider count has null pointer") {
+        fixture.catalog.providers = nullptr;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("root count has null pointer") {
+        fixture.catalog.root_contributions = nullptr;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("row count has null pointer") {
+        fixture.providers[0].view.rows = nullptr;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("action count has null pointer") {
+        fixture.roots[0].view.actions = nullptr;
+        check_catalog_snapshot_v2_rejected_transactionally(fixture,
+                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+}
+
+TEST_CASE("Entity provider catalog v2 first falls back only when unavailable",
+          "[launcher][entity_provider][v2][fallback][focused]") {
+    CatalogFixture v1_fixture;
+    v1_fixture.reset(1);
+    v1_fixture.set_row(0, "fallback-provider", 9, "fallback-category", "Fallback", "F", 0.0,
+                       "Fallback Row", "R", "fallback-action", "{}");
+    v1_fixture.finish(601);
+    g_catalog_fixture = &v1_fixture;
+    g_catalog_v1_snapshot_calls = 0;
+    g_catalog_v2_snapshot_calls = 0;
+
+    SECTION("v2 function missing") {
+        OwnedEntityProviderCatalog catalog;
+        REQUIRE(sao::launcher::entity_provider_catalog::snapshot_v2_first(
+                    nullptr, &counted_catalog_snapshot_v1, catalog) == SAO_STATUS_OK);
+        CHECK(g_catalog_v2_snapshot_calls == 0);
+        CHECK(g_catalog_v1_snapshot_calls == 1);
+        CHECK(catalog.abi_version == loader::kEntitySnapshotAbiVersion1);
+        CHECK(catalog.providers[0].provider_id == "fallback-provider");
+    }
+    SECTION("v2 reports not implemented") {
+        g_catalog_v2_entry_status = SAO_ERR_NOT_IMPLEMENTED;
+        OwnedEntityProviderCatalog catalog;
+        REQUIRE(sao::launcher::entity_provider_catalog::snapshot_v2_first(
+                    &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1, catalog) ==
+                SAO_STATUS_OK);
+        CHECK(g_catalog_v2_snapshot_calls == 1);
+        CHECK(g_catalog_v1_snapshot_calls == 1);
+        CHECK(catalog.providers[0].provider_id == "fallback-provider");
+    }
+    SECTION("v2 reports unsupported") {
+        g_catalog_v2_entry_status = loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+        OwnedEntityProviderCatalog catalog;
+        REQUIRE(sao::launcher::entity_provider_catalog::snapshot_v2_first(
+                    &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1, catalog) ==
+                SAO_STATUS_OK);
+        CHECK(g_catalog_v2_snapshot_calls == 1);
+        CHECK(g_catalog_v1_snapshot_calls == 1);
+        CHECK(catalog.providers[0].provider_id == "fallback-provider");
+    }
+
+    g_catalog_v2_entry_status = SAO_OK;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider catalog malformed v2 never falls back to v1",
+          "[launcher][entity_provider][v2][fallback][negative][focused]") {
+    CatalogV2Fixture v2_fixture;
+    v2_fixture.catalog.content_token = loader::kInvalidEntitySnapshotContentToken;
+    CatalogFixture v1_fixture;
+    v1_fixture.reset(1);
+    v1_fixture.set_row(0, "v1-provider", 9, "category", "Category", "C", 0.0, "V1 Row", "R",
+                       "action", "{}");
+    v1_fixture.finish(602);
+    g_catalog_v2_fixture = &v2_fixture;
+    g_catalog_fixture = &v1_fixture;
+    g_catalog_v2_entry_status = SAO_OK;
+    g_catalog_v1_snapshot_calls = 0;
+    g_catalog_v2_snapshot_calls = 0;
+
+    auto catalog = make_catalog_sentinel();
+    const auto before = catalog;
+    CHECK(sao::launcher::entity_provider_catalog::snapshot_v2_first(
+              &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1, catalog) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(g_catalog_v2_snapshot_calls == 1);
+    CHECK(g_catalog_v1_snapshot_calls == 0);
+    CHECK(catalog == before);
+
+    g_catalog_v2_fixture = nullptr;
     g_catalog_fixture = nullptr;
 }
 
@@ -1456,6 +1938,201 @@ TEST_CASE("Entity provider publication snapshots restored generation after faile
     CHECK(degraded_plugins[3].name == "无已启用面板插件");
     g_publication_log = nullptr;
     g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider publication v2 fallback is unavailable-only and fail closed",
+          "[launcher][entity_provider][v2][publication][fallback][focused]") {
+    CatalogFixture v1_fixture;
+    v1_fixture.reset(1);
+    v1_fixture.set_row(0, "fallback-provider", 71, "fallback-category", "Fallback", "F", 0.0,
+                       "Fallback Row", "R", "fallback-action", "{}");
+    v1_fixture.finish(701);
+    g_catalog_fixture = &v1_fixture;
+    g_catalog_v1_snapshot_calls = 0;
+    g_catalog_v2_snapshot_calls = 0;
+    PublicationLog log;
+    g_publication_log = &log;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+
+    SECTION("unavailable v2 falls back to v1") {
+        g_catalog_v2_entry_status = loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+        EntityActionRouteStore store;
+        EntityProviderPublicationState state;
+        REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                    shell, store, state, false, &fake_catalog_snapshot_v2,
+                    &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+        CHECK(g_catalog_v2_snapshot_calls == 1);
+        CHECK(g_catalog_v1_snapshot_calls == 1);
+        REQUIRE(log.calls.size() == 1);
+        CHECK(published_root(log.calls[0], "Plugins").children.back().name == "Fallback Row");
+        const auto routes = snapshot(store);
+        REQUIRE(routes.routes.size() == 1);
+        CHECK(routes.routes[0].provider_id == "fallback-provider");
+        CHECK_FALSE(state.has_catalog_content_token);
+    }
+
+    SECTION("malformed v2 never falls back") {
+        CatalogV2Fixture v2_fixture;
+        v2_fixture.use_single_provider_without_roots();
+        v2_fixture.catalog.content_token = loader::kInvalidEntitySnapshotContentToken;
+        g_catalog_v2_fixture = &v2_fixture;
+        g_catalog_v2_entry_status = SAO_OK;
+        EntityActionRouteStore store;
+        EntityProviderPublicationState state;
+        CHECK(sao::launcher::entity_provider_publication::refresh(
+                  shell, store, state, false, &fake_catalog_snapshot_v2,
+                  &counted_catalog_snapshot_v1, &fake_set_roots) ==
+              SAO_STATUS_ERR_INVALID_ARGUMENT);
+        CHECK(g_catalog_v2_snapshot_calls == 1);
+        CHECK(g_catalog_v1_snapshot_calls == 0);
+        REQUIRE(log.calls.size() == 1);
+        CHECK(all_actions_disabled(log.calls[0]));
+        CHECK(snapshot(store).routes.empty());
+        CHECK_FALSE(state.has_catalog_revision);
+        CHECK_FALSE(state.has_catalog_content_token);
+    }
+
+    g_catalog_v2_entry_status = SAO_OK;
+    g_catalog_v2_fixture = nullptr;
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider v2 content token suppresses only identical publications",
+          "[launcher][entity_provider][v2][content_token][publication][focused]") {
+    CatalogV2Fixture fixture;
+    fixture.use_single_provider_without_roots();
+    fixture.catalog.revision = 702;
+    fixture.catalog.content_token = 0x7021;
+    fixture.providers[0].view.revision = 72;
+    fixture.providers[0].view.content_token = 0x7022;
+    g_catalog_v2_fixture = &fixture;
+    g_catalog_v2_entry_status = SAO_OK;
+    g_catalog_v2_snapshot_calls = 0;
+    g_catalog_v1_snapshot_calls = 0;
+
+    CatalogFixture unused_v1;
+    unused_v1.reset(0);
+    unused_v1.finish(999);
+    g_catalog_fixture = &unused_v1;
+    PublicationLog log;
+    g_publication_log = &log;
+    EntityActionRouteStore store;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, false, &fake_catalog_snapshot_v2,
+                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+    const auto first = snapshot(store);
+    REQUIRE(first.routes.size() == 1);
+    const auto first_route = first.routes[0];
+    CHECK(first.routes[0].row_label == "Row A");
+    CHECK(state.catalog_revision == 702);
+    CHECK(state.catalog_content_token == 0x7021);
+    CHECK(state.has_catalog_content_token);
+    REQUIRE(log.calls.size() == 1);
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, false, &fake_catalog_snapshot_v2,
+                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+    CHECK(log.calls.size() == 1);
+    CHECK(snapshot(store).revision == first.revision);
+    CHECK(first_route.invocation_allowed());
+    CHECK(g_catalog_v2_snapshot_calls == 2);
+    CHECK(g_catalog_v1_snapshot_calls == 0);
+
+    fixture.row_labels[0] = "Row A changed";
+    fixture.payloads[0] = R"({"content":"changed"})";
+    fixture.sync_string_pointers();
+    fixture.catalog.content_token = 0x7023;
+    fixture.providers[0].view.content_token = 0x7024;
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, false, &fake_catalog_snapshot_v2,
+                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+    const auto changed = snapshot(store);
+    REQUIRE(changed.routes.size() == 1);
+    CHECK(changed.revision == first.revision + 1);
+    CHECK(changed.routes[0].token == first.routes[0].token);
+    CHECK(changed.routes[0].row_label == "Row A changed");
+    CHECK(changed.routes[0].payload_json == R"({"content":"changed"})");
+    CHECK_FALSE(first_route.invocation_allowed());
+    CHECK(state.catalog_revision == 702);
+    CHECK(state.catalog_content_token == 0x7023);
+    REQUIRE(log.calls.size() == 2);
+    CHECK(published_root(log.calls.back(), "Plugins").children.back().name == "Row A changed");
+    CHECK(g_catalog_v1_snapshot_calls == 0);
+
+    g_catalog_v2_fixture = nullptr;
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider v2 short circuit tracks modes authority and local roots",
+          "[launcher][entity_provider][v2][content_token][authority][root_contribution][focused]") {
+    CatalogV2Fixture fixture;
+    fixture.use_single_provider_without_roots();
+    fixture.catalog.revision = 703;
+    fixture.catalog.content_token = 0x7031;
+    fixture.providers[0].view.content_token = 0x7032;
+    g_catalog_v2_fixture = &fixture;
+    g_catalog_v2_entry_status = SAO_OK;
+    PublicationLog log;
+    g_publication_log = &log;
+    EntityActionRouteStore store;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, false, &fake_catalog_snapshot_v2, nullptr,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 1);
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 2);
+    CHECK(published_root(log.calls.back(), "Control").children[1].name == "NervGear: ON");
+
+    state.topmost = true;
+    state.builtin_authority.topmost = true;
+    state.builtin_authority.topmost_status =
+        sao::launcher::entity_provider_publication::TopmostPublicationStatus::ready;
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 3);
+    CHECK(published_root(log.calls.back(), "Control").children[0].name == "置顶: ON");
+
+    state.streaming_mode = true;
+    state.builtin_authority.streaming = true;
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 4);
+    CHECK(published_root(log.calls.back(), "Control").children[3].name ==
+          "Streaming Mode: ON");
+
+    REQUIRE(sao::launcher::entity_provider_publication::replace_root_contributions(
+                state, {{"launcher-owner",
+                         "launcher-contribution",
+                         "dynamic:launcher",
+                         "Launcher Dynamic",
+                         "L",
+                         5.0,
+                         {{"provider-a", "action-a"}}}}) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 5);
+    const auto& dynamic = published_root(log.calls.back(), "dynamic:launcher");
+    REQUIRE(dynamic.children.size() == 1);
+    CHECK(dynamic.children[0].name == "Row A");
+    CHECK(state.published_root_contribution_revision == state.root_contribution_revision);
+
+    g_catalog_v2_fixture = nullptr;
+    g_publication_log = nullptr;
 }
 
 TEST_CASE("Entity provider same catalog revision content replacement characterizes v1 limitation",

@@ -1,6 +1,6 @@
 // SAO Auto - launcher/tests/test_rollout_admin.cpp
 //
-// Wave 10 / Agent a - Phase 12 rollout admin CLI integration test.
+// Rollout administration CLI integration test.
 //
 // Spawns the built sao_rollout_admin.exe with --appdata-dir pointing at a
 // scratch dir, captures stdout, and checks the printed JSON.

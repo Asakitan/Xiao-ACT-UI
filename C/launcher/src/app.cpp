@@ -24,7 +24,7 @@ namespace {
 
 constexpr UINT kUiFrameIntervalMs = 16;
 
-// Wave 10 integration harness helper.  When ``--smoke`` is on, we attach
+// Full-stack smoke harness helper.  When ``--smoke`` is on, we attach
 // (or allocate) a console so the parent test process can capture stdout,
 // then print a single ``tag`` line.  All other invocations are silent —
 // production users never see this output.
@@ -81,7 +81,7 @@ int App::run() {
         return finish(exit_code, hint);
     };
 
-    // 1b. (Phase 12) — dual-run step zero.  Read %APPDATA%\SaoAuto\dual_run.json
+    // 1b. Dual-run step zero.  Read %APPDATA%\SaoAuto\dual_run.json
     // and, if the user has selected python_only or a Python-preferred variant,
     // spawn Python and hand off.  See dual_run.h for the full contract.
     // Children spawned by a parent dual-run driver have SAO_DUAL_RUN_ROLE set
@@ -111,7 +111,7 @@ int App::run() {
             return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero", "dual_run_step_zero");
         }
         if (should_continue == 0) {
-            // Wave 10 harness: parent test observes the exit code (which
+            // Smoke harness: the parent test observes the exit code (which
             // is SAO_EXIT_HANDOFF_TO_PYTHON = 100 for the python_only
             // path) plus, in smoke mode, a stdout tag it can grep for.
             smokePrint(state_, "HANDOFF_TO_PYTHON");
@@ -185,7 +185,7 @@ int App::run() {
         }
     }
 
-    // 9b. Wave 10 integration harness — the pipeline just reached "every
+    // Platform-ready smoke checkpoint — the pipeline just reached "every
     // subsystem is up".  ``--smoke --exit-after-init`` uses this as the
     // observable checkpoint: emit READY on stdout and stop before we
     // bring the UI online (no GUI, no message loop, no window handle
@@ -202,10 +202,10 @@ int App::run() {
         return fail(rc, L"ui_bring_online", "ui_bring_online");
     }
 
-    // 9b. Wave 10 integration harness — same checkpoint as 8b but for
-    // callers that want to observe the UI-online step too.  When only
+    // UI-online smoke checkpoint for callers that want to observe the
+    // UI bring-up step too.  When only
     // ``--smoke`` is set (no ``--exit-after-init``) we still print READY
-    // for parity with 8b, then fall through to the message loop so
+    // before falling through to the message loop so
     // interactive smoke inspection works.
     if (state_.smoke_mode) {
         smokePrint(state_, "READY");

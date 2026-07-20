@@ -39,9 +39,9 @@ struct AppState {
     // Command line.
     bool safe_mode = false;
     bool no_license = false;
-    // Wave 10 integration harness — `--smoke` flips the launcher into a
+    // Full-stack smoke harness — `--smoke` flips the launcher into a
     // console-attached, non-GUI mode used by the tests/integration/
-    // ``test_full_stack_wave10`` cases.  Combined with ``--exit-after-init``
+    // ``test_full_stack_integration`` cases.  Combined with ``--exit-after-init``
     // it drives the pipeline through platform bring-up and prints a
     // literal ``READY`` line on stdout so the parent test process can
     // observe successful init without opening a window.  Neither flag

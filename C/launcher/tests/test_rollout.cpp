@@ -1,6 +1,6 @@
 // SAO Auto - launcher/tests/test_rollout.cpp
 //
-// Wave 10 / Agent a - Phase 12 rollout system tests.
+// Telemetry-driven rollout policy and persistence tests.
 //
 // Covers the seven public APIs declared in rollout.h:
 //   config_load / config_save          - schema round-trip, defaults

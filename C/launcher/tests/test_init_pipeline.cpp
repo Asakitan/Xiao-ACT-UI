@@ -1,6 +1,6 @@
 // SAO Auto — launcher/tests/test_init_pipeline.cpp
 //
-// Wave 5 / Phase 1 — headless init pipeline coverage.
+// Headless init pipeline smoke harness coverage.
 //
 // The test target uses explicit composition hooks so ordering can be observed
 // without starting real platform or optional subsystem runtimes.
@@ -383,7 +383,7 @@ std::filesystem::path uniqueRolloutDirectory() {
     wchar_t temp_path[MAX_PATH]{};
     REQUIRE(GetTempPathW(MAX_PATH, temp_path) != 0);
     wchar_t temp_file[MAX_PATH]{};
-    REQUIRE(GetTempFileNameW(temp_path, L"w18", 0, temp_file) != 0);
+    REQUIRE(GetTempFileNameW(temp_path, L"rol", 0, temp_file) != 0);
     DeleteFileW(temp_file);
     std::filesystem::path directory(temp_file);
     std::error_code error;

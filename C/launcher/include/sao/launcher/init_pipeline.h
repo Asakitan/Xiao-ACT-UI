@@ -174,7 +174,7 @@ struct sao_launcher_composition_test_hooks_t {
 void sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hooks_t* hooks);
 
 // ---------------------------------------------------------------------------
-// Wave 5 / Phase 1 — headless init pipeline entry point.
+// Headless init pipeline entry point.
 //
 // A thin, unit-testable wrapper around the same steps ``App::run`` walks,
 // but with:
@@ -193,7 +193,7 @@ void sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test
 // ---------------
 // Setting the global ``sao_launcher_test_hooks_t::pump_once`` to a
 // non-null callback makes the run() variant return after that hook
-// completes instead of blocking on a real WM_QUIT.  The Wave 5 tests
+// completes instead of blocking on a real WM_QUIT.  The pipeline tests
 // use this to observe teardown order.
 struct sao_launcher_init_hooks_t {
     // Called immediately before the reverse-order teardown starts.
