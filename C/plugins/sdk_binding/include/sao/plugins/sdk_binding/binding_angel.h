@@ -154,14 +154,14 @@ extern "C" void as_ctx_register_report_view(void* self, const void* id,
 extern "C" void as_ctx_register_timer(void* self, const void* id,
                                         void* metadata,
                                         asIScriptFunction* handler);
-extern "C" void as_ctx_register_menu_category(void* self, const void* name,
+extern "C" int32_t as_ctx_register_menu_category(void* self, const void* name,
                                                 const void* icon,
                                                 asIScriptFunction* builder,
                                                 float priority);
-extern "C" void as_ctx_register_menu_surface(void* self, const void* id,
+extern "C" int32_t as_ctx_register_menu_surface(void* self, const void* id,
                                                void* descriptor,
                                                float priority);
-extern "C" void as_ctx_register_action_handler(void* self,
+extern "C" int32_t as_ctx_register_action_handler(void* self,
                                                  asIScriptFunction* handler);
 
 extern "C" void* as_ctx_set_interval(void* self, asIScriptFunction* cb, double s);

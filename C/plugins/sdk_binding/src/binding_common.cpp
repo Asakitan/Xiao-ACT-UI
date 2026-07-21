@@ -13,8 +13,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -967,6 +969,52 @@ std::string bytes_to_string(const char* ptr, size_t size) {
         return {};
     return std::string(ptr, size);
 }
+
+struct menu_category_arguments {
+    std::string name;
+    std::string icon;
+    float priority = 0.0F;
+};
+
+int32_t parse_menu_category_arguments(const char* ptr, size_t size,
+                                      menu_category_arguments* output) {
+    if (ptr == nullptr || size == 0 || output == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        const auto arguments = ordered_json::parse(ptr, ptr + size);
+        if (!arguments.is_object())
+            return SAO_ERR_INVALID_ARGUMENT;
+        const auto name = arguments.find("name");
+        if (name == arguments.end() || !name->is_string())
+            return SAO_ERR_INVALID_ARGUMENT;
+        output->name = name->get<std::string>();
+        if (output->name.empty())
+            return SAO_ERR_INVALID_ARGUMENT;
+        const auto icon = arguments.find("icon");
+        if (icon != arguments.end()) {
+            if (!icon->is_string())
+                return SAO_ERR_INVALID_ARGUMENT;
+            output->icon = icon->get<std::string>();
+        }
+        const auto builder = arguments.find("builder");
+        if (builder != arguments.end() && !builder->is_null())
+            return unsupported();
+        const auto priority = arguments.find("priority");
+        if (priority != arguments.end()) {
+            if (!priority->is_number())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const double value = priority->get<double>();
+            if (!std::isfinite(value) ||
+                std::abs(value) > static_cast<double>(std::numeric_limits<float>::max())) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            output->priority = static_cast<float>(value);
+        }
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+}
 } // namespace
 
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
@@ -1384,6 +1432,21 @@ sao_plugins_sdk_bind_call(plugin_binding_handle_t plugin, sdk_method_id method_i
             plugin->last_plugin_id_query = copied_plugin_id;
             return SAO_OK;
         }
+
+        case sdk_method_id::method_register_menu_category: {
+            menu_category_arguments arguments;
+            const int32_t parse_status =
+                parse_menu_category_arguments(args_ptr, args_size, &arguments);
+            if (parse_status != SAO_OK)
+                return parse_status;
+            return loader::sao_plugins_ctx_register_menu_category(
+                static_cast<loader::plugin_context_t*>(plugin->ctx), arguments.name.c_str(),
+                arguments.icon.c_str(), nullptr, arguments.priority, nullptr);
+        }
+
+        case sdk_method_id::method_register_menu_surface:
+        case sdk_method_id::method_register_action_handler:
+            return unsupported();
 
         case sdk_method_id::method_register_hotkey: {
             std::string key = bytes_to_string(args_ptr, args_size);

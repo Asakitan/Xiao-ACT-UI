@@ -4,6 +4,8 @@
 
 #include "sao/plugins/sdk_binding/binding_csharp.h"
 
+#include "sao/plugins/loader/plugin_context.h"
+
 #include <cstring>
 
 namespace sao::plugins::sdk_binding {
@@ -68,6 +70,23 @@ sao_plugins_binding_csharp_wrap_delegate(csharp_domain_ptr domain, void* delegat
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_binding_csharp_release_delegate(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::csharp, user_data);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_csharp_ctx_register_menu_category(
+    void* ctx, const char* name, const char* icon, void* builder_delegate, float priority) {
+    return loader::sao_plugins_ctx_register_menu_category(
+        static_cast<loader::plugin_context_t*>(ctx), name, icon, builder_delegate, priority,
+        nullptr);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_csharp_ctx_register_menu_surface(void*, const char*, const char*, float) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_csharp_ctx_register_action_handler(void*,
+                                                                                           void*) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
 }
 
 // 共享插件 binding 的 activate / deactivate

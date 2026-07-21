@@ -457,6 +457,10 @@ sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx,
         return ctx->ui != nullptr && ctx->ui->register_panel != nullptr
                    ? SAO_OK
                    : unsupported();
+    case sdk_method_id::method_register_menu_category:
+    case sdk_method_id::method_register_menu_surface:
+    case sdk_method_id::method_register_action_handler:
+        return unsupported();
     case sdk_method_id::method_register_hotkey:
     case sdk_method_id::method_set_overlay:
     case sdk_method_id::method_request_redraw:

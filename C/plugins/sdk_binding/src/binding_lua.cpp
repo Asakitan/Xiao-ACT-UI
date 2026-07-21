@@ -74,6 +74,20 @@ sao_plugins_binding_lua_release_callback(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::lua, user_data);
 }
 
+// lua_host owns the typed context and callback references. The provider-neutral
+// facade has no lua_State-to-loader-context contract for these legacy symbols.
+extern "C" int lua_ctx_register_menu_category(lua_State*) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+extern "C" int lua_ctx_register_menu_surface(lua_State*) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+extern "C" int lua_ctx_register_action_handler(lua_State*) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
 // 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_lua_activate(

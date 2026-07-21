@@ -10,9 +10,10 @@
 // 公共部分抽在这里, 各宿主的 binding_<lang>.h 只做语言侧特化。
 //
 // 关键设计原则:
-//   - 每种语言暴露 **同一组 SDK 方法** (见 sdk_method_id 枚举)
-//   - 每种语言暴露 ctx 对象顶层, 方法调用统一走 dispatch: ctx.<method>(args)
-//   - 所有 register_XXX 回调转换在 wrap_callback 里统一 SEH 屏障
+//   - sdk_method_id 是稳定名称/数值目录，不代表 generic JSON dispatcher
+//     自动具备每个方法的 typed callback 能力
+//   - 每种语言由自己的 host 暴露 ctx；带回调的注册直接走 host + loader typed ABI
+//   - generic JSON dispatcher 只处理 sdk_context_call_request 明确携带的 callback 类型
 //   - 所有跨 ABI JSON 用 json_node 中间格式 (avoid copy)
 #pragma once
 
@@ -53,11 +54,9 @@ class json_node {
     std::string to_string() const;
 };
 
-// SDK 方法目录 —— 所有宿主都要暴露这些方法, 与 Python PluginContext 1:1。
-//
-// 每个宿主在自己的 register_ctx 里遍历这个枚举, 为每一项在语言侧登记一个入口
-// (Python: PyMethodDef; Lua: lua_pushcfunction; AS: RegisterObjectMethod;
-// C#: LibraryImport; Emma: interpreter.register_global)。
+// SDK 稳定方法目录。名称和数值用于跨宿主识别；目录成员不等于 generic
+// JSON dispatcher 或每个语言 host 都具备该能力。带 typed callback 的方法由
+// 各 host 仅在能直接满足 loader 契约时暴露。
 enum class sdk_method_id : uint16_t {
     // 属性 (readonly)
     prop_plugin_id = 0,
@@ -145,6 +144,12 @@ enum class sdk_method_id : uint16_t {
 
     method_count_, // sentinel
 };
+
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_hotkey) == 33);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_request_redraw) == 39);
 
 enum class language_host_kind : uint8_t {
     python = 0,
@@ -320,7 +325,9 @@ struct sdk_context_call_request {
 
 // Dispatches the subset whose semantics are provided directly by a modern
 // SaoSdkContext. Provider-backed calls return UNSUPPORTED when the context has
-// no matching provider slot. Registrations stay owned by SaoSdkContext.
+// no matching provider slot. There is deliberately no Entity action-v2 callback
+// slot here: register_action_handler remains host-owned and must not be encoded
+// into JSON or tracked by sdk_binding. Registrations stay owned by SaoSdkContext.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_sdk_context_dispatch(
     const SaoSdkContext* ctx, sdk_method_id method_id, sdk_context_call_request* request);
 

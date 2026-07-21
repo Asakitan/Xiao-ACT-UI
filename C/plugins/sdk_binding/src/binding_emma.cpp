@@ -79,6 +79,14 @@ sao_plugins_binding_emma_release_callback(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::emma, user_data);
 }
 
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_emma_get_method_table(
+    sdk_method_id*, emma_ctx_method_fn*, size_t* inout_count) {
+    if (inout_count == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *inout_count = 0;
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
 // 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

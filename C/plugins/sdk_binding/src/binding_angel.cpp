@@ -60,6 +60,24 @@ sao_plugins_binding_angel_release_callback(void* user_data) {
     sao_plugins_binding_release_callback(language_host_kind::angel, user_data);
 }
 
+extern "C" int32_t as_ctx_register_menu_category(void* self, const void* name, const void* icon,
+                                                 asIScriptFunction* builder, float priority) {
+    (void)self;
+    (void)name;
+    (void)icon;
+    (void)builder;
+    (void)priority;
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+extern "C" int32_t as_ctx_register_menu_surface(void*, const void*, void*, float) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+extern "C" int32_t as_ctx_register_action_handler(void*, asIScriptFunction*) {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_angel_dict_to_json(void* as_dictionary_ptr, char** out_json_utf8) {
     if (out_json_utf8 != nullptr)

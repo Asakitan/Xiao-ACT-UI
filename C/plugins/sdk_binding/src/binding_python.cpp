@@ -82,6 +82,21 @@ sao_plugins_binding_python_pyobject_to_json(PyObject* obj, char** out_json_utf8)
         &request);
 }
 
+// Typed menu/action callbacks are implemented by python_host against the
+// loader context. These legacy declarations remain linkable but are not a
+// second Python callback surface.
+extern "C" PyObject* py_ctx_register_menu_category(PyObject*, PyObject*) {
+    return nullptr;
+}
+
+extern "C" PyObject* py_ctx_register_menu_surface(PyObject*, PyObject*) {
+    return nullptr;
+}
+
+extern "C" PyObject* py_ctx_register_action_handler(PyObject*, PyObject*) {
+    return nullptr;
+}
+
 // 共享插件 binding 的 activate / deactivate
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
