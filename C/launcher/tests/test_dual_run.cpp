@@ -1,4 +1,4 @@
-// SAO Auto — launcher/tests/test_dual_run_phase12.cpp
+// SAO Auto — launcher/tests/test_dual_run.cpp
 //
 // Dual-run mode coverage: config round-trip, Python probe,
 // spawn, status registry, driver mutex, and step-zero dispatch.
@@ -46,7 +46,7 @@ struct DualRunGuard {
 } // namespace
 
 TEST_CASE("dual_run_config_roundtrip_preserves_all_fields",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     auto path = unique_tmp_path("roundtrip");
 
@@ -82,7 +82,7 @@ TEST_CASE("dual_run_config_roundtrip_preserves_all_fields",
 }
 
 TEST_CASE("dual_run_mode_default_when_missing_config",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     auto path = unique_tmp_path("missing");
     // Make sure the file really doesn't exist.
@@ -99,7 +99,7 @@ TEST_CASE("dual_run_mode_default_when_missing_config",
 }
 
 TEST_CASE("dual_run_probe_python_when_absent_via_hook",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     sao_launcher_dual_run_set_test_probe_hook(
         +[](sao_dual_run_python_probe* out) {
@@ -115,7 +115,7 @@ TEST_CASE("dual_run_probe_python_when_absent_via_hook",
 }
 
 TEST_CASE("dual_run_probe_python_when_present",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     // No test hook — hit the real probe.  Requires Python 3.11+ on PATH
     // or at E:\Py\python.exe (the current dev machine's configured path).
@@ -139,7 +139,7 @@ TEST_CASE("dual_run_probe_python_when_present",
 }
 
 TEST_CASE("dual_run_spawn_python_returns_pid_via_test_hook",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     static std::atomic<int> spawn_calls{0};
     spawn_calls = 0;
@@ -176,7 +176,7 @@ TEST_CASE("dual_run_spawn_python_returns_pid_via_test_hook",
 }
 
 TEST_CASE("dual_run_spawn_cpp_side_by_side_returns_real_pid",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     // Point cpp_exe_path at the tests binary itself (we don't want to
     // launch a real SaoAuto because that would drag in every subsystem).
@@ -288,7 +288,7 @@ TEST_CASE("dual_run_spawn_cpp_capture_keeps_argv_role_and_recursion_guard",
 }
 
 TEST_CASE("dual_run_mutex_prevents_double_launch",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     HANDLE m1 = nullptr;
     REQUIRE(sao_launcher_dual_run_acquire_driver_mutex(&m1) == SAO_STATUS_OK);
@@ -308,7 +308,7 @@ TEST_CASE("dual_run_mutex_prevents_double_launch",
 }
 
 TEST_CASE("dual_run_fallback_records_reason",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     // Stub probe -> available + spawn hook -> succeeds.
     sao_launcher_dual_run_set_test_probe_hook(
@@ -360,7 +360,7 @@ TEST_CASE("dual_run_fallback_records_reason",
 }
 
 TEST_CASE("dual_run_init_pipeline_step_zero_python_only_short_circuits",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     // Configure python_only.  Probe stubbed to say Python is available;
     // spawn hook returns a fake pid.  step_zero must set continue=0 and
@@ -422,7 +422,7 @@ TEST_CASE("dual_run_init_pipeline_step_zero_python_only_short_circuits",
 }
 
 TEST_CASE("dual_run_config_load_rejects_malformed_json",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     auto path = unique_tmp_path("malformed");
 
@@ -441,7 +441,7 @@ TEST_CASE("dual_run_config_load_rejects_malformed_json",
 }
 
 TEST_CASE("dual_run_status_registers_children_and_reports_dead_processes",
-          "[launcher][dual_run][phase12]") {
+          "[launcher][dual_run][cutover]") {
     DualRunGuard g;
     // Register a fake child, then a real ping to a real short-lived
     // process (cmd /c exit 42), verify the status reports is_dead=1

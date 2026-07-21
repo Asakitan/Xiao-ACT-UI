@@ -1,4 +1,4 @@
-// SAO Auto — launcher/tests/test_cutover_diff_phase12.cpp
+// SAO Auto — launcher/tests/test_cutover_diff.cpp
 //
 // tools/cutover_diff deterministic-output stability check.
 //
@@ -98,7 +98,7 @@ std::string quote(const std::string& s) {
 } // namespace
 
 TEST_CASE("cutover_diff_json_stable_across_runs",
-          "[launcher][cutover_diff][phase12]") {
+          "[launcher][cutover_diff][cutover]") {
     std::string exe = cutover_diff_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("cutover_diff exe not built in this configuration; skipping subprocess test");
@@ -132,7 +132,7 @@ TEST_CASE("cutover_diff_json_stable_across_runs",
 }
 
 TEST_CASE("cutover_diff_bad_args_returns_nonzero",
-          "[launcher][cutover_diff][phase12]") {
+          "[launcher][cutover_diff][cutover]") {
     std::string exe = cutover_diff_exe_path();
     if (exe.empty() || !fs::exists(exe)) {
         WARN("cutover_diff exe not built in this configuration; skipping subprocess test");

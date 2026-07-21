@@ -958,6 +958,26 @@ sao_status_t SAO_UI_CALL hide_window_rect(void* user_data, void* hwnd,
                                       timeout_ms, &result);
 }
 
+sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask,
+                                      uint32_t timeout_ms) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || hwnd == nullptr || mask == 0) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
+    const SaoRtIoWindowToken& token = ctx->window_rect_token;
+    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
+        token.hwnd != hwnd_value) {
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    SaoRtIoCallResult result{};
+    return sao_rt_io_clear_window_exstyle(ctx->window_rect_controller, &token, mask, timeout_ms,
+                                          &result);
+}
+
 bool SAO_UI_CALL entity_hit_test(int32_t x, int32_t y, void* user_data) {
     bool hit = false;
     return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
@@ -1317,11 +1337,13 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
-    SaoUiDcMutationProvider dc_mutation_provider{};
+    SaoUiDcMutationProviderV2 dc_mutation_provider{};
+    dc_mutation_provider.struct_size = sizeof(dc_mutation_provider);
     dc_mutation_provider.hide_window_rect = &hide_window_rect;
+    dc_mutation_provider.hide_exstyle = &hide_exstyle;
     dc_mutation_provider.user_data = ctx;
-    status = sao_ui_dc_mutation_coordinator_create_ex(&dc_mutation_provider,
-                                                      &ctx->dc_mutation_coordinator);
+    status = sao_ui_dc_mutation_coordinator_create_ex_v2(&dc_mutation_provider,
+                                                         &ctx->dc_mutation_coordinator);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }

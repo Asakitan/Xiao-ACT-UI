@@ -125,7 +125,7 @@ bool parseCommandLineFromArgv(int argc,
 }
 
 void printHelp() noexcept {
-    // TODO(phase-11): Attach a console via AttachConsole(ATTACH_PARENT_PROCESS)
+    // TODO(console-output): Attach a console via AttachConsole(ATTACH_PARENT_PROCESS)
     // and write to stdout when available; fall back to MessageBoxW.  For now
     // the stub uses MessageBoxW so the launcher stays purely GUI.
     static const wchar_t* help =

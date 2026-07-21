@@ -10,8 +10,8 @@ if (NOT Catch2_FOUND)
     return()
 endif()
 
-# Phase 12 test cpps 由并发 agent 后续 land;
-# 用 file(EXISTS) 判断可用源, 保持 configure 通过.
+# Optional launcher test sources are discovered with file(EXISTS) so slim
+# source sets continue to configure.
 set(_sao_launcher_test_sources
     test_launcher_smoke.cpp
     test_args.cpp
@@ -26,8 +26,8 @@ set(_sao_launcher_test_sources
 # Rollout tests join the same discovery scheme
 # so an operator building a slim launcher can drop them without CMake edits.
 foreach (_maybe
-    test_dual_run_phase12.cpp
-    test_cutover_diff_phase12.cpp
+    test_dual_run.cpp
+    test_cutover_diff.cpp
     test_rollout.cpp
     test_rollout_admin.cpp)
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_maybe}")
@@ -83,7 +83,7 @@ target_compile_definitions(sao_launcher_tests PRIVATE
     SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER=1)
 
 # Cutover tests need the tools/cutover_diff exe path baked in so
-# ``test_cutover_diff_phase12`` can spawn and diff two runs.  When the
+# ``test_cutover_diff`` can spawn and diff two runs.  When the
 # tools tree isn't built (SAO_BUILD_TOOLS=OFF), fall back to a name-only
 # lookup — the cutover_diff test will WARN + skip its subprocess assertions.
 target_compile_definitions(sao_launcher_tests

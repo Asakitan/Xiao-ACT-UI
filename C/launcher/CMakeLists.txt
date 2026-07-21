@@ -189,7 +189,7 @@ else()
     message(STATUS "launcher: no application icon found; omitting icon resource")
 endif()
 
-# Link the whole platform.  The other agents' subsystems each expose an
+# Link the whole platform.  The other subsystems each expose an
 # INTERFACE meta-target (sao::platform, sao::security, sao::shell,
 # sao::license, sao::plugins) which pulls in all their sub-libs transitively.
 #
