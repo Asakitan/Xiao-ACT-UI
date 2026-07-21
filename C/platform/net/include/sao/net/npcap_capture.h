@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-// ABI export macros — net/ ships as a SHARED library so Agent 4's
+// ABI export macros — net/ ships as a SHARED library so plugin hosts can
 // plugins can dynamically link the packet types without pulling core in.
 #if defined(_WIN32)
 #  if defined(SAO_NET_BUILDING_DLL)

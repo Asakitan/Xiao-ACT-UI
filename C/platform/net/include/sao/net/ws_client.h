@@ -1,7 +1,7 @@
 // SAO Auto — WebSocket client (WSS supported).
 //
 // Used by the launcher for the optional cloud sync/telemetry channel.
-// Zero external deps in the ABI — the Phase 3 implementation sits on
+// Zero external deps in the ABI — the runtime implementation sits on
 // top of WinHTTP's WebSocket layer.
 
 #pragma once

@@ -1,6 +1,6 @@
 // SAO Auto — HTTPS client for License / cloud-config downloads.
 //
-// Backed by WinHTTP (Phase 3) so we don't drag libcurl into the exe.
+// Backed by WinHTTP so we don't drag libcurl into the exe.
 // The API is deliberately blocking + string-in/string-out for now — the
 // launcher does a handful of small requests at startup; nothing hot-path.
 

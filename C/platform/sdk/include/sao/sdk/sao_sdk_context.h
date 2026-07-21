@@ -699,7 +699,7 @@ struct SaoSdkContext {
     const struct SaoSdkTtsTable* tts;
     const struct SaoSdkBannerTable* banner;
     const struct SaoSdkGpuHuntTable* gpu_hunt;
-    // TODO(phase-6): scripting table for plugins that host scripts of
+    // TODO(script-host-table): scripting table for plugins that host scripts of
     // their own (e.g. the workshop plugin's LuaJit sandbox).
 };
 

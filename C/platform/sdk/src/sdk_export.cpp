@@ -5,7 +5,7 @@
 // hosts the vtable factory that produces a per-plugin SaoSdkContext.
 //
 // Skeleton phase: the factory is a stub — the real implementation lands
-// in Phase 6 when plugin loading is wired up.  Each vtable function
+// when plugin loading is wired up.  Each vtable function
 // pointer forwards to the corresponding platform module (sao::engine
 // for event/UI, sao::core for mem/config, sao::ui for UI, etc.).
 

@@ -2,7 +2,7 @@
 //
 // These tests demonstrate that "any plugin can register a panel +
 // widgets + event subs + hotkeys through the SDK, receive typed
-// events, and be cleanly unloaded" — the entire Phase 7 register
+// events, and be cleanly unloaded" — the complete register
 // pathway end-to-end.
 //
 // Key constraints proven here:

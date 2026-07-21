@@ -54,7 +54,7 @@ target_link_libraries(sao_platform_net_reassembly_tests PRIVATE
 target_compile_features(sao_platform_net_reassembly_tests PRIVATE cxx_std_20)
 target_compile_definitions(sao_platform_net_reassembly_tests PRIVATE SAO_NET_USING_DLL)
 
-# ── engine detector/IL2CPP slice — Phase 4 zstd + protobuf varint ──────────────
+# ── engine detector/IL2CPP slice — zstd + protobuf varint ───────────────────
 # zstd tests SKIP gracefully when the library is not compiled in
 # (SAO_NET_ZSTD_MISSING).  Varint tests are dependency-free.
 add_executable(sao_platform_net_zstd_tests
