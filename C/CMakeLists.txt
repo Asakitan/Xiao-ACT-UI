@@ -180,8 +180,9 @@ endif()
 #                                         directly reference.  Depth impl
 #                                         lives in platform/core/
 #                                         (sao_platform_core, include/sao/core/).
-#                                         Phase-1 will merge these; keeping
-#                                         both is a skeleton-only bridge.
+#                                         A later compatibility cleanup will
+#                                         merge these; keeping both is a
+#                                         skeleton-only bridge.
 #   plugins/{hide_seek,midi_piano,include,src,tests}  -> kept, folded into
 #                                         plugins/CMakeLists.txt as v1
 #                                         compat layer alongside v2 hosts.
@@ -316,7 +317,7 @@ endif()
 # rejects them in persistent artifacts and build metadata while preserving the
 # published ABI aliases and the `w2s` world-to-screen domain abbreviation.
 set(_SAO_ITERATION_NAME_PATTERN
-    "(^|[^a-z0-9])(wave[0-9]+[a-z]?|w[0-9]+[a-z]?)([^a-z0-9]|$)")
+    "(^|[^a-z0-9])(wave[0-9]+[a-z]?|w[0-9]+[a-z]?|phase[0-9]+[a-z]?)([^a-z0-9]|$)")
 string(CONCAT _SAO_PUBLISHED_ITERATION_ABI_IDENTIFIER_PATTERN
     "^sao_("
     "(shell_crypter_wave8|(security_)?anti_debug_wave8|"
@@ -556,7 +557,7 @@ function(sao_assert_no_iteration_test_tags root)
         file(READ "${root}/${_sao_test_source}" _sao_test_source_text)
         string(TOLOWER "${_sao_test_source_text}" _sao_test_source_text)
         string(REGEX MATCHALL
-            "\\[(wave[0-9]+[a-z]?|w[0-9]+[a-z]?)\\]"
+            "\\[(wave[0-9]+[a-z]?|w[0-9]+[a-z]?|phase[0-9]+[a-z]?)\\]"
             _sao_iteration_tags
             "${_sao_test_source_text}")
         set(_sao_seen_tags "")
@@ -646,7 +647,8 @@ function(sao_assert_no_iteration_metadata directory)
     endforeach()
 endfunction()
 
-# Keep the documented legacy entry point while applying the broader audit.
+# Keep the documented detector entry point; AGENTS.md lists this audit helper
+# as an explicit exception because its name describes the rule it enforces.
 function(sao_assert_no_wave_impl_libraries directory)
     sao_assert_no_iteration_metadata("${directory}")
 endfunction()

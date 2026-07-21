@@ -1,7 +1,7 @@
 # plugins/ — 多引擎插件宿主 (SAO Auto C++ 平台)
 
 本目录承载**独立 C++ 平台**的插件系统骨架。5 种脚本引擎并存, 平台**不 import 任何具体
-插件** —— 平台代码永不引用具体插件的符号或路径, 插件通过 SDK C ABI (由 Agent1
+插件** —— 平台代码永不引用具体插件的符号或路径, 插件通过 SDK C ABI (由 platform/sdk
 的 ``sao/sdk/*.h`` + ``sao/scripting/*.h`` 提供) 反向注册能力。
 
 ## 目录导览
@@ -270,7 +270,7 @@ SDK 暴露函数数量 ≥ 20 (Python 65+, Lua 55+, AS 45+, C# 60+, Emma 通过 
 ``sao_plugin_hide_seek.dll`` / ``sao_plugin_midi_piano.dll``, 上层通用 loader
 通过原有 ABI 加载。
 
-## 历史遗留说明 (Phase 5 单库骨架)
+## 历史遗留说明（v1 单库骨架）
 
 原有 ``sao_plugins.dll`` (``src/sao_plugins.cpp`` + ``sao_plugins_abi_version()`` /
 ``sao_plugins_set_log_callback()``) 是 v1 单库 ABI, 只覆盖 loader + Lua/AngelScript

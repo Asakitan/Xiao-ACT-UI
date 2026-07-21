@@ -7,8 +7,8 @@ their interpreters.
 ## Non-goal
 
 This module **does not** ship any interpreter code.  The concrete hosts
-for Python, Emma, AngelScript, Lua and C# are Agent 4's responsibility
-and live under:
+for Python, Emma, AngelScript, Lua and C# live in the plugin host layer
+under:
 
 ```
 ../plugins/python_host/
@@ -37,20 +37,20 @@ suffix.  This module formalises that into a proper factory registry.
 - `script_engine.h` — `SaoScriptEngineVTable`: what concrete hosts fill in.
 - `script_registry.h` — process-scoped factory registry.
 
-## Phase plan
+## Implementation map
 
-- **Phase 1 (this skeleton)** — headers + stub cpps.
-- **Phase 7 (Agent 4)** — the five concrete hosts are implemented and
+- **Registry foundation** — headers + registry implementation.
+- **Concrete hosts** — the five language hosts are implemented and
   wire themselves into the registry at DLL init.
 
-## Integration notes for Agent 6
+## Build integration notes
 
 `sao_platform_scripting` is a **STATIC** library.  Every concrete host
 under `../plugins/*_host/` links it privately so each host DLL contains
 its own inlined copy of the registry symbols.  This is deliberate: it
 lets a host be unloaded without dragging the registry with it.
 
-If Agent 6 finds itself linking `sao::scripting` into more than one
+If the top-level build links `sao::scripting` into more than one
 SHARED target simultaneously (e.g. into `sao_sdk.dll` AND into a host
 DLL), that's a design smell — the registry should live in exactly one
 place, currently the host DLLs.

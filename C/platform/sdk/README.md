@@ -15,7 +15,7 @@ reached through `SaoSdkContext`'s vtable — plugins never link
   sao_sdk_status_t SAO_SDK_CALL sao_plugin_init(const struct SaoSdkContext*);
   void            SAO_SDK_CALL sao_plugin_shutdown(const struct SaoSdkContext*);
   ```
-- The platform's loader (owned by Agent 4) LoadLibrarys the plugin,
+- The platform loader loads the plugin,
   GetProcAddresses those two symbols, calls `sao_sdk_bind_context` to
   populate a per-plugin `SaoSdkContext`, then invokes init.
 - Growth is append-only: NEVER reorder or remove fields from
@@ -43,17 +43,17 @@ reached through `SaoSdkContext`'s vtable — plugins never link
   `sao_sdk_config.h`, `sao_sdk_hotkey.h`, `sao_sdk_tts.h`,
   `sao_sdk_banner.h` — inline convenience wrappers for each sub-table.
 
-## Phase plan
+## Implementation map
 
-- **Phase 1 (this skeleton)** — headers + stub `sao_sdk_bind_context`
+- **ABI foundation** — headers + baseline `sao_sdk_bind_context`
   that only zeroes the context struct.
-- **Phase 6** — implement `sao_sdk_bind_context` for real: build the
+- **Runtime binding** — implement `sao_sdk_bind_context`: build the
   vtables that forward into the platform modules, populate `ctx_impl`
   with a per-plugin state object, wire the scoped config prefix.
-- **Phase 7** — first non-star-resonance plugin ships as end-to-end
+- **Plugin validation** — first non-star-resonance plugin ships as end-to-end
   validation.
 
-## Integration notes for Agent 6
+## Build integration notes
 
 - `sao_sdk.dll` **must** be co-located with `SaoAuto.exe` in the
   runtime output dir.  Plugins LoadLibrary it by relative path.

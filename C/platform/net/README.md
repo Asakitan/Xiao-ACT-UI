@@ -24,21 +24,21 @@ to talk to the outside world — with no game knowledge baked in.
 - `tls.h` — SPKI-pin sets for the security-critical scopes.
 - `url.h` — RFC 3986 parse + percent-encode.
 
-## Phase plan
+## Implementation map
 
-- **Phase 1 (this skeleton)** — headers + stub cpps.
-- **Phase 3** — real Npcap load-time dispatch + capture worker; WinHTTP
+- **Foundation surface** — headers + fallback implementations.
+- **Network runtime** — real Npcap load-time dispatch + capture worker; WinHTTP
   clients; SPKI pin verifier.  Concrete parsers live one directory up
   under `../plugins/star_resonance_plugin/`.
 
-## Integration notes for Agent 6
+## Build integration notes
 
-`sao_net.dll` links `wpcap.lib` from Npcap.  Agent 6 needs to ensure
+`sao_net.dll` links `wpcap.lib` from Npcap.  The top-level build needs to ensure
 either:
 
 1. Npcap SDK is on the include/link paths at build time (recommended:
    vendor via vcpkg overlay port), OR
-2. The Phase 3 implementation uses runtime `LoadLibrary` on
+2. The runtime implementation uses `LoadLibrary` on
    `wpcap.dll` so the exe still starts without Npcap installed.
 
 Design here assumes option 2 so the launcher can surface a "please

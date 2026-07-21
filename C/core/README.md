@@ -1,7 +1,7 @@
-# core/ — Phase 1 skeleton
+# core/ — Legacy compatibility skeleton
 
-Builds `sao_core.dll` (CMake target `sao_core`, alias `sao::core`). Phase-0 scaffolding only —
-see `../docs/module-inventory.md`'s `## core/ — Phase 1` section for the research this is based
+Builds `sao_core.dll` (CMake target `sao_core`, alias `sao::core`). Legacy compatibility scaffolding only —
+see `../docs/module-inventory.md`'s `## core/` section for the research this is based
 on, and `../docs/abi-contract.md` for the C ABI every export follows.
 
 ## Real

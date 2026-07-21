@@ -64,9 +64,9 @@ the `_priority` API.
 
 `src/event_bus.cpp` is a historical translation unit that CMake deliberately
 does not compile.  Its dead base-ABI section contains seven
-`SAO_STATUS_ERR_NOT_IMPLEMENTED` returns; the same file also contains an old
-Wave 5 implementation and a real destroy function, but none of that file is
-part of the shipping DLL.  Keep those seven returns unchanged as audit
+`SAO_STATUS_ERR_NOT_IMPLEMENTED` returns; the same file also contains an
+obsolete priority-dispatch implementation and a real destroy function, but
+none of that file is part of the shipping DLL.  Keep those seven returns unchanged as audit
 inventory.  Static occurrence counts for this dead file must not be reported
 as runtime completeness; executable tests against the linked engine target
 define production behavior.

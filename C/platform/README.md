@@ -54,18 +54,18 @@ Plugins are **not** in this directory.  They live under:
 
 ```
 sao_auto/C/plugins/               ← 5 script hosts (Python/Emma/AS/Lua/C#)
-                                     built by Agent 4
+                                     built by the plugin host modules
 sao_auto/C/plugins/star_resonance_plugin/  ← the ex-game-specific plugin
 ```
 
 Plugins include `<sao/sdk/sao_sdk.h>` and link `sao_sdk.dll` at load time.  The
 platform side of that boundary is `sdk/src/sdk_export.cpp`.
 
-## Build integration for Agent 6 (top-level CMake)
+## Top-level CMake integration
 
 The top-level `sao_auto/C/CMakeLists.txt` should:
 
-1. `add_subdirectory(platform)` after Agent 3 (kernel/security) but before
+1. `add_subdirectory(platform)` after kernel/security dependencies but before
    `plugins/`.
 2. Consume the aggregate target `sao::platform` from anything that wants the
    full runtime, or the individual `sao::core` / `sao::net` / etc. targets
@@ -88,16 +88,16 @@ proceed if the ABI mismatches.
 | sdk         | `sao_sdk_abi_version()`      | 1.0     |
 | scripting   | `sao_scripting_abi_version()`| 1.0     |
 
-## Phase plan
+## Implementation map
 
-This directory is **skeleton only** for the current phase — every function is
-a stub returning `SAO_STATUS_NOT_IMPLEMENTED`.  Later phases fill in:
+This directory defines the platform contracts; implementations are grouped by
+functional subsystem:
 
-- Phase 2 — `core/` real implementations (RPM helpers, module enum, string, path)
+- **Core runtime** — `core/` real implementations (RPM helpers, module enum, string, path)
   and `rt_io/` proxy + helper wire protocol.
-- Phase 3 — `net/` Npcap capture + HTTP client; `rt_io/` helper bootstrap +
+- **Network and helper runtime** — `net/` Npcap capture + HTTP client; `rt_io/` helper bootstrap +
   authenticated session + cleanup.
-- Phase 4 — `engine/` event bus + state store + UI spec pipeline.
-- Phase 5 — `ui/` overlay compositor + widget kit ported from legacy overlay/.
-- Phase 6 — `sdk/` full C ABI wired end-to-end; first non-star-resonance plugin.
-- Phase 7 — `scripting/` five script-engine hosts (owned by Agent 4).
+- **Engine services** — `engine/` event bus + state store + UI spec pipeline.
+- **Overlay presentation** — `ui/` overlay compositor + widget kit ported from legacy overlay/.
+- **SDK composition** — `sdk/` full C ABI wired end-to-end; first non-star-resonance plugin.
+- **Script hosts** — `scripting/` five script-engine hosts implemented under `plugins/`.

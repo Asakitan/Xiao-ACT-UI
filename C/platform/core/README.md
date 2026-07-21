@@ -19,7 +19,7 @@ any game/plugin logic runs.
 | `string.h`, `path.h`     | scattered helpers throughout the tree         |
 | `thread.h`, `event.h`    | `threading.Thread`, `Event` scattered usage   |
 
-## Phase plan
+## Implementation map
 
 - **Implemented slice** — process open/enumeration/info, module enumeration,
   `NtReadVirtualMemory`, typed reads, signed pointer chains, readable-region
@@ -27,7 +27,7 @@ any game/plugin logic runs.
   current-process probe passes; Python fixture and live-game parity remain open.
 - **Next core slice** — real Win32 implementations for `window`, `time`,
   `logging`, wait events and remaining lifecycle helpers.
-- **Phase 3** — `config` JSON backend, `crypto` via `../security/crypto/`,
+- **Configuration and services** — `config` JSON backend, `crypto` via `../security/crypto/`,
   `thread` pool, `path` BASE_DIR resolver.
 - **Later parity gates** — Python process/memory fixtures, target lease behavior,
   live game reads and orderly teardown.

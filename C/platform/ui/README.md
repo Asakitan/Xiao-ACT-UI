@@ -81,7 +81,7 @@ the Python overlay.
     cyan/gold palette (`_DARK` / `_LIGHT` in the Python source) that
     doesn't map onto full-app themes.
 
-## Anti-screencap integration (this batch — Agent a)
+## Anti-screencap integration
 
 Reference implementation is `render/overlay_host.py::set_capture_mode`
 which applies `WDA_EXCLUDEFROMCAPTURE` (or `WDA_MONITOR` fallback)
@@ -195,16 +195,16 @@ control decoy while the render side is excluded).
   polygon / text / bitmap).  Pointer callback for scripts that don't
   wire the router directly.
 
-## Phase plan
+## Implementation map
 
-- **Phase 1 (this skeleton)** — headers + stub cpps.
-- **Phase 5** — overlay_host + compositor + dcomp_bridge (the critical
+- **Foundation surface** — headers + baseline implementations.
+- **Overlay composition** — overlay_host + compositor + dcomp_bridge (the critical
   path); then d3d11_device.
-- **Phase 6** — d2d_widgets + theme + panel + popup + menu + dialog
-  + fisheye + animator + nervegear.  (Everything Agent d owns.)
-- **Phase 7** — input + z_order (they depend on the host being live).
+- **Widget and theme layer** — d2d_widgets + theme + panel + popup + menu + dialog
+  + fisheye + animator + nervegear.
+- **Input and z-order** — input + z_order (they depend on the host being live).
 
-## Integration notes for Agent 6
+## Build integration notes
 
 `sao_ui.dll` links against:
 - `d3d11.lib` `dxgi.lib` `dcomp.lib` `d2d1.lib` `dwrite.lib`
