@@ -1,4 +1,4 @@
-// TODO(phase-2): replace with a table-driven implementation once the
+// TODO(status-table): replace with a table-driven implementation once the
 // error taxonomy stabilises.
 
 #include "sao/core/status.h"

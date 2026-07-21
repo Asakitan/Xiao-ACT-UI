@@ -2,7 +2,7 @@
 //
 // Five concrete engines back this header (Python / Emma / AngelScript
 // / Lua / C#).  Their actual hosts live under `../plugins/*_host/`
-// and are the responsibility of Agent 4.  The interface exposed here
+// and live in the plugin host layer.  The interface exposed here
 // is the game-agnostic contract they must implement.
 
 #pragma once

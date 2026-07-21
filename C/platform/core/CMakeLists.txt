@@ -31,7 +31,7 @@ target_include_directories(sao_platform_core
 
 target_compile_features(sao_platform_core PUBLIC cxx_std_20)
 
-# Phase 1 — settings envelope uses nlohmann::json for parse +
+# Settings envelope uses nlohmann::json for parse +
 # shortest-round-trip float formatting.  The dependency is header-only,
 # so we only need PRIVATE (its symbols never appear in sao/core/*.h).
 find_package(nlohmann_json 3 CONFIG REQUIRED)

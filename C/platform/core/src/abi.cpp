@@ -1,5 +1,5 @@
-// TODO(phase-2): keep this stable across all subsequent phases.  Bump the
-// major only if a public struct in another core header changes layout.
+// Keep this stable across compatible releases. Bump the major only if a
+// public struct in another core header changes layout.
 
 #include "sao/core/abi.h"
 

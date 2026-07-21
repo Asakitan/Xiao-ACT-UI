@@ -5,9 +5,8 @@
 // header is intentionally *narrow* — it exposes only what the platform
 // itself uses.  Full crypto exports for plugins go through sdk/.
 //
-// Deep implementations delegate to `../security/crypto/` (owned by
-// Agent 2).  The public surface here stays stable regardless of which
-// backend is linked.
+// Deep implementations delegate to `../security/crypto/`.  The public surface
+// here stays stable regardless of which backend is linked.
 
 #pragma once
 

@@ -1,6 +1,6 @@
 // Smoke test — confirms the module links, ABI version is queryable,
 // and status codes stringify.  Real per-function tests land alongside
-// each phase-2 implementation.
+// each core implementation.
 
 #include <catch2/catch_test_macros.hpp>
 

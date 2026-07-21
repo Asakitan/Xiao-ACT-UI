@@ -6,7 +6,7 @@
 //
 // Backends:
 //   * default: NtReadVirtualMemory resolved from ntdll (user-mode).
-//   * optional: kernel driver bridge (registered by Agent 2 during boot;
+//   * optional: kernel driver bridge (registered by the security bootstrap;
 //     this header does not depend on it — the driver simply overrides the
 //     internal read function pointer via a private hook).
 //
