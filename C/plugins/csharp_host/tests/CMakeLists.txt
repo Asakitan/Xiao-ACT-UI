@@ -93,6 +93,59 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     target_compile_definitions(test_plugins_csharp_loader_adapter PRIVATE
         SAO_PLUGINS_BUILDING_DLL
         SAO_HELLO_CSHARP_DIR="${CMAKE_SOURCE_DIR}/plugins/examples/hello_csharp")
+    find_program(SAO_CSHARP_DOTNET_EXECUTABLE NAMES dotnet)
+    if (SAO_CSHARP_DOTNET_EXECUTABLE)
+        set(_sao_managed_entity_fixture_root
+            "${CMAKE_CURRENT_BINARY_DIR}/managed_entity_fixture")
+        set(_sao_managed_entity_fixture_a
+            "${_sao_managed_entity_fixture_root}/entity_a")
+        set(_sao_managed_entity_fixture_b
+            "${_sao_managed_entity_fixture_root}/entity_b")
+        set(_sao_managed_entity_project
+            "${CMAKE_SOURCE_DIR}/plugins/examples/hello_csharp/HelloPlugin.csproj")
+        set(_sao_managed_entity_source
+            "${CMAKE_SOURCE_DIR}/plugins/examples/hello_csharp/HelloPlugin.cs")
+        set(_sao_managed_entity_a_dll
+            "${_sao_managed_entity_fixture_a}/HelloPluginEntityA.dll")
+        set(_sao_managed_entity_b_dll
+            "${_sao_managed_entity_fixture_b}/HelloPluginEntityB.dll")
+        add_custom_command(
+            OUTPUT
+                "${_sao_managed_entity_a_dll}"
+                "${_sao_managed_entity_fixture_a}/HelloPluginEntityA.runtimeconfig.json"
+                "${_sao_managed_entity_b_dll}"
+                "${_sao_managed_entity_fixture_b}/HelloPluginEntityB.runtimeconfig.json"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory
+                    "${_sao_managed_entity_fixture_a}"
+                    "${_sao_managed_entity_fixture_b}"
+            COMMAND "${SAO_CSHARP_DOTNET_EXECUTABLE}" build
+                    "${_sao_managed_entity_project}"
+                    --configuration Release
+                    "-p:AssemblyName=HelloPluginEntityA"
+                    "-p:OutputPath=${_sao_managed_entity_fixture_a}/"
+                    "-p:BaseIntermediateOutputPath=${_sao_managed_entity_fixture_root}/obj/entity_a/"
+                    "-p:DefineConstants=SAO_MANAGED_ENTITY_FIXTURE"
+            COMMAND "${SAO_CSHARP_DOTNET_EXECUTABLE}" build
+                    "${_sao_managed_entity_project}"
+                    --configuration Release
+                    "-p:AssemblyName=HelloPluginEntityB"
+                    "-p:OutputPath=${_sao_managed_entity_fixture_b}/"
+                    "-p:BaseIntermediateOutputPath=${_sao_managed_entity_fixture_root}/obj/entity_b/"
+                    "-p:DefineConstants=SAO_MANAGED_ENTITY_FIXTURE"
+            DEPENDS
+                "${_sao_managed_entity_project}"
+                "${_sao_managed_entity_source}"
+            WORKING_DIRECTORY
+                "${CMAKE_SOURCE_DIR}/plugins/examples/hello_csharp"
+            VERBATIM)
+        add_custom_target(sao_csharp_managed_entity_fixture
+            DEPENDS "${_sao_managed_entity_a_dll}" "${_sao_managed_entity_b_dll}")
+        add_dependencies(test_plugins_csharp_loader_adapter
+            sao_csharp_managed_entity_fixture)
+        target_compile_definitions(test_plugins_csharp_loader_adapter PRIVATE
+            SAO_MANAGED_ENTITY_A_DIR="${_sao_managed_entity_fixture_a}"
+            SAO_MANAGED_ENTITY_B_DIR="${_sao_managed_entity_fixture_b}")
+    endif()
     if (MSVC)
         target_compile_options(test_plugins_csharp_loader_adapter PRIVATE /GR /EHsc)
     endif()
@@ -100,4 +153,10 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
              COMMAND test_plugins_csharp_loader_adapter)
     set_tests_properties(plugins_csharp_loader_adapter PROPERTIES
         LABELS "plugins;csharp;generic;requires_dotnet_fixture")
+
+    add_test(NAME plugins_csharp_managed_entity_v2
+             COMMAND test_plugins_csharp_loader_adapter
+                     "csharp managed Entity v2 provider preserves lifecycle token stride and generations")
+    set_tests_properties(plugins_csharp_managed_entity_v2 PROPERTIES
+        LABELS "plugins;csharp;generic;entity;v2;focused;requires_dotnet_fixture")
 endif()

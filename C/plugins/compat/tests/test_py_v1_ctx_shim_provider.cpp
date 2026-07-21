@@ -16,6 +16,10 @@ using namespace sao::plugins::sdk_binding;
 
 namespace {
 
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
+
 struct provider_fixture {
     uint64_t next_token = 100;
     std::vector<std::string> events;
@@ -135,6 +139,26 @@ SaoSdkProviderVTable make_provider(provider_fixture* state) {
 void SAO_PLUGINS_CALL hotkey_callback(uint64_t, void*) {}
 void SAO_PLUGINS_CALL timer_callback(uint64_t, void*) {}
 
+struct callback_probe {
+    uint32_t calls = 0;
+};
+
+void SAO_PLUGINS_CALL event_callback(const char*, const uint8_t*, size_t, void* user_data) {
+    ++static_cast<callback_probe*>(user_data)->calls;
+}
+
+void SAO_PLUGINS_CALL counted_hotkey_callback(uint64_t, void* user_data) {
+    ++static_cast<callback_probe*>(user_data)->calls;
+}
+
+void SAO_PLUGINS_CALL counted_timer_callback(uint64_t, void* user_data) {
+    ++static_cast<callback_probe*>(user_data)->calls;
+}
+
+void SAO_PLUGINS_CALL panel_action_callback(const char*, const uint8_t*, size_t, void* user_data) {
+    ++static_cast<callback_probe*>(user_data)->calls;
+}
+
 int32_t call(plugin_context_ptr ctx,
              const char* method,
              const std::string& arguments,
@@ -176,6 +200,16 @@ std::string method_status(const nlohmann::json& report,
     return found->at("status").get<std::string>();
 }
 
+int32_t method_status_code(const nlohmann::json& report, const char* legacy_name) {
+    const auto& methods = report.at("methods");
+    const auto found =
+        std::find_if(methods.begin(), methods.end(), [legacy_name](const auto& method) {
+            return method.at("legacy") == legacy_name;
+        });
+    assert(found != methods.end());
+    return found->at("status_code").get<int32_t>();
+}
+
 } // namespace
 
 int main() {
@@ -190,6 +224,18 @@ int main() {
     assert(!sao_plugins_compat_is_v1_method("eval_unbounded"));
     assert(sao_plugins_compat_ctx_v1_lookup_alias("add_hotkey") ==
            static_cast<uint16_t>(sdk_method_id::method_register_hotkey));
+    assert(sao_plugins_compat_ctx_v1_register_alias(
+               "register_menu_surface",
+               static_cast<uint16_t>(sdk_method_id::method_register_menu_category)) ==
+           SAO_ERR_INVALID_ARGUMENT);
+    assert(sao_plugins_compat_ctx_v1_register_alias(
+               "register_menu_category",
+               static_cast<uint16_t>(sdk_method_id::method_register_menu_surface)) ==
+           SAO_ERR_INVALID_ARGUMENT);
+    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
+           static_cast<uint16_t>(sdk_method_id::method_register_menu_surface));
+    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
+           static_cast<uint16_t>(sdk_method_id::method_register_menu_category));
 
     std::string result;
     assert(call(ctx, "metadata", "{}", &result) == SAO_OK);
@@ -224,6 +270,20 @@ int main() {
     assert(call(ctx, "register_menu_category",
                 R"({"name":"Legacy","icon":"x"})") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    sdk_context_call_request callback_request{};
+    callback_request.args_json_utf8 = "{}";
+    callback_request.args_size = 2;
+    callback_probe rejected_callbacks;
+    callback_request.event_callback = event_callback;
+    callback_request.hotkey_callback = counted_hotkey_callback;
+    callback_request.timer_callback = counted_timer_callback;
+    callback_request.panel_action_callback = panel_action_callback;
+    callback_request.callback_user_data = &rejected_callbacks;
+    assert(sao_plugins_compat_v1_call(ctx, "register_action_handler", &callback_request) ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    assert(sao_plugins_compat_v1_call(ctx, "register_menu_surface", &callback_request) ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    assert(rejected_callbacks.calls == 0);
     assert(call(ctx, "register_report_view", R"({"id":"report"})") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
     assert(call(ctx, "eval_unbounded", "{}") ==
@@ -240,6 +300,13 @@ int main() {
     assert(method_status(without_provider, "notify") == "unsupported");
     assert(method_status(without_provider, "register_menu_surface") ==
            "unsupported");
+    assert(method_status(without_provider, "register_action_handler") == "unsupported");
+    assert(method_status_code(without_provider, "register_menu_category") ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    assert(method_status_code(without_provider, "register_menu_surface") ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    assert(method_status_code(without_provider, "register_action_handler") ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     assert(call(ctx, "add_hotkey",
                 R"({"id":"toggle","default_key":"CTRL+F7","label":"Toggle"})",
@@ -286,6 +353,9 @@ int main() {
     assert(method_status(with_provider, "set_interval") == "supported");
     assert(method_status(with_provider, "notify") == "supported");
     assert(method_status(with_provider, "set_timeout") == "unsupported");
+    assert(method_status(with_provider, "register_menu_category") == "unsupported");
+    assert(method_status(with_provider, "register_menu_surface") == "unsupported");
+    assert(method_status(with_provider, "register_action_handler") == "unsupported");
 
     sao_sdk_context_destroy(&sdk);
     const std::vector<std::string> expected_tail = {

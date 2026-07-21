@@ -1,4 +1,4 @@
-// Phase 10 — AI Editor subprocess launcher.
+// AI Editor subprocess launcher.
 //
 // The launcher owns one child process and one named-pipe channel per handle.
 // Concurrent launches use distinct handles and pipe names.

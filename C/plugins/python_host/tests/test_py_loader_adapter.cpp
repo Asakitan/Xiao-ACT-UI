@@ -912,6 +912,51 @@ int32_t snapshot_menu_catalog(MenuCatalogSnapshot& out) {
     return sao_plugins_entity_provider_snapshot(copy_menu_catalog, &out);
 }
 
+struct ActionResultSnapshot {
+    std::uint32_t calls = 0;
+    bool handled = false;
+    bool has_result = false;
+    std::string result_json;
+};
+
+int32_t SAO_PLUGINS_CALL copy_action_result(const entity_action_result_v2* result,
+                                            void* user_data) {
+    if (result == nullptr || user_data == nullptr ||
+        result->struct_size < kEntityActionResultV2RequiredPrefixSize ||
+        result->abi_version != kEntityActionAbiVersion2 || result->handled > 1 ||
+        std::any_of(std::begin(result->reserved), std::end(result->reserved),
+                    [](std::uint8_t value) { return value != 0; })) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& snapshot = *static_cast<ActionResultSnapshot*>(user_data);
+    ++snapshot.calls;
+    snapshot.handled = result->handled != 0;
+    snapshot.has_result = result->result_json_utf8 != nullptr;
+    snapshot.result_json = snapshot.has_result ? result->result_json_utf8 : "";
+    return SAO_OK;
+}
+
+struct ActionUnloadProbe {
+    plugin_handle_t plugin = nullptr;
+    std::atomic_uint32_t calls{0};
+    std::atomic_int32_t status{SAO_ERR_OS_CALL_FAILED};
+};
+
+void action_unload_callback(const char*, const char*, void* user_data) {
+    auto& probe = *static_cast<ActionUnloadProbe*>(user_data);
+    probe.calls.fetch_add(1, std::memory_order_relaxed);
+    probe.status.store(sao_plugins_lifecycle_unload(probe.plugin), std::memory_order_release);
+}
+
+const MenuProviderSnapshot* find_menu_provider(const MenuCatalogSnapshot& catalog,
+                                               const std::string& provider_id) {
+    const auto found = std::find_if(catalog.providers.begin(), catalog.providers.end(),
+                                    [&provider_id](const MenuProviderSnapshot& provider) {
+                                        return provider.provider_id == provider_id;
+                                    });
+    return found == catalog.providers.end() ? nullptr : &*found;
+}
+
 std::string expected_menu_action_id(const std::string& contribution_id,
                                     const std::string& explicit_identity) {
     std::uint64_t hash = 1469598103934665603ULL;
@@ -2751,6 +2796,573 @@ def on_load(ctx):
     CHECK(probe.retain_calls == probe.release_calls);
     REQUIRE(sao_plugins_pyhost_shutdown(host) == SAO_OK);
 }
+
+#if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+TEST_CASE("Python action v2 converts JSON results and maps menu surface unsupported",
+          "[plugins][python][action-v2][json][menu-surface][focused]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+
+    CapabilityProbe capability_probe;
+    auto platform_provider = capability_provider(capability_probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
+
+    py_host_config config = production_config();
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+
+    TempTree tree(L"action_v2_json");
+    write_text(tree.root / L"plugin.py", R"PY(
+context = None
+calls = []
+
+def action_handler(action_id, payload):
+    calls.append((action_id, payload))
+    if action_id == "decline":
+        return None
+    if action_id == "nested":
+        return {"outer": [payload, None, {"ok": True}]}
+    if action_id == "maximum-depth":
+        result = 0
+        for _ in range(64):
+            result = [result]
+        return result
+    if action_id == "excessive-depth":
+        result = 0
+        for _ in range(65):
+            result = [result]
+        return result
+    if action_id == "maximum-nodes":
+        return [0] * 16383
+    if action_id == "excessive-nodes":
+        return [0] * 16384
+    if action_id == "maximum-bytes":
+        return "x" * ((1024 * 1024) - 2)
+    if action_id == "excessive-bytes":
+        return "x" * (1024 * 1024)
+    if action_id == "unserializable":
+        return object()
+    if action_id == "nan":
+        return float("nan")
+    if action_id == "exception":
+        raise RuntimeError("python action fixture")
+    return {"action": action_id, "payload": payload}
+
+def try_menu_surface():
+    try:
+        context.register_menu_surface(
+            "entity_menu", {"header_provider": lambda: None}, priority=7.5)
+    except NotImplementedError as exc:
+        return str(exc)
+    return "unexpected-success"
+
+def on_load(ctx):
+    global context
+    context = ctx
+    return ctx.register_action_handler(action_handler)
+)PY");
+    plugin_manifest manifest = make_manifest(tree, "python_action_v2_json");
+    plugin_handle_t plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &manifest, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+
+    const std::string provider_id = "python_action_v2_json/opaque-actions";
+    MenuCatalogSnapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.roots.empty());
+    const auto* provider = find_menu_provider(catalog, provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->rows.empty());
+    const std::uint64_t generation = provider->generation;
+
+    const auto invoke = [&](const char* action_id, const char* payload,
+                            ActionResultSnapshot& result) {
+        result = {};
+        return sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, action_id,
+                                                     payload, copy_action_result, &result);
+    };
+
+    ActionResultSnapshot result;
+    REQUIRE(invoke("dict", R"({"name":"测试","items":[1,null]})", result) == SAO_OK);
+    REQUIRE(result.calls == 1);
+    REQUIRE(result.handled);
+    REQUIRE(result.has_result);
+    json decoded = json::parse(result.result_json);
+    CHECK(decoded["action"] == "dict");
+    CHECK(decoded["payload"]["name"] == "测试");
+    CHECK(decoded["payload"]["items"] == json::array({1, nullptr}));
+    CHECK(result.result_json.find("测试") != std::string::npos);
+    CHECK(result.result_json.find("\\u") == std::string::npos);
+
+    REQUIRE(invoke("list", R"([1,{"nested":true},null])", result) == SAO_OK);
+    decoded = json::parse(result.result_json);
+    CHECK(decoded["payload"] == json::array({1, json{{"nested", true}}, nullptr}));
+
+    REQUIRE(invoke("scalar", "42", result) == SAO_OK);
+    decoded = json::parse(result.result_json);
+    CHECK(decoded["payload"] == 42);
+
+    REQUIRE(invoke("nested", R"({"source":"python"})", result) == SAO_OK);
+    decoded = json::parse(result.result_json);
+    CHECK(decoded["outer"][0]["source"] == "python");
+    CHECK(decoded["outer"][1].is_null());
+    CHECK(decoded["outer"][2]["ok"] == true);
+
+    REQUIRE(invoke("decline", "null", result) == SAO_OK);
+    CHECK(result.calls == 1);
+    CHECK_FALSE(result.handled);
+    CHECK_FALSE(result.has_result);
+    CHECK(sao_plugins_entity_provider_invoke(provider_id.c_str(), generation, "decline", "{}") ==
+          SAO_PLUGINS_ERR_NOT_FOUND);
+
+    REQUIRE(invoke("maximum-depth", "{}", result) == SAO_OK);
+    CHECK(result.calls == 1);
+    CHECK(result.handled);
+    REQUIRE(invoke("maximum-nodes", "{}", result) == SAO_OK);
+    CHECK(result.calls == 1);
+    CHECK(result.handled);
+    REQUIRE(invoke("maximum-bytes", "{}", result) == SAO_OK);
+    CHECK(result.result_json.size() == kMaximumEntityActionResultJsonBytes);
+
+    CHECK(invoke("bad-payload", "{bad", result) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(result.calls == 0);
+
+    for (const char* action_id : {"excessive-depth", "excessive-nodes", "excessive-bytes"}) {
+        CAPTURE(action_id);
+        CHECK(invoke(action_id, "{}", result) == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(result.calls == 0);
+    }
+
+    for (const char* action_id : {"unserializable", "nan"}) {
+        CAPTURE(action_id);
+        CHECK(invoke(action_id, "{}", result) == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(result.calls == 0);
+    }
+    CHECK(invoke("exception", "{}", result) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(result.calls == 0);
+
+    PyObject* handler_weakref = nullptr;
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_json");
+        REQUIRE(module != nullptr);
+        PyObject* context = PyObject_GetAttrString(module, "context");
+        REQUIRE(context != nullptr);
+        require_bridge_ledger_size(context, "menus", 0);
+        PyObject* surface = PyObject_GetAttrString(module, "try_menu_surface");
+        REQUIRE(surface != nullptr);
+        PyObject* surface_result = PyObject_CallNoArgs(surface);
+        Py_DECREF(surface);
+        REQUIRE(surface_result != nullptr);
+        REQUIRE(PyUnicode_Check(surface_result));
+        CHECK(std::string(PyUnicode_AsUTF8(surface_result)).find("-1000") != std::string::npos);
+        Py_DECREF(surface_result);
+        require_bridge_ledger_size(context, "menus", 0);
+
+        PyObject* weakref_module = PyImport_ImportModule("weakref");
+        REQUIRE(weakref_module != nullptr);
+        PyObject* weakref_ref = PyObject_GetAttrString(weakref_module, "ref");
+        Py_DECREF(weakref_module);
+        REQUIRE(weakref_ref != nullptr);
+        PyObject* handler = PyObject_GetAttrString(module, "action_handler");
+        REQUIRE(handler != nullptr);
+        handler_weakref = PyObject_CallOneArg(weakref_ref, handler);
+        Py_DECREF(handler);
+        Py_DECREF(weakref_ref);
+        REQUIRE(handler_weakref != nullptr);
+        REQUIRE(PyObject_DelAttrString(module, "action_handler") == 0);
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(handler_weakref) != Py_None);
+        Py_DECREF(context);
+    }
+
+    MenuCatalogSnapshot after_surface;
+    REQUIRE(snapshot_menu_catalog(after_surface) == SAO_OK);
+    REQUIRE(after_surface.providers.size() == 1);
+    CHECK(after_surface.roots.empty());
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, plugin) == SAO_OK);
+    {
+        GilGuard gil;
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(handler_weakref) == Py_None);
+        Py_DECREF(handler_weakref);
+    }
+
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+    CHECK(dependency_state.retain_calls == dependency_state.release_calls);
+    CHECK(capability_probe.create_session_calls == capability_probe.destroy_session_calls);
+    CHECK(capability_probe.retain_calls == capability_probe.release_calls);
+}
+
+TEST_CASE("Python action v2 replacement commits after loader success and preserves old on failure",
+          "[plugins][python][action-v2][replacement][weakref][focused]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+
+    CapabilityProbe capability_probe;
+    auto platform_provider = capability_provider(capability_probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
+
+    py_host_config config = production_config();
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+
+    TempTree tree(L"action_v2_replacement");
+    write_text(tree.root / L"plugin.py", R"PY(
+context = None
+
+def first_handler(action_id, payload):
+    return {"handler": 1, "payload": payload}
+
+def third_handler(action_id, payload):
+    return {"handler": 3}
+
+def second_handler(action_id, payload):
+    if action_id == "replace-inside-callback":
+        try:
+            context.register_action_handler(third_handler)
+        except RuntimeError as exc:
+            return {"handler": 2, "replacement_failed": "-1006" in str(exc)}
+        return {"handler": 2, "replacement_failed": False}
+    return {"handler": 2, "payload": payload}
+
+def install_second():
+    return context.register_action_handler(second_handler)
+
+def on_load(ctx):
+    global context
+    context = ctx
+    return ctx.register_action_handler(first_handler)
+)PY");
+    plugin_manifest manifest = make_manifest(tree, "python_action_v2_replacement");
+    plugin_handle_t plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &manifest, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+
+    const std::string provider_id = "python_action_v2_replacement/opaque-actions";
+    MenuCatalogSnapshot first_catalog;
+    REQUIRE(snapshot_menu_catalog(first_catalog) == SAO_OK);
+    const auto* first_provider = find_menu_provider(first_catalog, provider_id);
+    REQUIRE(first_provider != nullptr);
+    const std::uint64_t generation = first_provider->generation;
+    const std::uint64_t revision = first_provider->revision;
+
+    ActionResultSnapshot result;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, "first", "{}",
+                                                  copy_action_result, &result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == 1);
+
+    PyObject* first_weakref = nullptr;
+    PyObject* second_weakref = nullptr;
+    PyObject* third_weakref = nullptr;
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_replacement");
+        REQUIRE(module != nullptr);
+        PyObject* weakref_module = PyImport_ImportModule("weakref");
+        REQUIRE(weakref_module != nullptr);
+        PyObject* weakref_ref = PyObject_GetAttrString(weakref_module, "ref");
+        Py_DECREF(weakref_module);
+        REQUIRE(weakref_ref != nullptr);
+        PyObject* first = PyObject_GetAttrString(module, "first_handler");
+        PyObject* second = PyObject_GetAttrString(module, "second_handler");
+        PyObject* third = PyObject_GetAttrString(module, "third_handler");
+        REQUIRE(first != nullptr);
+        REQUIRE(second != nullptr);
+        REQUIRE(third != nullptr);
+        first_weakref = PyObject_CallOneArg(weakref_ref, first);
+        second_weakref = PyObject_CallOneArg(weakref_ref, second);
+        third_weakref = PyObject_CallOneArg(weakref_ref, third);
+        Py_DECREF(first);
+        Py_DECREF(second);
+        Py_DECREF(third);
+        Py_DECREF(weakref_ref);
+        REQUIRE(first_weakref != nullptr);
+        REQUIRE(second_weakref != nullptr);
+        REQUIRE(third_weakref != nullptr);
+
+        PyObject* install = PyObject_GetAttrString(module, "install_second");
+        REQUIRE(install != nullptr);
+        PyObject* installed = PyObject_CallNoArgs(install);
+        Py_DECREF(install);
+        REQUIRE(installed != nullptr);
+        REQUIRE(PyUnicode_Check(installed));
+        CHECK(std::string(PyUnicode_AsUTF8(installed)) == "python_action_v2_replacement");
+        Py_DECREF(installed);
+        REQUIRE(PyObject_DelAttrString(module, "first_handler") == 0);
+        REQUIRE(PyObject_DelAttrString(module, "second_handler") == 0);
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(first_weakref) == Py_None);
+        CHECK(PyWeakref_GetObject(second_weakref) != Py_None);
+    }
+
+    MenuCatalogSnapshot replaced_catalog;
+    REQUIRE(snapshot_menu_catalog(replaced_catalog) == SAO_OK);
+    const auto* replaced_provider = find_menu_provider(replaced_catalog, provider_id);
+    REQUIRE(replaced_provider != nullptr);
+    CHECK(replaced_provider->generation == generation);
+    CHECK(replaced_provider->revision == revision);
+    result = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, "second",
+                                                  R"({"value":2})", copy_action_result,
+                                                  &result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == 2);
+
+    result = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation,
+                                                  "replace-inside-callback", "{}",
+                                                  copy_action_result, &result) == SAO_OK);
+    const json failed_replacement = json::parse(result.result_json);
+    CHECK(failed_replacement["handler"] == 2);
+    CHECK(failed_replacement["replacement_failed"] == true);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_replacement");
+        REQUIRE(module != nullptr);
+        REQUIRE(PyObject_DelAttrString(module, "third_handler") == 0);
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(third_weakref) == Py_None);
+        CHECK(PyWeakref_GetObject(second_weakref) != Py_None);
+    }
+    result = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, "still-second",
+                                                  "{}", copy_action_result, &result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == 2);
+
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, plugin) == SAO_OK);
+    {
+        GilGuard gil;
+        (void)PyGC_Collect();
+        CHECK(PyWeakref_GetObject(second_weakref) == Py_None);
+        Py_DECREF(first_weakref);
+        Py_DECREF(second_weakref);
+        Py_DECREF(third_weakref);
+    }
+
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+}
+
+TEST_CASE("Python action v2 enable resources rollback disable reload and gate reentrant unload",
+          "[plugins][python][action-v2][lifecycle][generation][reentry][repeat][focused]") {
+    REQUIRE(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+
+    CapabilityProbe capability_probe;
+    auto platform_provider = capability_provider(capability_probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&platform_provider) == SAO_OK);
+    test_dependency_provider_state dependency_state;
+    const auto dependency_provider = test_dependency_provider(dependency_state);
+    REQUIRE(sao_plugins_deps_register_provider(&dependency_provider) == SAO_OK);
+
+    py_host_config config = production_config();
+    py_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_pyhost_register_loader_adapter(&config, &owner) == SAO_OK);
+
+    TempTree tree(L"action_v2_lifecycle");
+    write_text(tree.root / L"plugin.py", R"PY(
+import gc
+import weakref
+
+context = None
+fail_next_enable = True
+enable_attempts = 0
+resource_refs = []
+
+def resource_alive():
+    gc.collect()
+    return [reference() is not None for reference in resource_refs]
+
+def persistent_action(action_id, payload):
+    return {"handled_by": "persistent", "action": action_id, "payload": payload}
+
+def on_load(ctx):
+    global context
+    context = ctx
+    ctx.register_action_handler(persistent_action)
+
+def on_enable():
+    global fail_next_enable, enable_attempts, resource_refs
+    enable_attempts += 1
+    if enable_attempts > 2:
+        return None
+
+    def scoped_menu():
+        return [{"action_id": "scoped-menu", "label": "scoped", "command": lambda: None}]
+
+    def scoped_action(action_id, payload):
+        if action_id == "reentrant":
+            context.emit("python_action_v2_reentrant_unload", {"payload": payload})
+        return {"handled_by": "scoped", "action": action_id, "payload": payload}
+
+    resource_refs = [weakref.ref(scoped_menu), weakref.ref(scoped_action)]
+    context.register_menu_category("Scoped", "S", scoped_menu, priority=5.0)
+    context.register_action_handler(scoped_action)
+    if fail_next_enable:
+        fail_next_enable = False
+        raise RuntimeError("first enable rollback")
+
+def on_disable():
+    return None
+)PY");
+    plugin_manifest manifest = make_manifest(tree, "python_action_v2_lifecycle");
+    plugin_handle_t plugin = nullptr;
+    registry_handle_t registry = sao_plugins_registry_instance();
+    REQUIRE(sao_plugins_registry_add_plugin(registry, &manifest, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+
+    CHECK(sao_plugins_lifecycle_enable(plugin) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    MenuCatalogSnapshot failed_enable_catalog;
+    REQUIRE(snapshot_menu_catalog(failed_enable_catalog) == SAO_OK);
+    CHECK(failed_enable_catalog.providers.empty());
+    CHECK(failed_enable_catalog.roots.empty());
+    const std::string action_provider_id = "python_action_v2_lifecycle/opaque-actions";
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_lifecycle");
+        REQUIRE(module != nullptr);
+        PyObject* alive = PyObject_CallMethod(module, "resource_alive", nullptr);
+        REQUIRE(alive != nullptr);
+        REQUIRE(PyList_Check(alive));
+        REQUIRE(PyList_GET_SIZE(alive) == 2);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 0)) == 0);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 1)) == 0);
+        Py_DECREF(alive);
+    }
+
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
+    MenuCatalogSnapshot first_active;
+    REQUIRE(snapshot_menu_catalog(first_active) == SAO_OK);
+    REQUIRE(first_active.providers.size() == 2);
+    REQUIRE(first_active.roots.size() == 1);
+    const auto* first_action_provider = find_menu_provider(first_active, action_provider_id);
+    REQUIRE(first_action_provider != nullptr);
+    CHECK(first_action_provider->rows.empty());
+    const std::uint64_t first_generation = first_action_provider->generation;
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_lifecycle");
+        REQUIRE(module != nullptr);
+        PyObject* alive = PyObject_CallMethod(module, "resource_alive", nullptr);
+        REQUIRE(alive != nullptr);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 0)) == 1);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 1)) == 1);
+        Py_DECREF(alive);
+    }
+
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+    ActionUnloadProbe unload_probe;
+    unload_probe.plugin = plugin;
+    std::uint32_t subscription = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "python_action_v2_reentrant_unload",
+                                      action_unload_callback, &unload_probe,
+                                      &subscription) == SAO_OK);
+    ActionResultSnapshot result;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(), first_generation,
+                                                  "reentrant", R"({"depth":1})", copy_action_result,
+                                                  &result) == SAO_OK);
+    CHECK(unload_probe.calls.load(std::memory_order_acquire) == 1);
+    CHECK(unload_probe.status.load(std::memory_order_acquire) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
+    CHECK(json::parse(result.result_json)["payload"]["depth"] == 1);
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, subscription) == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    MenuCatalogSnapshot disabled;
+    REQUIRE(snapshot_menu_catalog(disabled) == SAO_OK);
+    CHECK(disabled.providers.empty());
+    CHECK(disabled.roots.empty());
+    CHECK(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(), first_generation,
+                                                "stale", "{}", copy_action_result,
+                                                &result) == SAO_PLUGINS_ERR_BUSY);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_lifecycle");
+        REQUIRE(module != nullptr);
+        PyObject* alive = PyObject_CallMethod(module, "resource_alive", nullptr);
+        REQUIRE(alive != nullptr);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 0)) == 0);
+        CHECK(PyObject_IsTrue(PyList_GET_ITEM(alive, 1)) == 0);
+        Py_DECREF(alive);
+    }
+
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    MenuCatalogSnapshot reenabled;
+    REQUIRE(snapshot_menu_catalog(reenabled) == SAO_OK);
+    REQUIRE(reenabled.providers.size() == 1);
+    CHECK(reenabled.roots.empty());
+    const auto* reenabled_action_provider = find_menu_provider(reenabled, action_provider_id);
+    REQUIRE(reenabled_action_provider != nullptr);
+    CHECK(reenabled_action_provider->generation == first_generation);
+    const std::uint64_t reenabled_generation = reenabled_action_provider->generation;
+    result = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(), reenabled_generation,
+                                                  "reenabled", "[]", copy_action_result,
+                                                  &result) == SAO_OK);
+    const json reenabled_result = json::parse(result.result_json);
+    CHECK(reenabled_result["handled_by"] == "persistent");
+    CHECK(reenabled_result["action"] == "reenabled");
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::unloaded);
+    CHECK(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(), reenabled_generation,
+                                                "stale", "{}", copy_action_result,
+                                                &result) == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    {
+        GilGuard gil;
+        PyObject* module = loaded_module("python_action_v2_lifecycle");
+        REQUIRE(module != nullptr);
+        REQUIRE(PyObject_SetAttrString(module, "fail_next_enable", Py_False) == 0);
+    }
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    MenuCatalogSnapshot reloaded;
+    REQUIRE(snapshot_menu_catalog(reloaded) == SAO_OK);
+    REQUIRE(reloaded.providers.size() == 2);
+    const auto* reloaded_action_provider = find_menu_provider(reloaded, action_provider_id);
+    REQUIRE(reloaded_action_provider != nullptr);
+    CHECK(reloaded_action_provider->generation != reenabled_generation);
+    CHECK(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(), reenabled_generation,
+                                                "stale", "{}", copy_action_result,
+                                                &result) == SAO_ERR_HANDLE_INVALID);
+    result = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(action_provider_id.c_str(),
+                                                  reloaded_action_provider->generation, "reloaded",
+                                                  "true", copy_action_result, &result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["payload"] == true);
+
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_registry_remove(registry, plugin) == SAO_OK);
+    REQUIRE(sao_plugins_pyhost_loader_adapter_plugin_count(owner) == 0);
+    REQUIRE(sao_plugins_pyhost_unregister_loader_adapter(owner) == SAO_OK);
+    REQUIRE(sao_plugins_deps_unregister_provider() == SAO_OK);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+    CHECK(dependency_state.retain_calls == dependency_state.release_calls);
+    CHECK(capability_probe.create_session_calls == capability_probe.destroy_session_calls);
+    CHECK(capability_probe.retain_calls == capability_probe.release_calls);
+}
+#endif
 
 #else
 

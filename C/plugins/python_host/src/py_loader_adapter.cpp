@@ -559,9 +559,7 @@ int32_t SAO_PLUGINS_CALL adapter_on_load(loader_plugin_handle_t plugin, void* ho
 int32_t SAO_PLUGINS_CALL adapter_on_enable(loader_plugin_handle_t plugin, void* host_user_data) {
     try {
         return with_plugin(plugin, host_user_data, [](py_plugin_handle_t python_plugin) {
-            return sao_plugins_pyhost_has_hook(python_plugin, "on_enable")
-                       ? sao_plugins_pyhost_call_on_enable(python_plugin)
-                       : SAO_OK;
+            return sao_plugins_pyhost_call_on_enable(python_plugin);
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -571,9 +569,7 @@ int32_t SAO_PLUGINS_CALL adapter_on_enable(loader_plugin_handle_t plugin, void* 
 int32_t SAO_PLUGINS_CALL adapter_on_disable(loader_plugin_handle_t plugin, void* host_user_data) {
     try {
         return with_plugin(plugin, host_user_data, [](py_plugin_handle_t python_plugin) {
-            return sao_plugins_pyhost_has_hook(python_plugin, "on_disable")
-                       ? sao_plugins_pyhost_call_on_disable(python_plugin)
-                       : SAO_OK;
+            return sao_plugins_pyhost_call_on_disable(python_plugin);
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;

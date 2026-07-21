@@ -84,6 +84,38 @@ struct cs_managed_entity_snapshot_invocation {
     uint64_t* out_revision;
 };
 
+struct cs_managed_entity_snapshot_invocation_v2 {
+    void* rows;
+    uint32_t capacity;
+    uint32_t row_stride_bytes;
+    uint32_t* out_count;
+    uint64_t* out_revision;
+    uint64_t* out_content_token;
+    uint32_t* out_row_stride_bytes;
+};
+
+// Managed v2 callbacks follow loader/entity_provider.h exactly. Probe receives
+// rows=null, capacity=0 and row_stride_bytes=0. Fill receives the probed
+// physical stride and must reproduce count, revision, nonzero producer token
+// and stride. Every string pointer written into a row is borrowed by native and
+// must remain valid until the enclosing native catalog snapshot call returns.
+// Native copies only the known 80-byte row prefix and ignores physical tails.
+struct cs_managed_entity_menu_row_v2 {
+    uint32_t struct_size;
+    const char* category_id_utf8;
+    const char* category_label_utf8;
+    const char* category_icon_utf8;
+    double category_priority;
+    const char* row_label_utf8;
+    const char* row_icon_utf8;
+    const char* action_id_utf8;
+    const char* payload_json_utf8;
+    uint8_t can_activate;
+    uint8_t keep_menu_open;
+    uint8_t close_menu_before;
+    uint8_t reserved[5];
+};
+
 struct cs_managed_entity_action_invocation {
     const char* action_id_utf8;
     const char* payload_json_utf8;
@@ -117,6 +149,18 @@ struct cs_managed_entity_provider_descriptor {
     const cs_managed_callback_descriptor* action_handler;
 };
 
+struct cs_managed_entity_provider_descriptor_v2 {
+    uint32_t struct_size;
+    const char* provider_id_utf8;
+    const char* contribution_id_utf8;
+    const char* root_id_utf8;
+    const char* name_utf8;
+    const char* icon_utf8;
+    double priority;
+    const cs_managed_callback_descriptor* snapshot;
+    const cs_managed_callback_descriptor* action_handler;
+};
+
 struct cs_managed_sdk_table {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -135,7 +179,33 @@ struct cs_managed_sdk_table {
                                                           const char* provider_id_utf8);
     int32_t(SAO_PLUGINS_CALL* last_error)(cs_managed_sdk_session_t session, char* out_error_utf8,
                                           size_t out_capacity, size_t* out_required);
+    int32_t(SAO_PLUGINS_CALL* register_entity_provider_v2)(
+        cs_managed_sdk_session_t session,
+        const cs_managed_entity_provider_descriptor_v2* descriptor);
+    int32_t(SAO_PLUGINS_CALL* emit_context)(cs_managed_sdk_session_t session,
+                                            const char* topic_utf8, const char* payload_json_utf8);
 };
+
+// ABI version 1 is retained. Consumers must gate appended entries with
+// struct_size; binaries compiled against the original prefix remain valid.
+inline constexpr size_t SAO_CSHOST_SDK_TABLE_V1_SIZE =
+    offsetof(cs_managed_sdk_table, register_entity_provider_v2);
+
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(cs_managed_entity_snapshot_invocation_v2) == 48);
+static_assert(offsetof(cs_managed_entity_snapshot_invocation_v2, row_stride_bytes) == 12);
+static_assert(offsetof(cs_managed_entity_snapshot_invocation_v2, out_content_token) == 32);
+static_assert(sizeof(cs_managed_entity_menu_row_v2) == 80);
+static_assert(alignof(cs_managed_entity_menu_row_v2) == 8);
+static_assert(offsetof(cs_managed_entity_menu_row_v2, can_activate) == 72);
+static_assert(offsetof(cs_managed_entity_menu_row_v2, reserved) == 75);
+static_assert(sizeof(cs_managed_entity_provider_descriptor_v2) == 72);
+static_assert(offsetof(cs_managed_entity_provider_descriptor_v2, snapshot) == 56);
+static_assert(SAO_CSHOST_SDK_TABLE_V1_SIZE == 72);
+static_assert(offsetof(cs_managed_sdk_table, register_entity_provider_v2) == 72);
+static_assert(offsetof(cs_managed_sdk_table, emit_context) == 80);
+static_assert(sizeof(cs_managed_sdk_table) == 88);
+#endif
 
 // 每 domain 注入一个 ctx 的 IntPtr (作为 [ThreadStatic] 或 AsyncLocal)。
 // 内部先编译一份 SaoPluginContext.cs (embedded 源码) 到 domain, 然后设

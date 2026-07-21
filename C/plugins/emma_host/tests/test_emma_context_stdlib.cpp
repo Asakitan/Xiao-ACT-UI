@@ -98,6 +98,14 @@ void remove_plugin(plugin_handle_t plugin) {
     REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(), plugin) == SAO_OK);
 }
 
+size_t extension_count(std::string_view plugin_id, extension_kind kind) {
+    const auto extensions = snapshot_extensions(sao_plugins_registry_instance(), kind);
+    return static_cast<size_t>(std::count_if(extensions.begin(), extensions.end(),
+                                             [plugin_id](const extension_record& extension) {
+                                                 return extension.plugin_id == plugin_id;
+                                             }));
+}
+
 json call_json(emma_plugin_handle_t plugin, const char* hook) {
     char* result = nullptr;
     REQUIRE(sao_plugins_emma_call_hook(plugin, hook, "[]", &result) == SAO_OK);
@@ -403,6 +411,10 @@ struct custom_emma_provider_fixture {
         context->items.emplace("plugin_id", std::string("forged.provider.id"));
         context->items.emplace("path", std::string("C:\\forged\\provider"));
         context->items.emplace("get_setting", std::string("poisoned native method"));
+        context->items.emplace("register_action_handler",
+                               std::string("poisoned action handler method"));
+        context->items.emplace("register_menu_surface",
+                               std::string("poisoned menu surface method"));
         switch (fixture.malformed_context) {
         case malformed_context_kind::null_log:
             context->items.insert_or_assign("log", std::shared_ptr<callable>{});
@@ -482,6 +494,12 @@ end
 fn rejected_panel_arity()
     return ctx.register_ui_panel("extra-panel", {title: "Extra"}, nil, nil, nil)
 end
+fn rejected_menu_surface()
+    return ctx.register_menu_surface("opaque", {title: "Opaque"}, 1.0)
+end
+fn context_methods()
+    return {action: type(ctx.register_action_handler), surface: type(ctx.register_menu_surface)}
+end
 )EMMA");
     write_text(tree.root / L"lex.emma", "let value = @\n");
     write_text(tree.root / L"parse.emma", "fn broken()\nreturn 1\n");
@@ -515,6 +533,7 @@ end
     CHECK(probe["imported"] == 42);
     CHECK(probe["decoded"] == json{{"name", "Emma"}, {"items", {1, true}}});
     CHECK(probe["now"].is_number());
+    CHECK(call_json(plugin, "context_methods") == json{{"action", "fn"}, {"surface", "fn"}});
 
     emma_error call_error;
     CHECK(sao_plugins_emma_call_hook_ex(plugin, "escape", "[]", nullptr, &call_error) ==
@@ -535,6 +554,14 @@ end
                                         &call_error) == SAO_ERR_INVALID_ARGUMENT);
     CHECK(call_error.kind == error_kind::runtime_error);
     CHECK(call_error.status == SAO_ERR_INVALID_ARGUMENT);
+    const size_t menu_categories_before =
+        extension_count(manifest.plugin_id, extension_kind::menu_category);
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_menu_surface", "[]", nullptr,
+                                        &call_error) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(call_error.kind == error_kind::runtime_error);
+    CHECK(call_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(extension_count(manifest.plugin_id, extension_kind::menu_category) ==
+          menu_categories_before);
 
     emma_error forged;
     forged.kind = static_cast<error_kind>(255);
@@ -924,7 +951,9 @@ end
 fn custom_context()
     return {provider: ctx.custom_provider, plugin_id: ctx.plugin_id, path: ctx.path,
             native_setting: ctx.get_setting("native_label", "fallback"),
-            menu: ctx.register_menu_category("Custom", "", build_menu)}
+            menu: ctx.register_menu_category("Custom", "", build_menu),
+            action_method: type(ctx.register_action_handler),
+            surface_method: type(ctx.register_menu_surface)}
 end
 fn rejected_panel_callback()
     return ctx.register_ui_panel("callback-panel", {title: "Callback"}, panel_callback, nil)
@@ -950,18 +979,19 @@ end
     CHECK(fixture.log_calls == 1);
     CHECK(fixture.panel_calls == 1);
     CHECK(fixture.menu_calls == 1);
-    CHECK(call_json(plugin, "custom_context") ==
-            json{{"provider", true},
-               {"plugin_id", manifest.plugin_id},
-               {"path", path_utf8(tree.root)},
-               {"native_setting", "native-label"},
-               {"menu", "custom-menu"}});
-        emma_error panel_error;
-        CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_panel_callback", "[]", nullptr,
-                                &panel_error) == SAO_PLUGINS_ERR_UNSUPPORTED);
-        CHECK(panel_error.kind == error_kind::runtime_error);
-        CHECK(panel_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
-        CHECK(fixture.panel_calls == 1);
+    CHECK(call_json(plugin, "custom_context") == json{{"provider", true},
+                                                      {"plugin_id", manifest.plugin_id},
+                                                      {"path", path_utf8(tree.root)},
+                                                      {"native_setting", "native-label"},
+                                                      {"menu", "custom-menu"},
+                                                      {"action_method", "fn"},
+                                                      {"surface_method", "fn"}});
+    emma_error panel_error;
+    CHECK(sao_plugins_emma_call_hook_ex(plugin, "rejected_panel_callback", "[]", nullptr,
+                                        &panel_error) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(panel_error.kind == error_kind::runtime_error);
+    CHECK(panel_error.status == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(fixture.panel_calls == 1);
     REQUIRE(sao_plugins_emma_with_interpreter(plugin,
                                               custom_emma_provider_fixture::invoke_menu_builder,
                                               &fixture) == SAO_OK);

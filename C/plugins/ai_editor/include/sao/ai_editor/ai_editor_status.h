@@ -1,4 +1,4 @@
-// Phase 10 — AI Editor subprocess plugin.
+// AI Editor subprocess plugin.
 //
 // Status codes shared across launcher / IPC / lifecycle entrypoints.
 // Follows the abi-contract.md convention: 0 = ok, negative = error.

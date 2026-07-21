@@ -1,4 +1,4 @@
-// Phase 10 — AI Editor IPC channel.
+// AI Editor IPC channel.
 //
 // First-slice selection: **Windows named pipe** (\\.\pipe\sao_ai_editor_<id>).
 // Rationale:

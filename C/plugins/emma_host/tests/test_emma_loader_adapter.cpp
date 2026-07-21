@@ -137,6 +137,7 @@ struct menu_root_snapshot {
 };
 
 struct menu_catalog_snapshot {
+    std::uint64_t revision = 0;
     std::vector<menu_provider_snapshot> providers;
     std::vector<menu_root_snapshot> roots;
 
@@ -160,6 +161,7 @@ int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* v
     if (view == nullptr || user_data == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     menu_catalog_snapshot candidate;
+    candidate.revision = view->revision;
     for (std::uint32_t provider_index = 0; provider_index < view->provider_count;
          ++provider_index) {
         const auto& source = view->providers[provider_index];
@@ -197,6 +199,54 @@ int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* v
 
 int32_t snapshot_menu_catalog(menu_catalog_snapshot& output) {
     return sao_plugins_entity_provider_snapshot(copy_menu_catalog, &output);
+}
+
+struct action_result_snapshot {
+    std::uint32_t callbacks = 0;
+    bool handled = false;
+    bool has_result = false;
+    std::string result_json;
+};
+
+int32_t SAO_PLUGINS_CALL copy_action_result(const entity_action_result_v2* result,
+                                            void* user_data) {
+    if (result == nullptr || user_data == nullptr ||
+        result->struct_size < kEntityActionResultV2RequiredPrefixSize ||
+        result->abi_version != kEntityActionAbiVersion2) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& snapshot = *static_cast<action_result_snapshot*>(user_data);
+    ++snapshot.callbacks;
+    snapshot.handled = result->handled != 0;
+    snapshot.has_result = result->result_json_utf8 != nullptr;
+    snapshot.result_json = snapshot.has_result ? result->result_json_utf8 : "";
+    return SAO_OK;
+}
+
+int32_t invoke_action_v2(const menu_provider_snapshot& provider, std::string_view action_id,
+                         std::string_view payload_json, action_result_snapshot& result) {
+    result = {};
+    const std::string action(action_id);
+    const std::string payload(payload_json);
+    return sao_plugins_entity_provider_invoke_v2(provider.provider_id.c_str(), provider.generation,
+                                                 action.c_str(), payload.c_str(),
+                                                 copy_action_result, &result);
+}
+
+struct action_result_unload_probe {
+    plugin_handle_t plugin = nullptr;
+    action_result_snapshot result;
+    std::atomic_int unload_status{SAO_ERR_OS_CALL_FAILED};
+};
+
+int32_t SAO_PLUGINS_CALL copy_action_result_and_unload(const entity_action_result_v2* result,
+                                                       void* user_data) {
+    auto& probe = *static_cast<action_result_unload_probe*>(user_data);
+    const int32_t copy_status = copy_action_result(result, &probe.result);
+    if (copy_status != SAO_OK)
+        return copy_status;
+    probe.unload_status.store(sao_plugins_lifecycle_unload(probe.plugin));
+    return SAO_OK;
 }
 
 std::string stable_suffix(std::string_view value) {
@@ -571,6 +621,368 @@ end
     CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
                                              explicit_action.c_str(),
                                              "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
+}
+
+TEST_CASE("Emma action v2 adapter preserves results replacement and lifecycle",
+          "[plugins][emma][adapter][action-v2][lifecycle][replacement][reentry][repeat]") {
+    temp_tree tree(L"action_v2_lifecycle");
+    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn handler_one(action_id, payload)
+    let mode = ctx.get_setting("action_mode", "object")
+    if mode == "object"
+        return {handler: "one", action: action_id, name: payload.name,
+                total: payload.items[0] + payload.items[1], enabled: payload.enabled}
+    end
+    if mode == "scalar"
+        return {handler: "one", scalar: payload}
+    end
+    if mode == "decline"
+        return nil
+    end
+    if mode == "nested"
+        return {handler: "one", nested: [payload, {ok: true, value: 7}]}
+    end
+    if mode == "cycle"
+        let cycle = [nil]
+        cycle[0] = cycle
+        return cycle
+    end
+    if mode == "callable"
+        return handler_one
+    end
+    if mode == "nonfinite"
+        return float("nan")
+    end
+    if mode == "large"
+        let output = "x"
+        for index in range(0, 20)
+            output = output .. output
+        end
+        return output
+    end
+    if mode == "exception"
+        missing_action_result()
+    end
+    if mode == "replace_busy"
+        ctx.register_action_handler(handler_two)
+    end
+    if mode == "reentrant"
+        ctx.emit("emma_action_reentrant_unload", {})
+        return {handler: "one", reentrant: true}
+    end
+    if mode == "surface"
+        return ctx.register_menu_surface("opaque", {title: "unsupported"}, 1.0)
+    end
+    return {handler: "one", mode: mode}
+end
+fn handler_two(action_id, payload)
+    return {handler: "two", action: action_id, payload: payload}
+end
+fn replace_with_two(event)
+    ctx.register_action_handler(handler_two)
+end
+fn replace_with_one(event)
+    ctx.register_action_handler(handler_one)
+end
+fn on_load(ctx)
+    ctx.set_setting("provider_local_id", ctx.register_action_handler(handler_one))
+    ctx.subscribe("emma_replace_two", replace_with_two)
+    ctx.subscribe("emma_replace_one", replace_with_one)
+end
+fn on_enable()
+    if ctx.get_setting("replace_on_enable", false)
+        ctx.register_action_handler(handler_two)
+    end
+    if ctx.get_setting("fail_enable", false)
+        missing_enable()
+    end
+end
+)EMMA");
+
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+    const auto manifest = make_manifest(tree, "emma.action.v2.lifecycle");
+    plugin_handle_t plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    CHECK(context_json(context, "provider_local_id") == json("action-handler").dump());
+
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.roots.empty());
+    const auto original_provider = catalog.providers.front();
+    CHECK(original_provider.provider_id == manifest.plugin_id + "/action-handler");
+    CHECK(original_provider.owner_id == manifest.plugin_id);
+    CHECK(original_provider.generation > 0);
+    CHECK(original_provider.rows.empty());
+
+    action_result_snapshot result;
+    set_context_json(context, "action_mode", json("object").dump());
+    REQUIRE(invoke_action_v2(original_provider, "inspect",
+                             R"({"name":"Emma","items":[2,5],"enabled":true})", result) == SAO_OK);
+    CHECK(result.callbacks == 1);
+    CHECK(result.handled);
+    REQUIRE(result.has_result);
+    CHECK(json::parse(result.result_json) == json{{"handler", "one"},
+                                                  {"action", "inspect"},
+                                                  {"name", "Emma"},
+                                                  {"total", 7},
+                                                  {"enabled", true}});
+
+    set_context_json(context, "action_mode", json("scalar").dump());
+    REQUIRE(invoke_action_v2(original_provider, "scalar", R"("value")", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) == json{{"handler", "one"}, {"scalar", "value"}});
+    REQUIRE(invoke_action_v2(original_provider, "scalar", "7", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) == json{{"handler", "one"}, {"scalar", 7}});
+
+    set_context_json(context, "action_mode", json("decline").dump());
+    REQUIRE(invoke_action_v2(original_provider, "decline", "null", result) == SAO_OK);
+    CHECK(result.callbacks == 1);
+    CHECK_FALSE(result.handled);
+    CHECK_FALSE(result.has_result);
+    CHECK(sao_plugins_entity_provider_invoke(original_provider.provider_id.c_str(),
+                                             original_provider.generation, "decline",
+                                             "{}") == SAO_PLUGINS_ERR_NOT_FOUND);
+
+    set_context_json(context, "action_mode", json("nested").dump());
+    REQUIRE(invoke_action_v2(original_provider, "nested", R"({"items":[1,{"x":2}]})", result) ==
+            SAO_OK);
+    CHECK(json::parse(result.result_json) ==
+          json{{"handler", "one"},
+               {"nested", json::array({json{{"items", json::array({1, json{{"x", 2}}})}},
+                                       json{{"ok", true}, {"value", 7}}})}});
+
+    CHECK(invoke_action_v2(original_provider, "bad-payload", "{bad", result) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(result.callbacks == 0);
+    for (const char* mode : {"nonfinite", "cycle", "callable", "large"}) {
+        CAPTURE(mode);
+        set_context_json(context, "action_mode", json(mode).dump());
+        CHECK(invoke_action_v2(original_provider, mode, "{}", result) == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(result.callbacks == 0);
+    }
+    set_context_json(context, "action_mode", json("exception").dump());
+    CHECK(invoke_action_v2(original_provider, "exception", "{}", result) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(result.callbacks == 0);
+
+    set_context_json(context, "action_mode", json("replace_busy").dump());
+    CHECK(invoke_action_v2(original_provider, "replace-busy", "{}", result) ==
+          SAO_PLUGINS_ERR_BUSY);
+    set_context_json(context, "action_mode", json("object").dump());
+    REQUIRE(invoke_action_v2(original_provider, "still-one",
+                             R"({"name":"old","items":[1,1],"enabled":false})", result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == "one");
+
+    const auto before_replacement = catalog;
+    REQUIRE(sao_plugins_ctx_emit(context, "emma_replace_two", "{}") == SAO_OK);
+    menu_catalog_snapshot after_replacement;
+    REQUIRE(snapshot_menu_catalog(after_replacement) == SAO_OK);
+    CHECK(after_replacement == before_replacement);
+    REQUIRE(invoke_action_v2(original_provider, "replaced", R"({"x":1})", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) ==
+          json{{"handler", "two"}, {"action", "replaced"}, {"payload", {{"x", 1}}}});
+    REQUIRE(sao_plugins_ctx_emit(context, "emma_replace_one", "{}") == SAO_OK);
+
+    lifecycle_unload_probe unload_probe;
+    unload_probe.plugin = plugin;
+    std::uint32_t unload_token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "emma_action_reentrant_unload",
+                                      reentrant_unload_callback, &unload_probe,
+                                      &unload_token) == SAO_OK);
+    set_context_json(context, "action_mode", json("reentrant").dump());
+    REQUIRE(invoke_action_v2(original_provider, "reentrant", "{}", result) == SAO_OK);
+    CHECK(unload_probe.callback_count.load() == 1);
+    CHECK(unload_probe.status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
+
+    set_context_json(context, "action_mode", json("nested").dump());
+    action_result_unload_probe sink_probe;
+    sink_probe.plugin = plugin;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                original_provider.provider_id.c_str(), original_provider.generation,
+                "consumer-reentry", "{}", copy_action_result_and_unload, &sink_probe) == SAO_OK);
+    CHECK(sink_probe.result.callbacks == 1);
+    CHECK(sink_probe.result.handled);
+    CHECK(sink_probe.unload_status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_active);
+
+    const auto before_surface = after_replacement;
+    set_context_json(context, "action_mode", json("surface").dump());
+    CHECK(invoke_action_v2(original_provider, "surface", "{}", result) ==
+          SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(result.callbacks == 0);
+    menu_catalog_snapshot after_surface;
+    REQUIRE(snapshot_menu_catalog(after_surface) == SAO_OK);
+    CHECK(after_surface == before_surface);
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    set_context_json(context, "replace_on_enable", "true");
+    set_context_json(context, "fail_enable", "true");
+    CHECK(sao_plugins_lifecycle_enable(plugin) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+
+    set_context_json(context, "replace_on_enable", "false");
+    set_context_json(context, "fail_enable", "false");
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.providers[0].generation == original_provider.generation);
+    set_context_json(context, "action_mode", json("object").dump());
+    REQUIRE(invoke_action_v2(catalog.providers[0], "rolled-back",
+                             R"({"name":"one","items":[2,3],"enabled":true})", result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == "one");
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    set_context_json(context, "replace_on_enable", "true");
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers[0].generation == original_provider.generation);
+    REQUIRE(invoke_action_v2(catalog.providers[0], "enable-replaced", "{}", result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == "two");
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    set_context_json(context, "replace_on_enable", "false");
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(invoke_action_v2(catalog.providers[0], "disable-restored",
+                             R"({"name":"one","items":[3,4],"enabled":true})", result) == SAO_OK);
+    CHECK(json::parse(result.result_json)["handler"] == "one");
+
+    const auto final_provider = catalog.providers[0];
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, unload_token) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::unloaded);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
+    CHECK(sao_plugins_entity_provider_invoke(final_provider.provider_id.c_str(),
+                                             final_provider.generation, "stale",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
+}
+
+TEST_CASE("Emma enable scoped action providers reject stale generations",
+          "[plugins][emma][adapter][action-v2][enable-scope][generation][repeat]") {
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+
+    temp_tree failed_tree(L"action_v2_failed_load");
+    write_text(failed_tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn failed_handler(action_id, payload)
+    return {action: action_id, payload: payload}
+end
+fn on_load(ctx)
+    ctx.register_action_handler(failed_handler)
+    missing_load()
+end
+)EMMA");
+    const auto failed_manifest = make_manifest(failed_tree, "emma.action.v2.failed-load");
+    plugin_handle_t failed_plugin = add_plugin(failed_manifest);
+    CHECK(sao_plugins_lifecycle_load(failed_plugin) == SAO_ERR_OS_CALL_FAILED);
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
+    remove_plugin(failed_plugin);
+
+    temp_tree tree(L"action_v2_enable_scope");
+    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+let saved = nil
+fn scoped_handler(action_id, payload)
+    return {action: action_id, payload: payload, scope: "enable"}
+end
+fn on_load(ctx)
+    saved = ctx
+end
+fn on_enable()
+    saved.register_action_handler(scoped_handler)
+    if saved.get_setting("fail_enable", false)
+        missing_enable()
+    end
+end
+)EMMA");
+
+    const auto manifest = make_manifest(tree, "emma.action.v2.enable-scope");
+    plugin_handle_t plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    set_context_json(context, "fail_enable", "true");
+    CHECK(sao_plugins_lifecycle_enable(plugin) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::loaded_disabled);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+
+    set_context_json(context, "fail_enable", "false");
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.roots.empty());
+    const auto first = catalog.providers[0];
+    CHECK(first.provider_id == manifest.plugin_id + "/action-handler");
+    CHECK(first.rows.empty());
+    action_result_snapshot result;
+    REQUIRE(invoke_action_v2(first, "first", R"({"value":1})", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) ==
+          json{{"action", "first"}, {"payload", {{"value", 1}}}, {"scope", "enable"}});
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke(first.provider_id.c_str(), first.generation, "stale",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    const auto second = catalog.providers[0];
+    CHECK(second.provider_id == first.provider_id);
+    CHECK(second.generation != first.generation);
+    CHECK(sao_plugins_entity_provider_invoke(first.provider_id.c_str(), first.generation, "stale",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(invoke_action_v2(second, "second", "7", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) ==
+          json{{"action", "second"}, {"payload", 7}, {"scope", "enable"}});
+
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
+    CHECK(sao_plugins_entity_provider_invoke(second.provider_id.c_str(), second.generation, "stale",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(plugin);
+
+    plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    set_context_json(context, "fail_enable", "false");
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    const auto reloaded = catalog.providers[0];
+    CHECK(reloaded.provider_id == first.provider_id);
+    CHECK(reloaded.generation != first.generation);
+    CHECK(reloaded.generation != second.generation);
+    CHECK(sao_plugins_entity_provider_invoke(second.provider_id.c_str(), second.generation, "stale",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(invoke_action_v2(reloaded, "reloaded", "true", result) == SAO_OK);
+    CHECK(json::parse(result.result_json) ==
+          json{{"action", "reloaded"}, {"payload", true}, {"scope", "enable"}});
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
     remove_plugin(plugin);
     REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
 }

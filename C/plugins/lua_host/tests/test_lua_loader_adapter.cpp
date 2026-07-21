@@ -28,11 +28,15 @@
 #include <utility>
 #include <vector>
 
+extern "C" int lua_gc(lua_State* state, int what, ...);
+
 using namespace sao::plugins::loader;
 using namespace sao::plugins::lua_host;
 namespace fs = std::filesystem;
 
 namespace {
+
+constexpr int kLuaGcCollect = 2;
 
 struct temp_directory {
     fs::path path;
@@ -187,6 +191,46 @@ struct menu_catalog_snapshot {
 
     bool operator==(const menu_catalog_snapshot&) const = default;
 };
+
+struct action_result_snapshot {
+    int32_t callback_status = SAO_OK;
+    std::uint32_t calls = 0;
+    std::uint32_t struct_size = 0;
+    std::uint32_t abi_version = 0;
+    std::uint8_t handled = 0;
+    bool has_result = false;
+    std::string result_json;
+};
+
+int32_t SAO_PLUGINS_CALL capture_action_result(const entity_action_result_v2* result,
+                                               void* user_data) {
+    if (result == nullptr || user_data == nullptr ||
+        result->struct_size < kEntityActionResultV2RequiredPrefixSize ||
+        result->abi_version != kEntityActionAbiVersion2 || result->handled > 1) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    for (const std::uint8_t value : result->reserved) {
+        if (value != 0)
+            return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& captured = *static_cast<action_result_snapshot*>(user_data);
+    ++captured.calls;
+    captured.struct_size = result->struct_size;
+    captured.abi_version = result->abi_version;
+    captured.handled = result->handled;
+    captured.has_result = result->result_json_utf8 != nullptr;
+    captured.result_json = captured.has_result ? result->result_json_utf8 : "";
+    return captured.callback_status;
+}
+
+const menu_provider_snapshot* find_provider(const menu_catalog_snapshot& catalog,
+                                            std::string_view provider_id) {
+    const auto found = std::find_if(catalog.providers.begin(), catalog.providers.end(),
+                                    [provider_id](const auto& provider) {
+                                        return provider.provider_id == provider_id;
+                                    });
+    return found == catalog.providers.end() ? nullptr : &*found;
+}
 
 int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* view,
                                            void* user_data) {
@@ -1143,6 +1187,490 @@ function bump() counter = counter + 1 return counter end
     remove_plugin(second);
 }
 
+TEST_CASE("Lua action handler bridges Entity action-v2 results and replacement rundown",
+          "[lua][adapter][entity-provider][action-v2][coroutine][replacement][reentry][repeat]["
+          "focused]") {
+    if (!sao_plugins_luahost_is_available()) {
+        SUCCEED("Lua 5.4 capability is disabled");
+        return;
+    }
+    temp_directory temp(L"action_v2");
+    write_text(temp.path / L"plugin.lua", R"lua(
+local context = nil
+local current_handler = 0
+local calls = 0
+local replacement_busy = false
+local weak_handlers = setmetatable({}, {__mode = "v"})
+local next_weak_handler = 0
+
+local function track(handler)
+    next_weak_handler = next_weak_handler + 1
+    weak_handlers[next_weak_handler] = handler
+    return handler
+end
+
+local function make_handler(identity)
+    return track(function(action_id, payload)
+        current_handler = identity
+        calls = calls + 1
+        if action_id == "decline" then return nil end
+        if action_id == "echo" then return payload end
+        if action_id == "scalar" then return payload + 1 end
+        if action_id == "nested" then
+            return {
+                handler = identity,
+                nested = {
+                    payload = payload,
+                    values = {true, payload.null_value},
+                },
+            }
+        end
+        if action_id == "bad_function" then return function() end end
+        if action_id == "bad_thread" then return coroutine.create(function() end) end
+        if action_id == "bad_userdata" then return context end
+        if action_id == "nan" then return math.huge - math.huge end
+        if action_id == "positive_inf" then return math.huge end
+        if action_id == "negative_inf" then return -math.huge end
+        if action_id == "cyclic" then
+            local value = {}
+            value.self = value
+            return value
+        end
+        if action_id == "error" then error("Lua action fixture failure") end
+        if action_id == "replace_busy" then
+            local ok, error_message = pcall(function()
+                context:register_action_handler(make_handler(identity + 100))
+            end)
+            replacement_busy = (not ok) and
+                string.find(error_message, "-1006", 1, true) ~= nil
+            return {handler = identity, busy = replacement_busy}
+        end
+        if action_id == "reentrant_unload" then
+            context:emit("lua_action_reentrant_unload", {})
+        end
+        return {handler = identity, action = action_id, payload = payload}
+    end)
+end
+
+function on_load(ctx)
+    context = ctx
+    local worker = coroutine.create(function()
+        assert(ctx:register_action_handler(make_handler(1)) == "lua_action_adapter")
+    end)
+    local ok, error_message = coroutine.resume(worker)
+    if not ok then error(error_message) end
+    assert(ctx:register_action_handler(make_handler(2)) == "lua_action_adapter")
+end
+
+function replace_handler(identity)
+    return context:register_action_handler(make_handler(identity))
+end
+
+function handler_stats()
+    local live_handlers = 0
+    for _, handler in pairs(weak_handlers) do
+        if handler ~= nil then live_handlers = live_handlers + 1 end
+    end
+    return {
+        current_handler = current_handler,
+        calls = calls,
+        replacement_busy = replacement_busy,
+        live_handlers = live_handlers,
+    }
+end
+)lua");
+
+    adapter_registration adapter;
+    auto handle = add_plugin(make_manifest("lua_action_adapter", temp.path));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+
+    const std::string provider_id = "lua_action_adapter/action-handler";
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.roots.empty());
+    const auto* provider = find_provider(catalog, provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->rows.empty());
+    const std::uint64_t generation = provider->generation;
+
+    action_result_snapshot captured;
+    const auto invoke = [&](const char* action_id, const char* payload) {
+        captured = {};
+        return sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, action_id,
+                                                     payload, capture_action_result, &captured);
+    };
+
+    REQUIRE(invoke("echo", R"({"name":"雪","items":[1,null,true]})") == SAO_OK);
+    CHECK(captured.calls == 1);
+    CHECK(captured.struct_size == sizeof(entity_action_result_v2));
+    CHECK(captured.abi_version == kEntityActionAbiVersion2);
+    CHECK(captured.handled == 1);
+    CHECK(captured.has_result);
+    CHECK(captured.result_json == R"({"items":[1,null,true],"name":"雪"})");
+
+    REQUIRE(invoke("scalar", "41") == SAO_OK);
+    CHECK(captured.handled == 1);
+    CHECK(captured.result_json == "42");
+
+    REQUIRE(invoke("echo", "null") == SAO_OK);
+    CHECK(captured.handled == 1);
+    CHECK(captured.result_json == "null");
+
+    REQUIRE(invoke("nested", R"({"value":7,"null_value":null})") == SAO_OK);
+    CHECK(captured.result_json ==
+          R"({"handler":2,"nested":{"payload":{"null_value":null,"value":7},"values":[true,null]}})");
+
+    REQUIRE(invoke("decline", "{}") == SAO_OK);
+    CHECK(captured.calls == 1);
+    CHECK(captured.handled == 0);
+    CHECK_FALSE(captured.has_result);
+    CHECK(sao_plugins_entity_provider_invoke(provider_id.c_str(), generation, "decline", "{}") ==
+          SAO_PLUGINS_ERR_NOT_FOUND);
+
+    for (const char* action_id : {"bad_function", "bad_thread", "bad_userdata", "nan",
+                                  "positive_inf", "negative_inf", "cyclic"}) {
+        INFO("action_id=" << action_id);
+        CHECK(invoke(action_id, "{}") == SAO_ERR_INVALID_ARGUMENT);
+        CHECK(captured.calls == 0);
+    }
+    CHECK(invoke("error", "{}") == SAO_ERR_OS_CALL_FAILED);
+    CHECK(captured.calls == 0);
+
+    captured = {};
+    captured.callback_status = SAO_ERR_BUFFER_TOO_SMALL;
+    CHECK(sao_plugins_entity_provider_invoke_v2(
+              provider_id.c_str(), generation, "echo", "true", capture_action_result,
+              &captured) == SAO_ERR_BUFFER_TOO_SMALL);
+    CHECK(captured.calls == 1);
+    CHECK(captured.result_json == "true");
+
+    CHECK(call_hook(adapter.owner, handle, "replace_handler", "[3]") ==
+          "\"lua_action_adapter\"");
+    REQUIRE(invoke("normal", R"({"value":9})") == SAO_OK);
+    CHECK(captured.result_json ==
+          R"({"action":"normal","handler":3,"payload":{"value":9}})");
+    REQUIRE(invoke("replace_busy", "{}") == SAO_OK);
+    CHECK(captured.result_json == R"({"busy":true,"handler":3})");
+    REQUIRE(invoke("normal", "{}") == SAO_OK);
+    CHECK(captured.result_json.find("\"handler\":3") != std::string::npos);
+    const std::string replacement_stats = call_hook(adapter.owner, handle, "handler_stats");
+    CHECK(replacement_stats.find("\"replacement_busy\":true") != std::string::npos);
+
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    lifecycle_unload_probe unload_probe;
+    unload_probe.plugin = handle;
+    std::uint32_t unload_token = 0;
+    REQUIRE(sao_plugins_ctx_subscribe(context, "lua_action_reentrant_unload",
+                                      reentrant_unload_callback, &unload_probe,
+                                      &unload_token) == SAO_OK);
+    REQUIRE(invoke("reentrant_unload", "{}") == SAO_OK);
+    CHECK(unload_probe.status.load() == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+    REQUIRE(sao_plugins_ctx_unsubscribe(context, unload_token) == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_disable(handle) == SAO_OK);
+    catalog = {};
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    captured = {};
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, "normal", "{}",
+                                                capture_action_result,
+                                                &captured) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(captured.calls == 0);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    provider = find_provider(catalog, provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->generation == generation);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), generation, "normal", "{}",
+                                                capture_action_result,
+                                                &captured) == SAO_ERR_HANDLE_INVALID);
+
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    catalog = {};
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    provider = find_provider(catalog, provider_id);
+    REQUIRE(provider != nullptr);
+    const std::uint64_t reloaded_generation = provider->generation;
+    CHECK(reloaded_generation != generation);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                provider_id.c_str(), reloaded_generation, "normal", "{}", capture_action_result,
+                &captured) == SAO_OK);
+    CHECK(captured.result_json.find("\"handler\":2") != std::string::npos);
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    adapter.unregister();
+    remove_plugin(handle);
+}
+
+TEST_CASE("Lua action handler scopes roll back failed enables and clean enable-only providers",
+          "[lua][adapter][entity-provider][action-v2][lifecycle][rollback][registry][focused]") {
+    if (!sao_plugins_luahost_is_available()) {
+        SUCCEED("Lua 5.4 capability is disabled");
+        return;
+    }
+    adapter_registration adapter;
+
+    temp_directory scoped_temp(L"action_v2_scopes");
+    write_text(scoped_temp.path / L"plugin.lua", R"lua(
+local context = nil
+local enable_attempt = 0
+local weak_handlers = setmetatable({}, {__mode = "v"})
+local weak_index = 0
+
+local function handler(identity)
+    local value = function(action_id, payload)
+        return {handler = identity, action = action_id, payload = payload}
+    end
+    weak_index = weak_index + 1
+    weak_handlers[weak_index] = value
+    return value
+end
+
+function on_load(ctx)
+    context = ctx
+    ctx:register_action_handler(handler(10))
+end
+
+function on_enable()
+    enable_attempt = enable_attempt + 1
+    if enable_attempt == 1 then
+        context:register_action_handler(handler(20))
+        error("action enable rollback fixture")
+    end
+    if enable_attempt == 3 then
+        context:register_action_handler(handler(30))
+    end
+end
+
+function scope_stats()
+    local live_handlers = 0
+    for _, value in pairs(weak_handlers) do
+        if value ~= nil then live_handlers = live_handlers + 1 end
+    end
+    return {attempt = enable_attempt, live_handlers = live_handlers}
+end
+)lua");
+
+    auto scoped = add_plugin(make_manifest("lua_action_scopes", scoped_temp.path));
+    REQUIRE(sao_plugins_lifecycle_load(scoped) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_enable(scoped) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(scoped) == lifecycle_state::loaded_disabled);
+        CHECK(call_hook(adapter.owner, scoped, "scope_stats").find("\"attempt\":1") !=
+            std::string::npos);
+
+    const std::string scoped_provider_id = "lua_action_scopes/action-handler";
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+
+    REQUIRE(sao_plugins_lifecycle_enable(scoped) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    const auto* provider = find_provider(catalog, scoped_provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->rows.empty());
+    const std::uint64_t persistent_generation = provider->generation;
+    action_result_snapshot captured;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                scoped_provider_id.c_str(), persistent_generation, "persistent", "{}",
+                capture_action_result, &captured) == SAO_OK);
+    CHECK(captured.result_json.find("\"handler\":10") != std::string::npos);
+
+    REQUIRE(sao_plugins_lifecycle_disable(scoped) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(scoped) == SAO_OK);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                scoped_provider_id.c_str(), persistent_generation, "enable", "{}",
+                capture_action_result, &captured) == SAO_OK);
+    CHECK(captured.result_json.find("\"handler\":30") != std::string::npos);
+    REQUIRE(sao_plugins_lifecycle_disable(scoped) == SAO_OK);
+        CHECK(call_hook(adapter.owner, scoped, "scope_stats").find("\"attempt\":3") !=
+            std::string::npos);
+    REQUIRE(sao_plugins_lifecycle_enable(scoped) == SAO_OK);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                scoped_provider_id.c_str(), persistent_generation, "restored", "{}",
+                capture_action_result, &captured) == SAO_OK);
+    CHECK(captured.result_json.find("\"handler\":10") != std::string::npos);
+    REQUIRE(sao_plugins_lifecycle_unload(scoped) == SAO_OK);
+    remove_plugin(scoped);
+
+    temp_directory enable_only_temp(L"action_v2_enable_only");
+    write_text(enable_only_temp.path / L"plugin.lua", R"lua(
+local context = nil
+local generation = 0
+local weak_handler = setmetatable({}, {__mode = "v"})
+
+function on_load(ctx) context = ctx end
+
+function on_enable()
+    generation = generation + 1
+    local identity = generation
+    local handler = function()
+        return {handler = identity}
+    end
+    weak_handler[1] = handler
+    context:register_action_handler(handler)
+end
+
+function enable_only_stats()
+    return {generation = generation, live_handler = weak_handler[1] ~= nil}
+end
+)lua");
+
+    auto enable_only =
+        add_plugin(make_manifest("lua_action_enable_only", enable_only_temp.path));
+    REQUIRE(sao_plugins_lifecycle_load(enable_only) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(enable_only) == SAO_OK);
+    const std::string enable_only_provider_id = "lua_action_enable_only/action-handler";
+    catalog = {};
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    provider = find_provider(catalog, enable_only_provider_id);
+    REQUIRE(provider != nullptr);
+    const std::uint64_t first_generation = provider->generation;
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                enable_only_provider_id.c_str(), first_generation, "first", "{}",
+                capture_action_result, &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":1})");
+
+    REQUIRE(sao_plugins_lifecycle_disable(enable_only) == SAO_OK);
+    catalog = {};
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(find_provider(catalog, enable_only_provider_id) == nullptr);
+        CHECK(call_hook(adapter.owner, enable_only, "enable_only_stats").find("\"generation\":1") !=
+            std::string::npos);
+    captured = {};
+    CHECK(sao_plugins_entity_provider_invoke_v2(
+              enable_only_provider_id.c_str(), first_generation, "stale", "{}",
+              capture_action_result, &captured) == SAO_ERR_HANDLE_INVALID);
+
+    REQUIRE(sao_plugins_lifecycle_enable(enable_only) == SAO_OK);
+    catalog = {};
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    provider = find_provider(catalog, enable_only_provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->generation != first_generation);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                enable_only_provider_id.c_str(), provider->generation, "second", "{}",
+                capture_action_result, &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":2})");
+    REQUIRE(sao_plugins_lifecycle_unload(enable_only) == SAO_OK);
+    remove_plugin(enable_only);
+    adapter.unregister();
+}
+
+TEST_CASE("Lua action handler registry refs are released on replacement and direct unload",
+          "[lua][entity-provider][action-v2][registry-cleanup][direct_unload][focused]") {
+    if (!sao_plugins_luahost_is_available()) {
+        SUCCEED("Lua 5.4 capability is disabled");
+        return;
+    }
+    temp_directory owner_temp(L"action_registry_owner");
+    write_text(owner_temp.path / L"plugin.lua", "function on_load(ctx) end");
+    adapter_registration adapter;
+    auto owner = add_plugin(make_manifest("lua_action_registry", owner_temp.path));
+    REQUIRE(sao_plugins_lifecycle_load(owner) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(owner) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(owner, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    temp_directory direct_temp(L"action_registry_direct");
+    write_text(direct_temp.path / L"plugin.lua", R"lua(
+weak_handlers = setmetatable({}, {__mode = "v"})
+
+local function make_handler(identity)
+    local handler = function()
+        return {handler = identity}
+    end
+    weak_handlers[identity] = handler
+    return handler
+end
+
+ctx:register_action_handler(make_handler(1))
+
+function replace_handler()
+    return ctx:register_action_handler(make_handler(2))
+end
+
+function weak_state()
+    return {
+        first = weak_handlers[1] ~= nil,
+        second = weak_handlers[2] ~= nil,
+    }
+end
+)lua");
+
+    lua_host_config config{};
+    config.install_stdlib = true;
+    lua_host_handle_t host = nullptr;
+    REQUIRE(sao_plugins_luahost_create(&config, &host) == SAO_OK);
+    lua_State* state = sao_plugins_luahost_state(host);
+    REQUIRE(state != nullptr);
+    lua_plugin_handle_t direct_plugin = nullptr;
+    REQUIRE(sao_plugins_luahost_load_script(state, direct_temp.path.c_str(), "plugin.lua",
+                                            "lua_action_registry", context,
+                                            &direct_plugin) == SAO_OK);
+    REQUIRE(direct_plugin != nullptr);
+
+    const std::string provider_id = "lua_action_registry/action-handler";
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    const auto* provider = find_provider(catalog, provider_id);
+    REQUIRE(provider != nullptr);
+    CHECK(provider->rows.empty());
+    const std::uint64_t generation = provider->generation;
+
+    char* hook_result = nullptr;
+    REQUIRE(sao_plugins_luahost_call_hook(direct_plugin, "replace_handler", nullptr,
+                                          &hook_result) == SAO_OK);
+    REQUIRE(hook_result != nullptr);
+    CHECK(std::string(hook_result) == "\"lua_action_registry\"");
+    sao_plugins_luahost_free_string(hook_result);
+    REQUIRE(lua_gc(state, kLuaGcCollect) == 0);
+    hook_result = nullptr;
+    REQUIRE(sao_plugins_luahost_call_hook(direct_plugin, "weak_state", nullptr,
+                                          &hook_result) == SAO_OK);
+    REQUIRE(hook_result != nullptr);
+    CHECK(std::string(hook_result) == R"({"first":false,"second":true})");
+    sao_plugins_luahost_free_string(hook_result);
+
+    action_result_snapshot captured;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                provider_id.c_str(), generation, "current", "{}", capture_action_result,
+                &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":2})");
+
+    REQUIRE(sao_plugins_luahost_unload_script(direct_plugin) == SAO_OK);
+    REQUIRE(lua_gc(state, kLuaGcCollect) == 0);
+    int32_t status = SAO_OK;
+    CHECK(execute_host(host,
+                       "return weak_handlers[1] == nil and weak_handlers[2] == nil",
+                       status) == "true");
+    REQUIRE(status == SAO_OK);
+    captured = {};
+    CHECK(sao_plugins_entity_provider_invoke_v2(
+              provider_id.c_str(), generation, "stale", "{}", capture_action_result,
+              &captured) == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_luahost_destroy(host) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unload(owner) == SAO_OK);
+    adapter.unregister();
+    remove_plugin(owner);
+}
+
 TEST_CASE("Lua menu category adapter preserves semantic identity and lifecycle",
           "[lua][adapter][menu][entity_provider]") {
     if (!sao_plugins_luahost_is_available()) {
@@ -1590,11 +2118,16 @@ end
 
 function set_mode(value) mode = value end
 function validation_stats()
+    local surface_ok, surface_error = pcall(function()
+        ctx:register_menu_surface("unsupported", {})
+    end)
     return {
         invalid_priority_rejected = invalid_priority_rejected,
         embedded_nul_rejected = embedded_nul_rejected,
-        menu_surface_absent = ctx.register_menu_surface == nil,
-        action_handler_absent = ctx.register_action_handler == nil,
+        menu_surface_present = type(ctx.register_menu_surface) == "function",
+        menu_surface_unsupported = (not surface_ok) and
+            string.find(surface_error, "-1000", 1, true) ~= nil,
+        action_handler_present = type(ctx.register_action_handler) == "function",
     }
 end
 )lua");
@@ -1606,8 +2139,9 @@ end
     const std::string validation = call_hook(adapter.owner, handle, "validation_stats");
     CHECK(validation.find("\"invalid_priority_rejected\":true") != std::string::npos);
     CHECK(validation.find("\"embedded_nul_rejected\":true") != std::string::npos);
-    CHECK(validation.find("\"menu_surface_absent\":true") != std::string::npos);
-    CHECK(validation.find("\"action_handler_absent\":true") != std::string::npos);
+    CHECK(validation.find("\"menu_surface_present\":true") != std::string::npos);
+    CHECK(validation.find("\"menu_surface_unsupported\":true") != std::string::npos);
+    CHECK(validation.find("\"action_handler_present\":true") != std::string::npos);
 
     menu_catalog_snapshot baseline;
     REQUIRE(snapshot_menu_catalog(baseline) == SAO_OK);

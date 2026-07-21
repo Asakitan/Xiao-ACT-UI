@@ -75,6 +75,15 @@ sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context);
 
+// Internal lifecycle transaction for resources registered from on_enable().
+// The caller must hold the CPython GIL. A failed hook rolls back to the
+// checkpoint; a successful hook commits the new resources as enable-scoped;
+// on_disable removes the committed enable-scoped resources.
+int32_t pyhost_ctx_begin_enable_resources(void* pyobject, uint64_t* out_checkpoint) noexcept;
+int32_t pyhost_ctx_commit_enable_resources(void* pyobject, uint64_t checkpoint) noexcept;
+int32_t pyhost_ctx_rollback_enable_resources(void* pyobject, uint64_t checkpoint) noexcept;
+int32_t pyhost_ctx_remove_enable_resources(void* pyobject) noexcept;
+
 // 已知的 SDK 方法数 (调 binding_python 侧的 method_defs 拿到)。
 extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL sao_plugins_pyhost_sdk_method_count(void);
 

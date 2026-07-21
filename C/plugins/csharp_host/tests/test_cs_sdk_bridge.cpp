@@ -188,10 +188,18 @@ TEST_CASE("C# SDK table preserves layout and fails closed without runtime contex
     STATIC_REQUIRE(offsetof(cs_sdk_bridge, log_info) == 0);
     STATIC_REQUIRE(offsetof(cs_sdk_bridge, sdk_table) == sizeof(void*) * 5 + sizeof(uint32_t) * 2);
     STATIC_REQUIRE(sizeof(cs_managed_plugin_context) == sizeof(uint32_t) * 2 + sizeof(void*) * 4);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE == sizeof(uint32_t) * 2 + sizeof(void*) * 8);
+    STATIC_REQUIRE(sizeof(cs_managed_entity_snapshot_invocation_v2) == 48);
+    STATIC_REQUIRE(sizeof(cs_managed_entity_menu_row_v2) == 80);
+    STATIC_REQUIRE(sizeof(cs_managed_entity_provider_descriptor_v2) == 72);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_menu_row_v2, can_activate) == 72);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_provider_descriptor_v2, snapshot) == 56);
 
     bridge_fixture fixture;
     REQUIRE(fixture.table()->struct_size == sizeof(cs_managed_sdk_table));
     REQUIRE(fixture.table()->abi_version == SAO_CSHOST_SDK_TABLE_ABI_VERSION);
+    REQUIRE(fixture.table()->register_entity_provider_v2 != nullptr);
+    REQUIRE(fixture.table()->emit_context != nullptr);
 
     cs_managed_sdk_call call{};
     call.struct_size = sizeof(call);
@@ -384,4 +392,26 @@ TEST_CASE("C# managed release throw is observable after provider deactivation",
     REQUIRE(fixture.finish() == SAO_ERR_OS_CALL_FAILED);
     REQUIRE(callback.release_calls == 1);
     REQUIRE(callback.release_reentry_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+}
+
+TEST_CASE("C# managed release failure is consumed so teardown retry can finish",
+          "[plugins][csharp][bridge][callback][release_throw][retry]") {
+    bridge_fixture fixture;
+    fake_managed_callback callback{"release-retry", nullptr, fixture.table(), fixture.session()};
+    callback.throw_on_release = true;
+    auto managed = descriptor(callback, cs_managed_callback_kind::timer);
+    void* native_entry = nullptr;
+    void* token = nullptr;
+    wrap_callback(fixture, managed, &native_entry, &token);
+
+    auto* session = cshost_sdk_session_find_handle(fixture.session());
+    REQUIRE(session != nullptr);
+    REQUIRE(cshost_sdk_session_quiesce(session) == SAO_OK);
+    REQUIRE(cshost_sdk_session_release_callbacks(session) == SAO_ERR_OS_CALL_FAILED);
+    REQUIRE(callback.release_calls == 1);
+
+    callback.throw_on_release = false;
+    REQUIRE(cshost_sdk_session_release_callbacks(session) == SAO_OK);
+    REQUIRE(callback.release_calls == 1);
+    REQUIRE(fixture.finish() == SAO_OK);
 }

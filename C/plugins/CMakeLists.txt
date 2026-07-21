@@ -50,7 +50,7 @@ target_compile_definitions(sao_plugins_legacy_loader_facade_objects PRIVATE
     SAO_PLUGINS_BUILDING_DLL
     _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
 
-# ── AI Editor subprocess — Phase 10 AI Editor subprocess plugin skeleton ──
+# ── AI Editor subprocess plugin ─────────────────────────────────────────────
 # AI Editor is an independent subprocess (mirrors Python subprocess.Popen),
 # so its C++ side is a launcher + IPC channel + status ABI, not a full
 # WebView2/LLM host.  The subdirectory manages its own SAO_BUILD_AI_EDITOR

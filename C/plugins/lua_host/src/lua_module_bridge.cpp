@@ -70,6 +70,13 @@ struct menu_bridge {
     std::unordered_map<std::string, int> actions;
 };
 
+struct action_handler_bridge {
+    lua_State* state = nullptr;
+    int persistent_ref = LUA_NOREF;
+    int enable_ref = LUA_NOREF;
+    bool closing = false;
+};
+
 struct event_callback_record {
     std::atomic<lua_State*> state{nullptr};
     std::shared_ptr<std::recursive_mutex> state_mutex;
@@ -114,6 +121,9 @@ struct bridge_state {
     std::unordered_map<std::string, int> engines;
     std::vector<passive_resource> passive_resources;
     std::vector<std::unique_ptr<menu_bridge>> menus;
+    action_handler_bridge action_handler;
+    bool enable_checkpoint_active = false;
+    bool enable_checkpoint_had_action = false;
     std::uint64_t next_resource_sequence = 1;
 };
 
@@ -132,6 +142,7 @@ constexpr std::size_t kMaximumMenuRows = 4096;
 constexpr std::size_t kMaximumMenuStringBytes = 16U * 1024U;
 constexpr std::size_t kMaximumMenuSnapshotBytes = 8U * 1024U * 1024U;
 constexpr std::size_t kMaximumRememberedActions = 4096;
+constexpr std::string_view kActionProviderId = "action-handler";
 
 bool callback_active_on_current_thread(const event_callback_record& callback) noexcept {
     return std::find(g_active_callbacks.begin(),
@@ -438,28 +449,84 @@ void release_action_refs(lua_State* state, std::unordered_map<std::string, int>&
     actions.clear();
 }
 
+bool valid_registry_ref(int reference) noexcept {
+    return reference != LUA_NOREF && reference != LUA_REFNIL;
+}
+
+int current_action_handler_ref(const action_handler_bridge& handler) noexcept {
+    return valid_registry_ref(handler.enable_ref) ? handler.enable_ref : handler.persistent_ref;
+}
+
+void release_registry_ref(lua_State* state, int& reference) noexcept {
+    if (valid_registry_ref(reference))
+        luaL_unref(state, LUA_REGISTRYINDEX, reference);
+    reference = LUA_NOREF;
+}
+
+void release_action_handler_refs(action_handler_bridge& handler) noexcept {
+    if (handler.state == nullptr)
+        return;
+    release_registry_ref(handler.state, handler.enable_ref);
+    release_registry_ref(handler.state, handler.persistent_ref);
+}
+
+int32_t unregister_entity_provider_ids(
+    bridge_state& bridge, const std::vector<std::string_view>& local_provider_ids) noexcept {
+    if (bridge.context == nullptr || local_provider_ids.empty())
+        return SAO_OK;
+    try {
+        const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge.context);
+        if (plugin_id == nullptr || plugin_id[0] == '\0')
+            return SAO_ERR_HANDLE_INVALID;
+        std::vector<std::string> qualified_ids;
+        qualified_ids.reserve(local_provider_ids.size());
+        std::vector<const char*> provider_ids;
+        provider_ids.reserve(local_provider_ids.size());
+        for (const auto provider_id : local_provider_ids) {
+            qualified_ids.push_back(std::string(plugin_id) + "/" + std::string(provider_id));
+        }
+        for (const auto& provider_id : qualified_ids)
+            provider_ids.push_back(provider_id.c_str());
+        return sao::plugins::loader::plugin_context_unregister_entity_providers(
+            bridge.context, provider_ids.data(), provider_ids.size());
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t unregister_menu_providers(bridge_state& bridge,
                                   const std::vector<menu_bridge*>& menus) noexcept {
-    if (bridge.context == nullptr || menus.empty()) {
+    if (menus.empty()) {
         return SAO_OK;
     }
     try {
-        const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge.context);
-        if (plugin_id == nullptr || plugin_id[0] == '\0') {
-            return SAO_ERR_HANDLE_INVALID;
-        }
-        std::vector<std::string> qualified_ids;
-        qualified_ids.reserve(menus.size());
-        std::vector<const char*> provider_ids;
+        std::vector<std::string_view> provider_ids;
         provider_ids.reserve(menus.size());
-        for (const auto* menu : menus) {
-            qualified_ids.push_back(std::string(plugin_id) + "/" + menu->provider_id);
-        }
-        for (const auto& provider_id : qualified_ids) {
-            provider_ids.push_back(provider_id.c_str());
-        }
-        return sao::plugins::loader::plugin_context_unregister_entity_providers(
-            bridge.context, provider_ids.data(), provider_ids.size());
+        for (const auto* menu : menus)
+            provider_ids.push_back(menu->provider_id);
+        return unregister_entity_provider_ids(bridge, provider_ids);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t unregister_action_provider(bridge_state& bridge) noexcept {
+    try {
+        return unregister_entity_provider_ids(bridge, {kActionProviderId});
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t unregister_all_entity_providers(bridge_state& bridge) noexcept {
+    try {
+        std::vector<std::string_view> provider_ids;
+        provider_ids.reserve(bridge.menus.size() + 1);
+        for (const auto& menu : bridge.menus)
+            provider_ids.push_back(menu->provider_id);
+        if (valid_registry_ref(current_action_handler_ref(bridge.action_handler)))
+            provider_ids.push_back(kActionProviderId);
+        return unregister_entity_provider_ids(bridge, provider_ids);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -829,6 +896,98 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
     }
 }
 
+int32_t SAO_PLUGINS_CALL native_action_handler_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto* handler = static_cast<action_handler_bridge*>(user_data);
+    try {
+        detail::state_operation operation;
+        const int32_t status = detail::acquire_state_operation(handler->state, operation);
+        if (status != SAO_OK)
+            return status;
+        lua_State* state = operation.state();
+        if (handler->closing)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        const int reference = current_action_handler_ref(*handler);
+        if (!valid_registry_ref(reference))
+            return SAO_ERR_HANDLE_INVALID;
+
+        const int base = lua_gettop(state);
+        detail::clear_state_error_locked(state);
+        lua_rawgeti(state, LUA_REGISTRYINDEX, reference);
+        if (!lua_isfunction(state, -1)) {
+            lua_settop(state, base);
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        lua_pushstring(state, action_id_utf8);
+        detail::json payload;
+        std::string conversion_error;
+        if (!detail::parse_json_c_string(payload_json_utf8, payload, conversion_error) ||
+            !detail::protected_push_json(state, payload, conversion_error, true)) {
+            detail::set_state_error_locked(state, std::move(conversion_error));
+            lua_settop(state, base);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        if (lua_pcall(state, 2, 1, 0) != LUA_OK) {
+            detail::capture_state_error_locked(state, -1);
+            lua_settop(state, base);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+
+        sao::plugins::loader::entity_action_result_v2 result{};
+        result.struct_size = sizeof(result);
+        result.abi_version = sao::plugins::loader::kEntityActionAbiVersion2;
+        if (lua_isnil(state, -1)) {
+            result.handled = 0;
+            const int32_t sink_status = result_sink(&result, result_sink_user_data);
+            lua_settop(state, base);
+            return sink_status;
+        }
+
+        detail::json result_value;
+        if (!detail::stack_to_json(state, -1, result_value, conversion_error)) {
+            detail::set_state_error_locked(state, std::move(conversion_error));
+            lua_settop(state, base);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        std::string serialized;
+        if (!detail::serialize_json(result_value, serialized, conversion_error)) {
+            detail::set_state_error_locked(state, std::move(conversion_error));
+            lua_settop(state, base);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        result.handled = 1;
+        result.result_json_utf8 = serialized.c_str();
+        const int32_t sink_status = result_sink(&result, result_sink_user_data);
+        lua_settop(state, base);
+        return sink_status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t register_action_provider(bridge_state& bridge) noexcept {
+    if (bridge.context == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        sao::plugins::loader::context_entity_provider_descriptor_v3 provider{};
+        provider.struct_size = sizeof(provider);
+        provider.provider_id_utf8 = kActionProviderId.data();
+        provider.action_handler_v2 = native_action_handler_v2;
+        provider.action_user_data = &bridge.action_handler;
+        provider.flags = sao::plugins::loader::kContextEntityProviderV3ActionOnly;
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(bridge.context,
+                                                                                 &provider);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t register_menu_provider(bridge_state& bridge, menu_bridge& menu) noexcept {
     if (bridge.context == nullptr)
         return SAO_ERR_HANDLE_INVALID;
@@ -866,6 +1025,13 @@ int32_t register_menu_providers(bridge_state& bridge) noexcept {
                 return rollback_status == SAO_OK ? status : rollback_status;
             }
             registered.push_back(menu.get());
+        }
+        if (valid_registry_ref(current_action_handler_ref(bridge.action_handler))) {
+            const int32_t status = register_action_provider(bridge);
+            if (status != SAO_OK) {
+                const int32_t rollback_status = unregister_menu_providers(bridge, registered);
+                return rollback_status == SAO_OK ? status : rollback_status;
+            }
         }
         return SAO_OK;
     } catch (...) {
@@ -1489,6 +1655,36 @@ int ctx_register_ui_panel(lua_State* state) {
     return 1;
 }
 
+int ctx_register_action_handler(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    if (!lua_isfunction(state, 2))
+        return push_status_error(state, "register_action_handler", SAO_ERR_INVALID_ARGUMENT);
+    const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
+    if (plugin_id == nullptr || plugin_id[0] == '\0')
+        return push_status_error(state, "register_action_handler context",
+                                 SAO_ERR_HANDLE_INVALID);
+
+    lua_pushvalue(state, 2);
+    if (state != bridge->state)
+        lua_xmove(state, bridge->state, 1);
+    const int candidate_ref = luaL_ref(bridge->state, LUA_REGISTRYINDEX);
+    registry_ref_guard candidate_guard(bridge->state, candidate_ref);
+    const int32_t status = register_action_provider(*bridge);
+    if (status != SAO_OK)
+        return push_status_error(state, "action handler provider registration", status);
+
+    int& committed_ref = bridge->enable_checkpoint_active
+                             ? bridge->action_handler.enable_ref
+                             : bridge->action_handler.persistent_ref;
+    const int replaced_ref = committed_ref;
+    committed_ref = candidate_ref;
+    candidate_guard.release();
+    if (valid_registry_ref(replaced_ref))
+        luaL_unref(bridge->state, LUA_REGISTRYINDEX, replaced_ref);
+    lua_pushstring(state, plugin_id);
+    return 1;
+}
+
 int ctx_register_menu_category(lua_State* state) {
     auto* bridge = checked_bridge(state);
     std::string name;
@@ -1706,6 +1902,7 @@ int register_ctx_body(lua_State* state) {
         set_method(state, "snapshot_value", safe_method<ctx_snapshot_value>);
         set_method(state, "register_ui_panel", safe_method<ctx_register_ui_panel>);
         set_method(state, "register_menu_category", safe_method<ctx_register_menu_category>);
+        set_method(state, "register_action_handler", safe_method<ctx_register_action_handler>);
         set_method(state, "subscribe", safe_method<ctx_subscribe>);
         set_method(state, "subscribe_once", safe_method<ctx_subscribe_once>);
         set_method(state, "unsubscribe", safe_method<ctx_unsubscribe>);
@@ -1728,7 +1925,8 @@ int register_ctx_body(lua_State* state) {
         set_method(state, "dismiss_notify", safe_method<ctx_dismiss_notify>);
         set_method(state, "register_engine", safe_method<ctx_register_engine>);
         set_method(state, "get_engine", safe_method<ctx_get_engine>);
-        for (const char* name : {"open_file", "open_window", "load_local", "ensure_requirements"}) {
+        for (const char* name : {"register_menu_surface", "open_file", "open_window",
+                                 "load_local", "ensure_requirements"}) {
             set_unsupported(state, name);
         }
         lua_setfield(state, -2, "__index");
@@ -1788,7 +1986,12 @@ std::size_t ctx_menu_checkpoint_locked(lua_State* state) noexcept {
         state = main_thread(state);
         std::lock_guard lock(g_bridge_map_mutex);
         const auto found = g_bridge_map.find(state);
-        return found == g_bridge_map.end() ? 0 : found->second->menus.size();
+        if (found == g_bridge_map.end())
+            return 0;
+        found->second->enable_checkpoint_active = true;
+        found->second->enable_checkpoint_had_action =
+            valid_registry_ref(current_action_handler_ref(found->second->action_handler));
+        return found->second->menus.size();
     } catch (...) {
         return 0;
     }
@@ -1808,6 +2011,8 @@ int32_t commit_ctx_enable_menus_locked(lua_State* state, std::size_t checkpoint)
         for (std::size_t index = checkpoint; index < found->second->menus.size(); ++index) {
             found->second->menus[index]->enable_scoped = true;
         }
+        found->second->enable_checkpoint_active = false;
+        found->second->enable_checkpoint_had_action = false;
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1844,6 +2049,19 @@ int32_t rollback_ctx_menus_locked(lua_State* state, std::size_t checkpoint) noex
         }
         bridge->menus.erase(bridge->menus.begin() + static_cast<std::ptrdiff_t>(checkpoint),
                             bridge->menus.end());
+        if (bridge->enable_checkpoint_active) {
+            auto& action_handler = bridge->action_handler;
+            if (valid_registry_ref(action_handler.enable_ref)) {
+                if (!bridge->enable_checkpoint_had_action) {
+                    const int32_t action_status = unregister_action_provider(*bridge);
+                    if (action_status != SAO_OK)
+                        return action_status;
+                }
+                release_registry_ref(state, action_handler.enable_ref);
+            }
+            bridge->enable_checkpoint_active = false;
+            bridge->enable_checkpoint_had_action = false;
+        }
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1883,6 +2101,15 @@ int32_t remove_ctx_enable_menus_locked(lua_State* state) noexcept {
             menu->rows.clear();
             return true;
         });
+        auto& action_handler = bridge->action_handler;
+        if (valid_registry_ref(action_handler.enable_ref)) {
+            if (!valid_registry_ref(action_handler.persistent_ref)) {
+                const int32_t action_status = unregister_action_provider(*bridge);
+                if (action_status != SAO_OK)
+                    return action_status;
+            }
+            release_registry_ref(state, action_handler.enable_ref);
+        }
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1910,15 +2137,24 @@ int32_t quiesce_ctx_menu_providers(lua_State* state) noexcept {
                 bridge = found->second.get();
             }
             bridge->closing = true;
+            bridge->action_handler.closing = true;
+            for (const auto& menu : bridge->menus)
+                menu->closing = true;
             context = bridge->context;
             const char* plugin_id = context == nullptr
                                         ? nullptr
                                         : sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
-            provider_ids.reserve(bridge->menus.size());
+            provider_ids.reserve(bridge->menus.size() + 1);
             for (const auto& menu : bridge->menus) {
                 provider_ids.push_back(plugin_id == nullptr
                                            ? menu->provider_id
                                            : std::string(plugin_id) + "/" + menu->provider_id);
+            }
+            if (valid_registry_ref(current_action_handler_ref(bridge->action_handler))) {
+                provider_ids.push_back(plugin_id == nullptr
+                                           ? std::string(kActionProviderId)
+                                           : std::string(plugin_id) + "/" +
+                                                 std::string(kActionProviderId));
             }
         }
         if (context == nullptr || provider_ids.empty())
@@ -1937,6 +2173,9 @@ int32_t quiesce_ctx_menu_providers(lua_State* state) noexcept {
                 const auto found = g_bridge_map.find(state);
                 if (found != g_bridge_map.end() && found->second.get() == bridge) {
                     bridge->closing = false;
+                    bridge->action_handler.closing = false;
+                    for (const auto& menu : bridge->menus)
+                        menu->closing = false;
                 }
             }
         }
@@ -1977,6 +2216,7 @@ int32_t resume_ctx_menu_providers_locked(lua_State* state) noexcept {
             return status;
         for (const auto& menu : found->second->menus)
             menu->closing = false;
+        found->second->action_handler.closing = false;
         found->second->closing = false;
         return SAO_OK;
     } catch (...) {
@@ -2020,9 +2260,9 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
             lua_pop(state, 1);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        const int32_t menu_status = unregister_menu_providers(*bridge, 0);
-        if (menu_status != SAO_OK)
-            return menu_status;
+        const int32_t provider_status = unregister_all_entity_providers(*bridge);
+        if (provider_status != SAO_OK)
+            return provider_status;
         std::vector<std::shared_ptr<event_callback_record>> callbacks;
         callbacks.reserve(bridge->callbacks.size() + bridge->hotkeys.size() +
                           bridge->timers.size() + bridge->render_hooks.size());
@@ -2158,6 +2398,11 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
             menu->rows.clear();
         }
         bridge->menus.clear();
+        bridge->action_handler.closing = true;
+        release_action_handler_refs(bridge->action_handler);
+        bridge->action_handler.state = nullptr;
+        bridge->enable_checkpoint_active = false;
+        bridge->enable_checkpoint_had_action = false;
         if (bridge->context_ref != LUA_NOREF && bridge->context_ref != LUA_REFNIL) {
             luaL_unref(state, LUA_REGISTRYINDEX, bridge->context_ref);
             bridge->context_ref = LUA_NOREF;
@@ -2230,6 +2475,7 @@ extern "C" SAO_PLUGINS_API
         bridge->state = state;
         bridge->context = context;
         bridge->context_lease = true;
+        bridge->action_handler.state = state;
         bridge->mutex = detail::state_mutex(state);
         if (!bridge->mutex) {
             sao::plugins::loader::plugin_context_release_host_lease(context);

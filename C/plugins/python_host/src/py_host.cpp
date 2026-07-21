@@ -1356,7 +1356,23 @@ sao_plugins_pyhost_call_on_enable(py_plugin_handle_t plugin) {
             return status;
         auto* pl = lease.state();
         // on_enable() 老插件不传 ctx (see hide_seek: on_disable(), on_unload()).
-        return invoke_hook(pl, pl->hook_on_enable, /*pass_ctx=*/false);
+        uint64_t checkpoint = 0;
+        int32_t transaction_status = pyhost_ctx_begin_enable_resources(pl->ctx, &checkpoint);
+        if (transaction_status != SAO_OK)
+            return transaction_status;
+        const int32_t hook_status = pl->hook_on_enable == nullptr
+                                        ? SAO_OK
+                                        : invoke_hook(pl, pl->hook_on_enable, /*pass_ctx=*/false);
+        if (hook_status == SAO_OK) {
+            const int32_t commit_status = pyhost_ctx_commit_enable_resources(pl->ctx, checkpoint);
+            if (commit_status == SAO_OK)
+                return SAO_OK;
+            const int32_t rollback_status =
+                pyhost_ctx_rollback_enable_resources(pl->ctx, checkpoint);
+            return rollback_status == SAO_OK ? commit_status : rollback_status;
+        }
+        const int32_t rollback_status = pyhost_ctx_rollback_enable_resources(pl->ctx, checkpoint);
+        return rollback_status == SAO_OK ? hook_status : rollback_status;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1375,7 +1391,10 @@ sao_plugins_pyhost_call_on_disable(py_plugin_handle_t plugin) {
         if (status != SAO_OK)
             return status;
         auto* pl = lease.state();
-        return invoke_hook(pl, pl->hook_on_disable, /*pass_ctx=*/false);
+        const int32_t hook_status = pl->hook_on_disable == nullptr
+                                        ? SAO_OK
+                                        : invoke_hook(pl, pl->hook_on_disable, /*pass_ctx=*/false);
+        return hook_status == SAO_OK ? pyhost_ctx_remove_enable_resources(pl->ctx) : hook_status;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

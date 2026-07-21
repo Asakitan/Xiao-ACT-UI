@@ -45,6 +45,8 @@ std::string emma_value_to_string(const emma_value& v);
 
 struct emma_plugin_runtime;
 
+constexpr std::string_view kActionProviderLocalId = "action-handler";
+
 struct emma_menu_row {
     std::string label;
     std::string icon;
@@ -71,6 +73,24 @@ struct emma_menu_bridge {
     std::shared_ptr<callable> builder;
     std::vector<emma_menu_row> rows;
     std::unordered_map<std::string, std::shared_ptr<callable>> actions;
+};
+
+struct emma_action_bridge {
+    emma_plugin_runtime* runtime = nullptr;
+    bool enable_scoped = false;
+    std::atomic_bool closing{false};
+    std::string provider_id{kActionProviderLocalId};
+    std::uint64_t registration_revision = 1;
+    std::shared_ptr<callable> handler;
+    std::shared_ptr<callable> disable_restore_handler;
+};
+
+struct emma_action_checkpoint {
+    bool present = false;
+    bool enable_scoped = false;
+    std::uint64_t registration_revision = 0;
+    std::shared_ptr<callable> handler;
+    std::shared_ptr<callable> disable_restore_handler;
 };
 
 struct emma_plugin_runtime {
@@ -107,6 +127,7 @@ struct emma_plugin_runtime {
     std::mutex resources_mutex;
     std::vector<owned_resource> resources;
     std::vector<std::unique_ptr<emma_menu_bridge>> menus;
+    std::unique_ptr<emma_action_bridge> action;
     uint64_t next_resource_id = 1;
     emma_error last_error;
     std::mutex invocation_mutex;
@@ -1077,6 +1098,124 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
     }
 }
 
+void remember_action_error(emma_plugin_runtime& runtime, int32_t status, std::string message) {
+    runtime.last_error = {};
+    runtime.last_error.kind = error_kind::runtime_error;
+    runtime.last_error.status = status;
+    runtime.last_error.message = std::move(message);
+}
+
+int32_t submit_action_result(sao::plugins::loader::entity_action_result_sink_v2_fn sink,
+                             void* sink_user_data, bool handled,
+                             const char* result_json_utf8) noexcept {
+    if (sink == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    const sao::plugins::loader::entity_action_result_v2 result{
+        sizeof(sao::plugins::loader::entity_action_result_v2),
+        sao::plugins::loader::kEntityActionAbiVersion2,
+        static_cast<std::uint8_t>(handled),
+        {},
+        result_json_utf8,
+    };
+    return sink(&result, sink_user_data);
+}
+
+int32_t SAO_PLUGINS_CALL
+native_action_handler(const char* action_id_utf8, const char* payload_json_utf8,
+                      sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                      void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& bridge = *static_cast<emma_action_bridge*>(user_data);
+    auto* runtime = bridge.runtime;
+    if (runtime == nullptr || bridge.closing.load(std::memory_order_acquire))
+        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    try {
+        runtime_invocation_guard guard(runtime);
+        if (!guard.acquired())
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
+        if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        if (bridge.handler == nullptr)
+            return SAO_ERR_HANDLE_INVALID;
+
+        emma_value payload = nullptr;
+        std::string conversion_error;
+        if (!detail::parse_json_c_string_to_emma_value(payload_json_utf8, payload,
+                                                       conversion_error)) {
+            remember_action_error(*runtime, SAO_ERR_INVALID_ARGUMENT,
+                                  "action payload cannot be converted from JSON: " +
+                                      conversion_error);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+
+        std::string call_message;
+        emma_error call_error;
+        emma_value value = runtime->interp->call_function(
+            bridge.handler, {std::string(action_id_utf8), std::move(payload)}, call_message,
+            &call_error);
+        if (call_error.kind != error_kind::none || !call_message.empty()) {
+            if (call_error.kind == error_kind::none) {
+                call_error.kind = error_kind::runtime_error;
+                call_error.status = SAO_ERR_OS_CALL_FAILED;
+                call_error.message = std::move(call_message);
+            }
+            const int32_t status = sao_plugins_emma_error_status(&call_error);
+            runtime->last_error = std::move(call_error);
+            return status;
+        }
+
+        if (std::holds_alternative<std::nullptr_t>(value)) {
+            const int32_t status =
+                submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+            if (status == SAO_OK) {
+                runtime->last_error = {};
+            } else {
+                remember_action_error(*runtime, status, "action result sink rejected decline");
+            }
+            return status;
+        }
+
+        std::string serialized;
+        if (!detail::serialize_emma_value(value, serialized, conversion_error)) {
+            remember_action_error(*runtime, SAO_ERR_INVALID_ARGUMENT,
+                                  "action result cannot be converted to JSON: " + conversion_error);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const int32_t status =
+            submit_action_result(result_sink, result_sink_user_data, true, serialized.c_str());
+        if (status == SAO_OK) {
+            runtime->last_error = {};
+        } else {
+            remember_action_error(*runtime, status, "action result sink rejected result");
+        }
+        return status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t register_action_provider(emma_plugin_runtime& runtime,
+                                 emma_action_bridge& action) noexcept {
+    if (runtime.context == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        sao::plugins::loader::context_entity_provider_descriptor_v3 provider{};
+        provider.struct_size = sizeof(provider);
+        provider.provider_id_utf8 = action.provider_id.c_str();
+        provider.action_handler_v2 = native_action_handler;
+        provider.action_user_data = &action;
+        provider.flags = sao::plugins::loader::kContextEntityProviderV3ActionOnly;
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(runtime.context,
+                                                                                 &provider);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t register_menu_provider(emma_plugin_runtime& runtime, emma_menu_bridge& menu) noexcept {
     if (runtime.context == nullptr)
         return SAO_ERR_HANDLE_INVALID;
@@ -1136,6 +1275,48 @@ int32_t unregister_menu_providers(emma_plugin_runtime& runtime,
     }
 }
 
+int32_t unregister_context_providers(emma_plugin_runtime& runtime,
+                                     const std::vector<emma_menu_bridge*>& menus,
+                                     emma_action_bridge* action) noexcept {
+    if (runtime.context == nullptr || (menus.empty() && action == nullptr))
+        return SAO_OK;
+    try {
+        std::vector<std::string> qualified_ids;
+        std::vector<const char*> provider_ids;
+        qualified_ids.reserve(menus.size() + (action == nullptr ? 0U : 1U));
+        provider_ids.reserve(qualified_ids.capacity());
+        for (auto* menu : menus) {
+            if (menu == nullptr)
+                return SAO_ERR_INVALID_ARGUMENT;
+            menu->closing.store(true, std::memory_order_release);
+            qualified_ids.push_back(runtime.plugin_id + "/" + menu->provider_id);
+        }
+        if (action != nullptr) {
+            action->closing.store(true, std::memory_order_release);
+            qualified_ids.push_back(runtime.plugin_id + "/" + action->provider_id);
+        }
+        for (const auto& provider_id : qualified_ids)
+            provider_ids.push_back(provider_id.c_str());
+        const int32_t status = sao::plugins::loader::plugin_context_unregister_entity_providers(
+            runtime.context, provider_ids.data(), provider_ids.size());
+        if (status != SAO_OK) {
+            for (auto* menu : menus)
+                menu->closing.store(false, std::memory_order_release);
+            if (action != nullptr)
+                action->closing.store(false, std::memory_order_release);
+        }
+        return status;
+    } catch (...) {
+        for (auto* menu : menus) {
+            if (menu != nullptr)
+                menu->closing.store(false, std::memory_order_release);
+        }
+        if (action != nullptr)
+            action->closing.store(false, std::memory_order_release);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 std::vector<emma_menu_bridge*> menu_range(emma_plugin_runtime& runtime, std::size_t checkpoint) {
     std::vector<emma_menu_bridge*> result;
     if (checkpoint >= runtime.menus.size())
@@ -1166,9 +1347,28 @@ int32_t register_menu_providers(emma_plugin_runtime& runtime) noexcept {
     }
 }
 
-int32_t quiesce_menu_providers(emma_plugin_runtime& runtime) noexcept {
+int32_t register_context_providers(emma_plugin_runtime& runtime) noexcept {
+    bool action_registered = false;
+    if (runtime.action != nullptr) {
+        const int32_t status = register_action_provider(runtime, *runtime.action);
+        if (status != SAO_OK)
+            return status;
+        action_registered = true;
+    }
+    const int32_t menu_status = register_menu_providers(runtime);
+    if (menu_status != SAO_OK && action_registered) {
+        const int32_t rollback_status =
+            unregister_context_providers(runtime, {}, runtime.action.get());
+        return rollback_status == SAO_OK ? menu_status : rollback_status;
+    }
+    if (menu_status == SAO_OK && runtime.action != nullptr)
+        runtime.action->closing.store(false, std::memory_order_release);
+    return menu_status;
+}
+
+int32_t quiesce_context_providers(emma_plugin_runtime& runtime) noexcept {
     try {
-        return unregister_menu_providers(runtime, menu_range(runtime, 0));
+        return unregister_context_providers(runtime, menu_range(runtime, 0), runtime.action.get());
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1219,6 +1419,139 @@ int32_t remove_enable_menus(emma_plugin_runtime& runtime) noexcept {
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
+}
+
+emma_action_checkpoint action_checkpoint(const emma_plugin_runtime& runtime) {
+    emma_action_checkpoint checkpoint;
+    if (runtime.action == nullptr)
+        return checkpoint;
+    checkpoint.present = true;
+    checkpoint.enable_scoped = runtime.action->enable_scoped;
+    checkpoint.registration_revision = runtime.action->registration_revision;
+    checkpoint.handler = runtime.action->handler;
+    checkpoint.disable_restore_handler = runtime.action->disable_restore_handler;
+    return checkpoint;
+}
+
+void reset_action_bridge(emma_plugin_runtime& runtime) noexcept {
+    if (runtime.action == nullptr)
+        return;
+    runtime.action->closing.store(true, std::memory_order_release);
+    runtime.action->runtime = nullptr;
+    runtime.action->handler.reset();
+    runtime.action->disable_restore_handler.reset();
+    runtime.action.reset();
+}
+
+int32_t rollback_action(emma_plugin_runtime& runtime,
+                        const emma_action_checkpoint& checkpoint) noexcept {
+    try {
+        if (!checkpoint.present) {
+            if (runtime.action == nullptr)
+                return SAO_OK;
+            const int32_t status = unregister_context_providers(runtime, {}, runtime.action.get());
+            if (status != SAO_OK)
+                return status;
+            reset_action_bridge(runtime);
+            return SAO_OK;
+        }
+        if (runtime.action == nullptr)
+            return SAO_ERR_HANDLE_INVALID;
+        runtime.action->enable_scoped = checkpoint.enable_scoped;
+        runtime.action->registration_revision = checkpoint.registration_revision;
+        runtime.action->handler = checkpoint.handler;
+        runtime.action->disable_restore_handler = checkpoint.disable_restore_handler;
+        runtime.action->closing.store(false, std::memory_order_release);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t commit_enable_action(emma_plugin_runtime& runtime,
+                             const emma_action_checkpoint& checkpoint) noexcept {
+    if (runtime.action == nullptr || (checkpoint.present && runtime.action->registration_revision ==
+                                                                checkpoint.registration_revision)) {
+        return SAO_OK;
+    }
+    if (!checkpoint.present) {
+        runtime.action->enable_scoped = true;
+        runtime.action->disable_restore_handler.reset();
+        return SAO_OK;
+    }
+    runtime.action->enable_scoped = false;
+    runtime.action->disable_restore_handler = checkpoint.handler;
+    return SAO_OK;
+}
+
+int32_t remove_enable_action(emma_plugin_runtime& runtime) noexcept {
+    if (runtime.action == nullptr)
+        return SAO_OK;
+    try {
+        if (runtime.action->enable_scoped) {
+            const int32_t status = unregister_context_providers(runtime, {}, runtime.action.get());
+            if (status != SAO_OK)
+                return status;
+            reset_action_bridge(runtime);
+            return SAO_OK;
+        }
+        if (runtime.action->disable_restore_handler == nullptr)
+            return SAO_OK;
+        runtime.action->handler = std::move(runtime.action->disable_restore_handler);
+        runtime.action->disable_restore_handler.reset();
+        runtime.action->closing.store(false, std::memory_order_release);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+emma_value register_action_handler(emma_plugin_runtime& runtime,
+                                   std::vector<emma_value> arguments) {
+    if (arguments.size() != 1)
+        throw_context_status("ctx.register_action_handler", SAO_ERR_INVALID_ARGUMENT);
+    auto candidate = require_callable(arguments, 0, "ctx.register_action_handler");
+    if (runtime.context == nullptr)
+        throw_context_status("ctx.register_action_handler", SAO_ERR_HANDLE_INVALID);
+
+    if (runtime.action == nullptr) {
+        auto action = std::make_unique<emma_action_bridge>();
+        action->runtime = &runtime;
+        action->handler = std::move(candidate);
+        const int32_t status = register_action_provider(runtime, *action);
+        if (status != SAO_OK) {
+            action->runtime = nullptr;
+            throw_context_status("ctx.register_action_handler", status);
+        }
+        runtime.action = std::move(action);
+        return std::string(kActionProviderLocalId);
+    }
+
+    if (runtime.action->registration_revision == std::numeric_limits<std::uint64_t>::max())
+        throw_context_status("ctx.register_action_handler", SAO_ERR_OS_CALL_FAILED);
+    const int32_t status = register_action_provider(runtime, *runtime.action);
+    if (status != SAO_OK)
+        throw_context_status("ctx.register_action_handler", status);
+    runtime.action->handler = std::move(candidate);
+    ++runtime.action->registration_revision;
+    runtime.action->closing.store(false, std::memory_order_release);
+    return std::string(kActionProviderLocalId);
+}
+
+emma_value register_menu_surface(emma_plugin_runtime& runtime, std::vector<emma_value> arguments) {
+    if (arguments.size() < 2 || arguments.size() > 3)
+        throw_context_status("ctx.register_menu_surface", SAO_ERR_INVALID_ARGUMENT);
+    const std::string surface_id = require_string(arguments, 0, "ctx.register_menu_surface");
+    const std::string descriptor = serialize_value_or_throw(arguments[1]);
+    const double priority =
+        arguments.size() == 3 ? require_number(arguments, 2, "ctx.register_menu_surface") : 0.0;
+    if (!std::isfinite(priority))
+        throw_context_status("ctx.register_menu_surface", SAO_ERR_INVALID_ARGUMENT);
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_menu_surface(
+        runtime.context, surface_id.c_str(), descriptor.c_str(), static_cast<float>(priority));
+    if (status != SAO_OK)
+        throw_context_status("ctx.register_menu_surface", status);
+    return surface_id;
 }
 
 emma_value register_menu_category(emma_plugin_runtime& runtime, std::vector<emma_value> arguments) {
@@ -1534,6 +1867,18 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                            make_host_callable("ctx.register_menu_category",
                                               [runtime](std::vector<emma_value> arguments) {
                                                   return register_menu_category(
+                                                      *runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("register_action_handler",
+                           make_host_callable("ctx.register_action_handler",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return register_action_handler(
+                                                      *runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("register_menu_surface",
+                           make_host_callable("ctx.register_menu_surface",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return register_menu_surface(
                                                       *runtime, std::move(arguments));
                                               }));
     wrapper->items.emplace(
@@ -2050,19 +2395,20 @@ int32_t finish_failed_load(std::unique_ptr<emma_plugin_s> plugin, int32_t failur
         return failure_status;
     auto& runtime = *plugin->runtime;
     runtime.callbacks_accepting.store(false, std::memory_order_release);
-    const int32_t menu_status = quiesce_menu_providers(runtime);
+    const int32_t provider_status = quiesce_context_providers(runtime);
     const int32_t teardown_status =
-        menu_status == SAO_OK ? teardown_owned_resources(runtime) : menu_status;
+        provider_status == SAO_OK ? teardown_owned_resources(runtime) : provider_status;
     int32_t closing_status =
         teardown_status == SAO_OK ? deactivate_emma_binding(runtime) : teardown_status;
     if (closing_status == SAO_OK) {
         for (auto& menu : runtime.menus)
             menu->runtime = nullptr;
         runtime.menus.clear();
+        reset_action_bridge(runtime);
         return failure_status;
     }
-    if (menu_status == SAO_OK) {
-        const int32_t resume_status = register_menu_providers(runtime);
+    if (provider_status == SAO_OK) {
+        const int32_t resume_status = register_context_providers(runtime);
         if (resume_status != SAO_OK)
             closing_status = resume_status;
     }
@@ -2112,6 +2458,7 @@ emma_plugin_runtime::~emma_plugin_runtime() {
     for (auto& menu : menus)
         menu->runtime = nullptr;
     menus.clear();
+    reset_action_bridge(*this);
     interp.reset();
     if (owns_context_lease) {
         sao::plugins::loader::plugin_context_release_host_lease(context);
@@ -2292,11 +2639,18 @@ sao_plugins_emma_call_on_enable(emma_plugin_handle_t plugin) {
     try {
         return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
             const std::size_t checkpoint = runtime.menus.size();
+            const emma_action_checkpoint action_before = action_checkpoint(runtime);
             const int32_t status = call_named(&runtime, "on_enable", {}, nullptr, true);
-            if (status == SAO_OK)
-                return commit_enable_menus(runtime, checkpoint);
-            const int32_t rollback_status = rollback_menus(runtime, checkpoint);
-            return rollback_status == SAO_OK ? status : rollback_status;
+            if (status == SAO_OK) {
+                const int32_t menu_status = commit_enable_menus(runtime, checkpoint);
+                return menu_status == SAO_OK ? commit_enable_action(runtime, action_before)
+                                             : menu_status;
+            }
+            const int32_t action_status = rollback_action(runtime, action_before);
+            const int32_t menu_status = rollback_menus(runtime, checkpoint);
+            if (action_status != SAO_OK)
+                return action_status;
+            return menu_status == SAO_OK ? status : menu_status;
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -2310,7 +2664,11 @@ sao_plugins_emma_call_on_disable(emma_plugin_handle_t plugin) {
     try {
         return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
             const int32_t status = call_named(&runtime, "on_disable", {}, nullptr, true);
-            return status == SAO_OK ? remove_enable_menus(runtime) : status;
+            if (status != SAO_OK)
+                return status;
+            const int32_t action_status = remove_enable_action(runtime);
+            const int32_t menu_status = remove_enable_menus(runtime);
+            return action_status == SAO_OK ? menu_status : action_status;
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -2516,20 +2874,20 @@ sao_plugins_emma_unload_script(emma_plugin_handle_t plugin) {
             runtime_to_teardown = found->second->runtime.get();
         }
 
-        const int32_t menu_status = quiesce_menu_providers(*runtime_to_teardown);
-        if (menu_status != SAO_OK) {
+        const int32_t provider_status = quiesce_context_providers(*runtime_to_teardown);
+        if (provider_status != SAO_OK) {
             std::lock_guard lock(registry.mutex);
             const auto found = registry.plugins.find(plugin);
             if (found != registry.plugins.end() && found->second != nullptr &&
                 found->second->runtime.get() == runtime_to_teardown) {
                 found->second->lifecycle = emma_plugin_s::state::closing;
             }
-            return menu_status;
+            return provider_status;
         }
 
         const int32_t teardown_status = teardown_owned_resources(*runtime_to_teardown);
         if (teardown_status != SAO_OK) {
-            const int32_t resume_status = register_menu_providers(*runtime_to_teardown);
+            const int32_t resume_status = register_context_providers(*runtime_to_teardown);
             std::lock_guard lock(registry.mutex);
             const auto found = registry.plugins.find(plugin);
             if (found != registry.plugins.end() && found->second != nullptr &&
@@ -2541,7 +2899,7 @@ sao_plugins_emma_unload_script(emma_plugin_handle_t plugin) {
 
         const int32_t binding_status = deactivate_emma_binding(*runtime_to_teardown);
         if (binding_status != SAO_OK) {
-            const int32_t resume_status = register_menu_providers(*runtime_to_teardown);
+            const int32_t resume_status = register_context_providers(*runtime_to_teardown);
             std::lock_guard lock(registry.mutex);
             const auto found = registry.plugins.find(plugin);
             if (found != registry.plugins.end() && found->second != nullptr &&
@@ -2554,6 +2912,7 @@ sao_plugins_emma_unload_script(emma_plugin_handle_t plugin) {
         for (auto& menu : runtime_to_teardown->menus)
             menu->runtime = nullptr;
         runtime_to_teardown->menus.clear();
+        reset_action_bridge(*runtime_to_teardown);
 
         std::unique_ptr<emma_plugin_runtime> runtime;
         {

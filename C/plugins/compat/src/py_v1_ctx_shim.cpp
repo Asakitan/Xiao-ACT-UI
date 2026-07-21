@@ -52,6 +52,7 @@ constexpr method_mapping kDefaultMappings[] = {
     {"register_menu_category",
      sdk_method_id::method_register_menu_category},
     {"register_menu_surface", sdk_method_id::method_register_menu_surface},
+    {"register_action_handler", sdk_method_id::method_register_action_handler},
     {"request_redraw", sdk_method_id::method_request_redraw},
     {"set_interval", sdk_method_id::method_set_interval},
     {"set_timeout", sdk_method_id::method_set_timeout},
@@ -100,6 +101,14 @@ uint16_t lookup_default(std::string_view name) noexcept {
 bool special_method(std::string_view name) noexcept {
     return std::any_of(std::begin(kSpecialMethods), std::end(kSpecialMethods),
                        [name](const char* method) { return name == method; });
+}
+
+bool fixed_fail_closed_method(std::string_view name) noexcept {
+    return name == "register_menu_surface" || name == "register_action_handler";
+}
+
+bool fixed_menu_action_method(std::string_view name) noexcept {
+    return name == "register_menu_category" || fixed_fail_closed_method(name);
 }
 
 int32_t write_json_result(const ordered_json& value,
@@ -210,6 +219,9 @@ sao_plugins_compat_v1_call(
             return SAO_ERR_OS_CALL_FAILED;
         }
     }
+    if (fixed_fail_closed_method(method_name)) {
+        return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+    }
     const uint16_t mapped = sao_plugins_compat_ctx_v1_lookup_alias(method_name);
     if (mapped == kUnknownMethod ||
         mapped >= static_cast<uint16_t>(sdk_method_id::method_count_)) {
@@ -293,6 +305,9 @@ sao_plugins_compat_ctx_v1_register_alias(const char* old_name,
         new_method_id >= static_cast<uint16_t>(sdk_method_id::method_count_)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    if (fixed_menu_action_method(old_name) && new_method_id != lookup_default(old_name)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     try {
         auto& aliases = registry();
         std::lock_guard lock(aliases.mutex);
@@ -306,6 +321,8 @@ sao_plugins_compat_ctx_v1_register_alias(const char* old_name,
 extern "C" SAO_PLUGINS_API uint16_t SAO_PLUGINS_CALL
 sao_plugins_compat_ctx_v1_lookup_alias(const char* old_name) {
     if (old_name == nullptr || old_name[0] == '\0') return kUnknownMethod;
+    if (fixed_menu_action_method(old_name))
+        return lookup_default(old_name);
     auto& aliases = registry();
     {
         std::lock_guard lock(aliases.mutex);

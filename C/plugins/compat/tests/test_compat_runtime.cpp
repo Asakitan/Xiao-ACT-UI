@@ -20,15 +20,22 @@
 #include <string>
 
 using namespace sao::plugins::compat;
+using sao::plugins::sdk_binding::sdk_method_id;
 
 namespace {
 
-// method_id 常量 (对齐 sdk_binding::sdk_method_id 但脱离编译依赖):
-//   method_register_hotkey = 34 (对齐枚举顺序; 也可直接引 sdk_method_id)
-// 为独立性起见, 用几个数字模拟 method_id 语义。
-constexpr uint16_t k_method_add_hotkey = 34;
-constexpr uint16_t k_method_register_ui_panel = 30;
-constexpr uint16_t k_method_publish_event = 15;
+constexpr uint16_t k_method_add_hotkey =
+    static_cast<uint16_t>(sdk_method_id::method_register_hotkey);
+constexpr uint16_t k_method_register_ui_panel =
+    static_cast<uint16_t>(sdk_method_id::method_register_ui_panel);
+constexpr uint16_t k_method_publish_event = static_cast<uint16_t>(sdk_method_id::method_emit);
+
+static_assert(k_method_add_hotkey == 33);
+static_assert(k_method_register_ui_panel == 29);
+static_assert(k_method_publish_event == 15);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
+static_assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
 
 // CASE 1: register + lookup 单向
 void case_compat_ctx_v1_register_alias_lookup() {
@@ -50,6 +57,12 @@ void case_compat_ctx_v1_register_alias_lookup() {
     // 未注册的返 0xFFFF
     id = sao_plugins_compat_ctx_v1_lookup_alias("nonexistent_method");
     assert(id == 0xFFFF);
+    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
+           static_cast<uint16_t>(sdk_method_id::method_register_menu_category));
+    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
+           static_cast<uint16_t>(sdk_method_id::method_register_menu_surface));
+    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_action_handler") ==
+           static_cast<uint16_t>(sdk_method_id::method_register_action_handler));
 
     // 空 / null 参数
     id = sao_plugins_compat_ctx_v1_lookup_alias(nullptr);

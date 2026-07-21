@@ -15,6 +15,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -29,6 +30,32 @@ using sdk_binding::language_host_kind;
 using sdk_binding::sdk_context_call_request;
 using sdk_binding::sdk_method_id;
 
+static_assert(sizeof(cs_managed_entity_snapshot_invocation_v2) == 48);
+static_assert(sizeof(cs_managed_entity_menu_row_v2) == sizeof(loader::entity_menu_row_v2));
+static_assert(alignof(cs_managed_entity_menu_row_v2) == alignof(loader::entity_menu_row_v2));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, struct_size) ==
+              offsetof(loader::entity_menu_row_v2, struct_size));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, category_id_utf8) ==
+              offsetof(loader::entity_menu_row_v2, category_id_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, category_label_utf8) ==
+              offsetof(loader::entity_menu_row_v2, category_label_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, category_icon_utf8) ==
+              offsetof(loader::entity_menu_row_v2, category_icon_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, category_priority) ==
+              offsetof(loader::entity_menu_row_v2, category_priority));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, row_label_utf8) ==
+              offsetof(loader::entity_menu_row_v2, row_label_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, row_icon_utf8) ==
+              offsetof(loader::entity_menu_row_v2, row_icon_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, action_id_utf8) ==
+              offsetof(loader::entity_menu_row_v2, action_id_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, payload_json_utf8) ==
+              offsetof(loader::entity_menu_row_v2, payload_json_utf8));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, can_activate) ==
+              offsetof(loader::entity_menu_row_v2, can_activate));
+static_assert(offsetof(cs_managed_entity_menu_row_v2, reserved) ==
+              offsetof(loader::entity_menu_row_v2, reserved));
+
 struct managed_callback;
 
 struct entity_callback_pair {
@@ -38,8 +65,11 @@ struct entity_callback_pair {
 
 struct entity_registration {
     std::string provider_id;
+    std::string qualified_provider_id;
     std::unique_ptr<entity_callback_pair> callbacks;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<entity_registration>);
 
 } // namespace
 
@@ -382,6 +412,22 @@ int32_t SAO_PLUGINS_CALL callback_entity_snapshot(loader::entity_menu_row* rows,
                            : invoke_callback(pair->snapshot, &invocation);
 }
 
+int32_t SAO_PLUGINS_CALL callback_entity_snapshot_v2(
+    void* rows, uint32_t capacity, uint32_t row_stride_bytes, uint32_t* out_count,
+    uint64_t* out_revision, loader::entity_snapshot_content_token_t* out_content_token,
+    uint32_t* out_row_stride_bytes, void* user_data) {
+    auto* pair = static_cast<entity_callback_pair*>(user_data);
+    if (pair == nullptr || out_count == nullptr || out_revision == nullptr ||
+        out_content_token == nullptr || out_row_stride_bytes == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const cs_managed_entity_snapshot_invocation_v2 invocation{
+        rows,         capacity,          row_stride_bytes,     out_count,
+        out_revision, out_content_token, out_row_stride_bytes,
+    };
+    return invoke_callback(pair->snapshot, &invocation);
+}
+
 int32_t SAO_PLUGINS_CALL callback_entity_action(const char* action_id_utf8,
                                                 const char* payload_json_utf8, void* user_data) {
     auto* pair = static_cast<entity_callback_pair*>(user_data);
@@ -600,6 +646,11 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider(
     try {
         entity_registration registration;
         registration.provider_id = descriptor->provider_id_utf8;
+        const char* plugin_id = loader::sao_plugins_ctx_plugin_id(session->loader_context);
+        if (plugin_id == nullptr || plugin_id[0] == '\0')
+            return SAO_ERR_HANDLE_INVALID;
+        registration.qualified_provider_id =
+            std::string(plugin_id) + "/" + registration.provider_id;
         registration.callbacks = std::make_unique<entity_callback_pair>();
         {
             std::lock_guard lock(session->mutex);
@@ -614,7 +665,8 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider(
                           registration.provider_id) != session->pending_entity_ids.end()) {
                 return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
             }
-            session->entities.reserve(session->entities.size() + 1);
+            session->entities.reserve(session->entities.size() +
+                                      session->pending_entity_ids.size() + 1);
             session->pending_entity_ids.push_back(registration.provider_id);
         }
 
@@ -702,7 +754,8 @@ int32_t SAO_PLUGINS_CALL table_unregister_entity_provider(cs_managed_sdk_session
         return SAO_ERR_NOT_INITIALIZED;
 
     entity_callback_pair* callbacks = nullptr;
-    {
+    std::string qualified_provider_id;
+    try {
         std::lock_guard lock(session->mutex);
         const auto found = std::find_if(session->entities.begin(), session->entities.end(),
                                         [provider_id_utf8](const entity_registration& current) {
@@ -711,8 +764,12 @@ int32_t SAO_PLUGINS_CALL table_unregister_entity_provider(cs_managed_sdk_session
         if (found == session->entities.end())
             return SAO_ERR_HANDLE_INVALID;
         callbacks = found->callbacks.get();
+        qualified_provider_id = found->qualified_provider_id;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    const char* ids[] = {provider_id_utf8};
+
+    const char* ids[] = {qualified_provider_id.c_str()};
     status = loader::plugin_context_unregister_entity_providers(session->loader_context, ids, 1);
     if (status != SAO_OK)
         return status;
@@ -734,6 +791,136 @@ int32_t SAO_PLUGINS_CALL table_unregister_entity_provider(cs_managed_sdk_session
         release_callback_token(owned_callbacks->snapshot);
     }
     return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL table_register_entity_provider_v2(
+    cs_managed_sdk_session_t opaque, const cs_managed_entity_provider_descriptor_v2* descriptor) {
+    if (descriptor == nullptr ||
+        descriptor->struct_size < sizeof(cs_managed_entity_provider_descriptor_v2) ||
+        descriptor->provider_id_utf8 == nullptr || descriptor->provider_id_utf8[0] == '\0' ||
+        descriptor->snapshot == nullptr || descriptor->action_handler == nullptr ||
+        descriptor->snapshot->kind != cs_managed_callback_kind::entity_snapshot ||
+        descriptor->action_handler->kind != cs_managed_callback_kind::entity_action) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    session_call_lease lease;
+    int32_t status = lease.acquire_handle(opaque);
+    if (status != SAO_OK)
+        return status;
+    auto* session = lease.get();
+    if (session->loader_context == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+
+    try {
+        entity_registration registration;
+        registration.provider_id = descriptor->provider_id_utf8;
+        const char* plugin_id = loader::sao_plugins_ctx_plugin_id(session->loader_context);
+        if (plugin_id == nullptr || plugin_id[0] == '\0')
+            return SAO_ERR_HANDLE_INVALID;
+        registration.qualified_provider_id =
+            std::string(plugin_id) + "/" + registration.provider_id;
+        registration.callbacks = std::make_unique<entity_callback_pair>();
+        {
+            std::lock_guard lock(session->mutex);
+            const auto duplicate =
+                std::find_if(session->entities.begin(), session->entities.end(),
+                             [&registration](const entity_registration& current) {
+                                 return current.provider_id == registration.provider_id;
+                             });
+            if (duplicate != session->entities.end())
+                return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+            if (std::find(session->pending_entity_ids.begin(), session->pending_entity_ids.end(),
+                          registration.provider_id) != session->pending_entity_ids.end()) {
+                return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+            }
+            session->entities.reserve(session->entities.size() +
+                                      session->pending_entity_ids.size() + 1);
+            session->pending_entity_ids.push_back(registration.provider_id);
+        }
+
+        const auto clear_pending = [&session, &registration]() noexcept {
+            try {
+                std::lock_guard lock(session->mutex);
+                std::erase(session->pending_entity_ids, registration.provider_id);
+            } catch (...) {
+            }
+        };
+
+        void* ignored_entry = nullptr;
+        status = wrap_managed_callback(session, descriptor->snapshot, &ignored_entry,
+                                       &registration.callbacks->snapshot);
+        if (status != SAO_OK) {
+            clear_pending();
+            return status;
+        }
+        status = wrap_managed_callback(session, descriptor->action_handler, &ignored_entry,
+                                       &registration.callbacks->action);
+        if (status != SAO_OK) {
+            release_callback_token(registration.callbacks->snapshot);
+            clear_pending();
+            return status;
+        }
+
+        loader::entity_root_contribution_descriptor root{};
+        const loader::entity_root_contribution_descriptor* root_ptr = nullptr;
+        if (descriptor->contribution_id_utf8 != nullptr &&
+            descriptor->contribution_id_utf8[0] != '\0') {
+            if (descriptor->root_id_utf8 == nullptr || descriptor->name_utf8 == nullptr) {
+                release_callback_token(registration.callbacks->action);
+                release_callback_token(registration.callbacks->snapshot);
+                clear_pending();
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            root = {sizeof(root),
+                    descriptor->contribution_id_utf8,
+                    descriptor->root_id_utf8,
+                    descriptor->name_utf8,
+                    descriptor->icon_utf8,
+                    descriptor->priority};
+            root_ptr = &root;
+        }
+        loader::context_entity_provider_descriptor_v2 native{};
+        native.struct_size = sizeof(native);
+        native.provider_id_utf8 = registration.provider_id.c_str();
+        native.snapshot = callback_entity_snapshot_v2;
+        native.action_handler = callback_entity_action;
+        native.user_data = registration.callbacks.get();
+        native.root_contribution = root_ptr;
+        status =
+            loader::sao_plugins_ctx_register_entity_provider_v2(session->loader_context, &native);
+        if (status != SAO_OK) {
+            release_callback_token(registration.callbacks->action);
+            release_callback_token(registration.callbacks->snapshot);
+            clear_pending();
+            return status;
+        }
+        {
+            std::lock_guard lock(session->mutex);
+            session->entities.push_back(std::move(registration));
+            std::erase(session->pending_entity_ids, descriptor->provider_id_utf8);
+        }
+        return SAO_OK;
+    } catch (...) {
+        try {
+            std::lock_guard lock(session->mutex);
+            std::erase(session->pending_entity_ids, descriptor->provider_id_utf8);
+        } catch (...) {
+        }
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL table_emit_context(cs_managed_sdk_session_t opaque, const char* topic_utf8,
+                                            const char* payload_json_utf8) {
+    if (topic_utf8 == nullptr || topic_utf8[0] == '\0' || payload_json_utf8 == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    session_call_lease lease;
+    const int32_t status = lease.acquire_handle(opaque);
+    if (status != SAO_OK)
+        return status;
+    if (lease.get()->loader_context == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    return loader::sao_plugins_ctx_emit(lease.get()->loader_context, topic_utf8, payload_json_utf8);
 }
 
 int32_t SAO_PLUGINS_CALL table_last_error(cs_managed_sdk_session_t opaque, char* out_error_utf8,
@@ -771,6 +958,8 @@ const cs_managed_sdk_table kSdkTable{
     table_register_entity_provider,
     table_unregister_entity_provider,
     table_last_error,
+    table_register_entity_provider_v2,
+    table_emit_context,
 };
 
 int32_t quiesce_entities(sdk_bridge_session* session) noexcept {
@@ -780,7 +969,7 @@ int32_t quiesce_entities(sdk_bridge_session* session) noexcept {
             std::lock_guard lock(session->mutex);
             owned_ids.reserve(session->entities.size());
             for (const auto& registration : session->entities)
-                owned_ids.push_back(registration.provider_id);
+                owned_ids.push_back(registration.qualified_provider_id);
         }
         if (owned_ids.empty() || session->loader_context == nullptr)
             return SAO_OK;
@@ -945,8 +1134,11 @@ int32_t cshost_sdk_session_release_callbacks(sdk_bridge_session* session) noexce
                 std::lock_guard lock(session->mutex);
                 if (!session->retiring || session->active_calls != 0)
                     return loader::SAO_PLUGINS_ERR_BUSY;
-                if (session->callbacks.empty())
-                    return session->callback_release_status;
+                if (session->callbacks.empty()) {
+                    const int32_t status = session->callback_release_status;
+                    session->callback_release_status = SAO_OK;
+                    return status;
+                }
                 callback_token = session->callbacks.back()->token;
             }
             release_callback_token(reinterpret_cast<void*>(callback_token));

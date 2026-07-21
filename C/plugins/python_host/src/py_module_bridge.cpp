@@ -67,7 +67,7 @@ namespace {
 
 namespace loader = sao::plugins::loader;
 
-static_assert(SAO_PLUGIN_CONTEXT_ENTITY_PROVIDER_ABI_VERSION >= 1u);
+static_assert(SAO_PLUGIN_CONTEXT_ENTITY_PROVIDER_ABI_VERSION >= 3u);
 
 struct CallbackGate {
     std::mutex mutex;
@@ -190,8 +190,13 @@ struct PluginContextObject {
     struct NativeTimerBridge* native_timer_bridges = nullptr;
     struct NativeNotifyBridge* native_notify_bridges = nullptr;
     struct NativeMenuBridge* native_menu_bridges = nullptr;
+    struct NativeActionBridge* native_action_bridge = nullptr;
     uint64_t next_resource_sequence = 1;
     uint64_t next_python_token = 1;
+    uint64_t next_enable_checkpoint = 1;
+    uint64_t active_enable_checkpoint = 0;
+    uint64_t enable_checkpoint_sequence = 0;
+    struct NativeActionBridge* enable_checkpoint_action = nullptr;
     bool tearing_down = false;
     bool teardown_deferred = false;
     bool controlled_test_shim = false;
@@ -271,6 +276,7 @@ struct NativeMenuRow {
 struct NativeMenuBridge {
     CallbackGate gate;
     PyObject* builder = nullptr;
+    PyObject* ledger_record = nullptr;
     std::string provider_id;
     std::string qualified_provider_id;
     std::string contribution_id;
@@ -279,11 +285,23 @@ struct NativeMenuBridge {
     std::string icon;
     double priority = 0.0;
     uint64_t revision = 0;
+    bool enable_scoped = false;
     bool registered = true;
     uint64_t sequence = 0;
     std::vector<NativeMenuRow> rows;
     std::unordered_map<std::string, PyObject*> actions;
     NativeMenuBridge* next = nullptr;
+};
+
+struct NativeActionBridge {
+    CallbackGate gate;
+    PyObject* callback = nullptr;
+    std::string provider_id;
+    std::string qualified_provider_id;
+    bool enable_scoped = false;
+    bool registered = true;
+    uint64_t sequence = 0;
+    NativeActionBridge* previous = nullptr;
 };
 
 // forward decl
@@ -429,6 +447,49 @@ void delete_timer_bridge(NativeTimerBridge* bridge) {
         Py_DECREF(reinterpret_cast<PyObject*>(owner));
 }
 
+void delete_action_bridge(NativeActionBridge* bridge) {
+    if (bridge == nullptr)
+        return;
+    Py_XDECREF(bridge->callback);
+    delete bridge;
+}
+
+void delete_action_chain(NativeActionBridge* bridge) {
+    while (bridge != nullptr) {
+        auto* previous = bridge->previous;
+        delete_action_bridge(bridge);
+        bridge = previous;
+    }
+}
+
+void delete_action_prefix(NativeActionBridge* bridge, NativeActionBridge* stop) {
+    while (bridge != stop) {
+        auto* previous = bridge->previous;
+        delete_action_bridge(bridge);
+        bridge = previous;
+    }
+}
+
+int32_t register_action_provider(PluginContextObject* self, NativeActionBridge* bridge) noexcept;
+
+int32_t unregister_provider_ids(PluginContextObject* self,
+                                const std::vector<std::string>& qualified_ids) noexcept {
+    if (qualified_ids.empty())
+        return SAO_OK;
+    if (self == nullptr || self->loader_context == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        std::vector<const char*> provider_ids;
+        provider_ids.reserve(qualified_ids.size());
+        for (const auto& provider_id : qualified_ids)
+            provider_ids.push_back(provider_id.c_str());
+        return loader::plugin_context_unregister_entity_providers(
+            self->loader_context, provider_ids.data(), provider_ids.size());
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t release_native_bridges(PluginContextObject* self) {
     if (self == nullptr)
         return SAO_OK;
@@ -436,13 +497,14 @@ int32_t release_native_bridges(PluginContextObject* self) {
         const bool has_native_bridges =
             self->native_panel_bridges != nullptr || self->native_hotkey_bridges != nullptr ||
             self->native_event_bridges != nullptr || self->native_timer_bridges != nullptr ||
-            self->native_notify_bridges != nullptr || self->native_menu_bridges != nullptr;
+            self->native_notify_bridges != nullptr || self->native_menu_bridges != nullptr ||
+            self->native_action_bridge != nullptr;
         return has_native_bridges ? loader::SAO_PLUGINS_ERR_BUSY : SAO_OK;
     }
 
     struct Resource {
         uint64_t sequence;
-        enum class Kind { panel, hotkey, event, timer, notify, menu } kind;
+        enum class Kind { panel, hotkey, event, timer, notify, menu, action } kind;
         void* value;
     };
     std::vector<Resource> resources;
@@ -463,6 +525,9 @@ int32_t release_native_bridges(PluginContextObject* self) {
     }
     for (auto* item = self->native_menu_bridges; item != nullptr; item = item->next) {
         resources.push_back({item->sequence, Resource::Kind::menu, item});
+    }
+    for (auto* item = self->native_action_bridge; item != nullptr; item = item->previous) {
+        resources.push_back({item->sequence, Resource::Kind::action, item});
     }
     std::sort(resources.begin(), resources.end(), [](const Resource& left, const Resource& right) {
         return left.sequence > right.sequence;
@@ -485,6 +550,9 @@ int32_t release_native_bridges(PluginContextObject* self) {
             break;
         case Resource::Kind::menu:
             gate = &static_cast<NativeMenuBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::action:
+            gate = &static_cast<NativeActionBridge*>(resource.value)->gate;
             break;
         case Resource::Kind::notify:
             break;
@@ -518,6 +586,9 @@ int32_t release_native_bridges(PluginContextObject* self) {
             break;
         case Resource::Kind::menu:
             gate = &static_cast<NativeMenuBridge*>(resource.value)->gate;
+            break;
+        case Resource::Kind::action:
+            gate = &static_cast<NativeActionBridge*>(resource.value)->gate;
             break;
         case Resource::Kind::notify:
             break;
@@ -654,6 +725,21 @@ int32_t release_native_bridges(PluginContextObject* self) {
                 bridge->registered = false;
             break;
         }
+        case Resource::Kind::action: {
+            auto* bridge = static_cast<NativeActionBridge*>(resource.value);
+            if (bridge->registered && self->loader_context != nullptr &&
+                !bridge->qualified_provider_id.empty()) {
+                const std::vector<std::string> provider_ids{bridge->qualified_provider_id};
+                status = unregister_provider_ids(self, provider_ids);
+                complete = status == SAO_OK;
+            } else if (bridge->registered && !bridge->qualified_provider_id.empty()) {
+                status = SAO_ERR_HANDLE_INVALID;
+                complete = false;
+            }
+            if (complete)
+                bridge->registered = false;
+            break;
+        }
         }
         if (!complete)
             return rollback_teardown(status);
@@ -691,11 +777,17 @@ int32_t release_native_bridges(PluginContextObject* self) {
         auto* bridge = self->native_menu_bridges;
         self->native_menu_bridges = bridge->next;
         Py_XDECREF(bridge->builder);
+        Py_XDECREF(bridge->ledger_record);
         for (const auto& [_, callback] : bridge->actions) {
             Py_XDECREF(callback);
         }
         delete bridge;
     }
+    delete_action_chain(self->native_action_bridge);
+    self->native_action_bridge = nullptr;
+    self->active_enable_checkpoint = 0;
+    self->enable_checkpoint_sequence = 0;
+    self->enable_checkpoint_action = nullptr;
     if (self->loader_context_lease_held && self->loader_context != nullptr) {
         loader::plugin_context_release_host_lease(self->loader_context);
         self->loader_context_lease_held = false;
@@ -1428,6 +1520,329 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
     PyGILState_Release(gil);
     return SAO_OK;
 }
+
+PyObject* parse_action_payload(const char* payload_json_utf8) {
+    PyObject* json_module = PyImport_ImportModule("json");
+    if (json_module == nullptr)
+        return nullptr;
+    PyObject* loads = PyObject_GetAttrString(json_module, "loads");
+    Py_DECREF(json_module);
+    if (loads == nullptr)
+        return nullptr;
+    PyObject* payload = PyObject_CallFunction(loads, "s", payload_json_utf8);
+    Py_DECREF(loads);
+    return payload;
+}
+
+PyObject* serialize_action_result(PyObject* value) {
+    PyObject* json_module = PyImport_ImportModule("json");
+    if (json_module == nullptr)
+        return nullptr;
+    PyObject* dumps = PyObject_GetAttrString(json_module, "dumps");
+    Py_DECREF(json_module);
+    if (dumps == nullptr)
+        return nullptr;
+    PyObject* args = PyTuple_Pack(1, value);
+    PyObject* kwargs = PyDict_New();
+    if (args == nullptr || kwargs == nullptr ||
+        PyDict_SetItemString(kwargs, "allow_nan", Py_False) != 0 ||
+        PyDict_SetItemString(kwargs, "ensure_ascii", Py_False) != 0) {
+        Py_XDECREF(args);
+        Py_XDECREF(kwargs);
+        Py_DECREF(dumps);
+        return nullptr;
+    }
+    PyObject* serialized = PyObject_Call(dumps, args, kwargs);
+    Py_DECREF(kwargs);
+    Py_DECREF(args);
+    Py_DECREF(dumps);
+    return serialized;
+}
+
+int32_t SAO_PLUGINS_CALL native_action_v2(const char* action_id_utf8, const char* payload_json_utf8,
+                                          loader::entity_action_result_sink_v2_fn result_sink,
+                                          void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto* bridge = static_cast<NativeActionBridge*>(user_data);
+    if (!enter_callback(bridge->gate))
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    const auto finish = [bridge, gil](int32_t status) {
+        leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
+        return status;
+    };
+    try {
+        PyObject* action = PyUnicode_FromString(action_id_utf8);
+        if (action == nullptr) {
+            PyErr_Clear();
+            return finish(SAO_ERR_OS_CALL_FAILED);
+        }
+        PyObject* payload = parse_action_payload(payload_json_utf8);
+        if (payload == nullptr) {
+            Py_DECREF(action);
+            PyErr_Clear();
+            return finish(SAO_ERR_INVALID_ARGUMENT);
+        }
+        PyObject* result = PyObject_CallFunctionObjArgs(bridge->callback, action, payload, nullptr);
+        Py_DECREF(payload);
+        Py_DECREF(action);
+        if (result == nullptr) {
+            PyErr_Clear();
+            return finish(SAO_ERR_OS_CALL_FAILED);
+        }
+
+        loader::entity_action_result_v2 native_result{
+            sizeof(loader::entity_action_result_v2),
+            loader::kEntityActionAbiVersion2,
+            static_cast<std::uint8_t>(result == Py_None ? 0 : 1),
+            {},
+            nullptr};
+        PyObject* serialized = nullptr;
+        if (result != Py_None) {
+            serialized = serialize_action_result(result);
+            if (serialized == nullptr || !PyUnicode_Check(serialized)) {
+                Py_XDECREF(serialized);
+                Py_DECREF(result);
+                PyErr_Clear();
+                return finish(SAO_ERR_INVALID_ARGUMENT);
+            }
+            Py_ssize_t result_size = 0;
+            const char* result_json = PyUnicode_AsUTF8AndSize(serialized, &result_size);
+            if (result_json == nullptr || result_size < 0 ||
+                static_cast<std::size_t>(result_size) >
+                    loader::kMaximumEntityActionResultJsonBytes ||
+                std::memchr(result_json, '\0', static_cast<std::size_t>(result_size)) != nullptr ||
+                !valid_menu_json(
+                    std::string_view(result_json, static_cast<std::size_t>(result_size)))) {
+                Py_DECREF(serialized);
+                Py_DECREF(result);
+                PyErr_Clear();
+                return finish(SAO_ERR_INVALID_ARGUMENT);
+            }
+            native_result.result_json_utf8 = result_json;
+        }
+        const int32_t status = result_sink(&native_result, result_sink_user_data);
+        Py_XDECREF(serialized);
+        Py_DECREF(result);
+        return finish(status);
+    } catch (...) {
+        PyErr_Clear();
+        return finish(SAO_ERR_OS_CALL_FAILED);
+    }
+}
+
+int32_t register_action_provider(PluginContextObject* self, NativeActionBridge* bridge) noexcept {
+    if (self == nullptr || bridge == nullptr || self->loader_context == nullptr ||
+        bridge->callback == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        loader::context_entity_provider_descriptor_v3 provider{};
+        provider.struct_size = sizeof(provider);
+        provider.provider_id_utf8 = bridge->provider_id.c_str();
+        provider.action_handler_v2 = native_action_v2;
+        provider.action_user_data = bridge;
+        provider.flags = loader::kContextEntityProviderV3ActionOnly;
+        return loader::sao_plugins_ctx_register_entity_provider_v3(self->loader_context, &provider);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+void mark_action_registration(NativeActionBridge* current,
+                              NativeActionBridge* registered) noexcept {
+    for (auto* bridge = current; bridge != nullptr; bridge = bridge->previous)
+        bridge->registered = bridge == registered;
+}
+
+void erase_menu_bridges_since(PluginContextObject* self, uint64_t sequence) {
+    auto** link = &self->native_menu_bridges;
+    while (*link != nullptr) {
+        auto* bridge = *link;
+        if (bridge->sequence < sequence) {
+            link = &bridge->next;
+            continue;
+        }
+        *link = bridge->next;
+        remove_list_identity(self->menus, bridge->ledger_record);
+        Py_XDECREF(bridge->builder);
+        Py_XDECREF(bridge->ledger_record);
+        for (const auto& [_, callback] : bridge->actions)
+            Py_XDECREF(callback);
+        delete bridge;
+    }
+}
+
+void erase_enable_scoped_menu_bridges(PluginContextObject* self) {
+    auto** link = &self->native_menu_bridges;
+    while (*link != nullptr) {
+        auto* bridge = *link;
+        if (!bridge->enable_scoped) {
+            link = &bridge->next;
+            continue;
+        }
+        *link = bridge->next;
+        remove_list_identity(self->menus, bridge->ledger_record);
+        Py_XDECREF(bridge->builder);
+        Py_XDECREF(bridge->ledger_record);
+        for (const auto& [_, callback] : bridge->actions)
+            Py_XDECREF(callback);
+        delete bridge;
+    }
+}
+
+int32_t begin_enable_resource_checkpoint(PluginContextObject* self,
+                                         uint64_t* out_checkpoint) noexcept {
+    if (self == nullptr || out_checkpoint == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *out_checkpoint = 0;
+    if (self->tearing_down)
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    if (self->active_enable_checkpoint != 0)
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    if (self->native_action_bridge != nullptr && !self->native_action_bridge->registered) {
+        const int32_t status = register_action_provider(self, self->native_action_bridge);
+        if (status != SAO_OK)
+            return status;
+        mark_action_registration(self->native_action_bridge, self->native_action_bridge);
+    }
+    if (self->next_enable_checkpoint == 0 ||
+        self->next_enable_checkpoint == (std::numeric_limits<uint64_t>::max)()) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    const uint64_t checkpoint = self->next_enable_checkpoint++;
+    self->active_enable_checkpoint = checkpoint;
+    self->enable_checkpoint_sequence = self->next_resource_sequence;
+    self->enable_checkpoint_action = self->native_action_bridge;
+    *out_checkpoint = checkpoint;
+    return SAO_OK;
+}
+
+int32_t commit_enable_resources(PluginContextObject* self, uint64_t checkpoint) noexcept {
+    if (self == nullptr || checkpoint == 0 || self->active_enable_checkpoint != checkpoint)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        for (auto* menu = self->native_menu_bridges; menu != nullptr; menu = menu->next) {
+            if (menu->sequence >= self->enable_checkpoint_sequence)
+                menu->enable_scoped = true;
+        }
+        if (self->native_action_bridge != self->enable_checkpoint_action) {
+            auto* current = self->native_action_bridge;
+            if (current == nullptr)
+                return SAO_ERR_INVALID_ARGUMENT;
+            auto* replaced = current->previous;
+            current->previous = self->enable_checkpoint_action;
+            current->enable_scoped = true;
+            delete_action_prefix(replaced, self->enable_checkpoint_action);
+        }
+        self->active_enable_checkpoint = 0;
+        self->enable_checkpoint_sequence = 0;
+        self->enable_checkpoint_action = nullptr;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t rollback_enable_resources(PluginContextObject* self, uint64_t checkpoint) noexcept {
+    if (self == nullptr || checkpoint == 0 || self->active_enable_checkpoint != checkpoint)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        NativeActionBridge* const action_base = self->enable_checkpoint_action;
+        const bool action_changed = self->native_action_bridge != action_base;
+        if (action_changed && action_base != nullptr) {
+            const int32_t status = register_action_provider(self, action_base);
+            if (status != SAO_OK)
+                return status;
+            mark_action_registration(self->native_action_bridge, action_base);
+        }
+
+        std::vector<std::string> provider_ids;
+        for (auto* menu = self->native_menu_bridges; menu != nullptr; menu = menu->next) {
+            if (menu->sequence >= self->enable_checkpoint_sequence && menu->registered)
+                provider_ids.push_back(menu->qualified_provider_id);
+        }
+        if (action_changed && action_base == nullptr && self->native_action_bridge != nullptr &&
+            self->native_action_bridge->registered) {
+            provider_ids.push_back(self->native_action_bridge->qualified_provider_id);
+        }
+        const int32_t unregister_status = unregister_provider_ids(self, provider_ids);
+        if (unregister_status != SAO_OK)
+            return unregister_status;
+
+        erase_menu_bridges_since(self, self->enable_checkpoint_sequence);
+        while (self->native_action_bridge != action_base) {
+            auto* bridge = self->native_action_bridge;
+            if (bridge == nullptr)
+                return SAO_ERR_INVALID_ARGUMENT;
+            self->native_action_bridge = bridge->previous;
+            delete_action_bridge(bridge);
+        }
+        if (action_base != nullptr)
+            action_base->registered = true;
+        self->active_enable_checkpoint = 0;
+        self->enable_checkpoint_sequence = 0;
+        self->enable_checkpoint_action = nullptr;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t remove_enable_resources(PluginContextObject* self) noexcept {
+    if (self == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (self->active_enable_checkpoint != 0)
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    try {
+        NativeActionBridge* action_base = self->native_action_bridge;
+        while (action_base != nullptr && action_base->enable_scoped)
+            action_base = action_base->previous;
+        bool action_changed = self->native_action_bridge != action_base;
+        if (action_changed && action_base != nullptr) {
+            auto* current = self->native_action_bridge;
+            Py_SETREF(current->callback, Py_NewRef(action_base->callback));
+            current->enable_scoped = false;
+            current->sequence = action_base->sequence;
+            auto* persistent_previous = action_base->previous;
+            delete_action_prefix(current->previous, action_base);
+            delete_action_bridge(action_base);
+            current->previous = persistent_previous;
+            action_base = current;
+            action_changed = false;
+        }
+
+        std::vector<std::string> provider_ids;
+        for (auto* menu = self->native_menu_bridges; menu != nullptr; menu = menu->next) {
+            if (menu->enable_scoped && menu->registered)
+                provider_ids.push_back(menu->qualified_provider_id);
+        }
+        if (action_changed && self->native_action_bridge != nullptr &&
+            self->native_action_bridge->registered) {
+            provider_ids.push_back(self->native_action_bridge->qualified_provider_id);
+        }
+        const int32_t unregister_status = unregister_provider_ids(self, provider_ids);
+        if (unregister_status != SAO_OK)
+            return unregister_status;
+
+        erase_enable_scoped_menu_bridges(self);
+        while (self->native_action_bridge != action_base) {
+            auto* bridge = self->native_action_bridge;
+            self->native_action_bridge = bridge->previous;
+            delete_action_bridge(bridge);
+        }
+        if (action_base != nullptr)
+            action_base->registered = true;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
 #endif
 
 // ── PluginContext 生命周期 ──────────────────────────────────
@@ -1484,8 +1899,13 @@ PyObject* PluginContext_new(PyTypeObject* type, PyObject* /*args*/, PyObject* /*
     self->native_timer_bridges = nullptr;
     self->native_notify_bridges = nullptr;
     self->native_menu_bridges = nullptr;
+    self->native_action_bridge = nullptr;
     self->next_resource_sequence = 1;
     self->next_python_token = 1;
+    self->next_enable_checkpoint = 1;
+    self->active_enable_checkpoint = 0;
+    self->enable_checkpoint_sequence = 0;
+    self->enable_checkpoint_action = nullptr;
     self->tearing_down = false;
     self->teardown_deferred = false;
     self->retired = false;
@@ -1565,9 +1985,12 @@ int PluginContext_traverse(PluginContextObject* self, visitproc visit, void* arg
     }
     for (auto* bridge = self->native_menu_bridges; bridge != nullptr; bridge = bridge->next) {
         Py_VISIT(bridge->builder);
+        Py_VISIT(bridge->ledger_record);
         for (const auto& [_, callback] : bridge->actions)
             Py_VISIT(callback);
     }
+    for (auto* bridge = self->native_action_bridge; bridge != nullptr; bridge = bridge->previous)
+        Py_VISIT(bridge->callback);
     return 0;
 }
 
@@ -2759,6 +3182,82 @@ PyObject* PluginContext_engine_owner_attr(PluginContextObject* self, PyObject* a
     return result;
 }
 
+PyObject* PluginContext_register_menu_surface(PluginContextObject* self, PyObject* args,
+                                              PyObject* kwds) {
+    if (!require_active_context(self))
+        return nullptr;
+    static const char* kwlist[] = {"surface_id", "descriptor", "priority", nullptr};
+    const char* surface_id = nullptr;
+    PyObject* descriptor = nullptr;
+    double priority = 0.0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|d", const_cast<char**>(kwlist), &surface_id,
+                                     &descriptor, &priority)) {
+        return nullptr;
+    }
+    if (surface_id[0] == '\0' || !PyMapping_Check(descriptor) || !std::isfinite(priority)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "menu surface id, descriptor, and priority must be valid");
+        return nullptr;
+    }
+    const int32_t status =
+        self->loader_context == nullptr
+            ? loader::SAO_PLUGINS_ERR_UNSUPPORTED
+            : loader::sao_plugins_ctx_register_menu_surface(self->loader_context, surface_id, "{}",
+                                                            static_cast<float>(priority));
+    if (status != SAO_OK)
+        return status_error("menu surface registration", status);
+    return PyUnicode_FromString(surface_id);
+}
+
+PyObject* PluginContext_register_action_handler(PluginContextObject* self, PyObject* args) {
+    if (!require_active_context(self))
+        return nullptr;
+    PyObject* callback = nullptr;
+    if (!PyArg_ParseTuple(args, "O", &callback))
+        return nullptr;
+    if (!require_callable(callback, "action handler"))
+        return nullptr;
+    if (self->loader_context == nullptr) {
+        return status_error("action handler registration", loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    }
+    try {
+        const char* plugin_id = PyUnicode_AsUTF8(self->plugin_id);
+        if (plugin_id == nullptr)
+            return nullptr;
+        auto candidate = std::make_unique<NativeActionBridge>();
+        candidate->provider_id = "opaque-actions";
+        candidate->qualified_provider_id = std::string(plugin_id) + "/" + candidate->provider_id;
+        auto* replaced = self->native_action_bridge;
+        if (self->active_enable_checkpoint != 0) {
+            candidate->previous = replaced;
+        } else if (replaced != nullptr && replaced->enable_scoped) {
+            auto* persistent_base = replaced;
+            while (persistent_base != nullptr && persistent_base->enable_scoped)
+                persistent_base = persistent_base->previous;
+            candidate->previous = persistent_base;
+            candidate->enable_scoped = true;
+        }
+        candidate->callback = Py_NewRef(callback);
+        const int32_t status = register_action_provider(self, candidate.get());
+        if (status != SAO_OK) {
+            Py_CLEAR(candidate->callback);
+            return status_error("action handler registration", status);
+        }
+        if (replaced != nullptr)
+            replaced->registered = false;
+        candidate->sequence = self->next_resource_sequence++;
+        self->native_action_bridge = candidate.release();
+        if (self->active_enable_checkpoint == 0)
+            delete_action_prefix(replaced, self->native_action_bridge->previous);
+        return Py_NewRef(self->plugin_id);
+    } catch (const std::bad_alloc&) {
+        return PyErr_NoMemory();
+    } catch (...) {
+        PyErr_SetString(PyExc_RuntimeError, "action handler registration failed");
+        return nullptr;
+    }
+}
+
 PyObject* PluginContext_register_menu_category(PluginContextObject* self, PyObject* args,
                                                PyObject* kwds) {
     if (!require_active_context(self))
@@ -2830,6 +3329,10 @@ PyObject* PluginContext_register_menu_category(PluginContextObject* self, PyObje
         Py_XDECREF(result);
         return nullptr;
     }
+#if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
+    if (bridge != nullptr)
+        bridge->ledger_record = Py_NewRef(record);
+#endif
     Py_DECREF(record);
 #if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
     const Py_ssize_t record_index = PyList_GET_SIZE(self->menus) - 1;
@@ -2859,6 +3362,7 @@ PyObject* PluginContext_register_menu_category(PluginContextObject* self, PyObje
             }
             Py_DECREF(bridge->builder);
             bridge->builder = nullptr;
+            Py_CLEAR(bridge->ledger_record);
             Py_DECREF(result);
             return status_error("dynamic menu provider registration", status);
         }
@@ -3077,6 +3581,11 @@ PyMethodDef PluginContext_methods[] = {
      "Read an attribute from the projected engine owner."},
     {"register_menu_category", reinterpret_cast<PyCFunction>(PluginContext_register_menu_category),
      METH_VARARGS | METH_KEYWORDS, "Register a legacy plugin menu category."},
+    {"register_menu_surface", reinterpret_cast<PyCFunction>(PluginContext_register_menu_surface),
+     METH_VARARGS | METH_KEYWORDS, "Register a typed plugin menu surface."},
+    {"register_action_handler",
+     reinterpret_cast<PyCFunction>(PluginContext_register_action_handler), METH_VARARGS,
+     "Register an opaque plugin action handler."},
     {"toast", reinterpret_cast<PyCFunction>(PluginContext_toast), METH_VARARGS, "Show a toast."},
     {"ensure_requirements", reinterpret_cast<PyCFunction>(PluginContext_ensure_requirements),
      METH_VARARGS | METH_KEYWORDS, "Ensure external requirements."},
@@ -3417,6 +3926,68 @@ sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context)
     } catch (...) {
         if (lease_held)
             loader::plugin_context_release_host_lease(canonical);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t pyhost_ctx_begin_enable_resources(void* pyobject, uint64_t* out_checkpoint) noexcept {
+    try {
+        if (pyobject == nullptr || out_checkpoint == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        auto* object = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(object, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        return begin_enable_resource_checkpoint(reinterpret_cast<PluginContextObject*>(object),
+                                                out_checkpoint);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t pyhost_ctx_commit_enable_resources(void* pyobject, uint64_t checkpoint) noexcept {
+    try {
+        if (pyobject == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        auto* object = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(object, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        return commit_enable_resources(reinterpret_cast<PluginContextObject*>(object), checkpoint);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t pyhost_ctx_rollback_enable_resources(void* pyobject, uint64_t checkpoint) noexcept {
+    try {
+        if (pyobject == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        auto* object = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(object, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        return rollback_enable_resources(reinterpret_cast<PluginContextObject*>(object),
+                                         checkpoint);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t pyhost_ctx_remove_enable_resources(void* pyobject) noexcept {
+    try {
+        if (pyobject == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (Py_IsInitialized() == 0)
+            return SAO_ERR_NOT_INITIALIZED;
+        auto* object = reinterpret_cast<PyObject*>(pyobject);
+        if (!PyObject_TypeCheck(object, &PluginContextType))
+            return SAO_ERR_INVALID_ARGUMENT;
+        return remove_enable_resources(reinterpret_cast<PluginContextObject*>(object));
+    } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

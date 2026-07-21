@@ -8,6 +8,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -26,6 +27,8 @@ inline constexpr std::size_t kMaximumJsonNodes = 16384;
 inline constexpr std::size_t kMaximumJsonStringBytes = 1024U * 1024U;
 inline constexpr std::size_t kMaximumJsonTotalStringBytes = 4U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumJsonOutputBytes = 8U * 1024U * 1024U;
+inline constexpr int kMaximumJsonNestingDepth = 64;
+inline unsigned char kJsonNullSentinel = 0;
 
 struct json_budget final {
     std::size_t nodes = 0;
@@ -96,15 +99,19 @@ inline bool consume_json_string(std::string_view value, json_budget& budget, std
 }
 
 inline bool push_json(lua_State* state, const json& value, json_budget& budget, std::string& error,
-                      int depth = 0) {
-    if (depth > 32) {
-        error = "JSON value nesting exceeds 32 levels";
+                      int depth = 0, bool preserve_json_null = false) {
+    if (depth > kMaximumJsonNestingDepth) {
+        error = "JSON value nesting exceeds 64 levels";
         return false;
     }
     if (!consume_json_node(budget, error))
         return false;
     if (value.is_null()) {
-        lua_pushnil(state);
+        if (preserve_json_null) {
+            lua_pushlightuserdata(state, &kJsonNullSentinel);
+        } else {
+            lua_pushnil(state);
+        }
     } else if (value.is_boolean()) {
         lua_pushboolean(state, value.get<bool>() ? 1 : 0);
     } else if (value.is_number_integer()) {
@@ -130,7 +137,8 @@ inline bool push_json(lua_State* state, const json& value, json_budget& budget, 
         }
         lua_createtable(state, static_cast<int>(value.size()), 0);
         for (size_t index = 0; index < value.size(); ++index) {
-            if (!push_json(state, value[index], budget, error, depth + 1)) {
+            if (!push_json(state, value[index], budget, error, depth + 1,
+                           preserve_json_null)) {
                 lua_pop(state, 1);
                 return false;
             }
@@ -148,7 +156,7 @@ inline bool push_json(lua_State* state, const json& value, json_budget& budget, 
                 return false;
             }
             lua_pushlstring(state, key.data(), key.size());
-            if (!push_json(state, child, budget, error, depth + 1)) {
+            if (!push_json(state, child, budget, error, depth + 1, preserve_json_null)) {
                 lua_pop(state, 2);
                 return false;
             }
@@ -165,6 +173,7 @@ struct push_json_context {
     const json* value = nullptr;
     std::string* error = nullptr;
     bool represented = false;
+    bool preserve_json_null = false;
 };
 
 inline int push_json_dispatch(lua_State* state) noexcept {
@@ -174,16 +183,18 @@ inline int push_json_dispatch(lua_State* state) noexcept {
             return luaL_error(state, "invalid JSON push context");
         }
         json_budget budget;
-        context->represented = push_json(state, *context->value, budget, *context->error);
+        context->represented = push_json(state, *context->value, budget, *context->error, 0,
+                                         context->preserve_json_null);
         return context->represented ? 1 : 0;
     } catch (...) {
         return luaL_error(state, "JSON conversion failed");
     }
 }
 
-inline bool protected_push_json(lua_State* state, const json& value, std::string& error) {
+inline bool protected_push_json(lua_State* state, const json& value, std::string& error,
+                                bool preserve_json_null = false) {
     lua_stack_guard stack(state);
-    push_json_context context{&value, &error, false};
+    push_json_context context{&value, &error, false, preserve_json_null};
     if (protected_trampoline(state, push_json_dispatch, &context, 1) != LUA_OK) {
         if (error.empty())
             error = "Lua rejected a JSON value";
@@ -204,10 +215,23 @@ struct table_item {
     json value;
 };
 
+struct active_table_guard final {
+    explicit active_table_guard(std::vector<const void*>& tables) noexcept : tables_(tables) {}
+    ~active_table_guard() {
+        tables_.pop_back();
+    }
+
+    active_table_guard(const active_table_guard&) = delete;
+    active_table_guard& operator=(const active_table_guard&) = delete;
+
+  private:
+    std::vector<const void*>& tables_;
+};
+
 inline bool stack_to_json(lua_State* state, int index, json& output, std::string& error, int depth,
-                          json_budget& budget) {
-    if (depth > 32) {
-        error = "Lua value nesting exceeds 32 levels";
+                          json_budget& budget, std::vector<const void*>& active_tables) {
+    if (depth > kMaximumJsonNestingDepth) {
+        error = "Lua value nesting exceeds 64 levels";
         return false;
     }
     if (!consume_json_node(budget, error))
@@ -224,7 +248,12 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
         if (lua_isinteger(state, index)) {
             output = static_cast<int64_t>(lua_tointeger(state, index));
         } else {
-            output = static_cast<double>(lua_tonumber(state, index));
+            const double number = static_cast<double>(lua_tonumber(state, index));
+            if (!std::isfinite(number)) {
+                error = "Lua JSON numbers must be finite";
+                return false;
+            }
+            output = number;
         }
         return true;
     case LUA_TSTRING: {
@@ -237,7 +266,26 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
         output = std::string(value == nullptr ? "" : value, length);
         return true;
     }
+    case LUA_TLIGHTUSERDATA:
+        if (lua_touserdata(state, index) == &kJsonNullSentinel) {
+            output = nullptr;
+            return true;
+        }
+        error = "Lua light userdata is not JSON serializable";
+        return false;
     case LUA_TTABLE: {
+        const void* identity = lua_topointer(state, index);
+        if (std::find(active_tables.begin(), active_tables.end(), identity) !=
+            active_tables.end()) {
+            error = "cyclic Lua tables are not JSON serializable";
+            return false;
+        }
+        if (lua_checkstack(state, 3) == 0) {
+            error = "Lua stack cannot represent the JSON value";
+            return false;
+        }
+        active_tables.push_back(identity);
+        active_table_guard active_guard(active_tables);
         std::vector<table_item> items;
         bool array_candidate = true;
         lua_Integer largest_index = 0;
@@ -264,7 +312,8 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
                 error = "Lua table JSON keys must be strings or positive integers";
                 return false;
             }
-            if (!stack_to_json(state, -1, item.value, error, depth + 1, budget)) {
+            if (!stack_to_json(state, -1, item.value, error, depth + 1, budget,
+                               active_tables)) {
                 lua_pop(state, 2);
                 return false;
             }
@@ -301,8 +350,10 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
 inline bool stack_to_json(lua_State* state, int index, json& output, std::string& error) {
     lua_stack_guard stack(state);
     json_budget budget;
+    std::vector<const void*> active_tables;
     try {
-        const bool converted = stack_to_json(state, index, output, error, 0, budget);
+        const bool converted =
+            stack_to_json(state, index, output, error, 0, budget, active_tables);
         if (converted)
             stack.dismiss();
         return converted;
