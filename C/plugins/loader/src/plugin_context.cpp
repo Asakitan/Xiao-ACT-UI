@@ -202,11 +202,12 @@ int32_t copy_external_entity_struct(const T* source, size_t required_prefix_size
 #if defined(_MSC_VER)
     __try {
 #endif
-        const size_t struct_size = source->struct_size;
+        uint32_t struct_size = 0;
+        std::memcpy(&struct_size, source, sizeof(struct_size));
         if (struct_size < required_prefix_size)
             return SAO_PLUGINS_ERR_ABI_MISMATCH;
         out = {};
-        std::memcpy(&out, source, (std::min)(struct_size, sizeof(out)));
+        std::memcpy(&out, source, (std::min)(static_cast<size_t>(struct_size), sizeof(out)));
         return SAO_OK;
 #if defined(_MSC_VER)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -398,17 +399,21 @@ bool parse_context_json(const char* text, parsed_context_json& output,
     }
 }
 
-int32_t copy_entity_provider_id(const char* value, std::string& out) {
-    constexpr size_t kMaximumEntityProviderIdBytes = 16 * 1024;
-    size_t length = 0;
-    if (!bounded_c_string_length(value, kMaximumEntityProviderIdBytes, length) || length == 0)
-        return SAO_ERR_INVALID_ARGUMENT;
-    std::string candidate(length, '\0');
-    if (!copy_c_string_bytes(candidate.data(), value, length) || !valid_utf8(candidate)) {
-        return SAO_ERR_INVALID_ARGUMENT;
+int32_t copy_entity_provider_id(const char* value, std::string& out) noexcept {
+    try {
+        constexpr size_t kMaximumEntityProviderIdBytes = 16 * 1024;
+        size_t length = 0;
+        if (!bounded_c_string_length(value, kMaximumEntityProviderIdBytes, length) || length == 0)
+            return SAO_ERR_INVALID_ARGUMENT;
+        std::string candidate(length, '\0');
+        if (!copy_c_string_bytes(candidate.data(), value, length) || !valid_utf8(candidate)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        out = std::move(candidate);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    out = std::move(candidate);
-    return SAO_OK;
 }
 
 extension_kind parse_extension_kind(const char* value, bool& valid) {
@@ -1910,9 +1915,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_men
     }
 }
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_menu_surface(
-    plugin_context_t* ctx, const char* surface_id_utf8, const char* descriptor_json_utf8, float) {
-    return add_extension(ctx, extension_kind::menu_category, surface_id_utf8, descriptor_json_utf8);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_register_menu_surface(plugin_context_t*, const char*, const char*, float) {
+    return SAO_PLUGINS_ERR_UNSUPPORTED;
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_data_source(
@@ -1936,11 +1941,43 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_dat
 int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
                                                  const native_entity_provider_descriptor* providers,
                                                  size_t count) noexcept {
-    if (ctx == nullptr || (count > 0 && providers == nullptr)) {
+    return plugin_context_register_entity_provider_arrays(ctx, providers, count, nullptr, 0, 0);
+}
+
+int32_t plugin_context_register_entity_provider_arrays(
+    plugin_context_t* ctx, const native_entity_provider_descriptor* providers_v1,
+    size_t provider_v1_count, const void* providers_v2, size_t provider_v2_count,
+    uint32_t provider_v2_stride_bytes) noexcept {
+    if (ctx == nullptr || (provider_v1_count > 0 && providers_v1 == nullptr)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    if (count > kMaximumEntityProvidersPerContext)
+    if (provider_v2_count == 0) {
+        if (providers_v2 != nullptr || provider_v2_stride_bytes != 0)
+            return SAO_ERR_INVALID_ARGUMENT;
+    } else if (providers_v2 == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
+    } else if (provider_v2_stride_bytes < kNativeEntityProviderDescriptorV2RequiredPrefixSize) {
+        return SAO_PLUGINS_ERR_ABI_MISMATCH;
+    } else if (provider_v2_stride_bytes % alignof(native_entity_provider_descriptor_v2) != 0) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (provider_v1_count > kMaximumEntityProvidersPerContext ||
+        provider_v2_count > kMaximumEntityProvidersPerContext - provider_v1_count) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const size_t total_count = provider_v1_count + provider_v2_count;
+    if (provider_v2_count > 0) {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(providers_v2);
+        constexpr uintptr_t kMaximumAddress = (std::numeric_limits<uintptr_t>::max)();
+        if (provider_v2_count > kMaximumAddress / provider_v2_stride_bytes) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const uintptr_t provider_v2_bytes =
+            static_cast<uintptr_t>(provider_v2_count) * provider_v2_stride_bytes;
+        if (base > kMaximumAddress - provider_v2_bytes) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+    }
     context_registration_lease lifetime;
     if (!lifetime.acquire(ctx))
         return SAO_ERR_HANDLE_INVALID;
@@ -1951,36 +1988,64 @@ int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
         if (ctx->plugin_owner->context != ctx)
             return SAO_ERR_HANDLE_INVALID;
         if (ctx->entity_providers.size() > kMaximumEntityProvidersPerContext ||
-            count > kMaximumEntityProvidersPerContext - ctx->entity_providers.size()) {
+            total_count > kMaximumEntityProvidersPerContext - ctx->entity_providers.size()) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
-        ctx->entity_providers.reserve(ctx->entity_providers.size() + count);
-        registered.reserve(count);
-        uintptr_t descriptor_address = reinterpret_cast<uintptr_t>(providers);
-        for (size_t index = 0; index < count; ++index) {
+        ctx->entity_providers.reserve(ctx->entity_providers.size() + total_count);
+        registered.reserve(total_count);
+        const auto rollback_registered = [&registered](int32_t status) noexcept {
+            const int32_t rollback_status = destroy_entity_providers(registered);
+            return rollback_status == SAO_OK ? status : rollback_status;
+        };
+        uintptr_t descriptor_address = reinterpret_cast<uintptr_t>(providers_v1);
+        for (size_t index = 0; index < provider_v1_count; ++index) {
             native_entity_provider_descriptor descriptor{};
             const int32_t descriptor_status = copy_external_entity_struct(
                 reinterpret_cast<const native_entity_provider_descriptor*>(descriptor_address),
                 kNativeEntityProviderDescriptorRequiredPrefixSize, descriptor);
             if (descriptor_status != SAO_OK) {
-                (void)destroy_entity_providers(registered);
-                return descriptor_status;
+                return rollback_registered(descriptor_status);
             }
             if (descriptor.struct_size >
                 (std::numeric_limits<uintptr_t>::max)() - descriptor_address) {
-                (void)destroy_entity_providers(registered);
-                return SAO_ERR_INVALID_ARGUMENT;
+                return rollback_registered(SAO_ERR_INVALID_ARGUMENT);
             }
             std::shared_ptr<entity_provider_state> provider;
             const int32_t status = register_entity_provider(
                 ctx->plugin_owner, ctx->plugin_id, descriptor.provider_id_utf8, descriptor.snapshot,
                 descriptor.action_handler, descriptor.user_data, nullptr, provider);
             if (status != SAO_OK) {
-                (void)destroy_entity_providers(registered);
-                return status;
+                return rollback_registered(status);
             }
             registered.push_back(std::move(provider));
             descriptor_address += descriptor.struct_size;
+        }
+
+        const uintptr_t descriptor_v2_base = reinterpret_cast<uintptr_t>(providers_v2);
+        for (size_t index = 0; index < provider_v2_count; ++index) {
+            const uintptr_t current_address =
+                descriptor_v2_base + index * static_cast<uintptr_t>(provider_v2_stride_bytes);
+            native_entity_provider_descriptor_v2 descriptor{};
+            const int32_t descriptor_status = copy_external_entity_struct(
+                reinterpret_cast<const native_entity_provider_descriptor_v2*>(current_address),
+                kNativeEntityProviderDescriptorV2RequiredPrefixSize, descriptor);
+            if (descriptor_status != SAO_OK) {
+                return rollback_registered(descriptor_status);
+            }
+            if (descriptor.struct_size < sizeof(descriptor))
+                descriptor.root_contribution = nullptr;
+            if (descriptor.struct_size > provider_v2_stride_bytes) {
+                return rollback_registered(SAO_ERR_INVALID_ARGUMENT);
+            }
+            std::shared_ptr<entity_provider_state> provider;
+            const int32_t status = register_entity_provider_v2(
+                ctx->plugin_owner, ctx->plugin_id, descriptor.provider_id_utf8,
+                descriptor.snapshot_v2, descriptor.action_handler, descriptor.user_data,
+                descriptor.root_contribution, provider);
+            if (status != SAO_OK) {
+                return rollback_registered(status);
+            }
+            registered.push_back(std::move(provider));
         }
         ctx->entity_providers.insert(ctx->entity_providers.end(), registered.begin(),
                                      registered.end());
@@ -1992,6 +2057,23 @@ int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
 }
 
 namespace {
+
+int32_t SAO_PLUGINS_CALL empty_entity_snapshot_v2(
+    void* rows, uint32_t capacity, uint32_t row_stride_bytes, uint32_t* out_count,
+    uint64_t* out_revision, entity_snapshot_content_token_t* out_content_token,
+    uint32_t* out_row_stride_bytes, void*) {
+    if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
+        out_row_stride_bytes == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (rows != nullptr || capacity != 0 || row_stride_bytes != 0)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *out_count = 0;
+    *out_revision = 1;
+    *out_content_token = 0x53414f4143545632ULL;
+    *out_row_stride_bytes = 0;
+    return SAO_OK;
+}
 
 int32_t register_context_entity_provider(
     plugin_context_t* ctx, const char* provider_id_utf8, entity_snapshot_callback_fn snapshot_v1,
@@ -2081,6 +2163,99 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_ent
     return register_context_entity_provider(ctx, current.provider_id_utf8, nullptr,
                                             current.snapshot, current.action_handler,
                                             current.user_data, current.root_contribution);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider_v3(
+    plugin_context_t* ctx, const context_entity_provider_descriptor_v3* descriptor) {
+    if (ctx == nullptr || descriptor == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_entity_provider_descriptor_v3 current{};
+    const int32_t descriptor_status = copy_external_entity_struct(
+        descriptor, kContextEntityProviderDescriptorV3RequiredPrefixSize, current);
+    if (descriptor_status != SAO_OK)
+        return descriptor_status;
+    if (current.struct_size <
+        offsetof(context_entity_provider_descriptor_v3, flags) + sizeof(current.flags)) {
+        current.flags = 0;
+    }
+    if (current.struct_size <
+        offsetof(context_entity_provider_descriptor_v3, reserved) + sizeof(current.reserved)) {
+        current.reserved = 0;
+    }
+    if (current.action_handler != nullptr || current.action_handler_v2 == nullptr ||
+        (current.flags & ~kContextEntityProviderV3ActionOnly) != 0 || current.reserved != 0) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const bool action_only = (current.flags & kContextEntityProviderV3ActionOnly) != 0;
+    if ((action_only && (current.snapshot != nullptr || current.user_data != nullptr ||
+                         current.root_contribution != nullptr)) ||
+        (!action_only && current.snapshot == nullptr)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+
+    std::string local_provider_id;
+    const int32_t provider_id_status =
+        copy_entity_provider_id(current.provider_id_utf8, local_provider_id);
+    if (provider_id_status != SAO_OK)
+        return provider_id_status;
+    if (local_provider_id.find('/') != std::string::npos) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+
+    context_registration_lease lifetime;
+    if (!lifetime.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    std::shared_ptr<entity_provider_state> provider;
+    try {
+        std::lock_guard plugin_lock(ctx->plugin_owner->mutex);
+        std::lock_guard context_lock(ctx->mutex);
+        if (ctx->plugin_owner->context != ctx)
+            return SAO_ERR_HANDLE_INVALID;
+        const lifecycle_state state = ctx->plugin_owner->state;
+        if (state != lifecycle_state::loading && state != lifecycle_state::loaded_disabled &&
+            state != lifecycle_state::enabling && state != lifecycle_state::loaded_active) {
+            return SAO_PLUGINS_ERR_BUSY;
+        }
+        if (state == lifecycle_state::enabling && ctx->entity_provider_publication_complete)
+            return SAO_PLUGINS_ERR_BUSY;
+
+        const std::string qualified_provider_id = ctx->plugin_id + "/" + local_provider_id;
+        const auto existing =
+            std::find_if(ctx->entity_providers.begin(), ctx->entity_providers.end(),
+                         [&qualified_provider_id](const auto& candidate) {
+                             return entity_provider_has_id(candidate, qualified_provider_id);
+                         });
+        if (existing != ctx->entity_providers.end()) {
+            return action_only ? replace_entity_provider_action_v2(
+                                     *existing, current.action_handler_v2, current.action_user_data)
+                               : SAO_PLUGINS_ERR_ALREADY_EXISTS;
+        }
+        if (ctx->entity_providers.size() >= kMaximumEntityProvidersPerContext)
+            return SAO_ERR_INVALID_ARGUMENT;
+
+        const int32_t status = register_entity_provider_v3(
+            ctx->plugin_owner, ctx->plugin_id, current.provider_id_utf8,
+            action_only ? empty_entity_snapshot_v2 : current.snapshot, current.action_handler_v2,
+            current.user_data, current.action_user_data,
+            action_only ? nullptr : current.root_contribution, provider);
+        if (status != SAO_OK)
+            return status;
+
+        ctx->entity_providers.reserve(ctx->entity_providers.size() + 1);
+        if (state == lifecycle_state::loaded_active) {
+            const int32_t activate_status = activate_entity_providers({provider});
+            if (activate_status != SAO_OK) {
+                (void)destroy_entity_providers({provider});
+                return activate_status;
+            }
+        }
+        ctx->entity_providers.push_back(provider);
+        return SAO_OK;
+    } catch (...) {
+        if (provider != nullptr)
+            (void)destroy_entity_providers({provider});
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t plugin_context_unregister_entity_providers(plugin_context_t* ctx,

@@ -13,5 +13,6 @@ inline constexpr int32_t SAO_PLUGINS_ERR_CAPABILITY_MISMATCH = -1005;
 inline constexpr int32_t SAO_PLUGINS_ERR_BUSY = -1006;
 inline constexpr int32_t SAO_PLUGINS_ERR_VERSION_MISMATCH = -1007;
 inline constexpr int32_t SAO_PLUGINS_ERR_NOT_OWNER = -1008;
+inline constexpr int32_t SAO_PLUGINS_ERR_NOT_FOUND = -1009;
 
 } // namespace sao::plugins::loader

@@ -14,6 +14,7 @@ using entity_snapshot_content_token_t = uint64_t;
 inline constexpr entity_snapshot_content_token_t kInvalidEntitySnapshotContentToken = 0;
 inline constexpr uint32_t kEntitySnapshotAbiVersion1 = 1;
 inline constexpr uint32_t kEntitySnapshotAbiVersion2 = 2;
+inline constexpr uint32_t kEntityActionAbiVersion2 = 2;
 
 struct entity_menu_row {
     uint32_t struct_size;
@@ -76,6 +77,25 @@ using entity_action_handler_fn = int32_t(SAO_PLUGINS_CALL*)(const char* action_i
                                                             const char* payload_json_utf8,
                                                             void* user_data);
 
+// Action v2 producers submit exactly one result through the provided sink
+// before returning SAO_OK. The result struct and result_json_utf8 are borrowed
+// only for the sink call; the loader validates and deep-copies them there.
+// handled must be 0 or 1, all reserved bytes must be zero, and a declined
+// result must not carry JSON. A handled result may use null for no JSON value.
+struct entity_action_result_v2 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint8_t handled;
+    uint8_t reserved[7];
+    const char* result_json_utf8;
+};
+
+using entity_action_result_sink_v2_fn =
+    int32_t(SAO_PLUGINS_CALL*)(const entity_action_result_v2* result, void* sink_user_data);
+using entity_action_handler_v2_fn = int32_t(SAO_PLUGINS_CALL*)(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    entity_action_result_sink_v2_fn result_sink, void* result_sink_user_data, void* user_data);
+
 struct native_entity_provider_descriptor {
     uint32_t struct_size;
     const char* provider_id_utf8;
@@ -83,13 +103,6 @@ struct native_entity_provider_descriptor {
     entity_action_handler_fn action_handler;
     void* user_data;
 };
-
-// Native query descriptor arrays remain v1-only in this loader-first slice.
-// Native plugins that need Entity v2 can opt in through
-// sao_plugins_ctx_register_entity_provider_v2 during lifecycle callbacks; this
-// does not add a native v2 query-array format. Native v1 descriptor arrays are
-// byte-packed, and the loader advances each element by that element's
-// struct_size so append-only future tails remain iterable.
 
 // Adapter-neutral registration ABI. Script hosts register one provider per
 // dynamic root while the canonical plugin context is loading. Ownership,
@@ -101,6 +114,19 @@ struct entity_root_contribution_descriptor {
     const char* name_utf8;
     const char* icon_utf8;
     double priority;
+};
+
+// Native query-array v2 descriptor. The required prefix ends at user_data;
+// root_contribution is the optional full-size tail. The query descriptor owns
+// the physical array stride, so future descriptor tails remain iterable without
+// changing this known 48-byte layout.
+struct native_entity_provider_descriptor_v2 {
+    uint32_t struct_size;
+    const char* provider_id_utf8;
+    entity_snapshot_callback_v2_fn snapshot_v2;
+    entity_action_handler_fn action_handler;
+    void* user_data;
+    const entity_root_contribution_descriptor* root_contribution;
 };
 
 struct context_entity_provider_descriptor {
@@ -121,9 +147,33 @@ struct context_entity_provider_descriptor_v2 {
     const entity_root_contribution_descriptor* root_contribution;
 };
 
+// Context v3 preserves the complete 48-byte v2 descriptor prefix and appends
+// an action-v2 binding. action_handler is the legacy prefix slot and must be
+// null. user_data remains snapshot-owned; action_user_data is independently
+// borrowed until replacement, unregister, or context teardown completes.
+// ACTION_ONLY with an existing provider_id replaces only its action binding;
+// without an existing provider it creates a zero-row, rootless provider.
+inline constexpr uint32_t kContextEntityProviderV3ActionOnly = 1u;
+
+struct context_entity_provider_descriptor_v3 {
+    uint32_t struct_size;
+    const char* provider_id_utf8;
+    entity_snapshot_callback_v2_fn snapshot;
+    entity_action_handler_fn action_handler;
+    void* user_data;
+    const entity_root_contribution_descriptor* root_contribution;
+    entity_action_handler_v2_fn action_handler_v2;
+    void* action_user_data;
+    uint32_t flags;
+    uint32_t reserved;
+};
+
 inline constexpr size_t kNativeEntityProviderDescriptorRequiredPrefixSize =
     offsetof(native_entity_provider_descriptor, user_data) +
     sizeof(static_cast<native_entity_provider_descriptor*>(nullptr)->user_data);
+inline constexpr size_t kNativeEntityProviderDescriptorV2RequiredPrefixSize =
+    offsetof(native_entity_provider_descriptor_v2, user_data) +
+    sizeof(static_cast<native_entity_provider_descriptor_v2*>(nullptr)->user_data);
 inline constexpr size_t kEntityRootContributionDescriptorRequiredPrefixSize =
     offsetof(entity_root_contribution_descriptor, priority) +
     sizeof(static_cast<entity_root_contribution_descriptor*>(nullptr)->priority);
@@ -133,6 +183,14 @@ inline constexpr size_t kContextEntityProviderDescriptorRequiredPrefixSize =
 inline constexpr size_t kContextEntityProviderDescriptorV2RequiredPrefixSize =
     offsetof(context_entity_provider_descriptor_v2, user_data) +
     sizeof(static_cast<context_entity_provider_descriptor_v2*>(nullptr)->user_data);
+inline constexpr size_t kContextEntityProviderDescriptorV3RequiredPrefixSize =
+    offsetof(context_entity_provider_descriptor_v3, action_user_data) +
+    sizeof(static_cast<context_entity_provider_descriptor_v3*>(nullptr)->action_user_data);
+inline constexpr size_t kEntityActionResultV2RequiredPrefixSize =
+    offsetof(entity_action_result_v2, result_json_utf8) +
+    sizeof(static_cast<entity_action_result_v2*>(nullptr)->result_json_utf8);
+
+inline constexpr size_t kMaximumEntityActionResultJsonBytes = 1024 * 1024;
 
 inline constexpr size_t kMaximumEntityProvidersPerContext = 256;
 inline constexpr size_t kMaximumAttachedEntityProviders = 4096;
@@ -140,15 +198,29 @@ inline constexpr size_t kMaximumEntityProvidersPerCatalog = 4096;
 
 static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize <=
               sizeof(native_entity_provider_descriptor));
+static_assert(kNativeEntityProviderDescriptorV2RequiredPrefixSize <=
+              sizeof(native_entity_provider_descriptor_v2));
 static_assert(kEntityRootContributionDescriptorRequiredPrefixSize <=
               sizeof(entity_root_contribution_descriptor));
 static_assert(kContextEntityProviderDescriptorRequiredPrefixSize <=
               sizeof(context_entity_provider_descriptor));
 static_assert(kContextEntityProviderDescriptorV2RequiredPrefixSize <=
               sizeof(context_entity_provider_descriptor_v2));
+static_assert(kContextEntityProviderDescriptorV3RequiredPrefixSize <=
+              sizeof(context_entity_provider_descriptor_v3));
+static_assert(kEntityActionResultV2RequiredPrefixSize <= sizeof(entity_action_result_v2));
 
 #if INTPTR_MAX == INT64_MAX
 static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize == 40);
+static_assert(kNativeEntityProviderDescriptorV2RequiredPrefixSize == 40);
+static_assert(alignof(native_entity_provider_descriptor_v2) == 8);
+static_assert(sizeof(native_entity_provider_descriptor_v2) == 48);
+static_assert(offsetof(native_entity_provider_descriptor_v2, struct_size) == 0);
+static_assert(offsetof(native_entity_provider_descriptor_v2, provider_id_utf8) == 8);
+static_assert(offsetof(native_entity_provider_descriptor_v2, snapshot_v2) == 16);
+static_assert(offsetof(native_entity_provider_descriptor_v2, action_handler) == 24);
+static_assert(offsetof(native_entity_provider_descriptor_v2, user_data) == 32);
+static_assert(offsetof(native_entity_provider_descriptor_v2, root_contribution) == 40);
 static_assert(kEntityRootContributionDescriptorRequiredPrefixSize == 48);
 static_assert(kContextEntityProviderDescriptorRequiredPrefixSize == 40);
 static_assert(kContextEntityProviderDescriptorV2RequiredPrefixSize == 40);
@@ -160,6 +232,41 @@ static_assert(offsetof(context_entity_provider_descriptor_v2, snapshot) == 16);
 static_assert(offsetof(context_entity_provider_descriptor_v2, action_handler) == 24);
 static_assert(offsetof(context_entity_provider_descriptor_v2, user_data) == 32);
 static_assert(offsetof(context_entity_provider_descriptor_v2, root_contribution) == 40);
+
+static_assert(kContextEntityProviderDescriptorV3RequiredPrefixSize == 64);
+static_assert(alignof(context_entity_provider_descriptor_v3) == 8);
+static_assert(sizeof(context_entity_provider_descriptor_v3) == 72);
+static_assert(offsetof(context_entity_provider_descriptor_v3, struct_size) == 0);
+static_assert(offsetof(context_entity_provider_descriptor_v3, provider_id_utf8) == 8);
+static_assert(offsetof(context_entity_provider_descriptor_v3, snapshot) == 16);
+static_assert(offsetof(context_entity_provider_descriptor_v3, action_handler) == 24);
+static_assert(offsetof(context_entity_provider_descriptor_v3, user_data) == 32);
+static_assert(offsetof(context_entity_provider_descriptor_v3, root_contribution) == 40);
+static_assert(offsetof(context_entity_provider_descriptor_v3, action_handler_v2) == 48);
+static_assert(offsetof(context_entity_provider_descriptor_v3, action_user_data) == 56);
+static_assert(offsetof(context_entity_provider_descriptor_v3, flags) == 64);
+static_assert(offsetof(context_entity_provider_descriptor_v3, reserved) == 68);
+static_assert(offsetof(context_entity_provider_descriptor_v3, struct_size) ==
+              offsetof(context_entity_provider_descriptor_v2, struct_size));
+static_assert(offsetof(context_entity_provider_descriptor_v3, provider_id_utf8) ==
+              offsetof(context_entity_provider_descriptor_v2, provider_id_utf8));
+static_assert(offsetof(context_entity_provider_descriptor_v3, snapshot) ==
+              offsetof(context_entity_provider_descriptor_v2, snapshot));
+static_assert(offsetof(context_entity_provider_descriptor_v3, action_handler) ==
+              offsetof(context_entity_provider_descriptor_v2, action_handler));
+static_assert(offsetof(context_entity_provider_descriptor_v3, user_data) ==
+              offsetof(context_entity_provider_descriptor_v2, user_data));
+static_assert(offsetof(context_entity_provider_descriptor_v3, root_contribution) ==
+              offsetof(context_entity_provider_descriptor_v2, root_contribution));
+
+static_assert(kEntityActionResultV2RequiredPrefixSize == 24);
+static_assert(alignof(entity_action_result_v2) == 8);
+static_assert(sizeof(entity_action_result_v2) == 24);
+static_assert(offsetof(entity_action_result_v2, struct_size) == 0);
+static_assert(offsetof(entity_action_result_v2, abi_version) == 4);
+static_assert(offsetof(entity_action_result_v2, handled) == 8);
+static_assert(offsetof(entity_action_result_v2, reserved) == 9);
+static_assert(offsetof(entity_action_result_v2, result_json_utf8) == 16);
 #endif
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider(
@@ -167,6 +274,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_ent
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider_v2(
     plugin_context_t* context, const context_entity_provider_descriptor_v2* descriptor);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_entity_provider_v3(
+    plugin_context_t* context, const context_entity_provider_descriptor_v3* descriptor);
 
 // Host-adapter teardown helper. Provider callbacks are quiesced before the
 // matching context-owned registrations are removed.
@@ -431,6 +541,11 @@ using entity_provider_catalog_callback =
 using entity_provider_catalog_callback_v2 =
     int32_t(SAO_PLUGINS_CALL*)(const entity_provider_catalog_view_v2* catalog, void* user_data);
 
+// The loader owns this callback view. result_json_utf8 points at the validated
+// deep copy and remains valid only for the callback duration.
+using entity_action_result_callback_v2_fn =
+    int32_t(SAO_PLUGINS_CALL*)(const entity_action_result_v2* result, void* user_data);
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_entity_provider_snapshot(entity_provider_catalog_callback callback, void* user_data);
 
@@ -440,5 +555,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_entity_provider_invoke(const char* provider_id_utf8, uint64_t expected_generation,
                                    const char* action_id_utf8, const char* payload_json_utf8);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_invoke_v2(
+    const char* provider_id_utf8, uint64_t expected_generation, const char* action_id_utf8,
+    const char* payload_json_utf8, entity_action_result_callback_v2_fn callback, void* user_data);
 
 } // namespace sao::plugins::loader

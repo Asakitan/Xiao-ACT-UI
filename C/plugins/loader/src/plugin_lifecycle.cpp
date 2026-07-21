@@ -146,10 +146,9 @@ uint32_t expected_native_abi(const plugin_manifest& manifest) {
 
 int32_t validate_native_descriptor(const plugin_manifest& manifest,
                                    const native_plugin_descriptor& descriptor) {
-    constexpr size_t kBaseDescriptorSize =
-        offsetof(native_plugin_descriptor, entity_provider_count);
-    const bool has_entity_providers = descriptor.struct_size >= sizeof(native_plugin_descriptor);
-    if (descriptor.struct_size < kBaseDescriptorSize ||
+    const bool has_entity_providers = descriptor.struct_size >= kNativePluginDescriptorV1Size;
+    const bool has_entity_providers_v2 = descriptor.struct_size >= kNativePluginDescriptorV2Size;
+    if (descriptor.struct_size < kNativePluginDescriptorBaseRequiredPrefixSize ||
         descriptor.abi_version != expected_native_abi(manifest) ||
         descriptor.abi_version > static_cast<uint32_t>(SAO_PLUGINS_ABI_VERSION)) {
         return SAO_PLUGINS_ERR_ABI_MISMATCH;
@@ -170,13 +169,17 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
     }
     uintptr_t provider_address = reinterpret_cast<uintptr_t>(descriptor.entity_providers);
     for (uint32_t index = 0; index < provider_count; ++index) {
-        const auto* provider =
-            reinterpret_cast<const native_entity_provider_descriptor*>(provider_address);
-        if (provider->struct_size < kNativeEntityProviderDescriptorRequiredPrefixSize)
+        if (provider_address > (std::numeric_limits<uintptr_t>::max)() - sizeof(uint32_t)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        uint32_t provider_struct_size = 0;
+        std::memcpy(&provider_struct_size, reinterpret_cast<const void*>(provider_address),
+                    sizeof(provider_struct_size));
+        if (provider_struct_size < kNativeEntityProviderDescriptorRequiredPrefixSize)
             return SAO_PLUGINS_ERR_ABI_MISMATCH;
         native_entity_provider_descriptor current{};
-        std::memcpy(&current, provider,
-                    (std::min)(static_cast<size_t>(provider->struct_size), sizeof(current)));
+        std::memcpy(&current, reinterpret_cast<const void*>(provider_address),
+                    (std::min)(static_cast<size_t>(provider_struct_size), sizeof(current)));
         if (current.provider_id_utf8 == nullptr || current.snapshot == nullptr ||
             current.action_handler == nullptr) {
             return SAO_ERR_INVALID_ARGUMENT;
@@ -185,6 +188,55 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
             return SAO_ERR_INVALID_ARGUMENT;
         }
         provider_address += current.struct_size;
+    }
+
+    const uint32_t provider_v2_count =
+        has_entity_providers_v2 ? descriptor.entity_provider_v2_count : 0;
+    const uint32_t provider_v2_stride =
+        has_entity_providers_v2 ? descriptor.entity_provider_v2_stride_bytes : 0;
+    const void* providers_v2 = has_entity_providers_v2 ? descriptor.entity_providers_v2 : nullptr;
+    if (provider_v2_count > kMaximumEntityProvidersPerContext - provider_count) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (provider_v2_count == 0) {
+        if (providers_v2 != nullptr || provider_v2_stride != 0)
+            return SAO_ERR_INVALID_ARGUMENT;
+    } else {
+        if (providers_v2 == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (provider_v2_stride < kNativeEntityProviderDescriptorV2RequiredPrefixSize)
+            return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        const uintptr_t provider_v2_address = reinterpret_cast<uintptr_t>(providers_v2);
+        if (provider_v2_stride % alignof(native_entity_provider_descriptor_v2) != 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        constexpr uintptr_t kMaximumAddress = (std::numeric_limits<uintptr_t>::max)();
+        if (provider_v2_count > kMaximumAddress / provider_v2_stride) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const uintptr_t provider_v2_bytes =
+            static_cast<uintptr_t>(provider_v2_count) * provider_v2_stride;
+        if (provider_v2_address > kMaximumAddress - provider_v2_bytes) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        for (uint32_t index = 0; index < provider_v2_count; ++index) {
+            const uintptr_t current_address =
+                provider_v2_address + static_cast<uintptr_t>(index) * provider_v2_stride;
+            uint32_t provider_struct_size = 0;
+            std::memcpy(&provider_struct_size, reinterpret_cast<const void*>(current_address),
+                        sizeof(provider_struct_size));
+            if (provider_struct_size < kNativeEntityProviderDescriptorV2RequiredPrefixSize)
+                return SAO_PLUGINS_ERR_ABI_MISMATCH;
+            if (provider_struct_size > provider_v2_stride)
+                return SAO_ERR_INVALID_ARGUMENT;
+            native_entity_provider_descriptor_v2 current{};
+            std::memcpy(&current, reinterpret_cast<const void*>(current_address),
+                        (std::min)(static_cast<size_t>(provider_struct_size), sizeof(current)));
+            if (current.provider_id_utf8 == nullptr || current.snapshot_v2 == nullptr ||
+                current.action_handler == nullptr) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+        }
     }
     for (const auto& required : manifest.capabilities) {
         bool found = false;
@@ -400,14 +452,22 @@ int32_t load_native(plugin_handle_t plugin, const plugin_manifest& manifest) {
         plugin->unload_hook_completed = false;
         plugin->host_adapter_unloaded = false;
     }
-    const bool has_entity_providers = descriptor.struct_size >= sizeof(native_plugin_descriptor);
+    const bool has_entity_providers = descriptor.struct_size >= kNativePluginDescriptorV1Size;
+    const bool has_entity_providers_v2 = descriptor.struct_size >= kNativePluginDescriptorV2Size;
     const auto* entity_providers = has_entity_providers ? descriptor.entity_providers : nullptr;
     const uint32_t entity_provider_count =
         has_entity_providers ? descriptor.entity_provider_count : 0;
+    const void* entity_providers_v2 =
+        has_entity_providers_v2 ? descriptor.entity_providers_v2 : nullptr;
+    const uint32_t entity_provider_v2_count =
+        has_entity_providers_v2 ? descriptor.entity_provider_v2_count : 0;
+    const uint32_t entity_provider_v2_stride =
+        has_entity_providers_v2 ? descriptor.entity_provider_v2_stride_bytes : 0;
     bool on_load_entered = false;
     try {
-        status = plugin_context_register_entity_providers(context, entity_providers,
-                                                          entity_provider_count);
+        status = plugin_context_register_entity_provider_arrays(
+            context, entity_providers, entity_provider_count, entity_providers_v2,
+            entity_provider_v2_count, entity_provider_v2_stride);
         if (status == SAO_OK) {
             on_load_entered = true;
             status = call_native_on_load(on_load, context);

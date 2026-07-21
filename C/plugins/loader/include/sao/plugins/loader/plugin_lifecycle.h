@@ -59,26 +59,58 @@ struct native_plugin_descriptor {
     const char* plugin_version;
     uint32_t entity_provider_count;
     const native_entity_provider_descriptor* entity_providers;
+    uint32_t entity_provider_v2_count;
+    uint32_t entity_provider_v2_stride_bytes;
+    const void* entity_providers_v2;
 };
 
-using native_plugin_query_fn = int32_t(SAO_PLUGINS_CALL*)(
-    native_plugin_descriptor* out_descriptor);
+inline constexpr size_t kNativePluginDescriptorBaseRequiredPrefixSize =
+    offsetof(native_plugin_descriptor, entity_provider_count);
+inline constexpr size_t kNativePluginDescriptorV1Size =
+    offsetof(native_plugin_descriptor, entity_provider_v2_count);
+inline constexpr size_t kNativePluginDescriptorV2Size =
+    offsetof(native_plugin_descriptor, entity_providers_v2) +
+    sizeof(static_cast<native_plugin_descriptor*>(nullptr)->entity_providers_v2);
+
+static_assert(kNativePluginDescriptorBaseRequiredPrefixSize <= kNativePluginDescriptorV1Size);
+static_assert(kNativePluginDescriptorV1Size <= sizeof(native_plugin_descriptor));
+static_assert(kNativePluginDescriptorV2Size <= sizeof(native_plugin_descriptor));
+
+#if INTPTR_MAX == INT64_MAX
+static_assert(alignof(native_plugin_descriptor) == 8);
+static_assert(sizeof(native_plugin_descriptor) == 64);
+static_assert(kNativePluginDescriptorBaseRequiredPrefixSize == 32);
+static_assert(kNativePluginDescriptorV1Size == 48);
+static_assert(kNativePluginDescriptorV2Size == 64);
+static_assert(offsetof(native_plugin_descriptor, struct_size) == 0);
+static_assert(offsetof(native_plugin_descriptor, abi_version) == 4);
+static_assert(offsetof(native_plugin_descriptor, capability_count) == 8);
+static_assert(offsetof(native_plugin_descriptor, capabilities) == 16);
+static_assert(offsetof(native_plugin_descriptor, plugin_version) == 24);
+static_assert(offsetof(native_plugin_descriptor, entity_provider_count) == 32);
+static_assert(offsetof(native_plugin_descriptor, entity_providers) == 40);
+static_assert(offsetof(native_plugin_descriptor, entity_provider_v2_count) == 48);
+static_assert(offsetof(native_plugin_descriptor, entity_provider_v2_stride_bytes) == 52);
+static_assert(offsetof(native_plugin_descriptor, entity_providers_v2) == 56);
+#endif
+
+using native_plugin_query_fn = int32_t(SAO_PLUGINS_CALL*)(native_plugin_descriptor* out_descriptor);
 
 // 插件生命周期状态 (对齐 Python PluginRecord.enabled/loaded/active 三元组)
 enum class lifecycle_state : uint8_t {
     unknown = 0,
-    discovered,       // manifest 已读, 记录已建, 未 load
-    validating,       // validate_manifest 进行中
-    resolving_deps,   // 等 requires 前置就绪
-    bootstrapping,    // plugin_deps.ensure 前插 libs/vendor
-    loading,          // 宿主装脚本, 调 on_load
-    loaded_active,    // on_load + on_enable 完成, 正在跑
-    loaded_disabled,  // 已 load 但 on_disable 完成, 可 re-enable 快速回到 active
-    unloading,        // unload_plugin 进行中 (等 worker 停车)
-    unloaded,         // 完全卸载, 待 GC / 待 refresh
-    failed,           // 加载失败 (last_error 非空), 达 max_failures 后自动 disabled
-    enabling,         // on_enable 正在执行，拒绝并发 lifecycle 转换
-    disabling,        // provider rundown / on_disable 正在执行
+    discovered,      // manifest 已读, 记录已建, 未 load
+    validating,      // validate_manifest 进行中
+    resolving_deps,  // 等 requires 前置就绪
+    bootstrapping,   // plugin_deps.ensure 前插 libs/vendor
+    loading,         // 宿主装脚本, 调 on_load
+    loaded_active,   // on_load + on_enable 完成, 正在跑
+    loaded_disabled, // 已 load 但 on_disable 完成, 可 re-enable 快速回到 active
+    unloading,       // unload_plugin 进行中 (等 worker 停车)
+    unloaded,        // 完全卸载, 待 GC / 待 refresh
+    failed,          // 加载失败 (last_error 非空), 达 max_failures 后自动 disabled
+    enabling,        // on_enable 正在执行，拒绝并发 lifecycle 转换
+    disabling,       // provider rundown / on_disable 正在执行
 };
 
 // 生命周期事件 (对齐 Python 平台通过 event_bus 发布的 "plugin_lifecycle" topic)

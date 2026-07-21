@@ -65,6 +65,10 @@ void plugin_context_clear_stop(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_register_entity_providers(plugin_context_t* ctx,
                                                  const native_entity_provider_descriptor* providers,
                                                  size_t count) noexcept;
+int32_t plugin_context_register_entity_provider_arrays(
+    plugin_context_t* ctx, const native_entity_provider_descriptor* providers_v1,
+    size_t provider_v1_count, const void* providers_v2, size_t provider_v2_count,
+    uint32_t provider_v2_stride_bytes) noexcept;
 bool plugin_context_entity_provider_is_current_thread(plugin_context_t* ctx) noexcept;
 bool plugin_context_event_is_current_thread(plugin_context_t* ctx) noexcept;
 bool plugin_context_platform_is_current_thread(plugin_context_t* ctx) noexcept;

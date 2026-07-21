@@ -38,8 +38,10 @@ struct entity_provider_state {
     uint32_t snapshot_abi_version = 0;
     entity_snapshot_callback_fn snapshot_v1 = nullptr;
     entity_snapshot_callback_v2_fn snapshot_v2 = nullptr;
-    entity_action_handler_fn action_handler = nullptr;
-    void* user_data = nullptr;
+    entity_action_handler_fn action_handler_v1 = nullptr;
+    entity_action_handler_v2_fn action_handler_v2 = nullptr;
+    void* snapshot_user_data = nullptr;
+    void* action_user_data = nullptr;
     bool has_root_contribution = false;
     std::string contribution_id;
     std::string root_id;
@@ -100,6 +102,12 @@ struct owned_provider_snapshot {
     std::string root_name;
     std::string root_icon;
     double root_priority = 0.0;
+};
+
+struct owned_action_result_v2 {
+    bool handled = false;
+    bool has_result = false;
+    std::string result_json;
 };
 
 std::mutex g_catalog_mutex;
@@ -240,6 +248,54 @@ int32_t call_action(entity_action_handler_fn callback, const char* action_id, co
     }
 #else
     return call_action_cpp(callback, action_id, payload, user_data);
+#endif
+}
+
+int32_t call_action_v2_cpp(entity_action_handler_v2_fn callback, const char* action_id,
+                           const char* payload, entity_action_result_sink_v2_fn result_sink,
+                           void* result_sink_user_data, void* user_data) noexcept {
+    try {
+        return callback(action_id, payload, result_sink, result_sink_user_data, user_data);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t call_action_v2(entity_action_handler_v2_fn callback, const char* action_id,
+                       const char* payload, entity_action_result_sink_v2_fn result_sink,
+                       void* result_sink_user_data, void* user_data) noexcept {
+#if defined(_MSC_VER)
+    __try {
+        return call_action_v2_cpp(callback, action_id, payload, result_sink, result_sink_user_data,
+                                  user_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+#else
+    return call_action_v2_cpp(callback, action_id, payload, result_sink, result_sink_user_data,
+                              user_data);
+#endif
+}
+
+int32_t call_action_result_cpp(entity_action_result_callback_v2_fn callback,
+                               const entity_action_result_v2* result, void* user_data) noexcept {
+    try {
+        return callback(result, user_data);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t call_action_result(entity_action_result_callback_v2_fn callback,
+                           const entity_action_result_v2* result, void* user_data) noexcept {
+#if defined(_MSC_VER)
+    __try {
+        return call_action_result_cpp(callback, result, user_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+#else
+    return call_action_result_cpp(callback, result, user_data);
 #endif
 }
 
@@ -503,6 +559,78 @@ int32_t copy_bounded_string(const char* value, bool required, size_t maximum_byt
     return SAO_OK;
 }
 
+struct action_result_sink_context {
+    uint32_t submissions = 0;
+    int32_t status = SAO_OK;
+    owned_action_result_v2 result;
+};
+
+int32_t SAO_PLUGINS_CALL copy_action_result_v2(const entity_action_result_v2* result,
+                                               void* user_data) noexcept {
+    auto* context = static_cast<action_result_sink_context*>(user_data);
+    if (context == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        if (context->submissions != 0) {
+            context->status = SAO_ERR_INVALID_ARGUMENT;
+            return context->status;
+        }
+        ++context->submissions;
+        entity_action_result_v2 current{};
+        int32_t status =
+            copy_external_struct(result, kEntityActionResultV2RequiredPrefixSize, current);
+        if (status == SAO_OK && current.abi_version != kEntityActionAbiVersion2)
+            status = SAO_PLUGINS_ERR_ABI_MISMATCH;
+        if (status == SAO_OK &&
+            (current.handled > 1 ||
+             std::any_of(std::begin(current.reserved), std::end(current.reserved),
+                         [](uint8_t value) { return value != 0; }))) {
+            status = SAO_ERR_INVALID_ARGUMENT;
+        }
+        if (status == SAO_OK && current.handled == 0 && current.result_json_utf8 != nullptr)
+            status = SAO_ERR_INVALID_ARGUMENT;
+
+        owned_action_result_v2 candidate;
+        candidate.handled = current.handled != 0;
+        if (status == SAO_OK && current.result_json_utf8 != nullptr) {
+            size_t result_bytes = 0;
+            status = copy_bounded_string(current.result_json_utf8, false,
+                                         kMaximumEntityActionResultJsonBytes, result_bytes,
+                                         candidate.result_json);
+            if (status == SAO_OK && !valid_json_syntax(candidate.result_json))
+                status = SAO_ERR_INVALID_ARGUMENT;
+            candidate.has_result = status == SAO_OK;
+        }
+        if (status == SAO_OK)
+            context->result = std::move(candidate);
+        context->status = status;
+        return status;
+    } catch (...) {
+        context->status = SAO_ERR_OS_CALL_FAILED;
+        return context->status;
+    }
+}
+
+int32_t invoke_action_v2_handler(entity_action_handler_v2_fn callback, const char* action_id,
+                                 const char* payload, void* user_data,
+                                 owned_action_result_v2& out_result) noexcept {
+    action_result_sink_context sink_context;
+    const int32_t callback_status = call_action_v2(callback, action_id, payload,
+                                                   copy_action_result_v2, &sink_context, user_data);
+    if (callback_status != SAO_OK)
+        return callback_status;
+    if (sink_context.submissions != 1)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (sink_context.status != SAO_OK)
+        return sink_context.status;
+    try {
+        out_result = std::move(sink_context.result);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t copy_row(const entity_menu_row& row, size_t& total_bytes, owned_entity_row& out) {
     entity_menu_row current{};
     const int32_t copy_status =
@@ -567,6 +695,11 @@ int32_t copy_row_v2(const entity_menu_row_v2& row, size_t& total_bytes, owned_en
         copy_external_struct(&row, kEntityMenuRowV2RequiredPrefixSize, current);
     if (copy_status != SAO_OK)
         return copy_status;
+    if (current.can_activate > 1 || current.keep_menu_open > 1 || current.close_menu_before > 1 ||
+        std::any_of(std::begin(current.reserved), std::end(current.reserved),
+                    [](uint8_t value) { return value != 0; })) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     const entity_menu_row canonical{
         sizeof(entity_menu_row),
         current.category_id_utf8,
@@ -688,7 +821,7 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         uint32_t required_count = 0;
         uint64_t first_revision = 0;
         int32_t status = call_snapshot(state->snapshot_v1, nullptr, 0, &required_count,
-                                       &first_revision, state->user_data);
+                                       &first_revision, state->snapshot_user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL) {
             return status;
         }
@@ -732,7 +865,8 @@ int32_t copy_provider_snapshot(const std::shared_ptr<entity_provider_state>& sta
         uint32_t written_count = required_count;
         uint64_t second_revision = 0;
         status = call_snapshot(state->snapshot_v1, rows.empty() ? nullptr : rows.data(),
-                               required_count, &written_count, &second_revision, state->user_data);
+                               required_count, &written_count, &second_revision,
+                               state->snapshot_user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
             return status;
         if (status == SAO_ERR_BUFFER_TOO_SMALL || written_count != required_count ||
@@ -792,7 +926,8 @@ int32_t copy_provider_snapshot_v2(const std::shared_ptr<entity_provider_state>& 
         uint32_t required_stride = 0;
         int32_t status =
             call_snapshot_v2(state->snapshot_v2, nullptr, 0, 0, &required_count, &first_revision,
-                             &first_content_token, &required_stride, state->user_data);
+                             &first_content_token, &required_stride,
+                             state->snapshot_user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
             return status;
         if (first_content_token == kInvalidEntitySnapshotContentToken ||
@@ -855,7 +990,7 @@ int32_t copy_provider_snapshot_v2(const std::shared_ptr<entity_provider_state>& 
         uint32_t written_stride = 0;
         status = call_snapshot_v2(state->snapshot_v2, raw_rows, required_count, required_stride,
                                   &written_count, &second_revision, &second_content_token,
-                                  &written_stride, state->user_data);
+                                  &written_stride, state->snapshot_user_data);
         if (status != SAO_OK && status != SAO_ERR_BUFFER_TOO_SMALL)
             return status;
         if (status == SAO_ERR_BUFFER_TOO_SMALL || written_count != required_count ||
@@ -938,17 +1073,17 @@ void entity_provider_set_counters_for_testing(entity_provider_test_counters coun
 
 namespace {
 
-int32_t register_entity_provider_core(const std::shared_ptr<plugin_handle_s>& owner,
-                                      const std::string& owner_plugin_id,
-                                      const char* provider_id_utf8,
-                                      entity_snapshot_callback_fn snapshot_v1,
-                                      entity_snapshot_callback_v2_fn snapshot_v2,
-                                      entity_action_handler_fn action_handler, void* user_data,
-                                      const entity_root_contribution_descriptor* root_contribution,
-                                      std::shared_ptr<entity_provider_state>& out) noexcept {
+int32_t register_entity_provider_core(
+    const std::shared_ptr<plugin_handle_s>& owner, const std::string& owner_plugin_id,
+    const char* provider_id_utf8, entity_snapshot_callback_fn snapshot_v1,
+    entity_snapshot_callback_v2_fn snapshot_v2, entity_action_handler_fn action_handler_v1,
+    entity_action_handler_v2_fn action_handler_v2, void* snapshot_user_data, void* action_user_data,
+    const entity_root_contribution_descriptor* root_contribution,
+    std::shared_ptr<entity_provider_state>& out) noexcept {
     out.reset();
     if (owner == nullptr || owner_plugin_id.empty() || provider_id_utf8 == nullptr ||
-        (snapshot_v1 == nullptr) == (snapshot_v2 == nullptr) || action_handler == nullptr) {
+        (snapshot_v1 == nullptr) == (snapshot_v2 == nullptr) ||
+        (action_handler_v1 == nullptr) == (action_handler_v2 == nullptr)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -969,8 +1104,10 @@ int32_t register_entity_provider_core(const std::shared_ptr<plugin_handle_s>& ow
             snapshot_v1 != nullptr ? kEntitySnapshotAbiVersion1 : kEntitySnapshotAbiVersion2;
         state->snapshot_v1 = snapshot_v1;
         state->snapshot_v2 = snapshot_v2;
-        state->action_handler = action_handler;
-        state->user_data = user_data;
+        state->action_handler_v1 = action_handler_v1;
+        state->action_handler_v2 = action_handler_v2;
+        state->snapshot_user_data = snapshot_user_data;
+        state->action_user_data = action_user_data;
         if (root_contribution != nullptr) {
             entity_root_contribution_descriptor current_root{};
             status = copy_external_struct(root_contribution,
@@ -1035,8 +1172,8 @@ int32_t register_entity_provider(const std::shared_ptr<plugin_handle_s>& owner,
                                  const entity_root_contribution_descriptor* root_contribution,
                                  std::shared_ptr<entity_provider_state>& out) noexcept {
     return register_entity_provider_core(owner, owner_plugin_id, provider_id_utf8, snapshot,
-                                         nullptr, action_handler, user_data, root_contribution,
-                                         out);
+                                         nullptr, action_handler, nullptr, user_data, user_data,
+                                         root_contribution, out);
 }
 
 int32_t register_entity_provider_v2(const std::shared_ptr<plugin_handle_s>& owner,
@@ -1047,8 +1184,46 @@ int32_t register_entity_provider_v2(const std::shared_ptr<plugin_handle_s>& owne
                                     const entity_root_contribution_descriptor* root_contribution,
                                     std::shared_ptr<entity_provider_state>& out) noexcept {
     return register_entity_provider_core(owner, owner_plugin_id, provider_id_utf8, nullptr,
-                                         snapshot, action_handler, user_data, root_contribution,
-                                         out);
+                                         snapshot, action_handler, nullptr, user_data, user_data,
+                                         root_contribution, out);
+}
+
+int32_t register_entity_provider_v3(const std::shared_ptr<plugin_handle_s>& owner,
+                                    const std::string& owner_plugin_id,
+                                    const char* provider_id_utf8,
+                                    entity_snapshot_callback_v2_fn snapshot,
+                                    entity_action_handler_v2_fn action_handler,
+                                    void* snapshot_user_data, void* action_user_data,
+                                    const entity_root_contribution_descriptor* root_contribution,
+                                    std::shared_ptr<entity_provider_state>& out) noexcept {
+    return register_entity_provider_core(owner, owner_plugin_id, provider_id_utf8, nullptr,
+                                         snapshot, nullptr, action_handler, snapshot_user_data,
+                                         action_user_data, root_contribution, out);
+}
+
+int32_t replace_entity_provider_action_v2(const std::shared_ptr<entity_provider_state>& provider,
+                                          entity_action_handler_v2_fn action_handler,
+                                          void* action_user_data) noexcept {
+    if (provider == nullptr || action_handler == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (std::find(g_current_providers.begin(), g_current_providers.end(), provider.get()) !=
+        g_current_providers.end()) {
+        return SAO_PLUGINS_ERR_BUSY;
+    }
+    try {
+        std::unique_lock callback_lock(provider->callback_mutex, std::try_to_lock);
+        if (!callback_lock.owns_lock())
+            return SAO_PLUGINS_ERR_BUSY;
+        std::lock_guard lock(provider->mutex);
+        if (provider->destroyed)
+            return SAO_ERR_HANDLE_INVALID;
+        provider->action_handler_v1 = nullptr;
+        provider->action_handler_v2 = action_handler;
+        provider->action_user_data = action_user_data;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 bool entity_provider_is_current_thread(
@@ -1270,8 +1445,10 @@ int32_t destroy_entity_providers(
             provider->owner.reset();
             provider->snapshot_v1 = nullptr;
             provider->snapshot_v2 = nullptr;
-            provider->action_handler = nullptr;
-            provider->user_data = nullptr;
+            provider->action_handler_v1 = nullptr;
+            provider->action_handler_v2 = nullptr;
+            provider->snapshot_user_data = nullptr;
+            provider->action_user_data = nullptr;
         }
         {
             std::lock_guard catalog_lock(g_catalog_mutex);
@@ -1581,9 +1758,12 @@ extern "C" int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_snapshot_v2(
     }
 }
 
-extern "C" int32_t SAO_PLUGINS_CALL
-sao_plugins_entity_provider_invoke(const char* provider_id_utf8, uint64_t expected_generation,
-                                   const char* action_id_utf8, const char* payload_json_utf8) {
+namespace {
+
+int32_t invoke_entity_provider_action(const char* provider_id_utf8, uint64_t expected_generation,
+                                      const char* action_id_utf8, const char* payload_json_utf8,
+                                      entity_action_result_callback_v2_fn callback,
+                                      void* callback_user_data, bool legacy_call) {
     if (provider_id_utf8 == nullptr || expected_generation == 0 || action_id_utf8 == nullptr ||
         payload_json_utf8 == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1623,11 +1803,56 @@ sao_plugins_entity_provider_invoke(const char* provider_id_utf8, uint64_t expect
         const int32_t lease_status = lease.acquire(provider);
         if (lease_status != SAO_OK)
             return lease_status;
-        return call_action(provider->action_handler, action_id.c_str(), payload_json.c_str(),
-                           provider->user_data);
+
+        owned_action_result_v2 result;
+        if (provider->action_handler_v1 != nullptr) {
+            status = call_action(provider->action_handler_v1, action_id.c_str(),
+                                 payload_json.c_str(), provider->action_user_data);
+            if (status != SAO_OK)
+                return status;
+            result.handled = true;
+        } else if (provider->action_handler_v2 != nullptr) {
+            status =
+                invoke_action_v2_handler(provider->action_handler_v2, action_id.c_str(),
+                                         payload_json.c_str(), provider->action_user_data, result);
+            if (status != SAO_OK)
+                return status;
+        } else {
+            return SAO_ERR_HANDLE_INVALID;
+        }
+
+        if (legacy_call)
+            return result.handled ? SAO_OK : SAO_PLUGINS_ERR_NOT_FOUND;
+
+        const entity_action_result_v2 view{
+            sizeof(entity_action_result_v2),
+            kEntityActionAbiVersion2,
+            static_cast<uint8_t>(result.handled),
+            {},
+            result.has_result ? result.result_json.c_str() : nullptr,
+        };
+        return call_action_result(callback, &view, callback_user_data);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
+}
+
+} // namespace
+
+extern "C" int32_t SAO_PLUGINS_CALL
+sao_plugins_entity_provider_invoke(const char* provider_id_utf8, uint64_t expected_generation,
+                                   const char* action_id_utf8, const char* payload_json_utf8) {
+    return invoke_entity_provider_action(provider_id_utf8, expected_generation, action_id_utf8,
+                                         payload_json_utf8, nullptr, nullptr, true);
+}
+
+extern "C" int32_t SAO_PLUGINS_CALL sao_plugins_entity_provider_invoke_v2(
+    const char* provider_id_utf8, uint64_t expected_generation, const char* action_id_utf8,
+    const char* payload_json_utf8, entity_action_result_callback_v2_fn callback, void* user_data) {
+    if (callback == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    return invoke_entity_provider_action(provider_id_utf8, expected_generation, action_id_utf8,
+                                         payload_json_utf8, callback, user_data, false);
 }
 
 } // namespace sao::plugins::loader

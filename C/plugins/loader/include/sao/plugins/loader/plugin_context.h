@@ -14,7 +14,7 @@
 
 namespace sao::plugins::loader {
 
-#define SAO_PLUGIN_CONTEXT_ENTITY_PROVIDER_ABI_VERSION 1u
+#define SAO_PLUGIN_CONTEXT_ENTITY_PROVIDER_ABI_VERSION 3u
 
 typedef struct plugin_context_s plugin_context_t;
 typedef struct plugin_handle_s* plugin_handle_t;

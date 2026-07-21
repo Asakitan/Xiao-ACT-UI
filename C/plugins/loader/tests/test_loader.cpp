@@ -24,6 +24,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -482,6 +483,166 @@ void remove_plugin(plugin_handle_t handle) {
     REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(), handle) == SAO_OK);
 }
 
+enum class native_fixture_query_mode : int32_t {
+    normal = 0,
+    descriptor_base_only,
+    v1_only,
+    descriptor_without_arrays,
+    descriptor_v1_only_with_v2_garbage,
+    v2_only,
+    dual,
+    v2_empty,
+    descriptor_future_tail,
+    v2_required_prefix_only,
+    v2_partial_root_tail,
+    v2_count_without_pointer,
+    v2_zero_count_with_metadata,
+    v2_short_stride,
+    v2_misaligned_stride,
+    v2_unaligned_base,
+    v2_short_struct,
+    v2_struct_exceeds_stride,
+    v2_pointer_overflow,
+    v2_count_over_limit,
+    duplicate_provider_id,
+};
+
+enum class native_fixture_snapshot_mode : int32_t {
+    stable = 0,
+    token_mismatch,
+};
+
+using native_fixture_action_hook_fn = int32_t(SAO_PLUGINS_CALL*)(void* user_data);
+
+struct native_fixture_control {
+    using set_lifecycle_statuses_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t, int32_t);
+    using set_query_mode_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t);
+    using set_snapshot_mode_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t);
+    using set_v2_producer_token_fn = int32_t(SAO_PLUGINS_CALL*)(uint64_t);
+    using set_v2_content_variant_fn = int32_t(SAO_PLUGINS_CALL*)(uint32_t);
+    using get_lifecycle_calls_fn = int32_t(SAO_PLUGINS_CALL*)(uint32_t*, uint32_t*);
+    using set_action_hook_fn = int32_t(SAO_PLUGINS_CALL*)(native_fixture_action_hook_fn, void*);
+    using reset_fn = int32_t(SAO_PLUGINS_CALL*)();
+
+    HMODULE module = nullptr;
+    native_plugin_query_fn query = nullptr;
+    set_lifecycle_statuses_fn set_lifecycle_statuses = nullptr;
+    set_query_mode_fn set_query_mode_raw = nullptr;
+    set_snapshot_mode_fn set_snapshot_mode_raw = nullptr;
+    set_v2_producer_token_fn set_v2_producer_token_raw = nullptr;
+    set_v2_content_variant_fn set_v2_content_variant_raw = nullptr;
+    get_lifecycle_calls_fn get_lifecycle_calls_raw = nullptr;
+    set_action_hook_fn set_action_hook_raw = nullptr;
+    reset_fn reset_raw = nullptr;
+
+    explicit native_fixture_control(const fs::path& path) {
+        module =
+            LoadLibraryExW(path.c_str(), nullptr,
+                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        REQUIRE(module != nullptr);
+        query = reinterpret_cast<native_plugin_query_fn>(
+            GetProcAddress(module, SAO_PLUGIN_NATIVE_QUERY_SYMBOL));
+        set_lifecycle_statuses = reinterpret_cast<set_lifecycle_statuses_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_lifecycle_statuses"));
+        set_query_mode_raw = reinterpret_cast<set_query_mode_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_query_mode"));
+        set_snapshot_mode_raw = reinterpret_cast<set_snapshot_mode_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_snapshot_mode"));
+        set_v2_producer_token_raw = reinterpret_cast<set_v2_producer_token_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_v2_producer_token"));
+        set_v2_content_variant_raw = reinterpret_cast<set_v2_content_variant_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_v2_content_variant"));
+        get_lifecycle_calls_raw = reinterpret_cast<get_lifecycle_calls_fn>(
+            GetProcAddress(module, "sao_test_plugin_get_lifecycle_calls"));
+        set_action_hook_raw = reinterpret_cast<set_action_hook_fn>(
+            GetProcAddress(module, "sao_test_plugin_set_action_hook"));
+        reset_raw = reinterpret_cast<reset_fn>(GetProcAddress(module, "sao_test_plugin_reset"));
+        REQUIRE(query != nullptr);
+        REQUIRE(set_lifecycle_statuses != nullptr);
+        REQUIRE(set_query_mode_raw != nullptr);
+        REQUIRE(set_snapshot_mode_raw != nullptr);
+        REQUIRE(set_v2_producer_token_raw != nullptr);
+        REQUIRE(set_v2_content_variant_raw != nullptr);
+        REQUIRE(get_lifecycle_calls_raw != nullptr);
+        REQUIRE(set_action_hook_raw != nullptr);
+        REQUIRE(reset_raw != nullptr);
+        REQUIRE(reset_raw() == SAO_OK);
+    }
+
+    ~native_fixture_control() {
+        if (module != nullptr)
+            (void)FreeLibrary(module);
+    }
+
+    native_fixture_control(const native_fixture_control&) = delete;
+    native_fixture_control& operator=(const native_fixture_control&) = delete;
+
+    void reset() const {
+        REQUIRE(reset_raw() == SAO_OK);
+    }
+
+    void set_query_mode(native_fixture_query_mode mode) const {
+        REQUIRE(set_query_mode_raw(static_cast<int32_t>(mode)) == SAO_OK);
+    }
+
+    void set_snapshot_mode(native_fixture_snapshot_mode mode) const {
+        REQUIRE(set_snapshot_mode_raw(static_cast<int32_t>(mode)) == SAO_OK);
+    }
+
+    void set_v2_producer_token(uint64_t token) const {
+        REQUIRE(set_v2_producer_token_raw(token) == SAO_OK);
+    }
+
+    void set_v2_content_variant(uint32_t variant) const {
+        REQUIRE(set_v2_content_variant_raw(variant) == SAO_OK);
+    }
+
+    std::pair<uint32_t, uint32_t> lifecycle_calls() const {
+        uint32_t on_load_calls = 0;
+        uint32_t on_unload_calls = 0;
+        REQUIRE(get_lifecycle_calls_raw(&on_load_calls, &on_unload_calls) == SAO_OK);
+        return {on_load_calls, on_unload_calls};
+    }
+
+    void set_action_hook(native_fixture_action_hook_fn hook, void* user_data) const {
+        REQUIRE(set_action_hook_raw(hook, user_data) == SAO_OK);
+    }
+};
+
+struct legacy_native_plugin_descriptor_v1 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t capability_count;
+    const char* const* capabilities;
+    const char* plugin_version;
+    uint32_t entity_provider_count;
+    const native_entity_provider_descriptor* entity_providers;
+};
+
+struct native_action_reentry_probe {
+    plugin_handle_t plugin = nullptr;
+    std::atomic_uint32_t calls{0};
+    std::atomic_int32_t unload_status{SAO_ERR_OS_CALL_FAILED};
+};
+
+int32_t SAO_PLUGINS_CALL native_action_reentrant_unload(void* user_data) {
+    auto& probe = *static_cast<native_action_reentry_probe*>(user_data);
+    probe.calls.fetch_add(1, std::memory_order_relaxed);
+    probe.unload_status.store(sao_plugins_lifecycle_unload(probe.plugin),
+                              std::memory_order_release);
+    return SAO_OK;
+}
+
+plugin_manifest make_native_fixture_manifest(std::string id, const fs::path& source,
+                                             bool enabled = false) {
+    auto manifest = make_manifest(std::move(id), source);
+    manifest.native_entry = "native_fixture.dll";
+    manifest.native_abi = "sao_plugin_v2";
+    manifest.enabled = enabled;
+    manifest.capabilities.push_back({"native_test"});
+    return manifest;
+}
+
 void put16(std::ofstream& output, uint16_t value) {
     const unsigned char bytes[] = {static_cast<unsigned char>(value),
                                    static_cast<unsigned char>(value >> 8)};
@@ -656,6 +817,7 @@ enum class entity_snapshot_v2_mode {
     stable,
     probe_ok,
     token_mismatch,
+    token_mismatch_invalid_flags,
     stride_mismatch,
     probe_zero_token,
     fill_buffer_too_small,
@@ -666,6 +828,8 @@ enum class entity_snapshot_v2_mode {
     misaligned_stride,
     oversized_stride,
     short_row_struct,
+    invalid_flags,
+    invalid_reserved,
     zero_rows,
     zero_rows_nonzero_stride,
 };
@@ -765,8 +929,10 @@ int32_t SAO_PLUGINS_CALL entity_provider_v2_snapshot(
     }
 
     probe.fill_input_stride = row_stride_bytes;
-    if (probe.mode == entity_snapshot_v2_mode::token_mismatch)
+    if (probe.mode == entity_snapshot_v2_mode::token_mismatch ||
+        probe.mode == entity_snapshot_v2_mode::token_mismatch_invalid_flags) {
         *out_content_token = probe.source_content_token + 1;
+    }
     if (probe.mode == entity_snapshot_v2_mode::stride_mismatch)
         *out_row_stride_bytes = row_stride_bytes + alignof(entity_menu_row_v2);
     if (probe.mode == entity_snapshot_v2_mode::fill_zero_token)
@@ -798,6 +964,12 @@ int32_t SAO_PLUGINS_CALL entity_provider_v2_snapshot(
                         "First V2", "first", R"({"index":1})", 1, 1, 0);
     set_v2_physical_row(second, row_struct_size, "v2-tools", "V2 Tools", probe.category_priority,
                         "Second V2", "second", R"({"index":2})", 0, 0, 1);
+    if (probe.mode == entity_snapshot_v2_mode::invalid_flags ||
+        probe.mode == entity_snapshot_v2_mode::token_mismatch_invalid_flags) {
+        first.row.can_activate = 2;
+    }
+    if (probe.mode == entity_snapshot_v2_mode::invalid_reserved)
+        first.row.reserved[0] = 1;
     auto* raw_rows = static_cast<std::byte*>(rows);
     std::memcpy(raw_rows, &first, sizeof(first));
     std::memcpy(raw_rows + row_stride_bytes, &second, sizeof(second));
@@ -1092,6 +1264,229 @@ host_adapter_vtable enable_registration_race_adapter(context_provider_probe* pro
     auto adapter = empty_context_provider_adapter(probe);
     adapter.call_on_enable = context_provider_enable_registration_race;
     return adapter;
+}
+
+constexpr size_t kEntityActionV2MaximumJsonNestingDepth = 64;
+constexpr size_t kEntityActionV2MaximumJsonNodes = 16384;
+
+enum class entity_action_v2_mode {
+    handled_without_result,
+    handled_null_result,
+    handled_nested_result,
+    custom_result,
+    declined,
+    declined_with_result,
+    invalid_utf8,
+    invalid_json,
+    over_budget,
+    invalid_handled,
+    invalid_reserved,
+    short_struct,
+    wrong_abi,
+    future_tail,
+    borrowed_result_mutated_after_submit,
+    missing_submission,
+    double_submission,
+    handler_error,
+    cpp_exception,
+    seh_exception,
+    reentrant_unload,
+};
+
+struct entity_action_v2_probe {
+    entity_action_v2_mode mode = entity_action_v2_mode::handled_without_result;
+    plugin_handle_t plugin = nullptr;
+    std::atomic_uint32_t calls{0};
+    std::atomic_int32_t reentrant_unload_status{SAO_ERR_OS_CALL_FAILED};
+    std::string last_action;
+    std::string last_payload;
+    std::string invalid_utf8 = std::string("\xC3\x28", 2);
+    std::string oversized_result;
+    std::string mutable_result;
+    const char* handled_json = R"({"handler":1})";
+};
+
+struct future_entity_action_result_v2 {
+    entity_action_result_v2 current{};
+    uint64_t future_tail[2]{};
+};
+
+struct required_context_entity_provider_descriptor_v3 {
+    uint32_t struct_size;
+    const char* provider_id_utf8;
+    entity_snapshot_callback_v2_fn snapshot;
+    entity_action_handler_fn action_handler;
+    void* user_data;
+    const entity_root_contribution_descriptor* root_contribution;
+    entity_action_handler_v2_fn action_handler_v2;
+    void* action_user_data;
+};
+
+struct future_context_entity_provider_descriptor_v3 {
+    context_entity_provider_descriptor_v3 current{};
+    uint64_t future_tail[2]{};
+};
+
+static_assert(sizeof(required_context_entity_provider_descriptor_v3) ==
+              kContextEntityProviderDescriptorV3RequiredPrefixSize);
+static_assert(sizeof(future_context_entity_provider_descriptor_v3) == 88);
+
+int32_t SAO_PLUGINS_CALL entity_action_v2_handler(const char* action_id_utf8,
+                                                  const char* payload_json_utf8,
+                                                  entity_action_result_sink_v2_fn result_sink,
+                                                  void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& probe = *static_cast<entity_action_v2_probe*>(user_data);
+    probe.calls.fetch_add(1, std::memory_order_relaxed);
+    probe.last_action = action_id_utf8;
+    probe.last_payload = payload_json_utf8;
+
+    entity_action_result_v2 result{
+        sizeof(entity_action_result_v2), kEntityActionAbiVersion2, 1, {}, nullptr};
+    switch (probe.mode) {
+    case entity_action_v2_mode::handled_without_result:
+        break;
+    case entity_action_v2_mode::handled_null_result:
+        result.result_json_utf8 = "null";
+        break;
+    case entity_action_v2_mode::handled_nested_result:
+        result.result_json_utf8 = R"({"outer":{"items":[1,{"ok":true}]}})";
+        break;
+    case entity_action_v2_mode::custom_result:
+        result.result_json_utf8 = probe.handled_json;
+        break;
+    case entity_action_v2_mode::declined:
+        result.handled = 0;
+        break;
+    case entity_action_v2_mode::declined_with_result:
+        result.handled = 0;
+        result.result_json_utf8 = "{}";
+        break;
+    case entity_action_v2_mode::invalid_utf8:
+        result.result_json_utf8 = probe.invalid_utf8.c_str();
+        break;
+    case entity_action_v2_mode::invalid_json:
+        result.result_json_utf8 = "{invalid";
+        break;
+    case entity_action_v2_mode::over_budget:
+        result.result_json_utf8 = probe.oversized_result.c_str();
+        break;
+    case entity_action_v2_mode::invalid_handled:
+        result.handled = 2;
+        break;
+    case entity_action_v2_mode::invalid_reserved:
+        result.reserved[0] = 1;
+        break;
+    case entity_action_v2_mode::short_struct:
+        result.struct_size = static_cast<uint32_t>(kEntityActionResultV2RequiredPrefixSize - 1);
+        break;
+    case entity_action_v2_mode::wrong_abi:
+        result.abi_version = kEntityActionAbiVersion2 + 1;
+        break;
+    case entity_action_v2_mode::future_tail: {
+        future_entity_action_result_v2 future{};
+        future.current = result;
+        future.current.struct_size = sizeof(future);
+        future.current.result_json_utf8 = R"({"future":true})";
+        future.future_tail[0] = 0xd1800001ULL;
+        future.future_tail[1] = 0xd1800002ULL;
+        return result_sink(&future.current, result_sink_user_data);
+    }
+    case entity_action_v2_mode::borrowed_result_mutated_after_submit: {
+        probe.mutable_result = R"({"before":true})";
+        result.result_json_utf8 = probe.mutable_result.c_str();
+        const int32_t status = result_sink(&result, result_sink_user_data);
+        probe.mutable_result = R"({"after":true})";
+        return status;
+    }
+    case entity_action_v2_mode::missing_submission:
+        return SAO_OK;
+    case entity_action_v2_mode::double_submission: {
+        const int32_t first = result_sink(&result, result_sink_user_data);
+        if (first != SAO_OK)
+            return first;
+        return result_sink(&result, result_sink_user_data);
+    }
+    case entity_action_v2_mode::handler_error:
+        return SAO_ERR_OS_CALL_FAILED;
+    case entity_action_v2_mode::cpp_exception:
+        throw std::runtime_error("entity action v2 test exception");
+    case entity_action_v2_mode::seh_exception:
+        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+        return SAO_ERR_OS_CALL_FAILED;
+    case entity_action_v2_mode::reentrant_unload:
+        result.result_json_utf8 = R"({"reentry":true})";
+        probe.reentrant_unload_status.store(sao_plugins_lifecycle_unload(probe.plugin),
+                                            std::memory_order_release);
+        break;
+    }
+    return result_sink(&result, result_sink_user_data);
+}
+
+struct captured_entity_action_result_v2 {
+    uint32_t calls = 0;
+    uint32_t struct_size = 0;
+    uint32_t abi_version = 0;
+    uint8_t handled = 0;
+    bool has_result = false;
+    std::string result_json;
+};
+
+int32_t SAO_PLUGINS_CALL capture_entity_action_result_v2(const entity_action_result_v2* result,
+                                                         void* user_data) {
+    if (result == nullptr || user_data == nullptr ||
+        result->struct_size < kEntityActionResultV2RequiredPrefixSize ||
+        result->abi_version != kEntityActionAbiVersion2 || result->handled > 1 ||
+        std::any_of(std::begin(result->reserved), std::end(result->reserved),
+                    [](uint8_t value) { return value != 0; })) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& captured = *static_cast<captured_entity_action_result_v2*>(user_data);
+    ++captured.calls;
+    captured.struct_size = result->struct_size;
+    captured.abi_version = result->abi_version;
+    captured.handled = result->handled;
+    captured.has_result = result->result_json_utf8 != nullptr;
+    captured.result_json = captured.has_result ? result->result_json_utf8 : "";
+    return SAO_OK;
+}
+
+enum class entity_action_result_consumer_mode {
+    return_error,
+    cpp_exception,
+    seh_exception,
+    reentrant_unload,
+};
+
+struct entity_action_result_consumer_probe {
+    entity_action_result_consumer_mode mode = entity_action_result_consumer_mode::return_error;
+    plugin_handle_t plugin = nullptr;
+    uint32_t calls = 0;
+    int32_t reentrant_unload_status = SAO_ERR_OS_CALL_FAILED;
+};
+
+int32_t SAO_PLUGINS_CALL consume_entity_action_result_v2(const entity_action_result_v2* result,
+                                                         void* user_data) {
+    if (result == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& probe = *static_cast<entity_action_result_consumer_probe*>(user_data);
+    ++probe.calls;
+    switch (probe.mode) {
+    case entity_action_result_consumer_mode::return_error:
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    case entity_action_result_consumer_mode::cpp_exception:
+        throw std::runtime_error("entity action result consumer exception");
+    case entity_action_result_consumer_mode::seh_exception:
+        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+        return SAO_ERR_OS_CALL_FAILED;
+    case entity_action_result_consumer_mode::reentrant_unload:
+        probe.reentrant_unload_status = sao_plugins_lifecycle_unload(probe.plugin);
+        return SAO_OK;
+    }
+    return SAO_ERR_OS_CALL_FAILED;
 }
 
 struct revision_change_snapshot_context {
@@ -1535,17 +1930,14 @@ TEST_CASE("generic context JSON inputs are bounded and preserve committed state"
     CHECK(std::string(setting) == "1");
     sao_plugins_ctx_free_string(setting);
     setting = reinterpret_cast<char*>(1);
-    CHECK(sao_plugins_ctx_get_setting(context, "introduced", &setting) ==
-          SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_ctx_get_setting(context, "introduced", &setting) == SAO_ERR_HANDLE_INVALID);
     CHECK(setting == nullptr);
 
     int callbacks = 0;
     uint32_t token = 0;
     REQUIRE(sao_plugins_ctx_subscribe(
                 context, "bounded-event",
-                +[](const char*, const char*, void* user_data) {
-                    ++*static_cast<int*>(user_data);
-                },
+                +[](const char*, const char*, void* user_data) { ++*static_cast<int*>(user_data); },
                 &callbacks, &token) == SAO_OK);
     REQUIRE(sao_plugins_ctx_emit(context, "bounded-event", R"({"state":"old"})") == SAO_OK);
     CHECK(sao_plugins_ctx_emit(context, "bounded-event", excessive_nodes.c_str()) ==
@@ -1576,7 +1968,8 @@ TEST_CASE("generic context JSON inputs are bounded and preserve committed state"
                                                R"({"title":"old"})", nullptr, nullptr) ==
             SAO_OK);
     REQUIRE(sao_plugins_ctx_register_menu_surface(context, "bounded-surface",
-                                                  R"({"title":"old"})", 0.0F) == SAO_OK);
+                                                  R"({"title":"old"})", 0.0F) ==
+            SAO_PLUGINS_ERR_UNSUPPORTED);
     REQUIRE(sao_plugins_ctx_register_data_source(
                 context, "bounded-source", R"({"title":"old"})",
                 +[](void*) -> int32_t { return SAO_OK; },
@@ -1596,7 +1989,7 @@ TEST_CASE("generic context JSON inputs are bounded and preserve committed state"
           SAO_ERR_INVALID_ARGUMENT);
     CHECK(sao_plugins_ctx_register_menu_surface(context, "bounded-surface",
                                                 node_metadata.c_str(), 0.0F) ==
-          SAO_ERR_INVALID_ARGUMENT);
+            SAO_PLUGINS_ERR_UNSUPPORTED);
     CHECK(sao_plugins_ctx_register_data_source(
               context, "bounded-source", oversized_metadata.c_str(),
               +[](void*) -> int32_t { return SAO_OK; },
@@ -1604,18 +1997,25 @@ TEST_CASE("generic context JSON inputs are bounded and preserve committed state"
           SAO_ERR_INVALID_ARGUMENT);
 
     for (const auto kind : {extension_kind::ui_panel, extension_kind::formatter,
-                            extension_kind::menu_category, extension_kind::data_source}) {
+                            extension_kind::data_source}) {
         const auto extensions = snapshot_extensions(sao_plugins_registry_instance(), kind);
         const auto preserved = std::find_if(
             extensions.begin(), extensions.end(), [](const extension_record& record) {
                 return record.plugin_id == "context_json_bounds" &&
                        (record.id == "bounded-panel" || record.id == "bounded-extension" ||
-                        record.id == "bounded-surface" || record.id == "bounded-source");
+                        record.id == "bounded-source");
             });
         REQUIRE(preserved != extensions.end());
         CHECK(preserved->title == "old");
         CHECK(preserved->payload_json == R"({"title":"old"})");
     }
+    const auto menu_extensions =
+        snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
+    CHECK(std::none_of(menu_extensions.begin(), menu_extensions.end(),
+                       [](const extension_record& record) {
+                           return record.plugin_id == "context_json_bounds" &&
+                                  record.id == "bounded-surface";
+                       }));
 
     REQUIRE(sao_plugins_ctx_unsubscribe(context, token) == SAO_OK);
     sao_plugins_ctx_destroy(context);
@@ -2054,6 +2454,442 @@ TEST_CASE("context entity provider ABI accepts required prefixes and future tail
     remove_plugin(handle);
 }
 
+TEST_CASE("Entity action v2 validates result ABI JSON budgets and legacy handlers",
+          "[plugins][loader][entity-provider][entity-action-v2][abi][json][focused]") {
+    TempDirectory temp(L"entity_action_v2_result");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_action_v2_result", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    entity_provider_v2_probe snapshot_probe;
+    entity_action_v2_probe action_probe;
+    entity_root_contribution_descriptor root{};
+    root.struct_size = sizeof(root);
+    root.contribution_id_utf8 = "action-v2-root";
+    root.root_id_utf8 = "plugin:entity-action-v2";
+    root.name_utf8 = "Entity Action V2";
+    root.icon_utf8 = "V2";
+    root.priority = 18.0;
+    context_entity_provider_descriptor_v3 descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "action-v2";
+    descriptor.snapshot = entity_provider_v2_snapshot;
+    descriptor.user_data = &snapshot_probe;
+    descriptor.root_contribution = &root;
+    descriptor.action_handler_v2 = entity_action_v2_handler;
+    descriptor.action_user_data = &action_probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(context, &descriptor) == SAO_OK);
+
+    required_context_entity_provider_descriptor_v3 required_prefix{
+        sizeof(required_prefix), "required-prefix", entity_provider_v2_snapshot, nullptr,
+        &snapshot_probe,         nullptr,           entity_action_v2_handler,    &action_probe,
+    };
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(
+                context, reinterpret_cast<const context_entity_provider_descriptor_v3*>(
+                             &required_prefix)) == SAO_OK);
+
+    future_context_entity_provider_descriptor_v3 future{};
+    future.current = descriptor;
+    future.current.struct_size = sizeof(future);
+    future.current.provider_id_utf8 = "future-tail";
+    future.current.root_contribution = nullptr;
+    future.future_tail[0] = 0xd1801001ULL;
+    future.future_tail[1] = 0xd1801002ULL;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(context, &future.current) == SAO_OK);
+
+    auto partial_tail = descriptor;
+    partial_tail.struct_size =
+        static_cast<uint32_t>(offsetof(context_entity_provider_descriptor_v3, flags) + 1);
+    partial_tail.provider_id_utf8 = "partial-flags-tail";
+    partial_tail.root_contribution = nullptr;
+    partial_tail.flags = (std::numeric_limits<uint32_t>::max)();
+    partial_tail.reserved = (std::numeric_limits<uint32_t>::max)();
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(context, &partial_tail) == SAO_OK);
+
+    auto invalid_descriptor = descriptor;
+    invalid_descriptor.struct_size =
+        static_cast<uint32_t>(kContextEntityProviderDescriptorV3RequiredPrefixSize - 1);
+    invalid_descriptor.provider_id_utf8 = "short-prefix";
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &invalid_descriptor) ==
+          SAO_PLUGINS_ERR_ABI_MISMATCH);
+    invalid_descriptor = descriptor;
+    invalid_descriptor.provider_id_utf8 = "invalid-legacy-slot";
+    invalid_descriptor.action_handler = context_provider_action;
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &invalid_descriptor) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    invalid_descriptor = descriptor;
+    invalid_descriptor.provider_id_utf8 = "invalid-flags";
+    invalid_descriptor.flags = 2;
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &invalid_descriptor) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    invalid_descriptor = descriptor;
+    invalid_descriptor.provider_id_utf8 = "invalid-reserved";
+    invalid_descriptor.reserved = 1;
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &invalid_descriptor) ==
+          SAO_ERR_INVALID_ARGUMENT);
+
+    entity_provider_v2_probe legacy_probe;
+    legacy_probe.mode = entity_snapshot_v2_mode::zero_rows;
+    context_entity_provider_descriptor_v2 legacy{};
+    legacy.struct_size = sizeof(legacy);
+    legacy.provider_id_utf8 = "legacy-action";
+    legacy.snapshot = entity_provider_v2_snapshot;
+    legacy.action_handler = entity_provider_v2_action;
+    legacy.user_data = &legacy_probe;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v2(context, &legacy) == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    CHECK(catalog.providers.size() == 5);
+    REQUIRE(catalog.roots.size() == 1);
+    CHECK(catalog.roots[0].owner_plugin_id == "entity_action_v2_result");
+    CHECK(catalog.roots[0].contribution_id == "action-v2-root");
+    CHECK(catalog.roots[0].root_id == "plugin:entity-action-v2");
+    REQUIRE(catalog.roots[0].actions.size() == 2);
+    CHECK(catalog.roots[0].actions[0].provider_id == "entity_action_v2_result/action-v2");
+    CHECK(catalog.roots[0].actions[0].action_id == "first");
+    CHECK(catalog.roots[0].actions[1].provider_id == "entity_action_v2_result/action-v2");
+    CHECK(catalog.roots[0].actions[1].action_id == "second");
+    const std::string provider_id = "entity_action_v2_result/action-v2";
+    const std::string legacy_provider_id = "entity_action_v2_result/legacy-action";
+    const auto provider = std::find_if(
+        catalog.providers.begin(), catalog.providers.end(),
+        [&provider_id](const auto& current) { return current.provider_id == provider_id; });
+    const auto legacy_provider = std::find_if(catalog.providers.begin(), catalog.providers.end(),
+                                              [&legacy_provider_id](const auto& current) {
+                                                  return current.provider_id == legacy_provider_id;
+                                              });
+    REQUIRE(provider != catalog.providers.end());
+    REQUIRE(legacy_provider != catalog.providers.end());
+
+    captured_entity_action_result_v2 captured;
+    const auto invoke = [&](entity_action_v2_mode mode) {
+        action_probe.mode = mode;
+        captured = {};
+        return sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), provider->generation,
+                                                     "opaque.action", R"({"input":1})",
+                                                     capture_entity_action_result_v2, &captured);
+    };
+
+    const auto calls_before_null_callback = action_probe.calls.load(std::memory_order_acquire);
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), provider->generation,
+                                                "opaque.action", "{}", nullptr,
+                                                nullptr) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(action_probe.calls.load(std::memory_order_acquire) == calls_before_null_callback);
+
+    REQUIRE(invoke(entity_action_v2_mode::handled_without_result) == SAO_OK);
+    CHECK(captured.calls == 1);
+    CHECK(captured.struct_size == sizeof(entity_action_result_v2));
+    CHECK(captured.abi_version == kEntityActionAbiVersion2);
+    CHECK(captured.handled == 1);
+    CHECK_FALSE(captured.has_result);
+    CHECK(action_probe.last_action == "opaque.action");
+    CHECK(action_probe.last_payload == R"({"input":1})");
+
+    REQUIRE(invoke(entity_action_v2_mode::handled_null_result) == SAO_OK);
+    CHECK(captured.handled == 1);
+    CHECK(captured.has_result);
+    CHECK(captured.result_json == "null");
+
+    REQUIRE(invoke(entity_action_v2_mode::handled_nested_result) == SAO_OK);
+    CHECK(captured.result_json == R"({"outer":{"items":[1,{"ok":true}]}})");
+
+    REQUIRE(invoke(entity_action_v2_mode::future_tail) == SAO_OK);
+    CHECK(captured.result_json == R"({"future":true})");
+
+    REQUIRE(invoke(entity_action_v2_mode::borrowed_result_mutated_after_submit) == SAO_OK);
+    CHECK(captured.result_json == R"({"before":true})");
+    CHECK(action_probe.mutable_result == R"({"after":true})");
+
+    REQUIRE(invoke(entity_action_v2_mode::declined) == SAO_OK);
+    CHECK(captured.calls == 1);
+    CHECK(captured.handled == 0);
+    CHECK_FALSE(captured.has_result);
+    action_probe.mode = entity_action_v2_mode::declined;
+    CHECK(sao_plugins_entity_provider_invoke(provider_id.c_str(), provider->generation,
+                                             "opaque.action", "{}") == SAO_PLUGINS_ERR_NOT_FOUND);
+
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(
+                legacy_provider_id.c_str(), legacy_provider->generation, "legacy", "{}",
+                capture_entity_action_result_v2, &captured) == SAO_OK);
+    CHECK(captured.calls == 1);
+    CHECK(captured.handled == 1);
+    CHECK_FALSE(captured.has_result);
+    REQUIRE(sao_plugins_entity_provider_invoke(
+                legacy_provider_id.c_str(), legacy_provider->generation, "legacy", "{}") == SAO_OK);
+    CHECK(legacy_probe.actions == 2);
+
+    std::string maximum_depth = nested_array_json(kEntityActionV2MaximumJsonNestingDepth);
+    action_probe.handled_json = maximum_depth.c_str();
+    REQUIRE(invoke(entity_action_v2_mode::custom_result) == SAO_OK);
+    CHECK(captured.result_json == maximum_depth);
+    std::string excessive_depth = nested_array_json(kEntityActionV2MaximumJsonNestingDepth + 1);
+    action_probe.handled_json = excessive_depth.c_str();
+    CHECK(invoke(entity_action_v2_mode::custom_result) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(captured.calls == 0);
+
+    std::string maximum_nodes = flat_array_json(kEntityActionV2MaximumJsonNodes - 1);
+    action_probe.handled_json = maximum_nodes.c_str();
+    REQUIRE(invoke(entity_action_v2_mode::custom_result) == SAO_OK);
+    CHECK(captured.result_json == maximum_nodes);
+    std::string excessive_nodes = flat_array_json(kEntityActionV2MaximumJsonNodes);
+    action_probe.handled_json = excessive_nodes.c_str();
+    CHECK(invoke(entity_action_v2_mode::custom_result) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(captured.calls == 0);
+
+    std::string maximum_bytes =
+        "\"" + std::string(kMaximumEntityActionResultJsonBytes - 2, 'x') + "\"";
+    action_probe.handled_json = maximum_bytes.c_str();
+    REQUIRE(invoke(entity_action_v2_mode::custom_result) == SAO_OK);
+    CHECK(captured.result_json.size() == kMaximumEntityActionResultJsonBytes);
+    action_probe.oversized_result =
+        "\"" + std::string(kMaximumEntityActionResultJsonBytes, 'x') + "\"";
+
+    struct invalid_result_case {
+        entity_action_v2_mode mode;
+        int32_t expected_status;
+    };
+    const std::array invalid_results{
+        invalid_result_case{entity_action_v2_mode::declined_with_result, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::invalid_utf8, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::invalid_json, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::over_budget, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::invalid_handled, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::invalid_reserved, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::short_struct, SAO_PLUGINS_ERR_ABI_MISMATCH},
+        invalid_result_case{entity_action_v2_mode::wrong_abi, SAO_PLUGINS_ERR_ABI_MISMATCH},
+        invalid_result_case{entity_action_v2_mode::missing_submission, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::double_submission, SAO_ERR_INVALID_ARGUMENT},
+        invalid_result_case{entity_action_v2_mode::handler_error, SAO_ERR_OS_CALL_FAILED},
+        invalid_result_case{entity_action_v2_mode::cpp_exception, SAO_ERR_OS_CALL_FAILED},
+        invalid_result_case{entity_action_v2_mode::seh_exception, SAO_ERR_OS_CALL_FAILED},
+    };
+    for (const auto& invalid : invalid_results) {
+        INFO("mode=" << static_cast<int>(invalid.mode));
+        CHECK(invoke(invalid.mode) == invalid.expected_status);
+        CHECK(captured.calls == 0);
+    }
+
+    action_probe.mode = entity_action_v2_mode::handled_without_result;
+    entity_action_result_consumer_probe consumer_probe;
+    const auto invoke_consumer = [&]() {
+        return sao_plugins_entity_provider_invoke_v2(
+            provider_id.c_str(), provider->generation, "opaque.action", "{}",
+            consume_entity_action_result_v2, &consumer_probe);
+    };
+    CHECK(invoke_consumer() == SAO_ERR_BUFFER_TOO_SMALL);
+    consumer_probe.mode = entity_action_result_consumer_mode::cpp_exception;
+    CHECK(invoke_consumer() == SAO_ERR_OS_CALL_FAILED);
+    consumer_probe.mode = entity_action_result_consumer_mode::seh_exception;
+    CHECK(invoke_consumer() == SAO_ERR_OS_CALL_FAILED);
+    consumer_probe.mode = entity_action_result_consumer_mode::reentrant_unload;
+    consumer_probe.plugin = handle;
+    REQUIRE(invoke_consumer() == SAO_OK);
+    CHECK(consumer_probe.reentrant_unload_status == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+    CHECK(consumer_probe.calls == 4);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("Entity action-only provider preserves replacement lifecycle reentry and generations",
+          "[plugins][loader][entity-provider][entity-action-v2][action-only][replacement]["
+          "lifecycle][generation][reentry][repeat][focused]") {
+    TempDirectory temp(L"entity_action_v2_lifecycle");
+    write_text(temp.path / L"plugin.py", "entry");
+    auto manifest = make_manifest("entity_action_v2_lifecycle", temp.path);
+    manifest.entry = "plugin.py";
+    manifest.language = engine_kind::python;
+    manifest.enabled = false;
+    auto handle = add_plugin(manifest);
+
+    context_provider_probe adapter_probe;
+    const auto adapter = empty_context_provider_adapter(&adapter_probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(engine_kind::python, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+
+    entity_action_v2_probe first_handler;
+    first_handler.mode = entity_action_v2_mode::custom_result;
+    first_handler.handled_json = R"({"handler":1})";
+    context_entity_provider_descriptor_v3 descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.provider_id_utf8 = "opaque-action";
+    descriptor.action_handler_v2 = entity_action_v2_handler;
+    descriptor.action_user_data = &first_handler;
+    descriptor.flags = kContextEntityProviderV3ActionOnly;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+
+    const std::string provider_id = "entity_action_v2_lifecycle/opaque-action";
+    entity_provider_catalog_snapshot_v2 first_catalog;
+    REQUIRE(snapshot_entity_providers_v2(first_catalog) == SAO_OK);
+    REQUIRE(first_catalog.providers.size() == 1);
+    CHECK(first_catalog.roots.empty());
+    const auto first_provider = std::find_if(
+        first_catalog.providers.begin(), first_catalog.providers.end(),
+        [&provider_id](const auto& current) { return current.provider_id == provider_id; });
+    REQUIRE(first_provider != first_catalog.providers.end());
+    CHECK(first_provider->snapshot_abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(first_provider->rows.empty());
+    const uint64_t first_generation = first_provider->generation;
+    const uint64_t first_catalog_revision = first_catalog.revision;
+    const auto first_catalog_token = first_catalog.content_token;
+
+    captured_entity_action_result_v2 captured;
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                  "{}", capture_entity_action_result_v2,
+                                                  &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":1})");
+    CHECK(first_handler.calls == 1);
+
+    entity_action_v2_probe second_handler;
+    second_handler.mode = entity_action_v2_mode::custom_result;
+    second_handler.handled_json = R"({"handler":2})";
+    auto replacement = descriptor;
+    replacement.action_user_data = &second_handler;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(context, &replacement) == SAO_OK);
+
+    entity_provider_catalog_snapshot_v2 after_replacement;
+    REQUIRE(snapshot_entity_providers_v2(after_replacement) == SAO_OK);
+    REQUIRE(after_replacement.providers.size() == 1);
+    CHECK(after_replacement.providers[0].provider_id == provider_id);
+    CHECK(after_replacement.providers[0].generation == first_generation);
+    CHECK(after_replacement.providers[0].rows.empty());
+    CHECK(after_replacement.roots.empty());
+    CHECK(after_replacement.revision == first_catalog_revision);
+    CHECK(after_replacement.content_token == first_catalog_token);
+
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                  "{}", capture_entity_action_result_v2,
+                                                  &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":2})");
+    CHECK(first_handler.calls == 1);
+    CHECK(second_handler.calls == 1);
+
+    entity_provider_v2_probe invalid_snapshot;
+    auto failed_replacement = replacement;
+    failed_replacement.snapshot = entity_provider_v2_snapshot;
+    failed_replacement.user_data = &invalid_snapshot;
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &failed_replacement) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    failed_replacement = replacement;
+    failed_replacement.reserved = 1;
+    CHECK(sao_plugins_ctx_register_entity_provider_v3(context, &failed_replacement) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                  "{}", capture_entity_action_result_v2,
+                                                  &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":2})");
+    CHECK(second_handler.calls == 2);
+
+    second_handler.mode = entity_action_v2_mode::reentrant_unload;
+    second_handler.plugin = handle;
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                  "{}", capture_entity_action_result_v2,
+                                                  &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"reentry":true})");
+    CHECK(second_handler.reentrant_unload_status.load(std::memory_order_acquire) ==
+          SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+
+    second_handler.mode = entity_action_v2_mode::custom_result;
+    const auto calls_before_disable = second_handler.calls.load(std::memory_order_acquire);
+    REQUIRE(sao_plugins_lifecycle_disable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 disabled_catalog;
+    REQUIRE(snapshot_entity_providers_v2(disabled_catalog) == SAO_OK);
+    CHECK(disabled_catalog.providers.empty());
+    captured = {};
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                "{}", capture_entity_action_result_v2,
+                                                &captured) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(captured.calls == 0);
+    CHECK(second_handler.calls.load(std::memory_order_acquire) == calls_before_disable);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 reenabled_catalog;
+    REQUIRE(snapshot_entity_providers_v2(reenabled_catalog) == SAO_OK);
+    REQUIRE(reenabled_catalog.providers.size() == 1);
+    CHECK(reenabled_catalog.providers[0].generation == first_generation);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                "{}", capture_entity_action_result_v2,
+                                                &captured) == SAO_ERR_HANDLE_INVALID);
+
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    plugin_context_t* reloaded_context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &reloaded_context) == SAO_OK);
+    REQUIRE(reloaded_context != nullptr);
+    entity_action_v2_probe reloaded_handler;
+    reloaded_handler.mode = entity_action_v2_mode::custom_result;
+    reloaded_handler.handled_json = R"({"handler":3})";
+    descriptor.action_user_data = &reloaded_handler;
+    REQUIRE(sao_plugins_ctx_register_entity_provider_v3(reloaded_context, &descriptor) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 reloaded_catalog;
+    REQUIRE(snapshot_entity_providers_v2(reloaded_catalog) == SAO_OK);
+    REQUIRE(reloaded_catalog.providers.size() == 1);
+    const uint64_t reloaded_generation = reloaded_catalog.providers[0].generation;
+    CHECK(reloaded_generation != first_generation);
+    CHECK(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), first_generation, "opaque",
+                                                "{}", capture_entity_action_result_v2,
+                                                &captured) == SAO_ERR_HANDLE_INVALID);
+    captured = {};
+    REQUIRE(sao_plugins_entity_provider_invoke_v2(provider_id.c_str(), reloaded_generation,
+                                                  "opaque", "{}", capture_entity_action_result_v2,
+                                                  &captured) == SAO_OK);
+    CHECK(captured.result_json == R"({"handler":3})");
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::python) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("menu surface is unsupported and never pollutes the menu category ledger",
+          "[plugins][loader][context][menu-surface][entity-action-v2][focused]") {
+    TempDirectory temp(L"menu_surface_unsupported");
+    write_text(temp.path / L"plugin.emma", "entry");
+    auto handle = add_plugin(make_manifest("menu_surface_unsupported", temp.path));
+    auto* context = sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    const auto before =
+        snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
+    CHECK(sao_plugins_ctx_register_menu_surface(context, "opaque-menu", R"({"title":"Menu"})",
+                                                7.0F) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(sao_plugins_ctx_register_menu_surface(nullptr, nullptr, nullptr, 0.0F) ==
+          SAO_PLUGINS_ERR_UNSUPPORTED);
+    const auto after =
+        snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
+    CHECK(after.size() == before.size());
+    CHECK(std::none_of(after.begin(), after.end(), [](const extension_record& record) {
+        return record.plugin_id == "menu_surface_unsupported" || record.id == "opaque-menu";
+    }));
+
+    sao_plugins_ctx_destroy(context);
+    remove_plugin(handle);
+}
+
 TEST_CASE("entity provider rows enforce mandatory flags and JSON atomically",
           "[plugins][loader][entity-provider][abi][json][focused]") {
     TempDirectory temp(L"context_provider_row_abi");
@@ -2313,9 +3149,29 @@ TEST_CASE("entity provider same-revision content replacement characterizes v1 li
     remove_plugin(handle);
 }
 
-TEST_CASE("entity provider v1 and v2 ABI offsets remain frozen",
-          "[plugins][loader][entity-provider][v1][abi][focused]") {
+TEST_CASE("native Entity query and snapshot v1 v2 ABI offsets remain frozen",
+          "[plugins][loader][native][entity-provider][v1][v2][query-array][abi][focused]") {
 #if INTPTR_MAX == INT64_MAX
+    STATIC_REQUIRE(alignof(native_plugin_descriptor) == 8);
+    STATIC_REQUIRE(sizeof(native_plugin_descriptor) == 64);
+    STATIC_REQUIRE(kNativePluginDescriptorBaseRequiredPrefixSize == 32);
+    STATIC_REQUIRE(kNativePluginDescriptorV1Size == 48);
+    STATIC_REQUIRE(kNativePluginDescriptorV2Size == 64);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, struct_size) == 0);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, abi_version) == 4);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, capability_count) == 8);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, capabilities) == 16);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, plugin_version) == 24);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, entity_provider_count) == 32);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, entity_providers) == 40);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, entity_provider_v2_count) == 48);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, entity_provider_v2_stride_bytes) == 52);
+    STATIC_REQUIRE(offsetof(native_plugin_descriptor, entity_providers_v2) == 56);
+    STATIC_REQUIRE(alignof(legacy_native_plugin_descriptor_v1) == 8);
+    STATIC_REQUIRE(sizeof(legacy_native_plugin_descriptor_v1) == 48);
+    STATIC_REQUIRE(offsetof(legacy_native_plugin_descriptor_v1, entity_provider_count) == 32);
+    STATIC_REQUIRE(offsetof(legacy_native_plugin_descriptor_v1, entity_providers) == 40);
+
     STATIC_REQUIRE(alignof(native_entity_provider_descriptor) == 8);
     STATIC_REQUIRE(sizeof(native_entity_provider_descriptor) == 40);
     STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, struct_size) == 0);
@@ -2323,6 +3179,16 @@ TEST_CASE("entity provider v1 and v2 ABI offsets remain frozen",
     STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, snapshot) == 16);
     STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, action_handler) == 24);
     STATIC_REQUIRE(offsetof(native_entity_provider_descriptor, user_data) == 32);
+
+    STATIC_REQUIRE(alignof(native_entity_provider_descriptor_v2) == 8);
+    STATIC_REQUIRE(sizeof(native_entity_provider_descriptor_v2) == 48);
+    STATIC_REQUIRE(kNativeEntityProviderDescriptorV2RequiredPrefixSize == 40);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, struct_size) == 0);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, snapshot_v2) == 16);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, action_handler) == 24);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, user_data) == 32);
+    STATIC_REQUIRE(offsetof(native_entity_provider_descriptor_v2, root_contribution) == 40);
 
     STATIC_REQUIRE(alignof(entity_root_contribution_descriptor) == 8);
     STATIC_REQUIRE(sizeof(entity_root_contribution_descriptor) == 48);
@@ -2350,6 +3216,31 @@ TEST_CASE("entity provider v1 and v2 ABI offsets remain frozen",
     STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v2, action_handler) == 24);
     STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v2, user_data) == 32);
     STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v2, root_contribution) == 40);
+
+    STATIC_REQUIRE(kContextEntityProviderDescriptorV3RequiredPrefixSize == 64);
+    STATIC_REQUIRE(alignof(context_entity_provider_descriptor_v3) == 8);
+    STATIC_REQUIRE(sizeof(context_entity_provider_descriptor_v3) == 72);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, struct_size) == 0);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, provider_id_utf8) == 8);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, snapshot) == 16);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, action_handler) == 24);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, user_data) == 32);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, root_contribution) == 40);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, action_handler_v2) == 48);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, action_user_data) == 56);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, flags) == 64);
+    STATIC_REQUIRE(offsetof(context_entity_provider_descriptor_v3, reserved) == 68);
+    STATIC_REQUIRE(sizeof(required_context_entity_provider_descriptor_v3) == 64);
+    STATIC_REQUIRE(sizeof(future_context_entity_provider_descriptor_v3) == 88);
+
+    STATIC_REQUIRE(kEntityActionResultV2RequiredPrefixSize == 24);
+    STATIC_REQUIRE(alignof(entity_action_result_v2) == 8);
+    STATIC_REQUIRE(sizeof(entity_action_result_v2) == 24);
+    STATIC_REQUIRE(offsetof(entity_action_result_v2, struct_size) == 0);
+    STATIC_REQUIRE(offsetof(entity_action_result_v2, abi_version) == 4);
+    STATIC_REQUIRE(offsetof(entity_action_result_v2, handled) == 8);
+    STATIC_REQUIRE(offsetof(entity_action_result_v2, reserved) == 9);
+    STATIC_REQUIRE(offsetof(entity_action_result_v2, result_json_utf8) == 16);
 
     STATIC_REQUIRE(alignof(entity_menu_row) == 8);
     STATIC_REQUIRE(sizeof(entity_menu_row) == 80);
@@ -2918,8 +3809,9 @@ TEST_CASE("entity snapshot v2 token and stride mismatches exhaust nested retry",
     REQUIRE(sao_plugins_ctx_register_entity_provider_v2(context, &descriptor) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
 
-    for (const auto mode :
-         {entity_snapshot_v2_mode::token_mismatch, entity_snapshot_v2_mode::stride_mismatch}) {
+    for (const auto mode : {entity_snapshot_v2_mode::token_mismatch,
+                            entity_snapshot_v2_mode::token_mismatch_invalid_flags,
+                            entity_snapshot_v2_mode::stride_mismatch}) {
         INFO("mode=" << static_cast<int>(mode));
         probe.mode = mode;
         probe.snapshot_calls = 0;
@@ -2978,6 +3870,8 @@ TEST_CASE("entity snapshot v2 rejects invalid token stride and row layouts atomi
         invalid_case{entity_snapshot_v2_mode::misaligned_stride, SAO_ERR_INVALID_ARGUMENT, 1},
         invalid_case{entity_snapshot_v2_mode::oversized_stride, SAO_ERR_INVALID_ARGUMENT, 1},
         invalid_case{entity_snapshot_v2_mode::short_row_struct, SAO_PLUGINS_ERR_ABI_MISMATCH, 2},
+        invalid_case{entity_snapshot_v2_mode::invalid_flags, SAO_ERR_INVALID_ARGUMENT, 2},
+        invalid_case{entity_snapshot_v2_mode::invalid_reserved, SAO_ERR_INVALID_ARGUMENT, 2},
         invalid_case{entity_snapshot_v2_mode::zero_rows_nonzero_stride, SAO_ERR_INVALID_ARGUMENT,
                      1},
     };
@@ -3573,8 +4467,550 @@ TEST_CASE("script load rollback veto remains resident until unload retry",
     remove_plugin(handle);
 }
 
+TEST_CASE("native query descriptor honors caller capacity and preserves the v1 prefix",
+          "[plugins][loader][native][entity-provider][v2][query-array][abi][focused]") {
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    native_fixture_control control(fixture);
+    control.set_query_mode(native_fixture_query_mode::dual);
+
+    struct legacy_query_buffer {
+        legacy_native_plugin_descriptor_v1 descriptor{};
+        uint64_t canary = 0xd17d17d17d17d17ULL;
+    } legacy;
+    legacy.descriptor.struct_size = sizeof(legacy.descriptor);
+    REQUIRE(control.query(reinterpret_cast<native_plugin_descriptor*>(&legacy.descriptor)) ==
+            SAO_OK);
+    CHECK(legacy.descriptor.struct_size == sizeof(legacy.descriptor));
+    CHECK(legacy.descriptor.abi_version == 2);
+    CHECK(legacy.descriptor.capability_count == 2);
+    CHECK(std::string_view(legacy.descriptor.plugin_version) == "1.0.0");
+    CHECK(legacy.descriptor.entity_provider_count == 1);
+    REQUIRE(legacy.descriptor.entity_providers != nullptr);
+    CHECK(legacy.descriptor.entity_providers[0].struct_size ==
+          sizeof(native_entity_provider_descriptor));
+    CHECK(std::string_view(legacy.descriptor.entity_providers[0].provider_id_utf8) == "fixture");
+    CHECK(legacy.canary == 0xd17d17d17d17d17ULL);
+
+    struct full_query_buffer {
+        native_plugin_descriptor descriptor{};
+        uint64_t canary = 0xd17f17f17f17f17ULL;
+    } full;
+    full.descriptor.struct_size = sizeof(full.descriptor);
+    REQUIRE(control.query(&full.descriptor) == SAO_OK);
+    CHECK(full.descriptor.struct_size == sizeof(full.descriptor));
+    CHECK(full.descriptor.entity_provider_count == 1);
+    CHECK(full.descriptor.entity_provider_v2_count == 1);
+    CHECK(full.descriptor.entity_provider_v2_stride_bytes == 64);
+    REQUIRE(full.descriptor.entity_providers_v2 != nullptr);
+    CHECK(full.canary == 0xd17f17f17f17f17ULL);
+    CHECK(GetProcAddress(control.module, "sao_plugin_query_descriptor_v2") == nullptr);
+
+    control.set_query_mode(native_fixture_query_mode::descriptor_future_tail);
+    native_plugin_descriptor future{};
+    future.struct_size = sizeof(future);
+    REQUIRE(control.query(&future) == SAO_OK);
+    CHECK(future.struct_size == kNativePluginDescriptorV2Size + 16);
+    CHECK(future.entity_provider_count == 1);
+    CHECK(future.entity_provider_v2_count == 1);
+}
+
+TEST_CASE("native query descriptor size gates v1 and v2 arrays",
+          "[plugins][loader][native][entity-provider][v2][query-array][compat][focused]") {
+    TempDirectory temp(L"native_query_size_gates");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+
+    struct size_case {
+        native_fixture_query_mode mode;
+        const char* plugin_id;
+        size_t expected_provider_count;
+        bool expects_v1;
+    };
+    const std::array cases{
+        size_case{native_fixture_query_mode::descriptor_base_only, "native_query_size_32", 0,
+                  false},
+        size_case{native_fixture_query_mode::descriptor_without_arrays, "native_query_size_47", 0,
+                  false},
+        size_case{native_fixture_query_mode::v1_only, "native_query_size_48", 1, true},
+        size_case{native_fixture_query_mode::descriptor_v1_only_with_v2_garbage,
+                  "native_query_size_63", 1, true},
+    };
+
+    for (const auto& item : cases) {
+        INFO("plugin_id=" << item.plugin_id);
+        control.reset();
+        control.set_query_mode(item.mode);
+        auto handle = add_plugin(make_native_fixture_manifest(item.plugin_id, temp.path, true));
+        REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+        REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+
+        entity_provider_catalog_snapshot_v2 catalog;
+        REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+        const auto owned = std::count_if(
+            catalog.providers.begin(), catalog.providers.end(),
+            [&item](const auto& provider) { return provider.owner_plugin_id == item.plugin_id; });
+        CHECK(owned == static_cast<std::ptrdiff_t>(item.expected_provider_count));
+        CHECK(std::none_of(
+            catalog.providers.begin(), catalog.providers.end(), [&item](const auto& provider) {
+                return provider.owner_plugin_id == item.plugin_id &&
+                       provider.provider_id == std::string(item.plugin_id) + "/fixture-v2";
+            }));
+        if (item.expects_v1) {
+            const auto provider = std::find_if(
+                catalog.providers.begin(), catalog.providers.end(), [&item](const auto& current) {
+                    return current.provider_id == std::string(item.plugin_id) + "/fixture";
+                });
+            REQUIRE(provider != catalog.providers.end());
+            CHECK(provider->snapshot_abi_version == kEntitySnapshotAbiVersion1);
+        }
+
+        REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+        remove_plugin(handle);
+    }
+}
+
+TEST_CASE("native query valid v1 v2 array combinations preserve registration order",
+          "[plugins][loader][native][entity-provider][v2][query-array][registration][focused]") {
+    TempDirectory temp(L"native_query_valid_modes");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+
+    struct valid_case {
+        native_fixture_query_mode mode;
+        const char* plugin_id;
+        size_t expected_provider_count;
+        bool expects_v1;
+        bool expects_v2;
+    };
+    const std::array cases{
+        valid_case{native_fixture_query_mode::normal, "native_query_default_v1", 1, true, false},
+        valid_case{native_fixture_query_mode::v2_only, "native_query_v2_only", 1, false, true},
+        valid_case{native_fixture_query_mode::dual, "native_query_dual", 2, true, true},
+        valid_case{native_fixture_query_mode::v2_empty, "native_query_v2_empty", 0, false, false},
+        valid_case{native_fixture_query_mode::descriptor_future_tail, "native_query_future_tail", 2,
+                   true, true},
+        valid_case{native_fixture_query_mode::v2_unaligned_base, "native_query_unaligned_base", 2,
+                   true, true},
+    };
+
+    for (const auto& item : cases) {
+        INFO("plugin_id=" << item.plugin_id);
+        control.reset();
+        control.set_query_mode(item.mode);
+        auto handle = add_plugin(make_native_fixture_manifest(item.plugin_id, temp.path, true));
+        REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+
+        entity_provider_catalog_snapshot_v2 catalog;
+        REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+        std::vector<const entity_provider_snapshot_record_v2*> owned;
+        for (const auto& provider : catalog.providers) {
+            if (provider.owner_plugin_id == item.plugin_id)
+                owned.push_back(&provider);
+        }
+        REQUIRE(owned.size() == item.expected_provider_count);
+        if (item.expects_v1) {
+            const auto provider = std::find_if(owned.begin(), owned.end(), [](const auto* current) {
+                return current->snapshot_abi_version == kEntitySnapshotAbiVersion1;
+            });
+            REQUIRE(provider != owned.end());
+        }
+        if (item.expects_v2) {
+            const auto provider = std::find_if(owned.begin(), owned.end(), [](const auto* current) {
+                return current->snapshot_abi_version == kEntitySnapshotAbiVersion2;
+            });
+            REQUIRE(provider != owned.end());
+            CHECK((*provider)->row_stride_bytes == sizeof(entity_menu_row_v2));
+            REQUIRE((*provider)->rows.size() == 1);
+            CHECK((*provider)->rows[0].struct_size == sizeof(entity_menu_row_v2));
+        }
+        if (item.expects_v1 && item.expects_v2) {
+            REQUIRE(owned.size() == 2);
+            CHECK(owned[0]->snapshot_abi_version == kEntitySnapshotAbiVersion1);
+            CHECK(owned[1]->snapshot_abi_version == kEntitySnapshotAbiVersion2);
+            CHECK(owned[0]->generation != owned[1]->generation);
+        }
+
+        REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+        remove_plugin(handle);
+    }
+}
+
+TEST_CASE("native v2 query accepts the required provider prefix as its physical stride",
+          "[plugins][loader][native][entity-provider][v2][query-array][compat][stride][focused]") {
+    TempDirectory temp(L"native_query_v2_required_prefix");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+    control.set_query_mode(native_fixture_query_mode::v2_required_prefix_only);
+
+    constexpr const char* kPluginId = "native_query_v2_required_prefix";
+    auto handle = add_plugin(make_native_fixture_manifest(kPluginId, temp.path, true));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    const auto provider =
+        std::find_if(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+            return item.provider_id == "native_query_v2_required_prefix/fixture-v2-prefix";
+        });
+    REQUIRE(provider != catalog.providers.end());
+    CHECK(provider->snapshot_abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(provider->revision == 17);
+    CHECK(provider->rows.size() == 1);
+    CHECK(std::none_of(catalog.roots.begin(), catalog.roots.end(), [](const auto& root) {
+        return root.owner_plugin_id == "native_query_v2_required_prefix";
+    }));
+    REQUIRE(sao_plugins_entity_provider_invoke(provider->provider_id.c_str(), provider->generation,
+                                               "fixture.v2.action", "{}") == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("native v2 query ignores a partial optional root pointer tail",
+          "[plugins][loader][native][entity-provider][v2][query-array][compat][prefix][focused]") {
+    TempDirectory temp(L"native_query_v2_partial_root");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+    control.set_query_mode(native_fixture_query_mode::v2_partial_root_tail);
+
+    constexpr const char* kPluginId = "native_query_v2_partial_root";
+    auto handle = add_plugin(make_native_fixture_manifest(kPluginId, temp.path, true));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    const auto provider =
+        std::find_if(catalog.providers.begin(), catalog.providers.end(), [](const auto& item) {
+            return item.provider_id == "native_query_v2_partial_root/fixture-v2-partial-root";
+        });
+    REQUIRE(provider != catalog.providers.end());
+    CHECK(provider->snapshot_abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(std::none_of(catalog.roots.begin(), catalog.roots.end(), [](const auto& root) {
+        return root.owner_plugin_id == "native_query_v2_partial_root";
+    }));
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE(
+    "native v2 query validation and duplicate registration fail atomically",
+    "[plugins][loader][native][entity-provider][v2][query-array][validation][rollback][focused]") {
+    TempDirectory temp(L"native_query_v2_invalid");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+
+    struct invalid_case {
+        native_fixture_query_mode mode;
+        int32_t expected_status;
+        const char* suffix;
+    };
+    const std::array cases{
+        invalid_case{native_fixture_query_mode::v2_count_without_pointer, SAO_ERR_INVALID_ARGUMENT,
+                     "null"},
+        invalid_case{native_fixture_query_mode::v2_zero_count_with_metadata,
+                     SAO_ERR_INVALID_ARGUMENT, "zero_count"},
+        invalid_case{native_fixture_query_mode::v2_short_stride, SAO_PLUGINS_ERR_ABI_MISMATCH,
+                     "short_stride"},
+        invalid_case{native_fixture_query_mode::v2_misaligned_stride, SAO_ERR_INVALID_ARGUMENT,
+                     "misaligned_stride"},
+        invalid_case{native_fixture_query_mode::v2_short_struct, SAO_PLUGINS_ERR_ABI_MISMATCH,
+                     "short_struct"},
+        invalid_case{native_fixture_query_mode::v2_struct_exceeds_stride, SAO_ERR_INVALID_ARGUMENT,
+                     "struct_exceeds_stride"},
+        invalid_case{native_fixture_query_mode::v2_pointer_overflow, SAO_ERR_INVALID_ARGUMENT,
+                     "overflow"},
+        invalid_case{native_fixture_query_mode::v2_count_over_limit, SAO_ERR_INVALID_ARGUMENT,
+                     "count"},
+        invalid_case{native_fixture_query_mode::duplicate_provider_id,
+                     SAO_PLUGINS_ERR_ALREADY_EXISTS, "duplicate"},
+    };
+
+    for (const auto& item : cases) {
+        INFO("mode=" << static_cast<int32_t>(item.mode));
+        control.reset();
+        control.set_query_mode(item.mode);
+        const std::string plugin_id = std::string("native_query_invalid_") + item.suffix;
+        auto handle = add_plugin(make_native_fixture_manifest(plugin_id, temp.path, true));
+        CHECK(sao_plugins_lifecycle_load(handle) == item.expected_status);
+        CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+        const auto [on_load_calls, on_unload_calls] = control.lifecycle_calls();
+        CHECK(on_load_calls == 0);
+        CHECK(on_unload_calls == 0);
+
+        plugin_context_t* context = reinterpret_cast<plugin_context_t*>(1);
+        CHECK(sao_plugins_lifecycle_get_context(handle, &context) == SAO_ERR_NOT_INITIALIZED);
+        CHECK(context == nullptr);
+        entity_provider_catalog_snapshot_v2 catalog;
+        REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+        CHECK(std::none_of(
+            catalog.providers.begin(), catalog.providers.end(),
+            [&plugin_id](const auto& provider) { return provider.owner_plugin_id == plugin_id; }));
+        CHECK(std::none_of(
+            catalog.roots.begin(), catalog.roots.end(),
+            [&plugin_id](const auto& root) { return root.owner_plugin_id == plugin_id; }));
+        CHECK(sao_plugins_entity_provider_invoke((plugin_id + "/fixture").c_str(), 1,
+                                                 "fixture.action", "{}") == SAO_ERR_HANDLE_INVALID);
+        CHECK(sao_plugins_entity_provider_invoke((plugin_id + "/fixture-v2").c_str(), 1,
+                                                 "fixture.v2.action",
+                                                 "{}") == SAO_ERR_HANDLE_INVALID);
+        remove_plugin(handle);
+    }
+}
+
+TEST_CASE(
+    "native v1 v2 query transaction rolls back when on_load fails",
+    "[plugins][loader][native][entity-provider][v2][query-array][on-load][rollback][focused]") {
+    TempDirectory temp(L"native_query_on_load_rollback");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+    control.set_query_mode(native_fixture_query_mode::dual);
+    REQUIRE(control.set_lifecycle_statuses(SAO_ERR_OS_CALL_FAILED, SAO_OK) == SAO_OK);
+
+    constexpr const char* kPluginId = "native_query_on_load_rollback";
+    auto handle = add_plugin(make_native_fixture_manifest(kPluginId, temp.path, true));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_ERR_OS_CALL_FAILED);
+    REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+    const auto [on_load_calls, on_unload_calls] = control.lifecycle_calls();
+    CHECK(on_load_calls == 1);
+    CHECK(on_unload_calls == 1);
+    plugin_context_t* context = reinterpret_cast<plugin_context_t*>(1);
+    CHECK(sao_plugins_lifecycle_get_context(handle, &context) == SAO_ERR_NOT_INITIALIZED);
+    CHECK(context == nullptr);
+
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    CHECK(
+        std::none_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& provider) {
+            return provider.owner_plugin_id == "native_query_on_load_rollback";
+        }));
+    CHECK(std::none_of(catalog.roots.begin(), catalog.roots.end(), [](const auto& root) {
+        return root.owner_plugin_id == "native_query_on_load_rollback";
+    }));
+    CHECK(sao_plugins_entity_provider_invoke("native_query_on_load_rollback/fixture", 1,
+                                             "fixture.action", "{}") == SAO_ERR_HANDLE_INVALID);
+    CHECK(sao_plugins_entity_provider_invoke("native_query_on_load_rollback/fixture-v2", 1,
+                                             "fixture.v2.action", "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(handle);
+}
+
+TEST_CASE("native v2 query separates producer and canonical content tokens",
+          "[plugins][loader][native][entity-provider][v2][query-array][token][focused]") {
+    TempDirectory temp(L"native_query_v2_tokens");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+    control.set_query_mode(native_fixture_query_mode::v2_only);
+
+    constexpr const char* kPluginId = "native_query_v2_tokens";
+    auto handle = add_plugin(make_native_fixture_manifest(kPluginId, temp.path, true));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+
+    entity_provider_catalog_snapshot_v2 first;
+    REQUIRE(snapshot_entity_providers_v2(first) == SAO_OK);
+    REQUIRE(first.providers.size() == 1);
+    const auto first_provider_token = first.providers[0].content_token;
+    const auto first_catalog_token = first.content_token;
+    CHECK(first.providers[0].rows[0].row_label == "Fixture V2 Action");
+
+    control.set_v2_producer_token(0xd170002ULL);
+    entity_provider_catalog_snapshot_v2 producer_changed;
+    REQUIRE(snapshot_entity_providers_v2(producer_changed) == SAO_OK);
+    REQUIRE(producer_changed.providers.size() == 1);
+    CHECK(producer_changed.providers[0].content_token == first_provider_token);
+    CHECK(producer_changed.content_token == first_catalog_token);
+
+    control.set_v2_content_variant(1);
+    entity_provider_catalog_snapshot_v2 content_changed;
+    REQUIRE(snapshot_entity_providers_v2(content_changed) == SAO_OK);
+    REQUIRE(content_changed.providers.size() == 1);
+    CHECK(content_changed.providers[0].rows[0].row_label == "Fixture V2 Action Changed");
+    CHECK(content_changed.providers[0].content_token != first_provider_token);
+    CHECK(content_changed.content_token != first_catalog_token);
+
+    control.set_snapshot_mode(native_fixture_snapshot_mode::token_mismatch);
+    counting_v2_catalog_context callback_context;
+    callback_context.snapshot.revision = 0xd17f1;
+    callback_context.snapshot.content_token = 0xd17f2;
+    CHECK(sao_plugins_entity_provider_snapshot_v2(count_and_copy_entity_provider_catalog_v2,
+                                                  &callback_context) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(callback_context.calls == 0);
+    CHECK(callback_context.snapshot.revision == 0xd17f1);
+    CHECK(callback_context.snapshot.content_token == 0xd17f2);
+    CHECK(callback_context.snapshot.providers.empty());
+
+    control.set_snapshot_mode(native_fixture_snapshot_mode::stable);
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE(
+    "native v2 query provider preserves lifecycle generations and reentrant unload gate",
+    "[plugins][loader][native][entity-provider][v2][query-array][generation][reentry][focused]") {
+    TempDirectory temp(L"native_query_v2_lifecycle");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+    write_text(temp.path / L"plugin.emma", "entry");
+    native_fixture_control control(copied);
+    control.set_query_mode(native_fixture_query_mode::dual);
+
+    constexpr const char* kPluginId = "native_query_v2_lifecycle";
+    auto handle = add_plugin(make_native_fixture_manifest(kPluginId, temp.path, true));
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+
+    entity_provider_catalog_snapshot_v2 first_catalog;
+    REQUIRE(snapshot_entity_providers_v2(first_catalog) == SAO_OK);
+    const auto first_v1 = std::find_if(
+        first_catalog.providers.begin(), first_catalog.providers.end(), [](const auto& provider) {
+            return provider.provider_id == "native_query_v2_lifecycle/fixture";
+        });
+    const auto first_v2 = std::find_if(
+        first_catalog.providers.begin(), first_catalog.providers.end(), [](const auto& provider) {
+            return provider.provider_id == "native_query_v2_lifecycle/fixture-v2";
+        });
+    REQUIRE(first_v1 != first_catalog.providers.end());
+    REQUIRE(first_v2 != first_catalog.providers.end());
+    CHECK(first_v1 < first_v2);
+    CHECK(first_v1->snapshot_abi_version == kEntitySnapshotAbiVersion1);
+    CHECK(first_v2->snapshot_abi_version == kEntitySnapshotAbiVersion2);
+    CHECK(first_v2->revision == 17);
+    CHECK(first_v2->row_stride_bytes == sizeof(entity_menu_row_v2));
+    REQUIRE(first_v2->rows.size() == 1);
+    CHECK(first_v2->rows[0].struct_size == sizeof(entity_menu_row_v2));
+    CHECK(first_v2->rows[0].category_id == "fixture-v2-category");
+    CHECK(first_v2->rows[0].row_label == "Fixture V2 Action");
+    CHECK(first_v2->rows[0].action_id == "fixture.v2.action");
+    CHECK(first_v2->rows[0].payload_json == R"({"source":"fixture-v2"})");
+    REQUIRE(first_catalog.roots.size() == 1);
+    CHECK(first_catalog.roots[0].owner_plugin_id == kPluginId);
+    CHECK(first_catalog.roots[0].contribution_id == "fixture-v2-root");
+    REQUIRE(first_catalog.roots[0].actions.size() == 1);
+    CHECK(first_catalog.roots[0].actions[0].provider_id == first_v2->provider_id);
+    CHECK(first_catalog.roots[0].actions[0].action_id == "fixture.v2.action");
+
+    const uint64_t first_v1_generation = first_v1->generation;
+    const uint64_t first_v2_generation = first_v2->generation;
+    const auto first_v2_content_token = first_v2->content_token;
+    CHECK(first_v1_generation < first_v2_generation);
+    native_action_reentry_probe reentry;
+    reentry.plugin = handle;
+    control.set_action_hook(native_action_reentrant_unload, &reentry);
+    REQUIRE(sao_plugins_entity_provider_invoke(first_v2->provider_id.c_str(), first_v2_generation,
+                                               "fixture.v2.action", "{}") == SAO_OK);
+    CHECK(reentry.calls.load(std::memory_order_acquire) == 1);
+    CHECK(reentry.unload_status.load(std::memory_order_acquire) == SAO_PLUGINS_ERR_BUSY);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+
+    control.set_action_hook(nullptr, nullptr);
+    entity_provider_catalog_snapshot_v2 after_reentry_catalog;
+    REQUIRE(snapshot_entity_providers_v2(after_reentry_catalog) == SAO_OK);
+    const auto after_reentry_v2 =
+        std::find_if(after_reentry_catalog.providers.begin(), after_reentry_catalog.providers.end(),
+                     [](const auto& provider) {
+                         return provider.provider_id == "native_query_v2_lifecycle/fixture-v2";
+                     });
+    REQUIRE(after_reentry_v2 != after_reentry_catalog.providers.end());
+    CHECK(after_reentry_v2->generation == first_v2_generation);
+    REQUIRE(sao_plugins_entity_provider_invoke(after_reentry_v2->provider_id.c_str(),
+                                               after_reentry_v2->generation, "fixture.v2.action",
+                                               "{}") == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_disable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 disabled_catalog;
+    REQUIRE(snapshot_entity_providers_v2(disabled_catalog) == SAO_OK);
+    CHECK(std::none_of(disabled_catalog.providers.begin(), disabled_catalog.providers.end(),
+                       [](const auto& provider) {
+                           return provider.owner_plugin_id == "native_query_v2_lifecycle";
+                       }));
+    CHECK(sao_plugins_entity_provider_invoke("native_query_v2_lifecycle/fixture-v2",
+                                             first_v2_generation, "fixture.v2.action",
+                                             "{}") == SAO_PLUGINS_ERR_BUSY);
+
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    entity_provider_catalog_snapshot_v2 reenabled_catalog;
+    REQUIRE(snapshot_entity_providers_v2(reenabled_catalog) == SAO_OK);
+    const auto reenabled_v1 =
+        std::find_if(reenabled_catalog.providers.begin(), reenabled_catalog.providers.end(),
+                     [](const auto& provider) {
+                         return provider.provider_id == "native_query_v2_lifecycle/fixture";
+                     });
+    const auto reenabled_v2 =
+        std::find_if(reenabled_catalog.providers.begin(), reenabled_catalog.providers.end(),
+                     [](const auto& provider) {
+                         return provider.provider_id == "native_query_v2_lifecycle/fixture-v2";
+                     });
+    REQUIRE(reenabled_v1 != reenabled_catalog.providers.end());
+    REQUIRE(reenabled_v2 != reenabled_catalog.providers.end());
+    CHECK(reenabled_v1->generation == first_v1_generation);
+    CHECK(reenabled_v2->generation == first_v2_generation);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke("native_query_v2_lifecycle/fixture-v2",
+                                             first_v2_generation, "fixture.v2.action",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
+    entity_provider_catalog_snapshot_v2 reloaded_catalog;
+    REQUIRE(snapshot_entity_providers_v2(reloaded_catalog) == SAO_OK);
+    const auto reloaded_v1 =
+        std::find_if(reloaded_catalog.providers.begin(), reloaded_catalog.providers.end(),
+                     [](const auto& provider) {
+                         return provider.provider_id == "native_query_v2_lifecycle/fixture";
+                     });
+    const auto reloaded_v2 =
+        std::find_if(reloaded_catalog.providers.begin(), reloaded_catalog.providers.end(),
+                     [](const auto& provider) {
+                         return provider.provider_id == "native_query_v2_lifecycle/fixture-v2";
+                     });
+    REQUIRE(reloaded_v1 != reloaded_catalog.providers.end());
+    REQUIRE(reloaded_v2 != reloaded_catalog.providers.end());
+    CHECK(reloaded_v1->generation != first_v1_generation);
+    CHECK(reloaded_v2->generation != first_v2_generation);
+    CHECK(reloaded_v2->content_token != first_v2_content_token);
+    CHECK(sao_plugins_entity_provider_invoke("native_query_v2_lifecycle/fixture-v2",
+                                             first_v2_generation, "fixture.v2.action",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_entity_provider_invoke(reloaded_v2->provider_id.c_str(),
+                                               reloaded_v2->generation, "fixture.v2.action",
+                                               "{}") == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    remove_plugin(handle);
+}
+
 TEST_CASE("native load rollback error remains resident until unload retry",
-          "[plugins][loader][lifecycle][rollback][resident-failed][native]") {
+          "[plugins][loader][lifecycle][rollback][resident-failed][native][entity-provider][v2]["
+          "query-array]") {
     TempDirectory temp(L"native_rollback_error");
     const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
     REQUIRE(fs::is_regular_file(fixture));
@@ -3587,9 +5023,18 @@ TEST_CASE("native load rollback error remains resident until unload retry",
                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     REQUIRE(control_module != nullptr);
     using set_lifecycle_statuses_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t, int32_t);
+    using set_query_mode_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t);
+    using get_lifecycle_calls_fn = int32_t(SAO_PLUGINS_CALL*)(uint32_t*, uint32_t*);
     const auto set_lifecycle_statuses = reinterpret_cast<set_lifecycle_statuses_fn>(
         GetProcAddress(control_module, "sao_test_plugin_set_lifecycle_statuses"));
+    const auto set_query_mode = reinterpret_cast<set_query_mode_fn>(
+        GetProcAddress(control_module, "sao_test_plugin_set_query_mode"));
+    const auto get_lifecycle_calls = reinterpret_cast<get_lifecycle_calls_fn>(
+        GetProcAddress(control_module, "sao_test_plugin_get_lifecycle_calls"));
     REQUIRE(set_lifecycle_statuses != nullptr);
+    REQUIRE(set_query_mode != nullptr);
+    REQUIRE(get_lifecycle_calls != nullptr);
+    REQUIRE(set_query_mode(static_cast<int32_t>(native_fixture_query_mode::dual)) == SAO_OK);
     REQUIRE(set_lifecycle_statuses(SAO_ERR_OS_CALL_FAILED, SAO_ERR_OS_CALL_FAILED) == SAO_OK);
 
     auto manifest = make_manifest("native_rollback_error", temp.path);
@@ -3608,11 +5053,25 @@ TEST_CASE("native load rollback error remains resident until unload retry",
             SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_registry_find(sao_plugins_registry_instance(),
                                       manifest.plugin_id.c_str()) == handle);
+    entity_provider_catalog_snapshot_v2 catalog;
+    REQUIRE(snapshot_entity_providers_v2(catalog) == SAO_OK);
+    CHECK(
+        std::none_of(catalog.providers.begin(), catalog.providers.end(), [](const auto& provider) {
+            return provider.owner_plugin_id == "native_rollback_error";
+        }));
+    uint32_t on_load_calls = 0;
+    uint32_t on_unload_calls = 0;
+    REQUIRE(get_lifecycle_calls(&on_load_calls, &on_unload_calls) == SAO_OK);
+    CHECK(on_load_calls == 1);
+    CHECK(on_unload_calls == 1);
 
     REQUIRE(set_lifecycle_statuses(SAO_ERR_OS_CALL_FAILED, SAO_OK) == SAO_OK);
-    REQUIRE(FreeLibrary(control_module) == TRUE);
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::unloaded);
+    REQUIRE(get_lifecycle_calls(&on_load_calls, &on_unload_calls) == SAO_OK);
+    CHECK(on_load_calls == 1);
+    CHECK(on_unload_calls == 2);
+    REQUIRE(FreeLibrary(control_module) == TRUE);
     REQUIRE(GetModuleHandleW(copied.c_str()) == nullptr);
     REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_ERR_NOT_INITIALIZED);
     REQUIRE(context == nullptr);
