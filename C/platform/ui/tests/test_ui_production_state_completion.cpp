@@ -107,6 +107,10 @@ void SAO_UI_CALL destroying_gpu_render_tick(void*, float, void* user_data) {
 
 #if defined(_WIN32)
 
+sao_status_t SAO_UI_CALL accept_physical_exstyle(void*, void*, uint32_t, uint32_t) {
+    return SAO_STATUS_OK;
+}
+
 struct HiddenWindow {
     HINSTANCE instance = ::GetModuleHandleW(nullptr);
     std::wstring class_name = L"SaoUiStateCompletionWindow";
@@ -505,8 +509,12 @@ TEST_CASE("graphics state snapshots zero invalid outputs", "[ui][completion][gra
 
 TEST_CASE("overlay z order submits configured exstyle mutation",
           "[ui][completion][overlay_host][z_order]") {
+    SaoUiDcMutationProviderV2 provider{};
+    provider.struct_size = sizeof(provider);
+    provider.hide_exstyle = &accept_physical_exstyle;
     sao_ui_dc_mutation_coordinator_handle_t coordinator = nullptr;
-    REQUIRE(sao_ui_dc_mutation_coordinator_create(&coordinator) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex_v2(&provider, &coordinator) ==
+            SAO_STATUS_OK);
     SaoOverlayHostConfig config{};
     config.width = 320;
     config.height = 180;

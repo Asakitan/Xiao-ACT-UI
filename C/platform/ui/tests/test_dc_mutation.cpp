@@ -257,6 +257,19 @@ struct RectProviderProbe {
     sao_status_t return_status = SAO_STATUS_OK;
 };
 
+struct ExStyleProviderCall {
+    void* hwnd = nullptr;
+    uint32_t mask = 0;
+    uint32_t timeout_ms = 0;
+    DWORD thread_id = 0;
+};
+
+struct ExStyleProviderProbe {
+    std::mutex mutex;
+    std::vector<ExStyleProviderCall> calls;
+    sao_status_t return_status = SAO_STATUS_OK;
+};
+
 sao_status_t SAO_UI_CALL rect_provider_callback(void* user_data, void* hwnd,
                                                 const SaoUiDcMutationRect* fake_rect,
                                                 uint32_t settle_ms, uint32_t timeout_ms) {
@@ -276,6 +289,14 @@ sao_status_t SAO_UI_CALL rect_provider_callback(void* user_data, void* hwnd,
     if (throw_exception)
         throw std::runtime_error("rect provider failure");
     return status;
+}
+
+sao_status_t SAO_UI_CALL exstyle_provider_callback(void* user_data, void* hwnd, uint32_t mask,
+                                                   uint32_t timeout_ms) {
+    auto* probe = static_cast<ExStyleProviderProbe*>(user_data);
+    std::lock_guard<std::mutex> lock(probe->mutex);
+    probe->calls.push_back({hwnd, mask, timeout_ms, ::GetCurrentThreadId()});
+    return probe->return_status;
 }
 
 bool wait_for_rect_provider(RectProviderProbe& probe) {
@@ -315,6 +336,24 @@ TEST_CASE("dc_mutation_create_destroy", "[ui][dc_mutation][automation]") {
     sao_ui_dc_mutation_coordinator_destroy(nullptr);
 }
 
+TEST_CASE("dc mutation V2 provider validates its versioned ABI",
+          "[ui][dc_mutation][provider][abi]") {
+    SaoUiDcMutationProviderV2 provider{};
+    provider.struct_size = sizeof(provider) - 1;
+    sao_ui_dc_mutation_coordinator_handle_t c =
+        reinterpret_cast<sao_ui_dc_mutation_coordinator_handle_t>(0x1u);
+    CHECK(sao_ui_dc_mutation_coordinator_create_ex_v2(&provider, &c) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(c == nullptr);
+
+    provider.struct_size = sizeof(provider);
+    provider.reserved = 1;
+    c = reinterpret_cast<sao_ui_dc_mutation_coordinator_handle_t>(0x1u);
+    CHECK(sao_ui_dc_mutation_coordinator_create_ex_v2(&provider, &c) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(c == nullptr);
+}
+
 #if defined(_WIN32)
 
 TEST_CASE("dc mutation executor applies bounds on the HWND owner thread",
@@ -350,8 +389,8 @@ TEST_CASE("dc mutation executor applies bounds on the HWND owner thread",
     sao_ui_dc_mutation_coordinator_destroy(c);
 }
 
-TEST_CASE("dc mutation executor clears only requested exstyle bits",
-          "[ui][dc_mutation][automation][win32]") {
+TEST_CASE("dc mutation hide exstyle requires a physical provider and never falls back to USER32",
+        "[ui][dc_mutation][exstyle_provider][fail_closed][automation][win32]") {
     PumpingWindow window;
     REQUIRE(window.hwnd() != nullptr);
     sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
@@ -359,22 +398,65 @@ TEST_CASE("dc mutation executor clears only requested exstyle bits",
     REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
     window.clear_non_client_calc_count();
 
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR before = ::GetWindowLongPtrW(window.hwnd(), GWL_EXSTYLE);
+    REQUIRE((before != 0 || ::GetLastError() == ERROR_SUCCESS));
     const uint32_t mask = WS_EX_TOPMOST | WS_EX_LAYERED;
+    const std::string args = "{\"mask\":" + std::to_string(mask) + "}";
+    REQUIRE(submit(c, window.hwnd(), "host-exstyle", "hide_exstyle", args.c_str()) ==
+        SAO_STATUS_ERR_NOT_INITIALIZED);
+    REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
+    REQUIRE(sao_ui_dc_mut_test_dispatch_count(c) == 0u);
+    REQUIRE(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0u);
+
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR after = ::GetWindowLongPtrW(window.hwnd(), GWL_EXSTYLE);
+    REQUIRE((after != 0 || ::GetLastError() == ERROR_SUCCESS));
+    CHECK(after == before);
+    CHECK(window.non_client_calc_count() == 0u);
+    CHECK(sao_ui_dc_mut_test_owner_execution_thread_id(c) == 0u);
+
+    sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
+TEST_CASE("dc mutation V2 exstyle provider executes on the worker and bypasses USER32",
+          "[ui][dc_mutation][exstyle_provider][worker][automation][win32]") {
+    PumpingWindow window;
+    REQUIRE(window.hwnd() != nullptr);
+    ExStyleProviderProbe probe;
+    SaoUiDcMutationProviderV2 provider{};
+    provider.struct_size = sizeof(provider);
+    provider.hide_exstyle = &exstyle_provider_callback;
+    provider.user_data = &probe;
+    sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex_v2(&provider, &c) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
+
+    constexpr uint32_t mask = WS_EX_TOPMOST | WS_EX_LAYERED;
     const std::string args = "{\"mask\":" + std::to_string(mask) + "}";
     REQUIRE(submit(c, window.hwnd(), "host-exstyle", "hide_exstyle", args.c_str()) ==
             SAO_STATUS_OK);
     REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
-    REQUIRE(sao_ui_dc_mut_test_dispatch_count(c) == 1u);
+
+    ExStyleProviderCall call{};
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        REQUIRE(probe.calls.size() == 1);
+        call = probe.calls.front();
+    }
+    CHECK(call.hwnd == window.hwnd());
+    CHECK(call.mask == mask);
+    CHECK(call.timeout_ms == 2000);
+    CHECK(call.thread_id == sao_ui_dc_mut_test_worker_thread_id(c));
+    CHECK(call.thread_id != window.owner_thread_id());
+    CHECK(sao_ui_dc_mut_test_owner_execution_thread_id(c) == 0);
 
     ::SetLastError(ERROR_SUCCESS);
     const LONG_PTR exstyle = ::GetWindowLongPtrW(window.hwnd(), GWL_EXSTYLE);
     REQUIRE((exstyle != 0 || ::GetLastError() == ERROR_SUCCESS));
-    CHECK((exstyle & static_cast<LONG_PTR>(mask)) == 0);
-    CHECK((exstyle & WS_EX_TOOLWINDOW) != 0);
-    CHECK(window.non_client_calc_count() != 0u);
-    CHECK(sao_ui_dc_mut_test_owner_execution_thread_id(c) == window.owner_thread_id());
-    CHECK(sao_ui_dc_mut_test_owner_execution_thread_id(c) !=
-          sao_ui_dc_mut_test_worker_thread_id(c));
+    CHECK((exstyle & static_cast<LONG_PTR>(mask)) == static_cast<LONG_PTR>(mask));
+    CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 1);
+    CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0);
 
     sao_ui_dc_mutation_coordinator_destroy(c);
 }
@@ -734,8 +816,13 @@ TEST_CASE("dc mutation shutdown cancels queued generations and waits only for cu
           "[ui][dc_mutation][automation][shutdown][bounded]") {
     PumpingWindow blocked_window;
     REQUIRE(blocked_window.hwnd() != nullptr);
+    ExStyleProviderProbe probe;
+    SaoUiDcMutationProviderV2 provider{};
+    provider.struct_size = sizeof(provider);
+    provider.hide_exstyle = &exstyle_provider_callback;
+    provider.user_data = &probe;
     sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
-    REQUIRE(sao_ui_dc_mutation_coordinator_create(&c) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex_v2(&provider, &c) == SAO_STATUS_OK);
     REQUIRE(sao_ui_dc_mutation_coordinator_register(c, blocked_window.hwnd(), nullptr) ==
             SAO_STATUS_OK);
     REQUIRE(blocked_window.pause());
@@ -773,6 +860,10 @@ TEST_CASE("dc mutation shutdown cancels queued generations and waits only for cu
         REQUIRE((exstyle != 0 || ::GetLastError() == ERROR_SUCCESS));
         CHECK((exstyle & WS_EX_LAYERED) != 0);
         window->resume();
+    }
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        CHECK(probe.calls.empty());
     }
     blocked_window.resume();
 }

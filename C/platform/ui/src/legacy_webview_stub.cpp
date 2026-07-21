@@ -1,4 +1,4 @@
-// Legacy WebView compatibility stub (Phase 9 — frozen).
+// Frozen Legacy WebView compatibility stub.
 //
 // Provides three probe entrypoints so the launcher, operator dialogs
 // and CTest fixtures can prove the surface is intentionally frozen.

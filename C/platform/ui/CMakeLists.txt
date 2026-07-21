@@ -10,7 +10,7 @@
 add_library(sao_platform_ui SHARED
     src/abi.cpp
 
-    # ── Overlay window / compositor / z-order (Phase 5) ─────
+    # ── Overlay window / compositor / z-order ─────
     src/overlay_host.cpp
     src/compositor.cpp
     src/dcomp_bridge.cpp
@@ -18,22 +18,22 @@ add_library(sao_platform_ui SHARED
     src/z_order.cpp
     src/input.cpp
 
-    # ── Presentation subsystem (Phase 5) ────────────────────
+    # ── Presentation subsystem ────────────────────
     src/scheduler.cpp          # overlay_scheduler.py
     src/render_worker.cpp      # overlay_render_worker.py
     src/capture_sync.cpp       # render_capture_sync.py
     src/subpixel.cpp           # overlay_subpixel.py
     src/dc_mutation.cpp        # dc_mutation_coordinator.py
 
-    # ── DXGI / GPU capture (Phase 5) ────────────────────────
+    # ── DXGI / GPU capture ────────────────────────
     src/dxgi_dup.cpp           # dxgi_duplication.py
     src/gpu_capture.cpp        # gpu_capture.py
 
-    # ── Legacy compat shims (Phase 5) ───────────────────────
+    # ── Legacy compat shims ───────────────────────
     src/gpu_overlay_window.cpp # gpu_overlay_window.py
     src/adapter.cpp            # overlay_adapter.py
 
-    # ── Widgets / theme / panels (Phase 6) ──────────────────
+    # ── Widgets / theme / panels ──────────────────
     src/d2d_widgets.cpp
     src/theme.cpp
     src/popup.cpp              # ui_gpu/popup.py

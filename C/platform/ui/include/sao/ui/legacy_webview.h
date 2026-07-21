@@ -1,4 +1,4 @@
-// Legacy WebView compatibility surface (Phase 9 — frozen).
+// Frozen Legacy WebView compatibility surface.
 //
 // The C++ platform does NOT re-implement `sao_webview.py`.  This header
 // only exposes three probe entrypoints so operators, tests, and the

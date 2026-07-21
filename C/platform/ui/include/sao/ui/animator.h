@@ -16,7 +16,7 @@
 // scheduler through every panel; this header mirrors that pattern
 // while exposing individual curve functions for direct math.
 //
-// Coupled with scheduler.h (Agent a's core layer) — sao_ui_animator
+// Coupled with scheduler.h — sao_ui_animator
 // registers on the shared 60Hz overlay pump so we never spawn
 // per-animation threads.
 

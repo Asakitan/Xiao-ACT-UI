@@ -1,9 +1,9 @@
 // SAO Auto — serialized, generation-aware display-context mutations.
 //
-// Legacy set_window_rect/set_bounds and hide_exstyle mutations execute on the
-// HWND owner thread. Typed hide_window_rect work executes directly on the
-// coordinator worker through a copied provider table. A dispatch is recorded
-// only after the selected executor reports success.
+// Legacy set_window_rect/set_bounds mutations execute on the HWND owner thread.
+// Every tagWND mutation executes directly on the coordinator worker through a
+// copied physical provider table. A dispatch is recorded only after the
+// selected executor reports success.
 
 #include "sao/ui/dc_mutation.h"
 
@@ -172,6 +172,7 @@ constexpr size_t kMaxOperationBytes = 63;
 constexpr size_t kMaxMethodBytes = 63;
 constexpr size_t kMaxArgsBytes = 1024;
 constexpr auto kAsyncMutationTimeout = std::chrono::milliseconds(500);
+constexpr uint32_t kPhysicalExStyleTimeoutMs = 2000;
 
 std::optional<std::string_view> bounded_string(const char* value, size_t max_bytes) noexcept {
     if (value == nullptr)
@@ -277,6 +278,7 @@ sao_status_t parse_mutation(std::string_view operation, std::string_view method,
                 !json_uint32(document["mask"], &payload.mask) || payload.mask == 0) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
+            payload.timeout_ms = kPhysicalExStyleTimeoutMs;
         }
         *out_payload = payload;
         return SAO_STATUS_OK;
@@ -331,7 +333,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
 
     // Copied provider table. user_data remains borrowed until shutdown joins
     // the worker and destroy() returns.
-    SaoUiDcMutationProvider rect_provider{};
+    SaoUiDcMutationProviderV2 mutation_provider{};
 
     // ── Diagnostic dispatch log (for tests) ────────────────────
     std::mutex dispatch_mu;
@@ -344,9 +346,9 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     // ── Worker thread ──────────────────────────────────────────
     std::thread worker;
 
-    explicit Coordinator(const SaoUiDcMutationProvider* provider) {
+    explicit Coordinator(const SaoUiDcMutationProviderV2* provider) {
         if (provider != nullptr) {
-            rect_provider = *provider;
+            mutation_provider = *provider;
         }
         worker = std::thread([this] { this->run(); });
     }
@@ -486,7 +488,11 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         if (tok_it == tokens.end()) {
             return SAO_STATUS_ERR_ACCESS_DENIED;
         }
-        if (requires_rect_provider && rect_provider.hide_window_rect == nullptr) {
+        if (requires_rect_provider && mutation_provider.hide_window_rect == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        if (payload.kind == MutationKind::kHideExstyle &&
+            mutation_provider.hide_exstyle == nullptr) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
         const Token token = tok_it->second;
@@ -542,63 +548,32 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
 #endif
     }
 
-    sao_status_t execute_hide_exstyle_on_owner(const Mutation& task) {
-#if !defined(_WIN32)
-        (void)task;
-        return SAO_STATUS_ERR_CAPABILITY_MISSING;
-#else
-        if (!token_current(task.token))
-            return SAO_STATUS_ERR_HANDLE_INVALID;
-        const HWND hwnd = reinterpret_cast<HWND>(task.key.hwnd);
-        ::SetLastError(ERROR_SUCCESS);
-        const LONG_PTR current = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if (current == 0 && ::GetLastError() != ERROR_SUCCESS) {
-            return win32_error_status();
-        }
-        const LONG_PTR updated = current & ~static_cast<LONG_PTR>(task.payload.mask);
-        if (!token_current(task.token))
-            return SAO_STATUS_ERR_HANDLE_INVALID;
-        if (updated != current) {
-            ::SetLastError(ERROR_SUCCESS);
-            const LONG_PTR previous = ::SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated);
-            if (previous == 0 && ::GetLastError() != ERROR_SUCCESS) {
-                return win32_error_status();
-            }
-        }
-
-        UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED;
-        HWND insert_after = nullptr;
-        if ((task.payload.mask & WS_EX_TOPMOST) == 0) {
-            flags |= SWP_NOZORDER;
-        } else {
-            insert_after = HWND_NOTOPMOST;
-        }
-        ::SetLastError(ERROR_SUCCESS);
-        if (!::SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags))
-            return win32_error_status();
-
-        ::SetLastError(ERROR_SUCCESS);
-        const LONG_PTR readback = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if (readback == 0 && ::GetLastError() != ERROR_SUCCESS)
-            return win32_error_status();
-        return (readback & static_cast<LONG_PTR>(task.payload.mask)) == 0
-                   ? SAO_STATUS_OK
-                   : SAO_STATUS_ERR_OS_CALL_FAILED;
-#endif
-    }
-
     sao_status_t execute_hide_window_rect_on_worker(const Mutation& task) {
         // Revalidate immediately before entering borrowed provider code. This
         // is intentionally independent of the owner-thread dispatch hook.
         if (!token_current(task.token))
             return SAO_STATUS_ERR_HANDLE_INVALID;
-        const auto callback = rect_provider.hide_window_rect;
+        const auto callback = mutation_provider.hide_window_rect;
         if (callback == nullptr)
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         try {
-            return callback(rect_provider.user_data, reinterpret_cast<void*>(task.key.hwnd),
+            return callback(mutation_provider.user_data, reinterpret_cast<void*>(task.key.hwnd),
                             &task.payload.fake_rect, task.payload.settle_ms,
                             task.payload.timeout_ms);
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
+    sao_status_t execute_hide_exstyle_on_worker(const Mutation& task) {
+        if (!token_current(task.token))
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const auto callback = mutation_provider.hide_exstyle;
+        if (callback == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        try {
+            return callback(mutation_provider.user_data, reinterpret_cast<void*>(task.key.hwnd),
+                            task.payload.mask, task.payload.timeout_ms);
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
@@ -615,7 +590,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         case MutationKind::kSetBounds:
             return execute_set_bounds_on_owner(task);
         case MutationKind::kHideExstyle:
-            return execute_hide_exstyle_on_owner(task);
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
         case MutationKind::kHideWindowRect:
             return SAO_STATUS_ERR_ACCESS_DENIED;
         }
@@ -625,6 +600,9 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     sao_status_t execute(const Mutation& task) {
         if (task.payload.kind == MutationKind::kHideWindowRect)
             return execute_hide_window_rect_on_worker(task);
+        if (task.payload.kind == MutationKind::kHideExstyle) {
+            return execute_hide_exstyle_on_worker(task);
+        }
 #if !defined(_WIN32)
         return execute_on_owner_thread(task);
 #else
@@ -847,10 +825,28 @@ struct BarrierHandle {
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
     const SaoUiDcMutationProvider* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
+    SaoUiDcMutationProviderV2 provider_v2{};
+    const SaoUiDcMutationProviderV2* selected_provider = nullptr;
+    if (provider != nullptr) {
+        provider_v2.struct_size = sizeof(provider_v2);
+        provider_v2.hide_window_rect = provider->hide_window_rect;
+        provider_v2.user_data = provider->user_data;
+        selected_provider = &provider_v2;
+    }
+    return sao_ui_dc_mutation_coordinator_create_ex_v2(selected_provider, out_handle);
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_create_ex_v2(const SaoUiDcMutationProviderV2* provider,
+                                            sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
     if (out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_handle = nullptr;
+    if (provider != nullptr &&
+        (provider->struct_size != sizeof(SaoUiDcMutationProviderV2) || provider->reserved != 0)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
     try {
         auto coordinator = std::make_shared<Coordinator>(provider);
         auto handle = std::make_unique<CoordinatorHandle>();
@@ -864,7 +860,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
-    return sao_ui_dc_mutation_coordinator_create_ex(nullptr, out_handle);
+    return sao_ui_dc_mutation_coordinator_create_ex_v2(nullptr, out_handle);
 }
 
 extern "C" void SAO_UI_CALL

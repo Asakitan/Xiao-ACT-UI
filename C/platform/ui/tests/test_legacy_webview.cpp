@@ -44,9 +44,9 @@ fs::path find_repo_root_with_manifest() {
 
 TEST_CASE("legacy_webview_declared_frozen", "[ui][legacy_webview][real_plugins]") {
     // The compatibility surface must NEVER report itself as available
-    // until Phase 9 is unfrozen.  Flipping this to true without also
-    // implementing every method in docs/legacy_webview_manifest.md is
-    // a broken change.
+    // until the compatibility surface is unfrozen.  Flipping this to true
+    // without also implementing every method in docs/legacy_webview_manifest.md
+    // is a broken change.
     REQUIRE(sao_ui_legacy_webview_available() == false);
 }
 

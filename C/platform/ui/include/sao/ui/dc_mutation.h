@@ -6,8 +6,8 @@
 // Serialized, generation-aware display-context mutations for overlay
 // HWNDs. Calls with the same (hwnd, generation, operation) key are
 // coalesced while an earlier call is in flight. Legacy USER32 mutations run
-// on the HWND owner thread. The typed rect-scrub provider runs directly on
-// the coordinator worker after the real USER32/DWM geometry is published.
+// on the HWND owner thread. Typed tagWND providers run directly on the
+// coordinator worker after the real USER32/DWM state is published.
 //
 // ── Why serialization matters ────────────────────────────────
 //   Real on-screen bounds are always published through USER32 and DWM first.
@@ -59,16 +59,39 @@ typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_hide_window_rect_fn_t)(
     void* user_data, void* hwnd, const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms,
     uint32_t timeout_ms);
 
+typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_hide_exstyle_fn_t)(void* user_data, void* hwnd,
+                                                                        uint32_t mask,
+                                                                        uint32_t timeout_ms);
+
 typedef struct SaoUiDcMutationProvider {
     sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
     void* user_data;
 } SaoUiDcMutationProvider;
+
+// Versioned provider surface. V2 adds physical tagWND ExStyle mutation while
+// keeping the original provider layout and create_ex() entry point intact.
+// struct_size must be sizeof(SaoUiDcMutationProviderV2); reserved must be 0.
+typedef struct SaoUiDcMutationProviderV2 {
+    uint32_t struct_size;
+    uint32_t reserved;
+    sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
+    sao_ui_dc_mutation_hide_exstyle_fn_t hide_exstyle;
+    void* user_data;
+} SaoUiDcMutationProviderV2;
 
 // Copies the provider table by value. provider->user_data remains borrowed and
 // must stay valid until destroy() returns. NULL installs no rect-scrub provider.
 // A provider callback must not re-enter or destroy the same coordinator.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
     const SaoUiDcMutationProvider* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle);
+
+// Copies the complete V2 provider table by value. provider->user_data remains
+// borrowed and must stay valid until destroy() returns. NULL installs no
+// physical providers; hide_exstyle and hide_window_rect then fail closed with
+// NOT_INITIALIZED. Provider callbacks must not re-enter or destroy the same
+// coordinator.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex_v2(
+    const SaoUiDcMutationProviderV2* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle);
 
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle);
@@ -95,7 +118,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_register(
 // key ("host-exstyle", "host-rect", "proxy-exstyle") used for
 // coalescing. Supported production methods are:
 //   host-rect + set_window_rect/set_bounds, with x/y/width/height JSON;
-//   host-exstyle/proxy-exstyle + hide_exstyle, with mask JSON.
+//   host-exstyle/proxy-exstyle + hide_exstyle, with mask JSON and a mandatory
+//   V2 physical ExStyle provider.
 // Unknown pairs return SAO_STATUS_ERR_NOT_IMPLEMENTED and are never queued.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
