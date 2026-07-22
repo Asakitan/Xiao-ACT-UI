@@ -32,9 +32,13 @@
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
 #include "sao/plugins/csharp_host/cs_loader_adapter.h"
 #endif
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+#ifdef SAO_STATUS_OK
+#undef SAO_STATUS_OK
+#endif
 #include "sao/sdk/sao_sdk.h"
-#define SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK 1
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
 #endif
 
 #include <algorithm>
@@ -111,6 +115,7 @@ struct ProviderOwnerState {
 
 ProviderOwnerState g_platform_provider_owner;
 ProviderOwnerState g_deps_provider_owner;
+std::atomic_uint64_t g_platform_session_sequence{0};
 
 void SAO_PLUGINS_CALL retainProviderOwner(void* user_data) {
     if (user_data != nullptr) {
@@ -132,6 +137,24 @@ void SAO_PLUGINS_CALL releaseProviderOwner(void* user_data) {
 struct LauncherPlatformSession;
 
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+struct LauncherPlatformCompositorLayer {
+    LauncherPlatformSession* session = nullptr;
+    uint64_t provider_token = 0;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    sao_ui_layer_handle_t layer = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::mutex callback_mutex;
+    std::condition_variable callback_idle;
+    uint64_t callback_generation = 1;
+    std::unordered_map<uint64_t, size_t> callbacks_by_generation;
+    loader::compositor_cursor_pos_fn cursor_pos = nullptr;
+    loader::compositor_mouse_button_fn mouse_button = nullptr;
+    loader::compositor_cursor_leave_fn cursor_leave = nullptr;
+    loader::compositor_scroll_fn scroll = nullptr;
+    void* callback_user_data = nullptr;
+};
+
 struct LauncherPlatformTimer {
     LauncherPlatformSession* session = nullptr;
     loader::timer_callback_fn callback = nullptr;
@@ -152,14 +175,21 @@ struct LauncherPlatformTimer {
 struct LauncherPlatformSession {
     std::mutex mutex;
     std::condition_variable idle;
+    std::string plugin_id;
+    uint64_t session_id = 0;
     bool accepting_callbacks = true;
     size_t active_callbacks = 0;
     uint64_t next_token = 1;
+    void* callback_gate_user_data = nullptr;
+    bool(SAO_PLUGINS_CALL* enter_callback)(void*) = nullptr;
+    void(SAO_PLUGINS_CALL* leave_callback)(void*) = nullptr;
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
     SaoSdkContext sdk_context{};
     bool sdk_ready = false;
     std::unordered_map<uint64_t, std::shared_ptr<LauncherPlatformTimer>> timers;
     std::unordered_map<uint64_t, sao_sdk_notify_token_t> notifications;
+    std::unordered_map<uint64_t, std::shared_ptr<LauncherPlatformCompositorLayer>>
+        compositor_layers;
     std::thread timer_cleanup_worker;
     bool timer_worker_stop = false;
     bool timer_worker_wake = false;
@@ -168,6 +198,54 @@ struct LauncherPlatformSession {
 
 thread_local LauncherPlatformSession* g_platform_callback_session = nullptr;
 
+class LoaderCallbackLease {
+  public:
+    explicit LoaderCallbackLease(LauncherPlatformSession* session) noexcept : session_(session) {
+        if (session_ == nullptr || session_->enter_callback == nullptr ||
+            session_->leave_callback == nullptr) {
+            allowed_ = true;
+            return;
+        }
+        entered_ = session_->enter_callback(session_->callback_gate_user_data);
+        allowed_ = entered_;
+    }
+
+    ~LoaderCallbackLease() {
+        if (entered_)
+            session_->leave_callback(session_->callback_gate_user_data);
+    }
+
+    explicit operator bool() const noexcept {
+        return allowed_;
+    }
+
+  private:
+    LauncherPlatformSession* session_ = nullptr;
+    bool entered_ = false;
+    bool allowed_ = false;
+};
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+struct ActiveLauncherCompositorCallback {
+    LauncherPlatformCompositorLayer* layer = nullptr;
+    uint64_t generation = 0;
+    ActiveLauncherCompositorCallback* previous = nullptr;
+};
+
+thread_local ActiveLauncherCompositorCallback* g_active_compositor_callback = nullptr;
+
+size_t compositorCallbackActiveCount(LauncherPlatformCompositorLayer* layer,
+                                     uint64_t generation) noexcept {
+    size_t count = 0;
+    for (const auto* active = g_active_compositor_callback; active != nullptr;
+         active = active->previous) {
+        if (active->layer == layer && active->generation == generation)
+            ++count;
+    }
+    return count;
+}
+#endif
+
 uint64_t nextPlatformTokenLocked(LauncherPlatformSession& session) noexcept {
     for (;;) {
         const uint64_t candidate = session.next_token++;
@@ -175,7 +253,8 @@ uint64_t nextPlatformTokenLocked(LauncherPlatformSession& session) noexcept {
             session.next_token = 1;
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
         if (candidate != 0 && !session.timers.contains(candidate) &&
-            !session.notifications.contains(candidate)) {
+            !session.notifications.contains(candidate) &&
+            !session.compositor_layers.contains(candidate)) {
             return candidate;
         }
 #else
@@ -211,10 +290,118 @@ int32_t mapSdkStatus(sao_sdk_status_t status) noexcept {
         return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
     case SAO_SDK_ERR_BUSY:
         return loader::SAO_PLUGINS_ERR_BUSY;
+    case SAO_SDK_ERR_ACCESS_DENIED:
+        return loader::SAO_PLUGINS_ERR_NOT_OWNER;
     case SAO_SDK_ERR_ALREADY_EXISTS:
         return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+    case SAO_SDK_ERR_INTERNAL:
     default:
         return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t mapUiStatus(sao_status_t status) noexcept {
+    switch (status) {
+    case SAO_STATUS_OK:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    case SAO_STATUS_ERR_INVALID_ARGUMENT:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    case SAO_STATUS_ERR_NOT_INITIALIZED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_INITIALIZED;
+    case SAO_STATUS_ERR_HANDLE_INVALID:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUFFER_TOO_SMALL;
+    case SAO_STATUS_ERR_NOT_IMPLEMENTED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_STATUS_ERR_CANCELLED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+    case SAO_STATUS_ERR_ABI_MISMATCH:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ABI_MISMATCH;
+    case SAO_STATUS_ERR_CAPABILITY_MISSING:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED;
+    case SAO_STATUS_ERR_OS_CALL_FAILED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_OS_CALL_FAILED;
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED;
+    case SAO_STATUS_ERR_NOT_FOUND:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_FOUND;
+    case SAO_STATUS_ERR_ALREADY_EXISTS:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ALREADY_EXISTS;
+    case SAO_STATUS_ERR_DEVICE_LOST:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_DEVICE_LOST;
+    case SAO_STATUS_ERR_SURFACE_INVALID:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_SURFACE_INVALID;
+    case SAO_STATUS_ERR_UNKNOWN:
+    case SAO_STATUS_ERR_TIMEOUT:
+    default:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t mapUiLoaderStatus(sao_status_t status) noexcept {
+    switch (status) {
+    case SAO_STATUS_OK:
+        return SAO_OK;
+    case SAO_STATUS_ERR_INVALID_ARGUMENT:
+        return SAO_ERR_INVALID_ARGUMENT;
+    case SAO_STATUS_ERR_NOT_INITIALIZED:
+        return SAO_ERR_NOT_INITIALIZED;
+    case SAO_STATUS_ERR_HANDLE_INVALID:
+    case SAO_STATUS_ERR_NOT_FOUND:
+    case SAO_STATUS_ERR_SURFACE_INVALID:
+        return SAO_ERR_HANDLE_INVALID;
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL:
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    case SAO_STATUS_ERR_NOT_IMPLEMENTED:
+    case SAO_STATUS_ERR_CAPABILITY_MISSING:
+        return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+    case SAO_STATUS_ERR_CANCELLED:
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    case SAO_STATUS_ERR_ABI_MISMATCH:
+        return loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return loader::SAO_PLUGINS_ERR_NOT_OWNER;
+    case SAO_STATUS_ERR_ALREADY_EXISTS:
+        return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+    case SAO_STATUS_ERR_UNKNOWN:
+    case SAO_STATUS_ERR_TIMEOUT:
+    case SAO_STATUS_ERR_OS_CALL_FAILED:
+    case SAO_STATUS_ERR_DEVICE_LOST:
+    default:
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t mapSdkPlatformStatus(sao_sdk_status_t status) noexcept {
+    switch (status) {
+    case SAO_SDK_OK:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    case SAO_SDK_ERR_INVALID_ARGUMENT:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    case SAO_SDK_ERR_NOT_INITIALIZED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_INITIALIZED;
+    case SAO_SDK_ERR_HANDLE_INVALID:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+    case SAO_SDK_ERR_BUFFER_TOO_SMALL:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUFFER_TOO_SMALL;
+    case SAO_SDK_ERR_NOT_IMPLEMENTED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_SDK_ERR_ABI_MISMATCH:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ABI_MISMATCH;
+    case SAO_SDK_ERR_UNSUPPORTED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED;
+    case SAO_SDK_ERR_BUSY:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+    case SAO_SDK_ERR_ACCESS_DENIED:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED;
+    case SAO_SDK_ERR_NOT_FOUND:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_FOUND;
+    case SAO_SDK_ERR_ALREADY_EXISTS:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ALREADY_EXISTS;
+    case SAO_SDK_ERR_INTERNAL:
+    default:
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
     }
 }
 
@@ -243,6 +430,8 @@ sao_sdk_status_t unregisterSdkTimer(LauncherPlatformSession& session,
 
 int32_t unregisterPlatformTimer(LauncherPlatformSession& session, uint64_t provider_token,
                                 bool missing_is_success = false);
+int32_t destroyPlatformCompositorLayerCore(LauncherPlatformSession& session,
+                                           uint64_t provider_token);
 
 void dispatchPlatformTimerCallback(const std::shared_ptr<LauncherPlatformTimer>& timer) noexcept {
     if (timer == nullptr || timer->session == nullptr)
@@ -287,9 +476,14 @@ void dispatchPlatformTimerCallback(const std::shared_ptr<LauncherPlatformTimer>&
     }
     auto* previous = g_platform_callback_session;
     g_platform_callback_session = session;
-    try {
-        callback(callback_user_data);
-    } catch (...) {
+    {
+        LoaderCallbackLease loader_callback(session);
+        if (loader_callback) {
+            try {
+                callback(callback_user_data);
+            } catch (...) {
+            }
+        }
     }
     g_platform_callback_session = previous;
     {
@@ -396,7 +590,7 @@ int32_t SAO_PLUGINS_CALL createPlatformSession(
     if (out_session != nullptr)
         *out_session = nullptr;
     if (spec == nullptr || out_session == nullptr ||
-        spec->struct_size < sizeof(loader::plugin_context_platform_session_spec) ||
+        spec->struct_size < SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE ||
         spec->plugin_id_utf8 == nullptr || spec->plugin_id_utf8[0] == '\0') {
         return SAO_ERR_INVALID_ARGUMENT;
     }
@@ -405,6 +599,18 @@ int32_t SAO_PLUGINS_CALL createPlatformSession(
         session.reset(new (std::nothrow) LauncherPlatformSession());
         if (!session)
             return SAO_ERR_OS_CALL_FAILED;
+        session->plugin_id = spec->plugin_id_utf8;
+        do {
+            session->session_id =
+                g_platform_session_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        } while (session->session_id == 0);
+        if (spec->struct_size >= sizeof(loader::plugin_context_platform_session_spec)) {
+            if ((spec->enter_callback == nullptr) != (spec->leave_callback == nullptr))
+                return SAO_ERR_INVALID_ARGUMENT;
+            session->callback_gate_user_data = spec->callback_gate_user_data;
+            session->enter_callback = spec->enter_callback;
+            session->leave_callback = spec->leave_callback;
+        }
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -545,6 +751,18 @@ int32_t SAO_PLUGINS_CALL destroyPlatformSession(
             const int32_t status = dismissPlatformNotification(*session, token);
             if (status != SAO_OK)
                 return status;
+        }
+        for (;;) {
+            uint64_t token = 0;
+            {
+                std::lock_guard lock(session->mutex);
+                if (session->compositor_layers.empty())
+                    break;
+                token = session->compositor_layers.begin()->first;
+            }
+            const int32_t status = destroyPlatformCompositorLayerCore(*session, token);
+            if (status != SAO_STATUS_OK)
+                return mapUiLoaderStatus(static_cast<sao_status_t>(status));
         }
         if (session->sdk_ready) {
             const int32_t status =
@@ -734,6 +952,389 @@ int32_t SAO_PLUGINS_CALL dismissPlatformNotification(
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
+
+template <typename Callback>
+void dispatchCompositorInput(LauncherPlatformCompositorLayer* raw_layer,
+                             Callback&& invoke) noexcept {
+    if (raw_layer == nullptr || raw_layer->session == nullptr)
+        return;
+    auto* session = raw_layer->session;
+    std::shared_ptr<LauncherPlatformCompositorLayer> layer;
+    {
+        std::lock_guard lock(session->mutex);
+        const auto found = session->compositor_layers.find(raw_layer->provider_token);
+        if (found == session->compositor_layers.end() || found->second.get() != raw_layer ||
+            !session->accepting_callbacks) {
+            return;
+        }
+        layer = found->second;
+        ++session->active_callbacks;
+    }
+    auto* previous = g_platform_callback_session;
+    g_platform_callback_session = session;
+    try {
+        invoke(*layer);
+    } catch (...) {
+    }
+    g_platform_callback_session = previous;
+    {
+        std::lock_guard lock(session->mutex);
+        if (session->active_callbacks > 0)
+            --session->active_callbacks;
+    }
+    session->idle.notify_all();
+}
+
+template <typename Callback, typename Invoke>
+void invokeCompositorPluginCallback(
+    LauncherPlatformCompositorLayer& layer,
+    Callback LauncherPlatformCompositorLayer::* callback_member,
+    Invoke&& invoke) {
+    Callback callback = nullptr;
+    void* callback_user_data = nullptr;
+    uint64_t generation = 0;
+    {
+        std::lock_guard lock(layer.callback_mutex);
+        callback = layer.*callback_member;
+        if (callback == nullptr)
+            return;
+        callback_user_data = layer.callback_user_data;
+        generation = layer.callback_generation;
+        ++layer.callbacks_by_generation[generation];
+    }
+    ActiveLauncherCompositorCallback marker{&layer, generation, g_active_compositor_callback};
+    g_active_compositor_callback = &marker;
+    {
+        LoaderCallbackLease loader_callback(layer.session);
+        if (loader_callback) {
+            try {
+                invoke(callback, callback_user_data);
+            } catch (...) {
+            }
+        }
+    }
+    g_active_compositor_callback = marker.previous;
+    {
+        std::lock_guard lock(layer.callback_mutex);
+        const auto found = layer.callbacks_by_generation.find(generation);
+        if (found != layer.callbacks_by_generation.end() && --found->second == 0)
+            layer.callbacks_by_generation.erase(found);
+    }
+    layer.callback_idle.notify_all();
+}
+
+void SAO_UI_CALL launcherCompositorCursor(float x, float y, void* user_data) {
+    dispatchCompositorInput(
+        static_cast<LauncherPlatformCompositorLayer*>(user_data), [x, y](auto& layer) {
+            invokeCompositorPluginCallback(
+                layer, &LauncherPlatformCompositorLayer::cursor_pos,
+                [x, y](auto callback, void* callback_user_data) {
+                    callback(x, y, callback_user_data);
+                });
+        });
+}
+
+void SAO_UI_CALL launcherCompositorLeave(void* user_data) {
+    dispatchCompositorInput(static_cast<LauncherPlatformCompositorLayer*>(user_data),
+                            [](auto& layer) {
+                                invokeCompositorPluginCallback(
+                                    layer, &LauncherPlatformCompositorLayer::cursor_leave,
+                                    [](auto callback, void* callback_user_data) {
+                                        callback(callback_user_data);
+                                    });
+                            });
+}
+
+void SAO_UI_CALL launcherCompositorButton(int32_t button, int32_t action, int32_t, float, float,
+                                          void* user_data) {
+    dispatchCompositorInput(
+        static_cast<LauncherPlatformCompositorLayer*>(user_data), [button, action](auto& layer) {
+            invokeCompositorPluginCallback(
+                layer, &LauncherPlatformCompositorLayer::mouse_button,
+                [button, action](auto callback, void* callback_user_data) {
+                    callback(static_cast<uint32_t>(button), action != 0, callback_user_data);
+                });
+        });
+}
+
+void SAO_UI_CALL launcherCompositorScroll(float dx, float dy, void* user_data) {
+    dispatchCompositorInput(
+        static_cast<LauncherPlatformCompositorLayer*>(user_data), [dx, dy](auto& layer) {
+            invokeCompositorPluginCallback(
+                layer, &LauncherPlatformCompositorLayer::scroll,
+                [dx, dy](auto callback, void* callback_user_data) {
+                    callback(dx, dy, callback_user_data);
+                });
+        });
+}
+
+int32_t getCentralCompositor(sao_ui_compositor_handle_t* out_compositor) noexcept {
+    if (out_compositor == nullptr)
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    *out_compositor = nullptr;
+    void* raw = nullptr;
+    const sao_sdk_status_t status = sao_sdk_platform_get_ui_compositor(&raw);
+    if (status != SAO_SDK_OK)
+        return mapSdkPlatformStatus(status);
+    *out_compositor = static_cast<sao_ui_compositor_handle_t>(raw);
+    if (*out_compositor == nullptr)
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_INITIALIZED;
+    return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+}
+
+bool boundedCompositorLayerName(const char* value, size_t* out_length) noexcept {
+    if (value == nullptr || out_length == nullptr)
+        return false;
+#if defined(_MSC_VER)
+    __try {
+#endif
+        size_t length = 0;
+        while (length <= SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES &&
+               value[length] != '\0') {
+            ++length;
+        }
+        if (length == 0 || length > SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES)
+            return false;
+        *out_length = length;
+        return true;
+#if defined(_MSC_VER)
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+#endif
+}
+
+std::shared_ptr<LauncherPlatformCompositorLayer>
+findCompositorLayer(LauncherPlatformSession& session, uint64_t provider_token) {
+    std::lock_guard lock(session.mutex);
+    const auto found = session.compositor_layers.find(provider_token);
+    return found == session.compositor_layers.end()
+               ? std::shared_ptr<LauncherPlatformCompositorLayer>()
+               : found->second;
+}
+
+int32_t SAO_PLUGINS_CALL createPlatformCompositorLayer(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    const loader::plugin_context_compositor_layer_spec* spec,
+    loader::plugin_context_platform_token_t* out_provider_token) {
+    if (out_provider_token != nullptr)
+        *out_provider_token = 0;
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || spec == nullptr || out_provider_token == nullptr ||
+        spec->struct_size < sizeof(*spec) || spec->width == 0 || spec->height == 0 ||
+        spec->width > static_cast<uint32_t>(INT32_MAX) ||
+        spec->height > static_cast<uint32_t>(INT32_MAX) ||
+        spec->target_fps > static_cast<uint32_t>(INT32_MAX)) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        size_t local_name_length = 0;
+        if (!boundedCompositorLayerName(spec->name_utf8, &local_name_length))
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+        (void)local_name_length;
+        sao_ui_compositor_handle_t compositor = nullptr;
+        int32_t status = getCentralCompositor(&compositor);
+        if (status != loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK)
+            return status;
+
+        auto layer = std::make_shared<LauncherPlatformCompositorLayer>();
+        layer->session = session;
+        layer->compositor = compositor;
+        layer->width = spec->width;
+        layer->height = spec->height;
+        {
+            std::lock_guard lock(session->mutex);
+            if (!session->accepting_callbacks)
+                return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+            layer->provider_token = nextPlatformTokenLocked(*session);
+        }
+        const std::string layer_name = "plugin." + std::to_string(session->session_id) + "." +
+                                       std::to_string(layer->provider_token);
+
+        SaoLayerConfig config{};
+        config.name_utf8 = layer_name.c_str();
+        config.x = spec->x;
+        config.y = spec->y;
+        config.width = static_cast<int32_t>(spec->width);
+        config.height = static_cast<int32_t>(spec->height);
+        config.z_order = spec->z;
+        config.click_through = spec->click_through;
+        config.rect_hit = false;
+        config.bgra_swizzle = true;
+        config.high_fps = spec->high_fps;
+        config.target_fps = static_cast<int32_t>(spec->target_fps);
+        sao_status_t ui_status = sao_ui_layer_create(compositor, &config, &layer->layer);
+        if (ui_status != SAO_STATUS_OK)
+            return mapUiStatus(ui_status);
+        ui_status = sao_ui_layer_set_input_callbacks(
+            layer->layer, &launcherCompositorCursor, &launcherCompositorLeave,
+            &launcherCompositorButton, &launcherCompositorScroll, layer.get());
+        if (ui_status != SAO_STATUS_OK) {
+            sao_ui_layer_destroy(layer->layer);
+            return mapUiStatus(ui_status);
+        }
+
+        bool published = false;
+        {
+            std::lock_guard lock(session->mutex);
+            if (session->accepting_callbacks) {
+                published = session->compositor_layers.emplace(layer->provider_token, layer).second;
+            }
+        }
+        if (!published) {
+            (void)sao_ui_layer_set_input_callbacks(layer->layer, nullptr, nullptr, nullptr, nullptr,
+                                                   nullptr);
+            sao_ui_layer_destroy(layer->layer);
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+        }
+        *out_provider_token = layer->provider_token;
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL uploadPlatformCompositorFrame(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token, const uint8_t* bgra_bytes,
+    size_t bytes_len, uint32_t width, uint32_t height) {
+    try {
+        auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+        if (session == nullptr || provider_token == 0 || bgra_bytes == nullptr || width == 0 ||
+            height == 0 || width > UINT32_MAX / 4U ||
+            static_cast<size_t>(width) > SIZE_MAX / 4U ||
+            static_cast<size_t>(height) > SIZE_MAX / (static_cast<size_t>(width) * 4U) ||
+            bytes_len != static_cast<size_t>(width) * height * 4U) {
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const auto layer = findCompositorLayer(*session, provider_token);
+        if (layer == nullptr)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+        if (layer->width != width || layer->height != height)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+        return mapUiStatus(
+            sao_ui_layer_update_bgra(layer->layer, bgra_bytes, width, height, width * 4U));
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL setPlatformCompositorLayerPosition(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token, int32_t x, int32_t y) {
+    try {
+        auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+        if (session == nullptr || provider_token == 0)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+        const auto layer = findCompositorLayer(*session, provider_token);
+        if (layer == nullptr)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+        return mapUiStatus(sao_ui_layer_set_position(layer->layer, x, y));
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL setPlatformCompositorLayerVisible(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token, bool visible) {
+    try {
+        auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+        if (session == nullptr || provider_token == 0)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+        const auto layer = findCompositorLayer(*session, provider_token);
+        if (layer == nullptr)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+        return mapUiStatus(sao_ui_layer_set_visible(layer->layer, visible));
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL setPlatformCompositorLayerInput(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token,
+    const loader::plugin_context_compositor_input_spec* spec) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || provider_token == 0 || spec == nullptr ||
+        spec->struct_size < sizeof(*spec)) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto layer = findCompositorLayer(*session, provider_token);
+        if (layer == nullptr)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
+        const sao_status_t central_status = sao_ui_layer_set_input_callbacks(
+            layer->layer, &launcherCompositorCursor, &launcherCompositorLeave,
+            &launcherCompositorButton, &launcherCompositorScroll, layer.get());
+        if (central_status != SAO_STATUS_OK)
+            return mapUiStatus(central_status);
+        std::unique_lock callback_lock(layer->callback_mutex);
+        std::vector<uint64_t> generations_to_drain;
+        generations_to_drain.reserve(layer->callbacks_by_generation.size());
+        for (const auto& [generation, count] : layer->callbacks_by_generation) {
+            const size_t active_here = compositorCallbackActiveCount(layer.get(), generation);
+            if (active_here != 0 && count > active_here)
+                return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED;
+            if (active_here == 0 && count != 0)
+                generations_to_drain.push_back(generation);
+        }
+        if (!generations_to_drain.empty()) {
+            layer->callback_idle.wait(callback_lock, [&] {
+                return std::ranges::none_of(generations_to_drain, [&](uint64_t generation) {
+                    const auto found = layer->callbacks_by_generation.find(generation);
+                    return found != layer->callbacks_by_generation.end() && found->second != 0;
+                });
+            });
+        }
+        ++layer->callback_generation;
+        if (layer->callback_generation == 0)
+            layer->callback_generation = 1;
+        layer->cursor_pos = spec->cursor_pos;
+        layer->mouse_button = spec->mouse_button;
+        layer->cursor_leave = spec->cursor_leave;
+        layer->scroll = spec->scroll;
+        layer->callback_user_data = spec->user_data;
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t destroyPlatformCompositorLayerCore(LauncherPlatformSession& session,
+                                           uint64_t provider_token) {
+    if (g_platform_callback_session == &session)
+        return SAO_STATUS_ERR_CANCELLED;
+    const auto layer = findCompositorLayer(session, provider_token);
+    if (layer == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_status_t callback_status = sao_ui_layer_set_visible(layer->layer, false);
+    if (callback_status != SAO_STATUS_OK)
+        return callback_status;
+    callback_status = sao_ui_layer_set_input_callbacks(
+        layer->layer, nullptr, nullptr, nullptr, nullptr, nullptr);
+    if (callback_status != SAO_STATUS_OK)
+        return callback_status;
+    sao_ui_layer_destroy(layer->layer);
+    std::lock_guard lock(session.mutex);
+    const auto found = session.compositor_layers.find(provider_token);
+    if (found != session.compositor_layers.end() && found->second == layer)
+        session.compositor_layers.erase(found);
+    return SAO_STATUS_OK;
+}
+
+int32_t SAO_PLUGINS_CALL destroyPlatformCompositorLayer(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || provider_token == 0)
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        return mapUiStatus(destroyPlatformCompositorLayerCore(*session, provider_token));
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
 #endif
 
 loader::plugin_context_platform_provider makePlatformProvider() noexcept {
@@ -751,6 +1352,12 @@ loader::plugin_context_platform_provider makePlatformProvider() noexcept {
     provider.unregister_timer = unregisterPlatformTimer;
     provider.show_notify = showPlatformNotification;
     provider.dismiss_notify = dismissPlatformNotification;
+    provider.create_compositor_layer = createPlatformCompositorLayer;
+    provider.upload_compositor_frame = uploadPlatformCompositorFrame;
+    provider.set_compositor_layer_position = setPlatformCompositorLayerPosition;
+    provider.set_compositor_layer_visible = setPlatformCompositorLayerVisible;
+    provider.set_compositor_layer_input = setPlatformCompositorLayerInput;
+    provider.destroy_compositor_layer = destroyPlatformCompositorLayer;
 #endif
     return provider;
 }

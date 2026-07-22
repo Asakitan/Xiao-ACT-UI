@@ -55,6 +55,9 @@
 #undef SAO_STATUS_OK
 #include "sao/rt_io/proxy.h"
 #include "sao/rt_io/window_rect.h"
+#include "sao/sdk/sao_sdk.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
 #include "sao/ui/dc_mutation.h"
 #include "sao/ui/entity_shell.h"
 #include "sao/ui/overlay_host.h"
@@ -867,6 +870,8 @@ struct sao_platform_ctx {
     bool window_rect_registered;
     sao_ui_dc_mutation_coordinator_handle_t dc_mutation_coordinator;
     sao_ui_overlay_host_handle_t overlay_host;
+    sao_ui_compositor_handle_t compositor;
+    bool sdk_compositor_bound;
     sao_ui_entity_shell_handle_t entity_shell;
     bool home_hotkey_registered;
     bool insert_hotkey_registered;
@@ -915,6 +920,38 @@ create_settings_owner(const wchar_t* base_dir,
 SaoUiThemeId runtime_theme_id(sao::launcher::settings_theme::PanelTheme theme) noexcept {
     return theme == sao::launcher::settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT
                                                                      : SAO_UI_THEME_DARK;
+}
+
+sao_status_t map_sdk_runtime_status(sao_sdk_status_t status) noexcept {
+    switch (status) {
+    case SAO_SDK_OK:
+        return SAO_STATUS_OK;
+    case SAO_SDK_ERR_INVALID_ARGUMENT:
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    case SAO_SDK_ERR_NOT_INITIALIZED:
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    case SAO_SDK_ERR_HANDLE_INVALID:
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    case SAO_SDK_ERR_BUFFER_TOO_SMALL:
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    case SAO_SDK_ERR_NOT_IMPLEMENTED:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_SDK_ERR_ABI_MISMATCH:
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    case SAO_SDK_ERR_UNSUPPORTED:
+        return SAO_STATUS_ERR_CAPABILITY_MISSING;
+    case SAO_SDK_ERR_BUSY:
+        return SAO_STATUS_ERR_CANCELLED;
+    case SAO_SDK_ERR_ACCESS_DENIED:
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    case SAO_SDK_ERR_NOT_FOUND:
+        return SAO_STATUS_ERR_NOT_FOUND;
+    case SAO_SDK_ERR_ALREADY_EXISTS:
+        return SAO_STATUS_ERR_ALREADY_EXISTS;
+    case SAO_SDK_ERR_INTERNAL:
+    default:
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept;
@@ -976,19 +1013,6 @@ sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask
     SaoRtIoCallResult result{};
     return sao_rt_io_clear_window_exstyle(ctx->window_rect_controller, &token, mask, timeout_ms,
                                           &result);
-}
-
-bool SAO_UI_CALL entity_hit_test(int32_t x, int32_t y, void* user_data) {
-    bool hit = false;
-    return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
-                                        &hit) == SAO_STATUS_OK &&
-           hit;
-}
-
-void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y, int32_t button,
-                              int32_t wheel_delta, void* user_data) {
-    (void)sao_ui_entity_shell_handle_mouse(static_cast<sao_ui_entity_shell_handle_t>(user_data),
-                                           message, x, y, button, wheel_delta);
 }
 
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -1358,6 +1382,15 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (render_hwnd == nullptr) {
         return rollback_platform_bringup(ctx, ctx_out, SAO_STATUS_ERR_HANDLE_INVALID);
     }
+    status = sao_ui_compositor_create(ctx->overlay_host, nullptr, &ctx->compositor);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    status = map_sdk_runtime_status(sao_sdk_platform_bind_ui_compositor(ctx->compositor));
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    ctx->sdk_compositor_bound = true;
     status = sao_rt_io_window_rect_register(
         ctx->window_rect_controller,
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &ctx->window_rect_token);
@@ -1379,7 +1412,8 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     SaoUiEntityShellConfig entity_cfg{};
     entity_cfg.action_fn = &entity_action;
     entity_cfg.action_user_data = ctx;
-    status = sao_ui_entity_shell_create(ctx->overlay_host, &entity_cfg, &ctx->entity_shell);
+    status =
+        sao_ui_entity_shell_create_on_compositor(ctx->compositor, &entity_cfg, &ctx->entity_shell);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
@@ -1393,15 +1427,6 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     authority.topmost_status = sao::launcher::entity_provider_publication::
         TopmostPublicationStatus::degraded_authority_unavailable;
 #endif
-    status =
-        sao_ui_overlay_host_set_hit_test(ctx->overlay_host, &entity_hit_test, ctx->entity_shell);
-    if (status == SAO_STATUS_OK) {
-        status = sao_ui_overlay_host_set_mouse(ctx->overlay_host, &entity_mouse, ctx->entity_shell);
-    }
-    if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
-    }
-
     ctx->restore_theme_on_rollback = false;
     ctx->settings_save_enabled = true;
     *ctx_out = ctx;
@@ -1435,8 +1460,22 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
             return clear_status;
         }
 #endif
-        sao_ui_entity_shell_destroy(ctx->entity_shell);
+        const sao_status_t entity_status = sao_ui_entity_shell_try_destroy(ctx->entity_shell);
+        if (entity_status != SAO_STATUS_OK)
+            return entity_status;
         ctx->entity_shell = nullptr;
+    }
+    if (ctx->sdk_compositor_bound) {
+        const sao_sdk_status_t unbind_status = sao_sdk_platform_unbind_ui_compositor();
+        if (unbind_status != SAO_SDK_OK)
+            return map_sdk_runtime_status(unbind_status);
+        ctx->sdk_compositor_bound = false;
+    }
+    if (ctx->compositor) {
+        const sao_status_t compositor_status = sao_ui_compositor_try_destroy(ctx->compositor);
+        if (compositor_status != SAO_STATUS_OK)
+            return compositor_status;
+        ctx->compositor = nullptr;
     }
     if (ctx->overlay_host) {
         if (!sao_ui_overlay_host_destroy(ctx->overlay_host)) {
@@ -1544,7 +1583,7 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
 }
 
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
-    if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
+    if (!ctx || !ctx->overlay_host || !ctx->compositor || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
     sao_status_t status = SAO_STATUS_OK;
@@ -1568,6 +1607,16 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK)
         return status;
 #endif
+    status = sao_ui_compositor_tick(ctx->compositor);
+    if (status != SAO_STATUS_OK) {
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        (void)sao::launcher::entity_provider_publication::clear(
+            ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+            ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
+#endif
+        (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
+        return status;
+    }
     if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
@@ -1626,25 +1675,26 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
         }
     }
     const sao_status_t offline_status = sao_ui_entity_shell_take_offline(ctx->entity_shell);
-    return status == SAO_STATUS_OK ? offline_status : status;
+    const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    if (status != SAO_STATUS_OK)
+        return status;
+    return offline_status == SAO_STATUS_OK ? compositor_status : offline_status;
 }
 
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
-    if (!ctx || !ctx->entity_shell)
+    if (!ctx || !ctx->entity_shell || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
-    const sao_status_t tick_status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
-    if (tick_status != SAO_STATUS_OK)
-        return tick_status;
+    sao_status_t status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     const sao_status_t provider_status =
-        ctx->builtin_action_state.authority.publication_available
+        status == SAO_STATUS_OK && ctx->builtin_action_state.authority.publication_available
             ? sao::launcher::entity_provider_publication::poll(
                   ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
                   elapsed_ms, ctx->nervgear_mode,
                   &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
                   &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
                   &sao_ui_entity_shell_set_roots)
-            : refresh_entity(ctx);
+            : (status == SAO_STATUS_OK ? refresh_entity(ctx) : status);
     if (provider_status != SAO_STATUS_OK) {
         ctx->builtin_action_state.authority.publication_available = false;
         sync_entity_publication_authority(ctx);
@@ -1655,10 +1705,11 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
                             "catalog refresh deferred: status=%d", provider_status);
     }
 #endif
-    return provider_status;
-#else
-    return SAO_STATUS_OK;
+    if (status == SAO_STATUS_OK && provider_status != SAO_STATUS_OK)
+        status = provider_status;
 #endif
+    const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    return status == SAO_STATUS_OK ? compositor_status : status;
 }
 
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
@@ -1675,11 +1726,15 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
         return SAO_STATUS_OK;
     if (w_param == kHomeHotkeyId) {
         *out_handled = 1;
-        return sao_ui_entity_shell_home(ctx->entity_shell);
+        const sao_status_t status = sao_ui_entity_shell_home(ctx->entity_shell);
+        const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+        return status == SAO_STATUS_OK ? compositor_status : status;
     }
     if (w_param == kInsertHotkeyId) {
         *out_handled = 1;
-        return sao_ui_entity_shell_insert(ctx->entity_shell);
+        const sao_status_t status = sao_ui_entity_shell_insert(ctx->entity_shell);
+        const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+        return status == SAO_STATUS_OK ? compositor_status : status;
     }
     return SAO_STATUS_OK;
 }

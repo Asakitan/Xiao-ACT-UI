@@ -191,6 +191,12 @@ if (TARGET sao_launcher_plugins_provider)
         Catch2::Catch2WithMain
         nlohmann_json::nlohmann_json
         sao_launcher_plugins_provider)
+    if (TARGET sao::sdk AND TARGET sao::ui)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::sdk sao::ui)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK=1)
+    endif()
     if (TARGET sao::plugins::python_host)
         target_link_libraries(sao_launcher_provider_tests PRIVATE
             sao::plugins::python_host)

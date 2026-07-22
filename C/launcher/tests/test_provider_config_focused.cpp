@@ -8,8 +8,15 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #endif
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
-#include "sao/sdk/sao_sdk_mem.h"
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+#ifdef SAO_STATUS_OK
+#undef SAO_STATUS_OK
+#endif
+#include "sao/sdk/sao_sdk.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
+#include "sao/ui/entity_shell.h"
+#include "sao/ui/overlay_host.h"
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_live_context_count(void);
 #endif
 
@@ -30,7 +37,7 @@ extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_live_context_count(void)
 #include <thread>
 #include <vector>
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 extern "C" size_t sao_launcher_test_platform_timer_count() noexcept;
 extern "C" size_t sao_launcher_test_platform_timer_worker_count() noexcept;
 extern "C" uint64_t sao_launcher_test_platform_timer_unregister_attempt_count() noexcept;
@@ -139,7 +146,163 @@ int32_t platform_render_callback(const char*, const char*, char**, void*) {
     return SAO_OK;
 }
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+constexpr uint32_t kMouseMove = 0x0200;
+constexpr uint32_t kLeftButtonDown = 0x0201;
+constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr uint32_t kMouseWheel = 0x020A;
+
+struct PlatformCompositorProbe {
+    sao::plugins::loader::plugin_context_t* context = nullptr;
+    uint32_t cursor_calls = 0;
+    uint32_t button_calls = 0;
+    uint32_t leave_calls = 0;
+    uint32_t scroll_calls = 0;
+    float x = -1.0F;
+    float y = -1.0F;
+    uint32_t button = UINT32_MAX;
+    bool pressed = false;
+    float scroll_y = 0.0F;
+    bool rebind_on_cursor = false;
+    bool rebind_on_button_release = false;
+    PlatformCompositorProbe* rebind_target = nullptr;
+    int32_t rebind_status = SAO_OK;
+};
+
+void platform_compositor_cursor(float x, float y, void* user_data);
+void platform_compositor_button(uint32_t button, bool pressed, void* user_data);
+void platform_compositor_leave(void* user_data);
+void platform_compositor_scroll(float dx, float dy, void* user_data);
+
+void platform_compositor_cursor(float x, float y, void* user_data) {
+    auto& probe = *static_cast<PlatformCompositorProbe*>(user_data);
+    ++probe.cursor_calls;
+    probe.x = x;
+    probe.y = y;
+    if (probe.rebind_on_cursor) {
+        probe.rebind_on_cursor = false;
+        probe.rebind_status =
+            sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+                probe.context, "probe", &platform_compositor_cursor,
+                &platform_compositor_button, &platform_compositor_leave,
+                &platform_compositor_scroll, &probe);
+    }
+}
+
+void platform_compositor_button(uint32_t button, bool pressed, void* user_data) {
+    auto& probe = *static_cast<PlatformCompositorProbe*>(user_data);
+    ++probe.button_calls;
+    probe.button = button;
+    probe.pressed = pressed;
+    if (!pressed && probe.rebind_on_button_release) {
+        probe.rebind_on_button_release = false;
+        auto* target = probe.rebind_target == nullptr ? &probe : probe.rebind_target;
+        probe.rebind_status =
+            sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+                probe.context, "probe", &platform_compositor_cursor,
+                &platform_compositor_button, &platform_compositor_leave,
+                &platform_compositor_scroll, target);
+    }
+}
+
+void platform_compositor_leave(void* user_data) {
+    ++static_cast<PlatformCompositorProbe*>(user_data)->leave_calls;
+}
+
+void platform_compositor_scroll(float, float dy, void* user_data) {
+    auto& probe = *static_cast<PlatformCompositorProbe*>(user_data);
+    ++probe.scroll_calls;
+    probe.scroll_y = dy;
+}
+
+size_t compositor_layer_count(sao_ui_compositor_handle_t compositor) {
+    size_t count = 0;
+    return sao_ui_compositor_list_layers(compositor, nullptr, 0, &count) == SAO_STATUS_OK
+               ? count
+               : SIZE_MAX;
+}
+
+std::vector<HWND> top_level_process_windows() {
+    struct EnumState {
+        DWORD process_id;
+        std::vector<HWND> windows;
+    } state{GetCurrentProcessId(), {}};
+    EnumWindows(
+        [](HWND hwnd, LPARAM parameter) -> BOOL {
+            auto& state = *reinterpret_cast<EnumState*>(parameter);
+            DWORD process_id = 0;
+            GetWindowThreadProcessId(hwnd, &process_id);
+            if (process_id == state.process_id &&
+                (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) == 0)
+                state.windows.push_back(hwnd);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&state));
+    std::ranges::sort(state.windows, {}, [](HWND hwnd) {
+        return reinterpret_cast<uintptr_t>(hwnd);
+    });
+    return state.windows;
+}
+#endif
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK) && defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
+struct CallbackUnloadObservation {
+    uint32_t calls = 0;
+    int32_t last_status = SAO_OK;
+    bool all_busy = true;
+    bool all_states_preserved = true;
+    bool stop_unchanged = true;
+};
+
+struct CallbackUnloadProbe {
+    sao::plugins::loader::plugin_handle_t handle = nullptr;
+    sao::plugins::loader::plugin_context_t* context = nullptr;
+    int32_t callback_destroy_status = SAO_OK;
+    CallbackUnloadObservation cursor;
+    CallbackUnloadObservation button;
+    CallbackUnloadObservation leave;
+    CallbackUnloadObservation scroll;
+};
+
+void record_callback_unload(CallbackUnloadProbe& probe, CallbackUnloadObservation& observation) {
+    ++observation.calls;
+    observation.last_status = sao::plugins::loader::sao_plugins_lifecycle_unload(probe.handle);
+    observation.all_busy =
+        observation.all_busy &&
+        observation.last_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    observation.all_states_preserved =
+        observation.all_states_preserved &&
+        sao::plugins::loader::sao_plugins_lifecycle_state(probe.handle) ==
+            sao::plugins::loader::lifecycle_state::loaded_active;
+    observation.stop_unchanged =
+        observation.stop_unchanged && !sao::plugins::loader::sao_plugins_ctx_should_stop(probe.context);
+}
+
+void callback_unload_cursor(float, float, void* user_data) {
+    auto& probe = *static_cast<CallbackUnloadProbe*>(user_data);
+    record_callback_unload(probe, probe.cursor);
+    probe.callback_destroy_status =
+        sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(probe.context,
+                                                                       "callback_gate");
+}
+
+void callback_unload_button(uint32_t, bool, void* user_data) {
+    auto& probe = *static_cast<CallbackUnloadProbe*>(user_data);
+    record_callback_unload(probe, probe.button);
+}
+
+void callback_unload_leave(void* user_data) {
+    auto& probe = *static_cast<CallbackUnloadProbe*>(user_data);
+    record_callback_unload(probe, probe.leave);
+}
+
+void callback_unload_scroll(float, float, void* user_data) {
+    auto& probe = *static_cast<CallbackUnloadProbe*>(user_data);
+    record_callback_unload(probe, probe.scroll);
+}
+#endif
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 struct FailedSdkBindMemoryProvider {
     int close_failures = 2;
     int close_attempts = 0;
@@ -203,7 +366,7 @@ struct FailedSdkBindMemoryProvider {
 };
 #endif
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 template <typename Predicate>
 bool wait_until(Predicate&& predicate,
                 std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
@@ -280,6 +443,17 @@ TEST_CASE("launcher owns real platform provider sessions and excludes unwired ca
     REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
             SAO_STATUS_OK);
 
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    SaoCompositorConfig compositor_config{};
+    compositor_config.target_hz = 60;
+    compositor_config.enable_temporal_union = true;
+    compositor_config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_OK);
+#endif
+
     sao_plugins_registry* registry = nullptr;
     REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
     REQUIRE(registry != nullptr);
@@ -307,11 +481,162 @@ TEST_CASE("launcher owns real platform provider sessions and excludes unwired ca
           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
     CHECK(sao::plugins::loader::sao_plugins_ctx_request_redraw(context, "probe", "test") ==
           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    const std::string maximum_public_name(
+        SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES, 'n');
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+                context, maximum_public_name.c_str(), 4, 4, 3, 5, 20, false, false, 60) ==
+            SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 1);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(
+                context, maximum_public_name.c_str()) == SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 0);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+                context, "probe", 4, 4, 3, 5, 20, false, false, 60) == SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 1);
     CHECK(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
-              context, "probe", 4, 4, 0, 0, 0, true, false, 0) ==
-          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+              context, "probe", 4, 4, 3, 5, 20, false, false, 60) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
+    const std::array<uint8_t, 4U * 4U * 4U> frame = [] {
+        std::array<uint8_t, 4U * 4U * 4U> pixels{};
+        pixels.fill(255);
+        return pixels;
+    }();
+    int32_t foreign_upload_status = SAO_ERR_NOT_INITIALIZED;
+    std::thread foreign_upload([&] {
+        foreign_upload_status = sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
+            context, "probe", frame.data(), frame.size(), 4, 4);
+    });
+    foreign_upload.join();
+    REQUIRE(foreign_upload_status == SAO_OK);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
+              context, "probe", frame.data(), frame.size(), 2, 8) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    int32_t foreign_position_status = SAO_OK;
+    std::thread foreign_position([&] {
+        foreign_position_status =
+            sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
+                context, "probe", 10, 20);
+    });
+    foreign_position.join();
+    REQUIRE(foreign_position_status == SAO_OK);
+    PlatformCompositorProbe compositor_probe;
+    compositor_probe.context = context;
+    compositor_probe.rebind_on_cursor = true;
+    int32_t foreign_input_status = SAO_ERR_NOT_INITIALIZED;
+    std::thread foreign_input([&] {
+        foreign_input_status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+            context, "probe", &platform_compositor_cursor, &platform_compositor_button,
+            &platform_compositor_leave, &platform_compositor_scroll, &compositor_probe);
+    });
+    foreign_input.join();
+    REQUIRE(foreign_input_status == SAO_OK);
+    int32_t foreign_visible_status = SAO_ERR_NOT_INITIALIZED;
+    std::thread foreign_hide([&] {
+        foreign_visible_status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+            context, "probe", false);
+    });
+    foreign_hide.join();
+    REQUIRE(foreign_visible_status == SAO_OK);
+    bool hit = true;
+    REQUIRE(sao_ui_compositor_hit_test(compositor, 11, 22, &hit) == SAO_STATUS_OK);
+    CHECK_FALSE(hit);
+    std::thread foreign_show([&] {
+        foreign_visible_status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+            context, "probe", true);
+    });
+    foreign_show.join();
+    REQUIRE(foreign_visible_status == SAO_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 11, 22, -1, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.cursor_calls == 1);
+    CHECK(compositor_probe.rebind_status == SAO_OK);
+    CHECK(compositor_probe.x == 1.0F);
+    CHECK(compositor_probe.y == 2.0F);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonDown, 11, 22, 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.button_calls == 1);
+    CHECK(compositor_probe.button == 0);
+    CHECK(compositor_probe.pressed);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonUp, 11, 22, 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.button_calls == 2);
+    CHECK_FALSE(compositor_probe.pressed);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseWheel, 11, 22, -1, 120) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.scroll_calls == 1);
+    CHECK(compositor_probe.scroll_y == 1.0F);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 100, 100, -1, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.leave_calls == 1);
+    PlatformCompositorProbe replacement_probe;
+    replacement_probe.context = context;
+    compositor_probe.rebind_target = &replacement_probe;
+    compositor_probe.rebind_on_button_release = true;
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 11, 22, -1, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonDown, 11, 22, 0, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonUp, 100, 100, 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.rebind_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    CHECK(compositor_probe.leave_calls == 2);
+    CHECK(replacement_probe.button_calls == 0);
+    CHECK(replacement_probe.leave_calls == 0);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 11, 22, -1, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.cursor_calls == 3);
+    CHECK(replacement_probe.cursor_calls == 0);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 100, 100, -1, 0) ==
+            SAO_STATUS_OK);
+    CHECK(compositor_probe.leave_calls == 3);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 11, 22, -1, 0) ==
+            SAO_STATUS_OK);
+    int32_t foreign_hide_status = SAO_ERR_NOT_INITIALIZED;
+    int32_t foreign_destroy_status = SAO_ERR_NOT_INITIALIZED;
+    std::thread foreign_hide_and_destroy([&] {
+        foreign_hide_status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+            context, "probe", false);
+        foreign_destroy_status =
+            sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(context, "probe");
+    });
+    foreign_hide_and_destroy.join();
+    REQUIRE(foreign_hide_status == SAO_OK);
+    CHECK(foreign_destroy_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    CHECK(compositor_layer_count(compositor) == 1);
+    PlatformCompositorProbe post_drain_probe;
+    post_drain_probe.context = context;
+    CHECK(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+              context, "probe", &platform_compositor_cursor, &platform_compositor_button,
+              &platform_compositor_leave, &platform_compositor_scroll, &post_drain_probe) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
+                context, "probe", 12, 24) == SAO_OK);
+    const sao_status_t owner_tick_status = sao_ui_compositor_tick(compositor);
+    CHECK((owner_tick_status == SAO_STATUS_OK ||
+           owner_tick_status == SAO_STATUS_ERR_NOT_INITIALIZED));
+    CHECK(compositor_probe.leave_calls == 4);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+                context, "probe", &platform_compositor_cursor, &platform_compositor_button,
+                &platform_compositor_leave, &platform_compositor_scroll, &post_drain_probe) ==
+            SAO_OK);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+                context, "probe", true) == SAO_OK);
+    const uint32_t old_cursor_calls = compositor_probe.cursor_calls;
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 13, 25, -1, 0) ==
+            SAO_STATUS_OK);
+    CHECK(post_drain_probe.cursor_calls == 1);
+    CHECK(compositor_probe.cursor_calls == old_cursor_calls);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+                context, "probe", false) == SAO_OK);
+    CHECK(post_drain_probe.leave_calls == 1);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(context, "probe") ==
+            SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 0);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+                context, "cleanup", 2, 2, 0, 0, 1, true, false, 0) == SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 1);
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
     char* timer_token = nullptr;
     REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_interval(
                 context, platform_timer_callback, 60.0, nullptr, &timer_token) == SAO_OK);
@@ -334,12 +659,19 @@ TEST_CASE("launcher owns real platform provider sessions and excludes unwired ca
 
     CHECK(sao_plugins_shutdown(registry) != SAO_STATUS_OK);
     sao::plugins::loader::sao_plugins_ctx_destroy(context);
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    CHECK(compositor_layer_count(compositor) == 0);
+#endif
     REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
                 sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
     REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+#endif
 }
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 TEST_CASE("launcher transfers a half-initialized SDK context to loader cleanup",
           "[launcher][provider][plugins][platform][sdk][cleanup][focused]") {
     temporary_tree tree("platform_sdk_bind_cleanup");
@@ -368,7 +700,96 @@ TEST_CASE("launcher transfers a half-initialized SDK context to loader cleanup",
 }
 #endif
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+TEST_CASE("Entity SDK and plugin layers share one visible compositor HWND",
+      "[launcher][provider][plugins][platform][compositor][coexistence][focused]") {
+    temporary_tree tree("central_compositor_coexistence");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    SaoOverlayHostConfig host_config{};
+    host_config.width = 640;
+    host_config.height = 480;
+    host_config.title_utf16 = L"SAO central compositor coexistence test";
+    sao_ui_overlay_host_handle_t host = nullptr;
+    if (sao_ui_overlay_host_create(&host_config, &host) != SAO_STATUS_OK) {
+        SKIP("overlay host unavailable in this desktop session");
+    }
+    sao_ui_compositor_handle_t compositor = nullptr;
+    if (sao_ui_compositor_create(host, nullptr, &compositor) != SAO_STATUS_OK) {
+        REQUIRE(sao_ui_overlay_host_destroy(host));
+        SKIP("D3D11/DirectComposition unavailable in this environment");
+    }
+    REQUIRE(sao_ui_overlay_host_set_visible(host, true) == SAO_STATUS_OK);
+    const auto top_level_windows = top_level_process_windows();
+    REQUIRE(top_level_windows.size() >= 3);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_OK);
+
+    SaoUiEntityShellConfig entity_config{};
+    sao_ui_entity_shell_handle_t entity = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(compositor, &entity_config, &entity) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(entity) == SAO_STATUS_OK);
+    CHECK(compositor_layer_count(compositor) == 2);
+    CHECK(top_level_process_windows() == top_level_windows);
+
+    SaoSdkContext sdk_context{};
+    REQUIRE(sao_sdk_bind_context("launcher.central.coexistence", "1.0", &sdk_context) ==
+            SAO_SDK_OK);
+    SaoSdkPanelDescriptor descriptor{};
+    descriptor.panel_id_utf8 = "launcher.central.panel";
+    descriptor.title_utf8 = "Central Panel";
+    descriptor.default_width_px = 240;
+    descriptor.default_height_px = 120;
+    descriptor.min_width_px = 80;
+    descriptor.min_height_px = 60;
+    descriptor.movable = true;
+    descriptor.resizable = true;
+    descriptor.show_titlebar = true;
+    descriptor.show_close_button = true;
+    descriptor.visible = true;
+    descriptor.initial_opacity = 1.0F;
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(&sdk_context, &descriptor, &panel) == SAO_SDK_OK);
+    CHECK(compositor_layer_count(compositor) == 3);
+    CHECK(top_level_process_windows() == top_level_windows);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+    const auto handle = add_external_plugin("launcher_central_coexistence", tree.root());
+    auto* plugin_context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(plugin_context != nullptr);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+                plugin_context, "plugin_panel", 16, 16, 300, 200, 10, true, false, 0) ==
+            SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 4);
+    CHECK(top_level_process_windows() == top_level_windows);
+    void* sdk_compositor = nullptr;
+    REQUIRE(sao_sdk_platform_get_ui_compositor(&sdk_compositor) == SAO_SDK_OK);
+    CHECK(sdk_compositor == compositor);
+
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(
+                plugin_context, "plugin_panel") == SAO_OK);
+    sao::plugins::loader::sao_plugins_ctx_destroy(plugin_context);
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+        sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_unregister_ui_panel(&sdk_context, panel) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&sdk_context) == SAO_SDK_OK);
+    REQUIRE(sao_ui_entity_shell_take_offline(entity) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_try_destroy(entity) == SAO_STATUS_OK);
+    CHECK(compositor_layer_count(compositor) == 0);
+    CHECK(sao_ui_overlay_host_visible(host));
+    CHECK(top_level_process_windows() == top_level_windows);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+}
+#endif
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 TEST_CASE("launcher one-shot timeouts release SDK timers without map or worker growth",
           "[launcher][provider][plugins][platform][timer][one-shot][focused]") {
     temporary_tree tree("platform_timeout_stress");
@@ -869,6 +1290,100 @@ TEST_CASE("provider lifecycle subscribers get BUSY on operation reentry",
     CHECK(probe.shutdown_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
 }
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+TEST_CASE("real compositor callbacks reject reentrant unload before lifecycle mutation",
+          "[launcher][provider][plugins][platform][compositor][lifecycle][reentry][focused]") {
+    temporary_tree tree("emma_compositor_unload_reentry");
+    const auto base = tree.root() / "package";
+    const auto plugin = base / "emma_plugin";
+    const auto manifest_path = plugin / "plugin.json";
+    write_text(plugin / "plugin.emma",
+               "fn on_load(ctx)\n    return true\nend\n"
+               "fn on_enable()\n    return true\nend\n"
+               "fn on_disable()\n    return true\nend\n"
+               "fn on_unload()\n    return true\nend\n");
+    write_text(
+        manifest_path,
+        R"({"id":"provider_emma_compositor_reentry","language":"emma","entry":"plugin.emma","enabled":true})");
+    const nlohmann::json root = {
+        {"plugins",
+         {{"enabled", true}, {"manifests", nlohmann::json::array({path_utf8(manifest_path)})}}},
+    };
+    const auto config_path = base / "provider.json";
+    write_text(config_path, root.dump());
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(base.c_str(), config_path.c_str()) ==
+            SAO_STATUS_OK);
+
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_OK);
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+    REQUIRE(sao_plugins_activate_autostart(registry) == SAO_STATUS_OK);
+    const auto handle = sao::plugins::loader::sao_plugins_registry_find(
+        sao::plugins::loader::sao_plugins_registry_instance(),
+        "provider_emma_compositor_reentry");
+    REQUIRE(handle != nullptr);
+    REQUIRE(sao::plugins::loader::sao_plugins_lifecycle_state(handle) ==
+            sao::plugins::loader::lifecycle_state::loaded_active);
+    sao::plugins::loader::plugin_context_t* context = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context != nullptr);
+
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+                context, "callback_gate", 8, 8, 10, 20, 1, false, false, 0) == SAO_OK);
+    const std::array<uint8_t, 8U * 8U * 4U> frame = [] {
+        std::array<uint8_t, 8U * 8U * 4U> pixels{};
+        pixels.fill(255);
+        return pixels;
+    }();
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
+                context, "callback_gate", frame.data(), frame.size(), 8, 8) == SAO_OK);
+    CallbackUnloadProbe probe{handle, context};
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+                context, "callback_gate", &callback_unload_cursor, &callback_unload_button,
+                &callback_unload_leave, &callback_unload_scroll, &probe) == SAO_OK);
+
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 12, 22, -1, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonDown, 12, 22, 0, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonUp, 12, 22, 0, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseWheel, 12, 22, -1, 120) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, 100, 100, -1, 0) ==
+            SAO_STATUS_OK);
+
+    CHECK(probe.cursor.calls == 1);
+    CHECK(probe.button.calls == 2);
+    CHECK(probe.leave.calls == 1);
+    CHECK(probe.scroll.calls == 1);
+    CHECK(probe.callback_destroy_status == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    CHECK(compositor_layer_count(compositor) == 1);
+    const std::array<const CallbackUnloadObservation*, 4> observations = {
+        &probe.cursor, &probe.button, &probe.leave, &probe.scroll};
+    for (const auto* observation : observations) {
+        CHECK(observation->all_busy);
+        CHECK(observation->all_states_preserved);
+        CHECK(observation->stop_unchanged);
+    }
+    CHECK(sao::plugins::loader::sao_plugins_lifecycle_state(handle) ==
+          sao::plugins::loader::lifecycle_state::loaded_active);
+    CHECK_FALSE(sao::plugins::loader::sao_plugins_ctx_should_stop(context));
+
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(context,
+                                                                           "callback_gate") ==
+            SAO_OK);
+    CHECK(compositor_layer_count(compositor) == 0);
+    REQUIRE(sao::plugins::loader::sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+#endif
 
 TEST_CASE("provider repeat discover and shutdown releases Emma adapter ownership",
           "[launcher][provider][plugins][emma][focused]") {

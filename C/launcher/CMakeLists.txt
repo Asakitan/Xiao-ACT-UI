@@ -98,6 +98,12 @@ if (TARGET sao::plugins::loader)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(sao_launcher_plugins_provider PRIVATE
         sao::plugins::loader)
+    if (TARGET sao::sdk AND TARGET sao::ui)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::sdk sao::ui)
+        target_compile_definitions(sao_launcher_plugins_provider PUBLIC
+            SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK=1)
+    endif()
     if (TARGET sao::plugins::python_host)
         target_link_libraries(sao_launcher_plugins_provider PRIVATE
             sao::plugins::python_host)
@@ -165,6 +171,9 @@ if (TARGET sao::core)
     target_compile_definitions(SaoAuto PRIVATE
         SAO_LAUNCHER_CORE_LOG_PROVIDER=1)
 endif()
+if (TARGET sao::ui)
+    target_link_libraries(SaoAuto PRIVATE sao::ui)
+endif()
 
 if (TARGET sao::plugin_ai_editor)
     target_link_libraries(SaoAuto PRIVATE sao::plugin_ai_editor)
@@ -224,14 +233,14 @@ _sao_link_meta(sao::plugins  SAO_LINKED_PLUGINS  sao_launcher_plugins_provider)
 
 # The platform aggregate is not itself a lifecycle ABI provider.  The
 # launcher owns the minimal composition provider in init_pipeline.cpp and may
-# enable it only when both concrete runtime targets it calls are available.
-if (TARGET sao::rt_io AND TARGET sao::ui)
-    target_link_libraries(SaoAuto PRIVATE sao::rt_io sao::ui)
+# enable it only when every concrete runtime target it calls is available.
+if (TARGET sao::rt_io AND TARGET sao::ui AND TARGET sao::sdk)
+    target_link_libraries(SaoAuto PRIVATE sao::rt_io sao::ui sao::sdk)
     target_compile_definitions(SaoAuto PRIVATE
         SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER=1)
 else()
     message(STATUS
-        "launcher: rt_io and/or ui target unavailable; retaining fail-closed platform composition")
+        "launcher: rt_io, ui, and/or sdk target unavailable; retaining fail-closed platform composition")
 endif()
 
 if (TARGET sao::plugins::loader AND
