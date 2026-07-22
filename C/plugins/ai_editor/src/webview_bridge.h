@@ -21,6 +21,20 @@ struct WebViewConfig {
     // `runtime_handle` to be non-null.
     bool bridge_native_runtime = true;
     sao_ai_editor_runtime_t runtime_handle = nullptr;
+    // Phase C wire-up: when `sao_mmf_name_utf8` is non-empty, the WebView2
+    // HWND is moved off-screen (SetWindowPos to -32000, -32000) and its
+    // rendered content is captured via PrintWindow into a MMF ring at
+    // ~30 fps.  A main-process compositor layer consuming that MMF then
+    // renders the webview inside the compositor.  Leave empty to keep
+    // the legacy visible-HWND behaviour (standalone SaoAiEditor.exe run).
+    std::string sao_mmf_name_utf8;
+    // Optional shared-memory input event ring name.  When non-empty the
+    // bridge polls the ring for InputEvent records and forwards them via
+    // SendMessage to the WebView2 HWND, unblocking keyboard/mouse routing
+    // from the main-process compositor.  Ignored when
+    // `sao_mmf_name_utf8` is empty (input ring is only meaningful when
+    // the visible HWND is off-screen).
+    std::string sao_input_ring_name_utf8;
 };
 
 // Blocking helper: creates an STA window, boots CoreWebView2, spins a

@@ -106,6 +106,13 @@ struct Arguments final {
     std::optional<std::filesystem::path> cli_params_file;
     std::optional<std::filesystem::path> workspace;
     std::optional<std::filesystem::path> node_executable;
+    // Phase C wire-up: when --sao-mmf-name is supplied the webview HWND
+    // hides off-screen and its rendered content is streamed to the named
+    // MMF ring for a main-process compositor layer to consume.
+    std::wstring sao_mmf_name;
+    std::wstring sao_input_ring_name;
+    int sao_init_width = 0;
+    int sao_init_height = 0;
     DWORD auto_exit_ms = 0;
     bool headless = false;
     bool hidden_window = false;
@@ -223,7 +230,11 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
             argument != L"--workspace" && argument != L"--auto-exit-ms" &&
             argument != L"--webview-url" && argument != L"--cli-method" &&
             argument != L"--cli-params" && argument != L"--cli-params-file" &&
-            argument != L"--node-executable") {
+            argument != L"--node-executable" &&
+            argument != L"--sao-mmf-name" &&
+            argument != L"--sao-input-ring-name" &&
+            argument != L"--sao-init-width" &&
+            argument != L"--sao-init-height") {
             return false;
         }
         if (++index >= argc || argv[index][0] == L'\0') {
@@ -266,6 +277,34 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
                 return false;
             }
             result.cli_params_file = std::filesystem::path(argv[index]);
+        } else if (argument == L"--sao-mmf-name") {
+            if (!result.sao_mmf_name.empty()) {
+                return false;
+            }
+            result.sao_mmf_name = argv[index];
+        } else if (argument == L"--sao-input-ring-name") {
+            if (!result.sao_input_ring_name.empty()) {
+                return false;
+            }
+            result.sao_input_ring_name = argv[index];
+        } else if (argument == L"--sao-init-width") {
+            if (result.sao_init_width != 0) {
+                return false;
+            }
+            const int parsed = _wtoi(argv[index]);
+            if (parsed <= 0 || parsed > 8192) {
+                return false;
+            }
+            result.sao_init_width = parsed;
+        } else if (argument == L"--sao-init-height") {
+            if (result.sao_init_height != 0) {
+                return false;
+            }
+            const int parsed = _wtoi(argv[index]);
+            if (parsed <= 0 || parsed > 8192) {
+                return false;
+            }
+            result.sao_init_height = parsed;
         } else if (result.auto_exit_ms != 0 ||
                    !parse_milliseconds(argv[index], result.auto_exit_ms)) {
             return false;
@@ -1365,10 +1404,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 wide_to_utf8((*workspace / L".sao" /
                               L"webview").native()).value_or(std::string{});
             config.window_title = "SAO AI Editor";
-            config.width = 1280;
-            config.height = 800;
+            config.width = arguments.sao_init_width > 0
+                              ? arguments.sao_init_width
+                              : 1280;
+            config.height = arguments.sao_init_height > 0
+                                ? arguments.sao_init_height
+                                : 800;
             config.bridge_native_runtime = true;
             config.runtime_handle = runtime;
+            if (!arguments.sao_mmf_name.empty()) {
+                const auto mmf_utf8 =
+                    wide_to_utf8(arguments.sao_mmf_name);
+                config.sao_mmf_name_utf8 =
+                    mmf_utf8.value_or(std::string{});
+            }
+            if (!arguments.sao_input_ring_name.empty()) {
+                const auto ring_utf8 =
+                    wide_to_utf8(arguments.sao_input_ring_name);
+                config.sao_input_ring_name_utf8 =
+                    ring_utf8.value_or(std::string{});
+            }
             const int32_t status =
                 sao::ai_editor::native::run_webview_bridge(config);
             sao_ai_editor_runtime_destroy(runtime);

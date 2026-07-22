@@ -4,6 +4,7 @@
 #include <objbase.h>
 #include <combaseapi.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -19,8 +20,10 @@
 
 #include <WebView2.h>
 
+#include "input_event_ring.h"
 #include "native_runtime_internal.h"
 #include "native_utils.h"
+#include "window_capture_mmf.h"
 #include "window_hardening.h"
 
 // Dynamic loader signature for CreateCoreWebView2EnvironmentWithOptions.
@@ -103,6 +106,13 @@ struct WebViewSession {
     DWORD ui_thread_id = 0;
     std::unordered_map<WebviewPostRequest*,
                        std::shared_ptr<WebviewPostRequest>> pending_posts;
+    // Phase C wire-up: MMF capture + input ring bridge state.
+    // Both are non-null iff the launcher supplied a
+    // WebViewConfig::sao_mmf_name_utf8; the HWND then sits off-screen
+    // and the compositor layer consumes the MMF output.
+    std::unique_ptr<sao::ai_editor::WindowCaptureToMmf> mmf_capture;
+    std::unique_ptr<sao::ai_editor::InputEventRingReader> input_reader;
+    bool off_screen = false;
 
     HWND window_handle() const noexcept {
         std::lock_guard<std::mutex> guard(mutex);
@@ -678,6 +688,103 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         }
         return 0;
     }
+    case WM_TIMER: {
+        constexpr UINT_PTR kCaptureTimerId = 0xA01u;
+        constexpr UINT_PTR kInputTimerId = 0xA02u;
+        if (wparam == kCaptureTimerId) {
+            sao::ai_editor::WindowCaptureToMmf* capture = nullptr;
+            {
+                std::lock_guard<std::mutex> guard(session->mutex);
+                if (!session->teardown_started && session->mmf_capture)
+                    capture = session->mmf_capture.get();
+            }
+            if (capture != nullptr)
+                (void)capture->capture_and_publish();
+            return 0;
+        }
+        if (wparam == kInputTimerId) {
+            sao::ai_editor::InputEventRingReader* reader = nullptr;
+            HWND target = nullptr;
+            {
+                std::lock_guard<std::mutex> guard(session->mutex);
+                if (!session->teardown_started && session->input_reader) {
+                    reader = session->input_reader.get();
+                    target = session->window;
+                }
+            }
+            if (reader != nullptr && target != nullptr) {
+                std::array<sao::ai_editor::InputEvent, 32> events{};
+                uint32_t dropped = 0u;
+                const uint32_t got = reader->try_read_batch(
+                    events.data(),
+                    static_cast<uint32_t>(events.size()), dropped);
+                for (uint32_t i = 0; i < got; ++i) {
+                    const auto& ev = events[i];
+                    switch (ev.type) {
+                    case sao::ai_editor::INPUT_EVENT_MOUSE_MOVE:
+                        (void)SendMessageW(target, WM_MOUSEMOVE, 0,
+                                            MAKELPARAM(ev.x, ev.y));
+                        break;
+                    case sao::ai_editor::INPUT_EVENT_MOUSE_BUTTON: {
+                        // Convention: ev.code == 1 → down, 0 → up.  ev.button
+                        // is one of INPUT_MOD_* -like flags mapped to VK_LBUTTON /
+                        // VK_RBUTTON / VK_MBUTTON.
+                        const bool down = ev.code != 0u;
+                        UINT msg = 0u;
+                        if (ev.button == VK_LBUTTON)
+                            msg = down ? WM_LBUTTONDOWN : WM_LBUTTONUP;
+                        else if (ev.button == VK_RBUTTON)
+                            msg = down ? WM_RBUTTONDOWN : WM_RBUTTONUP;
+                        else if (ev.button == VK_MBUTTON)
+                            msg = down ? WM_MBUTTONDOWN : WM_MBUTTONUP;
+                        if (msg != 0u)
+                            (void)SendMessageW(
+                                target, msg, 0,
+                                MAKELPARAM(ev.x, ev.y));
+                        break;
+                    }
+                    case sao::ai_editor::INPUT_EVENT_MOUSE_WHEEL:
+                        (void)SendMessageW(
+                            target, WM_MOUSEWHEEL,
+                            MAKEWPARAM(0, ev.wheel_delta),
+                            MAKELPARAM(ev.x, ev.y));
+                        break;
+                    case sao::ai_editor::INPUT_EVENT_KEY_DOWN:
+                        (void)SendMessageW(target, WM_KEYDOWN, ev.code, 0);
+                        break;
+                    case sao::ai_editor::INPUT_EVENT_KEY_UP:
+                        (void)SendMessageW(target, WM_KEYUP, ev.code, 0);
+                        break;
+                    case sao::ai_editor::INPUT_EVENT_CHAR:
+                        (void)SendMessageW(target, WM_CHAR, ev.code, 0);
+                        break;
+                    case sao::ai_editor::INPUT_EVENT_RESIZE: {
+                        ICoreWebView2Controller* controller = nullptr;
+                        {
+                            std::lock_guard<std::mutex> guard(
+                                session->mutex);
+                            if (!session->teardown_started)
+                                controller = session->controller;
+                        }
+                        if (controller != nullptr && ev.x > 0 &&
+                            ev.y > 0) {
+                            RECT rect{0, 0, ev.x, ev.y};
+                            controller->put_Bounds(rect);
+                        }
+                        break;
+                    }
+                    case sao::ai_editor::INPUT_EVENT_CLOSE:
+                        (void)PostMessageW(target, WM_CLOSE, 0, 0);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+            return 0;
+        }
+        break;
+    }
     case kPostWebMessage: {
         std::shared_ptr<WebviewPostRequest> request;
         ICoreWebView2* view = nullptr;
@@ -863,8 +970,56 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         session->window = window;
         session->ui_thread_id = GetCurrentThreadId();
     }
-    ShowWindow(window, SW_SHOW);
-    UpdateWindow(window);
+
+    const bool compositor_mode = !config.sao_mmf_name_utf8.empty();
+    if (compositor_mode) {
+        const int32_t width_px = std::max(320, config.width);
+        const int32_t height_px = std::max(240, config.height);
+        const std::wstring mmf_name_wide =
+            utf8_to_wide(config.sao_mmf_name_utf8);
+        if (!mmf_name_wide.empty()) {
+            auto capture =
+                std::make_unique<sao::ai_editor::WindowCaptureToMmf>();
+            if (capture->init(mmf_name_wide.c_str(), window, width_px,
+                              height_px)) {
+                std::lock_guard<std::mutex> guard(session->mutex);
+                session->mmf_capture = std::move(capture);
+                session->off_screen = true;
+            }
+        }
+        if (session->mmf_capture && !config.sao_input_ring_name_utf8.empty()) {
+            const std::wstring ring_name_wide =
+                utf8_to_wide(config.sao_input_ring_name_utf8);
+            if (!ring_name_wide.empty()) {
+                auto reader =
+                    std::make_unique<sao::ai_editor::InputEventRingReader>();
+                if (reader->open(ring_name_wide.c_str())) {
+                    std::lock_guard<std::mutex> guard(session->mutex);
+                    session->input_reader = std::move(reader);
+                }
+            }
+        }
+        if (session->off_screen) {
+            // Move the visible HWND off the virtual desktop so DWM keeps
+            // rendering it (PrintWindow still works) but no user pixel
+            // hits the screen; the compositor layer consuming the MMF
+            // is now the only visible surface.
+            (void)SetWindowPos(window, HWND_TOP, -32000, -32000, width_px,
+                                height_px,
+                                SWP_NOACTIVATE | SWP_NOZORDER);
+            (void)SetTimer(window, /*kCaptureTimerId=*/ 0xA01u, 33u,
+                            nullptr);
+            if (session->input_reader) {
+                (void)SetTimer(window, /*kInputTimerId=*/ 0xA02u, 5u,
+                                nullptr);
+            }
+        }
+    }
+
+    if (!compositor_mode || !session->off_screen) {
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
+    }
 
     const std::wstring user_data =
         utf8_to_wide(config.user_data_folder);
