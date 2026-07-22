@@ -1,10 +1,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/sdk/sao_sdk.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
+#include "sao/ui/input_router.h"
+#include "sao/ui/widget_kit.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <limits>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_fail_next_panel_state_insertion(void);
@@ -14,6 +22,12 @@ extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_panel_widget_count(const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_panel_cleanup_pending_count(const SaoSdkContext* ctx);
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_runtime_state(
+    void** out_compositor, void** out_input_router, bool* out_owns_compositor,
+    bool* out_compositor_bound, size_t* out_active_contexts);
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_reset_runtime(void);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_test_fail_next_compositor_destroy_after_preflight(void);
 
 namespace {
 
@@ -39,6 +53,85 @@ sao_sdk_status_t SAO_SDK_CALL throwing_register_panel(void*, const SaoSdkPanelDe
     throw std::runtime_error("UI callback fixture");
 }
 
+size_t compositor_layer_count(sao_ui_compositor_handle_t compositor) {
+    size_t count = 0;
+    return sao_ui_compositor_list_layers(compositor, nullptr, 0, &count) == SAO_STATUS_OK
+               ? count
+               : (std::numeric_limits<size_t>::max)();
+}
+
+struct RuntimeBindProbe {
+    sao_ui_compositor_handle_t replacement = nullptr;
+    sao_sdk_status_t status = SAO_SDK_OK;
+};
+
+struct RouterLeaseProbe {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+};
+
+struct RouterRegistrationProbe {
+    uint32_t calls = 0;
+};
+
+void SAO_UI_CALL bind_during_render(void*, float, void* user_data) {
+    auto& probe = *static_cast<RuntimeBindProbe*>(user_data);
+    probe.status = sao_sdk_platform_bind_ui_compositor(probe.replacement);
+}
+
+void SAO_UI_CALL hold_router_lease(sao_ui_widget_handle_t, sao_ui_widget_handle_t,
+                                   void* user_data) {
+    auto& probe = *static_cast<RouterLeaseProbe*>(user_data);
+    std::unique_lock lock(probe.mutex);
+    probe.entered = true;
+    probe.changed.notify_all();
+    probe.changed.wait(lock, [&probe] { return probe.release; });
+}
+
+void SAO_UI_CALL record_router_hotkey(const char*, const SaoUiInputEvent*, void* user_data) {
+    ++static_cast<RouterRegistrationProbe*>(user_data)->calls;
+}
+
+sao_ui_widget_handle_t create_router_probe_widget() {
+    SaoUiButtonSpec spec{};
+    spec.text_utf8 = "router-lease";
+    spec.kind = SAO_UI_BTN_NORMAL;
+    spec.radius_px = 4;
+    spec.pad_x_px = 8;
+    spec.pad_y_px = 4;
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_button_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+    return widget;
+}
+
+sao_sdk_status_t SAO_SDK_CALL motion_predicted_view_stub(
+    void*, sao_sdk_gpu_tracker_t, uint32_t, float out_matrix[16], float out_cam[3],
+    float* out_confidence) {
+    if (out_matrix != nullptr)
+        out_matrix[0] = 1.0F;
+    if (out_cam != nullptr)
+        out_cam[0] = 2.0F;
+    if (out_confidence != nullptr)
+        *out_confidence = 0.75F;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL motion_confidence_stub(
+    void*, sao_sdk_gpu_tracker_t, float* out_confidence) {
+    if (out_confidence != nullptr)
+        *out_confidence = 0.5F;
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t SAO_SDK_CALL motion_sample_count_stub(
+    void*, sao_sdk_gpu_tracker_t, uint32_t* out_count) {
+    if (out_count != nullptr)
+        *out_count = 4;
+    return SAO_SDK_OK;
+}
+
 } // namespace
 
 TEST_CASE("sdk ABI version is queryable", "[sdk][abi]") {
@@ -50,6 +143,14 @@ TEST_CASE("sdk ABI version is queryable", "[sdk][abi]") {
     REQUIRE(SAO_SDK_GPU_HUNT_TABLE_LEGACY_SIZE ==
             offsetof(SaoSdkGpuHuntTable, get_split_lock_info) +
                 sizeof(SaoSdkGpuHuntTable::get_split_lock_info));
+    REQUIRE(offsetof(SaoSdkGpuHuntTable, abi_version) == 224u);
+    REQUIRE(offsetof(SaoSdkGpuHuntTable, struct_size) == 228u);
+    REQUIRE(SAO_SDK_GPU_HUNT_TABLE_REQUIRED_SIZE == 232u);
+    REQUIRE(offsetof(SaoSdkGpuHuntTable, get_predicted_view) == 232u);
+    REQUIRE(offsetof(SaoSdkGpuHuntTable, get_motion_prediction_confidence) == 240u);
+    REQUIRE(offsetof(SaoSdkGpuHuntTable, get_motion_prediction_sample_count) == 248u);
+    REQUIRE(SAO_SDK_GPU_HUNT_TABLE_MOTION_REQUIRED_SIZE == 256u);
+    REQUIRE(sizeof(SaoSdkGpuHuntTable) == 256u);
 }
 
 TEST_CASE("GPU table metadata gates current slots without changing legacy offsets",
@@ -59,6 +160,9 @@ TEST_CASE("GPU table metadata gates current slots without changing legacy offset
     REQUIRE(ctx.gpu_hunt != nullptr);
     CHECK(ctx.gpu_hunt->abi_version == SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION);
     CHECK(ctx.gpu_hunt->struct_size == sizeof(SaoSdkGpuHuntTable));
+    CHECK(ctx.gpu_hunt->get_predicted_view != nullptr);
+    CHECK(ctx.gpu_hunt->get_motion_prediction_confidence != nullptr);
+    CHECK(ctx.gpu_hunt->get_motion_prediction_sample_count != nullptr);
     CHECK(sao_sdk_gpu_hunt_table_status(&ctx) == SAO_SDK_OK);
 
     SaoSdkGpuHuntTable table = *ctx.gpu_hunt;
@@ -76,8 +180,334 @@ TEST_CASE("GPU table metadata gates current slots without changing legacy offset
     table.abi_version = SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION;
     table.struct_size = SAO_SDK_GPU_HUNT_TABLE_LEGACY_SIZE;
     CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_ERR_UNSUPPORTED);
+    table.struct_size = SAO_SDK_GPU_HUNT_TABLE_REQUIRED_SIZE;
+    CHECK(sao_sdk_gpu_hunt_table_status(&probe) == SAO_SDK_OK);
 
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("GPU motion tail authorizes each slot independently by struct size",
+          "[sdk][abi][gpu_hunt][table][motion][tail]") {
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("gpu.table.motion.tail", "1.0", &context) == SAO_SDK_OK);
+    SaoSdkGpuHuntTable table = *context.gpu_hunt;
+    table.get_predicted_view = &motion_predicted_view_stub;
+    table.get_motion_prediction_confidence = &motion_confidence_stub;
+    table.get_motion_prediction_sample_count = &motion_sample_count_stub;
+    SaoSdkContext probe = context;
+    probe.gpu_hunt = &table;
+
+    float matrix[16]{};
+    float camera[3]{};
+    float confidence = 0.0F;
+    uint32_t sample_count = 0;
+    table.struct_size = SAO_SDK_GPU_HUNT_TABLE_REQUIRED_SIZE;
+    CHECK(sao_sdk_gpu_hunt_get_predicted_view(&probe, 0, 1, matrix, camera, &confidence) ==
+          SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_gpu_hunt_get_motion_prediction_confidence(&probe, 0, &confidence) ==
+          SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_gpu_hunt_get_motion_prediction_sample_count(&probe, 0, &sample_count) ==
+          SAO_SDK_ERR_UNSUPPORTED);
+
+    table.struct_size = offsetof(SaoSdkGpuHuntTable, get_motion_prediction_confidence);
+    REQUIRE(sao_sdk_gpu_hunt_get_predicted_view(&probe, 0, 1, matrix, camera, &confidence) ==
+            SAO_SDK_OK);
+    CHECK(matrix[0] == 1.0F);
+    CHECK(camera[0] == 2.0F);
+    CHECK(confidence == 0.75F);
+    CHECK(sao_sdk_gpu_hunt_get_motion_prediction_confidence(&probe, 0, &confidence) ==
+          SAO_SDK_ERR_UNSUPPORTED);
+
+    table.struct_size = offsetof(SaoSdkGpuHuntTable, get_motion_prediction_sample_count);
+    REQUIRE(sao_sdk_gpu_hunt_get_motion_prediction_confidence(&probe, 0, &confidence) ==
+            SAO_SDK_OK);
+    CHECK(confidence == 0.5F);
+    CHECK(sao_sdk_gpu_hunt_get_motion_prediction_sample_count(&probe, 0, &sample_count) ==
+          SAO_SDK_ERR_UNSUPPORTED);
+
+    table.struct_size = SAO_SDK_GPU_HUNT_TABLE_MOTION_REQUIRED_SIZE;
+    REQUIRE(sao_sdk_gpu_hunt_get_motion_prediction_sample_count(&probe, 0, &sample_count) ==
+            SAO_SDK_OK);
+    CHECK(sample_count == 4);
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+}
+
+TEST_CASE("SDK first compositor bind does not manufacture a headless runtime",
+          "[sdk][ui][compositor][binding][transaction]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    void* runtime_compositor = reinterpret_cast<void*>(uintptr_t{1});
+    void* runtime_router = reinterpret_cast<void*>(uintptr_t{1});
+    bool owns_compositor = true;
+    bool compositor_bound = true;
+    size_t active_contexts = 1;
+    REQUIRE(sao_sdk_test_runtime_state(&runtime_compositor, &runtime_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(runtime_compositor == nullptr);
+    CHECK(runtime_router == nullptr);
+    CHECK_FALSE(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+    CHECK(active_contexts == 0);
+
+    sao_ui_compositor_handle_t replacement = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &replacement) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_test_runtime_state(&runtime_compositor, &runtime_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(runtime_compositor == replacement);
+    CHECK(runtime_router != nullptr);
+    CHECK_FALSE(owns_compositor);
+    CHECK(compositor_bound);
+    CHECK(active_contexts == 0);
+
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(replacement) == SAO_STATUS_OK);
+}
+
+TEST_CASE("SDK rejects arbitrary and stale compositor handles without changing runtime",
+        "[sdk][ui][compositor][binding][handle][hardening]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    CHECK(sao_sdk_platform_bind_ui_compositor(reinterpret_cast<void*>(uintptr_t{0x1234})) ==
+        SAO_SDK_ERR_HANDLE_INVALID);
+
+    sao_ui_compositor_handle_t stale = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &stale) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(stale) == SAO_STATUS_OK);
+    CHECK(sao_sdk_platform_bind_ui_compositor(stale) == SAO_SDK_ERR_HANDLE_INVALID);
+
+    void* runtime_compositor = reinterpret_cast<void*>(uintptr_t{1});
+    void* runtime_router = reinterpret_cast<void*>(uintptr_t{1});
+    bool owns_compositor = true;
+    bool compositor_bound = true;
+    size_t active_contexts = 1;
+    REQUIRE(sao_sdk_test_runtime_state(&runtime_compositor, &runtime_router, &owns_compositor,
+                           &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(runtime_compositor == nullptr);
+    CHECK(runtime_router == nullptr);
+    CHECK_FALSE(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+    CHECK(active_contexts == 0);
+}
+
+TEST_CASE("SDK bind failure preserves the old headless compositor and router for retry",
+          "[sdk][ui][compositor][binding][transaction][retry]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("runtime.bind.retry", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+
+    void* old_compositor_raw = nullptr;
+    void* old_router = nullptr;
+    bool owns_compositor = false;
+    bool compositor_bound = true;
+    size_t active_contexts = 1;
+    REQUIRE(sao_sdk_test_runtime_state(&old_compositor_raw, &old_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    auto* old_compositor = static_cast<sao_ui_compositor_handle_t>(old_compositor_raw);
+    REQUIRE(old_compositor != nullptr);
+    REQUIRE(old_router != nullptr);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+    CHECK(active_contexts == 0);
+
+    sao_ui_compositor_handle_t replacement = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &replacement) == SAO_STATUS_OK);
+    RuntimeBindProbe probe{replacement};
+    SaoLayerConfig layer_config{};
+    layer_config.name_utf8 = "sdk.bind.retry.callback";
+    layer_config.width = 2;
+    layer_config.height = 2;
+    layer_config.click_through = true;
+    sao_ui_layer_handle_t layer = nullptr;
+    REQUIRE(sao_ui_layer_create(old_compositor, &layer_config, &layer) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_layer_set_render_fn(layer, &bind_during_render, &probe) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_present(old_compositor) == SAO_STATUS_ERR_NOT_INITIALIZED);
+    CHECK(probe.status == SAO_SDK_ERR_BUSY);
+
+    void* retained_compositor = nullptr;
+    void* retained_router = nullptr;
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == old_compositor_raw);
+    CHECK(retained_router == old_router);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+
+    sao_ui_layer_destroy(layer);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == replacement);
+    CHECK(retained_router == old_router);
+    CHECK_FALSE(owns_compositor);
+    CHECK(compositor_bound);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(replacement) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+}
+
+TEST_CASE("SDK bind retries after an in-flight headless router lease",
+          "[sdk][ui][compositor][binding][router][transaction][retry]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("runtime.router.bind.retry", "1.0", &context) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+
+    void* old_compositor = nullptr;
+    void* old_router_raw = nullptr;
+    bool owns_compositor = false;
+    bool compositor_bound = true;
+    size_t active_contexts = 1;
+    REQUIRE(sao_sdk_test_runtime_state(&old_compositor, &old_router_raw, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    auto* old_router = static_cast<sao_ui_input_router_deep_handle_t>(old_router_raw);
+    REQUIRE(old_compositor != nullptr);
+    REQUIRE(old_router != nullptr);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+
+    const auto widget = create_router_probe_widget();
+    REQUIRE(sao_ui_input_router_set_focus_widget(old_router, widget) == SAO_STATUS_OK);
+    RouterLeaseProbe probe;
+    REQUIRE(sao_ui_input_router_set_hover_change_handler(old_router, &hold_router_lease, &probe) ==
+            SAO_STATUS_OK);
+    SaoUiInputEvent move{};
+    move.kind = SAO_UI_INPUT_MOUSE_MOVE;
+    move.screen_x_px = 1;
+    move.screen_y_px = 1;
+    bool consumed = false;
+    sao_status_t route_status = SAO_STATUS_ERR_UNKNOWN;
+    std::thread route_thread([&] {
+        route_status = sao_ui_input_router_route_event(old_router, &move, &consumed);
+    });
+    {
+        std::unique_lock lock(probe.mutex);
+        REQUIRE(probe.changed.wait_for(lock, std::chrono::seconds(5),
+                                       [&probe] { return probe.entered; }));
+    }
+
+    sao_ui_compositor_handle_t replacement = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &replacement) == SAO_STATUS_OK);
+    CHECK(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_ERR_BUSY);
+    void* retained_compositor = nullptr;
+    void* retained_router = nullptr;
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == old_compositor);
+    CHECK(retained_router == old_router_raw);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+
+    {
+        std::lock_guard lock(probe.mutex);
+        probe.release = true;
+    }
+    probe.changed.notify_all();
+    route_thread.join();
+    CHECK(route_status == SAO_STATUS_OK);
+    CHECK(consumed);
+
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == replacement);
+    CHECK(retained_router == old_router_raw);
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(old_router, &focused, nullptr) == SAO_STATUS_OK);
+    CHECK(focused == widget);
+    sao_ui_widget_destroy(widget);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(replacement) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+}
+
+TEST_CASE("SDK bind rolls back a post-preflight destroy failure with the same router",
+          "[sdk][ui][compositor][binding][router][transaction][rollback]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("runtime.router.rollback", "1.0", &context) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+
+    void* old_compositor_raw = nullptr;
+    void* old_router_raw = nullptr;
+    bool owns_compositor = false;
+    bool compositor_bound = true;
+    size_t active_contexts = 1;
+    REQUIRE(sao_sdk_test_runtime_state(&old_compositor_raw, &old_router_raw, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    auto* old_router = static_cast<sao_ui_input_router_deep_handle_t>(old_router_raw);
+    REQUIRE(old_compositor_raw != nullptr);
+    REQUIRE(old_router != nullptr);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+
+    const auto widget = create_router_probe_widget();
+    REQUIRE(sao_ui_input_router_set_focus_widget(old_router, widget) == SAO_STATUS_OK);
+    RouterRegistrationProbe hotkey_probe;
+    SaoUiHotkeyBindingSpec hotkey_spec{};
+    hotkey_spec.binding_id_utf8 = "sdk-router-rollback";
+    hotkey_spec.virtual_key = 0x79;
+    hotkey_spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
+    sao_ui_hotkey_binding_t hotkey = 0;
+    REQUIRE(sao_ui_input_router_register_hotkey(old_router, "sdk", &hotkey_spec,
+                                                 &record_router_hotkey, &hotkey_probe,
+                                                 &hotkey) == SAO_STATUS_OK);
+    size_t hotkey_conflicts = 0;
+    REQUIRE(sao_ui_input_router_find_conflicts(old_router, hotkey_spec.virtual_key, 0, nullptr, 0,
+                                                &hotkey_conflicts) == SAO_STATUS_OK);
+    CHECK(hotkey_conflicts == 1);
+    sao_ui_compositor_handle_t replacement = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &replacement) == SAO_STATUS_OK);
+    sao_ui_test_fail_next_compositor_destroy_after_preflight();
+    CHECK(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_ERR_INTERNAL);
+
+    void* retained_compositor = nullptr;
+    void* retained_router = nullptr;
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == old_compositor_raw);
+    CHECK(retained_router == old_router_raw);
+    CHECK(owns_compositor);
+    CHECK_FALSE(compositor_bound);
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(old_router, &focused, nullptr) == SAO_STATUS_OK);
+    CHECK(focused == widget);
+    hotkey_conflicts = 0;
+    REQUIRE(sao_ui_input_router_find_conflicts(old_router, hotkey_spec.virtual_key, 0, nullptr, 0,
+                                                &hotkey_conflicts) == SAO_STATUS_OK);
+    CHECK(hotkey_conflicts == 1);
+    SaoUiInputEvent hotkey_event{};
+    hotkey_event.kind = SAO_UI_INPUT_KEY_DOWN;
+    hotkey_event.virtual_key = hotkey_spec.virtual_key;
+    sao_ui_hotkey_binding_t matched = 0;
+    REQUIRE(sao_ui_input_router_match_hotkey(old_router, &hotkey_event, &matched) ==
+            SAO_STATUS_OK);
+    CHECK(matched == hotkey);
+    CHECK(hotkey_probe.calls == 1);
+
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,
+                                       &compositor_bound, &active_contexts) == SAO_SDK_OK);
+    CHECK(retained_compositor == replacement);
+    CHECK(retained_router == old_router_raw);
+    CHECK_FALSE(owns_compositor);
+    CHECK(compositor_bound);
+    REQUIRE(sao_ui_input_router_get_focus(old_router, &focused, nullptr) == SAO_STATUS_OK);
+    CHECK(focused == widget);
+    hotkey_conflicts = 0;
+    REQUIRE(sao_ui_input_router_find_conflicts(old_router, hotkey_spec.virtual_key, 0, nullptr, 0,
+                                                &hotkey_conflicts) == SAO_STATUS_OK);
+    CHECK(hotkey_conflicts == 1);
+    matched = 0;
+    REQUIRE(sao_ui_input_router_match_hotkey(old_router, &hotkey_event, &matched) ==
+            SAO_STATUS_OK);
+    CHECK(matched == hotkey);
+    CHECK(hotkey_probe.calls == 2);
+
+    REQUIRE(sao_ui_input_router_unregister_hotkey(old_router, hotkey) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(widget);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(replacement) == SAO_STATUS_OK);
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
 }
 
 TEST_CASE("sdk_bind_context creates the unified owned context", "[sdk][bind]") {
@@ -117,6 +547,56 @@ TEST_CASE("sdk_bind_context creates the unified owned context", "[sdk][bind]") {
 
 TEST_CASE("sdk_bind_context rejects null out_ctx", "[sdk][bind]") {
     REQUIRE(sao_sdk_bind_context("test", "0.0.0", nullptr) == SAO_SDK_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("launcher binding makes SDK panels borrow the central compositor",
+          "[sdk][ui][compositor][binding]") {
+    REQUIRE(sao_sdk_test_reset_runtime() == SAO_SDK_OK);
+    SaoCompositorConfig config{};
+    config.target_hz = 60;
+    config.enable_temporal_union = true;
+    config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &config, &compositor) == SAO_STATUS_OK);
+
+    void* bound = reinterpret_cast<void*>(uintptr_t{1});
+    CHECK(sao_sdk_platform_get_ui_compositor(&bound) == SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(bound == nullptr);
+    REQUIRE(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_platform_get_ui_compositor(&bound) == SAO_SDK_OK);
+    CHECK(bound == compositor);
+    CHECK(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_ERR_ALREADY_EXISTS);
+
+    sao_sdk_status_t wrong_thread_bind = SAO_SDK_OK;
+    sao_sdk_status_t wrong_thread_unbind = SAO_SDK_OK;
+    std::thread wrong_thread([&] {
+        wrong_thread_bind = sao_sdk_platform_bind_ui_compositor(compositor);
+        wrong_thread_unbind = sao_sdk_platform_unbind_ui_compositor();
+    });
+    wrong_thread.join();
+    CHECK(wrong_thread_bind == SAO_SDK_ERR_ACCESS_DENIED);
+    CHECK(wrong_thread_unbind == SAO_SDK_ERR_ACCESS_DENIED);
+
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("ui.central.binding", "1.0", &ctx) == SAO_SDK_OK);
+    CHECK(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_platform_bind_ui_compositor(compositor) == SAO_SDK_ERR_BUSY);
+    CHECK(compositor_layer_count(compositor) == 0);
+
+    const auto descriptor = test_panel_descriptor("sdk.ui.central.binding");
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(&ctx, &descriptor, &panel) == SAO_SDK_OK);
+    REQUIRE(panel != nullptr);
+    CHECK(compositor_layer_count(compositor) == 1);
+    REQUIRE(sao_sdk_unregister_ui_panel(&ctx, panel) == SAO_SDK_OK);
+    CHECK(compositor_layer_count(compositor) == 0);
+
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_platform_unbind_ui_compositor() == SAO_SDK_OK);
+    bound = reinterpret_cast<void*>(uintptr_t{1});
+    CHECK(sao_sdk_platform_get_ui_compositor(&bound) == SAO_SDK_ERR_NOT_INITIALIZED);
+    CHECK(bound == nullptr);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
 TEST_CASE("legacy JSON UI path is context-owned", "[sdk][legacy_ui]") {

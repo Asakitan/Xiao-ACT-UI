@@ -23,6 +23,7 @@
 #include "sdk_internal.h"
 
 #include "sdk_callback_barrier.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
 
 #include <algorithm>
 #include <chrono>
@@ -45,22 +46,242 @@ SharedRuntime& SharedRuntime::instance() {
     return rt;
 }
 
-void SharedRuntime::ensure_started() {
-    std::lock_guard<std::mutex> guard(mu);
-    if (compositor == nullptr) {
-        SaoCompositorConfig cfg{};
-        cfg.enable_temporal_union = true;
-        cfg.enable_rgn_cache = true;
-        (void)sao_ui_compositor_create(nullptr, &cfg, &compositor);
+namespace {
+
+sao_sdk_status_t map_runtime_status(sao_status_t status) noexcept {
+    switch (status) {
+    case SAO_STATUS_OK:
+        return SAO_SDK_OK;
+    case SAO_STATUS_ERR_INVALID_ARGUMENT:
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    case SAO_STATUS_ERR_NOT_INITIALIZED:
+        return SAO_SDK_ERR_NOT_INITIALIZED;
+    case SAO_STATUS_ERR_HANDLE_INVALID:
+        return SAO_SDK_ERR_HANDLE_INVALID;
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL:
+        return SAO_SDK_ERR_BUFFER_TOO_SMALL;
+    case SAO_STATUS_ERR_NOT_IMPLEMENTED:
+        return SAO_SDK_ERR_NOT_IMPLEMENTED;
+    case SAO_STATUS_ERR_CANCELLED:
+        return SAO_SDK_ERR_BUSY;
+    case SAO_STATUS_ERR_ABI_MISMATCH:
+        return SAO_SDK_ERR_ABI_MISMATCH;
+    case SAO_STATUS_ERR_CAPABILITY_MISSING:
+        return SAO_SDK_ERR_UNSUPPORTED;
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return SAO_SDK_ERR_ACCESS_DENIED;
+    case SAO_STATUS_ERR_NOT_FOUND:
+        return SAO_SDK_ERR_NOT_FOUND;
+    case SAO_STATUS_ERR_ALREADY_EXISTS:
+        return SAO_SDK_ERR_ALREADY_EXISTS;
+    case SAO_UI_STATUS_ERR_BUSY:
+        return SAO_SDK_ERR_BUSY;
+    default:
+        return SAO_SDK_ERR_INTERNAL;
     }
-    if (event_bus == nullptr) {
-        (void)sao_engine_event_bus_create_priority(&event_bus);
+}
+
+sao_sdk_status_t ensure_base_runtime_locked(SharedRuntime& runtime) {
+    bool created_event_bus = false;
+    if (runtime.event_bus == nullptr) {
+        const sao_status_t status = sao_engine_event_bus_create_priority(&runtime.event_bus);
+        if (status != SAO_STATUS_OK)
+            return map_runtime_status(status);
+        created_event_bus = true;
     }
-    if (render_registry == nullptr) {
-        (void)sao_engine_render_hook_registry_create(&render_registry);
+    if (runtime.render_registry == nullptr) {
+        const sao_status_t status =
+            sao_engine_render_hook_registry_create(&runtime.render_registry);
+        if (status != SAO_STATUS_OK) {
+            if (created_event_bus) {
+                sao_engine_event_bus_destroy(runtime.event_bus);
+                runtime.event_bus = nullptr;
+            }
+            return map_runtime_status(status);
+        }
     }
-    if (input_router == nullptr) {
-        (void)sao_ui_input_router_deep_create(compositor, &input_router);
+    return SAO_SDK_OK;
+}
+
+sao_sdk_status_t start_runtime_locked(SharedRuntime& runtime) {
+    const sao_sdk_status_t base_status = ensure_base_runtime_locked(runtime);
+    if (base_status != SAO_SDK_OK)
+        return base_status;
+    bool created_compositor = false;
+    if (runtime.compositor == nullptr) {
+        SaoCompositorConfig config{};
+        config.enable_temporal_union = true;
+        config.enable_rgn_cache = true;
+        const sao_status_t status =
+            sao_ui_compositor_create(nullptr, &config, &runtime.compositor);
+        if (status != SAO_STATUS_OK)
+            return map_runtime_status(status);
+        runtime.owns_compositor = true;
+        runtime.compositor_bound = false;
+        runtime.compositor_owner_thread = std::this_thread::get_id();
+        created_compositor = true;
+    }
+    if (runtime.input_router == nullptr) {
+        const sao_status_t status =
+            sao_ui_input_router_deep_create(runtime.compositor, &runtime.input_router);
+        if (status != SAO_STATUS_OK) {
+            if (created_compositor) {
+                const sao_status_t destroy_status =
+                    sao_ui_compositor_try_destroy(runtime.compositor);
+                if (destroy_status == SAO_STATUS_OK) {
+                    runtime.compositor = nullptr;
+                    runtime.owns_compositor = false;
+                    runtime.compositor_owner_thread = {};
+                }
+            }
+            return map_runtime_status(status);
+        }
+    }
+    return SAO_SDK_OK;
+}
+
+} // namespace
+
+sao_sdk_status_t SharedRuntime::ensure_started() {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        return start_runtime_locked(*this);
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+sao_sdk_status_t SharedRuntime::acquire_context() {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        const sao_sdk_status_t status = start_runtime_locked(*this);
+        if (status != SAO_SDK_OK)
+            return status;
+        ++active_contexts;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+void SharedRuntime::release_context() noexcept {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        if (active_contexts > 0)
+            --active_contexts;
+    } catch (...) {
+    }
+}
+
+sao_sdk_status_t SharedRuntime::bind_compositor(sao_ui_compositor_handle_t replacement) {
+    if (replacement == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    const sao_status_t replacement_owner = sao_ui_compositor_require_owner_thread(replacement);
+    if (replacement_owner != SAO_STATUS_OK)
+        return map_runtime_status(replacement_owner);
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        if (active_contexts != 0)
+            return SAO_SDK_ERR_BUSY;
+        if (compositor_bound)
+            return SAO_SDK_ERR_ALREADY_EXISTS;
+
+        const sao_sdk_status_t base_status = ensure_base_runtime_locked(*this);
+        if (base_status != SAO_SDK_OK)
+            return base_status;
+        if (compositor == replacement)
+            return SAO_SDK_ERR_ALREADY_EXISTS;
+        if (owns_compositor &&
+            sao_ui_compositor_require_owner_thread(compositor) != SAO_STATUS_OK) {
+            return SAO_SDK_ERR_ACCESS_DENIED;
+        }
+
+        if (owns_compositor && compositor != nullptr) {
+            const sao_status_t preflight_status =
+                sao_ui_compositor_destroy_preflight(compositor);
+            if (preflight_status != SAO_STATUS_OK)
+                return map_runtime_status(preflight_status);
+        }
+        auto* const previous_compositor = compositor;
+        auto* const previous_router = input_router;
+        sao_ui_input_router_deep_handle_t retained_router = previous_router;
+        bool created_router = false;
+        if (previous_router != nullptr) {
+            const sao_status_t rebind_status = sao_ui_input_router_deep_rebind_compositor(
+                previous_router, previous_compositor, replacement);
+            if (rebind_status != SAO_STATUS_OK)
+                return map_runtime_status(rebind_status);
+        } else {
+            const sao_status_t create_status =
+                sao_ui_input_router_deep_create(replacement, &retained_router);
+            if (create_status != SAO_STATUS_OK)
+                return map_runtime_status(create_status);
+            created_router = true;
+        }
+        if (owns_compositor && previous_compositor != nullptr) {
+            const sao_status_t destroy_status =
+                sao_ui_compositor_try_destroy(previous_compositor);
+            if (destroy_status != SAO_STATUS_OK) {
+                if (created_router) {
+                    (void)sao_ui_input_router_deep_try_destroy(retained_router);
+                } else {
+                    const sao_status_t rollback_status =
+                        sao_ui_input_router_deep_rebind_compositor(
+                            retained_router, replacement, previous_compositor);
+                    if (rollback_status != SAO_STATUS_OK)
+                        return map_runtime_status(rollback_status);
+                }
+                return map_runtime_status(destroy_status);
+            }
+        }
+        compositor = replacement;
+        input_router = retained_router;
+        owns_compositor = false;
+        compositor_bound = true;
+        compositor_owner_thread = std::this_thread::get_id();
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+sao_sdk_status_t SharedRuntime::unbind_compositor() {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        if (!compositor_bound || compositor == nullptr)
+            return SAO_SDK_ERR_NOT_INITIALIZED;
+        if (std::this_thread::get_id() != compositor_owner_thread)
+            return SAO_SDK_ERR_ACCESS_DENIED;
+        if (active_contexts != 0)
+            return SAO_SDK_ERR_BUSY;
+        const sao_status_t router_status =
+            sao_ui_input_router_deep_try_destroy(input_router);
+        if (router_status != SAO_STATUS_OK)
+            return map_runtime_status(router_status);
+        input_router = nullptr;
+        compositor = nullptr;
+        owns_compositor = false;
+        compositor_bound = false;
+        compositor_owner_thread = {};
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+sao_sdk_status_t
+SharedRuntime::get_bound_compositor(sao_ui_compositor_handle_t* out_compositor) {
+    if (out_compositor == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    *out_compositor = nullptr;
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        if (!compositor_bound || compositor == nullptr)
+            return SAO_SDK_ERR_NOT_INITIALIZED;
+        *out_compositor = compositor;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
     }
 }
 
@@ -910,6 +1131,110 @@ void populate_context(ContextState* state, SaoSdkContext* out_ctx,
 
 // ─── Context lifecycle exports ───────────────────────────────────────
 
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_bind_ui_compositor(void* compositor) {
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().bind_compositor(
+            static_cast<sao_ui_compositor_handle_t>(compositor));
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_unbind_ui_compositor(void) {
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().unbind_compositor();
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_get_ui_compositor(void** out_compositor) {
+    if (out_compositor == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    *out_compositor = nullptr;
+    try {
+        sao_ui_compositor_handle_t compositor = nullptr;
+        const sao_sdk_status_t status =
+            sao_sdk_internal::SharedRuntime::instance().get_bound_compositor(&compositor);
+        if (status == SAO_SDK_OK)
+            *out_compositor = compositor;
+        return status;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+#if defined(SAO_SDK_TESTING)
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_runtime_state(
+    void** out_compositor, void** out_input_router, bool* out_owns_compositor,
+    bool* out_compositor_bound, size_t* out_active_contexts) {
+    if (out_compositor == nullptr || out_input_router == nullptr || out_owns_compositor == nullptr ||
+        out_compositor_bound == nullptr || out_active_contexts == nullptr) {
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    }
+    *out_compositor = nullptr;
+    *out_input_router = nullptr;
+    *out_owns_compositor = false;
+    *out_compositor_bound = false;
+    *out_active_contexts = 0;
+    try {
+        auto& runtime = sao_sdk_internal::SharedRuntime::instance();
+        std::lock_guard lock(runtime.mu);
+        *out_compositor = runtime.compositor;
+        *out_input_router = runtime.input_router;
+        *out_owns_compositor = runtime.owns_compositor;
+        *out_compositor_bound = runtime.compositor_bound;
+        *out_active_contexts = runtime.active_contexts;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_reset_runtime(void) {
+    try {
+        auto& runtime = sao_sdk_internal::SharedRuntime::instance();
+        std::lock_guard lock(runtime.mu);
+        if (runtime.active_contexts != 0 || runtime.compositor_bound)
+            return SAO_SDK_ERR_BUSY;
+        if (runtime.owns_compositor && runtime.compositor != nullptr) {
+            const sao_status_t preflight_status =
+                sao_ui_compositor_destroy_preflight(runtime.compositor);
+            if (preflight_status != SAO_STATUS_OK)
+                return sao_sdk_internal::map_runtime_status(preflight_status);
+        }
+        auto* const previous_compositor = runtime.compositor;
+        if (runtime.input_router != nullptr) {
+            const sao_status_t router_status =
+                sao_ui_input_router_deep_try_destroy(runtime.input_router);
+            if (router_status != SAO_STATUS_OK)
+                return sao_sdk_internal::map_runtime_status(router_status);
+            runtime.input_router = nullptr;
+        }
+        if (runtime.owns_compositor && previous_compositor != nullptr) {
+            const sao_status_t compositor_status =
+                sao_ui_compositor_try_destroy(previous_compositor);
+            if (compositor_status != SAO_STATUS_OK) {
+                (void)sao_ui_input_router_deep_create(previous_compositor,
+                                                      &runtime.input_router);
+                return sao_sdk_internal::map_runtime_status(compositor_status);
+            }
+        }
+        runtime.input_router = nullptr;
+        runtime.compositor = nullptr;
+        runtime.owns_compositor = false;
+        runtime.compositor_bound = false;
+        runtime.compositor_owner_thread = {};
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+#endif
+
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(
     const char* base_dir_utf8, const char* plugin_id_utf8, struct SaoSdkContext** out_ctx) {
     if (out_ctx == nullptr)
@@ -921,13 +1246,21 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(
 
     sao_sdk_internal::ContextState* state = nullptr;
     bool registered = false;
+    bool runtime_acquired = false;
     try {
-        // Bring up the shared runtime lazily so tests don't need a fixture.
-        sao_sdk_internal::SharedRuntime::instance().ensure_started();
+        const sao_sdk_status_t runtime_status =
+            sao_sdk_internal::SharedRuntime::instance().acquire_context();
+        if (runtime_status != SAO_SDK_OK)
+            return runtime_status;
+        runtime_acquired = true;
 
         state = new (std::nothrow) sao_sdk_internal::ContextState();
-        if (state == nullptr)
+        if (state == nullptr) {
+            sao_sdk_internal::SharedRuntime::instance().release_context();
             return SAO_SDK_ERR_NOT_INITIALIZED;
+        }
+        state->runtime_context_acquired = true;
+        runtime_acquired = false;
         state->plugin_id = plugin_id_utf8;
         state->base_dir = (base_dir_utf8 == nullptr) ? "" : base_dir_utf8;
 
@@ -950,8 +1283,14 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(
                 if (sao_sdk_context_try_destroy(&state->public_ctx) != SAO_SDK_OK)
                     sao_sdk_internal::quarantine_context(state);
             } else {
+                if (state->runtime_context_acquired) {
+                    sao_sdk_internal::SharedRuntime::instance().release_context();
+                    state->runtime_context_acquired = false;
+                }
                 delete state;
             }
+        } else if (runtime_acquired) {
+            sao_sdk_internal::SharedRuntime::instance().release_context();
         }
         return SAO_SDK_ERR_INTERNAL;
     }
@@ -994,6 +1333,10 @@ sao_sdk_context_try_destroy(struct SaoSdkContext* ctx) {
             return fail(panel_status);
 
         sao_sdk_internal::unregister_context(state);
+        if (state->runtime_context_acquired) {
+            sao_sdk_internal::SharedRuntime::instance().release_context();
+            state->runtime_context_acquired = false;
+        }
         if (caller_owns_context) {
             std::memset(ctx, 0, sizeof(*ctx));
         }

@@ -1353,7 +1353,9 @@ sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* 
 }
 
 sao_sdk_status_t bind_platform_provider(ContextState* state) {
-    SharedRuntime::instance().ensure_started();
+    const sao_sdk_status_t runtime_status = SharedRuntime::instance().ensure_started();
+    if (runtime_status != SAO_SDK_OK)
+        return runtime_status;
     return bind_provider(state, platform_provider());
 }
 
@@ -1364,7 +1366,9 @@ sao_sdk_status_t prepare_platform_provider_binding(ContextState* state,
     if (out_candidate == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_candidate = {};
-    SharedRuntime::instance().ensure_started();
+    const sao_sdk_status_t runtime_status = SharedRuntime::instance().ensure_started();
+    if (runtime_status != SAO_SDK_OK)
+        return runtime_status;
     out_candidate->provider = *platform_provider();
     if (out_candidate->provider.retain == nullptr)
         return SAO_SDK_OK;
@@ -2561,7 +2565,9 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_platform_render_dis
         return SAO_SDK_ERR_UNSUPPORTED;
     }
     auto& runtime = sao_sdk_internal::SharedRuntime::instance();
-    runtime.ensure_started();
+    const sao_sdk_status_t runtime_status = runtime.ensure_started();
+    if (runtime_status != SAO_SDK_OK)
+        return runtime_status;
     return sao_sdk_internal::normalize_provider_status(static_cast<sao_sdk_status_t>(
         sao_engine_render_clock_dispatch(runtime.render_registry, surface_id_utf8, hook_point,
                                          monotonic_time_ns, viewport_x_px, viewport_y_px,
@@ -2571,7 +2577,9 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_platform_render_dis
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_platform_render_gpu_provider_status(void) {
     auto& runtime = sao_sdk_internal::SharedRuntime::instance();
-    runtime.ensure_started();
+    const sao_sdk_status_t runtime_status = runtime.ensure_started();
+    if (runtime_status != SAO_SDK_OK)
+        return runtime_status;
     const sao_status_t status = sao_engine_render_hook_provider_status(runtime.render_registry);
     return sao_sdk_internal::normalize_provider_status(static_cast<sao_sdk_status_t>(status));
 }

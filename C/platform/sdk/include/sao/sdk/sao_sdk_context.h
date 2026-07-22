@@ -52,6 +52,7 @@ enum : sao_sdk_status_t {
     SAO_SDK_ERR_UNSUPPORTED = -10,
     SAO_SDK_ERR_INTERNAL = -11,
     SAO_SDK_ERR_BUSY = -12,
+    SAO_SDK_ERR_ACCESS_DENIED = -21,
     SAO_SDK_ERR_NOT_FOUND = -22,
     SAO_SDK_ERR_ALREADY_EXISTS = -23,
     SAO_SDK_ERR_READ_FAULT = -41,
@@ -641,6 +642,22 @@ struct SaoSdkGpuHuntTable {
     // these fields before reading any slot from the current table contract.
     uint32_t abi_version;
     uint32_t struct_size;
+
+    // ABI 1.11 optional motion-prediction tail. Hosts append these slots
+    // after metadata without raising the global/table minor. Consumers must
+    // authorize each slot independently through struct_size before reading it.
+    sao_sdk_status_t(SAO_SDK_CALL* get_predicted_view)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint32_t future_tick, float out_matrix[16], float out_cam[3],
+        float* out_confidence);
+
+    sao_sdk_status_t(SAO_SDK_CALL* get_motion_prediction_confidence)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float* out_confidence);
+
+    sao_sdk_status_t(SAO_SDK_CALL* get_motion_prediction_sample_count)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint32_t* out_count);
 };
 
 #define SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR SAO_SDK_ABI_VERSION_MAJOR
@@ -653,6 +670,9 @@ struct SaoSdkGpuHuntTable {
 #define SAO_SDK_GPU_HUNT_TABLE_REQUIRED_SIZE                                                 \
     (offsetof(struct SaoSdkGpuHuntTable, struct_size) +                                      \
      sizeof(((struct SaoSdkGpuHuntTable*)0)->struct_size))
+#define SAO_SDK_GPU_HUNT_TABLE_MOTION_REQUIRED_SIZE                                          \
+    (offsetof(struct SaoSdkGpuHuntTable, get_motion_prediction_sample_count) +                \
+     sizeof(((struct SaoSdkGpuHuntTable*)0)->get_motion_prediction_sample_count))
 
 // HeapLocatorProfile constants (ABI 1.10).  Append-only; existing
 // values never move.

@@ -31,11 +31,20 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_bind_context(
 
     sao_sdk_internal::ContextState* state = nullptr;
     bool registered = false;
+    bool runtime_acquired = false;
     try {
-        sao_sdk_internal::SharedRuntime::instance().ensure_started();
+        const sao_sdk_status_t runtime_status =
+            sao_sdk_internal::SharedRuntime::instance().acquire_context();
+        if (runtime_status != SAO_SDK_OK)
+            return runtime_status;
+        runtime_acquired = true;
         state = new (std::nothrow) sao_sdk_internal::ContextState();
-        if (state == nullptr)
+        if (state == nullptr) {
+            sao_sdk_internal::SharedRuntime::instance().release_context();
             return SAO_SDK_ERR_NOT_INITIALIZED;
+        }
+        state->runtime_context_acquired = true;
+        runtime_acquired = false;
         state->plugin_id = plugin_id_utf8;
         sao_sdk_internal::populate_context(state, out_ctx, plugin_version_utf8);
         sao_sdk_internal::register_context(state);
@@ -53,9 +62,15 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_bind_context(
                 if (sao_sdk_context_try_destroy(out_ctx) != SAO_SDK_OK)
                     sao_sdk_internal::quarantine_context(state);
             } else {
+                if (state->runtime_context_acquired) {
+                    sao_sdk_internal::SharedRuntime::instance().release_context();
+                    state->runtime_context_acquired = false;
+                }
                 delete state;
                 std::memset(out_ctx, 0, sizeof(*out_ctx));
             }
+        } else if (runtime_acquired) {
+            sao_sdk_internal::SharedRuntime::instance().release_context();
         }
         return SAO_SDK_ERR_INTERNAL;
     }

@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -266,6 +267,10 @@ struct MemoryProviderSession {
 // lifetime of a real plugin host).
 struct SharedRuntime {
     sao_ui_compositor_handle_t compositor = nullptr;
+    bool owns_compositor = false;
+    bool compositor_bound = false;
+    std::thread::id compositor_owner_thread{};
+    size_t active_contexts = 0;
     sao_engine_event_bus_handle_t event_bus = nullptr;
     sao_engine_render_hook_registry_handle_t render_registry = nullptr;
     sao_ui_input_router_deep_handle_t input_router = nullptr;
@@ -273,13 +278,19 @@ struct SharedRuntime {
 
     static SharedRuntime& instance();
     // Idempotent; safe under concurrent context_create calls.
-    void ensure_started();
+    sao_sdk_status_t ensure_started();
+    sao_sdk_status_t acquire_context();
+    void release_context() noexcept;
+    sao_sdk_status_t bind_compositor(sao_ui_compositor_handle_t replacement);
+    sao_sdk_status_t unbind_compositor();
+    sao_sdk_status_t get_bound_compositor(sao_ui_compositor_handle_t* out_compositor);
 };
 
 // Per-context private state — `ctx_impl` in SaoSdkContext points here.
 struct ContextState {
     ContextState() : callback_gate(std::make_shared<ContextCallbackGate>()) {}
 
+    bool runtime_context_acquired = false;
     std::string plugin_id;
     std::string plugin_version;
     std::string base_dir;
