@@ -7,10 +7,15 @@
 
 #include "sao/ui/theme.h"
 
+#include "panel_theme_internal.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -39,26 +44,45 @@ struct sao_ui_theme_s {
 // ── Process-wide flat-token state ────────────────────────────────
 namespace {
 
-// Process-wide active theme id.  atomic so the getter is lock-free;
-// mutations still take the callback mutex so listeners fire in a
-// consistent order.
+// Process-wide active theme id.  Atomic keeps the getter lock-free;
+// each setter dispatches the transition it wins synchronously on its
+// own calling thread.
 std::atomic<int32_t> g_active_theme_id{SAO_UI_THEME_DARK};
+std::atomic<uint64_t> g_active_theme_generation{1};
 
 struct ThemeCallbackSlot {
-    sao_ui_theme_callback_handle_t   handle;
-    sao_ui_theme_change_callback_t   callback;
-    void*                            user_data;
+    sao_ui_theme_callback_handle_t handle{};
+    sao_ui_theme_change_callback_t callback{};
+    void* user_data{};
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t in_flight{};
+    bool active{true};
 };
+
+struct ActiveThemeCallback {
+    ThemeCallbackSlot* slot{};
+    ActiveThemeCallback* previous{};
+};
+
+thread_local ActiveThemeCallback* active_theme_callback = nullptr;
 
 std::mutex& callbacks_mutex() {
     static std::mutex m;
     return m;
 }
 
-std::vector<ThemeCallbackSlot>& callbacks_storage() {
-    static std::vector<ThemeCallbackSlot> v;
+std::vector<std::shared_ptr<ThemeCallbackSlot>>& callbacks_storage() {
+    static std::vector<std::shared_ptr<ThemeCallbackSlot>> v;
     return v;
 }
+
+struct ThreadThemeTransitionQueue {
+    std::deque<SaoUiThemeId> pending;
+    bool dispatching{};
+};
+
+thread_local ThreadThemeTransitionQueue theme_transition_queue;
 
 std::atomic<uint64_t> g_next_callback_handle{1};
 
@@ -151,7 +175,58 @@ inline bool is_valid_metric_token(int32_t metric) {
     return metric >= 0 && metric < SAO_UI_METRIC_COUNT;
 }
 
+bool callback_is_active_on_this_thread(const ThemeCallbackSlot* slot) noexcept {
+    for (const ActiveThemeCallback* active = active_theme_callback; active != nullptr;
+         active = active->previous) {
+        if (active->slot == slot)
+            return true;
+    }
+    return false;
+}
+
+void invoke_theme_callbacks(SaoUiThemeId theme_id) noexcept {
+    std::vector<std::shared_ptr<ThemeCallbackSlot>> snapshot;
+    try {
+        std::lock_guard lock(callbacks_mutex());
+        snapshot = callbacks_storage();
+    } catch (...) {
+        return;
+    }
+    for (const auto& slot : snapshot) {
+        sao_ui_theme_change_callback_t callback = nullptr;
+        void* user_data = nullptr;
+        {
+            std::lock_guard slot_lock(slot->mutex);
+            if (!slot->active || slot->callback == nullptr)
+                continue;
+            ++slot->in_flight;
+            callback = slot->callback;
+            user_data = slot->user_data;
+        }
+        ActiveThemeCallback marker{slot.get(), active_theme_callback};
+        active_theme_callback = &marker;
+        try {
+            callback(theme_id, user_data);
+        } catch (...) {
+        }
+        active_theme_callback = marker.previous;
+        {
+            std::lock_guard slot_lock(slot->mutex);
+            --slot->in_flight;
+        }
+        slot->cv.notify_all();
+    }
+}
+
 }  // namespace
+
+namespace sao::ui::detail {
+
+uint64_t process_theme_generation() noexcept {
+    return g_active_theme_generation.load(std::memory_order_acquire);
+}
+
+} // namespace sao::ui::detail
 
 // ── Static table access (unchanged public API) ────────────────────
 extern "C" const SaoUiColorTable* SAO_UI_CALL sao_ui_theme_static_colors(
@@ -220,28 +295,29 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_set_active_id(
     if (!is_valid_theme_id(theme_id)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    // Snapshot old value; fire callbacks only on a real change.  We
-    // copy the callback list under the mutex, then release it before
-    // invoking each callback so re-entrant unregister calls don't
-    // deadlock.
-    const int32_t prev = g_active_theme_id.exchange(theme_id);
-    if (prev == theme_id) {
-        return SAO_STATUS_OK;
-    }
-    std::vector<ThemeCallbackSlot> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(callbacks_mutex());
-        snapshot = callbacks_storage();
-    }
-    for (const auto& slot : snapshot) {
-        if (slot.callback != nullptr) {
-            try {
-                slot.callback(theme_id, slot.user_data);
-            } catch (...) {
+    try {
+        auto& queue = theme_transition_queue;
+        queue.pending.push_back(theme_id);
+        if (queue.dispatching)
+            return SAO_STATUS_OK;
+
+        queue.dispatching = true;
+        while (!queue.pending.empty()) {
+            const SaoUiThemeId requested = queue.pending.front();
+            queue.pending.pop_front();
+            const int32_t previous = g_active_theme_id.exchange(requested);
+            if (previous != requested) {
+                g_active_theme_generation.fetch_add(1, std::memory_order_acq_rel);
+                invoke_theme_callbacks(requested);
             }
         }
+        queue.dispatching = false;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        theme_transition_queue.pending.clear();
+        theme_transition_queue.dispatching = false;
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_active_id(
@@ -259,13 +335,23 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_register_change_callback(
         if (out_handle != nullptr) *out_handle = SAO_UI_THEME_CALLBACK_HANDLE_INVALID;
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    const auto handle = g_next_callback_handle.fetch_add(1);
-    {
-        std::lock_guard<std::mutex> lock(callbacks_mutex());
-        callbacks_storage().push_back({handle, callback, user_data});
+    *out_handle = SAO_UI_THEME_CALLBACK_HANDLE_INVALID;
+    try {
+        auto slot = std::make_shared<ThemeCallbackSlot>();
+        slot->handle = g_next_callback_handle.fetch_add(1);
+        if (slot->handle == SAO_UI_THEME_CALLBACK_HANDLE_INVALID)
+            slot->handle = g_next_callback_handle.fetch_add(1);
+        slot->callback = callback;
+        slot->user_data = user_data;
+        {
+            std::lock_guard<std::mutex> lock(callbacks_mutex());
+            callbacks_storage().push_back(slot);
+        }
+        *out_handle = slot->handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    *out_handle = handle;
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_unregister_change_callback(
@@ -273,15 +359,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_unregister_change_callback(
     if (handle == SAO_UI_THEME_CALLBACK_HANDLE_INVALID) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    std::lock_guard<std::mutex> lock(callbacks_mutex());
-    auto& slots = callbacks_storage();
-    for (auto it = slots.begin(); it != slots.end(); ++it) {
-        if (it->handle == handle) {
-            slots.erase(it);
-            return SAO_STATUS_OK;
+    std::shared_ptr<ThemeCallbackSlot> slot;
+    {
+        std::lock_guard<std::mutex> lock(callbacks_mutex());
+        auto& slots = callbacks_storage();
+        for (auto it = slots.begin(); it != slots.end(); ++it) {
+            if ((*it)->handle == handle) {
+                slot = *it;
+                slots.erase(it);
+                break;
+            }
         }
     }
-    return SAO_STATUS_ERR_NOT_FOUND;
+    if (slot == nullptr)
+        return SAO_STATUS_ERR_NOT_FOUND;
+    std::unique_lock slot_lock(slot->mutex);
+    slot->active = false;
+    if (!callback_is_active_on_this_thread(slot.get())) {
+        slot->cv.wait(slot_lock, [&slot] { return slot->in_flight == 0; });
+    }
+    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_token_name(

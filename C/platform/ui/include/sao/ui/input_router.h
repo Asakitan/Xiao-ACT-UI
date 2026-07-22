@@ -138,6 +138,19 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_deep_create(
 SAO_UI_API void SAO_UI_CALL
 sao_ui_input_router_deep_destroy(sao_ui_input_router_deep_handle_t handle);
 
+// BUSY preserves the active router unchanged while an API lease or callback
+// is in flight. Successful teardown retires and finalizes the handle.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_input_router_deep_try_destroy(sao_ui_input_router_deep_handle_t handle);
+
+// Atomically retarget an idle active router without changing its handle or
+// focus/hotkey/input state. Expected-compositor mismatch fails closed with
+// HANDLE_INVALID. BUSY leaves both the compositor pointer and all state intact.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_deep_rebind_compositor(
+    sao_ui_input_router_deep_handle_t handle,
+    sao_ui_compositor_handle_t expected_compositor,
+    sao_ui_compositor_handle_t replacement_compositor);
+
 // ─── Raw Win32 feed ──────────────────────────────────────────────────
 //
 // The overlay host's WndProc forwards WM_MOUSE* / WM_KEY* / WM_CHAR

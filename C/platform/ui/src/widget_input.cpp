@@ -3,6 +3,8 @@
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
+#include "widget_paint_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -588,7 +590,8 @@ uint32_t resolve_button_fill(const SaoUiButtonSpec& spec) {
         return spec.colors.active_fill_argb;
     if (spec.colors.fill_argb != 0)
         return spec.colors.fill_argb;
-    return spec.active ? 0xff2f78b9U : 0xff273447U;
+    return sao::ui::detail::panel_theme_color(spec.active ? SAO_UI_TOKEN_APP_ACCENT
+                                                          : SAO_UI_TOKEN_APP_CARD);
 }
 
 uint32_t resolve_button_border(const SaoUiButtonSpec& spec) {
@@ -596,7 +599,9 @@ uint32_t resolve_button_border(const SaoUiButtonSpec& spec) {
         return spec.colors.disabled_border_argb;
     if (spec.active && spec.colors.active_border_argb != 0)
         return spec.colors.active_border_argb;
-    return spec.colors.border_argb == 0 ? 0xff75849aU : spec.colors.border_argb;
+    return spec.colors.border_argb == 0
+               ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+               : spec.colors.border_argb;
 }
 
 uint32_t resolve_button_foreground(const SaoUiButtonSpec& spec) {
@@ -606,33 +611,23 @@ uint32_t resolve_button_foreground(const SaoUiButtonSpec& spec) {
         return spec.colors.active_fg_argb;
     if (spec.colors.fg_argb != 0)
         return spec.colors.fg_argb;
-    return spec.disabled ? 0xff8f9aaaU : 0xfff0f4faU;
+    return sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_APP_TEXT_2
+                                                             : SAO_UI_TOKEN_APP_TEXT);
 }
 
 sao_status_t paint_button_box(sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
                               int32_t width, int32_t height, uint32_t fill,
-                              uint32_t border) {
-    sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                              uint32_t border, int32_t radius_px) {
+    const float radius = static_cast<float>(std::max(0, radius_px));
+    sao_status_t status = sao::ui::detail::paint_rounded_rect(
         context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
-        static_cast<float>(height), fill);
-    if (status != SAO_STATUS_OK)
+        static_cast<float>(height), radius, border);
+    if (status != SAO_STATUS_OK || width <= 2 || height <= 2)
         return status;
-    status = sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x), static_cast<float>(y),
-                                        static_cast<float>(width), 1.0F, border);
-    if (status != SAO_STATUS_OK)
-        return status;
-    status = sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x),
-                                        static_cast<float>(y + height - 1),
-                                        static_cast<float>(width), 1.0F, border);
-    if (status != SAO_STATUS_OK)
-        return status;
-    status = sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x), static_cast<float>(y),
-                                        1.0F, static_cast<float>(height), border);
-    if (status != SAO_STATUS_OK)
-        return status;
-    return sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x + width - 1),
-                                      static_cast<float>(y), 1.0F,
-                                      static_cast<float>(height), border);
+    return sao::ui::detail::paint_rounded_rect(
+        context, static_cast<float>(x + 1), static_cast<float>(y + 1),
+        static_cast<float>(width - 2), static_cast<float>(height - 2),
+        std::max(0.0F, radius - 1.0F), fill);
 }
 
 } // namespace
@@ -1384,9 +1379,9 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_button_preferred_si
     }
 }
 
-// Hit test relative to the button's local coord (0..width, 0..height).
-// Disabled buttons still report inside/outside but the caller can
-// gate downstream dispatch on that separately.
+// Hit test remains the full local rectangle even when the visual face has
+// rounded corners. Disabled buttons still report inside/outside; downstream
+// dispatch applies the disabled-state gate separately.
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_button_hit_test(sao_ui_widget_handle_t handle, SaoUiPointF point, bool* out_hit) {
     try {
@@ -1764,7 +1759,7 @@ sao_status_t sao::ui::detail::widget_input_paint(
             }
             sao_status_t status = paint_button_box(context, x, y, width, height,
                                                    resolve_button_fill(spec),
-                                                   resolve_button_border(spec));
+                                                   resolve_button_border(spec), spec.radius_px);
             if (status != SAO_STATUS_OK)
                 return status;
             return sao_ui_paint_ctx_draw_utf8(
@@ -1786,10 +1781,12 @@ sao_status_t sao::ui::detail::widget_input_paint(
             }
             SaoUiButtonSpec button{};
             button.kind = spec.kind;
+            button.radius_px = spec.radius_px;
             button.colors = spec.colors;
             sao_status_t status = paint_button_box(context, x, y, width, height,
                                                    resolve_button_fill(button),
-                                                   resolve_button_border(button));
+                                                   resolve_button_border(button),
+                                                   button.radius_px);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t pad = std::max(1, spec.pad_px);
@@ -1823,7 +1820,9 @@ sao_status_t sao::ui::detail::widget_input_paint(
             button.colors = spec.button_colors;
             sao_status_t status = paint_button_box(context, x, y, width, height,
                                                    resolve_button_fill(button),
-                                                   resolve_button_border(button));
+                                                   resolve_button_border(button),
+                                                   sao::ui::detail::panel_theme_metric(
+                                                       SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
             if (status != SAO_STATUS_OK)
                 return status;
             text += " v";
@@ -1848,7 +1847,10 @@ sao_status_t sao::ui::detail::widget_input_paint(
             const int32_t top = y + (height - box) / 2;
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(box),
-                static_cast<float>(box), spec.box_argb == 0 ? 0xff273447U : spec.box_argb);
+                static_cast<float>(box),
+                spec.box_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.box_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             if (spec.checked) {
@@ -1856,14 +1858,20 @@ sao_status_t sao::ui::detail::widget_input_paint(
                     context, static_cast<float>(x + 3), static_cast<float>(top + 3),
                     static_cast<float>(std::max(1, box - 6)),
                     static_cast<float>(std::max(1, box - 6)),
-                    spec.check_argb == 0 ? 0xff4ea5ffU : spec.check_argb);
+                    spec.check_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : spec.check_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + box + 4), static_cast<float>(y + 2),
                 label.c_str(), static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
-                spec.disabled ? 0xff8f9aaaU : (spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb));
+                spec.disabled
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                    : (spec.fg_argb == 0
+                           ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                           : spec.fg_argb));
         }
         case kRadioTag: {
             SaoUiRadioSpec spec{};
@@ -1881,7 +1889,10 @@ sao_status_t sao::ui::detail::widget_input_paint(
             const int32_t top = y + (height - ring) / 2;
             sao_status_t status = sao_ui_paint_ctx_fill_ellipse(
                 context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(ring),
-                static_cast<float>(ring), spec.ring_argb == 0 ? 0xff75849aU : spec.ring_argb);
+                static_cast<float>(ring),
+                spec.ring_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                    : spec.ring_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             if (spec.selected) {
@@ -1890,14 +1901,20 @@ sao_status_t sao::ui::detail::widget_input_paint(
                     context, static_cast<float>(x + inset), static_cast<float>(top + inset),
                     static_cast<float>(std::max(1, ring - inset * 2)),
                     static_cast<float>(std::max(1, ring - inset * 2)),
-                    spec.dot_argb == 0 ? 0xff4ea5ffU : spec.dot_argb);
+                    spec.dot_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : spec.dot_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + ring + 4), static_cast<float>(y + 2),
                 label.c_str(), static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
-                spec.disabled ? 0xff8f9aaaU : (spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb));
+                spec.disabled
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                    : (spec.fg_argb == 0
+                           ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                           : spec.fg_argb));
         }
         case kSliderTag: {
             SaoUiSliderSpec spec{};
@@ -1910,14 +1927,24 @@ sao_status_t sao::ui::detail::widget_input_paint(
             }
             const float ratio = std::clamp(
                 (spec.value - spec.min_value) / (spec.max_value - spec.min_value), 0.0F, 1.0F);
-            const uint32_t track = spec.track_argb == 0 ? 0xff39485cU : spec.track_argb;
+            const uint32_t track =
+                spec.track_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                    : spec.track_argb;
             const uint32_t fill = spec.disabled
-                                      ? 0xff647184U
-                                      : (spec.track_fill_argb == 0 ? 0xff4ea5ffU
-                                                                  : spec.track_fill_argb);
+                                      ? sao::ui::detail::panel_theme_color(
+                                            SAO_UI_TOKEN_APP_TEXT_2)
+                                      : (spec.track_fill_argb == 0
+                                             ? sao::ui::detail::panel_theme_color(
+                                                   SAO_UI_TOKEN_APP_ACCENT)
+                                             : spec.track_fill_argb);
             const uint32_t thumb = spec.disabled
-                                       ? 0xff8f9aaaU
-                                       : (spec.thumb_argb == 0 ? 0xfff0f4faU : spec.thumb_argb);
+                                       ? sao::ui::detail::panel_theme_color(
+                                             SAO_UI_TOKEN_APP_TEXT_2)
+                                       : (spec.thumb_argb == 0
+                                              ? sao::ui::detail::panel_theme_color(
+                                                    SAO_UI_TOKEN_APP_TEXT)
+                                              : spec.thumb_argb);
             if (spec.vertical) {
                 const int32_t thickness = std::max(1, spec.track_thickness_px);
                 const int32_t track_x = x + (width - thickness) / 2;

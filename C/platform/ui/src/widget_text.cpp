@@ -23,6 +23,8 @@
 #include "sao/ui/widget_text.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
+
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -842,7 +844,10 @@ sao_status_t sao::ui::detail::widget_text_paint(
             if (fill_status != SAO_STATUS_OK)
                 return fill_status;
         }
-        const uint32_t foreground = spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb;
+        const uint32_t foreground =
+            spec.fg_argb == 0
+                ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                : spec.fg_argb;
         const float font_size = static_cast<float>(
             spec.font_size_px > 0 ? spec.font_size_px : std::clamp(height - 4, 5, 16));
         return sao_ui_paint_ctx_draw_utf8(

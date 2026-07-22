@@ -44,6 +44,8 @@ struct ActionLog {
     sao_status_t return_status = SAO_STATUS_OK;
     bool menu_visible_when_called = true;
     bool throw_exception = false;
+    bool destroy_self = false;
+    sao_status_t self_destroy_status = SAO_STATUS_OK;
     uint64_t frame_count_when_called = 0;
 };
 
@@ -85,6 +87,8 @@ sao_status_t SAO_UI_CALL record_action(SaoUiEntityAction action, void* user_data
     }
     if (log->throw_exception)
         throw std::runtime_error("action callback");
+    if (log->destroy_self && log->shell != nullptr)
+        log->self_destroy_status = sao_ui_entity_shell_try_destroy(log->shell);
     return log->return_status;
 }
 
@@ -97,6 +101,13 @@ SaoUiEntityShellConfig headless_config(ActionLog* actions) {
     config.action_fn = &record_action;
     config.action_user_data = actions;
     return config;
+}
+
+size_t layer_count(sao_ui_compositor_handle_t compositor) {
+    size_t count = 0;
+    return sao_ui_compositor_list_layers(compositor, nullptr, 0, &count) == SAO_STATUS_OK
+               ? count
+               : (std::numeric_limits<size_t>::max)();
 }
 
 std::vector<uint8_t> snapshot_pixels(sao_ui_entity_shell_handle_t shell,
@@ -162,19 +173,6 @@ void send_wheel(sao_ui_entity_shell_handle_t shell, const std::array<int32_t, 2>
                 int32_t delta) {
     REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kMouseWheel, point[0], point[1], -1, delta) ==
             SAO_STATUS_OK);
-}
-
-bool SAO_UI_CALL shell_hit_test(int32_t x, int32_t y, void* user_data) {
-    bool hit = false;
-    return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
-                                        &hit) == SAO_STATUS_OK &&
-           hit;
-}
-
-void SAO_UI_CALL shell_mouse(uint32_t message, int32_t x, int32_t y, int32_t button,
-                             int32_t wheel_delta, void* user_data) {
-    (void)sao_ui_entity_shell_handle_mouse(static_cast<sao_ui_entity_shell_handle_t>(user_data),
-                                           message, x, y, button, wheel_delta);
 }
 
 } // namespace
@@ -730,7 +728,7 @@ TEST_CASE("Entity child setter is owner-thread atomic and clamps refreshed viewp
         sao_ui_entity_shell_destroy(shell);
     }
 
-TEST_CASE("Entity shell non-owner destroy detaches without releasing",
+TEST_CASE("Entity shell non-owner destroy is ignored without releasing",
           "[ui][entity_shell][lifecycle]") {
     ActionLog actions;
     const auto config = headless_config(&actions);
@@ -746,6 +744,233 @@ TEST_CASE("Entity shell non-owner destroy detaches without releasing",
     CHECK(state.online);
     REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
     sao_ui_entity_shell_destroy(shell);
+}
+
+TEST_CASE("Entity owned shell try destroy preserves handle after non-owner failure",
+          "[ui][entity_shell][lifecycle][retry]") {
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+    sao_status_t non_owner_status = SAO_STATUS_OK;
+    std::thread non_owner([&] { non_owner_status = sao_ui_entity_shell_try_destroy(shell); });
+    non_owner.join();
+    CHECK(non_owner_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    SaoUiEntityShellSnapshot snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    CHECK(snapshot.online);
+    REQUIRE(sao_ui_entity_shell_try_destroy(shell) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Entity shell borrows and preserves the central compositor",
+          "[ui][entity_shell][compositor][borrowed]") {
+    SaoCompositorConfig compositor_config{};
+    compositor_config.target_hz = 60;
+    compositor_config.enable_temporal_union = true;
+    compositor_config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(compositor, &config, &shell) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    CHECK(layer_count(compositor) == 2);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+    CHECK(layer_count(compositor) == 0);
+
+    SaoLayerConfig sentinel_config{};
+    sentinel_config.name_utf8 = "entity.borrowed.sentinel";
+    sentinel_config.width = 4;
+    sentinel_config.height = 4;
+    sentinel_config.click_through = true;
+    sentinel_config.bgra_swizzle = true;
+    sao_ui_layer_handle_t sentinel = nullptr;
+    REQUIRE(sao_ui_layer_create(compositor, &sentinel_config, &sentinel) == SAO_STATUS_OK);
+    REQUIRE(sentinel != nullptr);
+    sao_ui_layer_destroy(sentinel);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Entity borrowed construction failure leaves no stale compositor cleanup",
+          "[ui][entity_shell][compositor][borrowed][construction][rollback]") {
+    sao_ui_compositor_handle_t first_compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &first_compositor) == SAO_STATUS_OK);
+    SaoLayerConfig sentinel_config{};
+    sentinel_config.name_utf8 = "entity.borrowed.rollback.sentinel";
+    sentinel_config.width = 4;
+    sentinel_config.height = 4;
+    sentinel_config.click_through = true;
+    sao_ui_layer_handle_t sentinel = nullptr;
+    REQUIRE(sao_ui_layer_create(first_compositor, &sentinel_config, &sentinel) == SAO_STATUS_OK);
+
+    ActionLog first_actions;
+    const auto first_config = headless_config(&first_actions);
+    sao_status_t non_owner_status = SAO_STATUS_OK;
+    sao_ui_entity_shell_handle_t non_owner_shell =
+        reinterpret_cast<sao_ui_entity_shell_handle_t>(uintptr_t{1});
+    std::thread non_owner([&] {
+        non_owner_status = sao_ui_entity_shell_create_on_compositor(
+            first_compositor, &first_config, &non_owner_shell);
+    });
+    non_owner.join();
+    CHECK(non_owner_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(non_owner_shell == nullptr);
+    CHECK(layer_count(first_compositor) == 1);
+
+    sao_ui_entity_shell_handle_t failed_shell =
+        reinterpret_cast<sao_ui_entity_shell_handle_t>(uintptr_t{1});
+    sao_ui_test_fail_next_entity_shell_construction();
+    CHECK(sao_ui_entity_shell_create_on_compositor(first_compositor, &first_config,
+                                                    &failed_shell) == SAO_STATUS_ERR_UNKNOWN);
+    CHECK(failed_shell == nullptr);
+    CHECK(layer_count(first_compositor) == 1);
+    REQUIRE(sao_ui_layer_set_position(sentinel, 7, 9) == SAO_STATUS_OK);
+    sao_ui_layer_destroy(sentinel);
+    REQUIRE(sao_ui_compositor_try_destroy(first_compositor) == SAO_STATUS_OK);
+
+    sao_ui_compositor_handle_t second_compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &second_compositor) == SAO_STATUS_OK);
+    ActionLog second_actions;
+    const auto second_config = headless_config(&second_actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(second_compositor, &second_config, &shell) ==
+            SAO_STATUS_OK);
+    CHECK(layer_count(second_compositor) == 2);
+    REQUIRE(sao_ui_entity_shell_try_destroy(shell) == SAO_STATUS_OK);
+    CHECK(layer_count(second_compositor) == 0);
+    REQUIRE(sao_ui_compositor_try_destroy(second_compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Entity action self-destroy finalizes after the central input batch",
+          "[ui][entity_shell][compositor][input][destroy][deferred]") {
+    SaoCompositorConfig compositor_config{};
+    compositor_config.target_hz = 60;
+    compositor_config.enable_temporal_union = true;
+    compositor_config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+
+    ActionLog actions;
+    actions.destroy_self = true;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(compositor, &config, &shell) ==
+            SAO_STATUS_OK);
+    actions.shell = shell;
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const int32_t about_x = state.menu_x + kMenuSlotCenter;
+    const int32_t about_y = state.menu_y + kMenuPad + 4 * kMenuSlot + kMenuSlot / 2;
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, about_x, about_y, -1, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonDown, about_x, about_y, 0, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kLeftButtonUp, about_x, about_y, 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(actions.calls == 1);
+    CHECK(actions.self_destroy_status == SAO_STATUS_ERR_CANCELLED);
+    CHECK(layer_count(compositor) == 0);
+
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Entity central NerveGear input matches its logical circular hit shape",
+          "[ui][entity_shell][compositor][input][shape]") {
+    SaoCompositorConfig compositor_config{};
+    compositor_config.target_hz = 60;
+    compositor_config.enable_temporal_union = true;
+    compositor_config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(compositor, &config, &shell) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    bool central_hit = true;
+    bool entity_hit = true;
+    REQUIRE(sao_ui_compositor_hit_test(compositor, state.nervegear_x, state.nervegear_y,
+                                       &central_hit) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_hit_test(shell, state.origin_x + state.nervegear_x,
+                                         state.origin_y + state.nervegear_y,
+                                         &entity_hit) == SAO_STATUS_OK);
+    CHECK_FALSE(central_hit);
+    CHECK_FALSE(entity_hit);
+
+    REQUIRE(sao_ui_compositor_hit_test(compositor, state.nervegear_x + 36,
+                                       state.nervegear_y + 36, &central_hit) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_hit_test(shell, state.origin_x + state.nervegear_x + 36,
+                                         state.origin_y + state.nervegear_y + 36,
+                                         &entity_hit) == SAO_STATUS_OK);
+    CHECK(central_hit);
+    CHECK(entity_hit);
+
+    REQUIRE(sao_ui_entity_shell_try_destroy(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Entity central wheel uses the current event coordinates instead of stale cursor",
+          "[ui][entity_shell][compositor][input][wheel]") {
+    SaoCompositorConfig compositor_config{};
+    compositor_config.target_hz = 60;
+    compositor_config.enable_temporal_union = true;
+    compositor_config.enable_rgn_cache = true;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create_on_compositor(compositor, &config, &shell) ==
+            SAO_STATUS_OK);
+    actions.shell = shell;
+    const auto children = make_child_items(10);
+    set_entity_children(shell, "Control", children);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    select_root(shell, 0);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const int32_t child_host_x = state.menu_x + kChildRowX + 18;
+    const int32_t child_host_y = state.menu_y + kChildRowY + kChildRowHeight / 2;
+    const int32_t root_host_x = state.menu_x + kMenuSlotCenter;
+    const int32_t root_host_y = state.menu_y + kMenuPad + kMenuSlot / 2;
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseMove, child_host_x, child_host_y,
+                                              -1, 0) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseWheel, root_host_x, root_host_y, -1,
+                                              -120) == SAO_STATUS_OK);
+
+    auto slot0 = child_point(state, 0);
+    send_left_click(shell, slot0[0], slot0[1]);
+    REQUIRE(actions.calls == 1);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase);
+
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, kMouseWheel, child_host_x, child_host_y,
+                                              -1, -120) == SAO_STATUS_OK);
+    send_left_click(shell, slot0[0], slot0[1]);
+    REQUIRE(actions.calls == 2);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase + 1);
+
+    REQUIRE(sao_ui_entity_shell_try_destroy(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
 #if defined(_WIN32)
@@ -824,20 +1049,30 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
         SKIP("overlay host unavailable in this desktop session");
     }
 
+    sao_ui_compositor_handle_t compositor = nullptr;
+    const sao_status_t compositor_status = sao_ui_compositor_create(host, nullptr, &compositor);
+    if (compositor_status != SAO_STATUS_OK) {
+        REQUIRE(sao_ui_overlay_host_destroy(host));
+        SKIP("D3D11/DirectComposition unavailable in this environment");
+    }
+
     ActionLog actions;
     SaoUiEntityShellConfig shell_config{};
     shell_config.action_fn = &record_action;
     shell_config.action_user_data = &actions;
     sao_ui_entity_shell_handle_t shell = nullptr;
-    const sao_status_t create_status = sao_ui_entity_shell_create(host, &shell_config, &shell);
+    const sao_status_t create_status =
+        sao_ui_entity_shell_create_on_compositor(compositor, &shell_config, &shell);
     if (create_status != SAO_STATUS_OK) {
+        sao_ui_compositor_destroy(compositor);
         REQUIRE(sao_ui_overlay_host_destroy(host));
         SKIP("D3D11/DirectComposition unavailable in this environment");
     }
 
-    REQUIRE(sao_ui_overlay_host_set_hit_test(host, &shell_hit_test, shell) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_overlay_host_set_mouse(host, &shell_mouse, shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_set_visible(host, true) == SAO_STATUS_OK);
+    CHECK(sao_ui_overlay_host_visible(host));
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
 
     SaoUiEntityShellSnapshot state{};
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
@@ -846,6 +1081,7 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     SendMessageW(hwnd, WM_MOUSEMOVE, 0, point);
     SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point);
     SendMessageW(hwnd, WM_LBUTTONUP, 0, point);
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK(state.menu_visible);
 
@@ -860,6 +1096,8 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK_FALSE(state.menu_visible);
     REQUIRE(sao_ui_entity_shell_tick(shell, 16) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
     region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
     REQUIRE(GetWindowRgn(hwnd, region) != ERROR);
@@ -871,6 +1109,7 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     const int32_t old_menu_y = state.menu_y;
     REQUIRE(SetWindowPos(hwnd, nullptr, 180, 120, 800, 600, SWP_NOACTIVATE | SWP_NOZORDER));
     REQUIRE(sao_ui_entity_shell_tick(shell, 16) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK(state.origin_x == 180);
     CHECK(state.origin_y == 120);
@@ -881,6 +1120,7 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
 
     REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_tick(shell, 16) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_tick(compositor) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
@@ -889,10 +1129,10 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     CHECK_FALSE(PtInRegion(region, old_menu_x + kMenuSlotCenter, old_menu_y + kMenuSlotCenter));
     DeleteObject(region);
 
-    REQUIRE(sao_ui_overlay_host_set_mouse(host, nullptr, nullptr) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_overlay_host_set_hit_test(host, nullptr, nullptr) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
-    sao_ui_entity_shell_destroy(shell);
+    CHECK(sao_ui_overlay_host_visible(host));
+    REQUIRE(sao_ui_entity_shell_try_destroy(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
     REQUIRE(sao_ui_overlay_host_destroy(host));
 }
 #endif

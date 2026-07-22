@@ -12,6 +12,8 @@
 #include "sao/ui/widget_data.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
+#include "widget_paint_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -156,6 +158,21 @@ sao_status_t copy_string_to_caller(
 
 float clamp_ratio(float v, float lo = 0.0f, float hi = 1.0f) {
     return std::max(lo, std::min(hi, v));
+}
+
+sao_status_t paint_rounded_box(sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+                               int32_t width, int32_t height, uint32_t fill,
+                               uint32_t border, int32_t radius_px) noexcept {
+    const float radius = static_cast<float>(std::max(0, radius_px));
+    sao_status_t status = sao::ui::detail::paint_rounded_rect(
+        context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
+        static_cast<float>(height), radius, border);
+    if (status != SAO_STATUS_OK || width <= 2 || height <= 2)
+        return status;
+    return sao::ui::detail::paint_rounded_rect(
+        context, static_cast<float>(x + 1), static_cast<float>(y + 1),
+        static_cast<float>(width - 2), static_cast<float>(height - 2),
+        std::max(0.0F, radius - 1.0F), fill);
 }
 
 void apply_progress_spec_no_lock(ProgressState& s,
@@ -838,10 +855,14 @@ sao_status_t sao::ui::detail::widget_data_paint(
             const float ratio = spec.max_value <= 0.0F
                                     ? 0.0F
                                     : clamp_ratio(displayed / spec.max_value);
-            const uint32_t background = spec.bg_argb == 0 ? 0xff273447U : spec.bg_argb;
-            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+            const uint32_t background =
+                spec.bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.bg_argb;
+            sao_status_t status = sao::ui::detail::paint_rounded_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height), background);
+                static_cast<float>(width), static_cast<float>(height),
+                static_cast<float>(std::max(0, spec.radius_px)), background);
             if (status != SAO_STATUS_OK)
                 return status;
             if (spec.style == SAO_UI_PROGRESS_SEGMENTS && !segments.empty()) {
@@ -853,13 +874,18 @@ sao_status_t sao::ui::detail::widget_data_paint(
                     status = sao_ui_paint_ctx_fill_rect(
                         context, static_cast<float>(x) + width * start, static_cast<float>(y),
                         width * (end - start), static_cast<float>(height),
-                        segment.fill_argb == 0 ? 0xff4ea5ffU : segment.fill_argb);
+                        segment.fill_argb == 0
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                            : segment.fill_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
                 }
                 return SAO_STATUS_OK;
             }
-            uint32_t fill = spec.fill_argb == 0 ? 0xff4ea5ffU : spec.fill_argb;
+            uint32_t fill =
+                spec.fill_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                    : spec.fill_argb;
             if (spec.style == SAO_UI_PROGRESS_HP_RAMP) {
                 if (ratio < 0.25F && spec.fill_low_argb != 0)
                     fill = spec.fill_low_argb;
@@ -870,9 +896,10 @@ sao_status_t sao::ui::detail::widget_data_paint(
             }
             if (ratio <= 0.0F)
                 return SAO_STATUS_OK;
-            return sao_ui_paint_ctx_fill_rect(
+            return sao::ui::detail::paint_rounded_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
-                std::max(1.0F, width * ratio), static_cast<float>(height), fill);
+                std::max(1.0F, width * ratio), static_cast<float>(height),
+                static_cast<float>(std::max(0, spec.radius_px)), fill);
         }
         case kGaugeTag: {
             SaoUiGaugeSpec spec{};
@@ -892,20 +919,27 @@ sao_status_t sao::ui::detail::widget_data_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.center_argb == 0 ? 0xff1d2430U : spec.center_argb);
+                spec.center_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                    : spec.center_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             status = sao_ui_paint_ctx_fill_ellipse(
                 context, static_cast<float>(left), static_cast<float>(top),
                 static_cast<float>(diameter), static_cast<float>(diameter),
-                spec.track_argb == 0 ? 0xff39485cU : spec.track_argb);
+                spec.track_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                    : spec.track_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t inner = std::max(1, diameter - std::max(2, spec.thickness_px) * 2);
             status = sao_ui_paint_ctx_fill_ellipse(
                 context, static_cast<float>(left + (diameter - inner) / 2),
                 static_cast<float>(top + (diameter - inner) / 2), static_cast<float>(inner),
-                static_cast<float>(inner), spec.center_argb == 0 ? 0xff1d2430U : spec.center_argb);
+                static_cast<float>(inner),
+                spec.center_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                    : spec.center_argb);
             if (status != SAO_STATUS_OK || ratio <= 0.0F)
                 return status;
             const int32_t indicator = std::max(2, static_cast<int32_t>(std::lround(inner * ratio)));
@@ -913,7 +947,9 @@ sao_status_t sao::ui::detail::widget_data_paint(
                 context, static_cast<float>(left + (diameter - indicator) / 2),
                 static_cast<float>(top + (diameter - indicator) / 2),
                 static_cast<float>(indicator), static_cast<float>(indicator),
-                spec.fill_argb == 0 ? 0xff4ea5ffU : spec.fill_argb);
+                spec.fill_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                    : spec.fill_argb);
         }
         case kBadgeTag: {
             SaoUiStatusBadgeSpec spec{};
@@ -926,17 +962,29 @@ sao_status_t sao::ui::detail::widget_data_paint(
                 spec = state->spec;
                 text = state->text;
             }
-            sao_status_t status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height),
-                spec.fill_argb == 0 ? 0xff273447U : spec.fill_argb);
+            const int32_t radius = spec.radius_px > 0
+                                       ? spec.radius_px
+                                       : std::min(height / 2,
+                                                  sao::ui::detail::panel_theme_metric(
+                                                      SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
+            sao_status_t status = paint_rounded_box(
+                context, x, y, width, height,
+                spec.fill_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.fill_argb,
+                spec.border_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                    : spec.border_argb,
+                radius);
             if (status != SAO_STATUS_OK)
                 return status;
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
                 static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
                 static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
-                spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb);
+                spec.fg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                    : spec.fg_argb);
         }
         case kTooltipTag: {
             SaoUiTooltipSpec spec{};
@@ -949,17 +997,24 @@ sao_status_t sao::ui::detail::widget_data_paint(
                 spec = state->spec;
                 text = state->text;
             }
-            sao_status_t status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0 ? 0xee1d2430U : spec.bg_argb);
+            sao_status_t status = paint_rounded_box(
+                context, x, y, width, height,
+                spec.bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.bg_argb,
+                spec.border_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                    : spec.border_argb,
+                sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
             if (status != SAO_STATUS_OK)
                 return status;
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
                 static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
                 static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
-                spec.fg_argb == 0 ? 0xfff0f4faU : spec.fg_argb);
+                spec.fg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                    : spec.fg_argb);
         }
         case kMoreTag: {
             SaoUiMoreIndicatorSpec spec{};
@@ -977,7 +1032,9 @@ sao_status_t sao::ui::detail::widget_data_paint(
                 context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
                 static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
                 static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
-                spec.fg_argb == 0 ? 0xff8f9aaaU : spec.fg_argb);
+                spec.fg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                    : spec.fg_argb);
         }
         case kMetricTag: {
             SaoUiMetricSpec spec{};
@@ -996,7 +1053,10 @@ sao_status_t sao::ui::detail::widget_data_paint(
             }
             sao_status_t status = sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + 2), static_cast<float>(y + 2), label.c_str(),
-                10.0F, spec.label_argb == 0 ? 0xff8f9aaaU : spec.label_argb);
+                10.0F,
+                spec.label_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                    : spec.label_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             const std::string displayed = value + (unit.empty() ? "" : " " + unit);
@@ -1004,7 +1064,9 @@ sao_status_t sao::ui::detail::widget_data_paint(
                 context, static_cast<float>(x + 2), static_cast<float>(y + height / 2),
                 displayed.c_str(),
                 static_cast<float>(spec.value_font_size_px > 0 ? spec.value_font_size_px : 14),
-                spec.value_argb == 0 ? 0xfff0f4faU : spec.value_argb);
+                spec.value_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                    : spec.value_argb);
         }
         case kEmptyStateTag: {
             SaoUiEmptyStateSpec spec{};
@@ -1021,13 +1083,18 @@ sao_status_t sao::ui::detail::widget_data_paint(
             }
             sao_status_t status = sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + 2), static_cast<float>(y + 2), title.c_str(),
-                14.0F, spec.title_argb == 0 ? 0xfff0f4faU : spec.title_argb);
+                14.0F,
+                spec.title_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                    : spec.title_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + 2), static_cast<float>(y + height / 2),
                 detail.c_str(), 11.0F,
-                spec.detail_argb == 0 ? 0xff8f9aaaU : spec.detail_argb);
+                spec.detail_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                    : spec.detail_argb);
         }
         default:
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;

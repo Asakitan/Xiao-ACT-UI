@@ -199,13 +199,22 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_create(
     const SaoCompositorConfig* config,
     sao_ui_compositor_handle_t* out_handle);
 
-// Render-thread-affine. A call from any other thread is a safe no-op: the
-// handle remains valid and must be destroyed again on the thread that created
-// the compositor. A call made reentrantly from a render/fade callback during
-// present is also a safe no-op and must be retried after present returns.
-// Before the owner-thread call, the caller must stop and join every concurrent
-// compositor/layer API user. The owner-thread call flushes both active and
-// pending layer resources before releasing compositor COM.
+// Owner-thread preflight for transactional lifetime hand-off. This performs
+// no mutation. CANCELLED means present/input work still owns compositor state.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_destroy_preflight(
+    sao_ui_compositor_handle_t handle);
+
+// Render-thread-affine retryable teardown. ACCESS_DENIED means the caller is
+// not the compositor owner thread. CANCELLED means presentation or an input
+// callback is still in flight. Any failure preserves the handle and remaining
+// ownership for a later retry. A successful host-bound teardown first clears
+// the host input RGN, restores passthrough, and only then detaches callbacks.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
+    sao_ui_compositor_handle_t handle);
+
+// Compatibility wrapper for callers compiled against the historical void
+// destroy contract. It ignores the retryable status; callers that own a handle
+// must use sao_ui_compositor_try_destroy before clearing it.
 SAO_UI_API void SAO_UI_CALL sao_ui_compositor_destroy(
     sao_ui_compositor_handle_t handle);
 
@@ -215,6 +224,12 @@ SAO_UI_API sao_ui_overlay_host_handle_t SAO_UI_CALL sao_ui_compositor_host(
 
 SAO_UI_API void* SAO_UI_CALL sao_ui_compositor_host_hwnd(
     sao_ui_compositor_handle_t handle);
+
+// Validate that the caller is the compositor owner/render thread. Process-
+// level binders use this before borrowing a compositor whose lifetime they do
+// not own.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_require_owner_thread(
+    sao_ui_compositor_handle_t compositor);
 
 // ── Layer lifecycle ─────────────────────────────────────────────
 
@@ -364,6 +379,33 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_input_callbacks(
     sao_ui_layer_scroll_fn_t scroll_fn,
     void* user_data);
 
+// Central host input routing. Coordinates use the overlay host's screen-space
+// convention; callbacks receive layer-local coordinates. The compositor walks
+// visible interactive layers from highest to lowest z and invokes callbacks
+// after releasing its state mutex.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_hit_test(
+    sao_ui_compositor_handle_t compositor,
+    int32_t screen_x,
+    int32_t screen_y,
+    bool* out_hit);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
+    sao_ui_compositor_handle_t compositor,
+    uint32_t message,
+    int32_t screen_x,
+    int32_t screen_y,
+    int32_t button,
+    int32_t wheel_delta);
+
+// Run cleanup after the outermost current input-dispatch batch has released
+// all callbacks captured by that batch. If no input batch is active, the task
+// runs synchronously. The task may destroy the compositor.
+typedef void (SAO_UI_CALL* sao_ui_compositor_post_input_fn_t)(void* user_data);
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_post_input(
+    sao_ui_compositor_handle_t compositor,
+    sao_ui_compositor_post_input_fn_t fn,
+    void* user_data);
+
 // Route this interactive layer's input via a per-layer input proxy
 // (Tk-toplevel-style invisible window with LWA_COLORKEY hit shape)
 // so the host stays click-through everywhere.  See
@@ -387,6 +429,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_disable_input_proxy(
 // Returns SAO_STATUS_ERR_DEVICE_LOST on TDR — caller tears down
 // bridge + recreates.  Called every frame from the render thread.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_present(
+    sao_ui_compositor_handle_t compositor);
+
+// One production frame for the single host-bound compositor: present the
+// flattened layer tree, publish SetWindowRgn/input mode, and enforce z-order.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_tick(
     sao_ui_compositor_handle_t compositor);
 
 // Compose the current visible layers into a caller-owned premultiplied BGRA

@@ -650,6 +650,65 @@ sao_ui_input_router_deep_destroy(sao_ui_input_router_deep_handle_t handle) {
 }
 
 extern "C" sao_status_t SAO_UI_CALL
+sao_ui_input_router_deep_try_destroy(sao_ui_input_router_deep_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_OK;
+    try {
+        auto& registry = router_handle_registry();
+        {
+            std::lock_guard<std::mutex> registry_guard(registry.mu);
+            if (!registry.active.contains(handle))
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lifecycle_guard(handle->lifecycle_mu);
+            if (!handle->accepting || handle->retired)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            if (handle->in_flight != 0)
+                return SAO_UI_STATUS_ERR_BUSY;
+            handle->accepting = false;
+            handle->retired = true;
+            handle->finalization_started = true;
+            registry.active.erase(handle);
+        }
+#if defined(_WIN32)
+        if (::GetCapture() != nullptr)
+            ::ReleaseCapture();
+#endif
+        finalize_router(handle);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_deep_rebind_compositor(
+    sao_ui_input_router_deep_handle_t handle,
+    sao_ui_compositor_handle_t expected_compositor,
+    sao_ui_compositor_handle_t replacement_compositor) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        auto& registry = router_handle_registry();
+        std::lock_guard<std::mutex> registry_guard(registry.mu);
+        if (!registry.active.contains(handle))
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard<std::mutex> lifecycle_guard(handle->lifecycle_mu);
+        if (!handle->accepting || handle->retired || handle->finalized ||
+            handle->finalization_started) {
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        if (handle->in_flight != 0)
+            return SAO_UI_STATUS_ERR_BUSY;
+        std::lock_guard<std::mutex> state_guard(handle->mu);
+        if (handle->compositor != expected_compositor)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        handle->compositor = replacement_compositor;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
 sao_ui_input_router_feed_raw_win32(sao_ui_input_router_deep_handle_t handle, uint32_t msg,
                                    uint64_t wparam, int64_t lparam, bool* out_consumed) {
     if (out_consumed != nullptr)

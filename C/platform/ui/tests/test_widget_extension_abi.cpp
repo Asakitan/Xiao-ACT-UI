@@ -6,6 +6,7 @@
 #include "sao/ui/widget_kit.h"
 #include "sao/ui/widget_table.h"
 #include "sao/ui/widget_text.h"
+#include "sao/ui/theme.h"
 
 #include <algorithm>
 #include <array>
@@ -67,6 +68,13 @@ bool pixels_differ(const std::vector<Pixel>& left, const std::vector<Pixel>& rig
     return !std::equal(left.begin(), left.end(), right.begin(), [](const Pixel& a, const Pixel& b) {
         return a.b == b.b && a.g == b.g && a.r == b.r && a.a == b.a;
     });
+}
+
+bool pixel_matches(const Pixel& pixel, uint32_t argb) {
+    return pixel.a == static_cast<uint8_t>((argb >> 24U) & 0xffU) &&
+           pixel.r == static_cast<uint8_t>((argb >> 16U) & 0xffU) &&
+           pixel.g == static_cast<uint8_t>((argb >> 8U) & 0xffU) &&
+           pixel.b == static_cast<uint8_t>(argb & 0xffU);
 }
 
 struct EventRecorder {
@@ -286,6 +294,138 @@ TEST_CASE("generic widget props reject invalid JSON transactionally and decode R
     CHECK(std::string(text) == "stable");
 
     sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("generic widget theme overrides survive props and theme swaps",
+          "[ui][widget_extension][d2d][theme][precedence]") {
+    SaoUiThemeId original_theme = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active_id(&original_theme) == SAO_STATUS_OK);
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ROUNDED_PANEL, nullptr, &widget) ==
+            SAO_STATUS_OK);
+
+    constexpr char initial[] = R"({"fill":"#102030","radius":0})";
+    REQUIRE(sao_ui_widget_apply_props(
+                widget, reinterpret_cast<const uint8_t*>(initial), sizeof(initial) - 1U) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_set_theme_token(widget, "APP_CARD", 0xffd05020U) ==
+            SAO_STATUS_OK);
+    auto pixels = paint_snapshot(widget, 16, 16);
+    CHECK(pixel_matches(pixels[8U * 16U + 8U], 0xffd05020U));
+
+    constexpr char replacement[] = R"({"fill":"#204080","radius":0})";
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(replacement),
+                                      sizeof(replacement) - 1U) == SAO_STATUS_OK);
+    const SaoUiThemeId alternate =
+        original_theme == SAO_UI_THEME_LIGHT ? SAO_UI_THEME_DARK : SAO_UI_THEME_LIGHT;
+    REQUIRE(sao_ui_theme_set_active_id(alternate) == SAO_STATUS_OK);
+    pixels = paint_snapshot(widget, 16, 16);
+    CHECK(pixel_matches(pixels[8U * 16U + 8U], 0xffd05020U));
+
+    REQUIRE(sao_ui_widget_clear_theme_token(widget, "APP_CARD") == SAO_STATUS_OK);
+    pixels = paint_snapshot(widget, 16, 16);
+    CHECK(pixel_matches(pixels[8U * 16U + 8U], 0xff204080U));
+    REQUIRE(sao_ui_widget_set_theme_token(widget, "fill", 0xff20a050U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(initial),
+                                      sizeof(initial) - 1U) == SAO_STATUS_OK);
+    pixels = paint_snapshot(widget, 16, 16);
+    CHECK(pixel_matches(pixels[8U * 16U + 8U], 0xff20a050U));
+
+    REQUIRE(sao_ui_theme_set_active_id(original_theme) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("typed rounded widgets leave visual corners transparent",
+          "[ui][widget_extension][paint][typed][radius]") {
+    constexpr uint32_t face = 0xffc04020U;
+    const auto require_rounded_face = [](sao_ui_widget_handle_t widget) {
+        const auto pixels = paint_snapshot(widget, 32, 24);
+        CHECK(pixels.front().a == 0U);
+        CHECK(pixel_matches(pixels[12U * 32U + 16U], face));
+    };
+
+    SECTION("button") {
+        SaoUiButtonSpec spec{};
+        spec.text_utf8 = "";
+        spec.kind = SAO_UI_BTN_NORMAL;
+        spec.radius_px = 8;
+        spec.colors.fill_argb = face;
+        spec.colors.border_argb = face;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_button_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        require_rounded_face(widget);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("icon button") {
+        const uint8_t icon[] = {0, 0, 0, 0};
+        SaoUiIconButtonSpec spec{};
+        spec.icon_bgra_pixels = icon;
+        spec.icon_width = 1;
+        spec.icon_height = 1;
+        spec.icon_stride = 4;
+        spec.radius_px = 8;
+        spec.kind = SAO_UI_BTN_NORMAL;
+        spec.colors.fill_argb = face;
+        spec.colors.border_argb = face;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_icon_button_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        require_rounded_face(widget);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("dropdown") {
+        SaoUiDropdownButtonSpec spec{};
+        spec.text_utf8 = "";
+        spec.kind = SAO_UI_BTN_NORMAL;
+        spec.button_colors.fill_argb = face;
+        spec.button_colors.border_argb = face;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_dropdown_button_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        require_rounded_face(widget);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("badge") {
+        SaoUiStatusBadgeSpec spec{};
+        spec.text_utf8 = "";
+        spec.radius_px = 8;
+        spec.fill_argb = face;
+        spec.border_argb = face;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_status_badge_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        require_rounded_face(widget);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("tooltip") {
+        sao_ui_widget_handle_t target = nullptr;
+        REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ROUNDED_PANEL, nullptr, &target) ==
+                SAO_STATUS_OK);
+        SaoUiTooltipSpec spec{};
+        spec.text_utf8 = "";
+        spec.bg_argb = face;
+        spec.border_argb = face;
+        sao_ui_widget_handle_t tooltip = nullptr;
+        REQUIRE(sao_ui_tooltip_attach(target, &spec, &tooltip) == SAO_STATUS_OK);
+        require_rounded_face(tooltip);
+        sao_ui_widget_destroy(tooltip);
+        sao_ui_widget_destroy(target);
+    }
+
+    SECTION("progress") {
+        SaoUiProgressBarSpec spec{};
+        spec.value = 1.0F;
+        spec.max_value = 1.0F;
+        spec.style = SAO_UI_PROGRESS_FLAT;
+        spec.radius_px = 8;
+        spec.bg_argb = face;
+        spec.fill_argb = face;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_progress_bar_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        require_rounded_face(widget);
+        sao_ui_widget_destroy(widget);
+    }
 }
 
 TEST_CASE("unified widget ABI rejects cross-family and stale handles",

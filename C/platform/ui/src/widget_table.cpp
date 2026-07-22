@@ -21,6 +21,7 @@
 #include "sao/ui/widget_table.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -1658,7 +1659,9 @@ sao_status_t sao::ui::detail::widget_table_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.body_bg_argb == 0 ? 0xff1d2430U : spec.body_bg_argb);
+                spec.body_bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                    : spec.body_bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             int32_t cursor_y = y;
@@ -1667,7 +1670,9 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 status = sao_ui_paint_ctx_fill_rect(
                     context, static_cast<float>(x), static_cast<float>(cursor_y),
                     static_cast<float>(width), static_cast<float>(header_height),
-                    spec.header_bg_argb == 0 ? 0xff293a52U : spec.header_bg_argb);
+                    spec.header_bg_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                        : spec.header_bg_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
                 const int32_t column_width = columns.empty()
@@ -1681,7 +1686,10 @@ sao_status_t sao::ui::detail::widget_table_paint(
                         context, static_cast<float>(x + static_cast<int32_t>(index) * column_width + 2),
                         static_cast<float>(cursor_y + 2), columns[index].title.c_str(), 10.0F,
                         columns[index].header_fg_argb == 0
-                            ? (spec.header_fg_argb == 0 ? 0xfff0f4faU : spec.header_fg_argb)
+                            ? (spec.header_fg_argb == 0
+                                   ? sao::ui::detail::panel_theme_color(
+                                         SAO_UI_TOKEN_APP_TEXT)
+                                   : spec.header_fg_argb)
                             : columns[index].header_fg_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
@@ -1700,12 +1708,16 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 uint32_t row_background = row.row_bg_override_argb;
                 if (row_background == 0) {
                     if (row.highlight)
-                        row_background = 0xff2f4f72U;
+                        row_background =
+                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
                     else if (spec.zebra_stripes && (row_index % 2U) != 0U)
-                        row_background = 0xff222c3aU;
+                        row_background =
+                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD);
                     else
-                        row_background = spec.body_bg_argb == 0 ? 0xff1d2430U
-                                                                : spec.body_bg_argb;
+                        row_background =
+                            spec.body_bg_argb == 0
+                                ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                                : spec.body_bg_argb;
                 }
                 status = sao_ui_paint_ctx_fill_rect(
                     context, static_cast<float>(x), static_cast<float>(cursor_y),
@@ -1732,17 +1744,17 @@ sao_status_t sao::ui::detail::widget_table_paint(
                     default:
                         break;
                     }
-                    const uint32_t foreground = row.dim
-                                                    ? 0xff687587U
-                                                    : (cell.fg_argb != 0
-                                                           ? cell.fg_argb
-                                                           : (row.row_fg_override_argb != 0
-                                                                  ? row.row_fg_override_argb
-                                                                  : (columns[cell_index]
-                                                                                 .cell_fg_argb == 0
-                                                                         ? 0xfff0f4faU
-                                                                         : columns[cell_index]
-                                                                               .cell_fg_argb)));
+                    const uint32_t foreground =
+                        row.dim
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                            : (cell.fg_argb != 0
+                                   ? cell.fg_argb
+                                   : (row.row_fg_override_argb != 0
+                                          ? row.row_fg_override_argb
+                                          : (columns[cell_index].cell_fg_argb == 0
+                                                 ? sao::ui::detail::panel_theme_color(
+                                                       SAO_UI_TOKEN_APP_TEXT)
+                                                 : columns[cell_index].cell_fg_argb)));
                     status = sao_ui_paint_ctx_draw_utf8(
                         context,
                         static_cast<float>(x + static_cast<int32_t>(cell_index) * column_width + 2),
@@ -1772,7 +1784,9 @@ sao_status_t sao::ui::detail::widget_table_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.body_bg_argb == 0 ? 0xff1d2430U : spec.body_bg_argb);
+                spec.body_bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                    : spec.body_bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t row_height = std::max(1, spec.row_height_px);
@@ -1785,7 +1799,9 @@ sao_status_t sao::ui::detail::widget_table_paint(
                     status = sao_ui_paint_ctx_fill_rect(
                         context, static_cast<float>(x), static_cast<float>(row_y),
                         static_cast<float>(width), static_cast<float>(row_height),
-                        node.node_id == selected ? 0xff2f4f72U : node.bg_argb);
+                        node.node_id == selected
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                            : node.bg_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
                 }
@@ -1800,14 +1816,18 @@ sao_status_t sao::ui::detail::widget_table_paint(
                         context, static_cast<float>(x + indent + 2),
                         static_cast<float>(row_y + row_height / 2 - 1),
                         static_cast<float>(caret), 2.0F,
-                        spec.caret_argb == 0 ? 0xff75849aU : spec.caret_argb);
+                        spec.caret_argb == 0
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                            : spec.caret_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
                 }
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(x + indent + caret + 5),
                     static_cast<float>(row_y + 2), node.label.c_str(), 10.0F,
-                    node.fg_argb == 0 ? 0xfff0f4faU : node.fg_argb);
+                    node.fg_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                        : node.fg_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }

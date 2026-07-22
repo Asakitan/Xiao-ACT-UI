@@ -18,6 +18,7 @@
 //   * gpu_overlay/z_order.py            — z_class + z_within_class
 
 #include "sao/ui/panel_sdk.h"
+#include "sao/ui/theme.h"
 #include "sao/ui/widget_kit.h"
 
 #include "widget_typed_internal.h"
@@ -45,6 +46,9 @@
 namespace {
 
 using json = nlohmann::json;
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_apply_theme_override_(
+    sao_ui_panel_handle_t panel, const uint8_t* override_json_utf8, size_t override_len);
 
 std::atomic<int32_t> g_panel_publish_failure_point{0};
 std::atomic_size_t g_geometry_worker_count{0};
@@ -466,7 +470,15 @@ void initialize_body_model(BodyRecord& body) {
     root.id = 1;
     root.layout_mode = SAO_UI_LAYOUT_VERTICAL;
     sao_ui_layout_spec_defaults(&root.spec);
-    root.spec.gap_px = 2;
+    SaoUiThemeId theme_id = SAO_UI_THEME_DARK;
+    (void)sao_ui_theme_get_active_id(&theme_id);
+    const int32_t padding =
+        sao_ui_theme_resolve_metric(theme_id, SAO_UI_METRIC_PADDING_M);
+    root.spec.pad_top_px = padding;
+    root.spec.pad_right_px = padding;
+    root.spec.pad_bottom_px = padding;
+    root.spec.pad_left_px = padding;
+    root.spec.gap_px = sao_ui_theme_resolve_metric(theme_id, SAO_UI_METRIC_GAP_S);
     body.model.push_back(std::move(root));
     body.actual_to_model.emplace_back(body.root, 1);
 }
@@ -638,8 +650,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(sao_ui_compositor_hand
         sao_status_t status = sao_ui_panel_create(compositor, &runtime_config, &rec->runtime_panel);
         if (status != SAO_STATUS_OK)
             return status;
+        if (!rec->theme_override_json.empty()) {
+            status = sao_ui_panel_apply_theme_override_(
+                rec->runtime_panel,
+                reinterpret_cast<const uint8_t*>(rec->theme_override_json.data()),
+                rec->theme_override_json.size());
+        }
         status =
-            sao_ui_panel_get_layout_tree(rec->runtime_panel, &rec->body->tree, &rec->body->root);
+            status == SAO_STATUS_OK
+                ? sao_ui_panel_get_layout_tree(rec->runtime_panel, &rec->body->tree,
+                                               &rec->body->root)
+                : status;
         rec->geometry_persistence.runtime_panel = rec->runtime_panel;
         if (status == SAO_STATUS_OK)
             status = sao_ui_panel_set_event_handler(rec->runtime_panel, &runtime_panel_event,
@@ -1335,6 +1356,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_theme_override(
         const auto rec = registered_panel(panel);
         if (rec == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
+        sao_ui_panel_handle_t runtime_panel = nullptr;
+        {
+            std::lock_guard lock(rec->mutex);
+            if (!rec->active)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            runtime_panel = rec->runtime_panel;
+        }
+        const sao_status_t apply_status = sao_ui_panel_apply_theme_override_(
+            runtime_panel, override_json_utf8, override_len);
+        if (apply_status != SAO_STATUS_OK)
+            return apply_status;
         std::lock_guard lock(rec->mutex);
         if (!rec->active)
             return SAO_STATUS_ERR_HANDLE_INVALID;

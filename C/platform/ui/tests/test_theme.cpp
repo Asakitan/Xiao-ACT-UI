@@ -5,8 +5,13 @@
 // registry fires exactly on active-theme transitions.
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -247,6 +252,162 @@ TEST_CASE("theme_change_callback_fires_on_set_active", "[ui][theme][host]") {
     REQUIRE(sao_ui_theme_register_change_callback(nullptr, nullptr, &bogus)
             == SAO_STATUS_ERR_INVALID_ARGUMENT);
     REQUIRE(bogus == SAO_UI_THEME_CALLBACK_HANDLE_INVALID);
+}
+
+TEST_CASE("theme callback unregister drains an in-flight callback",
+          "[ui][theme][callback][concurrency]") {
+    using namespace std::chrono_literals;
+    struct BlockingState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool entered{};
+        bool release{};
+        std::atomic<int> calls{0};
+    } state;
+    const auto callback = [](SaoUiThemeId, void* user_data) {
+        auto* blocking = static_cast<BlockingState*>(user_data);
+        blocking->calls.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock lock(blocking->mutex);
+        blocking->entered = true;
+        blocking->cv.notify_all();
+        blocking->cv.wait(lock, [blocking] { return blocking->release; });
+    };
+
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_theme_callback_handle_t handle = SAO_UI_THEME_CALLBACK_HANDLE_INVALID;
+    REQUIRE(sao_ui_theme_register_change_callback(callback, &state, &handle) == SAO_STATUS_OK);
+
+    std::atomic<sao_status_t> setter_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread setter([&setter_status] {
+        setter_status.store(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT));
+    });
+    {
+        std::unique_lock lock(state.mutex);
+        REQUIRE(state.cv.wait_for(lock, 1s, [&state] { return state.entered; }));
+    }
+    std::atomic_bool unregister_returned{false};
+    std::atomic<sao_status_t> unregister_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread unregister_thread([&] {
+        unregister_status.store(sao_ui_theme_unregister_change_callback(handle));
+        unregister_returned.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(40ms);
+    CHECK_FALSE(unregister_returned.load(std::memory_order_acquire));
+    {
+        std::lock_guard lock(state.mutex);
+        state.release = true;
+    }
+    state.cv.notify_all();
+    setter.join();
+    unregister_thread.join();
+    CHECK(setter_status.load() == SAO_STATUS_OK);
+    CHECK(unregister_status.load() == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    CHECK(state.calls.load(std::memory_order_relaxed) == 1);
+}
+
+TEST_CASE("theme callback can unregister itself without deadlock",
+          "[ui][theme][callback][reentrant]") {
+    struct SelfUnregisterState {
+        sao_ui_theme_callback_handle_t handle{SAO_UI_THEME_CALLBACK_HANDLE_INVALID};
+        sao_status_t status{SAO_STATUS_ERR_UNKNOWN};
+        int calls{};
+    } state;
+    const auto callback = [](SaoUiThemeId, void* user_data) {
+        auto* self = static_cast<SelfUnregisterState*>(user_data);
+        ++self->calls;
+        self->status = sao_ui_theme_unregister_change_callback(self->handle);
+    };
+
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_register_change_callback(callback, &state, &state.handle) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+    CHECK(state.status == SAO_STATUS_OK);
+    CHECK(state.calls == 1);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    CHECK(state.calls == 1);
+}
+
+TEST_CASE("reentrant theme changes are queued and dispatched in order",
+          "[ui][theme][callback][reentrant][queue]") {
+    struct ReentrantState {
+        std::vector<SaoUiThemeId> observed;
+        sao_status_t nested_status{SAO_STATUS_ERR_UNKNOWN};
+        bool nested_requested{};
+    } state;
+    const auto callback = [](SaoUiThemeId theme_id, void* user_data) {
+        auto* reentrant = static_cast<ReentrantState*>(user_data);
+        reentrant->observed.push_back(theme_id);
+        if (theme_id == SAO_UI_THEME_LIGHT && !reentrant->nested_requested) {
+            reentrant->nested_requested = true;
+            reentrant->nested_status = sao_ui_theme_set_active_id(SAO_UI_THEME_GLASS);
+        }
+    };
+
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_theme_callback_handle_t handle = SAO_UI_THEME_CALLBACK_HANDLE_INVALID;
+    REQUIRE(sao_ui_theme_register_change_callback(callback, &state, &handle) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+    CHECK(state.nested_status == SAO_STATUS_OK);
+    REQUIRE(state.observed ==
+            std::vector<SaoUiThemeId>{SAO_UI_THEME_LIGHT, SAO_UI_THEME_GLASS});
+    SaoUiThemeId active = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active_id(&active) == SAO_STATUS_OK);
+    CHECK(active == SAO_UI_THEME_GLASS);
+    REQUIRE(sao_ui_theme_unregister_change_callback(handle) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+}
+
+TEST_CASE("theme callbacks execute synchronously on each setter thread",
+          "[ui][theme][callback][concurrency][thread]") {
+    struct ThreadState {
+        std::mutex mutex;
+        std::vector<std::pair<SaoUiThemeId, std::thread::id>> observed;
+    } state;
+    const auto callback = [](SaoUiThemeId theme_id, void* user_data) {
+        auto* thread_state = static_cast<ThreadState*>(user_data);
+        std::lock_guard lock(thread_state->mutex);
+        thread_state->observed.emplace_back(theme_id, std::this_thread::get_id());
+    };
+
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_theme_callback_handle_t handle = SAO_UI_THEME_CALLBACK_HANDLE_INVALID;
+    REQUIRE(sao_ui_theme_register_change_callback(callback, &state, &handle) == SAO_STATUS_OK);
+
+    std::thread::id light_thread_id;
+    sao_status_t light_status = SAO_STATUS_ERR_UNKNOWN;
+    std::thread light_setter([&] {
+        light_thread_id = std::this_thread::get_id();
+        light_status = sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT);
+    });
+    light_setter.join();
+    REQUIRE(light_status == SAO_STATUS_OK);
+    {
+        std::lock_guard lock(state.mutex);
+        REQUIRE(state.observed.size() == 1);
+        CHECK(state.observed.back().first == SAO_UI_THEME_LIGHT);
+        CHECK(state.observed.back().second == light_thread_id);
+    }
+
+    std::thread::id glass_thread_id;
+    sao_status_t glass_status = SAO_STATUS_ERR_UNKNOWN;
+    std::thread glass_setter([&] {
+        glass_thread_id = std::this_thread::get_id();
+        glass_status = sao_ui_theme_set_active_id(SAO_UI_THEME_GLASS);
+    });
+    glass_setter.join();
+    REQUIRE(glass_status == SAO_STATUS_OK);
+    {
+        std::lock_guard lock(state.mutex);
+        REQUIRE(state.observed.size() == 2);
+        CHECK(state.observed.back().first == SAO_UI_THEME_GLASS);
+        CHECK(state.observed.back().second == glass_thread_id);
+    }
+
+    REQUIRE(sao_ui_theme_unregister_change_callback(handle) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
 }
 
 TEST_CASE("theme_token_name_returns_nonempty", "[ui][theme][host]") {

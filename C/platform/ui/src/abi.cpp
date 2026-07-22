@@ -1,6 +1,7 @@
 #include "sao/ui/abi.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -358,34 +359,40 @@ sao_status_t paint_extended_default(
     const float yf = static_cast<float>(y);
     const float wf = static_cast<float>(width);
     const float hf = static_cast<float>(height);
+    const uint32_t surface =
+        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD);
+    const uint32_t accent =
+        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
+    const uint32_t foreground =
+        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT);
     sao_status_t status = sao_ui_paint_ctx_fill_rect(
-        ctx, xf, yf, wf, hf, 0xff273447U);
+        ctx, xf, yf, wf, hf, surface);
     if (status != SAO_STATUS_OK) return status;
 
     if (kind >= SAO_UI_WIDGET_TIME_SERIES_CHART &&
         kind <= SAO_UI_WIDGET_SPARKLINE) {
         status = sao_ui_paint_ctx_stroke_line(
             ctx, xf + 2.0F, yf + hf - 3.0F,
-            xf + wf * 0.4F, yf + hf * 0.35F, 2.0F, 0xff4ea5ffU);
+            xf + wf * 0.4F, yf + hf * 0.35F, 2.0F, accent);
         if (status == SAO_STATUS_OK) {
             status = sao_ui_paint_ctx_stroke_line(
                 ctx, xf + wf * 0.4F, yf + hf * 0.35F,
-                xf + wf - 2.0F, yf + hf * 0.55F, 2.0F, 0xff4ea5ffU);
+                xf + wf - 2.0F, yf + hf * 0.55F, 2.0F, accent);
         }
         return status;
     }
     if (kind == SAO_UI_WIDGET_PROGRESS_BAR || kind == SAO_UI_WIDGET_GAUGE) {
         return sao_ui_paint_ctx_fill_rect(
-            ctx, xf, yf, wf * 0.5F, hf, 0xff4ea5ffU);
+            ctx, xf, yf, wf * 0.5F, hf, accent);
     }
     if (kind >= SAO_UI_WIDGET_LABEL &&
         kind <= SAO_UI_WIDGET_DURATION_LABEL) {
         return sao_ui_paint_ctx_draw_utf8(
             ctx, xf + 2.0F, yf + 2.0F, "widget",
-            std::max(5.0F, std::min(14.0F, hf - 4.0F)), 0xfff0f4faU);
+            std::max(5.0F, std::min(14.0F, hf - 4.0F)), foreground);
     }
     return sao_ui_paint_ctx_fill_rect(
-        ctx, xf, yf, std::min(3.0F, wf), hf, 0xff4ea5ffU);
+        ctx, xf, yf, std::min(3.0F, wf), hf, accent);
 }
 
 void set_size_hint(

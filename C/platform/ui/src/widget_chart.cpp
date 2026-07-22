@@ -13,6 +13,7 @@
 #include "sao/ui/widget_chart.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -1562,7 +1563,9 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+                spec.bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             double min_x = std::numeric_limits<double>::infinity();
@@ -1587,10 +1590,12 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             if (!std::isfinite(min_x))
                 return SAO_STATUS_OK;
             for (size_t index = 0; index < lanes.size(); ++index) {
-                status = paint_polyline(samples[index],
-                                        lanes[index].fill_argb == 0 ? 0xff4ea5ffU
-                                                                    : lanes[index].fill_argb,
-                                        lanes[index].line_width_px, min_x, max_x, min_y, max_y);
+                status = paint_polyline(
+                    samples[index],
+                    lanes[index].fill_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : lanes[index].fill_argb,
+                    lanes[index].line_width_px, min_x, max_x, min_y, max_y);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
@@ -1610,7 +1615,9 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+                spec.bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.bg_argb);
             if (status != SAO_STATUS_OK || bars.empty())
                 return status;
             const size_t visible = spec.max_visible_bars <= 0
@@ -1630,7 +1637,9 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                     status = sao_ui_paint_ctx_fill_rect(
                         context, static_cast<float>(x + 2), y + row_height * index + 1.0F,
                         std::max(1.0F, bar_width), std::max(1.0F, row_height - 2.0F),
-                        bars[index].fill_argb == 0 ? 0xff4ea5ffU : bars[index].fill_argb);
+                        bars[index].fill_argb == 0
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                            : bars[index].fill_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
                 }
@@ -1644,7 +1653,9 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                     context, x + column_width * index + 1.0F,
                     static_cast<float>(y + height - 2) - bar_height,
                     std::max(1.0F, column_width - 2.0F), std::max(1.0F, bar_height),
-                    bars[index].fill_argb == 0 ? 0xff4ea5ffU : bars[index].fill_argb);
+                    bars[index].fill_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : bars[index].fill_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
@@ -1664,7 +1675,9 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0 ? 0xff1d2430U : spec.bg_argb);
+                spec.bg_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                    : spec.bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             double min_x = std::numeric_limits<double>::infinity();
@@ -1686,9 +1699,12 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                 points.reserve(item.points.size());
                 for (const auto& point : item.points)
                     points.emplace_back(point.x, point.y);
-                status = paint_polyline(points,
-                                        item.line_argb == 0 ? 0xff4ea5ffU : item.line_argb,
-                                        item.line_width_px, min_x, max_x, min_y, max_y);
+                status = paint_polyline(
+                    points,
+                    item.line_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : item.line_argb,
+                    item.line_width_px, min_x, max_x, min_y, max_y);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
@@ -1712,10 +1728,14 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             if (points.empty())
                 return SAO_STATUS_OK;
             const auto range = std::minmax_element(values.begin(), values.end());
-            return paint_polyline(points, spec.line_argb == 0 ? 0xff4ea5ffU : spec.line_argb,
-                                  spec.line_width_px, 0.0,
-                                  static_cast<double>(std::max<size_t>(1, values.size() - 1)),
-                                  *range.first, *range.second);
+            return paint_polyline(
+                points,
+                spec.line_argb == 0
+                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                    : spec.line_argb,
+                spec.line_width_px, 0.0,
+                static_cast<double>(std::max<size_t>(1, values.size() - 1)), *range.first,
+                *range.second);
         }
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     } catch (...) {

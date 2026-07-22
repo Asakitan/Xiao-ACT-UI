@@ -29,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -39,6 +40,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -80,6 +82,32 @@ static_assert(sizeof(sao_ui_layer_handle_t) == sizeof(void*),
 
 struct PendingFadeCall {
     sao_ui_layer_fade_done_fn_t fn{nullptr};
+    void* user{nullptr};
+};
+
+struct sao_ui_layer_s;
+struct sao_ui_compositor_s;
+
+struct InputCallbackInvocation {
+    enum class Kind { cursor, leave, button, scroll } kind{};
+    sao_ui_compositor_s* compositor{};
+    sao_ui_layer_s* layer{};
+    uint64_t generation{};
+    void* user_data{};
+    sao_ui_layer_cursor_pos_fn_t cursor{};
+    sao_ui_layer_cursor_leave_fn_t leave{};
+    sao_ui_layer_button_fn_t button{};
+    sao_ui_layer_scroll_fn_t scroll{};
+    float x{};
+    float y{};
+    float scroll_dx{};
+    float scroll_dy{};
+    int32_t button_id{-1};
+    int32_t action{};
+};
+
+struct PostInputTask {
+    sao_ui_compositor_post_input_fn_t fn{nullptr};
     void* user{nullptr};
 };
 
@@ -131,6 +159,10 @@ struct sao_ui_layer_s {
     sao_ui_layer_button_fn_t button_fn{nullptr};
     sao_ui_layer_scroll_fn_t scroll_fn{nullptr};
     void*       input_user_data{nullptr};
+    uint64_t    input_callback_generation{1};
+    size_t      input_callbacks_in_flight{0};
+    std::unordered_map<uint64_t, size_t> input_callbacks_by_generation;
+    bool        detached_payload_released{false};
     bool        input_proxy_enabled{false};
 
     // Back-pointer to the owning compositor -- used by
@@ -155,7 +187,10 @@ struct sao_ui_compositor_s {
     // would make later stale-handle validation dereference freed memory.
     size_t                         released_pending_count{0};
     std::vector<PendingFadeCall>   pending_fade_callbacks;
+    std::vector<InputCallbackInvocation> pending_owner_input_callbacks;
+    std::vector<PostInputTask>     post_input_tasks;
     mutable std::mutex           mtx;
+    std::condition_variable      input_callbacks_idle;
     uint64_t                     seq{0};
     sao_ui_d3d11_device_handle_t d3d11_device{nullptr};
     sao_ui_dcomp_bridge_handle_t dcomp_bridge{nullptr};
@@ -164,10 +199,396 @@ struct sao_ui_compositor_s {
     bool                          presented_visible_content{false};
     uint32_t                      last_present_width{0};
     uint32_t                      last_present_height{0};
+    sao_ui_layer_s*               hovered_layer{nullptr};
+    sao_ui_layer_s*               captured_layer{nullptr};
+    int32_t                       captured_button{-1};
+    int32_t                       suppressed_button_up{-1};
+    int32_t                       last_pointer_x{0};
+    int32_t                       last_pointer_y{0};
+    size_t                        input_dispatch_depth{0};
+    bool                          has_pointer{false};
+    bool                          host_callbacks_bound{false};
     std::atomic_bool              present_in_progress{false};
+    sao_ui_compositor_s*          registry_next{nullptr};
 };
 
 namespace {
+
+std::mutex g_compositor_registry_mutex;
+sao_ui_compositor_s* g_compositor_registry_head = nullptr;
+std::atomic_bool g_fail_next_compositor_destroy_after_preflight{};
+
+bool compositor_registered_locked(const sao_ui_compositor_s* compositor) noexcept {
+    for (auto* current = g_compositor_registry_head; current != nullptr;
+         current = current->registry_next) {
+        if (current == compositor)
+            return true;
+    }
+    return false;
+}
+
+void register_compositor(sao_ui_compositor_s* compositor) {
+    std::lock_guard lock(g_compositor_registry_mutex);
+    compositor->registry_next = g_compositor_registry_head;
+    g_compositor_registry_head = compositor;
+}
+
+void unregister_compositor(sao_ui_compositor_s* compositor) noexcept {
+    try {
+        std::lock_guard lock(g_compositor_registry_mutex);
+        auto** link = &g_compositor_registry_head;
+        while (*link != nullptr) {
+            if (*link == compositor) {
+                *link = compositor->registry_next;
+                compositor->registry_next = nullptr;
+                return;
+            }
+            link = &(*link)->registry_next;
+        }
+    } catch (...) {
+    }
+}
+
+constexpr uint32_t kMouseMove = 0x0200;
+constexpr uint32_t kLeftButtonDown = 0x0201;
+constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr uint32_t kLeftButtonDoubleClick = 0x0203;
+constexpr uint32_t kRightButtonDown = 0x0204;
+constexpr uint32_t kRightButtonUp = 0x0205;
+constexpr uint32_t kRightButtonDoubleClick = 0x0206;
+constexpr uint32_t kMiddleButtonDown = 0x0207;
+constexpr uint32_t kMiddleButtonUp = 0x0208;
+constexpr uint32_t kMiddleButtonDoubleClick = 0x0209;
+constexpr uint32_t kMouseWheel = 0x020A;
+constexpr uint32_t kCaptureChanged = 0x0215;
+constexpr uint32_t kMouseLeave = 0x02A3;
+constexpr uint32_t kCancelMode = 0x001F;
+constexpr float kWheelDelta = 120.0F;
+
+struct ActiveInputCallback {
+    sao_ui_layer_s* layer{};
+    uint64_t generation{};
+    ActiveInputCallback* previous{};
+};
+
+thread_local ActiveInputCallback* g_active_input_callback = nullptr;
+
+size_t input_callback_active_count(sao_ui_layer_s* layer, uint64_t generation) noexcept {
+    size_t count = 0;
+    for (const ActiveInputCallback* active = g_active_input_callback; active != nullptr;
+         active = active->previous) {
+        if (active->layer == layer && active->generation == generation)
+            ++count;
+    }
+    return count;
+}
+
+thread_local const InputCallbackInvocation* g_active_input_invocation = nullptr;
+
+bool capture_input_callback_locked(sao_ui_compositor_s* compositor, sao_ui_layer_s* layer,
+                                   InputCallbackInvocation::Kind kind, float x, float y,
+                                   int32_t button_id, int32_t action,
+                                   InputCallbackInvocation* out) {
+    if (layer == nullptr || out == nullptr)
+        return false;
+    InputCallbackInvocation invocation{};
+    invocation.kind = kind;
+    invocation.compositor = compositor;
+    invocation.layer = layer;
+    invocation.generation = layer->input_callback_generation;
+    invocation.user_data = layer->input_user_data;
+    invocation.x = x;
+    invocation.y = y;
+    invocation.button_id = button_id;
+    invocation.action = action;
+    switch (kind) {
+    case InputCallbackInvocation::Kind::cursor:
+        invocation.cursor = layer->cursor_pos_fn;
+        if (invocation.cursor == nullptr)
+            return false;
+        break;
+    case InputCallbackInvocation::Kind::leave:
+        invocation.leave = layer->cursor_leave_fn;
+        if (invocation.leave == nullptr)
+            return false;
+        break;
+    case InputCallbackInvocation::Kind::button:
+        invocation.button = layer->button_fn;
+        if (invocation.button == nullptr)
+            return false;
+        break;
+    case InputCallbackInvocation::Kind::scroll:
+        invocation.scroll = layer->scroll_fn;
+        if (invocation.scroll == nullptr)
+            return false;
+        break;
+    }
+    const auto generation = layer->input_callbacks_by_generation.find(invocation.generation);
+    if (generation == layer->input_callbacks_by_generation.end())
+        return false;
+    ++generation->second;
+    ++layer->input_callbacks_in_flight;
+    *out = invocation;
+    return true;
+}
+
+bool invoke_input_callback(const InputCallbackInvocation& invocation) noexcept {
+    ActiveInputCallback marker{invocation.layer, invocation.generation,
+                               g_active_input_callback};
+    const InputCallbackInvocation* const previous_invocation = g_active_input_invocation;
+    g_active_input_callback = &marker;
+    g_active_input_invocation = &invocation;
+    bool failed = false;
+    try {
+        switch (invocation.kind) {
+        case InputCallbackInvocation::Kind::cursor:
+            invocation.cursor(invocation.x, invocation.y, invocation.user_data);
+            break;
+        case InputCallbackInvocation::Kind::leave:
+            invocation.leave(invocation.user_data);
+            break;
+        case InputCallbackInvocation::Kind::button:
+            invocation.button(invocation.button_id, invocation.action, 0, invocation.x,
+                              invocation.y, invocation.user_data);
+            break;
+        case InputCallbackInvocation::Kind::scroll:
+            invocation.scroll(invocation.scroll_dx, invocation.scroll_dy, invocation.user_data);
+            break;
+        }
+    } catch (...) {
+        failed = true;
+    }
+    g_active_input_invocation = previous_invocation;
+    g_active_input_callback = marker.previous;
+    try {
+        std::lock_guard lock(invocation.compositor->mtx);
+        auto& generations = invocation.layer->input_callbacks_by_generation;
+        const auto found = generations.find(invocation.generation);
+        if (found != generations.end() && --found->second == 0 &&
+            invocation.generation != invocation.layer->input_callback_generation) {
+            generations.erase(found);
+        }
+        if (invocation.layer->input_callbacks_in_flight > 0)
+            --invocation.layer->input_callbacks_in_flight;
+    } catch (...) {
+        failed = true;
+    }
+    invocation.compositor->input_callbacks_idle.notify_all();
+    return !failed;
+}
+
+bool layer_accepts_input_at_locked(const sao_ui_layer_s* layer, int32_t host_x, int32_t host_y,
+                                   float* out_layer_x, float* out_layer_y) {
+    if (layer == nullptr || !layer->visible || !layer->input_enabled || layer->click_through ||
+        layer->input_proxy_enabled || layer->alpha <= 0.0F || layer->width <= 0 ||
+        layer->height <= 0) {
+        return false;
+    }
+    const int64_t local_x = static_cast<int64_t>(host_x) - layer->x;
+    const int64_t local_y = static_cast<int64_t>(host_y) - layer->y;
+    if (local_x < 0 || local_y < 0 || local_x >= layer->width || local_y >= layer->height)
+        return false;
+
+    bool hit = false;
+    if (!layer->input_rects.empty()) {
+        for (const auto& rect : layer->input_rects) {
+            if (local_x >= rect.x && local_y >= rect.y &&
+                local_x < static_cast<int64_t>(rect.x) + rect.width &&
+                local_y < static_cast<int64_t>(rect.y) + rect.height) {
+                hit = true;
+                break;
+            }
+        }
+    } else if (layer->rect_hit || layer->bgra_pixels.empty() || layer->bgra_width == 0 ||
+               layer->bgra_height == 0) {
+        hit = true;
+    } else if (local_x < layer->bgra_width && local_y < layer->bgra_height) {
+        const size_t offset = static_cast<size_t>(local_y) * layer->bgra_stride +
+                              static_cast<size_t>(local_x) * 4U + 3U;
+        hit = offset < layer->bgra_pixels.size() && layer->bgra_pixels[offset] != 0;
+    }
+    if (!hit)
+        return false;
+    if (out_layer_x != nullptr)
+        *out_layer_x = static_cast<float>(local_x);
+    if (out_layer_y != nullptr)
+        *out_layer_y = static_cast<float>(local_y);
+    return true;
+}
+
+void captured_layer_coordinates_locked(const sao_ui_layer_s* layer, int32_t host_x, int32_t host_y,
+                                       float* out_layer_x, float* out_layer_y) noexcept {
+    if (out_layer_x != nullptr)
+        *out_layer_x = static_cast<float>(static_cast<int64_t>(host_x) - layer->x);
+    if (out_layer_y != nullptr)
+        *out_layer_y = static_cast<float>(static_cast<int64_t>(host_y) - layer->y);
+}
+
+void release_captured_layer_locked(sao_ui_compositor_s* compositor,
+                                   bool suppress_button_up) noexcept {
+    if (suppress_button_up && compositor->captured_button >= 0)
+        compositor->suppressed_button_up = compositor->captured_button;
+    compositor->captured_layer = nullptr;
+    compositor->captured_button = -1;
+}
+
+void detach_invalid_input_layer_locked(sao_ui_compositor_s* compositor, sao_ui_layer_s* layer,
+                                       std::vector<InputCallbackInvocation>* invocations) {
+    if (layer == nullptr ||
+        (compositor->hovered_layer != layer && compositor->captured_layer != layer)) {
+        return;
+    }
+    if (compositor->has_pointer &&
+        layer_accepts_input_at_locked(layer, compositor->last_pointer_x,
+                                      compositor->last_pointer_y, nullptr, nullptr)) {
+        return;
+    }
+    if (compositor->hovered_layer == layer)
+        compositor->hovered_layer = nullptr;
+    if (compositor->captured_layer == layer)
+        release_captured_layer_locked(compositor, true);
+    InputCallbackInvocation leave{};
+    if (invocations != nullptr && capture_input_callback_locked(
+                                      compositor, layer,
+                                      InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
+                                      &leave)) {
+        invocations->push_back(leave);
+    }
+}
+
+template <typename Fn>
+sao_status_t mutate_input_layer(sao_ui_layer_handle_t layer, Fn&& fn) noexcept {
+    if (layer == nullptr || layer->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* compositor = layer->owner;
+    std::vector<InputCallbackInvocation> invocations;
+    try {
+        {
+            std::lock_guard lock(compositor->mtx);
+            const auto active = std::find_if(
+                compositor->layers.begin(), compositor->layers.end(),
+                [layer](const std::unique_ptr<sao_ui_layer_s>& candidate) {
+                    return candidate.get() == layer;
+                });
+            if (active == compositor->layers.end())
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            const sao_status_t status = std::forward<Fn>(fn)(compositor, layer);
+            if (status != SAO_STATUS_OK)
+                return status;
+            detach_invalid_input_layer_locked(compositor, layer, &invocations);
+        }
+        if (!invocations.empty() &&
+            std::this_thread::get_id() != compositor->render_thread) {
+            std::lock_guard lock(compositor->mtx);
+            compositor->pending_owner_input_callbacks.insert(
+                compositor->pending_owner_input_callbacks.end(),
+                std::make_move_iterator(invocations.begin()),
+                std::make_move_iterator(invocations.end()));
+            return SAO_STATUS_OK;
+        }
+        bool callback_failed = false;
+        for (const auto& invocation : invocations)
+            callback_failed = !invoke_input_callback(invocation) || callback_failed;
+        return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+bool drain_owner_input_callbacks(sao_ui_compositor_s* compositor) {
+    bool callback_failed = false;
+    for (;;) {
+        std::vector<InputCallbackInvocation> invocations;
+        {
+            std::lock_guard lock(compositor->mtx);
+            invocations.swap(compositor->pending_owner_input_callbacks);
+        }
+        if (invocations.empty())
+            return callback_failed;
+        for (const auto& invocation : invocations)
+            callback_failed = !invoke_input_callback(invocation) || callback_failed;
+    }
+}
+
+std::vector<PostInputTask> end_input_dispatch(sao_ui_compositor_s* compositor) {
+    std::vector<PostInputTask> tasks;
+    std::lock_guard lock(compositor->mtx);
+    if (compositor->input_dispatch_depth > 0)
+        --compositor->input_dispatch_depth;
+    if (compositor->input_dispatch_depth == 0)
+        tasks.swap(compositor->post_input_tasks);
+    return tasks;
+}
+
+void run_post_input_tasks(std::vector<PostInputTask> tasks) noexcept {
+    for (const auto& task : tasks) {
+        try {
+            task.fn(task.user);
+        } catch (...) {
+        }
+    }
+}
+
+struct PendingInputFlushResult {
+    sao_status_t status{SAO_STATUS_OK};
+    bool ran_post_tasks{};
+};
+
+PendingInputFlushResult flush_pending_owner_input(sao_ui_compositor_s* compositor) {
+    {
+        std::lock_guard lock(compositor->mtx);
+        ++compositor->input_dispatch_depth;
+    }
+    const bool callback_failed = drain_owner_input_callbacks(compositor);
+    auto tasks = end_input_dispatch(compositor);
+    const bool ran_tasks = !tasks.empty();
+    run_post_input_tasks(std::move(tasks));
+    return {callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK, ran_tasks};
+}
+
+sao_status_t screen_to_host(sao_ui_compositor_s* compositor, int32_t screen_x, int32_t screen_y,
+                            int32_t* out_host_x, int32_t* out_host_y) {
+    if (out_host_x == nullptr || out_host_y == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (compositor->host == nullptr) {
+        *out_host_x = screen_x;
+        *out_host_y = screen_y;
+        return SAO_STATUS_OK;
+    }
+    SaoOverlayHostState state{};
+    const sao_status_t status = sao_ui_overlay_host_get_state(compositor->host, &state);
+    if (status != SAO_STATUS_OK)
+        return status;
+    const int64_t host_x = static_cast<int64_t>(screen_x) - state.geometry.x;
+    const int64_t host_y = static_cast<int64_t>(screen_y) - state.geometry.y;
+    if (host_x < INT32_MIN || host_x > INT32_MAX || host_y < INT32_MIN || host_y > INT32_MAX)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_host_x = static_cast<int32_t>(host_x);
+    *out_host_y = static_cast<int32_t>(host_y);
+    return SAO_STATUS_OK;
+}
+
+sao_ui_layer_s* top_input_layer_locked(sao_ui_compositor_s* compositor, int32_t host_x,
+                                       int32_t host_y, float* out_layer_x, float* out_layer_y) {
+    for (auto it = compositor->layers.rbegin(); it != compositor->layers.rend(); ++it) {
+        if (layer_accepts_input_at_locked(it->get(), host_x, host_y, out_layer_x, out_layer_y))
+            return it->get();
+    }
+    return nullptr;
+}
+
+bool SAO_UI_CALL compositor_host_hit_test(int32_t screen_x, int32_t screen_y, void* user_data) {
+    bool hit = false;
+    return sao_ui_compositor_hit_test(static_cast<sao_ui_compositor_handle_t>(user_data), screen_x,
+                                      screen_y, &hit) == SAO_STATUS_OK &&
+           hit;
+}
+
+void SAO_UI_CALL compositor_host_mouse(uint32_t message, int32_t screen_x, int32_t screen_y,
+                                       int32_t button, int32_t wheel_delta, void* user_data) {
+    (void)sao_ui_compositor_dispatch_mouse(static_cast<sao_ui_compositor_handle_t>(user_data),
+                                           message, screen_x, screen_y, button, wheel_delta);
+}
 
 constexpr size_t kMaxBgraBufferBytes =
     static_cast<size_t>(SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES);
@@ -263,15 +684,16 @@ void release_detached_layer_payload(sao_ui_layer_s* layer) {
     layer->button_fn = nullptr;
     layer->scroll_fn = nullptr;
     layer->input_user_data = nullptr;
+    layer->detached_payload_released = true;
 }
 
 void flush_pending_layer_destroys_locked(sao_ui_compositor_s* comp) {
-    for (size_t index = comp->released_pending_count;
-         index < comp->pending_layer_destroys.size(); ++index) {
-        release_detached_layer_payload(
-            comp->pending_layer_destroys[index].get());
+    for (const auto& pending : comp->pending_layer_destroys) {
+        if (!pending->detached_payload_released && pending->input_callbacks_in_flight == 0) {
+            release_detached_layer_payload(pending.get());
+            ++comp->released_pending_count;
+        }
     }
-    comp->released_pending_count = comp->pending_layer_destroys.size();
 }
 
 uint8_t scale_alpha(uint8_t value, uint8_t alpha) {
@@ -761,6 +1183,7 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
     };
     std::vector<RenderCall> renders;
     std::vector<PendingFadeCall> done;
+    std::vector<InputCallbackInvocation> input_invocations;
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(comp->mtx);
@@ -778,6 +1201,7 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
                 layer->alpha = layer->fade_from +
                     (layer->fade_target - layer->fade_from) * progress;
                 mark_layer_dirty(layer);
+                detach_invalid_input_layer_locked(comp, layer, &input_invocations);
                 if (progress >= 1.0f) {
                     layer->fade_active = false;
                     if (layer->fade_done_fn != nullptr) {
@@ -796,6 +1220,8 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
     }
     const float seconds = std::chrono::duration<float>(now.time_since_epoch()).count();
     bool callback_failed = false;
+    for (const auto& invocation : input_invocations)
+        callback_failed = !invoke_input_callback(invocation) || callback_failed;
     for (const auto& call : renders) {
         try {
             call.fn(nullptr, seconds, call.user);
@@ -913,75 +1339,138 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_handle = nullptr;
-    // Host can be null in headless/tests; the compositor holds a
-    // reference but headless paths never dereference it.  RGN sync /
-    // presentation paths require a non-null host.
+    try {
+        // Host can be null in headless/tests; the compositor holds a
+        // reference but headless paths never dereference it.  RGN sync /
+        // presentation paths require a non-null host.
+        auto comp = std::unique_ptr<sao_ui_compositor_s>(
+            new (std::nothrow) sao_ui_compositor_s{});
+        if (comp == nullptr)
+            return SAO_STATUS_ERR_UNKNOWN;
+        comp->host = host;
+        if (config != nullptr) {
+            comp->config = *config;
+        } else {
+            comp->config.target_hz = 0;
+            comp->config.enable_temporal_union = true;
+            comp->config.enable_rgn_cache = true;
+        }
 
-    auto* comp = new (std::nothrow) sao_ui_compositor_s{};
-    if (comp == nullptr) {
+        comp->render_thread = std::this_thread::get_id();
+        if (host != nullptr) {
+            sao_status_t status = sao_ui_overlay_host_require_owner_thread(host);
+            if (status != SAO_STATUS_OK)
+                return status;
+            void* const hwnd = sao_ui_overlay_host_hwnd(host);
+            if (hwnd == nullptr)
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+
+            SaoD3d11DeviceConfig d3d_config{};
+            status = sao_ui_d3d11_device_create(&d3d_config, &comp->d3d11_device);
+            if (status != SAO_STATUS_OK)
+                return status;
+
+            SaoDcompBridgeConfig bridge_config{};
+            bridge_config.hwnd = hwnd;
+            bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(comp->d3d11_device);
+            bridge_config.alpha_mode = 1;
+            bridge_config.buffer_count = 2;
+            bridge_config.width = 1;
+            bridge_config.height = 1;
+            status = sao_ui_dcomp_bridge_create(host, &bridge_config, &comp->dcomp_bridge);
+            if (status != SAO_STATUS_OK) {
+                sao_ui_d3d11_device_destroy(comp->d3d11_device);
+                return status;
+            }
+            status = sao_ui_z_order_manager_create(host, &comp->z_order);
+            if (status != SAO_STATUS_OK) {
+                sao_ui_dcomp_bridge_destroy(comp->dcomp_bridge);
+                sao_ui_d3d11_device_destroy(comp->d3d11_device);
+                return status;
+            }
+            status = sao_ui_overlay_host_set_hit_test(host, &compositor_host_hit_test, comp.get());
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_overlay_host_set_mouse(host, &compositor_host_mouse, comp.get());
+            if (status != SAO_STATUS_OK) {
+                (void)sao_ui_overlay_host_set_mouse(host, nullptr, nullptr);
+                (void)sao_ui_overlay_host_set_hit_test(host, nullptr, nullptr);
+                sao_ui_z_order_manager_destroy(comp->z_order);
+                sao_ui_dcomp_bridge_destroy(comp->dcomp_bridge);
+                sao_ui_d3d11_device_destroy(comp->d3d11_device);
+                return status;
+            }
+            comp->host_callbacks_bound = true;
+        }
+
+        register_compositor(comp.get());
+        *out_handle = comp.release();
+        return SAO_STATUS_OK;
+    } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    comp->host = host;
-    if (config != nullptr) {
-        comp->config = *config;
-    } else {
-        // Defaults matching the header banner (target_hz = 0 means
-        // "auto-detect", the RGN caches on).
-        comp->config.target_hz              = 0;
-        comp->config.enable_temporal_union  = true;
-        comp->config.enable_rgn_cache       = true;
-    }
-
-    comp->render_thread = std::this_thread::get_id();
-    if (host != nullptr) {
-        void* const hwnd = sao_ui_overlay_host_hwnd(host);
-        if (hwnd == nullptr) {
-            delete comp;
-            return SAO_STATUS_ERR_NOT_INITIALIZED;
-        }
-
-        SaoD3d11DeviceConfig d3d_config{};
-        sao_status_t status = sao_ui_d3d11_device_create(
-            &d3d_config, &comp->d3d11_device);
-        if (status != SAO_STATUS_OK) {
-            delete comp;
-            return status;
-        }
-
-        SaoDcompBridgeConfig bridge_config{};
-        bridge_config.hwnd = hwnd;
-        bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(comp->d3d11_device);
-        bridge_config.alpha_mode = 1;
-        bridge_config.buffer_count = 2;
-        bridge_config.width = 1;
-        bridge_config.height = 1;
-        status = sao_ui_dcomp_bridge_create(
-            host, &bridge_config, &comp->dcomp_bridge);
-        if (status != SAO_STATUS_OK) {
-            sao_ui_d3d11_device_destroy(comp->d3d11_device);
-            delete comp;
-            return status;
-        }
-        status = sao_ui_z_order_manager_create(host, &comp->z_order);
-        if (status != SAO_STATUS_OK) {
-            sao_ui_dcomp_bridge_destroy(comp->dcomp_bridge);
-            sao_ui_d3d11_device_destroy(comp->d3d11_device);
-            delete comp;
-            return status;
-        }
-    }
-
-    *out_handle = comp;
-    return SAO_STATUS_OK;
 }
 
-extern "C" void SAO_UI_CALL sao_ui_compositor_destroy(
-    sao_ui_compositor_handle_t handle) {
-    if (handle == nullptr) return;
-    if (std::this_thread::get_id() != handle->render_thread) return;
-    if (handle->present_in_progress.load(std::memory_order_acquire)) return;
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_compositor_destroy_preflight(sao_ui_compositor_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_OK;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(handle);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    if (handle->present_in_progress.load(std::memory_order_acquire))
+        return SAO_STATUS_ERR_CANCELLED;
     try {
         std::lock_guard<std::mutex> lock(handle->mtx);
+        const auto callback_active = [](const auto& layer) {
+            return layer->input_callbacks_in_flight != 0;
+        };
+        return std::ranges::any_of(handle->layers, callback_active) ||
+                       std::ranges::any_of(handle->pending_layer_destroys, callback_active)
+                   ? SAO_STATUS_ERR_CANCELLED
+                   : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
+    sao_ui_compositor_handle_t handle) {
+    const sao_status_t preflight_status = sao_ui_compositor_destroy_preflight(handle);
+    if (preflight_status != SAO_STATUS_OK)
+        return preflight_status;
+    if (handle == nullptr)
+        return SAO_STATUS_OK;
+    if (g_fail_next_compositor_destroy_after_preflight.exchange(false,
+                                                                std::memory_order_acq_rel)) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    try {
+        if (handle->host != nullptr) {
+#if defined(_WIN32)
+            const auto host_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(handle->host));
+            if (host_hwnd != nullptr && ::GetCapture() == host_hwnd)
+                (void)::ReleaseCapture();
+#endif
+            sao_status_t status = sao_ui_overlay_host_set_input_region(handle->host, nullptr, 0);
+            if (status != SAO_STATUS_OK)
+                return status;
+            status = sao_ui_overlay_host_set_input_passthrough(handle->host, true);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        if (handle->host_callbacks_bound) {
+            sao_status_t status = sao_ui_overlay_host_set_mouse(handle->host, nullptr, nullptr);
+            if (status != SAO_STATUS_OK)
+                return status;
+            status = sao_ui_overlay_host_set_hit_test(handle->host, nullptr, nullptr);
+            if (status != SAO_STATUS_OK)
+                return status;
+            handle->host_callbacks_bound = false;
+        }
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        handle->hovered_layer = nullptr;
+        release_captured_layer_locked(handle, false);
+        handle->suppressed_button_up = -1;
         sao_ui_z_order_manager_destroy(handle->z_order);
         flush_pending_layer_destroys_locked(handle);
 #if defined(_WIN32)
@@ -995,9 +1484,21 @@ extern "C" void SAO_UI_CALL sao_ui_compositor_destroy(
         sao_ui_dcomp_bridge_destroy(handle->dcomp_bridge);
         sao_ui_d3d11_device_destroy(handle->d3d11_device);
     } catch (...) {
-        return;
+        return SAO_STATUS_ERR_UNKNOWN;
     }
+    unregister_compositor(handle);
     delete handle;
+    return SAO_STATUS_OK;
+}
+
+extern "C" void SAO_UI_CALL sao_ui_compositor_destroy(
+    sao_ui_compositor_handle_t handle) {
+    (void)sao_ui_compositor_try_destroy(handle);
+}
+
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_test_fail_next_compositor_destroy_after_preflight(void) {
+    g_fail_next_compositor_destroy_after_preflight.store(true, std::memory_order_release);
 }
 
 extern "C" sao_ui_overlay_host_handle_t SAO_UI_CALL sao_ui_compositor_host(
@@ -1085,11 +1586,31 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
             return;
         }
 
-        std::lock_guard<std::mutex> lk(comp->mtx);
-        auto it = find_layer_it(comp, layer);
-        if (it == comp->layers.end()) return;
-        comp->pending_layer_destroys.push_back(std::move(*it));
-        comp->layers.erase(it);
+        InputCallbackInvocation leave{};
+        bool invoke_leave = false;
+        {
+            std::lock_guard<std::mutex> lk(comp->mtx);
+            auto it = find_layer_it(comp, layer);
+            if (it == comp->layers.end()) return;
+            if (comp->hovered_layer == layer || comp->captured_layer == layer) {
+                invoke_leave = capture_input_callback_locked(
+                    comp, layer, InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
+                    &leave);
+                comp->hovered_layer = nullptr;
+            }
+            if (comp->captured_layer == layer)
+                release_captured_layer_locked(comp, true);
+            comp->pending_layer_destroys.push_back(std::move(*it));
+            comp->layers.erase(it);
+        }
+        if (invoke_leave) {
+            if (std::this_thread::get_id() != comp->render_thread) {
+                std::lock_guard lock(comp->mtx);
+                comp->pending_owner_input_callbacks.push_back(std::move(leave));
+            } else {
+                (void)invoke_input_callback(leave);
+            }
+        }
     } catch (...) {
     }
 }
@@ -1112,7 +1633,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_z_order(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_visible(
     sao_ui_layer_handle_t layer, bool visible) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [visible](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->visible = visible;
             mark_layer_dirty(active);
@@ -1195,10 +1716,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_update_bgra(
     }
     std::memcpy(snapshot.data(), bgra_pixels, copy_size);
 
-    return with_active_layer_locked(
-        comp, layer,
-        [width, height, stride, &snapshot](sao_ui_compositor_s*,
-                                           sao_ui_layer_s* active) {
+    return mutate_input_layer(
+        layer, [width, height, stride, &snapshot](sao_ui_compositor_s*,
+                                                  sao_ui_layer_s* active) {
             if (!valid_composition_extent(
                     active->x, active->y, width, height)) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1295,7 +1815,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_render_fn(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_position(
     sao_ui_layer_handle_t layer, int32_t x, int32_t y) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [x, y](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             const int64_t source_width = std::max<int64_t>(
                 active->width,
@@ -1321,7 +1841,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_geometry(
     if (!valid_composition_extent(x, y, width, height)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [x, y, width, height](sao_ui_compositor_s*,
                                      sao_ui_layer_s* active) {
             if ((active->bgra_width != 0 &&
@@ -1355,7 +1875,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_alpha(
     if (!std::isfinite(alpha) || alpha < 0.0f || alpha > 1.0f) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [alpha](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->alpha = alpha;
             mark_layer_dirty(active);
@@ -1392,7 +1912,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_start_fade(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_enabled(
     sao_ui_layer_handle_t layer, bool enabled) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [enabled](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->input_enabled = enabled;
             return SAO_STATUS_OK;
@@ -1403,7 +1923,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_layer_set_input_policy(
     sao_ui_layer_handle_t layer, bool click_through,
     bool input_enabled) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [click_through, input_enabled](
                    sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->click_through = click_through;
@@ -1430,9 +1950,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_rects(
         return SAO_STATUS_ERR_UNKNOWN;
     }
 
-    return with_active_layer_locked(
-        comp, layer,
-        [&snapshot](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+    return mutate_input_layer(
+        layer, [&snapshot](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             for (const auto& rect : snapshot) {
                 const int64_t right =
                     static_cast<int64_t>(rect.x) + rect.width;
@@ -1466,21 +1985,297 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_input_callbacks(
     sao_ui_layer_button_fn_t button_fn,
     sao_ui_layer_scroll_fn_t scroll_fn,
     void* user_data) {
-    return with_active_layer_locked(
-        layer, [cursor_pos_fn, cursor_leave_fn, button_fn, scroll_fn,
-                user_data](sao_ui_compositor_s*, sao_ui_layer_s* active) {
-            active->cursor_pos_fn = cursor_pos_fn;
-            active->cursor_leave_fn = cursor_leave_fn;
-            active->button_fn = button_fn;
-            active->scroll_fn = scroll_fn;
-            active->input_user_data = user_data;
+    if (layer == nullptr || layer->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* compositor = layer->owner;
+    try {
+        for (;;) {
+            std::unique_lock lock(compositor->mtx);
+            if (find_layer_it(compositor, layer) == compositor->layers.end())
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            const bool pending_owner_callback = std::ranges::any_of(
+                compositor->pending_owner_input_callbacks,
+                [layer](const InputCallbackInvocation& invocation) {
+                    return invocation.layer == layer;
+                });
+            if (pending_owner_callback)
+                return SAO_STATUS_ERR_CANCELLED;
+            std::vector<uint64_t> generations_to_drain;
+            generations_to_drain.reserve(layer->input_callbacks_by_generation.size());
+            for (const auto& [generation, count] : layer->input_callbacks_by_generation) {
+                const size_t active_here = input_callback_active_count(layer, generation);
+                if (active_here != 0 && count > active_here)
+                    return SAO_STATUS_ERR_CANCELLED;
+                if (active_here == 0 && count != 0)
+                    generations_to_drain.push_back(generation);
+            }
+            if (!generations_to_drain.empty()) {
+                compositor->input_callbacks_idle.wait(lock, [&] {
+                    return std::ranges::none_of(generations_to_drain, [&](uint64_t generation) {
+                        const auto found = layer->input_callbacks_by_generation.find(generation);
+                        return found != layer->input_callbacks_by_generation.end() &&
+                               found->second != 0;
+                    });
+                });
+            }
+            for (auto it = layer->input_callbacks_by_generation.begin();
+                 it != layer->input_callbacks_by_generation.end();) {
+                if (it->second == 0 && it->first != layer->input_callback_generation)
+                    it = layer->input_callbacks_by_generation.erase(it);
+                else
+                    ++it;
+            }
+            uint64_t next_generation = layer->input_callback_generation;
+            do {
+                ++next_generation;
+                if (next_generation == 0)
+                    next_generation = 1;
+            } while (layer->input_callbacks_by_generation.contains(next_generation));
+            layer->input_callbacks_by_generation.emplace(next_generation, 0);
+            layer->input_callback_generation = next_generation;
+            layer->cursor_pos_fn = cursor_pos_fn;
+            layer->cursor_leave_fn = cursor_leave_fn;
+            layer->button_fn = button_fn;
+            layer->scroll_fn = scroll_fn;
+            layer->input_user_data = user_data;
             return SAO_STATUS_OK;
-        });
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_hit_test(
+    sao_ui_compositor_handle_t compositor, int32_t screen_x, int32_t screen_y, bool* out_hit) {
+    if (out_hit == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_hit = false;
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        int32_t host_x = 0;
+        int32_t host_y = 0;
+        const sao_status_t coordinate_status =
+            screen_to_host(compositor, screen_x, screen_y, &host_x, &host_y);
+        if (coordinate_status != SAO_STATUS_OK)
+            return coordinate_status;
+        std::lock_guard lock(compositor->mtx);
+        *out_hit = top_input_layer_locked(compositor, host_x, host_y, nullptr, nullptr) != nullptr;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
+    sao_ui_compositor_handle_t compositor, uint32_t message, int32_t screen_x, int32_t screen_y,
+    int32_t button, int32_t wheel_delta) {
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != compositor->render_thread)
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (message != kMouseMove && message != kMouseLeave && message != kMouseWheel &&
+        message != kCaptureChanged && message != kCancelMode &&
+        message != kLeftButtonDown && message != kLeftButtonUp &&
+        message != kLeftButtonDoubleClick && message != kRightButtonDown &&
+        message != kRightButtonUp && message != kRightButtonDoubleClick &&
+        message != kMiddleButtonDown && message != kMiddleButtonUp &&
+        message != kMiddleButtonDoubleClick) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+
+    try {
+        {
+            std::lock_guard lock(compositor->mtx);
+            ++compositor->input_dispatch_depth;
+        }
+        bool callback_failed = drain_owner_input_callbacks(compositor);
+        int32_t host_x = 0;
+        int32_t host_y = 0;
+        sao_status_t dispatch_status = SAO_STATUS_OK;
+        if (message != kMouseLeave && message != kCaptureChanged && message != kCancelMode) {
+            const sao_status_t coordinate_status =
+                screen_to_host(compositor, screen_x, screen_y, &host_x, &host_y);
+            if (coordinate_status != SAO_STATUS_OK)
+                dispatch_status = coordinate_status;
+        }
+
+        std::vector<InputCallbackInvocation> invocations;
+        invocations.reserve(2);
+        if (dispatch_status == SAO_STATUS_OK) {
+            std::lock_guard lock(compositor->mtx);
+            if (message == kCaptureChanged || message == kCancelMode) {
+                sao_ui_layer_s* leave_target = compositor->captured_layer != nullptr
+                                                   ? compositor->captured_layer
+                                                   : compositor->hovered_layer;
+                InputCallbackInvocation leave{};
+                if (capture_input_callback_locked(
+                        compositor, leave_target, InputCallbackInvocation::Kind::leave, 0.0F,
+                        0.0F, -1, 0, &leave)) {
+                    invocations.push_back(leave);
+                }
+                release_captured_layer_locked(compositor, true);
+                compositor->hovered_layer = nullptr;
+                compositor->has_pointer = false;
+            } else if (message == kMouseLeave) {
+                if (compositor->captured_layer != nullptr)
+                    dispatch_status = SAO_STATUS_OK;
+                else {
+                    compositor->has_pointer = false;
+                    InputCallbackInvocation leave{};
+                    if (capture_input_callback_locked(
+                            compositor, compositor->hovered_layer,
+                            InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0, &leave)) {
+                        invocations.push_back(leave);
+                    }
+                    compositor->hovered_layer = nullptr;
+                }
+            } else {
+                compositor->last_pointer_x = host_x;
+                compositor->last_pointer_y = host_y;
+                compositor->has_pointer = true;
+                float layer_x = 0.0F;
+                float layer_y = 0.0F;
+                sao_ui_layer_s* hit_target =
+                    top_input_layer_locked(compositor, host_x, host_y, &layer_x, &layer_y);
+                if (message == kMouseMove) {
+                    if (compositor->captured_layer == nullptr &&
+                        compositor->hovered_layer != hit_target) {
+                        InputCallbackInvocation leave{};
+                        if (capture_input_callback_locked(
+                                compositor, compositor->hovered_layer,
+                                InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
+                                &leave)) {
+                            invocations.push_back(leave);
+                        }
+                        compositor->hovered_layer = hit_target;
+                    }
+                    sao_ui_layer_s* route_target = compositor->captured_layer != nullptr
+                                                       ? compositor->captured_layer
+                                                       : hit_target;
+                    if (route_target != hit_target)
+                        captured_layer_coordinates_locked(route_target, host_x, host_y, &layer_x,
+                                                          &layer_y);
+                    InputCallbackInvocation cursor{};
+                    if (capture_input_callback_locked(
+                            compositor, route_target, InputCallbackInvocation::Kind::cursor,
+                            layer_x, layer_y, -1, 0, &cursor)) {
+                        invocations.push_back(cursor);
+                    }
+                } else if (message == kMouseWheel) {
+                    InputCallbackInvocation scroll{};
+                    if (capture_input_callback_locked(
+                            compositor, hit_target, InputCallbackInvocation::Kind::scroll, layer_x,
+                            layer_y, -1, 0, &scroll)) {
+                        scroll.scroll_dx = 0.0F;
+                        scroll.scroll_dy = static_cast<float>(wheel_delta) / kWheelDelta;
+                        invocations.push_back(scroll);
+                    }
+                } else {
+                    const bool double_click = message == kLeftButtonDoubleClick ||
+                                              message == kRightButtonDoubleClick ||
+                                              message == kMiddleButtonDoubleClick;
+                    const bool released = message == kLeftButtonUp || message == kRightButtonUp ||
+                                          message == kMiddleButtonUp;
+                    if (double_click) {
+                        compositor->suppressed_button_up = button;
+                        release_captured_layer_locked(compositor, false);
+                    } else if (released && compositor->suppressed_button_up == button) {
+                        compositor->suppressed_button_up = -1;
+                        release_captured_layer_locked(compositor, false);
+                    } else {
+                        sao_ui_layer_s* route_target =
+                            released && compositor->captured_layer != nullptr
+                                ? compositor->captured_layer
+                                : hit_target;
+                        if (!released && route_target != nullptr) {
+                            compositor->captured_layer = route_target;
+                            compositor->captured_button = button;
+                        }
+                        if (route_target != hit_target)
+                            captured_layer_coordinates_locked(route_target, host_x, host_y,
+                                                              &layer_x, &layer_y);
+                        InputCallbackInvocation button_invocation{};
+                        if (capture_input_callback_locked(
+                                compositor, route_target, InputCallbackInvocation::Kind::button,
+                                layer_x, layer_y, button, released ? 0 : 1,
+                                &button_invocation)) {
+                            invocations.push_back(button_invocation);
+                        }
+                        if (released) {
+                            release_captured_layer_locked(compositor, false);
+                            if (compositor->hovered_layer != hit_target) {
+                                InputCallbackInvocation leave{};
+                                if (capture_input_callback_locked(
+                                        compositor, compositor->hovered_layer,
+                                        InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
+                                        &leave)) {
+                                    invocations.push_back(leave);
+                                }
+                                compositor->hovered_layer = hit_target;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (const auto& invocation : invocations) {
+            callback_failed = !invoke_input_callback(invocation) || callback_failed;
+        }
+        callback_failed = drain_owner_input_callbacks(compositor) || callback_failed;
+        auto tasks = end_input_dispatch(compositor);
+        const sao_status_t result =
+            dispatch_status != SAO_STATUS_OK
+                ? dispatch_status
+                : (callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK);
+        run_post_input_tasks(std::move(tasks));
+        return result;
+    } catch (...) {
+        auto tasks = end_input_dispatch(compositor);
+        run_post_input_tasks(std::move(tasks));
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_post_input(
+    sao_ui_compositor_handle_t compositor, sao_ui_compositor_post_input_fn_t fn,
+    void* user_data) {
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (fn == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    try {
+        {
+            std::lock_guard lock(compositor->mtx);
+            if (compositor->input_dispatch_depth != 0) {
+                compositor->post_input_tasks.push_back({fn, user_data});
+                return SAO_STATUS_OK;
+            }
+        }
+        fn(user_data);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_current_input_position(
+    float* out_layer_x, float* out_layer_y) {
+    if (out_layer_x == nullptr || out_layer_y == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (g_active_input_invocation == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    *out_layer_x = g_active_input_invocation->x;
+    *out_layer_y = g_active_input_invocation->y;
+    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
     sao_ui_layer_handle_t layer) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->input_proxy_enabled = true;
             active->input_enabled = true;
@@ -1490,7 +2285,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_disable_input_proxy(
     sao_ui_layer_handle_t layer) {
-    return with_active_layer_locked(
+    return mutate_input_layer(
         layer, [](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->input_proxy_enabled = false;
             active->input_enabled = false;
@@ -1650,7 +2445,38 @@ sao_status_t compositor_present_impl(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_present(
     sao_ui_compositor_handle_t compositor) {
     try {
+        if (compositor == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (std::this_thread::get_id() != compositor->render_thread)
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        const auto pending = flush_pending_owner_input(compositor);
+        if (pending.ran_post_tasks || pending.status != SAO_STATUS_OK)
+            return pending.status;
         return compositor_present_impl(compositor);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_tick(
+    sao_ui_compositor_handle_t compositor) {
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != compositor->render_thread)
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    try {
+        const auto pending = flush_pending_owner_input(compositor);
+        if (pending.ran_post_tasks || pending.status != SAO_STATUS_OK)
+            return pending.status;
+        sao_status_t status = compositor_present_impl(compositor);
+        const auto merge = [&status](sao_status_t candidate) {
+            if (status == SAO_STATUS_OK && candidate != SAO_STATUS_OK)
+                status = candidate;
+        };
+        merge(sao_ui_compositor_sync_host_rgn(compositor));
+        merge(sao_ui_compositor_sync_host_input_mode(compositor));
+        merge(sao_ui_compositor_enforce_z_order(compositor));
+        return status;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -1710,9 +2536,16 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_compositor_require_owner_thread(sao_ui_compositor_handle_t compositor) {
     if (compositor == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    return std::this_thread::get_id() == compositor->render_thread
-               ? SAO_STATUS_OK
-               : SAO_STATUS_ERR_ACCESS_DENIED;
+    try {
+        std::lock_guard lock(g_compositor_registry_mutex);
+        if (!compositor_registered_locked(compositor))
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        return std::this_thread::get_id() == compositor->render_thread
+                   ? SAO_STATUS_OK
+                   : SAO_STATUS_ERR_ACCESS_DENIED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
@@ -1727,7 +2560,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
         std::lock_guard<std::mutex> lock(compositor->mtx);
         for (const auto& layer : compositor->layers) {
             if (!layer->visible || !layer->input_enabled || layer->click_through ||
-                layer->width <= 0 || layer->height <= 0 ||
+                layer->input_proxy_enabled || layer->width <= 0 || layer->height <= 0 ||
                 layer->alpha <= 0.0f) continue;
             if (!layer->input_rects.empty()) {
                 for (const auto& rect : layer->input_rects) {
@@ -1796,7 +2629,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_input_mode(
         std::lock_guard<std::mutex> lock(compositor->mtx);
         for (const auto& layer : compositor->layers) {
             if (layer->visible && layer->input_enabled &&
-                !layer->click_through && layer->alpha > 0.0f &&
+                !layer->click_through && !layer->input_proxy_enabled && layer->alpha > 0.0f &&
                 (!layer->input_rects.empty() || layer->rect_hit ||
                  layer->bgra_pixels.empty() ||
                  has_nonzero_bgra_alpha(layer.get()))) {

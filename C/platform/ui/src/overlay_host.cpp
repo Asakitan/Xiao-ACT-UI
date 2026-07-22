@@ -322,9 +322,16 @@ void dispatch_mouse(sao_ui_overlay_host_s* host, UINT message, WPARAM wparam, LP
     if (callback == nullptr)
         return;
 
-    POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-    if (message != WM_MOUSEWHEEL)
+    POINT point{};
+    if (message == WM_CAPTURECHANGED || message == WM_CANCELMODE || message == WM_MOUSELEAVE) {
+        (void)::GetCursorPos(&point);
+    } else {
+        point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    }
+    if (message != WM_MOUSEWHEEL && message != WM_CAPTURECHANGED &&
+        message != WM_CANCELMODE && message != WM_MOUSELEAVE) {
         ::ClientToScreen(host->hwnd, &point);
+    }
     int32_t button = -1;
     if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK) {
         button = 0;
@@ -387,16 +394,32 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     }
     case WM_MOUSELEAVE:
     case WM_MOUSEWHEEL:
-    case WM_LBUTTONDOWN:
-    case WM_LBUTTONUP:
     case WM_LBUTTONDBLCLK:
-    case WM_RBUTTONDOWN:
-    case WM_RBUTTONUP:
     case WM_RBUTTONDBLCLK:
-    case WM_MBUTTONDOWN:
-    case WM_MBUTTONUP:
     case WM_MBUTTONDBLCLK:
         dispatch_mouse(host, message, wparam, lparam);
+        return 0;
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+        ::SetCapture(hwnd);
+        dispatch_mouse(host, message, wparam, lparam);
+        return 0;
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONUP:
+        dispatch_mouse(host, message, wparam, lparam);
+        if (::GetCapture() == hwnd)
+            ::ReleaseCapture();
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (reinterpret_cast<HWND>(lparam) != hwnd)
+            dispatch_mouse(host, message, wparam, lparam);
+        return 0;
+    case WM_CANCELMODE:
+        dispatch_mouse(host, message, wparam, lparam);
+        if (::GetCapture() == hwnd)
+            ::ReleaseCapture();
         return 0;
     case WM_SIZE: {
         sao_ui_size_fn_t callback = nullptr;
@@ -560,9 +583,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
         explicit_bounds ? config->height : ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
     const int32_t x = explicit_bounds ? config->origin_x : ::GetSystemMetrics(SM_XVIRTUALSCREEN);
     const int32_t y = explicit_bounds ? config->origin_y : ::GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const wchar_t* title = config != nullptr && config->title_utf16 != nullptr
-                               ? config->title_utf16
-                               : L"";
+    const wchar_t* title =
+        config != nullptr && config->title_utf16 != nullptr ? config->title_utf16 : L"";
 
     host->owner_hwnd =
         ::CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, host->class_name.c_str(), L"",
@@ -623,6 +645,10 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
     if (handle->dc_mutation != nullptr && handle->hwnd != nullptr &&
         !sao_ui_dc_mutation_coordinator_invalidate(handle->dc_mutation, handle->hwnd, 1.0)) {
         return false;
+    }
+    if (handle->hwnd != nullptr && ::GetCapture() == handle->hwnd) {
+        dispatch_mouse(handle, WM_CANCELMODE, 0, 0);
+        (void)::ReleaseCapture();
     }
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
     SaoAntiScreencapAffinityPair pair{};
@@ -731,6 +757,9 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         }
         publish_real_geometry(handle, desired);
+    } else if (::GetCapture() == handle->hwnd) {
+        dispatch_mouse(handle, WM_CANCELMODE, 0, 0);
+        (void)::ReleaseCapture();
     }
     ::ShowWindow(handle->hwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
     ::ShowWindow(handle->control_hwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
@@ -742,6 +771,15 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
         return SAO_STATUS_OK;
     (void)::DwmFlush();
     return submit_physical_rect_scrub(handle);
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_require_owner_thread(sao_ui_overlay_host_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    return handle->owner_thread_id == ::GetCurrentThreadId()
+               ? SAO_STATUS_OK
+               : SAO_STATUS_ERR_ACCESS_DENIED;
 }
 
 extern "C" sao_status_t SAO_UI_CALL

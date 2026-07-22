@@ -21,6 +21,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
@@ -839,4 +840,107 @@ TEST_CASE("portable_router_self_destroy_and_callback_exceptions_are_contained",
     REQUIRE(sao_ui_input_router_route_event(router, &move, &consumed) == SAO_STATUS_ERR_UNKNOWN);
     sao_ui_input_router_deep_destroy(router);
     sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("router compositor rebind preserves handle focus and hotkeys",
+          "[ui][input_router][lifecycle][rebind][state]") {
+    sao_ui_compositor_handle_t first = nullptr;
+    sao_ui_compositor_handle_t second = nullptr;
+    sao_ui_compositor_handle_t third = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &third) == SAO_STATUS_OK);
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(first, &router) == SAO_STATUS_OK);
+    auto* const identity = router;
+
+    const auto widget = create_focus_button("rebind-focus");
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, widget) == SAO_STATUS_OK);
+    HotkeyFireLog log;
+    SaoUiHotkeyBindingSpec spec{};
+    spec.binding_id_utf8 = "rebind-hotkey";
+    spec.virtual_key = 0x77;
+    spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
+    sao_ui_hotkey_binding_t binding = 0;
+    REQUIRE(sao_ui_input_router_register_hotkey(router, "core", &spec, &hotkey_cb, &log,
+                                                 &binding) == SAO_STATUS_OK);
+
+    CHECK(sao_ui_input_router_deep_rebind_compositor(router, second, third) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(router == identity);
+    CHECK(sao_ui_input_router_focus_depth(router) == 1);
+    CHECK(sao_ui_input_router_hotkey_count(router) == 1);
+    REQUIRE(sao_ui_input_router_deep_rebind_compositor(router, first, second) == SAO_STATUS_OK);
+    CHECK(router == identity);
+    CHECK(sao_ui_input_router_focus_depth(router) == 1);
+    CHECK(sao_ui_input_router_hotkey_count(router) == 1);
+    CHECK(sao_ui_input_router_deep_rebind_compositor(router, first, third) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(router, &focused, nullptr) == SAO_STATUS_OK);
+    CHECK(focused == widget);
+    const auto event = key_down_event(spec.virtual_key, 0);
+    sao_ui_hotkey_binding_t matched = 0;
+    REQUIRE(sao_ui_input_router_match_hotkey(router, &event, &matched) == SAO_STATUS_OK);
+    CHECK(matched == binding);
+    CHECK(log.hits.load() == 1);
+
+    REQUIRE(sao_ui_input_router_deep_try_destroy(router) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(widget);
+    REQUIRE(sao_ui_compositor_try_destroy(third) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(first) == SAO_STATUS_OK);
+}
+
+TEST_CASE("router compositor rebind is busy during an in-flight callback and retries unchanged",
+          "[ui][input_router][lifecycle][rebind][callback][concurrency]") {
+    sao_ui_compositor_handle_t first = nullptr;
+    sao_ui_compositor_handle_t second = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &second) == SAO_STATUS_OK);
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(first, &router) == SAO_STATUS_OK);
+    const auto widget = create_focus_button("rebind-busy-focus");
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, widget) == SAO_STATUS_OK);
+
+    BlockingHotkey state;
+    SaoUiHotkeyBindingSpec spec{};
+    spec.binding_id_utf8 = "rebind-busy";
+    spec.virtual_key = 0x78;
+    spec.scope = SAO_UI_HOTKEY_SCOPE_GLOBAL;
+    sao_ui_hotkey_binding_t binding = 0;
+    REQUIRE(sao_ui_input_router_register_hotkey(router, "core", &spec, &blocking_hotkey_cb,
+                                                 &state, &binding) == SAO_STATUS_OK);
+    const auto event = key_down_event(spec.virtual_key, 0);
+    auto dispatch = std::async(std::launch::async, [&] {
+        sao_ui_hotkey_binding_t matched = 0;
+        return sao_ui_input_router_match_hotkey(router, &event, &matched);
+    });
+    {
+        std::unique_lock lock(state.mutex);
+        REQUIRE(state.condition.wait_for(lock, std::chrono::seconds(5),
+                                         [&state] { return state.entered; }));
+    }
+
+    CHECK(sao_ui_input_router_deep_rebind_compositor(router, first, second) ==
+          SAO_UI_STATUS_ERR_BUSY);
+    CHECK(sao_ui_input_router_focus_depth(router) == 1);
+    CHECK(sao_ui_input_router_hotkey_count(router) == 1);
+    {
+        std::lock_guard lock(state.mutex);
+        state.release = true;
+    }
+    state.condition.notify_all();
+    REQUIRE(dispatch.get() == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_deep_rebind_compositor(router, first, second) == SAO_STATUS_OK);
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(router, &focused, nullptr) == SAO_STATUS_OK);
+    CHECK(focused == widget);
+    CHECK(sao_ui_input_router_hotkey_count(router) == 1);
+
+    REQUIRE(sao_ui_input_router_deep_try_destroy(router) == SAO_STATUS_OK);
+    sao_ui_widget_destroy(widget);
+    REQUIRE(sao_ui_compositor_try_destroy(second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(first) == SAO_STATUS_OK);
 }

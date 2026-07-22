@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -46,8 +47,9 @@ sao_ui_nervegear_on_mouse_leave(sao_ui_nervegear_handle_t handle);
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_nervegear_on_mouse_down(sao_ui_nervegear_handle_t handle);
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_nervegear_on_mouse_up(sao_ui_nervegear_handle_t handle);
+sao_status_t SAO_UI_CALL sao_ui_compositor_current_input_position(float* out_layer_x,
+                                                                  float* out_layer_y);
 }
-
 namespace {
 
 constexpr int32_t kMarginRight = 20;
@@ -1035,9 +1037,18 @@ sao_status_t first_failure(sao_status_t current, sao_status_t candidate) {
 
 } // namespace
 
+struct EntityLayerInputBinding {
+    sao_ui_entity_shell_s* shell{};
+    bool menu{};
+    float last_x{};
+    float last_y{};
+    bool has_cursor{};
+};
+
 struct sao_ui_entity_shell_s {
     sao_ui_overlay_host_handle_t host{};
     sao_ui_compositor_handle_t compositor{};
+    bool owns_compositor{true};
     sao_ui_theme_handle_t theme{};
     sao_ui_menu_handle_t menu{};
     sao_ui_nervegear_handle_t nervegear{};
@@ -1047,6 +1058,8 @@ struct sao_ui_entity_shell_s {
     Raster nervegear_raster;
     Raster menu_raster;
     std::vector<SaoUiLayerInputRect> menu_input_rects;
+    EntityLayerInputBinding nervegear_input{};
+    EntityLayerInputBinding menu_input{};
     int32_t origin_x{};
     int32_t origin_y{};
     int32_t width{};
@@ -1073,6 +1086,9 @@ struct sao_ui_entity_shell_s {
     bool visual_dirty{true};
     bool input_region_settle_pending{};
     bool destroy_pending{};
+    bool destroy_finalizer_scheduled{};
+    bool teardown_started{};
+    std::atomic_bool suppress_layer_input_callbacks{};
     uint32_t callback_depth{};
     uint64_t frame_count{};
     uint64_t action_count{};
@@ -1083,6 +1099,108 @@ struct sao_ui_entity_shell_s {
 };
 
 namespace {
+
+bool entity_input_screen_point(EntityLayerInputBinding* binding, float local_x, float local_y,
+                               int32_t* out_x, int32_t* out_y) {
+    if (binding == nullptr || binding->shell == nullptr || out_x == nullptr || out_y == nullptr)
+        return false;
+    int32_t layer_x = 0;
+    int32_t layer_y = 0;
+    int32_t origin_x = 0;
+    int32_t origin_y = 0;
+    {
+        std::lock_guard lock(binding->shell->mutex);
+        origin_x = binding->shell->origin_x;
+        origin_y = binding->shell->origin_y;
+        layer_x = binding->menu ? binding->shell->menu_x : binding->shell->nervegear_x;
+        layer_y = binding->menu ? binding->shell->menu_y : binding->shell->nervegear_y;
+    }
+    const int64_t screen_x = static_cast<int64_t>(origin_x) + layer_x +
+                             static_cast<int32_t>(local_x);
+    const int64_t screen_y = static_cast<int64_t>(origin_y) + layer_y +
+                             static_cast<int32_t>(local_y);
+    if (screen_x < INT32_MIN || screen_x > INT32_MAX || screen_y < INT32_MIN ||
+        screen_y > INT32_MAX) {
+        return false;
+    }
+    *out_x = static_cast<int32_t>(screen_x);
+    *out_y = static_cast<int32_t>(screen_y);
+    return true;
+}
+
+void SAO_UI_CALL entity_layer_cursor(float layer_x, float layer_y, void* user_data) {
+    auto* binding = static_cast<EntityLayerInputBinding*>(user_data);
+    if (binding == nullptr || binding->shell == nullptr ||
+        binding->shell->suppress_layer_input_callbacks.load(std::memory_order_acquire)) {
+        return;
+    }
+    int32_t screen_x = 0;
+    int32_t screen_y = 0;
+    if (!entity_input_screen_point(binding, layer_x, layer_y, &screen_x, &screen_y))
+        return;
+    binding->last_x = layer_x;
+    binding->last_y = layer_y;
+    binding->has_cursor = true;
+    (void)sao_ui_entity_shell_handle_mouse(binding->shell, kMouseMove, screen_x, screen_y, -1, 0);
+}
+
+void SAO_UI_CALL entity_layer_leave(void* user_data) {
+    auto* binding = static_cast<EntityLayerInputBinding*>(user_data);
+    if (binding == nullptr || binding->shell == nullptr)
+        return;
+    binding->has_cursor = false;
+    if (binding->shell->suppress_layer_input_callbacks.load(std::memory_order_acquire))
+        return;
+    (void)sao_ui_entity_shell_handle_mouse(binding->shell, kMouseLeave, 0, 0, -1, 0);
+}
+
+void SAO_UI_CALL entity_layer_button(int32_t button, int32_t action, int32_t, float layer_x,
+                                     float layer_y, void* user_data) {
+    auto* binding = static_cast<EntityLayerInputBinding*>(user_data);
+    if (binding == nullptr || binding->shell == nullptr ||
+        binding->shell->suppress_layer_input_callbacks.load(std::memory_order_acquire)) {
+        return;
+    }
+    int32_t screen_x = 0;
+    int32_t screen_y = 0;
+    if (!entity_input_screen_point(binding, layer_x, layer_y, &screen_x, &screen_y))
+        return;
+    uint32_t message = 0;
+    if (button == 0)
+        message = action == 0 ? kLeftButtonUp : kLeftButtonDown;
+    else if (button == 1)
+        message = action == 0 ? 0x0205U : 0x0204U;
+    else if (button == 2)
+        message = action == 0 ? 0x0208U : 0x0207U;
+    if (message != 0)
+        (void)sao_ui_entity_shell_handle_mouse(binding->shell, message, screen_x, screen_y, button,
+                                               0);
+}
+
+void SAO_UI_CALL entity_layer_scroll(float, float dy, void* user_data) {
+    auto* binding = static_cast<EntityLayerInputBinding*>(user_data);
+    if (binding == nullptr || binding->shell == nullptr || !std::isfinite(dy) ||
+        binding->shell->suppress_layer_input_callbacks.load(std::memory_order_acquire)) {
+        return;
+    }
+    float local_x = binding->last_x;
+    float local_y = binding->last_y;
+    if (sao_ui_compositor_current_input_position(&local_x, &local_y) != SAO_STATUS_OK &&
+        !binding->has_cursor) {
+        std::lock_guard lock(binding->shell->mutex);
+        local_x = static_cast<float>((binding->menu ? kMenuWidth : SAO_UI_NERVEGEAR_SIZE) / 2);
+        local_y = static_cast<float>((binding->menu ? kMenuHeight : SAO_UI_NERVEGEAR_SIZE) / 2);
+    }
+    int32_t screen_x = 0;
+    int32_t screen_y = 0;
+    if (!entity_input_screen_point(binding, local_x, local_y, &screen_x, &screen_y))
+        return;
+    const double raw_delta = static_cast<double>(dy) * kWheelDeltaPerNotch;
+    if (raw_delta < INT32_MIN || raw_delta > INT32_MAX)
+        return;
+    (void)sao_ui_entity_shell_handle_mouse(binding->shell, kMouseWheel, screen_x, screen_y, -1,
+                                           static_cast<int32_t>(std::lround(raw_delta)));
+}
 
 size_t visible_root_count(const sao_ui_entity_shell_s* shell) {
     if (shell->first_visible_root_index >= shell->roots.size())
@@ -1222,25 +1340,113 @@ sao_status_t sync_child_viewport_locked(
     return clear_child_interaction_locked(shell);
 }
 
-void destroy_members(sao_ui_entity_shell_s* shell) {
-    sao_ui_layer_destroy(shell->menu_layer);
-    shell->menu_layer = nullptr;
-    sao_ui_layer_destroy(shell->nervegear_layer);
-    shell->nervegear_layer = nullptr;
-    sao_ui_nervegear_destroy(shell->nervegear);
-    shell->nervegear = nullptr;
-    sao_ui_menu_destroy(shell->menu);
-    shell->menu = nullptr;
-    sao_ui_theme_destroy(shell->theme);
-    shell->theme = nullptr;
-    sao_ui_compositor_destroy(shell->compositor);
-    shell->compositor = nullptr;
+std::vector<SaoUiLayerInputRect> circular_input_rects(int32_t center_x, int32_t center_y,
+                                                      int32_t radius, int32_t width,
+                                                      int32_t height) {
+    std::vector<SaoUiLayerInputRect> rects;
+    rects.reserve(static_cast<size_t>(height));
+    const int64_t radius_squared = static_cast<int64_t>(radius) * radius;
+    for (int32_t y = 0; y < height; ++y) {
+        const int64_t dy = static_cast<int64_t>(y) - center_y;
+        const int64_t remaining = radius_squared - dy * dy;
+        if (remaining < 0)
+            continue;
+        const int32_t half_span = static_cast<int32_t>(std::floor(std::sqrt(
+            static_cast<double>(remaining))));
+        const int32_t left = std::max(0, center_x - half_span);
+        const int32_t right = std::min(width - 1, center_x + half_span);
+        if (left <= right)
+            rects.push_back({left, y, right - left + 1, 1});
+    }
+    return rects;
 }
 
-void destroy_now(sao_ui_entity_shell_s* shell) {
-    (void)sao_ui_entity_shell_take_offline(shell);
-    destroy_members(shell);
-    delete shell;
+sao_status_t detach_and_destroy_layer(sao_ui_layer_handle_t* layer,
+                                      bool force_construction_cleanup = false) {
+    if (layer == nullptr || *layer == nullptr)
+        return SAO_STATUS_OK;
+    const sao_status_t status = sao_ui_layer_set_input_callbacks(
+        *layer, nullptr, nullptr, nullptr, nullptr, nullptr);
+    if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_HANDLE_INVALID &&
+        !force_construction_cleanup) {
+        return status;
+    }
+    if (status != SAO_STATUS_ERR_HANDLE_INVALID)
+        sao_ui_layer_destroy(*layer);
+    *layer = nullptr;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t destroy_members(sao_ui_entity_shell_s* shell,
+                             bool force_construction_cleanup = false) {
+    shell->suppress_layer_input_callbacks.store(true, std::memory_order_release);
+    sao_status_t status =
+        detach_and_destroy_layer(&shell->menu_layer, force_construction_cleanup);
+    status = first_failure(
+        status, detach_and_destroy_layer(&shell->nervegear_layer, force_construction_cleanup));
+    if (status != SAO_STATUS_OK)
+        return status;
+
+    if (shell->nervegear != nullptr) {
+        sao_ui_nervegear_destroy(shell->nervegear);
+        shell->nervegear = nullptr;
+    }
+    if (shell->menu != nullptr) {
+        sao_ui_menu_destroy(shell->menu);
+        shell->menu = nullptr;
+    }
+    if (shell->theme != nullptr) {
+        sao_ui_theme_destroy(shell->theme);
+        shell->theme = nullptr;
+    }
+    if (shell->owns_compositor && shell->compositor != nullptr) {
+        status = sao_ui_compositor_try_destroy(shell->compositor);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+    shell->compositor = nullptr;
+    return SAO_STATUS_OK;
+}
+
+std::mutex g_failed_owned_construction_mutex;
+std::vector<std::unique_ptr<sao_ui_entity_shell_s>> g_failed_owned_construction_shells;
+std::atomic_bool g_fail_next_entity_shell_construction{};
+
+void retry_failed_owned_construction_cleanup() {
+    std::lock_guard lock(g_failed_owned_construction_mutex);
+    for (auto it = g_failed_owned_construction_shells.begin();
+         it != g_failed_owned_construction_shells.end();) {
+        if ((*it)->owner_thread == std::this_thread::get_id() &&
+            destroy_members(it->get()) == SAO_STATUS_OK) {
+            it = g_failed_owned_construction_shells.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void quarantine_failed_owned_construction(std::unique_ptr<sao_ui_entity_shell_s> shell) {
+    if (shell == nullptr || !shell->owns_compositor || shell->compositor == nullptr)
+        return;
+    shell->suppress_layer_input_callbacks.store(true, std::memory_order_release);
+    std::lock_guard lock(g_failed_owned_construction_mutex);
+    try {
+        g_failed_owned_construction_shells.push_back(std::move(shell));
+    } catch (...) {
+        (void)shell.release();
+        throw;
+    }
+}
+
+void SAO_UI_CALL deferred_entity_destroy(void* user_data) {
+    auto* shell = static_cast<sao_ui_entity_shell_s*>(user_data);
+    if (shell == nullptr)
+        return;
+    {
+        std::lock_guard lock(shell->mutex);
+        shell->destroy_finalizer_scheduled = false;
+    }
+    (void)sao_ui_entity_shell_try_destroy(shell);
 }
 
 sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visible) {
@@ -1317,6 +1523,8 @@ sao_status_t refresh_host_geometry_locked(sao_ui_entity_shell_s* shell) {
 }
 
 sao_status_t apply_layer_state_locked(sao_ui_entity_shell_s* shell) {
+    const bool callbacks_were_suppressed =
+        shell->suppress_layer_input_callbacks.exchange(true, std::memory_order_acq_rel);
     const bool overlay_active = shell->online && shell->overlay_visible;
     const bool nervegear_active = overlay_active && shell->nervgear_mode;
     SaoUiMenuPhase menu_phase = SAO_UI_MENU_PHASE_CLOSED;
@@ -1337,6 +1545,8 @@ sao_status_t apply_layer_state_locked(sao_ui_entity_shell_s* shell) {
     status = first_failure(status, sao_ui_layer_set_input_enabled(
                                        shell->menu_layer, menu_active && shell->menu_visible &&
                                                               !shell->roots.empty()));
+    shell->suppress_layer_input_callbacks.store(callbacks_were_suppressed,
+                                                 std::memory_order_release);
     return status;
 }
 
@@ -1435,7 +1645,8 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
 
 sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
     if (!shell->visual_dirty) {
-        if (shell->host == nullptr || !shell->input_region_settle_pending) {
+        if (!shell->owns_compositor || shell->host == nullptr ||
+            !shell->input_region_settle_pending) {
             return SAO_STATUS_OK;
         }
         const sao_status_t settle_status = sao_ui_compositor_sync_host_rgn(shell->compositor);
@@ -1455,7 +1666,7 @@ sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
         shell->last_status = status;
         return status;
     }
-    if (shell->host != nullptr) {
+    if (shell->owns_compositor && shell->host != nullptr) {
         status = first_failure(status, sao_ui_compositor_present(shell->compositor));
         const sao_status_t region_status = sao_ui_compositor_sync_host_rgn(shell->compositor);
         status = first_failure(status, region_status);
@@ -1774,15 +1985,31 @@ sao_status_t dispatch_entity_action(sao_ui_entity_shell_s* shell,
         action_status = SAO_STATUS_ERR_UNKNOWN;
     }
     bool should_destroy = false;
+    bool schedule_finalizer = false;
     {
         std::lock_guard<std::mutex> lock(shell->mutex);
         shell->last_status = action_status;
         if (shell->callback_depth > 0)
             --shell->callback_depth;
         should_destroy = shell->destroy_pending && shell->callback_depth == 0;
+        if (should_destroy && !shell->destroy_finalizer_scheduled &&
+            shell->compositor != nullptr) {
+            shell->destroy_finalizer_scheduled = true;
+            schedule_finalizer = true;
+            should_destroy = false;
+        }
+    }
+    if (schedule_finalizer) {
+        const sao_status_t finalizer_status = sao_ui_compositor_post_input(
+            shell->compositor, &deferred_entity_destroy, shell);
+        if (finalizer_status == SAO_STATUS_OK)
+            return action_status;
+        std::lock_guard lock(shell->mutex);
+        shell->destroy_finalizer_scheduled = false;
+        should_destroy = true;
     }
     if (should_destroy)
-        destroy_now(shell);
+        (void)sao_ui_entity_shell_try_destroy(shell);
     return action_status;
 }
 
@@ -1819,12 +2046,25 @@ MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t 
 
 } // namespace
 
-extern "C" sao_status_t SAO_UI_CALL
-sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityShellConfig* config,
-                           sao_ui_entity_shell_handle_t* out_handle) {
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_test_fail_next_entity_shell_construction(void) {
+    g_fail_next_entity_shell_construction.store(true, std::memory_order_release);
+}
+
+static sao_status_t create_entity_shell(
+    sao_ui_overlay_host_handle_t host, sao_ui_compositor_handle_t borrowed_compositor,
+    const SaoUiEntityShellConfig* config, sao_ui_entity_shell_handle_t* out_handle) {
     if (out_handle == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
+    if (borrowed_compositor != nullptr) {
+        const sao_status_t owner_status =
+            sao_ui_compositor_require_owner_thread(borrowed_compositor);
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+    } else {
+        retry_failed_owned_construction_cleanup();
+    }
     SaoUiEntityShellConfig effective = config == nullptr ? SaoUiEntityShellConfig{} : *config;
     SaoOverlayHostState host_state{};
     if (host != nullptr) {
@@ -1845,6 +2085,10 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
     if (shell == nullptr)
         return SAO_STATUS_ERR_UNKNOWN;
     shell->host = host;
+    shell->compositor = borrowed_compositor;
+    shell->owns_compositor = borrowed_compositor == nullptr;
+    shell->nervegear_input = {shell.get(), false};
+    shell->menu_input = {shell.get(), true};
     shell->config = effective;
     shell->origin_x = effective.origin_x;
     shell->origin_y = effective.origin_y;
@@ -1864,7 +2108,10 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
         return SAO_STATUS_ERR_UNKNOWN;
     }
 
-    sao_status_t status = sao_ui_compositor_create(host, nullptr, &shell->compositor);
+    std::vector<SaoUiLayerInputRect> nervegear_input_rects;
+    sao_status_t status = SAO_STATUS_OK;
+    if (shell->owns_compositor)
+        status = sao_ui_compositor_create(host, nullptr, &shell->compositor);
     if (status == SAO_STATUS_OK) {
         status = sao_ui_theme_create(&shell->theme);
     }
@@ -1897,6 +2144,23 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
             shell->origin_y + shell->nervegear_y, SAO_UI_NG_PALETTE_DARK, &shell->nervegear);
     }
     if (status == SAO_STATUS_OK) {
+        int32_t center_x = 0;
+        int32_t center_y = 0;
+        int32_t radius = 0;
+        status = sao_ui_nervegear_get_hit_shape(shell->nervegear, &center_x, &center_y, &radius);
+        if (status == SAO_STATUS_OK) {
+            const int32_t local_center_x = center_x - shell->origin_x - shell->nervegear_x;
+            const int32_t local_center_y = center_y - shell->origin_y - shell->nervegear_y;
+            try {
+                nervegear_input_rects = circular_input_rects(
+                    local_center_x, local_center_y, radius, SAO_UI_NERVEGEAR_SIZE,
+                    SAO_UI_NERVEGEAR_SIZE);
+            } catch (...) {
+                status = SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+    }
+    if (status == SAO_STATUS_OK) {
         SaoLayerConfig layer{};
         layer.name_utf8 = "entity.nervegear";
         layer.x = shell->nervegear_x;
@@ -1910,6 +2174,11 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
         layer.high_fps = true;
         layer.target_fps = 60;
         status = sao_ui_layer_create(shell->compositor, &layer, &shell->nervegear_layer);
+    }
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_layer_set_input_rects(shell->nervegear_layer,
+                                              nervegear_input_rects.data(),
+                                              nervegear_input_rects.size());
     }
     if (status == SAO_STATUS_OK) {
         SaoLayerConfig layer{};
@@ -1934,31 +2203,88 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
     }
     if (status == SAO_STATUS_OK)
         status = raster_and_upload_locked(shell.get());
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_layer_set_input_callbacks(
+            shell->nervegear_layer, &entity_layer_cursor, &entity_layer_leave,
+            &entity_layer_button, &entity_layer_scroll, &shell->nervegear_input);
+    }
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_layer_set_input_callbacks(
+            shell->menu_layer, &entity_layer_cursor, &entity_layer_leave, &entity_layer_button,
+            &entity_layer_scroll, &shell->menu_input);
+    }
+    if (status == SAO_STATUS_OK &&
+        g_fail_next_entity_shell_construction.exchange(false, std::memory_order_acq_rel)) {
+        status = SAO_STATUS_ERR_UNKNOWN;
+    }
     if (status != SAO_STATUS_OK) {
-        destroy_members(shell.get());
+        const sao_status_t cleanup_status =
+            destroy_members(shell.get(), !shell->owns_compositor);
+        if (cleanup_status != SAO_STATUS_OK) {
+            if (shell->owns_compositor) {
+                try {
+                    quarantine_failed_owned_construction(std::move(shell));
+                } catch (...) {
+                    (void)shell.release();
+                }
+            }
+            return cleanup_status;
+        }
         return status;
     }
     *out_handle = shell.release();
     return SAO_STATUS_OK;
 }
 
-extern "C" void SAO_UI_CALL sao_ui_entity_shell_destroy(sao_ui_entity_shell_handle_t handle) {
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityShellConfig* config,
+                           sao_ui_entity_shell_handle_t* out_handle) {
+    return create_entity_shell(host, nullptr, config, out_handle);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_create_on_compositor(
+    sao_ui_compositor_handle_t compositor, const SaoUiEntityShellConfig* config,
+    sao_ui_entity_shell_handle_t* out_handle) {
+    if (compositor == nullptr) {
+        if (out_handle != nullptr)
+            *out_handle = nullptr;
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    return create_entity_shell(sao_ui_compositor_host(compositor), compositor, config, out_handle);
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_entity_shell_try_destroy(sao_ui_entity_shell_handle_t handle) {
     if (handle == nullptr)
-        return;
-    if (handle->host != nullptr) {
-        (void)sao_ui_overlay_host_set_mouse(handle->host, nullptr, nullptr);
-        (void)sao_ui_overlay_host_set_hit_test(handle->host, nullptr, nullptr);
-    }
+        return SAO_STATUS_OK;
     if (std::this_thread::get_id() != handle->owner_thread)
-        return;
-    {
-        std::lock_guard<std::mutex> lock(handle->mutex);
-        if (handle->callback_depth > 0) {
-            handle->destroy_pending = true;
-            return;
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    try {
+        {
+            std::lock_guard<std::mutex> lock(handle->mutex);
+            if (handle->callback_depth > 0) {
+                handle->destroy_pending = true;
+                return SAO_STATUS_ERR_CANCELLED;
+            }
         }
+        if (!handle->teardown_started) {
+            const sao_status_t offline_status = sao_ui_entity_shell_take_offline(handle);
+            if (offline_status != SAO_STATUS_OK)
+                return offline_status;
+            handle->teardown_started = true;
+        }
+        const sao_status_t status = destroy_members(handle);
+        if (status != SAO_STATUS_OK)
+            return status;
+        delete handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    destroy_now(handle);
+}
+
+extern "C" void SAO_UI_CALL sao_ui_entity_shell_destroy(sao_ui_entity_shell_handle_t handle) {
+    (void)sao_ui_entity_shell_try_destroy(handle);
 }
 
 extern "C" sao_status_t SAO_UI_CALL
@@ -1978,11 +2304,11 @@ sao_ui_entity_shell_bring_online(sao_ui_entity_shell_handle_t handle) {
     status = first_failure(status, sao_ui_layer_set_visible(handle->nervegear_layer, true));
     status = first_failure(status, sao_ui_layer_set_input_enabled(handle->nervegear_layer, true));
     status = first_failure(status, sync_frame_locked(handle, 0));
-    if (handle->host != nullptr) {
+    if (handle->owns_compositor && handle->host != nullptr) {
         status = first_failure(status, sao_ui_overlay_host_set_visible(handle->host, true));
     }
     if (status != SAO_STATUS_OK) {
-        if (handle->host != nullptr) {
+        if (handle->owns_compositor && handle->host != nullptr) {
             (void)sao_ui_overlay_host_set_visible(handle->host, false);
         }
         (void)sao_ui_layer_set_input_enabled(handle->nervegear_layer, false);
@@ -2009,7 +2335,7 @@ sao_ui_entity_shell_take_offline(sao_ui_entity_shell_handle_t handle) {
     handle->visual_dirty = true;
     status = first_failure(status, sao_ui_nervegear_hide(handle->nervegear));
     status = first_failure(status, commit_visual_state_locked(handle));
-    if (handle->host != nullptr) {
+    if (handle->owns_compositor && handle->host != nullptr) {
         status = first_failure(status, sao_ui_overlay_host_set_visible(handle->host, false));
     }
     handle->last_status = status;
@@ -2362,7 +2688,7 @@ sao_ui_entity_shell_insert(sao_ui_entity_shell_handle_t handle) {
     handle->overlay_visible = !handle->overlay_visible;
     handle->visual_dirty = true;
     sao_status_t status = commit_visual_state_locked(handle);
-    if (handle->host != nullptr) {
+    if (handle->owns_compositor && handle->host != nullptr) {
         status = first_failure(
             status, sao_ui_overlay_host_set_visible(handle->host, handle->overlay_visible));
     }

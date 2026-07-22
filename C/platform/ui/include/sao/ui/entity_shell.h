@@ -99,9 +99,25 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_create(
     const SaoUiEntityShellConfig* config,
     sao_ui_entity_shell_handle_t* out_handle);
 
-// Destruction is owner-thread-affine. A non-owner call only detaches the
-// shell's host callbacks; the owner must call destroy again to release the
-// shell and its D3D11/DirectComposition resources.
+// Attach Entity's NerveGear/menu layers to an existing compositor. The shell
+// borrows the compositor and never presents or destroys it; the process-level
+// owner drives sao_ui_compositor_tick after all feature layers update.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_create_on_compositor(
+    sao_ui_compositor_handle_t compositor,
+    const SaoUiEntityShellConfig* config,
+    sao_ui_entity_shell_handle_t* out_handle);
+
+#if defined(SAO_UI_TESTING)
+SAO_UI_API void SAO_UI_CALL sao_ui_test_fail_next_entity_shell_construction(void);
+#endif
+
+// Destruction is owner-thread-affine and retryable. Owned compositor teardown
+// failures preserve the shell handle and compositor ownership for another
+// call. Borrowed compositors remain owned by their process-level host.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_try_destroy(
+    sao_ui_entity_shell_handle_t handle);
+
+// Compatibility wrapper that ignores the retryable status.
 SAO_UI_API void SAO_UI_CALL sao_ui_entity_shell_destroy(
     sao_ui_entity_shell_handle_t handle);
 

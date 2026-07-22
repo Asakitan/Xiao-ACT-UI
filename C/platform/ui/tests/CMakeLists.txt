@@ -336,7 +336,9 @@ if (WIN32)
     target_link_libraries(sao_platform_ui_entity_shell_tests PRIVATE user32 gdi32)
 endif()
 
-target_compile_definitions(sao_platform_ui_entity_shell_tests PRIVATE SAO_UI_USING_DLL)
+target_compile_definitions(sao_platform_ui_entity_shell_tests PRIVATE
+    SAO_UI_USING_DLL
+    SAO_UI_TESTING)
 target_compile_features(sao_platform_ui_entity_shell_tests PRIVATE cxx_std_20)
 
 catch_discover_tests(sao_platform_ui_entity_shell_tests

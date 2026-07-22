@@ -4,6 +4,9 @@
 #include "sao/ui/sao_ui_scriptable_canvas.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
+#include "widget_paint_internal.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -51,11 +54,12 @@ struct sao_ui_widget_s {
     bool active{};
     bool enabled{true};
     float value{};
-    float radius{6.0F};
+    float radius{};
     float border_width{1.0F};
     Rect bounds{};
     std::string text;
-    std::unordered_map<std::string, uint32_t> colors;
+    std::unordered_map<std::string, uint32_t> prop_colors;
+    std::unordered_map<std::string, uint32_t> theme_overrides;
     std::mutex mutex;
 };
 
@@ -63,7 +67,7 @@ struct GenericWidgetPropsState {
     bool active{};
     bool enabled{true};
     float value{};
-    float radius{6.0F};
+    float radius{};
     float border_width{1.0F};
     std::string text;
     std::unordered_map<std::string, uint32_t> colors;
@@ -204,6 +208,40 @@ void fill_rect(sao_ui_paint_ctx_s& context, Rect rect, uint32_t argb) {
     }
 }
 
+void fill_rounded_rect(sao_ui_paint_ctx_s& context, Rect rect, float radius,
+                       uint32_t argb) {
+    if (context.raster == nullptr || !valid_rect(rect.width, rect.height))
+        return;
+    radius = std::clamp(radius, 0.0F, std::min(rect.width, rect.height) * 0.5F);
+    if (radius <= 0.0F) {
+        fill_rect(context, rect, argb);
+        return;
+    }
+    const Rect draw = intersect(rect, clip_bounds(context));
+    if (!valid_rect(draw.width, draw.height))
+        return;
+    const BgraPixel color = premultiply(apply_opacity(argb, current_opacity(context)));
+    const float inner_left = rect.x + radius;
+    const float inner_top = rect.y + radius;
+    const float inner_right = rect.x + rect.width - radius;
+    const float inner_bottom = rect.y + rect.height - radius;
+    const float radius_squared = radius * radius;
+    for (int32_t y = static_cast<int32_t>(std::floor(draw.y));
+         y < static_cast<int32_t>(std::ceil(draw.y + draw.height)); ++y) {
+        for (int32_t x = static_cast<int32_t>(std::floor(draw.x));
+             x < static_cast<int32_t>(std::ceil(draw.x + draw.width)); ++x) {
+            const float pixel_x = static_cast<float>(x) + 0.5F;
+            const float pixel_y = static_cast<float>(y) + 0.5F;
+            const float nearest_x = std::clamp(pixel_x, inner_left, inner_right);
+            const float nearest_y = std::clamp(pixel_y, inner_top, inner_bottom);
+            const float delta_x = pixel_x - nearest_x;
+            const float delta_y = pixel_y - nearest_y;
+            if (delta_x * delta_x + delta_y * delta_y <= radius_squared)
+                blend_pixel(*context.raster, x, y, color);
+        }
+    }
+}
+
 void fill_ellipse(sao_ui_paint_ctx_s& context, Rect rect, uint32_t argb) {
     if (context.raster == nullptr || !valid_rect(rect.width, rect.height)) return;
     const Rect draw = intersect(rect, clip_bounds(context));
@@ -255,31 +293,72 @@ void draw_text(sao_ui_paint_ctx_s& context, float x, float y, const char* text, 
 }
 
 uint32_t widget_color(const sao_ui_widget_s& widget, const char* name, uint32_t fallback) {
-    const auto found = widget.colors.find(name);
-    return found == widget.colors.end() ? fallback : found->second;
+    const auto theme_override = widget.theme_overrides.find(name);
+    if (theme_override != widget.theme_overrides.end())
+        return theme_override->second;
+    const auto prop_color = widget.prop_colors.find(name);
+    return prop_color == widget.prop_colors.end() ? fallback : prop_color->second;
+}
+
+std::string_view semantic_color_key(std::string_view key) noexcept {
+    if (key == "APP_BG")
+        return "canvas_bg";
+    if (key == "APP_CARD")
+        return "fill";
+    if (key == "APP_BORDER")
+        return "border";
+    if (key == "APP_TEXT" || key == "APP_TEXT_2" || key == "APP_TEXT_DIM")
+        return "fg";
+    if (key == "APP_ACCENT")
+        return "accent";
+    return key;
 }
 
 void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bounds) {
     widget.bounds = bounds;
-    const uint32_t fill = widget_color(widget, "fill", widget.active ? 0xff3a8ee6U : 0xff273447U);
-    const uint32_t border = widget_color(widget, "border", 0xff75849aU);
-    const uint32_t foreground = widget_color(widget, "fg", widget.enabled ? 0xfff0f4faU : 0xff8f9aaaU);
-    const uint32_t accent = widget_color(widget, "accent", 0xff4ea5ffU);
-    if (widget.kind != SAO_UI_WIDGET_TEXT && widget.kind != SAO_UI_WIDGET_MORE_INDICATOR) fill_rect(context, bounds, fill);
+    const uint32_t accent = widget_color(
+        widget, "accent", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT));
+    const uint32_t fill = widget_color(
+        widget, "fill",
+        widget.active ? accent : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD));
+    const uint32_t border = widget_color(
+        widget, "border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+    const SaoUiColorToken foreground_token =
+        widget.kind == SAO_UI_WIDGET_TEXT || widget.kind == SAO_UI_WIDGET_MORE_INDICATOR
+            ? SAO_UI_TOKEN_APP_TEXT_2
+            : SAO_UI_TOKEN_APP_TEXT;
+    const uint32_t foreground = widget_color(
+        widget, "fg", sao::ui::detail::panel_theme_color(
+                          widget.enabled ? foreground_token : SAO_UI_TOKEN_APP_TEXT_2));
+    const bool rounded = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+                         widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL ||
+                         widget.kind == SAO_UI_WIDGET_STATUS_BADGE;
+    if (widget.kind != SAO_UI_WIDGET_TEXT && widget.kind != SAO_UI_WIDGET_MORE_INDICATOR) {
+        if (rounded)
+            fill_rounded_rect(context, bounds, widget.radius, border);
+        else
+            fill_rect(context, bounds, fill);
+    }
+    if (rounded) {
+        const float line = std::clamp(widget.border_width, 0.0F,
+                                      std::min(bounds.width, bounds.height) * 0.5F);
+        const Rect inner{bounds.x + line, bounds.y + line, bounds.width - line * 2.0F,
+                         bounds.height - line * 2.0F};
+        if (valid_rect(inner.width, inner.height))
+            fill_rounded_rect(context, inner, std::max(0.0F, widget.radius - line), fill);
+    }
     if (widget.kind == SAO_UI_WIDGET_BAR) fill_rect(context, {bounds.x, bounds.y, bounds.width * std::clamp(widget.value, 0.0F, 1.0F), bounds.height}, accent);
     if (widget.kind == SAO_UI_WIDGET_DIVIDER) fill_rect(context, {bounds.x, bounds.y + bounds.height * 0.5F, bounds.width, std::max(1.0F, widget.border_width)}, border);
     if (widget.kind == SAO_UI_WIDGET_TABLE) {
         fill_rect(context, {bounds.x, bounds.y, bounds.width, std::min(20.0F, bounds.height)}, accent);
         for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height; row += 18.0F) fill_rect(context, {bounds.x, row, bounds.width, 1.0F}, border);
     }
-    if (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON || widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL || widget.kind == SAO_UI_WIDGET_STATUS_BADGE) {
-        const float line = std::min(widget.border_width, std::min(bounds.width, bounds.height) * 0.5F);
-        fill_rect(context, {bounds.x, bounds.y, bounds.width, line}, border);
-        fill_rect(context, {bounds.x, bounds.y + bounds.height - line, bounds.width, line}, border);
-        fill_rect(context, {bounds.x, bounds.y, line, bounds.height}, border);
-        fill_rect(context, {bounds.x + bounds.width - line, bounds.y, line, bounds.height}, border);
+    if (!widget.text.empty()) {
+        const float padding = static_cast<float>(
+            sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_PADDING_S));
+        draw_text(context, bounds.x + padding, bounds.y + padding, widget.text.c_str(),
+                  std::max(5.0F, std::min(15.0F, bounds.height - padding)), foreground);
     }
-    if (!widget.text.empty()) draw_text(context, bounds.x + 3.0F, bounds.y + 3.0F, widget.text.c_str(), std::max(5.0F, std::min(15.0F, bounds.height - 4.0F)), foreground);
 }
 
 bool parse_color(const std::string& value, uint32_t* out_color) {
@@ -313,6 +392,8 @@ sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
         GenericWidgetPropsState candidate;
+        candidate.radius = static_cast<float>(
+            sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
         for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg"}) {
             const auto property = document.find(key);
             if (property == document.end())
@@ -414,6 +495,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_create(
     try {
         auto widget = std::make_unique<sao_ui_widget_s>();
         widget->kind = widget_kind;
+        widget->radius = static_cast<float>(
+            sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
         sao_ui_widget_handle_t handle = widget.get();
         auto& registry = generic_widget_registry();
         std::lock_guard lock(registry.mutex);
@@ -481,7 +564,8 @@ extern "C" void SAO_UI_CALL sao_ui_widget_destroy(sao_ui_widget_handle_t handle)
             (void)sao::ui::detail::release_widget_event_handlers(handle, &removed);
             std::lock_guard state_lock(handle->mutex);
             handle->text.clear();
-            handle->colors.clear();
+            handle->prop_colors.clear();
+            handle->theme_overrides.clear();
             return;
         }
     } catch (...) {
@@ -542,7 +626,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(
     handle->radius = candidate.radius;
     handle->border_width = candidate.border_width;
     handle->text.swap(candidate.text);
-    handle->colors.swap(candidate.colors);
+    handle->prop_colors.swap(candidate.colors);
     return SAO_STATUS_OK;
 }
 
@@ -553,7 +637,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_theme_token(
     if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
-    handle->colors[token_key_utf8] = argb_value;
+    handle->theme_overrides[std::string(semantic_color_key(token_key_utf8))] = argb_value;
     return SAO_STATUS_OK;
 }
 
@@ -564,7 +648,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_clear_theme_token(
     if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::scoped_lock lock(handle->mutex);
-    handle->colors.erase(token_key_utf8);
+    handle->theme_overrides.erase(std::string(semantic_color_key(token_key_utf8)));
     return SAO_STATUS_OK;
 }
 
@@ -620,8 +704,8 @@ extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(
     if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
         return false;
     std::lock_guard lock(handle->mutex);
-    const auto color = handle->colors.find(color_key);
-    if (color == handle->colors.end())
+    const auto color = handle->prop_colors.find(color_key);
+    if (color == handle->prop_colors.end())
         return false;
     *out_color = color->second;
     const size_t count = std::min(handle->text.size(), out_text_capacity - 1);
@@ -747,6 +831,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(
     std::scoped_lock lock(context->raster->mutex);
     fill_rect(*context, {x, y, width, height}, argb);
     return SAO_STATUS_OK;
+}
+
+sao_status_t sao::ui::detail::paint_rounded_rect(
+    sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height,
+    float radius, uint32_t argb) noexcept {
+    if (context == nullptr || context->raster == nullptr || !valid_rect(width, height) ||
+        !std::isfinite(radius) || radius < 0.0F) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->raster->mutex);
+        fill_rounded_rect(*context, {x, y, width, height}, radius, argb);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_stroke_line(

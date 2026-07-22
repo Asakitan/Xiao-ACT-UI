@@ -139,6 +139,12 @@ SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle
 // BOTH hRender and hControl, or on neither.
 SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(sao_ui_overlay_host_handle_t handle);
 
+// Validate that the caller is the Win32 owner thread that created the host.
+// Host-bound compositors use this before attaching thread-affine D3D/DComp and
+// input state.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_overlay_host_require_owner_thread(sao_ui_overlay_host_handle_t handle);
+
 // Borrowed DC-mutation coordinator configured at host creation, or NULL.
 // The host owns only its HWND registration; it does not own the coordinator.
 SAO_UI_API void* SAO_UI_CALL
