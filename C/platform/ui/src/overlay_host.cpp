@@ -82,7 +82,8 @@ struct sao_ui_overlay_host_s {
 namespace {
 
 #if !defined(SAO_UI_OVERLAY_HOST_TESTING)
-constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\SaoAutoOverlayHost";
+constexpr wchar_t kSingleInstanceMutexName[] =
+    L"Local\\{7F3E2A91-4C8B-4D6E-9A15-8B2F0C4E3D7A}";
 #endif
 constexpr SaoUiDcMutationRect kPhysicalRectScrub{0, 0, 1, 1};
 constexpr uint32_t kPhysicalRectScrubSettleMs = 40;
@@ -155,11 +156,21 @@ std::wstring make_class_name() {
     LARGE_INTEGER counter{};
     ::QueryPerformanceCounter(&counter);
     static std::atomic<uint32_t> sequence{0};
-    wchar_t name[80]{};
-    ::swprintf_s(name, L"SaoOverlayHost.%08lX.%08lX.%08lX",
-                 static_cast<unsigned long>(::GetCurrentProcessId()),
-                 static_cast<unsigned long>(counter.LowPart ^ counter.HighPart),
-                 static_cast<unsigned long>(sequence.fetch_add(1, std::memory_order_relaxed)));
+    const uint32_t seq = sequence.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t pid = static_cast<uint32_t>(::GetCurrentProcessId());
+    const uint32_t mix_a =
+        static_cast<uint32_t>(counter.LowPart) ^ (pid * 0x9E3779B1u);
+    const uint32_t mix_b =
+        static_cast<uint32_t>(counter.HighPart) ^ (seq * 0xC2B2AE35u);
+    wchar_t name[64]{};
+    ::swprintf_s(name, L"{%08lX-%04lX-%04lX-%04lX-%08lX%04lX}",
+                 static_cast<unsigned long>(mix_a),
+                 static_cast<unsigned long>((mix_b >> 16) & 0xFFFFu),
+                 static_cast<unsigned long>(mix_b & 0xFFFFu),
+                 static_cast<unsigned long>((pid ^ seq) & 0xFFFFu),
+                 static_cast<unsigned long>(counter.LowPart ^
+                                             (counter.HighPart << 3)),
+                 static_cast<unsigned long>(seq & 0xFFFFu));
     return name;
 }
 
@@ -551,7 +562,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     const int32_t y = explicit_bounds ? config->origin_y : ::GetSystemMetrics(SM_YVIRTUALSCREEN);
     const wchar_t* title = config != nullptr && config->title_utf16 != nullptr
                                ? config->title_utf16
-                               : L"SAO Overlay Host";
+                               : L"";
 
     host->owner_hwnd =
         ::CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, host->class_name.c_str(), L"",

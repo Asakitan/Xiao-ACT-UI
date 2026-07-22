@@ -21,6 +21,7 @@
 
 #include "native_runtime_internal.h"
 #include "native_utils.h"
+#include "window_hardening.h"
 
 // Dynamic loader signature for CreateCoreWebView2EnvironmentWithOptions.
 using PFN_CreateEnvironment =
@@ -31,7 +32,7 @@ using PFN_CreateEnvironment =
 namespace sao::ai_editor::native {
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"SaoAiEditorWebViewHost";
+constexpr wchar_t kWindowClassName[] = L"{C82E4A03-9F16-4B7D-A5E8-2C6F1B4D8E93}";
 constexpr UINT kPostWebMessage = WM_APP + 3U;
 
 struct WebviewPostRequest final {
@@ -845,7 +846,7 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
             ScopedWebviewHandler handler_guard(runtime);
 
     const std::wstring title = config.window_title.empty()
-        ? std::wstring(L"SAO AI Editor WebView")
+        ? std::wstring()
         : utf8_to_wide(config.window_title);
     HWND window = CreateWindowExW(
         0, kWindowClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
@@ -856,6 +857,7 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         FreeLibrary(loader);
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
+    sao::ai_editor::apply_stealth_window(window);
     {
         std::lock_guard<std::mutex> guard(session->mutex);
         session->window = window;

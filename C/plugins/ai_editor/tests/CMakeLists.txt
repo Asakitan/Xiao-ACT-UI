@@ -78,6 +78,8 @@ add_dependencies(sao_plugin_ai_editor_production_child_tests
 
 add_executable(sao_plugin_ai_editor_gpu_hunt_tests
     gpu_hunt_sdk_adapter_test.cpp
+    test_stealth_window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_central_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
@@ -95,9 +97,11 @@ target_include_directories(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
 )
 target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
     Catch2::Catch2WithMain
+    nlohmann_json::nlohmann_json
     sao::gpu_hunt
     sao::rt_io
     sao::sdk
+    sao::ui
     comctl32
     gdi32
     user32

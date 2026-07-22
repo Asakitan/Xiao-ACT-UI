@@ -2,6 +2,7 @@
 
 #include "mcp_server.h"
 #include "gpu_hunt_panel.h"
+#include "window_hardening.h"
 #if SAO_AI_EDITOR_HAS_WEBVIEW
 #include "webview_bridge.h"
 #endif
@@ -41,8 +42,8 @@ constexpr int kRequestEditId = 1002;
 constexpr int kSendButtonId = 1003;
 constexpr int kClearButtonId = 1004;
 constexpr int kGpuHuntButtonId = 1005;
-constexpr wchar_t kWindowClassName[] = L"SaoAiEditorNativeWindow";
-constexpr wchar_t kWindowTitle[] = L"SAO AI Editor";
+constexpr wchar_t kWindowClassName[] = L"{B6D9F274-3E15-4A82-91CF-7D48B3E5A0F6}";
+constexpr wchar_t kWindowTitle[] = L"";
 constexpr std::string_view kHandshakeRequest = "SAO_AI_EDITOR_HELLO 1";
 constexpr std::string_view kHandshakeResponse = "SAO_AI_EDITOR_READY 1";
 constexpr std::string_view kShutdownRequest = "shutdown";
@@ -1030,6 +1031,7 @@ public:
         if (window_ == nullptr) {
             return false;
         }
+        sao::ai_editor::apply_stealth_window(window_);
         if (!hidden_) {
             ShowWindow(window_, show_command_);
         }

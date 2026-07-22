@@ -1284,7 +1284,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return status;
     }
     bool persisted_streaming_mode = false;
-    status = ctx->settings_owner->get_truthy("streaming_mode", false, persisted_streaming_mode);
+    status = ctx->settings_owner->get_truthy("streaming_mode", true, persisted_streaming_mode);
     if (status != SAO_STATUS_OK) {
         delete ctx;
         return status;
