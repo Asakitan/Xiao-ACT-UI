@@ -220,6 +220,16 @@ python/runtime/node/node.exe
 /C/AGENTS.md
 /C/docs/
 
+# ── Shipping SAO2 driver assets: encrypted PE blobs are safe to ship ──
+# Parent tree above is ignored, so re-allow each level explicitly.
+# The .sao2 files themselves are AES-GCM sealed with the fixed install
+# key so a repository clone alone gives no plaintext driver bytes;
+# first launch on each machine re-encrypts them into per-user SAO3.
+!/C/platform/rt_io/assets/
+!/C/platform/rt_io/assets/drivers/
+!/C/platform/rt_io/assets/drivers/*.sao2
+!/C/platform/rt_io/assets/drivers/README.md
+
 # ── Public end-user documentation remains trackable ──
 !/python/docs/html/index.html
 !/python/docs/html/assets/style.css

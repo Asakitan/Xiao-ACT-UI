@@ -91,6 +91,13 @@ option(SAO_BUILD_LAUNCHER   "Standalone SaoAuto.exe launcher"                   
 option(SAO_BUILD_TESTS      "Catch2 unit tests + integration smoke tests"             OFF)
 option(SAO_BUILD_TOOLS      "CLI tools: sign / pack / crypter / obfuscate / ..."      ON)
 
+if (SAO_BUILD_PLUGINS AND NOT SAO_BUILD_PLATFORM)
+    message(FATAL_ERROR
+        "SAO_BUILD_PLUGINS=ON requires SAO_BUILD_PLATFORM=ON. "
+        "For the supported platform-off matrix configure with "
+        "-DSAO_BUILD_PLATFORM=OFF -DSAO_BUILD_PLUGINS=OFF.")
+endif()
+
 # Hardening posture — flip ON for ship builds. Adds LTO, CFG, CET when the
 # linker supports it, ASLR/DEP, and reproducible-link settings without
 # changing the public ABI.
