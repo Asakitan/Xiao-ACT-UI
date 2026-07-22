@@ -31,6 +31,8 @@ struct provider_probe {
     int create_session_calls = 0;
     int quiesce_session_calls = 0;
     int destroy_session_calls = 0;
+    uint32_t session_spec_size = 0;
+    bool callback_gate_present = false;
     uint64_t next_token = 100;
     std::vector<std::string> calls;
     std::unordered_map<uint64_t, std::string> layers;
@@ -66,11 +68,16 @@ int32_t SAO_PLUGINS_CALL provider_create_session(void* user_data,
                                                  const plugin_context_platform_session_spec* spec,
                                                  plugin_context_platform_session_t* out_session) {
     if (user_data == nullptr || spec == nullptr || out_session == nullptr ||
-        spec->struct_size < sizeof(plugin_context_platform_session_spec) ||
+        spec->struct_size < SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE ||
         spec->plugin_id_utf8 == nullptr) {
         return SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
     }
     auto* probe = static_cast<provider_probe*>(user_data);
+    probe->session_spec_size = spec->struct_size;
+    probe->callback_gate_present =
+        spec->struct_size >= sizeof(plugin_context_platform_session_spec) &&
+        spec->callback_gate_user_data != nullptr && spec->enter_callback != nullptr &&
+        spec->leave_callback != nullptr;
     auto session = std::make_unique<provider_session>();
     session->owner = probe;
     session->plugin_id = spec->plugin_id_utf8;
@@ -304,6 +311,8 @@ TEST_CASE("plugin context compositor preserves ABI 1.0 provider compatibility",
     auto handle = add_context_plugin("compositor_abi_1_0");
     auto* context = sao_plugins_ctx_create(handle);
     REQUIRE(context != nullptr);
+    CHECK(probe.session_spec_size == SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE);
+    CHECK_FALSE(probe.callback_gate_present);
     CHECK(sao_plugins_ctx_create_compositor_layer(context, "hud", 2, 2, 0, 0, 0, true, false, 0) ==
           SAO_PLUGINS_ERR_UNSUPPORTED);
 
@@ -321,7 +330,21 @@ TEST_CASE("plugin context compositor forwards owned tokens and tolerates callbac
     auto handle = add_context_plugin("compositor_forward");
     auto* context = sao_plugins_ctx_create(handle);
     REQUIRE(context != nullptr);
+    CHECK(probe.session_spec_size == sizeof(plugin_context_platform_session_spec));
+    CHECK(probe.callback_gate_present);
     probe.reentry_context = context;
+
+    const std::string too_long_name(
+        static_cast<size_t>(SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES) + 1U, 'x');
+    CHECK(sao_plugins_ctx_create_compositor_layer(context, too_long_name.c_str(), 4, 4, 10, 20,
+                                                  140, false, true, 120) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    const char invalid_utf8_name[] = {'h', 'u', 'd', static_cast<char>(0xc0),
+                                      static_cast<char>(0xaf), '\0'};
+    CHECK(sao_plugins_ctx_create_compositor_layer(context, invalid_utf8_name, 4, 4, 10, 20, 140,
+                                                  false, true, 120) ==
+          SAO_ERR_INVALID_ARGUMENT);
+    CHECK(probe.layers.empty());
 
     REQUIRE(sao_plugins_ctx_create_compositor_layer(context, "hud", 4, 4, 10, 20, 140, false, true,
                                                     120) == SAO_OK);
@@ -331,6 +354,8 @@ TEST_CASE("plugin context compositor forwards owned tokens and tolerates callbac
     const std::vector<uint8_t> frame(4 * 4 * 4, 0x7f);
     CHECK(sao_plugins_ctx_upload_compositor_frame(context, "hud", frame.data(), frame.size() - 1, 4,
                                                   4) == SAO_ERR_INVALID_ARGUMENT);
+    CHECK(sao_plugins_ctx_upload_compositor_frame(context, "hud", frame.data(), frame.size(), 2,
+                                                  8) == SAO_ERR_INVALID_ARGUMENT);
     REQUIRE(sao_plugins_ctx_upload_compositor_frame(context, "hud", frame.data(), frame.size(), 4,
                                                     4) == SAO_OK);
     REQUIRE(sao_plugins_ctx_set_compositor_layer_position(context, "hud", 30, 40) == SAO_OK);
@@ -390,6 +415,36 @@ TEST_CASE("compositor create preserves retryable ownership when local publicatio
     remove_context_plugin(handle);
 }
 
+TEST_CASE("plugin context teardown retains failed compositor ledger entries for retry",
+          "[plugins][loader][context][compositor][teardown][retry]") {
+    provider_probe probe;
+    auto provider = make_provider(probe);
+    REQUIRE(sao_plugins_ctx_register_platform_provider(&provider) == SAO_OK);
+
+    auto handle = add_context_plugin("compositor_teardown_retry");
+    auto* context = sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+    REQUIRE(sao_plugins_ctx_create_compositor_layer(context, "alpha", 2, 2, 0, 0, 0, true,
+                                                    false, 0) == SAO_OK);
+    REQUIRE(sao_plugins_ctx_create_compositor_layer(context, "beta", 2, 2, 0, 0, 0, true,
+                                                    false, 0) == SAO_OK);
+
+    probe.destroy_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+    sao_plugins_ctx_destroy(context);
+    CHECK(probe.layers.size() == 2);
+    CHECK(probe.destroy_session_calls == 0);
+    CHECK(std::string(sao_plugins_ctx_plugin_id(context)) == "compositor_teardown_retry");
+    CHECK_FALSE(sao_plugins_ctx_should_stop(context));
+
+    probe.destroy_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    sao_plugins_ctx_destroy(context);
+    CHECK(probe.layers.empty());
+    CHECK(probe.destroy_session_calls == 1);
+    CHECK(probe.release_calls == 1);
+    REQUIRE(sao_plugins_ctx_unregister_platform_provider() == SAO_OK);
+    remove_context_plugin(handle);
+}
+
 TEST_CASE("plugin context compositor maps provider statuses and tears down in reverse order",
           "[plugins][loader][context][compositor][teardown]") {
     provider_probe probe;
@@ -404,6 +459,9 @@ TEST_CASE("plugin context compositor maps provider statuses and tears down in re
     CHECK(sao_plugins_ctx_create_compositor_layer(context, "provider_duplicate", 2, 2, 0, 0, 0,
                                                   true, false,
                                                   0) == SAO_PLUGINS_ERR_ALREADY_EXISTS);
+    probe.create_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+    CHECK(sao_plugins_ctx_create_compositor_layer(context, "provider_busy", 2, 2, 0, 0, 0, true,
+                                                  false, 0) == SAO_PLUGINS_ERR_BUSY);
     probe.create_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
 
     REQUIRE(sao_plugins_ctx_create_compositor_layer(context, "alpha", 2, 2, 0, 0, 0, true, false,
@@ -417,14 +475,20 @@ TEST_CASE("plugin context compositor maps provider statuses and tears down in re
     probe.upload_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED;
     CHECK(sao_plugins_ctx_upload_compositor_frame(context, "alpha", frame.data(), frame.size(), 2,
                                                   2) == SAO_PLUGINS_ERR_UNSUPPORTED);
+    probe.upload_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED;
+    CHECK(sao_plugins_ctx_upload_compositor_frame(context, "alpha", frame.data(), frame.size(), 2,
+                                                  2) == SAO_PLUGINS_ERR_BUSY);
     probe.upload_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
     probe.position_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_HANDLE_INVALID;
     CHECK(sao_plugins_ctx_set_compositor_layer_position(context, "alpha", 1, 2) ==
           SAO_ERR_HANDLE_INVALID);
+    probe.position_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED;
+    CHECK(sao_plugins_ctx_set_compositor_layer_position(context, "alpha", 1, 2) ==
+          SAO_PLUGINS_ERR_NOT_OWNER);
     probe.position_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
     probe.visible_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED;
     CHECK(sao_plugins_ctx_set_compositor_layer_visible(context, "alpha", true) ==
-          SAO_ERR_OS_CALL_FAILED);
+          SAO_PLUGINS_ERR_NOT_OWNER);
     probe.visible_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
     probe.input_status = SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
     CHECK(sao_plugins_ctx_set_compositor_layer_input(context, "alpha", nullptr, nullptr, nullptr,

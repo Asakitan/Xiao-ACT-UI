@@ -60,7 +60,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/conversation_store.cpp
     src/extension_host.cpp
     src/gpu_hunt_bridge.cpp
-    src/gpu_hunt_panel.cpp
+    src/gpu_hunt_central_panel.cpp
     src/gpu_hunt_sdk_adapter.cpp
     src/gpu_hunt_tool.cpp
     src/mcp_client.cpp
@@ -98,6 +98,9 @@ target_include_directories(sao_plugin_ai_editor PUBLIC
 
 target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_BUILDING_DLL)
 target_compile_features(sao_plugin_ai_editor PUBLIC cxx_std_20)
+target_link_libraries(sao_plugin_ai_editor PUBLIC
+    sao::ui
+)
 target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
     sao::gpu_hunt

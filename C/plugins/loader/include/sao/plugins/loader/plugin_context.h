@@ -41,13 +41,15 @@ using compositor_scroll_fn = void (*)(float dx, float dy, void* user_data);
 // provider vtable and never includes or links the platform SDK.  A provider
 // owns one isolated session per canonical plugin_context_t.
 #define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR 1u
-#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR 2u
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR 3u
 #define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION                                           \
     ((SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR << 16u) |                             \
      SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR)
 
 using plugin_context_platform_token_t = uint64_t;
 using plugin_context_platform_session_t = void*;
+
+#define SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES 1024u
 
 // ABI 1.1 compositor callbacks use the platform/core status domain. The
 // loader maps these values into SaoStatus/loader-specific results before
@@ -65,6 +67,7 @@ enum plugin_context_platform_status_e : int32_t {
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED = -8,
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ABI_MISMATCH = -9,
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED = -10,
+    SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY = -12,
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_OS_CALL_FAILED = -20,
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED = -21,
     SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_FOUND = -22,
@@ -78,7 +81,19 @@ struct plugin_context_platform_session_spec {
     const char* plugin_id_utf8;
     const char* plugin_path_utf8;
     const char* plugin_version_utf8;
+
+    // ABI 1.3 tail. A real provider-to-plugin callback must enter this gate
+    // immediately before invoking plugin code and leave it immediately after.
+    // This lets lifecycle unload reject callback-thread reentry before it
+    // mutates lifecycle state or stop_requested. Providers compiled against
+    // older prefixes continue to receive the historical struct_size.
+    void* callback_gate_user_data;
+    bool(SAO_PLUGINS_CALL* enter_callback)(void* callback_gate_user_data);
+    void(SAO_PLUGINS_CALL* leave_callback)(void* callback_gate_user_data);
 };
+
+#define SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE                                    \
+    offsetof(sao::plugins::loader::plugin_context_platform_session_spec, callback_gate_user_data)
 
 struct plugin_context_compositor_layer_spec {
     uint32_t struct_size;

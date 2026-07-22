@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -154,6 +155,8 @@ struct platform_resource_record {
     bool pending_destroy = false;
     size_t active_calls = 0;
     bool one_shot = false;
+    uint32_t compositor_width = 0;
+    uint32_t compositor_height = 0;
 };
 
 struct platform_provider_record {
@@ -416,6 +419,24 @@ int32_t copy_entity_provider_id(const char* value, std::string& out) noexcept {
     }
 }
 
+int32_t copy_compositor_layer_name(const char* value, std::string& out) noexcept {
+    try {
+        size_t length = 0;
+        if (!bounded_c_string_length(value, SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES,
+                                     length) ||
+            length == 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        std::string candidate(length, '\0');
+        if (!copy_c_string_bytes(candidate.data(), value, length) || !valid_utf8(candidate))
+            return SAO_ERR_INVALID_ARGUMENT;
+        out = std::move(candidate);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 extension_kind parse_extension_kind(const char* value, bool& valid) {
     valid = true;
     if (std::strcmp(value, "parser_adapter") == 0)
@@ -649,6 +670,48 @@ class platform_call_lease {
     plugin_context_platform_session_t session_ = nullptr;
 };
 
+bool SAO_PLUGINS_CALL enter_platform_callback(void* user_data) noexcept {
+    auto* ctx = static_cast<plugin_context_t*>(user_data);
+    if (ctx == nullptr || g_active_platform_context_depth == kMaximumPlatformCallbackNesting)
+        return false;
+    try {
+        std::lock_guard lock(ctx->mutex);
+        if (!ctx->platform_bound || ctx->platform_closing || ctx->platform_quiesced ||
+            ctx->platform_session_destroyed) {
+            return false;
+        }
+        ++ctx->platform_active_calls;
+        g_active_platform_contexts[g_active_platform_context_depth++] = ctx;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void SAO_PLUGINS_CALL leave_platform_callback(void* user_data) noexcept {
+    auto* ctx = static_cast<plugin_context_t*>(user_data);
+    if (ctx == nullptr)
+        return;
+    const auto begin = g_active_platform_contexts.begin();
+    const auto end = begin + g_active_platform_context_depth;
+    const auto found = std::find(std::make_reverse_iterator(end),
+                                 std::make_reverse_iterator(begin), ctx);
+    if (found == std::make_reverse_iterator(begin))
+        return;
+    const size_t index = static_cast<size_t>(std::distance(begin, found.base()) - 1);
+    for (size_t current = index + 1; current < g_active_platform_context_depth; ++current)
+        g_active_platform_contexts[current - 1] = g_active_platform_contexts[current];
+    g_active_platform_contexts[--g_active_platform_context_depth] = nullptr;
+    try {
+        std::lock_guard lock(ctx->mutex);
+        if (ctx->platform_active_calls > 0)
+            --ctx->platform_active_calls;
+        if (ctx->platform_active_calls == 0)
+            ctx->platform_calls_drained.notify_all();
+    } catch (...) {
+    }
+}
+
 bool platform_context_active_on_current_thread(plugin_context_t* ctx) noexcept {
     return std::find(g_active_platform_contexts.begin(),
                      g_active_platform_contexts.begin() + g_active_platform_context_depth,
@@ -695,15 +758,18 @@ int32_t map_platform_status(int32_t status) noexcept {
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_IMPLEMENTED:
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED:
         return SAO_PLUGINS_ERR_UNSUPPORTED;
+    case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY:
+    case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED:
+        return SAO_PLUGINS_ERR_BUSY;
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ABI_MISMATCH:
         return SAO_PLUGINS_ERR_ABI_MISMATCH;
+    case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED:
+        return SAO_PLUGINS_ERR_NOT_OWNER;
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ALREADY_EXISTS:
         return SAO_PLUGINS_ERR_ALREADY_EXISTS;
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN:
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_TIMEOUT:
-    case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED:
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_OS_CALL_FAILED:
-    case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ACCESS_DENIED:
     case SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_DEVICE_LOST:
     default:
         return SAO_ERR_OS_CALL_FAILED;
@@ -1394,10 +1460,18 @@ sao_plugins_ctx_create(plugin_handle_t plugin) {
         }
         context->platform_bound = true;
         plugin_context_platform_session_spec spec{};
-        spec.struct_size = sizeof(spec);
+        const uint32_t provider_minor = context->platform_provider.abi_version & 0xffffu;
+        spec.struct_size = provider_minor >= 3u
+                               ? sizeof(spec)
+                               : SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE;
         spec.plugin_id_utf8 = context->plugin_id.c_str();
         spec.plugin_path_utf8 = context->plugin_path_utf8.c_str();
         spec.plugin_version_utf8 = context->plugin_version.c_str();
+        if (provider_minor >= 3u) {
+            spec.callback_gate_user_data = context.get();
+            spec.enter_callback = &enter_platform_callback;
+            spec.leave_callback = &leave_platform_callback;
+        }
         int32_t create_status = SAO_ERR_OS_CALL_FAILED;
         try {
             create_status = context->platform_provider.create_session(
@@ -2848,10 +2922,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_window(
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compositor_layer(
     plugin_context_t* ctx, const char* name_utf8, uint32_t width, uint32_t height, int32_t x,
     int32_t y, int32_t z, bool click_through, bool high_fps, uint32_t target_fps) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0' ||
-        !valid_compositor_dimensions(width, height, target_fps)) {
+    if (ctx == nullptr || !valid_compositor_dimensions(width, height, target_fps)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -2863,7 +2940,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compo
     uint32_t loader_token = 0;
     try {
         std::lock_guard lock(ctx->mutex);
-        if (has_platform_key_locked(ctx, platform_resource_kind::compositor_layer, name_utf8)) {
+        if (has_platform_key_locked(ctx, platform_resource_kind::compositor_layer, layer_name)) {
             return SAO_PLUGINS_ERR_ALREADY_EXISTS;
         }
         loader_token = allocate_context_token_locked(ctx);
@@ -2872,6 +2949,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compo
             placeholder.kind = platform_resource_kind::compositor_layer;
             placeholder.loader_token = loader_token;
             placeholder.pending_destroy = true;
+            placeholder.compositor_width = width;
+            placeholder.compositor_height = height;
             ctx->platform_resources.push_back(std::move(placeholder));
         }
     } catch (...) {
@@ -2882,7 +2961,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compo
 
     plugin_context_compositor_layer_spec spec{};
     spec.struct_size = sizeof(spec);
-    spec.name_utf8 = name_utf8;
+    spec.name_utf8 = layer_name.c_str();
     spec.width = width;
     spec.height = height;
     spec.x = x;
@@ -2946,8 +3025,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compo
                                     candidate.loader_token == loader_token;
                          });
         if (found != ctx->platform_resources.end() &&
-            !has_platform_key_locked(ctx, platform_resource_kind::compositor_layer, name_utf8)) {
-            found->key = name_utf8;
+            !has_platform_key_locked(ctx, platform_resource_kind::compositor_layer, layer_name)) {
+            found->key = layer_name;
             found->pending_destroy = false;
             recorded = true;
         }
@@ -2991,10 +3070,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_create_compo
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_upload_compositor_frame(
     plugin_context_t* ctx, const char* name_utf8, const uint8_t* bgra_bytes, size_t bytes_len,
     uint32_t width, uint32_t height) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0' ||
-        !valid_bgra_frame(bgra_bytes, bytes_len, width, height)) {
+    if (ctx == nullptr || !valid_bgra_frame(bgra_bytes, bytes_len, width, height)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -3003,9 +3085,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_upload_compo
         return SAO_PLUGINS_ERR_UNSUPPORTED;
     }
     compositor_resource_lease resource_lease;
-    const int32_t resource_status = resource_lease.acquire(ctx, name_utf8);
+    const int32_t resource_status = resource_lease.acquire(ctx, layer_name);
     if (resource_status != SAO_OK)
         return resource_status;
+    if (resource_lease.resource().compositor_width != width ||
+        resource_lease.resource().compositor_height != height) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     try {
         return map_platform_status(provider.upload_compositor_frame(
             provider.user_data, lease.session(), resource_lease.resource().provider_token,
@@ -3017,9 +3103,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_upload_compo
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_compositor_layer_position(
     plugin_context_t* ctx, const char* name_utf8, int32_t x, int32_t y) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0') {
+    if (ctx == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -3028,7 +3118,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
         return SAO_PLUGINS_ERR_UNSUPPORTED;
     }
     compositor_resource_lease resource_lease;
-    const int32_t resource_status = resource_lease.acquire(ctx, name_utf8);
+    const int32_t resource_status = resource_lease.acquire(ctx, layer_name);
     if (resource_status != SAO_OK)
         return resource_status;
     try {
@@ -3041,9 +3131,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_compositor_layer_visible(
     plugin_context_t* ctx, const char* name_utf8, bool visible) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0') {
+    if (ctx == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -3052,7 +3146,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
         return SAO_PLUGINS_ERR_UNSUPPORTED;
     }
     compositor_resource_lease resource_lease;
-    const int32_t resource_status = resource_lease.acquire(ctx, name_utf8);
+    const int32_t resource_status = resource_lease.acquire(ctx, layer_name);
     if (resource_status != SAO_OK)
         return resource_status;
     try {
@@ -3066,9 +3160,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ctx_destroy_compositor_layer(plugin_context_t* ctx, const char* name_utf8) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0') {
+    if (ctx == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx, true))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -3079,7 +3177,7 @@ sao_plugins_ctx_destroy_compositor_layer(plugin_context_t* ctx, const char* name
     platform_resource_record resource;
     {
         std::lock_guard lock(ctx->mutex);
-        const int32_t status = find_compositor_layer_locked(ctx, name_utf8, resource);
+        const int32_t status = find_compositor_layer_locked(ctx, layer_name, resource);
         if (status != SAO_OK)
             return status;
         const auto found =
@@ -3128,9 +3226,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
     plugin_context_t* ctx, const char* name_utf8, compositor_cursor_pos_fn cursor_pos,
     compositor_mouse_button_fn mouse_button, compositor_cursor_leave_fn cursor_leave,
     compositor_scroll_fn scroll, void* user_data) {
-    if (ctx == nullptr || name_utf8 == nullptr || name_utf8[0] == '\0') {
+    if (ctx == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    std::string layer_name;
+    const int32_t name_status = copy_compositor_layer_name(name_utf8, layer_name);
+    if (name_status != SAO_OK)
+        return name_status;
     platform_call_lease lease;
     if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
@@ -3139,7 +3241,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
         return SAO_PLUGINS_ERR_UNSUPPORTED;
     }
     compositor_resource_lease resource_lease;
-    const int32_t resource_status = resource_lease.acquire(ctx, name_utf8);
+    const int32_t resource_status = resource_lease.acquire(ctx, layer_name);
     if (resource_status != SAO_OK)
         return resource_status;
     plugin_context_compositor_input_spec spec{};

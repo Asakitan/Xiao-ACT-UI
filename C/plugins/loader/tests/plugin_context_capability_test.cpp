@@ -27,6 +27,8 @@ struct capability_probe {
     int retain_calls = 0;
     int release_calls = 0;
     int create_session_calls = 0;
+    uint32_t session_spec_size = 0;
+    bool callback_gate_present = false;
     int quiesce_session_calls = 0;
     int destroy_session_calls = 0;
     uint64_t next_token = 400;
@@ -70,11 +72,16 @@ int32_t SAO_PLUGINS_CALL provider_create_session(void* user_data,
                                                  const plugin_context_platform_session_spec* spec,
                                                  plugin_context_platform_session_t* out_session) {
     if (user_data == nullptr || spec == nullptr || out_session == nullptr ||
-        spec->struct_size < sizeof(plugin_context_platform_session_spec) ||
+        spec->struct_size < SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE ||
         spec->plugin_id_utf8 == nullptr) {
         return SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
     }
     auto* probe = static_cast<capability_probe*>(user_data);
+    probe->session_spec_size = spec->struct_size;
+    probe->callback_gate_present =
+        spec->struct_size >= sizeof(plugin_context_platform_session_spec) &&
+        spec->callback_gate_user_data != nullptr && spec->enter_callback != nullptr &&
+        spec->leave_callback != nullptr;
     auto session = std::make_unique<capability_session>();
     session->owner = probe;
     session->plugin_id = spec->plugin_id_utf8;
@@ -269,6 +276,8 @@ TEST_CASE("plugin context 1.2 file and window capabilities preserve the 1.1 pref
     auto handle = add_plugin("platform_abi_1_1");
     auto* context = sao_plugins_ctx_create(handle);
     REQUIRE(context != nullptr);
+    CHECK(probe.session_spec_size == SAO_PLUGIN_CONTEXT_PLATFORM_SESSION_SPEC_V1_2_SIZE);
+    CHECK_FALSE(probe.callback_gate_present);
     wchar_t* selected = reinterpret_cast<wchar_t*>(1);
     CHECK(sao_plugins_ctx_open_file(context, "[]", "Pick", L"", 0, &selected) ==
           SAO_PLUGINS_ERR_UNSUPPORTED);
