@@ -3,6 +3,9 @@
 
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
 #include "sao/ai_editor/ai_editor_launcher.h"
+#include "sao/ai_editor/ai_editor_main_panel.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
 #endif
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
@@ -312,6 +315,10 @@ struct AiEditorProcessOwner::State {
 
     ~State() {
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+        if (panel_handle != nullptr) {
+            (void)sao_ai_editor_main_panel_try_destroy(panel_handle);
+            panel_handle = nullptr;
+        }
         if (launcher != nullptr) {
             sao_ai_editor_destroy(launcher);
         }
@@ -334,6 +341,7 @@ struct AiEditorProcessOwner::State {
     HANDLE process{};
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
     sao_ai_editor_launcher_t launcher{};
+    sao_ai_editor_main_panel_t panel_handle{};
 #endif
     detail::PackageLease package_lease;
     std::filesystem::path executable;
@@ -527,6 +535,14 @@ void shutdown_and_destroy(sao_ai_editor_launcher_t launcher) noexcept {
     }
     sao_ai_editor_destroy(launcher);
 }
+
+sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
+    void* raw = nullptr;
+    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK) {
+        return nullptr;
+    }
+    return static_cast<sao_ui_compositor_handle_t>(raw);
+}
 #endif
 
 void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
@@ -593,6 +609,7 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
         SaoAiEditorLaunchConfig config{};
         config.executable_utf8 = executable.c_str();
         config.base_dir_utf8 = working_directory.c_str();
+        config.extra_args_utf8 = "--headless";
         config.handshake_timeout_ms = kAiEditorHandshakeTimeoutMs;
         config.request_timeout_ms = kAiEditorHandshakeTimeoutMs;
 
@@ -751,6 +768,11 @@ sao_status_t AiEditorProcessOwner::open() noexcept {
             }
             sao_ai_editor_launcher_t launcher = state->launcher;
             state->launcher = nullptr;
+            sao_ai_editor_main_panel_t stale_panel = state->panel_handle;
+            state->panel_handle = nullptr;
+            if (stale_panel != nullptr) {
+                (void)sao_ai_editor_main_panel_try_destroy(stale_panel);
+            }
             sao_ai_editor_destroy(launcher);
             state->has_exit_code = exit_code != kUnsetExitCode;
             state->exit_code = state->has_exit_code
@@ -839,6 +861,11 @@ sao_status_t AiEditorProcessOwner::snapshot(
             } else {
                 sao_ai_editor_launcher_t launcher = state->launcher;
                 state->launcher = nullptr;
+                sao_ai_editor_main_panel_t stale_panel = state->panel_handle;
+                state->panel_handle = nullptr;
+                if (stale_panel != nullptr) {
+                    (void)sao_ai_editor_main_panel_try_destroy(stale_panel);
+                }
                 sao_ai_editor_destroy(launcher);
                 state->has_exit_code = exit_code != kUnsetExitCode;
                 state->exit_code = state->has_exit_code

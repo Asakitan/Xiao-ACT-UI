@@ -53,6 +53,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/ai_editor_launcher_process.cpp
     src/ai_editor_ipc_win32.cpp
     src/agent_registry.cpp
+    src/ai_editor_main_panel.cpp
     src/ai_editor_native_runtime.cpp
     src/auth_device_flow.cpp
     src/chat_provider_router.cpp

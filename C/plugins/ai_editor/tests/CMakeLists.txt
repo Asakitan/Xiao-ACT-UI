@@ -83,6 +83,8 @@ add_executable(sao_plugin_ai_editor_gpu_hunt_tests
     test_input_event_ring.cpp
     test_self_render.cpp
     test_window_capture_mmf.cpp
+    test_ai_editor_main_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ai_editor_main_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_central_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
