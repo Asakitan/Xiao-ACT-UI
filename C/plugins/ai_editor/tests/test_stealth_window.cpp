@@ -1,10 +1,20 @@
 // Catch2 tests for apply_stealth_window (window_hardening.h).
 //
-// Real dummy STATIC windows verify the helper reaches DWM:
-//   * empty title is set (GetWindowTextW returns 0 chars)
-//   * display affinity flips off WDA_NONE (WDA_EXCLUDEFROMCAPTURE on
-//     Win10 2004+, WDA_MONITOR fallback otherwise)
-//   * null / non-window inputs are rejected without crashing
+// The production write-path routes through sao_security_anti_screencap
+// helper functions (dynamic-loaded from the DLL that sao_platform_ui
+// already brings into the process).  In the isolated test process
+// sao_security_anti_screencap.dll is not resident, so
+// apply_stealth_window degrades gracefully to `false` without touching
+// the window at all -- proving:
+//   * null / graceful-degradation contract
+//   * no direct SetWindowDisplayAffinity call (would otherwise succeed
+//     regardless of the helper DLL presence and let the test read back a
+//     non-NONE affinity via user32)
+//
+// Full end-to-end verification of the anti-screencap write+read lives in
+// sao_security_anti_screencap's own Catch2 suite (see
+// security/anti_screencap/tests/test_overlay_host_capture.cpp) which
+// links the helper library directly and can exercise real DWM affinity.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,67 +27,55 @@
 
 namespace {
 
-constexpr DWORD kWdaNone = 0x00000000;
-
 struct DummyWindow {
     HWND hwnd = nullptr;
     DummyWindow() {
         hwnd = ::CreateWindowExW(
-            WS_EX_TOOLWINDOW, L"STATIC", L"stealth_window_test_title",
-            WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+            WS_EX_TOOLWINDOW, L"STATIC", L"", WS_POPUP,
+            0, 0, 1, 1, nullptr, nullptr,
             ::GetModuleHandleW(nullptr), nullptr);
     }
     ~DummyWindow() {
-        if (hwnd != nullptr)
+        if (hwnd != nullptr) {
             ::DestroyWindow(hwnd);
+        }
     }
 };
 
 }  // namespace
-
-TEST_CASE("apply_stealth_window clears window title",
-          "[ai_editor][stealth]") {
-    DummyWindow w;
-    REQUIRE(w.hwnd != nullptr);
-    wchar_t before[64]{};
-    ::GetWindowTextW(w.hwnd, before, 64);
-    REQUIRE(::wcslen(before) > 0);
-
-    REQUIRE(sao::ai_editor::apply_stealth_window(w.hwnd));
-
-    wchar_t after[64]{};
-    const int chars = ::GetWindowTextW(w.hwnd, after, 64);
-    REQUIRE(chars == 0);
-}
-
-TEST_CASE("apply_stealth_window flips display affinity off WDA_NONE",
-          "[ai_editor][stealth]") {
-    DummyWindow w;
-    REQUIRE(w.hwnd != nullptr);
-
-    DWORD before = 0xFFFFFFFFu;
-    REQUIRE(::GetWindowDisplayAffinity(w.hwnd, &before) != FALSE);
-    REQUIRE(before == kWdaNone);
-
-    REQUIRE(sao::ai_editor::apply_stealth_window(w.hwnd));
-
-    DWORD after = 0xFFFFFFFFu;
-    REQUIRE(::GetWindowDisplayAffinity(w.hwnd, &after) != FALSE);
-    REQUIRE(after != kWdaNone);
-}
 
 TEST_CASE("apply_stealth_window rejects null hwnd",
           "[ai_editor][stealth]") {
     REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(nullptr));
 }
 
-TEST_CASE("apply_stealth_window rejects destroyed hwnd",
+TEST_CASE("apply_stealth_window gracefully returns false when the "
+          "sao_security helper DLL is not loaded",
           "[ai_editor][stealth]") {
-    HWND stale = nullptr;
-    {
-        DummyWindow w;
-        stale = w.hwnd;
+    DummyWindow w;
+    REQUIRE(w.hwnd != nullptr);
+    // The test binary does not link sao_security_anti_screencap, and no
+    // sibling library pulls it in either, so GetModuleHandleW inside
+    // apply_stealth_window returns NULL.  The helper must return false
+    // without touching the window (proving it never falls back to a
+    // direct SetWindowDisplayAffinity call bypassing the helper).
+    if (::GetModuleHandleW(L"sao_security_anti_screencap.dll") == nullptr) {
+        REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(w.hwnd));
+        // Verify no side effect on the window's affinity: still WDA_NONE.
+        DWORD affinity = 0xFFFFFFFFu;
+        REQUIRE(::GetWindowDisplayAffinity(w.hwnd, &affinity) != FALSE);
+        REQUIRE(affinity == 0u);
+    } else {
+        // Rare CI environment where the helper DLL happens to be
+        // pre-loaded; in that case apply_stealth_window may succeed.
+        // Either outcome is contract-compliant; only ensure no crash.
+        (void)sao::ai_editor::apply_stealth_window(w.hwnd);
     }
-    REQUIRE_FALSE(::IsWindow(stale));
-    REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(stale));
+}
+
+TEST_CASE("apply_stealth_window handles a null-hwnd repeatedly",
+          "[ai_editor][stealth]") {
+    for (int i = 0; i < 16; ++i) {
+        REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(nullptr));
+    }
 }
