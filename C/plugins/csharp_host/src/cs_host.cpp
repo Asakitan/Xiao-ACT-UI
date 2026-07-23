@@ -270,6 +270,16 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host) {
             FreeLibrary(impl->hostfxr_module);
             return SAO_ERR_OS_CALL_FAILED;
         }
+        // Shutdown closes host contexts and releases this ordinary LoadLibrary reference; the
+        // process-lifetime PIN keeps hostfxr mapped for sequential managed registry rebuilds.
+        HMODULE pinned_module = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_PIN,
+                               reinterpret_cast<LPCWSTR>(impl->hostfxr_module),
+                               &pinned_module) == 0) {
+            FreeLibrary(impl->hostfxr_module);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
 
         impl->runtime_version = extract_runtime_version_from_path(dll_path);
         impl->available = true;

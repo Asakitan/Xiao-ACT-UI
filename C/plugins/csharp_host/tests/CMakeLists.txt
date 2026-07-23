@@ -152,11 +152,13 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     add_test(NAME plugins_csharp_loader_adapter
              COMMAND test_plugins_csharp_loader_adapter)
     set_tests_properties(plugins_csharp_loader_adapter PROPERTIES
-        LABELS "plugins;csharp;generic;requires_dotnet_fixture")
+        LABELS "plugins;csharp;generic;requires_dotnet_fixture"
+        RESOURCE_LOCK "sao_launcher_process_resources")
 
     add_test(NAME plugins_csharp_managed_entity_v2
              COMMAND test_plugins_csharp_loader_adapter
                      "csharp managed Entity v2 provider preserves lifecycle token stride and generations")
     set_tests_properties(plugins_csharp_managed_entity_v2 PROPERTIES
-        LABELS "plugins;csharp;generic;entity;v2;focused;requires_dotnet_fixture")
+        LABELS "plugins;csharp;generic;entity;v2;focused;requires_dotnet_fixture"
+        RESOURCE_LOCK "sao_launcher_process_resources")
 endif()
