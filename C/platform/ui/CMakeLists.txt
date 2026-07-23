@@ -51,6 +51,7 @@ add_library(sao_platform_ui SHARED
     # ── Dialog state machine + fisheye focus math ─────────────
     src/dialog.cpp             # sao_theme/dialogs.py state machine
     src/fisheye.cpp             # sao_theme/menu_bar.py fisheye math
+    src/fisheye_backdrop.cpp   # shared procedural/live fisheye backdrop
 
     # ── Panel SDK + input router + scriptable canvas ──────────────
     src/panel_sdk.cpp                # plugin_manager.register_panel

@@ -1,26 +1,23 @@
-// SAO Auto — popup keyboard-nav + hierarchical hit-test first slice.
-//
-// Logic only, no rendering.  Owns the entry
-// tree (with submenus), the selection state machine (UP/DOWN/LEFT/
-// RIGHT/ENTER/ESC) and the hit-test cursor→entry_id resolver.
-//
-// 1:1 with `ui_gpu/popup.py` navigation semantics.  Render callbacks
-// come from the compositor and are populated by later slices.
+// SAO Auto — generic compositor-backed popup menu.
 
 #include "sao/ui/popup.h"
+#include "sao/ui/d2d_widgets.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
 
-// Deep-copied entry node — the caller's SaoUiPopupEntry array is a
-// transient POD, we build a heap-owned tree so mutations (open/close
-// submenu, hover) are safe past the show() return.
 struct EntryNode {
     std::string label;
     std::string icon;
@@ -29,62 +26,228 @@ struct EntryNode {
     bool        enabled = true;
     bool        checked = false;
     bool        is_separator = false;
-    // Sub-entries; empty when leaf.
     std::vector<EntryNode> children;
 };
 
-// Cache-aware layout: computed once per level open, invalidated on
-// refresh_entries.  Mirrors the [连续反馈不对要停止调参数] memory:
-// content_w/h and origin must both be recomputed together every tick
-// when the anchor shifts.
 struct LevelRect {
     int32_t x = 0;
     int32_t y = 0;
     int32_t width = 0;
     int32_t height = 0;
-    // Per-visible-row rect list, aligned with `entries` after skipping
-    // separators (they get half-height rows).
-    std::vector<int32_t> row_top;      // top-y per entry
-    std::vector<int32_t> row_bottom;   // bottom-y (exclusive) per entry
+    std::vector<int32_t> row_top;
+    std::vector<int32_t> row_bottom;
 };
 
 struct OpenLevel {
-    // Path from root down: indices into parent's `children` at each
-    // depth.  Level 0 is the root popup itself (index unused).
-    int32_t parent_entry_index = -1;   // -1 for root
-    int32_t selected_index = -1;       // active hover / arrow-nav row
+    int32_t parent_entry_index = -1;
+    int32_t selected_index = -1;
     LevelRect rect;
 };
 
-// Row size heuristics.  These stay compile-time constant per the
-// header contract; the trap is caching *some* of them but not the
-// anchor.  We only cache row_top/bottom (deterministic from anchor).
+struct ScreenBounds {
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+};
+
+struct HitTarget {
+    int32_t depth = -1;
+    int32_t index = -1;
+    int32_t entry_id = -1;
+    bool inside_level = false;
+};
+
+struct VisualRow {
+    std::string label;
+    std::string icon;
+    std::string accelerator;
+    bool enabled = true;
+    bool checked = false;
+    bool separator = false;
+    bool has_submenu = false;
+};
+
+struct VisualLevel {
+    LevelRect rect;
+    int32_t selected_index = -1;
+    std::vector<VisualRow> rows;
+};
+
+struct VisualSnapshot {
+    std::vector<VisualLevel> levels;
+};
+
+struct PopupFrame {
+    std::vector<uint8_t> pixels;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t stride = 0;
+    ScreenBounds screen_bounds;
+    std::vector<SaoUiLayerInputRect> input_rects;
+};
+
+struct PopupInputBinding {
+    std::mutex mutex;
+    sao_ui_popup_s* popup = nullptr;
+};
+
+struct PendingResult {
+    sao_ui_popup_result_callback_t callback = nullptr;
+    void* user_data = nullptr;
+    int32_t entry_id = -1;
+    bool dismissed = false;
+    int32_t screen_x = -1;
+    int32_t screen_y = -1;
+};
+
 constexpr int32_t kRowHeight = 28;
 constexpr int32_t kSeparatorHeight = 8;
+constexpr int32_t kEmptyPanelHeight = 24;
+constexpr int32_t kVisualPadding = 6;
+constexpr int32_t kShadowOffset = 3;
+constexpr int32_t kPopupZOrder = 1'000'000;
+
+constexpr uint32_t kShadow = 0x66000000U;
+constexpr uint32_t kGlass = 0xD20A1118U;
+constexpr uint32_t kGlassTint = 0x351B4654U;
+constexpr uint32_t kCyan = 0xFF68E4FFU;
+constexpr uint32_t kCyanSoft = 0xB05898BEU;
+constexpr uint32_t kGold = 0xFFF3AF12U;
+constexpr uint32_t kGoldSoft = 0xA0D49C17U;
+constexpr uint32_t kText = 0xFFE8F4F8U;
+constexpr uint32_t kTextSecondary = 0xCC7EB8C9U;
+constexpr uint32_t kTextDisabled = 0x88516D78U;
+constexpr uint32_t kSelected = 0x5A245467U;
+constexpr uint32_t kSelectedDisabled = 0x30213A45U;
+constexpr uint32_t kRowDivider = 0x302D5668U;
+
+std::atomic<uint64_t> g_popup_layer_sequence{0};
+
+std::mutex& binding_registry_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<PopupInputBinding*, std::shared_ptr<PopupInputBinding>>&
+binding_registry() {
+    static std::unordered_map<PopupInputBinding*, std::shared_ptr<PopupInputBinding>> registry;
+    return registry;
+}
+
+bool register_binding(const std::shared_ptr<PopupInputBinding>& binding) noexcept {
+    try {
+        std::lock_guard lock(binding_registry_mutex());
+        binding_registry().emplace(binding.get(), binding);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void unregister_binding(PopupInputBinding* binding) noexcept {
+    try {
+        std::lock_guard lock(binding_registry_mutex());
+        binding_registry().erase(binding);
+    } catch (...) {
+    }
+}
+
+std::shared_ptr<PopupInputBinding> acquire_binding(void* user_data) noexcept {
+    if (user_data == nullptr) return {};
+    try {
+        auto* binding = static_cast<PopupInputBinding*>(user_data);
+        std::lock_guard lock(binding_registry_mutex());
+        const auto found = binding_registry().find(binding);
+        return found == binding_registry().end() ? std::shared_ptr<PopupInputBinding>{}
+                                                  : found->second;
+    } catch (...) {
+        return {};
+    }
+}
+
+struct RasterDeleter {
+    void operator()(sao_ui_offscreen_raster_s* raster) const noexcept {
+        sao_ui_offscreen_raster_destroy(raster);
+    }
+};
+
+struct PaintContextDeleter {
+    void operator()(sao_ui_paint_ctx_s* context) const noexcept {
+        sao_ui_paint_ctx_destroy(context);
+    }
+};
+
+class Painter {
+  public:
+    explicit Painter(sao_ui_paint_ctx_handle_t context) : context_(context) {}
+
+    void fill(float x, float y, float width, float height, uint32_t color) {
+        merge(sao_ui_paint_ctx_fill_rect(context_, x, y, width, height, color));
+    }
+
+    void line(float x1, float y1, float x2, float y2, float width, uint32_t color) {
+        merge(sao_ui_paint_ctx_stroke_line(context_, x1, y1, x2, y2, width, color));
+    }
+
+    void polygon(const int32_t* points, size_t count, uint32_t color) {
+        merge(sao_ui_paint_ctx_fill_polygon(context_, points, count, color));
+    }
+
+    void text(float x, float y, const std::string& value, float size, uint32_t color) {
+        if (!value.empty())
+            merge(sao_ui_paint_ctx_draw_utf8(context_, x, y, value.c_str(), size, color));
+    }
+
+    void clipped_text(float x, float y, float width, float height,
+                      const std::string& value, float size, uint32_t color) {
+        if (value.empty() || width <= 0.0F || height <= 0.0F || status_ != SAO_STATUS_OK) return;
+        const sao_status_t push = sao_ui_paint_ctx_push_clip(context_, x, y, width, height);
+        if (push != SAO_STATUS_OK) {
+            merge(push);
+            return;
+        }
+        const sao_status_t draw = sao_ui_paint_ctx_draw_utf8(
+            context_, x, y, value.c_str(), size, color);
+        const sao_status_t pop = sao_ui_paint_ctx_pop_clip(context_);
+        merge(draw);
+        merge(pop);
+    }
+
+    sao_status_t status() const noexcept { return status_; }
+
+  private:
+    void merge(sao_status_t status) noexcept {
+        if (status_ == SAO_STATUS_OK && status != SAO_STATUS_OK) status_ = status;
+    }
+
+    sao_ui_paint_ctx_handle_t context_ = nullptr;
+    sao_status_t status_ = SAO_STATUS_OK;
+};
 
 }  // namespace
 
 struct sao_ui_popup_s {
     std::mutex mu;
+    std::mutex layer_mu;
 
-    // Configured at create — never mutated.
     sao_ui_compositor_handle_t compositor = nullptr;
     sao_ui_theme_handle_t theme = nullptr;
 
-    // Set by show().
     bool visible = false;
-    SaoUiPopupSpec spec_snapshot {};   // shallow copy; entries deep-copied below.
-    EntryNode root;                    // synthetic root whose children are the top-level entries
+    SaoUiPopupSpec spec_snapshot {};
+    EntryNode root;
     sao_ui_popup_result_callback_t callback = nullptr;
     void* user_data = nullptr;
-
-    // Navigation stack.  levels[0] is always the root popup; each
-    // deeper level represents an opened submenu.  On LEFT we pop; on
-    // RIGHT into an item with children we push.
     std::vector<OpenLevel> levels;
+
+    sao_ui_layer_handle_t layer = nullptr;
+    ScreenBounds layer_screen_bounds {};
+    bool layer_bounds_valid = false;
+    std::shared_ptr<PopupInputBinding> input_binding;
 };
 
-// ── helpers (internal) ────────────────────────────────────────────
+namespace {
 
 static void deep_copy_entries(
     const SaoUiPopupEntry* entries, size_t count,
@@ -109,14 +272,12 @@ static void deep_copy_entries(
     }
 }
 
-// Compute the rect for a level given its anchor.  Root is anchored at
-// the show() anchor; a submenu is anchored at the right edge of its
-// parent's selected row.
-static void compute_level_rect(
+static bool compute_level_rect(
     const std::vector<EntryNode>& entries,
     int32_t anchor_x, int32_t anchor_y,
     int32_t width,
     LevelRect* out) {
+    if (out == nullptr || width <= 0) return false;
     out->x = anchor_x;
     out->y = anchor_y;
     out->width = width;
@@ -124,18 +285,24 @@ static void compute_level_rect(
     out->row_bottom.clear();
     out->row_top.reserve(entries.size());
     out->row_bottom.reserve(entries.size());
-    int32_t cursor_y = anchor_y;
+    int64_t cursor_y = anchor_y;
     for (const EntryNode& e : entries) {
-        int32_t h = e.is_separator ? kSeparatorHeight : kRowHeight;
-        out->row_top.push_back(cursor_y);
-        out->row_bottom.push_back(cursor_y + h);
-        cursor_y += h;
+        const int32_t height = e.is_separator ? kSeparatorHeight : kRowHeight;
+        const int64_t bottom = cursor_y + height;
+        if (cursor_y < std::numeric_limits<int32_t>::min() ||
+            bottom > std::numeric_limits<int32_t>::max()) {
+            return false;
+        }
+        out->row_top.push_back(static_cast<int32_t>(cursor_y));
+        out->row_bottom.push_back(static_cast<int32_t>(bottom));
+        cursor_y = bottom;
     }
-    out->height = cursor_y - anchor_y;
+    const int64_t total_height = cursor_y - anchor_y;
+    if (total_height < 0 || total_height > std::numeric_limits<int32_t>::max()) return false;
+    out->height = static_cast<int32_t>(total_height);
+    return true;
 }
 
-// Get pointer to the entry vector for a given level path.  levels[0]
-// is root (entries = popup->root.children); deeper levels drill down.
 static const std::vector<EntryNode>& level_entries(
     const sao_ui_popup_s* popup, int32_t level_idx) {
     const EntryNode* node = &popup->root;
@@ -146,29 +313,597 @@ static const std::vector<EntryNode>& level_entries(
     return node->children;
 }
 
-// Walk from current selection: skip separators + disabled rows.
-// direction = +1 (down) or -1 (up).  Wraps.  Returns new index or -1
-// if no eligible entry.
 static int32_t advance_selection(
     const std::vector<EntryNode>& entries, int32_t current, int32_t direction) {
     if (entries.empty()) return -1;
     const int32_t n = static_cast<int32_t>(entries.size());
-    // Start from current (or -1 → wrap to first candidate).
     int32_t start = current;
-    if (start < 0) start = (direction > 0) ? -1 : n;   // pretend "past" boundary
+    if (start < 0) start = (direction > 0) ? -1 : n;
     for (int32_t step = 0; step < n; ++step) {
         int32_t candidate = start + direction * (step + 1);
-        // Wrap modulo n.
         candidate = ((candidate % n) + n) % n;
         const EntryNode& e = entries[static_cast<size_t>(candidate)];
         if (!e.is_separator && e.enabled) {
             return candidate;
         }
     }
-    return -1;   // nothing selectable
+    return -1;
 }
 
-// ── layout constants (unchanged from stub) ────────────────────────
+static sao_status_t make_root_level(
+    const std::vector<EntryNode>& entries,
+    const SaoUiPopupSpec& spec,
+    OpenLevel* out_level) {
+    if (out_level == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const auto* constants = sao_ui_popup_layout_constants();
+    const int32_t width = spec.anchor_w > 0 ? spec.anchor_w : constants->child_width;
+    OpenLevel level;
+    if (!compute_level_rect(entries, spec.anchor_x, spec.anchor_y, width, &level.rect))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    level.parent_entry_index = -1;
+    level.selected_index = advance_selection(entries, -1, +1);
+    *out_level = std::move(level);
+    return SAO_STATUS_OK;
+}
+
+static sao_status_t open_submenu_locked(
+    sao_ui_popup_s* popup, int32_t depth, int32_t entry_index) {
+    const auto& entries = level_entries(popup, depth);
+    if (entry_index < 0 || entry_index >= static_cast<int32_t>(entries.size()))
+        return SAO_STATUS_ERR_NOT_FOUND;
+    const EntryNode& entry = entries[static_cast<size_t>(entry_index)];
+    if (!entry.enabled || entry.is_separator || entry.children.empty())
+        return SAO_STATUS_ERR_NOT_FOUND;
+
+    const size_t child_level_index = static_cast<size_t>(depth + 1);
+    if (popup->levels.size() > child_level_index &&
+        popup->levels[child_level_index].parent_entry_index == entry_index) {
+        popup->levels.resize(child_level_index + 1);
+        return SAO_STATUS_OK;
+    }
+    popup->levels.resize(child_level_index);
+
+    const OpenLevel& parent = popup->levels[static_cast<size_t>(depth)];
+    const auto* constants = sao_ui_popup_layout_constants();
+    const int64_t child_x = static_cast<int64_t>(parent.rect.x) +
+        parent.rect.width + constants->gap_menu_child;
+    if (child_x < std::numeric_limits<int32_t>::min() ||
+        child_x > std::numeric_limits<int32_t>::max()) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+
+    OpenLevel child;
+    child.parent_entry_index = entry_index;
+    const int32_t child_y = parent.rect.row_top[static_cast<size_t>(entry_index)];
+    if (!compute_level_rect(entry.children, static_cast<int32_t>(child_x), child_y,
+                            constants->child_width, &child.rect)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    child.selected_index = advance_selection(entry.children, -1, +1);
+    popup->levels.push_back(std::move(child));
+    return SAO_STATUS_OK;
+}
+
+static HitTarget hit_target_locked(const sao_ui_popup_s* popup, int32_t x, int32_t y) {
+    HitTarget hit;
+    for (int32_t depth = static_cast<int32_t>(popup->levels.size()) - 1;
+         depth >= 0; --depth) {
+        const OpenLevel& level = popup->levels[static_cast<size_t>(depth)];
+        const LevelRect& rect = level.rect;
+        if (x < rect.x || x >= rect.x + rect.width ||
+            y < rect.y || y >= rect.y + rect.height) {
+            continue;
+        }
+        hit.depth = depth;
+        hit.inside_level = true;
+        const auto& entries = level_entries(popup, depth);
+        for (size_t index = 0; index < entries.size(); ++index) {
+            if (y >= rect.row_top[index] && y < rect.row_bottom[index]) {
+                hit.index = static_cast<int32_t>(index);
+                if (!entries[index].is_separator) hit.entry_id = entries[index].entry_id;
+                return hit;
+            }
+        }
+        return hit;
+    }
+    return hit;
+}
+
+static void build_visual_snapshot_locked(
+    const sao_ui_popup_s* popup, VisualSnapshot* out_snapshot) {
+    out_snapshot->levels.clear();
+    out_snapshot->levels.reserve(popup->levels.size());
+    for (int32_t depth = 0; depth < static_cast<int32_t>(popup->levels.size()); ++depth) {
+        const OpenLevel& open_level = popup->levels[static_cast<size_t>(depth)];
+        const auto& entries = level_entries(popup, depth);
+        VisualLevel level;
+        level.rect = open_level.rect;
+        level.selected_index = open_level.selected_index;
+        level.rows.reserve(entries.size());
+        for (const EntryNode& entry : entries) {
+            level.rows.push_back({entry.label, entry.icon, entry.accelerator,
+                                  entry.enabled, entry.checked, entry.is_separator,
+                                  !entry.children.empty()});
+        }
+        out_snapshot->levels.push_back(std::move(level));
+    }
+}
+
+static bool compute_screen_bounds(
+    const VisualSnapshot& snapshot, ScreenBounds* out_bounds) {
+    if (out_bounds == nullptr || snapshot.levels.empty()) return false;
+    int64_t left = std::numeric_limits<int64_t>::max();
+    int64_t top = std::numeric_limits<int64_t>::max();
+    int64_t right = std::numeric_limits<int64_t>::min();
+    int64_t bottom = std::numeric_limits<int64_t>::min();
+    for (const VisualLevel& level : snapshot.levels) {
+        const int32_t panel_height = std::max(level.rect.height, kEmptyPanelHeight);
+        left = std::min(left, static_cast<int64_t>(level.rect.x));
+        top = std::min(top, static_cast<int64_t>(level.rect.y));
+        right = std::max(right, static_cast<int64_t>(level.rect.x) + level.rect.width);
+        bottom = std::max(bottom, static_cast<int64_t>(level.rect.y) + panel_height);
+    }
+    left -= kVisualPadding;
+    top -= kVisualPadding;
+    right += kVisualPadding + kShadowOffset;
+    bottom += kVisualPadding + kShadowOffset;
+    const int64_t width = right - left;
+    const int64_t height = bottom - top;
+    if (left < std::numeric_limits<int32_t>::min() ||
+        top < std::numeric_limits<int32_t>::min() ||
+        left > std::numeric_limits<int32_t>::max() ||
+        top > std::numeric_limits<int32_t>::max() ||
+        width <= 0 || height <= 0 ||
+        width > std::numeric_limits<int32_t>::max() ||
+        height > std::numeric_limits<int32_t>::max()) {
+        return false;
+    }
+    *out_bounds = {static_cast<int32_t>(left), static_cast<int32_t>(top),
+                   static_cast<int32_t>(width), static_cast<int32_t>(height)};
+    return true;
+}
+
+static float text_width(const std::string& text, float size) {
+    const int32_t scale = std::max(1, static_cast<int32_t>(std::floor(size / 5.0F)));
+    return static_cast<float>(text.size() * static_cast<size_t>(scale * 6));
+}
+
+static void draw_level_border(
+    Painter* painter, float x, float y, float width, float height) {
+    painter->fill(x + kShadowOffset, y + kShadowOffset, width, height, kShadow);
+    painter->fill(x, y, width, height, kGlass);
+    painter->fill(x + 1.0F, y + 1.0F, width - 2.0F, 3.0F, kGlassTint);
+    painter->fill(x, y, width, 1.0F, kCyan);
+    painter->fill(x, y, 1.0F, height, kCyanSoft);
+    painter->fill(x, y + height - 1.0F, width, 1.0F, kGoldSoft);
+    painter->fill(x + width - 1.0F, y, 1.0F, height, kGold);
+    painter->fill(x + 5.0F, y + 4.0F, 20.0F, 1.0F, kCyan);
+    painter->fill(x + width - 25.0F, y + height - 5.0F, 20.0F, 1.0F, kGold);
+}
+
+static void draw_separator(Painter* painter, float x, float y, float width, float height) {
+    const float center = y + height * 0.5F;
+    const float half = std::max(1.0F, (width - 20.0F) * 0.5F);
+    painter->fill(x + 10.0F, center, half, 1.0F, kCyanSoft);
+    painter->fill(x + 10.0F + half, center, half, 1.0F, kGoldSoft);
+}
+
+static void draw_check(Painter* painter, float x, float y, uint32_t color) {
+    painter->line(x, y + 5.0F, x + 4.0F, y + 9.0F, 1.5F, color);
+    painter->line(x + 4.0F, y + 9.0F, x + 11.0F, y + 1.0F, 1.5F, color);
+}
+
+static void draw_row(
+    Painter* painter, const VisualRow& row, bool selected,
+    float x, float y, float width, float height) {
+    if (row.separator) {
+        draw_separator(painter, x, y, width, height);
+        return;
+    }
+    if (selected) {
+        painter->fill(x + 2.0F, y, width - 4.0F, height,
+                      row.enabled ? kSelected : kSelectedDisabled);
+        painter->fill(x + 2.0F, y, 3.0F, height, row.enabled ? kCyan : kCyanSoft);
+        painter->fill(x + width - 3.0F, y, 1.0F, height, kGoldSoft);
+    }
+    painter->fill(x + 8.0F, y + height - 1.0F, width - 16.0F, 1.0F, kRowDivider);
+
+    const uint32_t primary = row.enabled ? (selected ? kText : kTextSecondary) : kTextDisabled;
+    const uint32_t accent = row.enabled ? (selected ? kGold : kCyanSoft) : kTextDisabled;
+    float icon_x = x + 9.0F;
+    if (row.checked) {
+        draw_check(painter, icon_x, y + (height - 11.0F) * 0.5F, accent);
+        icon_x += 15.0F;
+    }
+    if (!row.icon.empty()) painter->text(icon_x, y + 8.0F, row.icon, 10.0F, accent);
+
+    const float label_x = x + 31.0F;
+    const float arrow_space = row.has_submenu ? 20.0F : 0.0F;
+    const float accelerator_width = row.accelerator.empty()
+        ? 0.0F : text_width(row.accelerator, 10.0F) + 9.0F;
+    const float label_width = std::max(
+        1.0F, width - (label_x - x) - 10.0F - arrow_space - accelerator_width);
+    painter->clipped_text(label_x, y + 8.0F, label_width, height - 8.0F,
+                          row.label, 10.0F, primary);
+    if (!row.accelerator.empty()) {
+        painter->text(x + width - 9.0F - arrow_space -
+                          text_width(row.accelerator, 10.0F),
+                      y + 8.0F, row.accelerator, 10.0F,
+                      row.enabled ? kTextSecondary : kTextDisabled);
+    }
+    if (row.has_submenu) {
+        const int32_t arrow_x = static_cast<int32_t>(std::lround(x + width - 12.0F));
+        const int32_t arrow_y = static_cast<int32_t>(std::lround(y + height * 0.5F));
+        const int32_t points[] = {
+            arrow_x - 3, arrow_y - 5,
+            arrow_x + 3, arrow_y,
+            arrow_x - 3, arrow_y + 5,
+        };
+        painter->polygon(points, 3, accent);
+    }
+}
+
+static sao_status_t render_popup_frame(
+    const VisualSnapshot& snapshot, PopupFrame* out_frame) {
+    if (out_frame == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        ScreenBounds bounds;
+        if (!compute_screen_bounds(snapshot, &bounds)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        SaoUiOffscreenRasterDesc descriptor{};
+        descriptor.width_px = static_cast<uint32_t>(bounds.width);
+        descriptor.height_px = static_cast<uint32_t>(bounds.height);
+        descriptor.clear_argb = 0;
+        sao_ui_offscreen_raster_handle_t raw_raster = nullptr;
+        sao_status_t status = sao_ui_offscreen_raster_create(&descriptor, &raw_raster);
+        if (status != SAO_STATUS_OK) return status;
+        std::unique_ptr<sao_ui_offscreen_raster_s, RasterDeleter> raster(raw_raster);
+
+        sao_ui_paint_ctx_handle_t raw_context = nullptr;
+        status = sao_ui_paint_ctx_create_offscreen(raster.get(), &raw_context);
+        if (status != SAO_STATUS_OK) return status;
+        std::unique_ptr<sao_ui_paint_ctx_s, PaintContextDeleter> context(raw_context);
+        status = sao_ui_paint_ctx_begin_frame(context.get());
+        if (status != SAO_STATUS_OK) return status;
+
+        Painter painter(context.get());
+        for (const VisualLevel& level : snapshot.levels) {
+            const float x = static_cast<float>(level.rect.x - bounds.x);
+            const float y = static_cast<float>(level.rect.y - bounds.y);
+            const float width = static_cast<float>(level.rect.width);
+            const float height = static_cast<float>(std::max(level.rect.height, kEmptyPanelHeight));
+            draw_level_border(&painter, x, y, width, height);
+            for (size_t index = 0; index < level.rows.size(); ++index) {
+                const float row_y = static_cast<float>(level.rect.row_top[index] - bounds.y);
+                const float row_height = static_cast<float>(
+                    level.rect.row_bottom[index] - level.rect.row_top[index]);
+                draw_row(&painter, level.rows[index],
+                         level.selected_index == static_cast<int32_t>(index),
+                         x, row_y, width, row_height);
+            }
+        }
+        if (painter.status() != SAO_STATUS_OK) return painter.status();
+        status = sao_ui_paint_ctx_end_frame(context.get());
+        if (status != SAO_STATUS_OK) return status;
+
+        PopupFrame frame;
+        frame.width = descriptor.width_px;
+        frame.height = descriptor.height_px;
+        frame.stride = descriptor.width_px * 4U;
+        frame.screen_bounds = bounds;
+        frame.pixels.resize(static_cast<size_t>(frame.stride) * frame.height);
+        size_t bytes_written = 0;
+        uint32_t snapshot_width = 0;
+        uint32_t snapshot_height = 0;
+        uint32_t snapshot_stride = 0;
+        status = sao_ui_offscreen_raster_snapshot(
+            raster.get(), frame.pixels.data(), frame.pixels.size(), &bytes_written,
+            &snapshot_width, &snapshot_height, &snapshot_stride);
+        if (status != SAO_STATUS_OK) return status;
+        if (bytes_written != frame.pixels.size() || snapshot_width != frame.width ||
+            snapshot_height != frame.height || snapshot_stride != frame.stride) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        frame.input_rects.reserve(snapshot.levels.size());
+        for (const VisualLevel& level : snapshot.levels) {
+            if (level.rect.height <= 0) continue;
+            frame.input_rects.push_back({
+                level.rect.x - bounds.x,
+                level.rect.y - bounds.y,
+                level.rect.width,
+                level.rect.height,
+            });
+        }
+        *out_frame = std::move(frame);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+static sao_status_t resolve_layer_origin(
+    sao_ui_compositor_handle_t compositor, const ScreenBounds& bounds,
+    int32_t* out_x, int32_t* out_y) {
+    if (out_x == nullptr || out_y == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    int64_t x = bounds.x;
+    int64_t y = bounds.y;
+    const sao_ui_overlay_host_handle_t host = sao_ui_compositor_host(compositor);
+    if (host != nullptr) {
+        SaoOverlayHostState state{};
+        const sao_status_t status = sao_ui_overlay_host_get_state(host, &state);
+        if (status != SAO_STATUS_OK) return status;
+        x -= state.geometry.x;
+        y -= state.geometry.y;
+    }
+    if (x < std::numeric_limits<int32_t>::min() ||
+        x > std::numeric_limits<int32_t>::max() ||
+        y < std::numeric_limits<int32_t>::min() ||
+        y > std::numeric_limits<int32_t>::max()) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    *out_x = static_cast<int32_t>(x);
+    *out_y = static_cast<int32_t>(y);
+    return SAO_STATUS_OK;
+}
+
+static void destroy_layer_handle(sao_ui_layer_handle_t layer) noexcept {
+    if (layer == nullptr) return;
+    (void)sao_ui_layer_set_input_callbacks(layer, nullptr, nullptr, nullptr, nullptr, nullptr);
+    sao_ui_layer_destroy(layer);
+}
+
+static std::string next_layer_name() {
+    const uint64_t sequence = g_popup_layer_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    return "popup." + std::to_string(sequence);
+}
+
+static void SAO_UI_CALL popup_layer_cursor(float layer_x, float layer_y, void* user_data);
+static void SAO_UI_CALL popup_layer_button(
+    int32_t button, int32_t action, int32_t mods,
+    float layer_x, float layer_y, void* user_data);
+
+static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
+    if (popup->compositor == nullptr) return SAO_STATUS_OK;
+    try {
+        VisualSnapshot snapshot;
+        sao_ui_layer_handle_t layer = nullptr;
+        PopupInputBinding* binding = nullptr;
+        {
+            std::lock_guard lock(popup->mu);
+            if (!popup->visible || popup->levels.empty()) return SAO_STATUS_OK;
+            build_visual_snapshot_locked(popup, &snapshot);
+            layer = popup->layer;
+            binding = popup->input_binding.get();
+        }
+
+        PopupFrame frame;
+        sao_status_t status = render_popup_frame(snapshot, &frame);
+        if (status != SAO_STATUS_OK) return status;
+        int32_t layer_x = 0;
+        int32_t layer_y = 0;
+        status = resolve_layer_origin(
+            popup->compositor, frame.screen_bounds, &layer_x, &layer_y);
+        if (status != SAO_STATUS_OK) return status;
+
+        if (layer == nullptr) {
+            const std::string layer_name = next_layer_name();
+            SaoLayerConfig config{};
+            config.name_utf8 = layer_name.c_str();
+            config.x = layer_x;
+            config.y = layer_y;
+            config.width = static_cast<int32_t>(frame.width);
+            config.height = static_cast<int32_t>(frame.height);
+            config.z_order = kPopupZOrder;
+            config.click_through = false;
+            config.rect_hit = false;
+            config.bgra_swizzle = true;
+            sao_ui_layer_handle_t created = nullptr;
+            status = sao_ui_layer_create(popup->compositor, &config, &created);
+            if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(created, false);
+            if (status == SAO_STATUS_OK) {
+                status = sao_ui_layer_set_input_callbacks(
+                    created, &popup_layer_cursor, nullptr, &popup_layer_button,
+                    nullptr, binding);
+            }
+            if (status == SAO_STATUS_OK) {
+                status = sao_ui_layer_update_bgra(
+                    created, frame.pixels.data(), frame.width, frame.height, frame.stride);
+            }
+            if (status == SAO_STATUS_OK) {
+                status = sao_ui_layer_set_input_rects(
+                    created, frame.input_rects.empty() ? nullptr : frame.input_rects.data(),
+                    frame.input_rects.size());
+            }
+            if (status == SAO_STATUS_OK) {
+                status = sao_ui_layer_set_input_enabled(created, !frame.input_rects.empty());
+            }
+            if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(created, true);
+            if (status != SAO_STATUS_OK) {
+                destroy_layer_handle(created);
+                return status;
+            }
+            {
+                std::lock_guard lock(popup->mu);
+                popup->layer = created;
+                popup->layer_screen_bounds = frame.screen_bounds;
+                popup->layer_bounds_valid = true;
+            }
+            return SAO_STATUS_OK;
+        }
+
+        status = sao_ui_layer_set_input_rects(layer, nullptr, 0);
+        if (status == SAO_STATUS_OK) {
+            status = sao_ui_layer_update_bgra(
+                layer, frame.pixels.data(), frame.width, frame.height, frame.stride);
+        }
+        if (status == SAO_STATUS_OK) {
+            status = sao_ui_layer_set_geometry(
+                layer, layer_x, layer_y,
+                static_cast<int32_t>(frame.width), static_cast<int32_t>(frame.height));
+        }
+        if (status == SAO_STATUS_OK) {
+            status = sao_ui_layer_set_input_rects(
+                layer, frame.input_rects.empty() ? nullptr : frame.input_rects.data(),
+                frame.input_rects.size());
+        }
+        if (status == SAO_STATUS_OK) {
+            status = sao_ui_layer_set_input_enabled(layer, !frame.input_rects.empty());
+        }
+        if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(layer, true);
+        if (status != SAO_STATUS_OK) {
+            {
+                std::lock_guard lock(popup->mu);
+                if (popup->layer == layer) {
+                    popup->layer = nullptr;
+                    popup->layer_bounds_valid = false;
+                }
+            }
+            destroy_layer_handle(layer);
+            return status;
+        }
+        {
+            std::lock_guard lock(popup->mu);
+            popup->layer_screen_bounds = frame.screen_bounds;
+            popup->layer_bounds_valid = true;
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+static void invoke_result_noexcept(const PendingResult& result) noexcept {
+    if (result.callback == nullptr) return;
+    try {
+        result.callback(result.entry_id, result.dismissed,
+                        result.screen_x, result.screen_y, result.user_data);
+    } catch (...) {
+    }
+}
+
+static bool local_to_screen_locked(
+    const sao_ui_popup_s* popup, float layer_x, float layer_y,
+    int32_t* out_x, int32_t* out_y) {
+    if (!popup->layer_bounds_valid || out_x == nullptr || out_y == nullptr ||
+        !std::isfinite(layer_x) || !std::isfinite(layer_y)) {
+        return false;
+    }
+    const int64_t x = static_cast<int64_t>(popup->layer_screen_bounds.x) +
+        static_cast<int64_t>(std::floor(layer_x));
+    const int64_t y = static_cast<int64_t>(popup->layer_screen_bounds.y) +
+        static_cast<int64_t>(std::floor(layer_y));
+    if (x < std::numeric_limits<int32_t>::min() ||
+        x > std::numeric_limits<int32_t>::max() ||
+        y < std::numeric_limits<int32_t>::min() ||
+        y > std::numeric_limits<int32_t>::max()) {
+        return false;
+    }
+    *out_x = static_cast<int32_t>(x);
+    *out_y = static_cast<int32_t>(y);
+    return true;
+}
+
+static void SAO_UI_CALL popup_layer_cursor(
+    float layer_x, float layer_y, void* user_data) {
+    const auto binding = acquire_binding(user_data);
+    if (!binding) return;
+    try {
+        std::unique_lock binding_lock(binding->mutex);
+        sao_ui_popup_s* popup = binding->popup;
+        if (popup == nullptr) return;
+        std::lock_guard layer_lock(popup->layer_mu);
+        bool redraw = false;
+        {
+            std::lock_guard lock(popup->mu);
+            if (!popup->visible || popup->levels.empty()) return;
+            int32_t screen_x = 0;
+            int32_t screen_y = 0;
+            if (!local_to_screen_locked(popup, layer_x, layer_y, &screen_x, &screen_y)) return;
+            const HitTarget hit = hit_target_locked(popup, screen_x, screen_y);
+            if (!hit.inside_level) return;
+            OpenLevel& level = popup->levels[static_cast<size_t>(hit.depth)];
+            const auto& entries = level_entries(popup, hit.depth);
+            const int32_t selection = hit.index >= 0 &&
+                !entries[static_cast<size_t>(hit.index)].is_separator ? hit.index : -1;
+            if (level.selected_index != selection) {
+                level.selected_index = selection;
+                redraw = true;
+            }
+            const size_t child_index = static_cast<size_t>(hit.depth + 1);
+            if (popup->levels.size() > child_index) {
+                const bool keep_open = selection >= 0 &&
+                    popup->levels[child_index].parent_entry_index == selection;
+                if (!keep_open) {
+                    popup->levels.resize(child_index);
+                    redraw = true;
+                }
+            }
+        }
+        if (redraw) (void)sync_visible_layer_locked(popup);
+    } catch (...) {
+    }
+}
+
+static void SAO_UI_CALL popup_layer_button(
+    int32_t button, int32_t action, int32_t,
+    float layer_x, float layer_y, void* user_data) {
+    if (button != 0 || action != 1) return;
+    const auto binding = acquire_binding(user_data);
+    if (!binding) return;
+
+    PendingResult pending;
+    try {
+        std::unique_lock binding_lock(binding->mutex);
+        sao_ui_popup_s* popup = binding->popup;
+        if (popup == nullptr) return;
+        std::unique_lock layer_lock(popup->layer_mu);
+        sao_ui_layer_handle_t layer_to_destroy = nullptr;
+        bool redraw = false;
+        {
+            std::lock_guard lock(popup->mu);
+            if (!popup->visible || popup->levels.empty()) return;
+            int32_t screen_x = 0;
+            int32_t screen_y = 0;
+            if (!local_to_screen_locked(popup, layer_x, layer_y, &screen_x, &screen_y)) return;
+            const HitTarget hit = hit_target_locked(popup, screen_x, screen_y);
+            if (hit.index < 0) return;
+            OpenLevel& level = popup->levels[static_cast<size_t>(hit.depth)];
+            const auto& entries = level_entries(popup, hit.depth);
+            const EntryNode& entry = entries[static_cast<size_t>(hit.index)];
+            if (level.selected_index != hit.index) {
+                level.selected_index = hit.index;
+                redraw = true;
+            }
+            popup->levels.resize(static_cast<size_t>(hit.depth + 1));
+            if (!entry.enabled || entry.is_separator) {
+                redraw = true;
+            } else if (!entry.children.empty()) {
+                redraw = open_submenu_locked(popup, hit.depth, hit.index) == SAO_STATUS_OK;
+            } else {
+                pending = {popup->callback, popup->user_data, entry.entry_id,
+                           false, screen_x, screen_y};
+                popup->visible = false;
+                popup->callback = nullptr;
+                popup->user_data = nullptr;
+                popup->levels.clear();
+                layer_to_destroy = std::exchange(popup->layer, nullptr);
+                popup->layer_bounds_valid = false;
+            }
+        }
+        if (layer_to_destroy != nullptr) {
+            destroy_layer_handle(layer_to_destroy);
+        } else if (redraw) {
+            (void)sync_visible_layer_locked(popup);
+        }
+        layer_lock.unlock();
+        binding_lock.unlock();
+    } catch (...) {
+        return;
+    }
+    invoke_result_noexcept(pending);
+}
+
+}  // namespace
+
 extern "C" const SaoUiPopupLayoutConsts* SAO_UI_CALL
 sao_ui_popup_layout_constants(void) {
     static constexpr SaoUiPopupLayoutConsts kConsts = {
@@ -187,80 +922,120 @@ sao_ui_popup_layout_constants(void) {
     return &kConsts;
 }
 
-// ── create / destroy ──────────────────────────────────────────────
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_create(
     sao_ui_compositor_handle_t compositor,
     sao_ui_theme_handle_t theme,
     sao_ui_popup_handle_t* out_handle) {
     if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
-    auto* p = new (std::nothrow) sao_ui_popup_s;
-    if (p == nullptr) return SAO_STATUS_ERR_UNKNOWN;
-    p->compositor = compositor;
-    p->theme = theme;
-    *out_handle = p;
-    return SAO_STATUS_OK;
+    try {
+        auto popup = std::make_unique<sao_ui_popup_s>();
+        auto binding = std::make_shared<PopupInputBinding>();
+        binding->popup = popup.get();
+        if (!register_binding(binding)) return SAO_STATUS_ERR_UNKNOWN;
+        popup->compositor = compositor;
+        popup->theme = theme;
+        popup->input_binding = std::move(binding);
+        *out_handle = popup.release();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" void SAO_UI_CALL sao_ui_popup_destroy(sao_ui_popup_handle_t handle) {
+    if (handle == nullptr) return;
+    const std::shared_ptr<PopupInputBinding> binding = handle->input_binding;
+    if (binding) {
+        std::lock_guard binding_lock(binding->mutex);
+        if (binding->popup == handle) binding->popup = nullptr;
+    }
+    unregister_binding(binding.get());
+    sao_ui_layer_handle_t layer = nullptr;
+    {
+        std::lock_guard layer_lock(handle->layer_mu);
+        std::lock_guard lock(handle->mu);
+        handle->visible = false;
+        handle->callback = nullptr;
+        handle->user_data = nullptr;
+        handle->levels.clear();
+        layer = std::exchange(handle->layer, nullptr);
+        handle->layer_bounds_valid = false;
+    }
+    destroy_layer_handle(layer);
     delete handle;
 }
 
-// ── show / hide ───────────────────────────────────────────────────
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
     sao_ui_popup_handle_t handle,
     const SaoUiPopupSpec* spec,
     sao_ui_popup_result_callback_t callback,
     void* user_data) {
     if (handle == nullptr || spec == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lk(handle->mu);
-    // Deep copy entries into our owned tree; the caller's array can go
-    // out of scope any time after show() returns.
-    deep_copy_entries(spec->entries, spec->entry_count, &handle->root.children);
-    handle->spec_snapshot = *spec;
-    // Null out the transient entries pointer so nobody accidentally
-    // uses the caller's buffer past this point.
-    handle->spec_snapshot.entries = nullptr;
-    handle->spec_snapshot.entry_count = 0;
-    handle->callback = callback;
-    handle->user_data = user_data;
-    handle->visible = true;
-    // Reset navigation stack to just the root.
-    handle->levels.clear();
-    OpenLevel root_level;
-    root_level.parent_entry_index = -1;
-    // Anchor width — use spec.anchor_w if non-zero, else the child_width
-    // constant (matches popup.py fallback).
-    const auto* consts = sao_ui_popup_layout_constants();
-    int32_t width = spec->anchor_w > 0 ? spec->anchor_w : consts->child_width;
-    compute_level_rect(handle->root.children,
-                       spec->anchor_x, spec->anchor_y, width,
-                       &root_level.rect);
-    // Pre-select first enabled non-separator (matches Python's
-    // "keyboard-open lands on first item" behavior).
-    root_level.selected_index = advance_selection(handle->root.children, -1, +1);
-    handle->levels.push_back(std::move(root_level));
-    return SAO_STATUS_OK;
+    try {
+        EntryNode replacement_root;
+        deep_copy_entries(spec->entries, spec->entry_count, &replacement_root.children);
+        OpenLevel root_level;
+        sao_status_t status = make_root_level(replacement_root.children, *spec, &root_level);
+        if (status != SAO_STATUS_OK) return status;
+
+        std::lock_guard layer_lock(handle->layer_mu);
+        sao_ui_layer_handle_t old_layer = nullptr;
+        {
+            std::lock_guard lock(handle->mu);
+            old_layer = std::exchange(handle->layer, nullptr);
+            handle->layer_bounds_valid = false;
+            handle->root = std::move(replacement_root);
+            handle->spec_snapshot = *spec;
+            handle->spec_snapshot.entries = nullptr;
+            handle->spec_snapshot.entry_count = 0;
+            handle->callback = callback;
+            handle->user_data = user_data;
+            handle->visible = true;
+            handle->levels.clear();
+            handle->levels.push_back(std::move(root_level));
+        }
+        destroy_layer_handle(old_layer);
+        status = sync_visible_layer_locked(handle);
+        if (status == SAO_STATUS_OK) return SAO_STATUS_OK;
+
+        sao_ui_layer_handle_t failed_layer = nullptr;
+        {
+            std::lock_guard lock(handle->mu);
+            handle->visible = false;
+            handle->callback = nullptr;
+            handle->user_data = nullptr;
+            handle->levels.clear();
+            failed_layer = std::exchange(handle->layer, nullptr);
+            handle->layer_bounds_valid = false;
+        }
+        destroy_layer_handle(failed_layer);
+        return status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hide(sao_ui_popup_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    sao_ui_popup_result_callback_t cb = nullptr;
-    void* ud = nullptr;
+    PendingResult pending;
+    sao_ui_layer_handle_t layer = nullptr;
     {
-        std::lock_guard<std::mutex> lk(handle->mu);
-        if (!handle->visible) return SAO_STATUS_OK;
-        handle->visible = false;
-        cb = handle->callback;
-        ud = handle->user_data;
-        handle->callback = nullptr;
-        handle->user_data = nullptr;
-        handle->levels.clear();
+        std::lock_guard layer_lock(handle->layer_mu);
+        {
+            std::lock_guard lock(handle->mu);
+            if (!handle->visible) return SAO_STATUS_OK;
+            pending = {handle->callback, handle->user_data, -1, true, -1, -1};
+            handle->visible = false;
+            handle->callback = nullptr;
+            handle->user_data = nullptr;
+            handle->levels.clear();
+            layer = std::exchange(handle->layer, nullptr);
+            handle->layer_bounds_valid = false;
+        }
+        destroy_layer_handle(layer);
     }
-    if (cb != nullptr) {
-        cb(/*chosen_entry_id=*/-1, /*dismissed=*/true,
-           /*screen_x=*/-1, /*screen_y=*/-1, ud);
-    }
+    invoke_result_noexcept(pending);
     return SAO_STATUS_OK;
 }
 
@@ -272,29 +1047,34 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_is_visible(
     return SAO_STATUS_OK;
 }
 
-// ── runtime mutation ──────────────────────────────────────────────
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_refresh_entries(
     sao_ui_popup_handle_t handle,
     const SaoUiPopupEntry* entries, size_t count) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lk(handle->mu);
-    deep_copy_entries(entries, count, &handle->root.children);
-    // Rebuild root level rect + drop any submenu levels (their paths
-    // are invalidated).
-    handle->levels.clear();
-    OpenLevel root_level;
-    root_level.parent_entry_index = -1;
-    const auto* consts = sao_ui_popup_layout_constants();
-    int32_t width = handle->spec_snapshot.anchor_w > 0
-        ? handle->spec_snapshot.anchor_w : consts->child_width;
-    compute_level_rect(handle->root.children,
-                       handle->spec_snapshot.anchor_x,
-                       handle->spec_snapshot.anchor_y,
-                       width,
-                       &root_level.rect);
-    root_level.selected_index = advance_selection(handle->root.children, -1, +1);
-    handle->levels.push_back(std::move(root_level));
-    return SAO_STATUS_OK;
+    try {
+        std::lock_guard layer_lock(handle->layer_mu);
+        SaoUiPopupSpec spec{};
+        {
+            std::lock_guard lock(handle->mu);
+            spec = handle->spec_snapshot;
+        }
+        EntryNode replacement_root;
+        deep_copy_entries(entries, count, &replacement_root.children);
+        OpenLevel root_level;
+        sao_status_t status = make_root_level(replacement_root.children, spec, &root_level);
+        if (status != SAO_STATUS_OK) return status;
+        bool visible = false;
+        {
+            std::lock_guard lock(handle->mu);
+            handle->root = std::move(replacement_root);
+            handle->levels.clear();
+            handle->levels.push_back(std::move(root_level));
+            visible = handle->visible;
+        }
+        return visible ? sync_visible_layer_locked(handle) : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 static EntryNode* find_by_id_mut(EntryNode& root, int32_t entry_id) {
@@ -309,142 +1089,116 @@ static EntryNode* find_by_id_mut(EntryNode& root, int32_t entry_id) {
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_checked(
     sao_ui_popup_handle_t handle, int32_t entry_id, bool checked) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lk(handle->mu);
-    EntryNode* n = find_by_id_mut(handle->root, entry_id);
-    if (n == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-    n->checked = checked;
-    return SAO_STATUS_OK;
+    std::lock_guard layer_lock(handle->layer_mu);
+    bool visible = false;
+    {
+        std::lock_guard lock(handle->mu);
+        EntryNode* node = find_by_id_mut(handle->root, entry_id);
+        if (node == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
+        node->checked = checked;
+        visible = handle->visible;
+    }
+    return visible ? sync_visible_layer_locked(handle) : SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_enabled(
     sao_ui_popup_handle_t handle, int32_t entry_id, bool enabled) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lk(handle->mu);
-    EntryNode* n = find_by_id_mut(handle->root, entry_id);
-    if (n == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-    n->enabled = enabled;
-    return SAO_STATUS_OK;
+    std::lock_guard layer_lock(handle->layer_mu);
+    bool visible = false;
+    {
+        std::lock_guard lock(handle->mu);
+        EntryNode* node = find_by_id_mut(handle->root, entry_id);
+        if (node == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
+        node->enabled = enabled;
+        visible = handle->visible;
+    }
+    return visible ? sync_visible_layer_locked(handle) : SAO_STATUS_OK;
 }
 
-// ── keyboard nav — the state machine ──────────────────────────────
-//
-// This is the core of G3.4.  All navigation happens on the innermost
-// open level (handle->levels.back()); LEFT collapses that level (or
-// dismisses if at root); RIGHT pushes a new level when the selected
-// entry has children; ENTER fires the callback for the selected entry
-// (or expands if it's a container-only row); ESC dismisses regardless
-// of depth.
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_key_press(
     sao_ui_popup_handle_t handle, SaoUiPopupNavKey key) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    // ESC path fires the dismiss callback outside the lock.
-    sao_ui_popup_result_callback_t dismiss_cb = nullptr;
-    void* dismiss_ud = nullptr;
-    sao_ui_popup_result_callback_t choose_cb = nullptr;
-    void* choose_ud = nullptr;
-    int32_t chosen_entry = -1;
-    {
-        std::lock_guard<std::mutex> lk(handle->mu);
-        if (!handle->visible || handle->levels.empty()) {
-            return SAO_STATUS_ERR_NOT_INITIALIZED;
-        }
-        OpenLevel& top = handle->levels.back();
-        const int32_t top_depth = static_cast<int32_t>(handle->levels.size()) - 1;
-        const std::vector<EntryNode>& entries = level_entries(handle, top_depth);
+    PendingResult pending;
+    sao_status_t status = SAO_STATUS_OK;
+    try {
+        std::unique_lock layer_lock(handle->layer_mu);
+        sao_ui_layer_handle_t layer_to_destroy = nullptr;
+        bool redraw = true;
+        {
+            std::lock_guard lock(handle->mu);
+            if (!handle->visible || handle->levels.empty())
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+            const int32_t depth = static_cast<int32_t>(handle->levels.size()) - 1;
+            OpenLevel& top = handle->levels.back();
+            const auto& entries = level_entries(handle, depth);
 
-        switch (key) {
-        case SAO_UI_POPUP_KEY_UP: {
-            top.selected_index = advance_selection(entries, top.selected_index, -1);
-            break;
-        }
-        case SAO_UI_POPUP_KEY_DOWN: {
-            top.selected_index = advance_selection(entries, top.selected_index, +1);
-            break;
-        }
-        case SAO_UI_POPUP_KEY_LEFT: {
-            if (handle->levels.size() > 1) {
-                handle->levels.pop_back();
-            }
-            // At root, LEFT is a no-op (matches Windows menu behavior).
-            break;
-        }
-        case SAO_UI_POPUP_KEY_RIGHT: {
-            if (top.selected_index < 0 ||
-                top.selected_index >= static_cast<int32_t>(entries.size())) {
+            switch (key) {
+            case SAO_UI_POPUP_KEY_UP:
+                top.selected_index = advance_selection(entries, top.selected_index, -1);
                 break;
-            }
-            const EntryNode& sel = entries[static_cast<size_t>(top.selected_index)];
-            if (sel.enabled && !sel.is_separator && !sel.children.empty()) {
-                OpenLevel next;
-                next.parent_entry_index = top.selected_index;
-                // Anchor at right edge of parent's selected row.
-                const auto* consts = sao_ui_popup_layout_constants();
-                int32_t sub_x = top.rect.x + top.rect.width + consts->gap_menu_child;
-                int32_t sub_y = top.rect.row_top[static_cast<size_t>(top.selected_index)];
-                int32_t sub_width = consts->child_width;
-                compute_level_rect(sel.children, sub_x, sub_y, sub_width, &next.rect);
-                next.selected_index = advance_selection(sel.children, -1, +1);
-                handle->levels.push_back(std::move(next));
-            }
-            break;
-        }
-        case SAO_UI_POPUP_KEY_ENTER: {
-            if (top.selected_index < 0 ||
-                top.selected_index >= static_cast<int32_t>(entries.size())) {
+            case SAO_UI_POPUP_KEY_DOWN:
+                top.selected_index = advance_selection(entries, top.selected_index, +1);
                 break;
-            }
-            const EntryNode& sel = entries[static_cast<size_t>(top.selected_index)];
-            if (!sel.enabled || sel.is_separator) break;
-            if (!sel.children.empty()) {
-                // ENTER on a submenu row = expand (same as RIGHT).
-                OpenLevel next;
-                next.parent_entry_index = top.selected_index;
-                const auto* consts = sao_ui_popup_layout_constants();
-                int32_t sub_x = top.rect.x + top.rect.width + consts->gap_menu_child;
-                int32_t sub_y = top.rect.row_top[static_cast<size_t>(top.selected_index)];
-                compute_level_rect(sel.children, sub_x, sub_y, consts->child_width, &next.rect);
-                next.selected_index = advance_selection(sel.children, -1, +1);
-                handle->levels.push_back(std::move(next));
-            } else {
-                chosen_entry = sel.entry_id;
-                choose_cb = handle->callback;
-                choose_ud = handle->user_data;
+            case SAO_UI_POPUP_KEY_LEFT:
+                if (handle->levels.size() > 1) handle->levels.pop_back();
+                break;
+            case SAO_UI_POPUP_KEY_RIGHT:
+                if (top.selected_index >= 0 &&
+                    top.selected_index < static_cast<int32_t>(entries.size())) {
+                    const EntryNode& entry = entries[static_cast<size_t>(top.selected_index)];
+                    if (entry.enabled && !entry.is_separator && !entry.children.empty())
+                        status = open_submenu_locked(handle, depth, top.selected_index);
+                }
+                break;
+            case SAO_UI_POPUP_KEY_ENTER:
+                if (top.selected_index >= 0 &&
+                    top.selected_index < static_cast<int32_t>(entries.size())) {
+                    const EntryNode& entry = entries[static_cast<size_t>(top.selected_index)];
+                    if (entry.enabled && !entry.is_separator) {
+                        if (!entry.children.empty()) {
+                            status = open_submenu_locked(handle, depth, top.selected_index);
+                        } else {
+                            pending = {handle->callback, handle->user_data, entry.entry_id,
+                                       false, -1, -1};
+                            handle->visible = false;
+                            handle->callback = nullptr;
+                            handle->user_data = nullptr;
+                            handle->levels.clear();
+                            layer_to_destroy = std::exchange(handle->layer, nullptr);
+                            handle->layer_bounds_valid = false;
+                            redraw = false;
+                        }
+                    }
+                }
+                break;
+            case SAO_UI_POPUP_KEY_ESC:
+                pending = {handle->callback, handle->user_data, -1, true, -1, -1};
                 handle->visible = false;
                 handle->callback = nullptr;
                 handle->user_data = nullptr;
                 handle->levels.clear();
+                layer_to_destroy = std::exchange(handle->layer, nullptr);
+                handle->layer_bounds_valid = false;
+                redraw = false;
+                break;
+            default:
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
-            break;
         }
-        case SAO_UI_POPUP_KEY_ESC: {
-            handle->visible = false;
-            dismiss_cb = handle->callback;
-            dismiss_ud = handle->user_data;
-            handle->callback = nullptr;
-            handle->user_data = nullptr;
-            handle->levels.clear();
-            break;
+        if (layer_to_destroy != nullptr) {
+            destroy_layer_handle(layer_to_destroy);
+        } else if (redraw && status == SAO_STATUS_OK) {
+            status = sync_visible_layer_locked(handle);
         }
-        default:
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        }
+        layer_lock.unlock();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    if (choose_cb != nullptr) {
-        choose_cb(chosen_entry, /*dismissed=*/false,
-                  /*screen_x=*/-1, /*screen_y=*/-1, choose_ud);
-    }
-    if (dismiss_cb != nullptr) {
-        dismiss_cb(/*chosen=*/-1, /*dismissed=*/true, -1, -1, dismiss_ud);
-    }
-    return SAO_STATUS_OK;
+    invoke_result_noexcept(pending);
+    return status;
 }
 
-// ── hit test (hierarchical) ───────────────────────────────────────
-//
-// Walk the level stack from deepest → shallowest.  A hit inside the
-// deepest submenu wins; otherwise the parent's row we're hovering
-// over.  entry_id == -1 when off any entry (e.g. gutter between
-// menu column and submenu).
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hit_test(
     sao_ui_popup_handle_t handle,
     int32_t x, int32_t y,
@@ -456,31 +1210,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hit_test(
     if (!handle->visible || handle->levels.empty()) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    // Test deepest first (submenu wins over parent).
-    for (int32_t depth = static_cast<int32_t>(handle->levels.size()) - 1;
-         depth >= 0; --depth) {
-        const OpenLevel& lvl = handle->levels[static_cast<size_t>(depth)];
-        const LevelRect& r = lvl.rect;
-        if (x < r.x || x >= r.x + r.width) continue;
-        if (y < r.y || y >= r.y + r.height) continue;
-        const std::vector<EntryNode>& entries = level_entries(handle, depth);
-        for (size_t i = 0; i < entries.size(); ++i) {
-            if (y >= r.row_top[i] && y < r.row_bottom[i]) {
-                const EntryNode& e = entries[i];
-                if (e.is_separator) {
-                    // Separator rows report no entry; still record depth.
-                    if (out_submenu_depth != nullptr) *out_submenu_depth = depth;
-                    return SAO_STATUS_OK;
-                }
-                if (out_entry_id != nullptr) *out_entry_id = e.entry_id;
-                if (out_submenu_depth != nullptr) *out_submenu_depth = depth;
-                return SAO_STATUS_OK;
-            }
-        }
-        // Inside this level's rect but off all rows — treat as "on level, no entry".
-        if (out_submenu_depth != nullptr) *out_submenu_depth = depth;
-        return SAO_STATUS_OK;
-    }
-    // Outside all level rects.
+    const HitTarget hit = hit_target_locked(handle, x, y);
+    if (out_entry_id != nullptr) *out_entry_id = hit.entry_id;
+    if (out_submenu_depth != nullptr && hit.inside_level)
+        *out_submenu_depth = hit.depth;
     return SAO_STATUS_OK;
 }

@@ -1,0 +1,91 @@
+// SAO Auto - shared fisheye glass backdrop service.
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#include "sao/core/status.h"
+#include "sao/ui/abi.h"
+#include "sao/ui/compositor.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct sao_ui_fisheye_backdrop_s* sao_ui_fisheye_backdrop_handle_t;
+
+enum SaoUiFisheyeBackdropMode : int32_t {
+    SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL = 0,
+    SAO_UI_FISHEYE_BACKDROP_MODE_LIVE = 1,
+};
+
+struct SaoUiFisheyeBackdropRect {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+};
+
+struct SaoUiFisheyeBackdropGeometry {
+    SaoUiFisheyeBackdropRect rect;
+    int32_t z_order;
+};
+
+struct SaoUiFisheyeBackdropState {
+    bool visible;
+    SaoUiFisheyeBackdropMode mode;
+    SaoUiFisheyeBackdropGeometry geometry;
+    bool layer_present;
+    bool live_available;
+    sao_status_t last_status;
+    uint64_t frame_generation;
+};
+
+// The compositor is borrowed and must outlive the service. Passing NULL creates
+// a headless service that can still use the procedural pixel helper.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_create(
+    sao_ui_compositor_handle_t compositor, sao_ui_fisheye_backdrop_handle_t* out_handle);
+
+// Owner-thread retryable teardown. A failed call preserves the handle.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_try_destroy(sao_ui_fisheye_backdrop_handle_t handle);
+
+// Compatibility wrapper. Owners should prefer try_destroy before clearing the
+// handle so an owner-thread error remains observable.
+SAO_UI_API void SAO_UI_CALL
+sao_ui_fisheye_backdrop_destroy(sao_ui_fisheye_backdrop_handle_t handle);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_set_mode(
+    sao_ui_fisheye_backdrop_handle_t handle, SaoUiFisheyeBackdropMode mode);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_get_mode(
+    sao_ui_fisheye_backdrop_handle_t handle, SaoUiFisheyeBackdropMode* out_mode);
+
+// Publish the target foreground surface. Repeated calls reuse the existing
+// layer and only update geometry/z-order during the next owner-thread tick.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_show(
+    sao_ui_fisheye_backdrop_handle_t handle, const SaoUiFisheyeBackdropRect* rect, int32_t z_order);
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_hide(sao_ui_fisheye_backdrop_handle_t handle);
+
+// Apply mode, geometry, visibility, and worker reports on the owner thread.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle);
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_service(sao_ui_fisheye_backdrop_handle_t handle);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_get_state(
+    sao_ui_fisheye_backdrop_handle_t handle, SaoUiFisheyeBackdropState* out_state);
+
+// Generate a deterministic premultiplied BGRA SAO glass frame. Passing NULL
+// with capacity 0 queries the required byte count. Row padding is zero-filled.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_render_procedural_bgra(
+    uint32_t width, uint32_t height, uint32_t stride, uint8_t* out_bgra, size_t capacity,
+    size_t* out_required_bytes);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif

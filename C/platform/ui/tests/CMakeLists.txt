@@ -150,6 +150,24 @@ target_compile_features(sao_platform_ui_dialog_fisheye_tests PRIVATE cxx_std_20)
 
 catch_discover_tests(sao_platform_ui_dialog_fisheye_tests)
 
+# ── Shared procedural/live fisheye backdrop service ───────────────
+add_executable(sao_platform_ui_fisheye_backdrop_tests
+    test_fisheye_backdrop.cpp
+)
+
+target_link_libraries(sao_platform_ui_fisheye_backdrop_tests PRIVATE
+    sao::ui
+    Catch2::Catch2WithMain
+)
+
+target_compile_definitions(sao_platform_ui_fisheye_backdrop_tests PRIVATE SAO_UI_USING_DLL)
+target_compile_features(sao_platform_ui_fisheye_backdrop_tests PRIVATE cxx_std_20)
+
+catch_discover_tests(sao_platform_ui_fisheye_backdrop_tests
+    TEST_PREFIX "ui.fisheye_backdrop."
+    PROPERTIES LABELS "ui;fisheye_backdrop;compositor;dxgi"
+)
+
 # ── Panel SDK + input router + scriptable canvas tests ─────────────
 # Pure registry / matcher / op-append logic — no Windows-only
 # surface, no D3D11, no compositor.  Isolated target keeps the
