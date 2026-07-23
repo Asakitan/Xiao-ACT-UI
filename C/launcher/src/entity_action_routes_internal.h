@@ -471,6 +471,28 @@ class EntityActionRouteStore final {
     EntityActionRouteStore(EntityActionRouteStore&&) = delete;
     EntityActionRouteStore& operator=(EntityActionRouteStore&&) = delete;
 
+    sao_status_t open_invocation_gate() noexcept {
+        const auto state = state_;
+        if (state == nullptr) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        try {
+            std::lock_guard lock(state->publish_mutex);
+            if (!state->accepting.load(std::memory_order_acquire)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (state->transition_in_progress) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
+            const auto current = state->published.load(std::memory_order_acquire);
+            activate_controls(current.get());
+            state->invocation_enabled.store(true, std::memory_order_release);
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
     sao_status_t close_invocation_gate() noexcept {
         const auto state = state_;
         if (state == nullptr) {

@@ -119,8 +119,7 @@ std::atomic_uint64_t g_platform_session_sequence{0};
 
 void SAO_PLUGINS_CALL retainProviderOwner(void* user_data) {
     if (user_data != nullptr) {
-        static_cast<ProviderOwnerState*>(user_data)->leases.fetch_add(1,
-                                                                     std::memory_order_relaxed);
+        static_cast<ProviderOwnerState*>(user_data)->leases.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -526,13 +525,12 @@ void platformTimerCleanupWorker(LauncherPlatformSession* session) noexcept {
                 std::unique_lock lock(session->mutex);
                 session->idle.wait(lock, [session] {
                     return session->timer_worker_stop || session->timer_worker_wake ||
-                           std::any_of(
-                               session->timers.begin(), session->timers.end(),
-                               [](const auto& candidate) {
-                                   const auto& timer = candidate.second;
-                                   return timer->cleanup_pending && !timer->registering &&
-                                          !timer->unregistering && !timer->callback_active;
-                               });
+                           std::any_of(session->timers.begin(), session->timers.end(),
+                                       [](const auto& candidate) {
+                                           const auto& timer = candidate.second;
+                                           return timer->cleanup_pending && !timer->registering &&
+                                                  !timer->unregistering && !timer->callback_active;
+                                       });
                 });
                 session->timer_worker_wake = false;
                 const auto found = std::find_if(
@@ -584,9 +582,10 @@ void stopPlatformTimerWorker(LauncherPlatformSession& session) noexcept {
 }
 #endif
 
-int32_t SAO_PLUGINS_CALL createPlatformSession(
-    void*, const loader::plugin_context_platform_session_spec* spec,
-    loader::plugin_context_platform_session_t* out_session) {
+int32_t
+    SAO_PLUGINS_CALL createPlatformSession(void*,
+                                           const loader::plugin_context_platform_session_spec* spec,
+                                           loader::plugin_context_platform_session_t* out_session) {
     if (out_session != nullptr)
         *out_session = nullptr;
     if (spec == nullptr || out_session == nullptr ||
@@ -642,8 +641,8 @@ int32_t SAO_PLUGINS_CALL createPlatformSession(
     return SAO_OK;
 }
 
-int32_t SAO_PLUGINS_CALL quiescePlatformSession(
-    void*, loader::plugin_context_platform_session_t provider_session) {
+int32_t SAO_PLUGINS_CALL
+quiescePlatformSession(void*, loader::plugin_context_platform_session_t provider_session) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
@@ -708,8 +707,7 @@ int32_t dismissPlatformNotification(LauncherPlatformSession& session, uint64_t p
             return SAO_ERR_HANDLE_INVALID;
         sdk_token = found->second;
     }
-    const int32_t status =
-        mapSdkStatus(sao_sdk_notify_dismiss(&session.sdk_context, sdk_token));
+    const int32_t status = mapSdkStatus(sao_sdk_notify_dismiss(&session.sdk_context, sdk_token));
     if (status != SAO_OK && status != SAO_ERR_HANDLE_INVALID)
         return status;
     std::lock_guard lock(session.mutex);
@@ -718,8 +716,8 @@ int32_t dismissPlatformNotification(LauncherPlatformSession& session, uint64_t p
 }
 #endif
 
-int32_t SAO_PLUGINS_CALL destroyPlatformSession(
-    void*, loader::plugin_context_platform_session_t provider_session) {
+int32_t SAO_PLUGINS_CALL
+destroyPlatformSession(void*, loader::plugin_context_platform_session_t provider_session) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
@@ -765,8 +763,7 @@ int32_t SAO_PLUGINS_CALL destroyPlatformSession(
                 return mapUiLoaderStatus(static_cast<sao_status_t>(status));
         }
         if (session->sdk_ready) {
-            const int32_t status =
-                mapSdkStatus(sao_sdk_context_try_destroy(&session->sdk_context));
+            const int32_t status = mapSdkStatus(sao_sdk_context_try_destroy(&session->sdk_context));
             if (status != SAO_OK)
                 return status;
             session->sdk_ready = false;
@@ -822,9 +819,9 @@ int32_t SAO_PLUGINS_CALL registerPlatformTimer(
         if (g_test_fire_timer_during_register.exchange(false))
             launcherPlatformTimerCallback(0, timer.get());
         sao_sdk_timer_token_t sdk_token = 0;
-        const int32_t status = mapSdkStatus(sao_sdk_timer_register(
-            &session->sdk_context, interval_ms, launcherPlatformTimerCallback, timer.get(),
-            &sdk_token));
+        const int32_t status = mapSdkStatus(
+            sao_sdk_timer_register(&session->sdk_context, interval_ms,
+                                   launcherPlatformTimerCallback, timer.get(), &sdk_token));
         if (status != SAO_OK) {
             std::lock_guard lock(session->mutex);
             timer->registering = false;
@@ -852,9 +849,9 @@ int32_t SAO_PLUGINS_CALL registerPlatformTimer(
     }
 }
 
-int32_t SAO_PLUGINS_CALL unregisterPlatformTimer(
-    void*, loader::plugin_context_platform_session_t provider_session,
-    loader::plugin_context_platform_token_t provider_token) {
+int32_t SAO_PLUGINS_CALL
+unregisterPlatformTimer(void*, loader::plugin_context_platform_session_t provider_session,
+                        loader::plugin_context_platform_token_t provider_token) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr || provider_token == 0)
         return SAO_ERR_INVALID_ARGUMENT;
@@ -901,8 +898,7 @@ int32_t SAO_PLUGINS_CALL showPlatformNotification(
         const std::string_view kind = kind_utf8 == nullptr ? "info" : kind_utf8;
         SaoSdkNotifySpec spec{};
         spec.text_utf8 = text.c_str();
-        spec.duration_ms =
-            (std::max)(uint32_t{1}, static_cast<uint32_t>(std::ceil(milliseconds)));
+        spec.duration_ms = (std::max)(uint32_t{1}, static_cast<uint32_t>(std::ceil(milliseconds)));
         spec.argb_color = notificationColor(kind);
         uint64_t provider_token = 0;
         sao_sdk_notify_token_t* sdk_token_slot = nullptr;
@@ -929,8 +925,7 @@ int32_t SAO_PLUGINS_CALL showPlatformNotification(
             accepting = session->accepting_callbacks;
         }
         if (!accepting) {
-            const int32_t rollback_status =
-                dismissPlatformNotification(*session, provider_token);
+            const int32_t rollback_status = dismissPlatformNotification(*session, provider_token);
             return rollback_status == SAO_OK ? loader::SAO_PLUGINS_ERR_BUSY : rollback_status;
         }
         *out_provider_token = provider_token;
@@ -940,9 +935,9 @@ int32_t SAO_PLUGINS_CALL showPlatformNotification(
     }
 }
 
-int32_t SAO_PLUGINS_CALL dismissPlatformNotification(
-    void*, loader::plugin_context_platform_session_t provider_session,
-    loader::plugin_context_platform_token_t provider_token) {
+int32_t SAO_PLUGINS_CALL
+dismissPlatformNotification(void*, loader::plugin_context_platform_session_t provider_session,
+                            loader::plugin_context_platform_token_t provider_token) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr || provider_token == 0)
         return SAO_ERR_INVALID_ARGUMENT;
@@ -986,10 +981,9 @@ void dispatchCompositorInput(LauncherPlatformCompositorLayer* raw_layer,
 }
 
 template <typename Callback, typename Invoke>
-void invokeCompositorPluginCallback(
-    LauncherPlatformCompositorLayer& layer,
-    Callback LauncherPlatformCompositorLayer::* callback_member,
-    Invoke&& invoke) {
+void invokeCompositorPluginCallback(LauncherPlatformCompositorLayer& layer,
+                                    Callback LauncherPlatformCompositorLayer::* callback_member,
+                                    Invoke&& invoke) {
     Callback callback = nullptr;
     void* callback_user_data = nullptr;
     uint64_t generation = 0;
@@ -1026,23 +1020,20 @@ void invokeCompositorPluginCallback(
 void SAO_UI_CALL launcherCompositorCursor(float x, float y, void* user_data) {
     dispatchCompositorInput(
         static_cast<LauncherPlatformCompositorLayer*>(user_data), [x, y](auto& layer) {
-            invokeCompositorPluginCallback(
-                layer, &LauncherPlatformCompositorLayer::cursor_pos,
-                [x, y](auto callback, void* callback_user_data) {
-                    callback(x, y, callback_user_data);
-                });
+            invokeCompositorPluginCallback(layer, &LauncherPlatformCompositorLayer::cursor_pos,
+                                           [x, y](auto callback, void* callback_user_data) {
+                                               callback(x, y, callback_user_data);
+                                           });
         });
 }
 
 void SAO_UI_CALL launcherCompositorLeave(void* user_data) {
-    dispatchCompositorInput(static_cast<LauncherPlatformCompositorLayer*>(user_data),
-                            [](auto& layer) {
-                                invokeCompositorPluginCallback(
-                                    layer, &LauncherPlatformCompositorLayer::cursor_leave,
-                                    [](auto callback, void* callback_user_data) {
-                                        callback(callback_user_data);
-                                    });
-                            });
+    dispatchCompositorInput(
+        static_cast<LauncherPlatformCompositorLayer*>(user_data), [](auto& layer) {
+            invokeCompositorPluginCallback(
+                layer, &LauncherPlatformCompositorLayer::cursor_leave,
+                [](auto callback, void* callback_user_data) { callback(callback_user_data); });
+        });
 }
 
 void SAO_UI_CALL launcherCompositorButton(int32_t button, int32_t action, int32_t, float, float,
@@ -1060,11 +1051,10 @@ void SAO_UI_CALL launcherCompositorButton(int32_t button, int32_t action, int32_
 void SAO_UI_CALL launcherCompositorScroll(float dx, float dy, void* user_data) {
     dispatchCompositorInput(
         static_cast<LauncherPlatformCompositorLayer*>(user_data), [dx, dy](auto& layer) {
-            invokeCompositorPluginCallback(
-                layer, &LauncherPlatformCompositorLayer::scroll,
-                [dx, dy](auto callback, void* callback_user_data) {
-                    callback(dx, dy, callback_user_data);
-                });
+            invokeCompositorPluginCallback(layer, &LauncherPlatformCompositorLayer::scroll,
+                                           [dx, dy](auto callback, void* callback_user_data) {
+                                               callback(dx, dy, callback_user_data);
+                                           });
         });
 }
 
@@ -1113,10 +1103,10 @@ findCompositorLayer(LauncherPlatformSession& session, uint64_t provider_token) {
                : found->second;
 }
 
-int32_t SAO_PLUGINS_CALL createPlatformCompositorLayer(
-    void*, loader::plugin_context_platform_session_t provider_session,
-    const loader::plugin_context_compositor_layer_spec* spec,
-    loader::plugin_context_platform_token_t* out_provider_token) {
+int32_t SAO_PLUGINS_CALL
+createPlatformCompositorLayer(void*, loader::plugin_context_platform_session_t provider_session,
+                              const loader::plugin_context_compositor_layer_spec* spec,
+                              loader::plugin_context_platform_token_t* out_provider_token) {
     if (out_provider_token != nullptr)
         *out_provider_token = 0;
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
@@ -1201,8 +1191,7 @@ int32_t SAO_PLUGINS_CALL uploadPlatformCompositorFrame(
     try {
         auto* session = static_cast<LauncherPlatformSession*>(provider_session);
         if (session == nullptr || provider_token == 0 || bgra_bytes == nullptr || width == 0 ||
-            height == 0 || width > UINT32_MAX / 4U ||
-            static_cast<size_t>(width) > SIZE_MAX / 4U ||
+            height == 0 || width > UINT32_MAX / 4U || static_cast<size_t>(width) > SIZE_MAX / 4U ||
             static_cast<size_t>(height) > SIZE_MAX / (static_cast<size_t>(width) * 4U) ||
             bytes_len != static_cast<size_t>(width) * height * 4U) {
             return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
@@ -1251,10 +1240,10 @@ int32_t SAO_PLUGINS_CALL setPlatformCompositorLayerVisible(
     }
 }
 
-int32_t SAO_PLUGINS_CALL setPlatformCompositorLayerInput(
-    void*, loader::plugin_context_platform_session_t provider_session,
-    loader::plugin_context_platform_token_t provider_token,
-    const loader::plugin_context_compositor_input_spec* spec) {
+int32_t SAO_PLUGINS_CALL
+setPlatformCompositorLayerInput(void*, loader::plugin_context_platform_session_t provider_session,
+                                loader::plugin_context_platform_token_t provider_token,
+                                const loader::plugin_context_compositor_input_spec* spec) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr || provider_token == 0 || spec == nullptr ||
         spec->struct_size < sizeof(*spec)) {
@@ -1311,8 +1300,8 @@ int32_t destroyPlatformCompositorLayerCore(LauncherPlatformSession& session,
     sao_status_t callback_status = sao_ui_layer_set_visible(layer->layer, false);
     if (callback_status != SAO_STATUS_OK)
         return callback_status;
-    callback_status = sao_ui_layer_set_input_callbacks(
-        layer->layer, nullptr, nullptr, nullptr, nullptr, nullptr);
+    callback_status =
+        sao_ui_layer_set_input_callbacks(layer->layer, nullptr, nullptr, nullptr, nullptr, nullptr);
     if (callback_status != SAO_STATUS_OK)
         return callback_status;
     sao_ui_layer_destroy(layer->layer);
@@ -1323,9 +1312,9 @@ int32_t destroyPlatformCompositorLayerCore(LauncherPlatformSession& session,
     return SAO_STATUS_OK;
 }
 
-int32_t SAO_PLUGINS_CALL destroyPlatformCompositorLayer(
-    void*, loader::plugin_context_platform_session_t provider_session,
-    loader::plugin_context_platform_token_t provider_token) {
+int32_t SAO_PLUGINS_CALL
+destroyPlatformCompositorLayer(void*, loader::plugin_context_platform_session_t provider_session,
+                               loader::plugin_context_platform_token_t provider_token) {
     auto* session = static_cast<LauncherPlatformSession*>(provider_session);
     if (session == nullptr || provider_token == 0)
         return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
@@ -1429,11 +1418,10 @@ int32_t SAO_PLUGINS_CALL restoreDependencyPath(void*, void* provider_session,
         const std::wstring normalized =
             std::filesystem::path(absolute_dir).lexically_normal().wstring();
         std::lock_guard lock(session->mutex);
-        const auto found = std::find_if(
-            session->paths.rbegin(), session->paths.rend(),
-            [&normalized](const DependencyPathLease& candidate) {
-                return candidate.path == normalized;
-            });
+        const auto found = std::find_if(session->paths.rbegin(), session->paths.rend(),
+                                        [&normalized](const DependencyPathLease& candidate) {
+                                            return candidate.path == normalized;
+                                        });
         if (found == session->paths.rend())
             return SAO_ERR_HANDLE_INVALID;
         if (!RemoveDllDirectory(found->cookie))
@@ -1845,9 +1833,8 @@ int32_t rollbackRegistry(sao_plugins_registry_body& owned) noexcept {
         const auto lifecycle_state = loader::sao_plugins_lifecycle_state(handle);
         if (needsLifecycleUnload(handle) || lifecycle_state == loader::lifecycle_state::failed) {
             const int32_t unload_status = loader::sao_plugins_lifecycle_unload(handle);
-            if (unload_status != SAO_OK &&
-                !(lifecycle_state == loader::lifecycle_state::failed &&
-                  unload_status == loader::SAO_PLUGINS_ERR_BUSY)) {
+            if (unload_status != SAO_OK && !(lifecycle_state == loader::lifecycle_state::failed &&
+                                             unload_status == loader::SAO_PLUGINS_ERR_BUSY)) {
                 return unload_status;
             }
         }
@@ -1954,7 +1941,7 @@ extern "C" void sao_launcher_test_fire_timer_during_register(bool enabled) noexc
 extern "C" void sao_launcher_test_fail_next_timer_unregister(bool enabled) noexcept {
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
     g_test_fail_next_timer_unregister.store(enabled ? SAO_SDK_ERR_INTERNAL : SAO_SDK_OK,
-                                             std::memory_order_relaxed);
+                                            std::memory_order_relaxed);
 #else
     (void)enabled;
 #endif

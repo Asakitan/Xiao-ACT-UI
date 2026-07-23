@@ -1162,9 +1162,11 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         const sao_status_t route_status = ctx->entity_action_routes.resolve(action_token, route);
         if (route_status == SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-            return sao::launcher::entity_provider_publication::invoke(
-                route, ctx->entity_shell, &sao::plugins::loader::sao_plugins_entity_provider_invoke,
-                &sao_ui_entity_shell_get_snapshot, &sao_ui_entity_shell_home);
+            sao::launcher::entity_provider_publication::OwnedEntityActionResult result;
+            return sao::launcher::entity_provider_publication::invoke_v2(
+                route, ctx->entity_shell,
+                &sao::plugins::loader::sao_plugins_entity_provider_invoke_v2,
+                &sao_ui_entity_shell_get_snapshot, &sao_ui_entity_shell_home, &result);
 #else
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
@@ -1436,6 +1438,13 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->ai_editor) {
+        const sao_status_t ai_editor_status = ctx->ai_editor->take_offline();
+        if (ai_editor_status != SAO_STATUS_OK) {
+            return ai_editor_status;
+        }
+        ctx->ai_editor.reset();
+    }
     if (ctx->insert_hotkey_registered) {
         (void)UnregisterHotKey(nullptr, kInsertHotkeyId);
         ctx->insert_hotkey_registered = false;
@@ -1646,6 +1655,12 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
+    if (ctx->ai_editor) {
+        const sao_status_t ai_editor_status = ctx->ai_editor->take_offline();
+        if (ai_editor_status != SAO_STATUS_OK) {
+            return ai_editor_status;
+        }
+    }
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     status = ctx->entity_action_routes.close_invocation_gate();
@@ -1708,6 +1723,22 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (status == SAO_STATUS_OK && provider_status != SAO_STATUS_OK)
         status = provider_status;
 #endif
+    if (ctx->ai_editor) {
+        const sao_status_t ai_editor_status = ctx->ai_editor->service_ui();
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+        if (ai_editor_status != SAO_STATUS_OK &&
+            ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
+            (void)sao_core_logf(
+                SAO_LOG_WARN, "launcher.ai_editor",
+                "owner-thread UI service deferred: status=%d",
+                ai_editor_status);
+        }
+#endif
+        if (status == SAO_STATUS_OK &&
+            ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
+            status = ai_editor_status;
+        }
+    }
     const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     return status == SAO_STATUS_OK ? compositor_status : status;
 }

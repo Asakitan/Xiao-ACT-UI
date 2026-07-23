@@ -98,6 +98,9 @@ if (TARGET sao::plugin_ai_editor)
     target_compile_definitions(sao_launcher_tests PRIVATE
         SAO_LAUNCHER_HAS_AI_EDITOR_ABI=1)
 endif()
+if (TARGET sao::sdk AND TARGET sao::ui)
+    target_link_libraries(sao_launcher_tests PRIVATE sao::sdk sao::ui)
+endif()
 if (TARGET cutover_diff)
     target_compile_definitions(sao_launcher_tests
         PRIVATE
@@ -230,4 +233,59 @@ if (TARGET sao_launcher_plugins_provider)
     catch_discover_tests(sao_launcher_provider_tests
         TEST_PREFIX "launcher.provider."
         PROPERTIES LABELS "launcher;plugins;focused")
+endif()
+
+if (TARGET sao_launcher_plugins_provider AND
+    TARGET sao::plugins::csharp_host AND
+    TARGET sao::plugins::loader AND
+    TARGET sao::ui AND
+    TARGET sao::sdk AND
+    TARGET sao_csharp_managed_entity_fixture AND
+    TARGET Catch2::Catch2WithMain)
+    set(_sao_csharp_entity_fixture_root
+        "${CMAKE_BINARY_DIR}/plugins/csharp_host/tests/managed_entity_fixture")
+    set(_sao_csharp_entity_fixture_a
+        "${_sao_csharp_entity_fixture_root}/entity_a")
+    set(_sao_csharp_entity_fixture_b
+        "${_sao_csharp_entity_fixture_root}/entity_b")
+
+    add_executable(sao_launcher_csharp_entity_tests
+        test_csharp_entity_integration.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_provider_publication_internal.cpp)
+    add_dependencies(sao_launcher_csharp_entity_tests
+        sao_csharp_managed_entity_fixture)
+    target_include_directories(sao_launcher_csharp_entity_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_SOURCE_DIR}/platform/core/include
+        ${CMAKE_SOURCE_DIR}/platform/ui/include
+        ${CMAKE_SOURCE_DIR}/platform/sdk/include
+        ${CMAKE_SOURCE_DIR}/plugins/include
+        ${CMAKE_SOURCE_DIR}/plugins/loader/include
+        ${CMAKE_SOURCE_DIR}/plugins/csharp_host/include)
+    target_compile_features(sao_launcher_csharp_entity_tests PRIVATE cxx_std_20)
+    target_compile_definitions(sao_launcher_csharp_entity_tests PRIVATE
+        SAO_PLUGINS_BUILDING_DLL
+        SAO_CSHARP_ENTITY_A_DLL="${_sao_csharp_entity_fixture_a}/HelloPluginEntityA.dll"
+        SAO_CSHARP_ENTITY_A_RUNTIMECONFIG="${_sao_csharp_entity_fixture_a}/HelloPluginEntityA.runtimeconfig.json"
+        SAO_CSHARP_ENTITY_B_DLL="${_sao_csharp_entity_fixture_b}/HelloPluginEntityB.dll"
+        SAO_CSHARP_ENTITY_B_RUNTIMECONFIG="${_sao_csharp_entity_fixture_b}/HelloPluginEntityB.runtimeconfig.json")
+    if (MSVC)
+        target_compile_options(sao_launcher_csharp_entity_tests PRIVATE /GR /EHsc)
+    endif()
+    target_link_libraries(sao_launcher_csharp_entity_tests PRIVATE
+        Catch2::Catch2WithMain
+        nlohmann_json::nlohmann_json
+        sao_launcher_plugins_provider
+        sao::plugins::csharp_host
+        sao::plugins::loader
+        sao::ui
+        sao::sdk)
+
+    catch_discover_tests(sao_launcher_csharp_entity_tests
+        TEST_PREFIX "launcher.csharp_entity."
+        PROPERTIES
+            LABELS "launcher;plugins;csharp;entity;v2;headless"
+            RESOURCE_LOCK "sao_launcher_process_resources")
 endif()

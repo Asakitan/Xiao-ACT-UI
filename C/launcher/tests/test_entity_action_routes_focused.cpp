@@ -5,6 +5,8 @@
 #include "entity_provider_publication_internal.h"
 #include "tool_launch_internal.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -42,6 +44,7 @@ using EntityRootContributionActionRef =
     sao::launcher::entity_provider_publication::EntityRootContributionActionRef;
 using EntityRootContributionSpec =
     sao::launcher::entity_provider_publication::EntityRootContributionSpec;
+using OwnedEntityActionResult = sao::launcher::entity_provider_publication::OwnedEntityActionResult;
 
 namespace loader = sao::plugins::loader;
 
@@ -212,8 +215,7 @@ fake_catalog_snapshot(loader::entity_provider_catalog_callback callback, void* u
     return callback(&g_catalog_fixture->catalog, user_data);
 }
 
-template <typename View>
-struct alignas(View) FutureStrideView {
+template <typename View> struct alignas(View) FutureStrideView {
     View view{};
     std::array<std::byte, 16> future{};
 };
@@ -308,12 +310,12 @@ struct CatalogV2Fixture {
             sizeof(PhysicalEntityMenuRowV2),
             rows.data() + 1,
         };
-        root_actions[0].view = {sizeof(PhysicalEntityRootActionV2),
-                                provider_ids[0].c_str(), action_ids[0].c_str()};
-        root_actions[1].view = {sizeof(PhysicalEntityRootActionV2),
-                                provider_ids[0].c_str(), action_ids[1].c_str()};
-        root_actions[2].view = {sizeof(PhysicalEntityRootActionV2),
-                                provider_ids[1].c_str(), action_ids[1].c_str()};
+        root_actions[0].view = {sizeof(PhysicalEntityRootActionV2), provider_ids[0].c_str(),
+                                action_ids[0].c_str()};
+        root_actions[1].view = {sizeof(PhysicalEntityRootActionV2), provider_ids[0].c_str(),
+                                action_ids[1].c_str()};
+        root_actions[2].view = {sizeof(PhysicalEntityRootActionV2), provider_ids[1].c_str(),
+                                action_ids[1].c_str()};
         roots[0].view = {
             sizeof(PhysicalEntityRootV2),
             root_owner_ids[0].c_str(),
@@ -435,13 +437,13 @@ void check_catalog_snapshot_rejected_transactionally(CatalogFixture& fixture) {
 }
 
 void check_catalog_snapshot_v2_rejected_transactionally(CatalogV2Fixture& fixture,
-                                                         sao_status_t expected) {
+                                                        sao_status_t expected) {
     g_catalog_v2_fixture = &fixture;
     g_catalog_v2_entry_status = SAO_OK;
     auto catalog = make_catalog_sentinel();
     const auto before = catalog;
-    CHECK(sao::launcher::entity_provider_catalog::snapshot_v2(&fake_catalog_snapshot_v2,
-                                                              catalog) == expected);
+    CHECK(sao::launcher::entity_provider_catalog::snapshot_v2(&fake_catalog_snapshot_v2, catalog) ==
+          expected);
     CHECK(catalog == before);
     g_catalog_v2_fixture = nullptr;
 }
@@ -460,6 +462,7 @@ struct PublishedRoot {
     std::string icon;
     std::int32_t action_id = 0;
     bool can_activate = false;
+    bool children_pointer_is_null = false;
     std::vector<PublishedMenuRow> children;
 };
 
@@ -499,6 +502,7 @@ sao_status_t SAO_UI_CALL fake_set_roots(sao_ui_entity_shell_handle_t,
         root.icon = roots[index].icon_utf8 == nullptr ? "" : roots[index].icon_utf8;
         root.action_id = roots[index].action_id;
         root.can_activate = roots[index].can_activate;
+        root.children_pointer_is_null = roots[index].children == nullptr;
         root.children.reserve(roots[index].child_count);
         for (std::size_t child = 0; child < roots[index].child_count; ++child) {
             root.children.push_back({
@@ -662,6 +666,304 @@ std::int32_t SAO_PLUGINS_CALL reentrant_invoke(const char*, std::uint64_t, const
             probe->shell, *probe->store, *probe->state, false, &fake_set_roots);
     }
     return SAO_OK;
+}
+
+constexpr std::uint32_t kEntityMouseMove = 0x0200;
+constexpr std::uint32_t kEntityLeftButtonDown = 0x0201;
+constexpr std::uint32_t kEntityLeftButtonUp = 0x0202;
+constexpr std::uint32_t kEntityMouseWheel = 0x020A;
+constexpr std::int32_t kEntityMenuPad = 40;
+constexpr std::int32_t kEntityMenuSlot = 70;
+constexpr std::int32_t kEntityMenuSlotCenter = 75;
+constexpr std::int32_t kEntityChildX = 180;
+constexpr std::int32_t kEntityChildRowStride = 47;
+constexpr std::int32_t kEntityChildRowCenterY = 22;
+
+struct CanonicalActionCatalogV2Fixture {
+    std::string plugin_id;
+    std::string provider_id;
+    std::string category_id;
+    std::string category_label;
+    std::string row_label;
+    std::string action_id;
+    std::string payload;
+    loader::entity_menu_row_v2 row{};
+    loader::entity_provider_view_v2 provider{};
+    loader::entity_provider_catalog_view_v2 catalog{};
+
+    void configure(std::string plugin, std::string provider_suffix, std::string action,
+                   bool keep_menu_open, bool close_menu_before, std::uint64_t generation,
+                   loader::entity_snapshot_content_token_t token) {
+        plugin_id = std::move(plugin);
+        provider_id = plugin_id + "/" + provider_suffix;
+        category_id = plugin_id + ".actions";
+        category_label = "Canonical action fixture";
+        row_label = "Invoke canonical action";
+        action_id = std::move(action);
+        payload = R"({"source":"launcher-focused"})";
+        row = {
+            sizeof(row),
+            category_id.c_str(),
+            category_label.c_str(),
+            "F",
+            0.0,
+            row_label.c_str(),
+            ">",
+            action_id.c_str(),
+            payload.c_str(),
+            1,
+            static_cast<std::uint8_t>(keep_menu_open),
+            static_cast<std::uint8_t>(close_menu_before),
+            {},
+        };
+        provider = {
+            sizeof(provider),
+            loader::kEntitySnapshotAbiVersion2,
+            provider_id.c_str(),
+            plugin_id.c_str(),
+            generation,
+            1,
+            token,
+            1,
+            sizeof(row),
+            &row,
+        };
+        catalog = {
+            sizeof(catalog),
+            loader::kEntitySnapshotAbiVersion2,
+            1,
+            token + 1,
+            1,
+            sizeof(provider),
+            &provider,
+            0,
+            sizeof(loader::entity_root_contribution_view_v2),
+            nullptr,
+        };
+    }
+};
+
+CanonicalActionCatalogV2Fixture* g_canonical_action_catalog = nullptr;
+
+std::int32_t SAO_PLUGINS_CALL canonical_action_catalog_snapshot_v2(
+    loader::entity_provider_catalog_callback_v2 callback, void* user_data) {
+    if (g_canonical_action_catalog == nullptr || callback == nullptr) {
+        return SAO_ERR_NOT_INITIALIZED;
+    }
+    return callback(&g_canonical_action_catalog->catalog, user_data);
+}
+
+struct CanonicalActionResultStep {
+    std::uint32_t struct_size = sizeof(loader::entity_action_result_v2);
+    std::uint32_t abi_version = loader::kEntityActionAbiVersion2;
+    std::uint8_t handled = 1;
+    std::array<std::uint8_t, 7> reserved{};
+    bool has_result = false;
+    bool null_view = false;
+    bool future_tail = false;
+    bool mutate_after_callback = false;
+    std::string result_json;
+    std::string mutated_result_json;
+};
+
+struct CanonicalActionV2Probe {
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    std::vector<CanonicalActionResultStep> steps;
+    std::size_t calls = 0;
+    std::vector<bool> menu_visible_on_entry;
+    std::vector<bool> menu_visible_before_return;
+    std::string provider_id;
+    std::uint64_t generation = 0;
+    std::string action_id;
+    std::string payload;
+    std::string backing_result;
+};
+
+CanonicalActionV2Probe* g_canonical_action_v2_probe = nullptr;
+
+bool shell_menu_visible(sao_ui_entity_shell_handle_t shell) {
+    SaoUiEntityShellSnapshot snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    return snapshot.menu_visible;
+}
+
+std::int32_t SAO_PLUGINS_CALL canonical_action_invoke_v2(
+    const char* provider_id, std::uint64_t generation, const char* action_id, const char* payload,
+    loader::entity_action_result_callback_v2_fn callback, void* user_data) {
+    auto* probe = g_canonical_action_v2_probe;
+    if (probe == nullptr || provider_id == nullptr || action_id == nullptr || payload == nullptr ||
+        callback == nullptr || user_data == nullptr || probe->calls >= probe->steps.size()) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const auto step = probe->steps[probe->calls++];
+    probe->provider_id = provider_id;
+    probe->generation = generation;
+    probe->action_id = action_id;
+    probe->payload = payload;
+    if (probe->shell != nullptr) {
+        probe->menu_visible_on_entry.push_back(shell_menu_visible(probe->shell));
+    }
+
+    loader::entity_action_result_v2 result{};
+    result.struct_size = step.struct_size;
+    result.abi_version = step.abi_version;
+    result.handled = step.handled;
+    std::copy(step.reserved.begin(), step.reserved.end(), std::begin(result.reserved));
+    if (step.has_result) {
+        probe->backing_result = step.result_json;
+        result.result_json_utf8 = probe->backing_result.c_str();
+    }
+
+    std::int32_t status = SAO_OK;
+    if (step.null_view) {
+        status = callback(nullptr, user_data);
+    } else if (step.future_tail) {
+        struct FutureActionResultView {
+            loader::entity_action_result_v2 current{};
+            std::array<std::uint64_t, 2> tail{};
+        } future;
+        future.current = result;
+        future.current.struct_size = sizeof(future);
+        future.tail = {0xd1800001ULL, 0xd1800002ULL};
+        status = callback(&future.current, user_data);
+    } else {
+        status = callback(&result, user_data);
+    }
+    if (step.mutate_after_callback) {
+        probe->backing_result = step.mutated_result_json;
+    }
+    if (probe->shell != nullptr) {
+        probe->menu_visible_before_return.push_back(shell_menu_visible(probe->shell));
+    }
+    return status;
+}
+
+struct CanonicalActionUiContext {
+    EntityActionRouteStore* routes = nullptr;
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    OwnedEntityActionResult result;
+    std::size_t callback_calls = 0;
+    sao_status_t last_status = SAO_STATUS_OK;
+};
+
+sao_status_t SAO_UI_CALL invoke_canonical_action_from_ui(SaoUiEntityAction action,
+                                                         void* user_data) {
+    auto* context = static_cast<CanonicalActionUiContext*>(user_data);
+    if (context == nullptr || context->routes == nullptr || context->shell == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    ++context->callback_calls;
+    EntityActionRoute route;
+    const sao_status_t resolve_status =
+        context->routes->resolve(static_cast<std::int32_t>(action), route);
+    if (resolve_status != SAO_STATUS_OK) {
+        context->last_status = resolve_status;
+        return resolve_status;
+    }
+    context->last_status = sao::launcher::entity_provider_publication::invoke_v2(
+        route, context->shell, &canonical_action_invoke_v2, &sao_ui_entity_shell_get_snapshot,
+        &sao_ui_entity_shell_home, &context->result);
+    return context->last_status;
+}
+
+struct HeadlessEntityShellFixture {
+    sao_ui_entity_shell_handle_t shell = nullptr;
+
+    ~HeadlessEntityShellFixture() {
+        if (shell != nullptr) {
+            (void)sao_ui_entity_shell_take_offline(shell);
+            sao_ui_entity_shell_destroy(shell);
+        }
+    }
+
+    void create(CanonicalActionUiContext& context) {
+        SaoUiEntityShellConfig config{};
+        config.width = 420;
+        config.height = 460;
+        config.origin_x = 100;
+        config.origin_y = 200;
+        config.action_fn = &invoke_canonical_action_from_ui;
+        config.action_user_data = &context;
+        REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+        context.shell = shell;
+        REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    }
+
+    void shutdown() {
+        REQUIRE(shell != nullptr);
+        REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+        sao_ui_entity_shell_destroy(shell);
+        shell = nullptr;
+    }
+};
+
+sao_status_t click_entity_point(sao_ui_entity_shell_handle_t shell, std::int32_t x,
+                                std::int32_t y) {
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kEntityMouseMove, x, y, -1, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kEntityLeftButtonDown, x, y, 0, 0) ==
+            SAO_STATUS_OK);
+    return sao_ui_entity_shell_handle_mouse(shell, kEntityLeftButtonUp, x, y, 0, 0);
+}
+
+void select_plugins_root(sao_ui_entity_shell_handle_t shell) {
+    SaoUiEntityShellSnapshot snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    if (!snapshot.menu_visible) {
+        REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    }
+    SaoUiEntityRootSnapshot root_snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_root_snapshot(shell, &root_snapshot) == SAO_STATUS_OK);
+    if (std::string_view(root_snapshot.active_root_id_utf8) != "Plugins") {
+        const std::int32_t x = snapshot.origin_x + snapshot.menu_x + kEntityMenuSlotCenter;
+        const std::int32_t y = snapshot.origin_y + snapshot.menu_y + kEntityMenuPad +
+                               2 * kEntityMenuSlot + kEntityMenuSlot / 2;
+        REQUIRE(click_entity_point(shell, x, y) == SAO_STATUS_OK);
+    }
+    REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 200) == SAO_STATUS_OK);
+}
+
+void reopen_selected_plugins_root(sao_ui_entity_shell_handle_t shell) {
+    SaoUiEntityShellSnapshot snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    REQUIRE_FALSE(snapshot.menu_visible);
+    REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    const std::int32_t x = snapshot.origin_x + snapshot.menu_x + kEntityMenuSlotCenter;
+    const auto click_root = [&](std::int32_t slot) {
+        const std::int32_t y = snapshot.origin_y + snapshot.menu_y + kEntityMenuPad +
+                               slot * kEntityMenuSlot + kEntityMenuSlot / 2;
+        REQUIRE(click_entity_point(shell, x, y) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_tick(shell, 200) == SAO_STATUS_OK);
+    };
+    click_root(0);
+    click_root(2);
+}
+
+sao_status_t click_plugins_child(sao_ui_entity_shell_handle_t shell, std::int32_t slot) {
+    SaoUiEntityShellSnapshot snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &snapshot) == SAO_STATUS_OK);
+    const std::int32_t x = snapshot.origin_x + snapshot.menu_x + kEntityChildX;
+    const std::int32_t y = snapshot.origin_y + snapshot.menu_y + kEntityMenuPad +
+                           slot * kEntityChildRowStride + kEntityChildRowCenterY;
+    return click_entity_point(shell, x, y);
+}
+
+void publish_canonical_action_catalog(CanonicalActionCatalogV2Fixture& catalog,
+                                      EntityActionRouteStore& routes,
+                                      EntityProviderPublicationState& state,
+                                      sao_ui_entity_shell_handle_t shell) {
+    g_canonical_action_catalog = &catalog;
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell, routes, state, false, &canonical_action_catalog_snapshot_v2, nullptr,
+                &sao_ui_entity_shell_set_roots) == SAO_STATUS_OK);
+    const auto published = snapshot(routes);
+    REQUIRE(published.routes.size() == 1);
+    CHECK(published.routes[0].provider_id == catalog.provider_id);
+    CHECK(published.routes[0].action_id == catalog.action_id);
 }
 
 } // namespace
@@ -986,15 +1288,14 @@ TEST_CASE("Entity provider catalog v2 deep copies physical future strides",
     STATIC_REQUIRE(sizeof(PhysicalEntityProviderV2) > sizeof(loader::entity_provider_view_v2));
     STATIC_REQUIRE(sizeof(PhysicalEntityRootActionV2) >
                    sizeof(loader::entity_root_action_ref_view_v2));
-    STATIC_REQUIRE(sizeof(PhysicalEntityRootV2) >
-                   sizeof(loader::entity_root_contribution_view_v2));
+    STATIC_REQUIRE(sizeof(PhysicalEntityRootV2) > sizeof(loader::entity_root_contribution_view_v2));
 
     CatalogV2Fixture fixture;
     g_catalog_v2_fixture = &fixture;
     g_catalog_v2_entry_status = SAO_OK;
     OwnedEntityProviderCatalog catalog;
     REQUIRE(sao::launcher::entity_provider_catalog::snapshot_v2(&fake_catalog_snapshot_v2,
-                                                                 catalog) == SAO_STATUS_OK);
+                                                                catalog) == SAO_STATUS_OK);
 
     CHECK(catalog.abi_version == loader::kEntitySnapshotAbiVersion2);
     CHECK(catalog.revision == 501);
@@ -1026,8 +1327,7 @@ TEST_CASE("Entity provider catalog v2 deep copies physical future strides",
     fixture.sync_string_pointers();
 
     std::vector<EntityActionRouteSpec> routes;
-    REQUIRE(sao::launcher::entity_provider_catalog::build_routes(catalog, routes) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_catalog::build_routes(catalog, routes) == SAO_STATUS_OK);
     REQUIRE(routes.size() == 3);
     CHECK(routes[0].provider_id == "provider-a");
     CHECK(routes[1].row_label == "Row B");
@@ -1043,141 +1343,126 @@ TEST_CASE("Entity provider catalog v2 rejects malformed ABI and strides atomical
 
     SECTION("catalog prefix truncated") {
         fixture.catalog.struct_size = loader::kEntityProviderCatalogViewV2RequiredPrefixSize - 1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("catalog version unsupported") {
         fixture.catalog.abi_version = loader::kEntitySnapshotAbiVersion1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("catalog token zero") {
         fixture.catalog.content_token = loader::kInvalidEntitySnapshotContentToken;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("provider token zero") {
         fixture.providers[0].view.content_token = loader::kInvalidEntitySnapshotContentToken;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("provider snapshot version unsupported") {
         fixture.providers[0].view.snapshot_abi_version = 3;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
 
     SECTION("provider stride too small") {
         fixture.catalog.provider_stride_bytes =
             static_cast<std::uint32_t>(loader::kEntityProviderViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("root stride too small") {
-        fixture.catalog.root_contribution_stride_bytes = static_cast<std::uint32_t>(
-            loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        fixture.catalog.root_contribution_stride_bytes =
+            static_cast<std::uint32_t>(loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("row stride too small") {
         fixture.providers[0].view.row_stride_bytes =
             static_cast<std::uint32_t>(loader::kEntityMenuRowV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("action stride too small") {
-        fixture.roots[0].view.action_stride_bytes = static_cast<std::uint32_t>(
-            loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        fixture.roots[0].view.action_stride_bytes =
+            static_cast<std::uint32_t>(loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
 
     SECTION("provider stride misaligned") {
         ++fixture.catalog.provider_stride_bytes;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("root stride misaligned") {
         ++fixture.catalog.root_contribution_stride_bytes;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("row stride misaligned") {
         ++fixture.providers[0].view.row_stride_bytes;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("action stride misaligned") {
         ++fixture.roots[0].view.action_stride_bytes;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
 
     SECTION("provider prefix truncated") {
         fixture.providers[0].view.struct_size =
             static_cast<std::uint32_t>(loader::kEntityProviderViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("root prefix truncated") {
-        fixture.roots[0].view.struct_size = static_cast<std::uint32_t>(
-            loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        fixture.roots[0].view.struct_size =
+            static_cast<std::uint32_t>(loader::kEntityRootContributionViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("row prefix truncated") {
         fixture.rows[0].view.struct_size =
             static_cast<std::uint32_t>(loader::kEntityMenuRowV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("action prefix truncated") {
-        fixture.root_actions[0].view.struct_size = static_cast<std::uint32_t>(
-            loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        fixture.root_actions[0].view.struct_size =
+            static_cast<std::uint32_t>(loader::kEntityRootActionRefViewV2RequiredPrefixSize - 1);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
 
     SECTION("provider struct size exceeds stride") {
         fixture.providers[0].view.struct_size = fixture.catalog.provider_stride_bytes + 1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("root struct size exceeds stride") {
         fixture.roots[0].view.struct_size = fixture.catalog.root_contribution_stride_bytes + 1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("row struct size exceeds stride") {
         fixture.rows[0].view.struct_size = fixture.providers[0].view.row_stride_bytes + 1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
     SECTION("action struct size exceeds stride") {
         fixture.root_actions[0].view.struct_size = fixture.roots[0].view.action_stride_bytes + 1;
-        check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_ABI_MISMATCH);
+        check_catalog_snapshot_v2_rejected_transactionally(fixture, SAO_STATUS_ERR_ABI_MISMATCH);
     }
 
     SECTION("provider count has null pointer") {
         fixture.catalog.providers = nullptr;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("root count has null pointer") {
         fixture.catalog.root_contributions = nullptr;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("row count has null pointer") {
         fixture.providers[0].view.rows = nullptr;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
     SECTION("action count has null pointer") {
         fixture.roots[0].view.actions = nullptr;
         check_catalog_snapshot_v2_rejected_transactionally(fixture,
-                                                            SAO_STATUS_ERR_INVALID_ARGUMENT);
+                                                           SAO_STATUS_ERR_INVALID_ARGUMENT);
     }
 }
 
@@ -1656,13 +1941,277 @@ TEST_CASE("Entity provider action honors close timing and maps loader statuses",
     g_action_log = nullptr;
 }
 
+TEST_CASE(
+    "Launcher action-v2 Python canonical provider identity fixture owns close-before object result",
+    "[launcher][entity_provider][action-v2][focused]") {
+    CanonicalActionCatalogV2Fixture catalog;
+    catalog.configure("canonical-python-fixture", "opaque-actions", "opaque.execute", false, true,
+                      401, 0x4100);
+    EntityActionRouteStore routes;
+    EntityProviderPublicationState state;
+    CanonicalActionUiContext ui{&routes};
+    HeadlessEntityShellFixture shell;
+    shell.create(ui);
+    publish_canonical_action_catalog(catalog, routes, state, shell.shell);
+
+    CanonicalActionV2Probe provider;
+    provider.shell = shell.shell;
+    CanonicalActionResultStep step;
+    step.has_result = true;
+    step.mutate_after_callback = true;
+    step.result_json = R"({"language":"python","value":1,"nested":null})";
+    step.mutated_result_json = R"({"language":"mutated"})";
+    provider.steps.push_back(step);
+    g_canonical_action_v2_probe = &provider;
+
+    select_plugins_root(shell.shell);
+    REQUIRE(click_plugins_child(shell.shell, 3) == SAO_STATUS_OK);
+
+    SaoUiEntityShellSnapshot shell_snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK_FALSE(shell_snapshot.menu_visible);
+    CHECK(shell_snapshot.action_count == 1);
+    CHECK(shell_snapshot.last_status == SAO_STATUS_OK);
+    CHECK(ui.callback_calls == 1);
+    CHECK(ui.last_status == SAO_STATUS_OK);
+    REQUIRE(provider.menu_visible_on_entry == std::vector<bool>{false});
+    REQUIRE(provider.menu_visible_before_return == std::vector<bool>{false});
+    CHECK(provider.calls == 1);
+    CHECK(provider.provider_id == "canonical-python-fixture/opaque-actions");
+    CHECK(provider.generation == 401);
+    CHECK(provider.action_id == "opaque.execute");
+    CHECK(provider.payload == R"({"source":"launcher-focused"})");
+    CHECK(provider.backing_result == R"({"language":"mutated"})");
+    CHECK(ui.result.callback_received);
+    CHECK(ui.result.handled);
+    CHECK(ui.result.has_result);
+    CHECK(ui.result.result_json == R"({"language":"python","value":1,"nested":null})");
+    const auto parsed = nlohmann::json::parse(ui.result.result_json);
+    CHECK(parsed.at("language") == "python");
+    CHECK(parsed.at("value") == 1);
+    CHECK(parsed.at("nested").is_null());
+
+    shell.shutdown();
+    g_canonical_action_v2_probe = nullptr;
+    g_canonical_action_catalog = nullptr;
+}
+
+TEST_CASE("Launcher action-v2 Lua canonical provider identity fixture distinguishes decline and "
+          "JSON null",
+          "[launcher][entity_provider][action-v2][focused]") {
+    CanonicalActionCatalogV2Fixture catalog;
+    catalog.configure("canonical-lua-fixture", "action-handler", "action.execute", false, false,
+                      402, 0x4200);
+    EntityActionRouteStore routes;
+    EntityProviderPublicationState state;
+    CanonicalActionUiContext ui{&routes};
+    HeadlessEntityShellFixture shell;
+    shell.create(ui);
+    publish_canonical_action_catalog(catalog, routes, state, shell.shell);
+
+    CanonicalActionV2Probe provider;
+    provider.shell = shell.shell;
+    CanonicalActionResultStep decline;
+    decline.handled = 0;
+    provider.steps.push_back(decline);
+    CanonicalActionResultStep handled_null;
+    handled_null.has_result = true;
+    handled_null.result_json = "null";
+    provider.steps.push_back(handled_null);
+    g_canonical_action_v2_probe = &provider;
+
+    select_plugins_root(shell.shell);
+    REQUIRE(click_plugins_child(shell.shell, 3) == SAO_STATUS_ERR_NOT_FOUND);
+    SaoUiEntityShellSnapshot shell_snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK_FALSE(shell_snapshot.menu_visible);
+    CHECK(shell_snapshot.action_count == 1);
+    CHECK(shell_snapshot.last_status == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(ui.last_status == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(ui.result.callback_received);
+    CHECK_FALSE(ui.result.handled);
+    CHECK_FALSE(ui.result.has_result);
+    CHECK(ui.result.result_json.empty());
+
+    reopen_selected_plugins_root(shell.shell);
+    REQUIRE(click_plugins_child(shell.shell, 3) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK_FALSE(shell_snapshot.menu_visible);
+    CHECK(shell_snapshot.action_count == 2);
+    CHECK(shell_snapshot.last_status == SAO_STATUS_OK);
+    CHECK(ui.callback_calls == 2);
+    CHECK(ui.last_status == SAO_STATUS_OK);
+    CHECK(ui.result.callback_received);
+    CHECK(ui.result.handled);
+    CHECK(ui.result.has_result);
+    CHECK(ui.result.result_json == "null");
+    CHECK(nlohmann::json::parse(ui.result.result_json).is_null());
+    CHECK(provider.calls == 2);
+    CHECK(provider.provider_id == "canonical-lua-fixture/action-handler");
+    CHECK(provider.menu_visible_on_entry == std::vector<bool>{true, true});
+    CHECK(provider.menu_visible_before_return == std::vector<bool>{true, true});
+
+    shell.shutdown();
+    g_canonical_action_v2_probe = nullptr;
+    g_canonical_action_catalog = nullptr;
+}
+
+TEST_CASE("Launcher action-v2 Emma canonical provider identity fixture keeps menu open and rejects "
+          "stale route",
+          "[launcher][entity_provider][action-v2][focused]") {
+    CanonicalActionCatalogV2Fixture catalog;
+    catalog.configure("canonical-emma-fixture", "action-handler", "action.execute", true, false,
+                      403, 0x4300);
+    EntityActionRouteStore routes;
+    EntityProviderPublicationState state;
+    CanonicalActionUiContext ui{&routes};
+    HeadlessEntityShellFixture shell;
+    shell.create(ui);
+    publish_canonical_action_catalog(catalog, routes, state, shell.shell);
+    const EntityActionRoute saved_route = snapshot(routes).routes.front();
+
+    CanonicalActionV2Probe provider;
+    provider.shell = shell.shell;
+    CanonicalActionResultStep handled;
+    handled.has_result = true;
+    handled.result_json = R"({"language":"emma","kept_open":true})";
+    provider.steps.push_back(handled);
+    g_canonical_action_v2_probe = &provider;
+
+    select_plugins_root(shell.shell);
+    REQUIRE(click_plugins_child(shell.shell, 3) == SAO_STATUS_OK);
+    SaoUiEntityShellSnapshot shell_snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK(shell_snapshot.menu_visible);
+    CHECK(shell_snapshot.action_count == 1);
+    CHECK(shell_snapshot.last_status == SAO_STATUS_OK);
+    CHECK(ui.result.callback_received);
+    CHECK(ui.result.handled);
+    CHECK(ui.result.has_result);
+    CHECK(ui.result.result_json == R"({"language":"emma","kept_open":true})");
+    CHECK(provider.menu_visible_on_entry == std::vector<bool>{true});
+    CHECK(provider.menu_visible_before_return == std::vector<bool>{true});
+    CHECK(provider.calls == 1);
+    CHECK(provider.provider_id == "canonical-emma-fixture/action-handler");
+
+    REQUIRE(routes.close_invocation_gate() == SAO_STATUS_OK);
+    REQUIRE_FALSE(saved_route.invocation_allowed());
+    const OwnedEntityActionResult before_stale_invoke = ui.result;
+    CHECK(sao::launcher::entity_provider_publication::invoke_v2(
+              saved_route, shell.shell, &canonical_action_invoke_v2,
+              &sao_ui_entity_shell_get_snapshot, &sao_ui_entity_shell_home,
+              &ui.result) == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(ui.result == before_stale_invoke);
+    CHECK(provider.calls == 1);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK(shell_snapshot.menu_visible);
+
+    shell.shutdown();
+    g_canonical_action_v2_probe = nullptr;
+    g_canonical_action_catalog = nullptr;
+}
+
+TEST_CASE("Launcher action-v2 consumer validates borrowed result views transactionally",
+          "[launcher][entity_provider][action-v2][abi][focused]") {
+    CHECK(sao::launcher::entity_provider_catalog::map_loader_status(
+              loader::SAO_PLUGINS_ERR_NOT_FOUND) == SAO_STATUS_ERR_NOT_FOUND);
+
+    EntityActionRoute route;
+    route.provider_id = "canonical-validation-fixture/action-handler";
+    route.provider_generation = 404;
+    route.action_id = "action.execute";
+    route.payload_json = "{}";
+    route.can_activate = true;
+    route.keep_menu_open = true;
+
+    const auto reject = [&](CanonicalActionResultStep step, sao_status_t expected) {
+        CanonicalActionV2Probe provider;
+        provider.steps.push_back(std::move(step));
+        g_canonical_action_v2_probe = &provider;
+        OwnedEntityActionResult result{true, true, true, "sentinel"};
+        const auto before = result;
+        CHECK(sao::launcher::entity_provider_publication::invoke_v2(
+                  route, nullptr, &canonical_action_invoke_v2, nullptr, nullptr, &result) ==
+              expected);
+        CHECK(result == before);
+        CHECK(provider.calls == 1);
+        g_canonical_action_v2_probe = nullptr;
+    };
+
+    SECTION("null callback view") {
+        CanonicalActionResultStep step;
+        step.null_view = true;
+        reject(std::move(step), SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("required struct prefix") {
+        CanonicalActionResultStep step;
+        step.struct_size =
+            static_cast<std::uint32_t>(loader::kEntityActionResultV2RequiredPrefixSize - 1);
+        reject(std::move(step), SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("ABI v2") {
+        CanonicalActionResultStep step;
+        step.abi_version = loader::kEntityActionAbiVersion2 + 1;
+        reject(std::move(step), SAO_STATUS_ERR_ABI_MISMATCH);
+    }
+    SECTION("handled is boolean") {
+        CanonicalActionResultStep step;
+        step.handled = 2;
+        reject(std::move(step), SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("reserved bytes are zero") {
+        CanonicalActionResultStep step;
+        step.reserved[3] = 1;
+        reject(std::move(step), SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("decline carries no result") {
+        CanonicalActionResultStep step;
+        step.handled = 0;
+        step.has_result = true;
+        step.result_json = "null";
+        reject(std::move(step), SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+    SECTION("handled without result is successful and distinct") {
+        CanonicalActionV2Probe provider;
+        provider.steps.emplace_back();
+        g_canonical_action_v2_probe = &provider;
+        OwnedEntityActionResult result;
+        REQUIRE(sao::launcher::entity_provider_publication::invoke_v2(
+                    route, nullptr, &canonical_action_invoke_v2, nullptr, nullptr, &result) ==
+                SAO_STATUS_OK);
+        CHECK(result.callback_received);
+        CHECK(result.handled);
+        CHECK_FALSE(result.has_result);
+        CHECK(result.result_json.empty());
+        g_canonical_action_v2_probe = nullptr;
+    }
+    SECTION("future tail is accepted and copied") {
+        CanonicalActionV2Probe provider;
+        CanonicalActionResultStep step;
+        step.future_tail = true;
+        step.has_result = true;
+        step.result_json = R"({"future":true})";
+        provider.steps.push_back(step);
+        g_canonical_action_v2_probe = &provider;
+        OwnedEntityActionResult result;
+        REQUIRE(sao::launcher::entity_provider_publication::invoke_v2(
+                    route, nullptr, &canonical_action_invoke_v2, nullptr, nullptr, &result) ==
+                SAO_STATUS_OK);
+        CHECK(result.callback_received);
+        CHECK(result.handled);
+        CHECK(result.has_result);
+        CHECK(result.result_json == R"({"future":true})");
+        g_canonical_action_v2_probe = nullptr;
+    }
+}
+
 TEST_CASE("Entity route rundown blocks copied routes and drains active callbacks",
           "[launcher][entity_provider][invocation][rundown][concurrency][focused]") {
     EntityActionRouteStore store;
     CatalogFixture fixture;
     fixture.reset(1);
-    fixture.set_row(0, "provider", 31, "category", "Category", "C", 0.0, "Action", "A",
-                    "action", "{}");
+    fixture.set_row(0, "provider", 31, "category", "Category", "C", 0.0, "Action", "A", "action",
+                    "{}");
     fixture.finish(301);
     g_catalog_fixture = &fixture;
 
@@ -1739,8 +2288,8 @@ TEST_CASE("Entity route invocation and clear reentry return busy without invalid
     EntityActionRouteStore store;
     CatalogFixture fixture;
     fixture.reset(1);
-    fixture.set_row(0, "provider", 32, "category", "Category", "C", 0.0, "Action", "A",
-                    "action", "{}");
+    fixture.set_row(0, "provider", 32, "category", "Category", "C", 0.0, "Action", "A", "action",
+                    "{}");
     fixture.finish(302);
     g_catalog_fixture = &fixture;
 
@@ -1756,15 +2305,15 @@ TEST_CASE("Entity route invocation and clear reentry return busy without invalid
 
     ReentryActionProbe probe{&route, &store, &state, shell};
     g_reentry_action_probe = &probe;
-    REQUIRE(sao::launcher::entity_provider_publication::invoke(
-                route, shell, &reentrant_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::invoke(route, shell, &reentrant_invoke,
+                                                               nullptr, nullptr) == SAO_STATUS_OK);
     CHECK(probe.calls == 1);
     CHECK(probe.nested_status == SAO_STATUS_ERR_TIMEOUT);
     CHECK(route.invocation_allowed());
 
     probe.operation = ReentryOperation::clear;
-    REQUIRE(sao::launcher::entity_provider_publication::invoke(
-                route, shell, &reentrant_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::invoke(route, shell, &reentrant_invoke,
+                                                               nullptr, nullptr) == SAO_STATUS_OK);
     CHECK(probe.calls == 2);
     CHECK(probe.nested_status == SAO_STATUS_ERR_TIMEOUT);
     CHECK(route.invocation_allowed());
@@ -1788,8 +2337,8 @@ TEST_CASE("Entity refresh permanently retires copied routes even when semantics 
     EntityActionRouteStore store;
     CatalogFixture fixture;
     fixture.reset(1);
-    fixture.set_row(0, "provider", 33, "category", "Category", "C", 0.0, "Action", "A",
-                    "action", "{}");
+    fixture.set_row(0, "provider", 33, "category", "Category", "C", 0.0, "Action", "A", "action",
+                    "{}");
     fixture.finish(303);
     g_catalog_fixture = &fixture;
 
@@ -1814,11 +2363,11 @@ TEST_CASE("Entity refresh permanently retires copied routes even when semantics 
 
     ActionLog log;
     g_action_log = &log;
-    CHECK(sao::launcher::entity_provider_publication::invoke(
-              stale, shell, &fake_invoke, nullptr, nullptr) == SAO_STATUS_ERR_NOT_FOUND);
+    CHECK(sao::launcher::entity_provider_publication::invoke(stale, shell, &fake_invoke, nullptr,
+                                                             nullptr) == SAO_STATUS_ERR_NOT_FOUND);
     CHECK(log.order.empty());
-    CHECK(sao::launcher::entity_provider_publication::invoke(
-              current, shell, &fake_invoke, nullptr, nullptr) == SAO_STATUS_OK);
+    CHECK(sao::launcher::entity_provider_publication::invoke(current, shell, &fake_invoke, nullptr,
+                                                             nullptr) == SAO_STATUS_OK);
     CHECK(log.order == std::vector<std::string>{"invoke"});
 
     g_action_log = nullptr;
@@ -1981,8 +2530,8 @@ TEST_CASE("Entity provider publication v2 fallback is unavailable-only and fail 
         EntityProviderPublicationState state;
         CHECK(sao::launcher::entity_provider_publication::refresh(
                   shell, store, state, false, &fake_catalog_snapshot_v2,
-                  &counted_catalog_snapshot_v1, &fake_set_roots) ==
-              SAO_STATUS_ERR_INVALID_ARGUMENT);
+                  &counted_catalog_snapshot_v1,
+                  &fake_set_roots) == SAO_STATUS_ERR_INVALID_ARGUMENT);
         CHECK(g_catalog_v2_snapshot_calls == 1);
         CHECK(g_catalog_v1_snapshot_calls == 0);
         REQUIRE(log.calls.size() == 1);
@@ -2022,8 +2571,8 @@ TEST_CASE("Entity provider v2 content token suppresses only identical publicatio
     const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
 
     REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, false, &fake_catalog_snapshot_v2,
-                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+                shell, store, state, false, &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1,
+                &fake_set_roots) == SAO_STATUS_OK);
     const auto first = snapshot(store);
     REQUIRE(first.routes.size() == 1);
     const auto first_route = first.routes[0];
@@ -2034,8 +2583,8 @@ TEST_CASE("Entity provider v2 content token suppresses only identical publicatio
     REQUIRE(log.calls.size() == 1);
 
     REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, false, &fake_catalog_snapshot_v2,
-                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+                shell, store, state, false, &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1,
+                &fake_set_roots) == SAO_STATUS_OK);
     CHECK(log.calls.size() == 1);
     CHECK(snapshot(store).revision == first.revision);
     CHECK(first_route.invocation_allowed());
@@ -2049,8 +2598,8 @@ TEST_CASE("Entity provider v2 content token suppresses only identical publicatio
     fixture.providers[0].view.content_token = 0x7024;
 
     REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, false, &fake_catalog_snapshot_v2,
-                &counted_catalog_snapshot_v1, &fake_set_roots) == SAO_STATUS_OK);
+                shell, store, state, false, &fake_catalog_snapshot_v2, &counted_catalog_snapshot_v1,
+                &fake_set_roots) == SAO_STATUS_OK);
     const auto changed = snapshot(store);
     REQUIRE(changed.routes.size() == 1);
     CHECK(changed.revision == first.revision + 1);
@@ -2084,14 +2633,24 @@ TEST_CASE("Entity provider v2 short circuit tracks modes authority and local roo
     EntityProviderPublicationState state;
     const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
 
-    REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, false, &fake_catalog_snapshot_v2, nullptr,
-                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 1);
+    const EntityActionRoute route = snapshot(store).routes.front();
+    REQUIRE(route.invocation_allowed());
 
-    REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
-                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(store.close_invocation_gate() == SAO_STATUS_OK);
+    REQUIRE_FALSE(route.invocation_allowed());
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    CHECK(log.calls.size() == 1);
+    CHECK(route.invocation_allowed());
+
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, true,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 2);
     CHECK(published_root(log.calls.back(), "Control").children[1].name == "NervGear: ON");
 
@@ -2099,20 +2658,19 @@ TEST_CASE("Entity provider v2 short circuit tracks modes authority and local roo
     state.builtin_authority.topmost = true;
     state.builtin_authority.topmost_status =
         sao::launcher::entity_provider_publication::TopmostPublicationStatus::ready;
-    REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
-                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, true,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 3);
     CHECK(published_root(log.calls.back(), "Control").children[0].name == "置顶: ON");
 
     state.streaming_mode = true;
     state.builtin_authority.streaming = true;
-    REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
-                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, true,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 4);
-    CHECK(published_root(log.calls.back(), "Control").children[3].name ==
-          "Streaming Mode: ON");
+    CHECK(published_root(log.calls.back(), "Control").children[3].name == "Streaming Mode: ON");
 
     REQUIRE(sao::launcher::entity_provider_publication::replace_root_contributions(
                 state, {{"launcher-owner",
@@ -2122,9 +2680,9 @@ TEST_CASE("Entity provider v2 short circuit tracks modes authority and local roo
                          "L",
                          5.0,
                          {{"provider-a", "action-a"}}}}) == SAO_STATUS_OK);
-    REQUIRE(sao::launcher::entity_provider_publication::refresh(
-                shell, store, state, true, &fake_catalog_snapshot_v2, nullptr,
-                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, true,
+                                                                &fake_catalog_snapshot_v2, nullptr,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 5);
     const auto& dynamic = published_root(log.calls.back(), "dynamic:launcher");
     REQUIRE(dynamic.children.size() == 1);
@@ -2565,6 +3123,107 @@ TEST_CASE("Entity root contributions append stable sorted roots and survive clea
     REQUIRE(log.calls.size() == 3);
     CHECK(log.calls[2].size() == 8);
     g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Zero-action dynamic Entity root remains materialized and ignores headless clicks",
+          "[launcher][entity_provider][root_contribution][headless][focused]") {
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider-ready", 1, "category", "Category", "C", 0.0, "Ready", "R",
+                    "action-ready", "{}");
+    fixture.finish(35);
+    g_catalog_fixture = &fixture;
+
+    const std::vector<EntityRootContributionSpec> contributions{
+        {"owner-empty", "menu-empty", "dynamic:empty", "Empty Dynamic", "E", 10.0, {}},
+        {"owner-ready",
+         "menu-ready",
+         "dynamic:ready",
+         "Ready Dynamic",
+         "R",
+         20.0,
+         {{"provider-ready", "action-ready"}}},
+    };
+
+    EntityActionRouteStore structural_store;
+    EntityProviderPublicationState structural_state;
+    REQUIRE(sao::launcher::entity_provider_publication::replace_root_contributions(
+                structural_state, contributions) == SAO_STATUS_OK);
+    PublicationLog log;
+    g_publication_log = &log;
+    const auto fake_shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                fake_shell, structural_store, structural_state, false, &fake_catalog_snapshot,
+                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 1);
+    REQUIRE(log.calls[0].size() == 7);
+
+    const auto& empty = published_root(log.calls[0], "dynamic:empty");
+    CHECK_FALSE(empty.can_activate);
+    CHECK(empty.children.empty());
+    CHECK(empty.children_pointer_is_null);
+
+    const auto& ready = published_root(log.calls[0], "dynamic:ready");
+    CHECK(ready.can_activate);
+    CHECK_FALSE(ready.children_pointer_is_null);
+    REQUIRE(ready.children.size() == 1);
+    EntityActionRoute resolved;
+    REQUIRE(structural_store.resolve(ready.children[0].action_id, resolved) == SAO_STATUS_OK);
+    CHECK(resolved.provider_id == "provider-ready");
+    CHECK(resolved.action_id == "action-ready");
+    g_publication_log = nullptr;
+
+    EntityActionRouteStore headless_store;
+    EntityProviderPublicationState headless_state;
+    REQUIRE(sao::launcher::entity_provider_publication::replace_root_contributions(
+                headless_state, contributions) == SAO_STATUS_OK);
+    CanonicalActionUiContext ui{&headless_store};
+    HeadlessEntityShellFixture shell;
+    shell.create(ui);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(
+                shell.shell, headless_store, headless_state, false, &fake_catalog_snapshot,
+                &sao_ui_entity_shell_set_roots) == SAO_STATUS_OK);
+
+    SaoUiEntityShellSnapshot shell_snapshot{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    if (!shell_snapshot.menu_visible) {
+        REQUIRE(sao_ui_entity_shell_home(shell.shell) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    }
+    REQUIRE(shell_snapshot.menu_visible);
+    const std::int32_t x = shell_snapshot.origin_x + shell_snapshot.menu_x + kEntityMenuSlotCenter;
+    const std::int32_t control_y =
+        shell_snapshot.origin_y + shell_snapshot.menu_y + kEntityMenuPad + kEntityMenuSlot / 2;
+    REQUIRE(click_entity_point(shell.shell, x, control_y) == SAO_STATUS_OK);
+    SaoUiEntityRootSnapshot active_root{};
+    REQUIRE(sao_ui_entity_shell_get_root_snapshot(shell.shell, &active_root) == SAO_STATUS_OK);
+    REQUIRE(std::string(active_root.active_root_id_utf8) == "Control");
+
+    const std::int32_t y = shell_snapshot.origin_y + shell_snapshot.menu_y + kEntityMenuPad +
+                           4 * kEntityMenuSlot + kEntityMenuSlot / 2;
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell.shell, kEntityMouseWheel, x, y, -1, -120) ==
+            SAO_STATUS_OK);
+
+    SaoUiEntityRootSnapshot root_before{};
+    REQUIRE(sao_ui_entity_shell_get_root_snapshot(shell.shell, &root_before) == SAO_STATUS_OK);
+    REQUIRE(root_before.root_count == 7);
+    REQUIRE(root_before.first_visible_root_index == 1);
+    const std::string active_root_before = root_before.active_root_id_utf8;
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    const auto action_count_before = shell_snapshot.action_count;
+    const auto callback_count_before = ui.callback_calls;
+
+    REQUIRE(click_entity_point(shell.shell, x, y) == SAO_STATUS_OK);
+
+    SaoUiEntityRootSnapshot root_after{};
+    REQUIRE(sao_ui_entity_shell_get_root_snapshot(shell.shell, &root_after) == SAO_STATUS_OK);
+    CHECK(std::string(root_after.active_root_id_utf8) == active_root_before);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell.shell, &shell_snapshot) == SAO_STATUS_OK);
+    CHECK(shell_snapshot.action_count == action_count_before);
+    CHECK(ui.callback_calls == callback_count_before);
+
+    shell.shutdown();
     g_catalog_fixture = nullptr;
 }
 

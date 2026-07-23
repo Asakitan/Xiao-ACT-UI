@@ -13,12 +13,12 @@
 #endif
 
 #include <windows.h>
-#include <dwmapi.h>
 #include <process.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
 #include <climits>
+#include <condition_variable>
 #include <cwchar>
 #include <filesystem>
 #include <iterator>
@@ -32,11 +32,12 @@
 namespace sao::launcher::tool_launch {
 namespace {
 
-constexpr wchar_t kAiEditorWindowTitle[] = L"SAO AI Editor";
 constexpr wchar_t kAiEditorLaunchMutex[] =
     L"Local\\SAO.Auto.AiEditor.Launch.v1";
 constexpr std::uint32_t kAiEditorHandshakeTimeoutMs = 5000;
 constexpr std::uint32_t kAiEditorShutdownTimeoutMs = 3000;
+constexpr std::uint32_t kAiEditorPanelRetireAttempts = 64;
+constexpr DWORD kAiEditorPanelRetireRetryDelayMs = 1;
 constexpr std::int32_t kUnsetExitCode =
     (std::numeric_limits<std::int32_t>::min)();
 
@@ -81,6 +82,8 @@ sao_status_t map_ai_editor_status(std::int32_t status) noexcept {
     case SAO_AI_EDITOR_ERR_PERMISSION_DENIED:
         return SAO_STATUS_ERR_ACCESS_DENIED;
     case SAO_AI_EDITOR_ERR_CANCELLED:
+        return SAO_STATUS_ERR_CANCELLED;
+    case SAO_AI_EDITOR_ERR_BUSY:
         return SAO_STATUS_ERR_CANCELLED;
     default:
         return SAO_STATUS_ERR_OS_CALL_FAILED;
@@ -156,153 +159,6 @@ bool process_image_matches(HANDLE process,
     return matches;
 }
 
-bool window_identity_matches(HWND hwnd, DWORD required_process_id) noexcept {
-    if (!IsWindow(hwnd)) {
-        return false;
-    }
-    wchar_t title[64]{};
-    if (GetWindowTextW(hwnd, title, static_cast<int>(std::size(title))) <= 0 ||
-        std::wcscmp(title, kAiEditorWindowTitle) != 0) {
-        return false;
-    }
-    DWORD process_id = 0;
-    GetWindowThreadProcessId(hwnd, &process_id);
-    if (process_id == 0 || process_id != required_process_id) {
-        return false;
-    }
-    return process_id != 0 && process_id == required_process_id;
-}
-
-bool window_is_cloaked(HWND hwnd) noexcept {
-    DWORD cloaked = 0;
-    const HRESULT cloak_status = DwmGetWindowAttribute(
-        hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-    return SUCCEEDED(cloak_status) && cloaked != 0;
-}
-
-bool window_responds(HWND hwnd) noexcept {
-    DWORD_PTR response = 0;
-    return SendMessageTimeoutW(hwnd, WM_NULL, 0, 0,
-                               SMTO_ABORTIFHUNG | SMTO_BLOCK, 200,
-                               &response) != 0;
-}
-
-bool window_intersects_virtual_screen(const RECT& window) noexcept {
-    constexpr LONG kMinimumVisible = 80;
-    const LONG screen_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const LONG screen_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const LONG screen_right = screen_left +
-        GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const LONG screen_bottom = screen_top +
-        GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    return window.right >= screen_left + kMinimumVisible &&
-           window.bottom >= screen_top + kMinimumVisible &&
-           window.left <= screen_right - kMinimumVisible &&
-           window.top <= screen_bottom - kMinimumVisible;
-}
-
-bool window_is_reusable(HWND hwnd, DWORD required_process_id) noexcept {
-    return window_identity_matches(hwnd, required_process_id) &&
-           !window_is_cloaked(hwnd) && window_responds(hwnd);
-}
-
-bool window_is_ready(HWND hwnd, DWORD required_process_id) noexcept {
-    constexpr LONG kMinimumClientWidth = 320;
-    constexpr LONG kMinimumClientHeight = 220;
-    RECT client{};
-    RECT window{};
-    return IsWindowVisible(hwnd) &&
-           window_is_reusable(hwnd, required_process_id) &&
-           GetClientRect(hwnd, &client) &&
-           client.right - client.left >= kMinimumClientWidth &&
-           client.bottom - client.top >= kMinimumClientHeight &&
-           GetWindowRect(hwnd, &window) &&
-           window_intersects_virtual_screen(window) &&
-           MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) != nullptr;
-}
-
-struct WindowCandidate {
-    HWND hwnd{};
-    DWORD process_id{};
-    OwnedHandle process;
-};
-
-struct WindowSearch {
-    DWORD required_process_id{};
-    const std::filesystem::path* expected_image{};
-    bool require_ready{true};
-    WindowCandidate candidate;
-};
-
-BOOL CALLBACK find_ai_editor_window(HWND hwnd, LPARAM parameter) {
-    auto* search = reinterpret_cast<WindowSearch*>(parameter);
-    DWORD process_id = 0;
-    GetWindowThreadProcessId(hwnd, &process_id);
-    if (process_id == 0 ||
-        (search->required_process_id != 0 &&
-         process_id != search->required_process_id) ||
-        !(search->require_ready ? window_is_ready(hwnd, process_id)
-                       : window_is_reusable(hwnd, process_id))) {
-        return TRUE;
-    }
-    OwnedHandle process(OpenProcess(SYNCHRONIZE |
-                                        PROCESS_QUERY_LIMITED_INFORMATION,
-                                    FALSE, process_id));
-    if (process.get() == nullptr ||
-        WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT ||
-        (search->expected_image != nullptr &&
-         !process_image_matches(process.get(), *search->expected_image))) {
-        return TRUE;
-    }
-    search->candidate.hwnd = hwnd;
-    search->candidate.process_id = process_id;
-    search->candidate.process = std::move(process);
-    return FALSE;
-}
-
-HWND ai_editor_window(DWORD process_id) noexcept {
-    WindowSearch search;
-    search.required_process_id = process_id;
-    search.require_ready = false;
-    (void)EnumWindows(&find_ai_editor_window,
-                      reinterpret_cast<LPARAM>(&search));
-    return search.candidate.hwnd;
-}
-
-bool activate_window(HWND hwnd, DWORD process_id) noexcept {
-    if (hwnd == nullptr) {
-        return false;
-    }
-    RECT window{};
-    if (GetWindowRect(hwnd, &window) &&
-        !window_intersects_virtual_screen(window)) {
-        constexpr LONG kMinimumWidth = 600;
-        constexpr LONG kMinimumHeight = 400;
-        const LONG width = std::max(kMinimumWidth,
-                                    window.right - window.left);
-        const LONG height = std::max(kMinimumHeight,
-                                     window.bottom - window.top);
-        const LONG screen_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        const LONG screen_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        const LONG screen_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        const LONG screen_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        const LONG x = screen_left + std::max<LONG>(0, screen_width - width);
-        const LONG y = screen_top + std::max<LONG>(0, screen_height - height);
-        (void)SetWindowPos(hwnd, nullptr, x, y, width, height,
-                           SWP_NOZORDER | SWP_SHOWWINDOW);
-    }
-    (void)ShowWindowAsync(hwnd, SW_RESTORE);
-    (void)SetForegroundWindow(hwnd);
-    (void)BringWindowToTop(hwnd);
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        if (window_is_ready(hwnd, process_id)) {
-            return true;
-        }
-        Sleep(10);
-    }
-    return false;
-}
-
 } // namespace
 
 struct AiEditorProcessOwner::State {
@@ -314,15 +170,6 @@ struct AiEditorProcessOwner::State {
     }
 
     ~State() {
-#if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
-        if (panel_handle != nullptr) {
-            (void)sao_ai_editor_main_panel_try_destroy(panel_handle);
-            panel_handle = nullptr;
-        }
-        if (launcher != nullptr) {
-            sao_ai_editor_destroy(launcher);
-        }
-#endif
         if (worker != nullptr) {
             CloseHandle(worker);
         }
@@ -342,6 +189,7 @@ struct AiEditorProcessOwner::State {
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
     sao_ai_editor_launcher_t launcher{};
     sao_ai_editor_main_panel_t panel_handle{};
+    sao_ui_compositor_handle_t panel_compositor{};
 #endif
     detail::PackageLease package_lease;
     std::filesystem::path executable;
@@ -352,10 +200,39 @@ struct AiEditorProcessOwner::State {
     sao_status_t last_status{SAO_STATUS_OK};
     std::uint64_t generation{};
     bool owner_alive{true};
+    bool show_requested{};
+    bool teardown_requested{};
     std::mutex mutex;
+    std::mutex service_mutex;
+    std::condition_variable service_cv;
+    bool service_active{};
 };
 
 namespace {
+
+class ServiceOperation final {
+public:
+    explicit ServiceOperation(AiEditorProcessOwner::State& state)
+        : state_(state) {
+        std::unique_lock lock(state_.service_mutex);
+        state_.service_cv.wait(lock, [&] { return !state_.service_active; });
+        state_.service_active = true;
+    }
+
+    ~ServiceOperation() {
+        {
+            std::lock_guard lock(state_.service_mutex);
+            state_.service_active = false;
+        }
+        state_.service_cv.notify_one();
+    }
+
+    ServiceOperation(const ServiceOperation&) = delete;
+    ServiceOperation& operator=(const ServiceOperation&) = delete;
+
+private:
+    AiEditorProcessOwner::State& state_;
+};
 
 void emit_launch_failure(sao_status_t status) noexcept {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
@@ -402,41 +279,6 @@ void publish_failure(const std::shared_ptr<AiEditorProcessOwner::State>& state,
     emit_launch_failure(status);
 }
 
-bool publish_existing(
-    const std::shared_ptr<AiEditorProcessOwner::State>& state,
-    std::uint64_t generation,
-    const std::filesystem::path& executable,
-    detail::PackageLease lease,
-    WindowCandidate candidate) noexcept {
-    if (candidate.process.get() == nullptr ||
-        WaitForSingleObject(candidate.process.get(), 0) != WAIT_TIMEOUT ||
-        !process_image_matches(candidate.process.get(), executable)) {
-        return false;
-    }
-    if (candidate.hwnd != nullptr) {
-        (void)activate_window(candidate.hwnd, candidate.process_id);
-    }
-    {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        if (!state->owner_alive || state->generation != generation) {
-            return true;
-        }
-        if (WaitForSingleObject(candidate.process.get(), 0) != WAIT_TIMEOUT ||
-            !process_image_matches(candidate.process.get(), executable)) {
-            return false;
-        }
-        state->process = candidate.process.release();
-        state->package_lease = std::move(lease);
-        state->executable = executable;
-        state->phase = AiEditorLaunchPhase::started;
-        state->last_status = SAO_STATUS_OK;
-        state->process_id = candidate.process_id;
-        state->exit_code = 0;
-        state->has_exit_code = false;
-    }
-    return true;
-}
-
 DWORD wait_for_launch_mutex(
     const std::shared_ptr<AiEditorProcessOwner::State>& state,
     HANDLE mutex, HANDLE cancel_event) noexcept {
@@ -460,8 +302,13 @@ DWORD wait_for_launch_mutex(
     return WAIT_TIMEOUT;
 }
 
-bool existing_ai_editor_process(const std::filesystem::path& executable,
-                                WindowCandidate& candidate) noexcept {
+struct ProcessCandidate {
+    DWORD process_id{};
+    OwnedHandle process;
+};
+
+bool find_ai_editor_process(const std::filesystem::path& executable,
+                            ProcessCandidate& candidate) noexcept {
     OwnedHandle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
     if (snapshot.get() == INVALID_HANDLE_VALUE) {
         return false;
@@ -471,7 +318,6 @@ bool existing_ai_editor_process(const std::filesystem::path& executable,
     if (!Process32FirstW(snapshot.get(), &entry)) {
         return false;
     }
-    WindowCandidate first;
     do {
         OwnedHandle process(OpenProcess(SYNCHRONIZE |
                                             PROCESS_QUERY_LIMITED_INFORMATION,
@@ -481,23 +327,11 @@ bool existing_ai_editor_process(const std::filesystem::path& executable,
             !process_image_matches(process.get(), executable)) {
             continue;
         }
-        WindowCandidate current;
-        current.process_id = entry.th32ProcessID;
-        current.hwnd = ai_editor_window(current.process_id);
-        current.process = std::move(process);
-        if (current.hwnd != nullptr) {
-            candidate = std::move(current);
-            return true;
-        }
-        if (first.process.get() == nullptr) {
-            first = std::move(current);
-        }
+        candidate.process_id = entry.th32ProcessID;
+        candidate.process = std::move(process);
+        return true;
     } while (Process32NextW(snapshot.get(), &entry));
-    if (first.process.get() == nullptr) {
-        return false;
-    }
-    candidate = std::move(first);
-    return true;
+    return false;
 }
 
 std::string path_to_utf8(const std::filesystem::path& path) {
@@ -521,19 +355,25 @@ std::string path_to_utf8(const std::filesystem::path& path) {
 }
 
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
-void shutdown_and_destroy(sao_ai_editor_launcher_t launcher) noexcept {
+sao_status_t shutdown_launcher(sao_ai_editor_launcher_t launcher) noexcept {
     if (launcher == nullptr) {
-        return;
+        return SAO_STATUS_OK;
     }
     bool running = false;
-    std::int32_t exit_code = 0;
-    if (sao_ai_editor_status(launcher, &running, &exit_code) ==
-            SAO_AI_EDITOR_OK &&
-        running) {
-        (void)sao_ai_editor_shutdown(launcher, kAiEditorShutdownTimeoutMs,
-                                     &exit_code);
+    std::int32_t exit_code = kUnsetExitCode;
+    const std::int32_t status =
+        sao_ai_editor_status(launcher, &running, &exit_code);
+    if (status != SAO_AI_EDITOR_OK) {
+        return map_ai_editor_status(status);
     }
-    sao_ai_editor_destroy(launcher);
+    if (running) {
+        const std::int32_t shutdown_status = sao_ai_editor_shutdown(
+            launcher, kAiEditorShutdownTimeoutMs, &exit_code);
+        if (shutdown_status != SAO_AI_EDITOR_OK) {
+            return map_ai_editor_status(shutdown_status);
+        }
+    }
+    return SAO_STATUS_OK;
 }
 
 sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
@@ -542,6 +382,43 @@ sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
         return nullptr;
     }
     return static_cast<sao_ui_compositor_handle_t>(raw);
+}
+
+sao_status_t retire_panel(sao_ai_editor_main_panel_t panel,
+                          sao_ui_compositor_handle_t compositor) noexcept {
+    if (panel == nullptr) {
+        return SAO_STATUS_OK;
+    }
+    const sao_status_t owner_status =
+        sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK) {
+        return owner_status;
+    }
+    for (std::uint32_t attempt = 0;
+         attempt < kAiEditorPanelRetireAttempts; ++attempt) {
+        const std::int32_t status =
+            sao_ai_editor_main_panel_try_destroy(panel);
+        if (status == SAO_AI_EDITOR_OK ||
+            status == SAO_AI_EDITOR_ERR_HANDLE_INVALID) {
+            return SAO_STATUS_OK;
+        }
+        if (status != SAO_AI_EDITOR_ERR_BUSY ||
+            attempt + 1 == kAiEditorPanelRetireAttempts) {
+            return map_ai_editor_status(status);
+        }
+
+        const std::int32_t tick_status =
+            sao_ai_editor_main_panel_tick(panel);
+        if (tick_status == SAO_AI_EDITOR_ERR_HANDLE_INVALID) {
+            return SAO_STATUS_OK;
+        }
+        if (tick_status != SAO_AI_EDITOR_OK &&
+            tick_status != SAO_AI_EDITOR_ERR_BUSY) {
+            return map_ai_editor_status(tick_status);
+        }
+        Sleep(kAiEditorPanelRetireRetryDelayMs);
+    }
+    return map_ai_editor_status(SAO_AI_EDITOR_ERR_BUSY);
 }
 #endif
 
@@ -579,21 +456,6 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
             return;
         }
         launch_mutex.set_acquired();
-
-        WindowCandidate existing;
-        if (existing_ai_editor_process(package.executable, existing)) {
-            detail::PackageLease lease;
-            status = detail::acquire_package_lease(
-                state->base_dir, package, lease);
-            if (status != SAO_STATUS_OK) {
-                publish_failure(state, generation, status);
-                return;
-            }
-            if (publish_existing(state, generation, package.executable,
-                                 std::move(lease), std::move(existing))) {
-                return;
-            }
-        }
 
         detail::PackageLease lease;
         status = detail::acquire_package_lease(
@@ -634,7 +496,8 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
         exit_code = kUnsetExitCode;
         abi_status = sao_ai_editor_status(launcher, &running, &exit_code);
         if (abi_status != SAO_AI_EDITOR_OK || !running) {
-            shutdown_and_destroy(launcher);
+            (void)shutdown_launcher(launcher);
+            sao_ai_editor_destroy(launcher);
             publish_failure(
                 state, generation,
                 abi_status == SAO_AI_EDITOR_OK
@@ -644,8 +507,8 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
             return;
         }
 
-        WindowCandidate launched;
-        (void)existing_ai_editor_process(package.executable, launched);
+        ProcessCandidate launched;
+        (void)find_ai_editor_process(package.executable, launched);
         bool accepted = false;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
@@ -659,11 +522,13 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
                 state->last_status = SAO_STATUS_OK;
                 state->exit_code = 0;
                 state->has_exit_code = false;
+                state->show_requested = true;
                 accepted = true;
             }
         }
         if (!accepted) {
-            shutdown_and_destroy(launcher);
+            (void)shutdown_launcher(launcher);
+            sao_ai_editor_destroy(launcher);
         }
     } catch (const std::bad_alloc&) {
         publish_failure(state, generation, SAO_STATUS_ERR_UNKNOWN);
@@ -695,11 +560,21 @@ AiEditorProcessOwner::~AiEditorProcessOwner() {
     if (!state) {
         return;
     }
+
+    // Normal owner-thread destruction follows the same retryable panel-first
+    // path as production teardown. A foreign-thread failure is handled below
+    // without destroying the launcher borrowed by the still-live panel.
+    (void)take_offline();
+
     HANDLE worker = nullptr;
     DWORD worker_thread_id = 0;
     try {
+        ServiceOperation service_operation(*state);
         std::unique_lock<std::mutex> lock(state->mutex);
         state->owner_alive = false;
+        state->teardown_requested = true;
+        state->show_requested = false;
+        ++state->generation;
         (void)SetEvent(state->cancel_event);
         worker = state->worker;
         worker_thread_id = state->worker_thread_id;
@@ -715,13 +590,26 @@ AiEditorProcessOwner::~AiEditorProcessOwner() {
     }
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
     sao_ai_editor_launcher_t launcher = nullptr;
+    sao_ai_editor_main_panel_t panel = nullptr;
     try {
         std::lock_guard<std::mutex> lock(state->mutex);
-        launcher = state->launcher;
-        state->launcher = nullptr;
+        panel = state->panel_handle;
+        if (panel == nullptr) {
+            launcher = state->launcher;
+            state->launcher = nullptr;
+            state->panel_compositor = nullptr;
+            release_process_locked(*state);
+        } else {
+            launcher = state->launcher;
+        }
     } catch (...) {
     }
-    shutdown_and_destroy(launcher);
+    if (launcher != nullptr) {
+        (void)shutdown_launcher(launcher);
+        if (panel == nullptr) {
+            sao_ai_editor_destroy(launcher);
+        }
+    }
 #endif
 }
 
@@ -731,71 +619,131 @@ sao_status_t AiEditorProcessOwner::open() noexcept {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     try {
-        std::unique_lock<std::mutex> lock(state->mutex);
-        const std::filesystem::path base(state->base_dir);
-        if (state->base_dir.empty() || !base.is_absolute()) {
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        ServiceOperation service_operation(*state);
+        {
+            std::lock_guard lock(state->mutex);
+            const std::filesystem::path base(state->base_dir);
+            if (state->base_dir.empty() || !base.is_absolute()) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (state->teardown_requested || !state->owner_alive) {
+                return SAO_STATUS_ERR_CANCELLED;
+            }
         }
 #if !defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+        std::lock_guard lock(state->mutex);
         state->phase = AiEditorLaunchPhase::failed;
         state->last_status = SAO_STATUS_ERR_CAPABILITY_MISSING;
         return state->last_status;
 #else
-        if (state->worker != nullptr) {
-            const DWORD worker_wait = WaitForSingleObject(state->worker, 0);
-            if (worker_wait == WAIT_TIMEOUT) {
-                return SAO_STATUS_OK;
+        HANDLE finished_worker = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->worker != nullptr) {
+                const DWORD worker_wait = WaitForSingleObject(state->worker, 0);
+                if (worker_wait == WAIT_TIMEOUT) {
+                    return SAO_STATUS_OK;
+                }
+                if (worker_wait == WAIT_FAILED) {
+                    return map_os_error(GetLastError());
+                }
+                finished_worker = state->worker;
+                state->worker = nullptr;
+                state->worker_thread_id = 0;
             }
-            if (worker_wait == WAIT_FAILED) {
-                return map_os_error(GetLastError());
-            }
-            CloseHandle(state->worker);
-            state->worker = nullptr;
-            state->worker_thread_id = 0;
         }
-        if (state->launcher != nullptr) {
+        if (finished_worker != nullptr) {
+            CloseHandle(finished_worker);
+        }
+
+        sao_ai_editor_launcher_t launcher = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            launcher = state->launcher;
+        }
+        if (launcher != nullptr) {
             bool running = false;
             std::int32_t exit_code = kUnsetExitCode;
             const std::int32_t abi_status = sao_ai_editor_status(
-                state->launcher, &running, &exit_code);
+                launcher, &running, &exit_code);
             if (abi_status == SAO_AI_EDITOR_OK && running) {
+                std::lock_guard lock(state->mutex);
+                if (state->launcher != launcher || state->teardown_requested) {
+                    return SAO_STATUS_ERR_CANCELLED;
+                }
                 state->phase = AiEditorLaunchPhase::started;
                 state->last_status = SAO_STATUS_OK;
-                const DWORD process_id = state->process_id;
-                lock.unlock();
-                (void)activate_window(ai_editor_window(process_id), process_id);
+                state->show_requested = true;
                 return SAO_STATUS_OK;
             }
-            sao_ai_editor_launcher_t launcher = state->launcher;
-            state->launcher = nullptr;
-            sao_ai_editor_main_panel_t stale_panel = state->panel_handle;
-            state->panel_handle = nullptr;
-            if (stale_panel != nullptr) {
-                (void)sao_ai_editor_main_panel_try_destroy(stale_panel);
+
+            sao_ai_editor_main_panel_t stale_panel = nullptr;
+            sao_ui_compositor_handle_t stale_compositor = nullptr;
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->launcher != launcher) {
+                    return SAO_STATUS_ERR_CANCELLED;
+                }
+                stale_panel = state->panel_handle;
+                stale_compositor = state->panel_compositor;
             }
-            sao_ai_editor_destroy(launcher);
-            state->has_exit_code = exit_code != kUnsetExitCode;
-            state->exit_code = state->has_exit_code
-                ? static_cast<DWORD>(exit_code)
-                : 0;
-            release_process_locked(*state);
-            state->phase = AiEditorLaunchPhase::failed;
-            state->last_status = abi_status == SAO_AI_EDITOR_OK
-                ? SAO_STATUS_ERR_PROCESS_GONE
-                : map_ai_editor_status(abi_status);
+            if (stale_panel != nullptr) {
+                const sao_status_t owner_status =
+                    sao_ui_compositor_require_owner_thread(stale_compositor);
+                if (owner_status != SAO_STATUS_OK) {
+                    return owner_status;
+                }
+            }
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->launcher != launcher ||
+                    state->panel_handle != stale_panel ||
+                    state->panel_compositor != stale_compositor) {
+                    return SAO_STATUS_ERR_CANCELLED;
+                }
+                state->has_exit_code = exit_code != kUnsetExitCode;
+                state->exit_code = state->has_exit_code
+                    ? static_cast<DWORD>(exit_code)
+                    : 0;
+                state->phase = AiEditorLaunchPhase::failed;
+                state->last_status = abi_status == SAO_AI_EDITOR_OK
+                    ? SAO_STATUS_ERR_PROCESS_GONE
+                    : map_ai_editor_status(abi_status);
+                state->show_requested = false;
+            }
+
+            const sao_status_t panel_status =
+                retire_panel(stale_panel, stale_compositor);
+            if (panel_status != SAO_STATUS_OK) {
+                return panel_status;
+            }
+
+            bool destroy_launcher = false;
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->launcher != launcher ||
+                    state->panel_handle != stale_panel) {
+                    return SAO_STATUS_ERR_CANCELLED;
+                }
+                state->panel_handle = nullptr;
+                state->panel_compositor = nullptr;
+                state->launcher = nullptr;
+                release_process_locked(*state);
+                destroy_launcher = true;
+            }
+            if (destroy_launcher) {
+                sao_ai_editor_destroy(launcher);
+            }
+        }
+
+        std::unique_lock lock(state->mutex);
+        if (state->teardown_requested || !state->owner_alive) {
+            return SAO_STATUS_ERR_CANCELLED;
         }
         if (state->process != nullptr) {
             const DWORD wait = WaitForSingleObject(state->process, 0);
             if (wait == WAIT_TIMEOUT) {
-                const HWND window = ai_editor_window(state->process_id);
-                state->phase = AiEditorLaunchPhase::started;
-                state->last_status = SAO_STATUS_OK;
-                const DWORD process_id = state->process_id;
-                lock.unlock();
-                if (window != nullptr) {
-                    (void)activate_window(window, process_id);
-                }
-                return SAO_STATUS_OK;
+                return SAO_STATUS_ERR_CANCELLED;
             }
             if (wait == WAIT_FAILED) {
                 const sao_status_t status = map_os_error(GetLastError());
@@ -819,6 +767,7 @@ sao_status_t AiEditorProcessOwner::open() noexcept {
         state->last_status = SAO_STATUS_OK;
         state->exit_code = 0;
         state->has_exit_code = false;
+        state->show_requested = true;
         unsigned thread_id = 0;
         const uintptr_t thread = _beginthreadex(
             nullptr, 0, &launch_ai_editor_thread, parameter.get(), 0,
@@ -840,6 +789,264 @@ sao_status_t AiEditorProcessOwner::open() noexcept {
     }
 }
 
+sao_status_t AiEditorProcessOwner::service_ui() noexcept {
+    const auto state = state_;
+    if (!state) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+#if !defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+    return SAO_STATUS_OK;
+#else
+    try {
+        ServiceOperation service_operation(*state);
+        sao_ai_editor_launcher_t launcher = nullptr;
+        sao_ai_editor_main_panel_t panel = nullptr;
+        sao_ui_compositor_handle_t panel_compositor = nullptr;
+        bool show_requested = false;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->teardown_requested) {
+                return SAO_STATUS_OK;
+            }
+            launcher = state->launcher;
+            panel = state->panel_handle;
+            panel_compositor = state->panel_compositor;
+            show_requested = state->show_requested;
+        }
+        if (launcher == nullptr) {
+            return SAO_STATUS_OK;
+        }
+
+        bool running = false;
+        std::int32_t exit_code = kUnsetExitCode;
+        const std::int32_t abi_status =
+            sao_ai_editor_status(launcher, &running, &exit_code);
+        if (abi_status != SAO_AI_EDITOR_OK || !running) {
+            if (panel != nullptr) {
+                const sao_status_t owner_status =
+                    sao_ui_compositor_require_owner_thread(panel_compositor);
+                if (owner_status != SAO_STATUS_OK) {
+                    return owner_status;
+                }
+            }
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->launcher == launcher) {
+                    state->phase = AiEditorLaunchPhase::failed;
+                    state->last_status = abi_status == SAO_AI_EDITOR_OK
+                                             ? SAO_STATUS_ERR_PROCESS_GONE
+                                             : map_ai_editor_status(abi_status);
+                    state->has_exit_code = exit_code != kUnsetExitCode;
+                    state->exit_code = state->has_exit_code
+                                           ? static_cast<DWORD>(exit_code)
+                                           : 0;
+                    state->show_requested = false;
+                }
+            }
+            const sao_status_t panel_status =
+                retire_panel(panel, panel_compositor);
+            if (panel_status != SAO_STATUS_OK) {
+                return panel_status;
+            }
+            bool destroy_launcher = false;
+            {
+                std::lock_guard lock(state->mutex);
+                if (state->panel_handle == panel) {
+                    state->panel_handle = nullptr;
+                    state->panel_compositor = nullptr;
+                }
+                if (state->launcher == launcher) {
+                    state->launcher = nullptr;
+                    release_process_locked(*state);
+                    destroy_launcher = true;
+                }
+            }
+            if (destroy_launcher) {
+                sao_ai_editor_destroy(launcher);
+            }
+            return SAO_STATUS_OK;
+        }
+
+        const sao_ui_compositor_handle_t compositor = borrow_platform_compositor();
+        if (compositor == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+        if (owner_status != SAO_STATUS_OK) {
+            return owner_status;
+        }
+
+        if (panel == nullptr) {
+            sao_ai_editor_main_panel_t created = nullptr;
+            const std::int32_t create_status =
+                sao_ai_editor_main_panel_create(compositor, launcher, &created);
+            if (create_status != SAO_AI_EDITOR_OK || created == nullptr) {
+                return create_status == SAO_AI_EDITOR_OK
+                           ? SAO_STATUS_ERR_OS_CALL_FAILED
+                           : map_ai_editor_status(create_status);
+            }
+            bool accepted = false;
+            {
+                std::lock_guard lock(state->mutex);
+                if (!state->teardown_requested && state->launcher == launcher &&
+                    state->panel_handle == nullptr) {
+                    state->panel_handle = created;
+                    state->panel_compositor = compositor;
+                    panel = created;
+                    accepted = true;
+                }
+            }
+            if (!accepted) {
+                const sao_status_t retire_status =
+                    retire_panel(created, compositor);
+                return retire_status == SAO_STATUS_OK ? SAO_STATUS_OK : retire_status;
+            }
+            show_requested = true;
+        }
+
+        if (show_requested) {
+            const std::int32_t show_status = sao_ai_editor_main_panel_show(panel);
+            if (show_status != SAO_AI_EDITOR_OK) {
+                return map_ai_editor_status(show_status);
+            }
+            std::lock_guard lock(state->mutex);
+            if (state->panel_handle == panel) {
+                state->show_requested = false;
+            }
+        }
+        return map_ai_editor_status(sao_ai_editor_main_panel_tick(panel));
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+#endif
+}
+
+sao_status_t AiEditorProcessOwner::take_offline() noexcept {
+    const auto state = state_;
+    if (!state) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    try {
+#if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+        sao_ai_editor_main_panel_t initial_panel = nullptr;
+        sao_ui_compositor_handle_t initial_compositor = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            initial_panel = state->panel_handle;
+            initial_compositor = state->panel_compositor;
+        }
+        if (initial_panel != nullptr) {
+            const sao_status_t owner_status =
+                sao_ui_compositor_require_owner_thread(initial_compositor);
+            if (owner_status != SAO_STATUS_OK) {
+                return owner_status;
+            }
+        }
+#endif
+        ServiceOperation service_operation(*state);
+#if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+        sao_ai_editor_main_panel_t preflight_panel = nullptr;
+        sao_ui_compositor_handle_t preflight_compositor = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            preflight_panel = state->panel_handle;
+            preflight_compositor = state->panel_compositor;
+        }
+        if (preflight_panel != nullptr) {
+            const sao_status_t owner_status =
+                sao_ui_compositor_require_owner_thread(preflight_compositor);
+            if (owner_status != SAO_STATUS_OK) {
+                return owner_status;
+            }
+        }
+#endif
+        HANDLE worker = nullptr;
+        DWORD worker_thread_id = 0;
+        {
+            std::lock_guard lock(state->mutex);
+            state->teardown_requested = true;
+            state->show_requested = false;
+            ++state->generation;
+            (void)SetEvent(state->cancel_event);
+            worker = state->worker;
+            worker_thread_id = state->worker_thread_id;
+            state->worker = nullptr;
+            state->worker_thread_id = 0;
+        }
+        if (worker != nullptr) {
+            if (GetCurrentThreadId() == worker_thread_id) {
+                std::lock_guard lock(state->mutex);
+                state->worker = worker;
+                state->worker_thread_id = worker_thread_id;
+                return SAO_STATUS_ERR_CANCELLED;
+            }
+            (void)WaitForSingleObject(worker, INFINITE);
+            CloseHandle(worker);
+        }
+
+#if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+        sao_ai_editor_main_panel_t panel = nullptr;
+        sao_ui_compositor_handle_t panel_compositor = nullptr;
+        sao_ai_editor_launcher_t launcher = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            panel = state->panel_handle;
+            panel_compositor = state->panel_compositor;
+            launcher = state->launcher;
+        }
+        const sao_status_t panel_status =
+            retire_panel(panel, panel_compositor);
+        if (panel_status != SAO_STATUS_OK) {
+            return panel_status;
+        }
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->panel_handle == panel) {
+                state->panel_handle = nullptr;
+                state->panel_compositor = nullptr;
+            }
+        }
+
+        const sao_status_t shutdown_status = shutdown_launcher(launcher);
+        if (shutdown_status != SAO_STATUS_OK) {
+            return shutdown_status;
+        }
+        bool destroy_launcher = false;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->launcher == launcher) {
+                state->launcher = nullptr;
+                release_process_locked(*state);
+                state->phase = AiEditorLaunchPhase::idle;
+                state->last_status = SAO_STATUS_OK;
+                state->exit_code = 0;
+                state->has_exit_code = false;
+                state->show_requested = false;
+                state->teardown_requested = false;
+                destroy_launcher = launcher != nullptr;
+            }
+        }
+        if (destroy_launcher) {
+            sao_ai_editor_destroy(launcher);
+        }
+#else
+        std::lock_guard lock(state->mutex);
+        release_process_locked(*state);
+        state->phase = AiEditorLaunchPhase::idle;
+        state->last_status = SAO_STATUS_OK;
+        state->exit_code = 0;
+        state->has_exit_code = false;
+        state->show_requested = false;
+        state->teardown_requested = false;
+#endif
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 sao_status_t AiEditorProcessOwner::snapshot(
     AiEditorLaunchSnapshot& out) const noexcept {
     out = {};
@@ -848,37 +1055,37 @@ sao_status_t AiEditorProcessOwner::snapshot(
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     try {
-        std::lock_guard<std::mutex> lock(state->mutex);
+        ServiceOperation service_operation(*state);
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
-        if (state->launcher != nullptr) {
+        sao_ai_editor_launcher_t launcher = nullptr;
+        {
+            std::lock_guard lock(state->mutex);
+            launcher = state->launcher;
+        }
+        if (launcher != nullptr) {
             bool running = false;
             std::int32_t exit_code = kUnsetExitCode;
             const std::int32_t abi_status = sao_ai_editor_status(
-                state->launcher, &running, &exit_code);
-            if (abi_status == SAO_AI_EDITOR_OK && running) {
-                state->phase = AiEditorLaunchPhase::started;
-                state->last_status = SAO_STATUS_OK;
-            } else {
-                sao_ai_editor_launcher_t launcher = state->launcher;
-                state->launcher = nullptr;
-                sao_ai_editor_main_panel_t stale_panel = state->panel_handle;
-                state->panel_handle = nullptr;
-                if (stale_panel != nullptr) {
-                    (void)sao_ai_editor_main_panel_try_destroy(stale_panel);
+                launcher, &running, &exit_code);
+            std::lock_guard lock(state->mutex);
+            if (state->launcher == launcher) {
+                if (abi_status == SAO_AI_EDITOR_OK && running) {
+                    state->phase = AiEditorLaunchPhase::started;
+                    state->last_status = SAO_STATUS_OK;
+                } else {
+                    state->has_exit_code = exit_code != kUnsetExitCode;
+                    state->exit_code = state->has_exit_code
+                        ? static_cast<DWORD>(exit_code)
+                        : 0;
+                    state->phase = AiEditorLaunchPhase::failed;
+                    state->last_status = abi_status == SAO_AI_EDITOR_OK
+                        ? SAO_STATUS_ERR_PROCESS_GONE
+                        : map_ai_editor_status(abi_status);
                 }
-                sao_ai_editor_destroy(launcher);
-                state->has_exit_code = exit_code != kUnsetExitCode;
-                state->exit_code = state->has_exit_code
-                    ? static_cast<DWORD>(exit_code)
-                    : 0;
-                release_process_locked(*state);
-                state->phase = AiEditorLaunchPhase::failed;
-                state->last_status = abi_status == SAO_AI_EDITOR_OK
-                    ? SAO_STATUS_ERR_PROCESS_GONE
-                    : map_ai_editor_status(abi_status);
             }
         }
 #endif
+        std::lock_guard<std::mutex> lock(state->mutex);
         if (state->process != nullptr) {
             const DWORD wait = WaitForSingleObject(state->process, 0);
             if (wait == WAIT_OBJECT_0) {
@@ -887,7 +1094,6 @@ sao_status_t AiEditorProcessOwner::snapshot(
                     GetExitCodeProcess(state->process, &exit_code) != FALSE &&
                     exit_code != STILL_ACTIVE;
                 state->exit_code = state->has_exit_code ? exit_code : 0;
-                release_process_locked(*state);
                 if (state->phase == AiEditorLaunchPhase::started ||
                     state->phase == AiEditorLaunchPhase::launching) {
                     state->phase = AiEditorLaunchPhase::failed;
@@ -895,7 +1101,6 @@ sao_status_t AiEditorProcessOwner::snapshot(
                 }
             } else if (wait == WAIT_FAILED) {
                 const sao_status_t status = map_os_error(GetLastError());
-                release_process_locked(*state);
                 state->phase = AiEditorLaunchPhase::failed;
                 state->last_status = status;
             }

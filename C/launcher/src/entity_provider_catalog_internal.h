@@ -603,6 +603,8 @@ inline sao_status_t map_loader_status(std::int32_t status) noexcept {
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     case loader::SAO_PLUGINS_ERR_ALREADY_EXISTS:
         return SAO_STATUS_ERR_ALREADY_EXISTS;
+    case loader::SAO_PLUGINS_ERR_NOT_FOUND:
+        return SAO_STATUS_ERR_NOT_FOUND;
     case loader::SAO_PLUGINS_ERR_DEPENDENCY_MISSING:
         return SAO_STATUS_ERR_NOT_FOUND;
     case loader::SAO_PLUGINS_ERR_DEPENDENCY_CYCLE:

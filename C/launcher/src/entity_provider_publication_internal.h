@@ -19,6 +19,10 @@ using InvokeProviderFn = std::int32_t(SAO_PLUGINS_CALL*)(const char* provider_id
                                                          std::uint64_t expected_generation,
                                                          const char* action_id_utf8,
                                                          const char* payload_json_utf8);
+using InvokeProviderV2Fn = std::int32_t(SAO_PLUGINS_CALL*)(
+    const char* provider_id_utf8, std::uint64_t expected_generation,
+    const char* action_id_utf8, const char* payload_json_utf8,
+    sao::plugins::loader::entity_action_result_callback_v2_fn callback, void* user_data);
 using SetRootsFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle,
                                               const SaoUiEntityRootItem* roots,
                                               std::size_t root_count);
@@ -95,6 +99,15 @@ struct EntityRootContributionSpec {
     bool operator==(const EntityRootContributionSpec&) const = default;
 };
 
+struct OwnedEntityActionResult {
+    bool callback_received = false;
+    bool handled = false;
+    bool has_result = false;
+    std::string result_json;
+
+    bool operator==(const OwnedEntityActionResult&) const = default;
+};
+
 struct EntityProviderPublicationState {
     std::uint64_t catalog_revision = 0;
     sao::plugins::loader::entity_snapshot_content_token_t catalog_content_token =
@@ -167,5 +180,10 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
 sao_status_t invoke(const entity_action_routes::EntityActionRoute& route,
                     sao_ui_entity_shell_handle_t shell, InvokeProviderFn invoke_fn,
                     GetShellSnapshotFn get_snapshot_fn, HomeFn home_fn) noexcept;
+
+sao_status_t invoke_v2(const entity_action_routes::EntityActionRoute& route,
+                       sao_ui_entity_shell_handle_t shell, InvokeProviderV2Fn invoke_fn,
+                       GetShellSnapshotFn get_snapshot_fn, HomeFn home_fn,
+                       OwnedEntityActionResult* out_result) noexcept;
 
 } // namespace sao::launcher::entity_provider_publication

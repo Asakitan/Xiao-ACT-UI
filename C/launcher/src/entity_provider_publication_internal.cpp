@@ -451,7 +451,7 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
             contribution.name.c_str(),
             contribution.icon.c_str(),
             -1,
-            false,
+            !children.empty(),
             {0, 0, 0},
             children.empty() ? nullptr : children.data(),
             children.size(),
@@ -534,8 +534,7 @@ sao_status_t first_failure(sao_status_t current, sao_status_t candidate) noexcep
 
 void reset_published_state(EntityProviderPublicationState& state) noexcept {
     state.catalog_revision = 0;
-    state.catalog_content_token =
-        sao::plugins::loader::kInvalidEntitySnapshotContentToken;
+    state.catalog_content_token = sao::plugins::loader::kInvalidEntitySnapshotContentToken;
     state.has_catalog_revision = false;
     state.has_catalog_content_token = false;
     state.published_catalog = {};
@@ -552,8 +551,7 @@ void reset_published_state(EntityProviderPublicationState& state) noexcept {
 bool has_v2_content_identity(
     const entity_provider_catalog::OwnedEntityProviderCatalog& catalog) noexcept {
     return catalog.abi_version == sao::plugins::loader::kEntitySnapshotAbiVersion2 &&
-           catalog.content_token !=
-               sao::plugins::loader::kInvalidEntitySnapshotContentToken;
+           catalog.content_token != sao::plugins::loader::kInvalidEntitySnapshotContentToken;
 }
 
 bool publication_inputs_match(const EntityProviderPublicationState& state, bool nervgear_mode,
@@ -664,6 +662,83 @@ sao_status_t close_menu_if_visible(sao_ui_entity_shell_handle_t shell,
     return home_fn(shell);
 }
 
+struct ActionResultCopyContext {
+    OwnedEntityActionResult candidate;
+    sao_status_t status = SAO_STATUS_OK;
+};
+
+std::int32_t SAO_PLUGINS_CALL copy_action_result_v2(
+    const sao::plugins::loader::entity_action_result_v2* result, void* user_data) {
+    if (user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& context = *static_cast<ActionResultCopyContext*>(user_data);
+    if (result == nullptr) {
+        context.status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (context.candidate.callback_received) {
+        context.status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (result->struct_size < sao::plugins::loader::kEntityActionResultV2RequiredPrefixSize ||
+        result->abi_version != sao::plugins::loader::kEntityActionAbiVersion2) {
+        context.status = SAO_STATUS_ERR_ABI_MISMATCH;
+        return sao::plugins::loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
+    }
+    if (result->handled > 1 ||
+        std::any_of(std::begin(result->reserved), std::end(result->reserved),
+                    [](std::uint8_t value) { return value != 0; }) ||
+        (result->handled == 0 && result->result_json_utf8 != nullptr)) {
+        context.status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        OwnedEntityActionResult candidate;
+        candidate.callback_received = true;
+        candidate.handled = result->handled != 0;
+        candidate.has_result = result->result_json_utf8 != nullptr;
+        if (candidate.has_result) {
+            candidate.result_json = result->result_json_utf8;
+        }
+        context.candidate = std::move(candidate);
+        return SAO_OK;
+    } catch (...) {
+        context.status = SAO_STATUS_ERR_UNKNOWN;
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+template <typename InvokeCallable>
+sao_status_t invoke_common(const entity_action_routes::EntityActionRoute& route,
+                           sao_ui_entity_shell_handle_t shell, GetShellSnapshotFn get_snapshot_fn,
+                           HomeFn home_fn, InvokeCallable&& invoke_callable) {
+    entity_action_routes::EntityActionInvocationLease invocation_lease;
+    const sao_status_t lease_status = route.acquire_invocation(invocation_lease);
+    if (lease_status != SAO_STATUS_OK) {
+        return lease_status;
+    }
+    if (route.provider_id.empty() || route.provider_generation == 0 || route.action_id.empty() ||
+        !route.can_activate) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const bool should_close = !route.keep_menu_open;
+    if (should_close && (shell == nullptr || get_snapshot_fn == nullptr || home_fn == nullptr)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (should_close && route.close_menu_before) {
+        const sao_status_t close_status = close_menu_if_visible(shell, get_snapshot_fn, home_fn);
+        if (close_status != SAO_STATUS_OK) {
+            return close_status;
+        }
+    }
+    sao_status_t status = invoke_callable();
+    if (should_close && !route.close_menu_before) {
+        status = first_failure(status, close_menu_if_visible(shell, get_snapshot_fn, home_fn));
+    }
+    return status;
+}
+
 } // namespace
 
 sao_status_t
@@ -744,14 +819,13 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
     try {
         entity_provider_catalog::OwnedEntityProviderCatalog catalog;
         sao_status_t status = SAO_STATUS_OK;
-        const bool plugin_runtime_degraded =
-            state.builtin_authority.plugin_runtime ==
-            PluginRuntimePublicationStatus::degraded_internal;
+        const bool plugin_runtime_degraded = state.builtin_authority.plugin_runtime ==
+                                             PluginRuntimePublicationStatus::degraded_internal;
         if (plugin_runtime_degraded) {
             catalog = {};
         } else {
-            status = entity_provider_catalog::snapshot_v2_first(snapshot_v2_fn, snapshot_v1_fn,
-                                                                 catalog);
+            status =
+                entity_provider_catalog::snapshot_v2_first(snapshot_v2_fn, snapshot_v1_fn, catalog);
             if (status != SAO_STATUS_OK)
                 return fail_closed_after(status, shell, routes, state, nervgear_mode, set_roots_fn);
         }
@@ -772,7 +846,7 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
             state.catalog_content_token == catalog.content_token &&
             publication_inputs_match(state, nervgear_mode, contribution_revision,
                                      current_routes.revision)) {
-            return SAO_STATUS_OK;
+            return routes.open_invocation_gate();
         }
 
         status = routes.close_invocation_gate();
@@ -809,8 +883,7 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
             state.published_catalog = std::move(catalog);
         } else {
             state.catalog_revision = 0;
-            state.catalog_content_token =
-                sao::plugins::loader::kInvalidEntitySnapshotContentToken;
+            state.catalog_content_token = sao::plugins::loader::kInvalidEntitySnapshotContentToken;
             state.has_catalog_revision = false;
             state.has_catalog_content_token = false;
             state.published_catalog = {};
@@ -833,8 +906,7 @@ sao_status_t poll(sao_ui_entity_shell_handle_t shell,
                   entity_action_routes::EntityActionRouteStore& routes,
                   EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
                   bool nervgear_mode, SnapshotCatalogV2Fn snapshot_v2_fn,
-                  SnapshotCatalogFn snapshot_v1_fn,
-                  SetRootsFn set_roots_fn) noexcept {
+                  SnapshotCatalogFn snapshot_v1_fn, SetRootsFn set_roots_fn) noexcept {
     if (shell == nullptr || (snapshot_v2_fn == nullptr && snapshot_v1_fn == nullptr) ||
         set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -861,9 +933,9 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
         if (status != SAO_STATUS_OK) {
             return status;
         }
-        status = publish_routes_transaction(
-            shell, routes, {}, {}, nervgear_mode, state.topmost, state.streaming_mode,
-            state.builtin_authority, set_roots_fn, RouteCommitMode::resync_on_failure);
+        status = publish_routes_transaction(shell, routes, {}, {}, nervgear_mode, state.topmost,
+                                            state.streaming_mode, state.builtin_authority,
+                                            set_roots_fn, RouteCommitMode::resync_on_failure);
         if (status != SAO_STATUS_OK)
             return status;
         state.refresh_elapsed_ms = 0;
@@ -877,32 +949,51 @@ sao_status_t clear(sao_ui_entity_shell_handle_t shell,
 sao_status_t invoke(const entity_action_routes::EntityActionRoute& route,
                     sao_ui_entity_shell_handle_t shell, InvokeProviderFn invoke_fn,
                     GetShellSnapshotFn get_snapshot_fn, HomeFn home_fn) noexcept {
-    entity_action_routes::EntityActionInvocationLease invocation_lease;
-    const sao_status_t lease_status = route.acquire_invocation(invocation_lease);
-    if (lease_status != SAO_STATUS_OK)
-        return lease_status;
-    if (invoke_fn == nullptr || route.provider_id.empty() || route.provider_generation == 0 ||
-        route.action_id.empty() || !route.can_activate) {
+    if (invoke_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        bool should_close = !route.keep_menu_open;
-        if (!route.keep_menu_open) {
-            if (shell == nullptr || get_snapshot_fn == nullptr || home_fn == nullptr) {
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            }
-        }
-        if (should_close && route.close_menu_before) {
-            const sao_status_t close_status =
-                close_menu_if_visible(shell, get_snapshot_fn, home_fn);
-            if (close_status != SAO_STATUS_OK)
-                return close_status;
-        }
-        sao_status_t status = entity_provider_catalog::map_loader_status(
-            invoke_fn(route.provider_id.c_str(), route.provider_generation, route.action_id.c_str(),
-                      route.payload_json.c_str()));
-        if (should_close && !route.close_menu_before) {
-            status = first_failure(status, close_menu_if_visible(shell, get_snapshot_fn, home_fn));
+        return invoke_common(route, shell, get_snapshot_fn, home_fn, [&]() {
+            return entity_provider_catalog::map_loader_status(
+                invoke_fn(route.provider_id.c_str(), route.provider_generation,
+                          route.action_id.c_str(), route.payload_json.c_str()));
+        });
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t invoke_v2(const entity_action_routes::EntityActionRoute& route,
+                       sao_ui_entity_shell_handle_t shell, InvokeProviderV2Fn invoke_fn,
+                       GetShellSnapshotFn get_snapshot_fn, HomeFn home_fn,
+                       OwnedEntityActionResult* out_result) noexcept {
+    if (invoke_fn == nullptr || out_result == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        ActionResultCopyContext context;
+        bool provider_completed = false;
+        const sao_status_t status =
+            invoke_common(route, shell, get_snapshot_fn, home_fn, [&]() -> sao_status_t {
+                const std::int32_t loader_status = invoke_fn(
+                    route.provider_id.c_str(), route.provider_generation, route.action_id.c_str(),
+                    route.payload_json.c_str(), &copy_action_result_v2, &context);
+                if (context.status != SAO_STATUS_OK) {
+                    return context.status;
+                }
+                const sao_status_t mapped =
+                    entity_provider_catalog::map_loader_status(loader_status);
+                if (mapped != SAO_STATUS_OK) {
+                    return mapped;
+                }
+                if (!context.candidate.callback_received) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                provider_completed = true;
+                return context.candidate.handled ? SAO_STATUS_OK : SAO_STATUS_ERR_NOT_FOUND;
+            });
+        if (provider_completed) {
+            *out_result = std::move(context.candidate);
         }
         return status;
     } catch (...) {
