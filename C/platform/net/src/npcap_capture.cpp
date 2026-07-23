@@ -8,6 +8,8 @@
 
 #include "sao/net/npcap_capture.h"
 
+#include "sao_security/obfuscation/enc_str.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -96,44 +98,64 @@ static void load_wpcap_once() {
     // Prefer %SystemRoot%\System32\Npcap\wpcap.dll (Npcap install path)
     // over a bare LoadLibrary — Npcap installs its DLLs under a
     // subdirectory to avoid colliding with WinPcap installs.
+    //
+    // The DLL name and every exported symbol name are wrapped in
+    // SAO_ENC_STR() so the .rdata segment does not advertise the wpcap
+    // surface to static string scanners.  The lookup semantics are
+    // unchanged.
+    const auto enc_subdir = SAO_ENC_STR("\\Npcap\\wpcap.dll");
+    const auto enc_bare   = SAO_ENC_STR("wpcap.dll");
     HMODULE dll = nullptr;
     char sysroot[MAX_PATH];
     UINT n = GetSystemDirectoryA(sysroot, MAX_PATH);
     if (n > 0 && n < MAX_PATH) {
         std::string path(sysroot, n);
-        path.append("\\Npcap\\wpcap.dll");
+        path.append(enc_subdir.decrypt());
         dll = LoadLibraryA(path.c_str());
     }
     if (dll == nullptr) {
-        dll = LoadLibraryA("wpcap.dll");
+        dll = LoadLibraryA(enc_bare.decrypt());
     }
     if (dll == nullptr) {
         g_wpcap.loaded_ok = false;
         return;
     }
     g_wpcap.dll = dll;
+
+    const auto sym_lib_version = SAO_ENC_STR("pcap_lib_version");
+    const auto sym_findalldevs = SAO_ENC_STR("pcap_findalldevs");
+    const auto sym_freealldevs = SAO_ENC_STR("pcap_freealldevs");
+    const auto sym_open_live   = SAO_ENC_STR("pcap_open_live");
+    const auto sym_close       = SAO_ENC_STR("pcap_close");
+    const auto sym_compile     = SAO_ENC_STR("pcap_compile");
+    const auto sym_setfilter   = SAO_ENC_STR("pcap_setfilter");
+    const auto sym_freecode    = SAO_ENC_STR("pcap_freecode");
+    const auto sym_next_ex     = SAO_ENC_STR("pcap_next_ex");
+    const auto sym_dispatch    = SAO_ENC_STR("pcap_dispatch");
+    const auto sym_geterr      = SAO_ENC_STR("pcap_geterr");
+
     g_wpcap.lib_version =
-        reinterpret_cast<pcap_lib_version_fn>(GetProcAddress(dll, "pcap_lib_version"));
+        reinterpret_cast<pcap_lib_version_fn>(GetProcAddress(dll, sym_lib_version.decrypt()));
     g_wpcap.findalldevs =
-        reinterpret_cast<pcap_findalldevs_fn>(GetProcAddress(dll, "pcap_findalldevs"));
+        reinterpret_cast<pcap_findalldevs_fn>(GetProcAddress(dll, sym_findalldevs.decrypt()));
     g_wpcap.freealldevs =
-        reinterpret_cast<pcap_freealldevs_fn>(GetProcAddress(dll, "pcap_freealldevs"));
+        reinterpret_cast<pcap_freealldevs_fn>(GetProcAddress(dll, sym_freealldevs.decrypt()));
     g_wpcap.open_live =
-        reinterpret_cast<pcap_open_live_fn>(GetProcAddress(dll, "pcap_open_live"));
+        reinterpret_cast<pcap_open_live_fn>(GetProcAddress(dll, sym_open_live.decrypt()));
     g_wpcap.close =
-        reinterpret_cast<pcap_close_fn>(GetProcAddress(dll, "pcap_close"));
+        reinterpret_cast<pcap_close_fn>(GetProcAddress(dll, sym_close.decrypt()));
     g_wpcap.compile =
-        reinterpret_cast<pcap_compile_fn>(GetProcAddress(dll, "pcap_compile"));
+        reinterpret_cast<pcap_compile_fn>(GetProcAddress(dll, sym_compile.decrypt()));
     g_wpcap.setfilter =
-        reinterpret_cast<pcap_setfilter_fn>(GetProcAddress(dll, "pcap_setfilter"));
+        reinterpret_cast<pcap_setfilter_fn>(GetProcAddress(dll, sym_setfilter.decrypt()));
     g_wpcap.freecode =
-        reinterpret_cast<pcap_freecode_fn>(GetProcAddress(dll, "pcap_freecode"));
+        reinterpret_cast<pcap_freecode_fn>(GetProcAddress(dll, sym_freecode.decrypt()));
     g_wpcap.next_ex =
-        reinterpret_cast<pcap_next_ex_fn>(GetProcAddress(dll, "pcap_next_ex"));
+        reinterpret_cast<pcap_next_ex_fn>(GetProcAddress(dll, sym_next_ex.decrypt()));
     g_wpcap.dispatch =
-        reinterpret_cast<pcap_dispatch_fn>(GetProcAddress(dll, "pcap_dispatch"));
+        reinterpret_cast<pcap_dispatch_fn>(GetProcAddress(dll, sym_dispatch.decrypt()));
     g_wpcap.geterr =
-        reinterpret_cast<pcap_geterr_fn>(GetProcAddress(dll, "pcap_geterr"));
+        reinterpret_cast<pcap_geterr_fn>(GetProcAddress(dll, sym_geterr.decrypt()));
 
     // Minimum viable surface — everything except dispatch/freecode is
     // considered mandatory.

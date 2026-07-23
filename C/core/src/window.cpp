@@ -2,14 +2,43 @@
 
 #include "logging.h"
 
+#include "sao_security/obfuscation/enc_str.h"
+
 #include <windows.h>
 
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"SaoLegacyCoreLayeredWindow";
+// ASCII-only widening for identifiers decrypted from SAO_ENC_STR.
+void widen_ascii(const char* src, wchar_t* dst, std::size_t dst_cap) {
+    if (!dst || dst_cap == 0) return;
+    std::size_t i = 0;
+    if (src) {
+        for (; src[i] != '\0' && i + 1 < dst_cap; ++i) {
+            dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(src[i]));
+        }
+    }
+    dst[i] = L'\0';
+}
+
+// Opaque window class name (replaces plaintext "SaoLegacyCoreLayeredWindow").
+// Wrap the static array in a struct so C++11 magic-statics give us
+// thread-safe once-initialisation across concurrent create / destroy paths.
+const wchar_t* opaque_window_class_name() noexcept {
+    struct Widened {
+        wchar_t buf[32];
+        Widened() noexcept {
+            const auto enc = SAO_ENC_STR("4F5A.lc");
+            widen_ascii(enc.decrypt(), buf, std::size(buf));
+        }
+    };
+    static const Widened w{};
+    return w.buf;
+}
+
 constexpr char kComponent[] = "core.window";
 
 int32_t finish(int32_t status, const char* message) noexcept {
@@ -32,9 +61,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 }
 
 bool ensure_window_class(HINSTANCE instance) noexcept {
+    const wchar_t* class_name = opaque_window_class_name();
     WNDCLASSEXW existing{};
     existing.cbSize = sizeof(existing);
-    if (GetClassInfoExW(instance, kWindowClassName, &existing) != FALSE) {
+    if (GetClassInfoExW(instance, class_name, &existing) != FALSE) {
         return true;
     }
 
@@ -43,7 +73,7 @@ bool ensure_window_class(HINSTANCE instance) noexcept {
     window_class.lpfnWndProc = window_proc;
     window_class.hInstance = instance;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.lpszClassName = kWindowClassName;
+    window_class.lpszClassName = class_name;
     if (RegisterClassExW(&window_class) != 0) {
         return true;
     }
@@ -100,7 +130,7 @@ extern "C" int32_t SAO_LEGACY_CORE_CALL sao_legacy_core_window_create_layered_to
 
     HWND hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-        kWindowClassName, title, WS_POPUP, x, y, w, h, nullptr, nullptr, instance, nullptr);
+        opaque_window_class_name(), title, WS_POPUP, x, y, w, h, nullptr, nullptr, instance, nullptr);
     if (hwnd == nullptr) {
         return fail(SAO_ERR_OS_CALL_FAILED,
                     "window_create_layered_topmost failed to create the window");

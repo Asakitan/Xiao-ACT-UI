@@ -43,7 +43,22 @@ add_subdirectory(rt_io)
 add_subdirectory(ui)
 add_subdirectory(sdk)
 add_subdirectory(scripting)
-add_subdirectory(gpu_hunt)
+
+# gpu_hunt: local-only sources live outside the tracked tree (see the top-
+# level .gitignore rules for **/gpu_hunt/ and **/gpu_hunt_*.cpp).  A clean
+# checkout without those files must still configure and build; the stub
+# INTERFACE alias keeps downstream target_link_libraries(sao::gpu_hunt)
+# calls resolvable with zero symbols to worry about.  Downstream consumers
+# gate the code that actually needs gpu_hunt symbols via TARGET_EXISTS
+# checks or their own source-file EXISTS guards.
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/gpu_hunt/CMakeLists.txt"
+    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/gpu_hunt/src/rt_io_backend.cpp")
+    add_subdirectory(gpu_hunt)
+else()
+    message(STATUS "sao::gpu_hunt disabled (source not present in this checkout)")
+    add_library(sao_gpu_hunt_stub INTERFACE)
+    add_library(sao::gpu_hunt ALIAS sao_gpu_hunt_stub)
+endif()
 
 # Convenience meta-target: link this to pull the whole platform in.
 add_library(sao_platform INTERFACE)

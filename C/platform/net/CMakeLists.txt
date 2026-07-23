@@ -23,6 +23,10 @@ target_include_directories(sao_platform_net
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# SAO_ENC_STR() header-only compile-time string encryption; no link dep.
+target_include_directories(sao_platform_net PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/security/obfuscation/include>)
+
 target_compile_features(sao_platform_net PUBLIC cxx_std_20)
 
 target_link_libraries(sao_platform_net
@@ -45,10 +49,17 @@ if (WIN32)
     )
 endif()
 
-# Optional zstd binding.  Gated on find_package(zstd CONFIG) so
-# hosts without the vcpkg port still configure/build; the symbols degrade
-# to SAO_STATUS_ERR_CAPABILITY_MISSING (see src/proto_zstd.cpp).  Runtime
-# probing via sao_net_zstd_available() is the source of truth.
+# Optional zstd binding.  Gated on find_package(zstd CONFIG) so hosts
+# without the vcpkg port still configure/build; the symbols degrade to
+# SAO_STATUS_ERR_CAPABILITY_MISSING when the compile-time macro
+# SAO_NET_ZSTD_MISSING is defined (see src/proto_zstd.cpp).  Runtime
+# probing via sao_net_zstd_available() is the source of truth for
+# "zstd usable in this build".
+#
+# Gate polarity is INVERSE: SAO_NET_ZSTD_MISSING is DEFINED only when the
+# port was not found.  When zstd was found the macro stays undefined and
+# the real compress/decompress paths are compiled in.  Do NOT invert this
+# to SAO_NET_HAS_ZSTD — proto_zstd.cpp reads the inverse form.
 find_package(zstd CONFIG QUIET)
 if (TARGET zstd::libzstd_shared OR TARGET zstd::libzstd_static OR TARGET zstd::libzstd)
     if (TARGET zstd::libzstd_shared)
@@ -58,10 +69,12 @@ if (TARGET zstd::libzstd_shared OR TARGET zstd::libzstd_static OR TARGET zstd::l
     else()
         target_link_libraries(sao_platform_net PRIVATE zstd::libzstd)
     endif()
-    message(STATUS "SAO net: zstd found — proto_zstd bindings enabled")
+    message(STATUS "SAO net: zstd found — proto_zstd bindings enabled "
+                   "(SAO_NET_ZSTD_MISSING undefined)")
 else()
     target_compile_definitions(sao_platform_net PRIVATE SAO_NET_ZSTD_MISSING)
-    message(STATUS "SAO net: zstd NOT found — proto_zstd stubs to NOT_IMPLEMENTED")
+    message(STATUS "SAO net: zstd NOT found — proto_zstd stubs to "
+                   "CAPABILITY_MISSING (SAO_NET_ZSTD_MISSING defined)")
 endif()
 
 if (SAO_BUILD_TESTS)

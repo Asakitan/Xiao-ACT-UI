@@ -38,10 +38,20 @@
     {
       "name": "windows-hardened",
       "displayName": "Windows x64 Hardened Release",
-      "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP.",
+      "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP. Tests are deliberately OFF here so the shipped DLLs never link test-only symbols (SAO_SDK_TESTING would export helper exports on sao_platform_sdk). Use windows-hardened-tests for a mitigations+CTest build.",
       "inherits": "windows-base",
       "cacheVariables": {
         "SAO_HARDENED_BUILD": "ON"
+      }
+    },
+    {
+      "name": "windows-hardened-tests",
+      "displayName": "Windows x64 Hardened + Tests",
+      "description": "Mitigations flags identical to windows-hardened, but SAO_BUILD_TESTS=ON so the hardened CTest suite can run against a test-instrumented build. The resulting binaries are NOT ship-safe because SAO_SDK_TESTING exports helper symbols on sao_platform_sdk; never install from this preset.",
+      "inherits": "windows-hardened",
+      "cacheVariables": {
+        "SAO_BUILD_TESTS": "ON",
+        "BUILD_TESTING": "ON"
       }
     },
     {
@@ -84,6 +94,11 @@
       "configuration": "Release"
     },
     {
+      "name": "windows-hardened-tests",
+      "configurePreset": "windows-hardened-tests",
+      "configuration": "Release"
+    },
+    {
       "name": "windows-tests",
       "configurePreset": "windows-tests",
       "configuration": "Debug"
@@ -114,6 +129,13 @@
       "configurePreset": "windows-hardened",
       "configuration": "Release",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-hardened-tests",
+      "configurePreset": "windows-hardened-tests",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true },
+      "execution": { "stopOnFailure": false }
     },
     {
       "name": "windows-tests",

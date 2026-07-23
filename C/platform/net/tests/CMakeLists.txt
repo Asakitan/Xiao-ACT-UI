@@ -73,7 +73,12 @@ catch_discover_tests(sao_platform_net_tests)
 catch_discover_tests(sao_platform_net_network_abi_tests
     TEST_PREFIX "net_abi."
     PROPERTIES LABELS "net;network_abi")
-catch_discover_tests(sao_platform_net_npcap_tests)
+# Npcap SDK is licensed and optional.  When wpcap.dll / Packet.dll are not
+# installed the Catch2 cases call SKIP(); Catch2 SKIP() exits with 4 and
+# without SKIP_RETURN_CODE ctest reports the skip as a hard failure.  See
+# the zstd target below and platform/rt_io driver tests for prior art.
+catch_discover_tests(sao_platform_net_npcap_tests
+    PROPERTIES SKIP_RETURN_CODE 4)
 catch_discover_tests(sao_platform_net_reassembly_tests)
 # Catch2 SKIP() exits with 4; without SKIP_RETURN_CODE ctest reports the
 # skip as a hard failure.  See platform/rt_io driver tests for prior art.
