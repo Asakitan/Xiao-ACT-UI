@@ -88,3 +88,44 @@ TEST_CASE("direct and generic errors share one allocator", "[plugins][csharp][co
     REQUIRE(std::strcmp(value, "managed failure") == 0);
     sao_plugins_cshost_free_string(value);
 }
+
+TEST_CASE("managed SDK table append-only ABI locks V1/V2/current windows",
+          "[plugins][csharp][contract][abi][append_only]") {
+    // ABI version is fixed at 1; append-only growth publishes larger struct
+    // sizes without bumping the version, and consumers must gate optional
+    // slots via safe_readable_extent.
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_ABI_VERSION == 1);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE == 72);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V2_SIZE == 88);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == 96);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == sizeof(cs_managed_sdk_table));
+
+    // safe_readable_extent must clamp both under- and over-sized producer
+    // struct sizes without exposing a partial pointer at the tail.
+    STATIC_REQUIRE(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V1_SIZE,
+                                        SAO_CSHOST_SDK_TABLE_CURRENT_SIZE) ==
+                   SAO_CSHOST_SDK_TABLE_V1_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V2_SIZE,
+                                        SAO_CSHOST_SDK_TABLE_CURRENT_SIZE) ==
+                   SAO_CSHOST_SDK_TABLE_V2_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(0, SAO_CSHOST_SDK_TABLE_CURRENT_SIZE) ==
+                   SAO_CSHOST_SDK_TABLE_CURRENT_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(static_cast<uint32_t>(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE +
+                                                              256),
+                                        SAO_CSHOST_SDK_TABLE_CURRENT_SIZE) ==
+                   SAO_CSHOST_SDK_TABLE_CURRENT_SIZE);
+
+    // Action v2 invocation and result records lock the append-only tail.
+    STATIC_REQUIRE(sizeof(cs_managed_action_result_v2) == 24);
+    STATIC_REQUIRE(offsetof(cs_managed_action_result_v2, handled) == 8);
+    STATIC_REQUIRE(offsetof(cs_managed_action_result_v2, result_json_utf8) == 16);
+    STATIC_REQUIRE(sizeof(cs_managed_entity_action_invocation_v2) == 48);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, session) == 0);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, callback_token) == 8);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, action_id_utf8) == 16);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, payload_json_utf8) == 24);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, result_sink) == 32);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, sink_user_data) == 40);
+    STATIC_REQUIRE(static_cast<uint32_t>(cs_managed_callback_kind::entity_action_v2) ==
+                   static_cast<uint32_t>(cs_managed_callback_kind::entity_action) + 1);
+}

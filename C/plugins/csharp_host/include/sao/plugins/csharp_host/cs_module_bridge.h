@@ -39,6 +39,7 @@ enum class cs_managed_callback_kind : uint32_t {
     panel_action,
     entity_snapshot,
     entity_action,
+    entity_action_v2,
 };
 
 using cs_managed_callback_invoke_fn = int32_t(SAO_CSHOST_MANAGED_CALL*)(
@@ -123,6 +124,34 @@ struct cs_managed_entity_action_invocation {
 
 using cs_managed_callback_token_t = void*;
 
+// Managed action v2 receives an invocation carrying the owning session, a
+// per-invocation callback token that identifies which pending result sink this
+// dispatch owns, the borrowed action id and payload json, and the direct native
+// sink pointer plus user data. Managed implementations may either invoke the
+// sink pointer directly or route the submission through the appended
+// submit_action_result_v2 table slot. The invocation struct itself is borrowed
+// and remains valid only until the managed handler returns. All string pointers
+// follow the same borrowed lifetime.
+struct cs_managed_action_result_v2 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint8_t handled;
+    uint8_t reserved[7];
+    const char* result_json_utf8;
+};
+
+using cs_managed_action_result_sink_fn =
+    int32_t(SAO_PLUGINS_CALL*)(const cs_managed_action_result_v2* result, void* sink_user_data);
+
+struct cs_managed_entity_action_invocation_v2 {
+    cs_managed_sdk_session_t session;
+    cs_managed_callback_token_t callback_token;
+    const char* action_id_utf8;
+    const char* payload_json_utf8;
+    cs_managed_action_result_sink_fn result_sink;
+    void* sink_user_data;
+};
+
 struct cs_managed_sdk_call {
     uint32_t struct_size;
     uint32_t reserved;
@@ -184,12 +213,44 @@ struct cs_managed_sdk_table {
         const cs_managed_entity_provider_descriptor_v2* descriptor);
     int32_t(SAO_PLUGINS_CALL* emit_context)(cs_managed_sdk_session_t session,
                                             const char* topic_utf8, const char* payload_json_utf8);
+    // Managed action v2 result submission path. Managed handlers registered
+    // through register_entity_provider_v2 with a callback of kind
+    // entity_action_v2 receive a cs_managed_entity_action_invocation_v2 whose
+    // callback_token identifies the pending native sink. Calling this slot
+    // resolves the sink by callback_token and forwards the result exactly once
+    // per invocation. Submitting twice or with a non-matching token returns
+    // SAO_ERR_HANDLE_INVALID; the invocation still fails closed if the managed
+    // handler never submits.
+    int32_t(SAO_PLUGINS_CALL* submit_action_result_v2)(
+        cs_managed_sdk_session_t session, cs_managed_callback_token_t callback_token,
+        const cs_managed_action_result_v2* result);
 };
 
 // ABI version 1 is retained. Consumers must gate appended entries with
 // struct_size; binaries compiled against the original prefix remain valid.
 inline constexpr size_t SAO_CSHOST_SDK_TABLE_V1_SIZE =
     offsetof(cs_managed_sdk_table, register_entity_provider_v2);
+
+// V2 extended the append-only tail with register_entity_provider_v2 and
+// emit_context (10 total pointers). V2 remains a valid readable extent for
+// consumers that lack the action-v2 result submission slot.
+inline constexpr size_t SAO_CSHOST_SDK_TABLE_V2_SIZE =
+    offsetof(cs_managed_sdk_table, submit_action_result_v2);
+
+// Current full size includes the action-v2 result submission slot. Consumers
+// compiled against this header must publish struct_size >= V2 size and use
+// safe_readable_extent when iterating unknown producer sizes.
+inline constexpr size_t SAO_CSHOST_SDK_TABLE_CURRENT_SIZE = sizeof(cs_managed_sdk_table);
+
+// Convert a producer-declared struct_size into a byte extent that is safe to
+// read from a compiled cs_managed_sdk_table copy. Zero and oversize inputs
+// clamp to the compiled size. Undersize inputs report exactly the declared
+// prefix so the caller can gate optional appended slots on the boundary.
+inline constexpr size_t safe_readable_extent(uint32_t struct_size,
+                                             size_t compiled_size) noexcept {
+    return (struct_size == 0 || struct_size > compiled_size) ? compiled_size
+                                                              : static_cast<size_t>(struct_size);
+}
 
 #if INTPTR_MAX == INT64_MAX
 static_assert(sizeof(cs_managed_entity_snapshot_invocation_v2) == 48);
@@ -204,7 +265,33 @@ static_assert(offsetof(cs_managed_entity_provider_descriptor_v2, snapshot) == 56
 static_assert(SAO_CSHOST_SDK_TABLE_V1_SIZE == 72);
 static_assert(offsetof(cs_managed_sdk_table, register_entity_provider_v2) == 72);
 static_assert(offsetof(cs_managed_sdk_table, emit_context) == 80);
-static_assert(sizeof(cs_managed_sdk_table) == 88);
+static_assert(SAO_CSHOST_SDK_TABLE_V2_SIZE == 88);
+static_assert(offsetof(cs_managed_sdk_table, submit_action_result_v2) == 88);
+static_assert(sizeof(cs_managed_sdk_table) == 96);
+static_assert(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == 96);
+static_assert(sizeof(cs_managed_action_result_v2) == 24);
+static_assert(alignof(cs_managed_action_result_v2) == 8);
+static_assert(offsetof(cs_managed_action_result_v2, struct_size) == 0);
+static_assert(offsetof(cs_managed_action_result_v2, abi_version) == 4);
+static_assert(offsetof(cs_managed_action_result_v2, handled) == 8);
+static_assert(offsetof(cs_managed_action_result_v2, reserved) == 9);
+static_assert(offsetof(cs_managed_action_result_v2, result_json_utf8) == 16);
+static_assert(sizeof(cs_managed_entity_action_invocation_v2) == 48);
+static_assert(alignof(cs_managed_entity_action_invocation_v2) == 8);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, session) == 0);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, callback_token) == 8);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, action_id_utf8) == 16);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, payload_json_utf8) == 24);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, result_sink) == 32);
+static_assert(offsetof(cs_managed_entity_action_invocation_v2, sink_user_data) == 40);
+static_assert(safe_readable_extent(0, sizeof(cs_managed_sdk_table)) ==
+              sizeof(cs_managed_sdk_table));
+static_assert(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V1_SIZE, sizeof(cs_managed_sdk_table)) ==
+              SAO_CSHOST_SDK_TABLE_V1_SIZE);
+static_assert(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V2_SIZE, sizeof(cs_managed_sdk_table)) ==
+              SAO_CSHOST_SDK_TABLE_V2_SIZE);
+static_assert(safe_readable_extent(sizeof(cs_managed_sdk_table) + 32,
+                                    sizeof(cs_managed_sdk_table)) == sizeof(cs_managed_sdk_table));
 #endif
 
 // 每 domain 注入一个 ctx 的 IntPtr (作为 [ThreadStatic] 或 AsyncLocal)。

@@ -12,6 +12,8 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
+#include <cstring>
 #include <future>
 #include <mutex>
 #include <stdexcept>
@@ -189,17 +191,40 @@ TEST_CASE("C# SDK table preserves layout and fails closed without runtime contex
     STATIC_REQUIRE(offsetof(cs_sdk_bridge, sdk_table) == sizeof(void*) * 5 + sizeof(uint32_t) * 2);
     STATIC_REQUIRE(sizeof(cs_managed_plugin_context) == sizeof(uint32_t) * 2 + sizeof(void*) * 4);
     STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE == sizeof(uint32_t) * 2 + sizeof(void*) * 8);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V2_SIZE == sizeof(uint32_t) * 2 + sizeof(void*) * 10);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == sizeof(uint32_t) * 2 + sizeof(void*) * 11);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_ABI_VERSION == 1);
     STATIC_REQUIRE(sizeof(cs_managed_entity_snapshot_invocation_v2) == 48);
     STATIC_REQUIRE(sizeof(cs_managed_entity_menu_row_v2) == 80);
     STATIC_REQUIRE(sizeof(cs_managed_entity_provider_descriptor_v2) == 72);
     STATIC_REQUIRE(offsetof(cs_managed_entity_menu_row_v2, can_activate) == 72);
     STATIC_REQUIRE(offsetof(cs_managed_entity_provider_descriptor_v2, snapshot) == 56);
+    STATIC_REQUIRE(sizeof(cs_managed_action_result_v2) == 24);
+    STATIC_REQUIRE(offsetof(cs_managed_action_result_v2, handled) == 8);
+    STATIC_REQUIRE(offsetof(cs_managed_action_result_v2, result_json_utf8) == 16);
+    STATIC_REQUIRE(sizeof(cs_managed_entity_action_invocation_v2) == 48);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, session) == 0);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, callback_token) == 8);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, result_sink) == 32);
+    STATIC_REQUIRE(offsetof(cs_managed_entity_action_invocation_v2, sink_user_data) == 40);
+    STATIC_REQUIRE(safe_readable_extent(0, sizeof(cs_managed_sdk_table)) ==
+                   sizeof(cs_managed_sdk_table));
+    STATIC_REQUIRE(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V1_SIZE,
+                                        sizeof(cs_managed_sdk_table)) ==
+                   SAO_CSHOST_SDK_TABLE_V1_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V2_SIZE,
+                                        sizeof(cs_managed_sdk_table)) ==
+                   SAO_CSHOST_SDK_TABLE_V2_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(sizeof(cs_managed_sdk_table) + 64,
+                                        sizeof(cs_managed_sdk_table)) ==
+                   sizeof(cs_managed_sdk_table));
 
     bridge_fixture fixture;
     REQUIRE(fixture.table()->struct_size == sizeof(cs_managed_sdk_table));
     REQUIRE(fixture.table()->abi_version == SAO_CSHOST_SDK_TABLE_ABI_VERSION);
     REQUIRE(fixture.table()->register_entity_provider_v2 != nullptr);
     REQUIRE(fixture.table()->emit_context != nullptr);
+    REQUIRE(fixture.table()->submit_action_result_v2 != nullptr);
 
     cs_managed_sdk_call call{};
     call.struct_size = sizeof(call);
@@ -414,4 +439,77 @@ TEST_CASE("C# managed release failure is consumed so teardown retry can finish",
     REQUIRE(cshost_sdk_session_release_callbacks(session) == SAO_OK);
     REQUIRE(callback.release_calls == 1);
     REQUIRE(fixture.finish() == SAO_OK);
+}
+
+TEST_CASE("C# SDK table safe_readable_extent brackets append-only ABI window",
+          "[plugins][csharp][bridge][abi][extent]") {
+    // V1 window remains at the 72-byte prefix; producers older than the v2
+    // append still land inside the compiled struct and their trailing slots
+    // are clamped away from the readable extent.
+    STATIC_REQUIRE(safe_readable_extent(static_cast<uint32_t>(SAO_CSHOST_SDK_TABLE_V1_SIZE - 1),
+                                        sizeof(cs_managed_sdk_table)) ==
+                   SAO_CSHOST_SDK_TABLE_V1_SIZE - 1);
+    STATIC_REQUIRE(safe_readable_extent(static_cast<uint32_t>(SAO_CSHOST_SDK_TABLE_V2_SIZE - 1),
+                                        sizeof(cs_managed_sdk_table)) ==
+                   SAO_CSHOST_SDK_TABLE_V2_SIZE - 1);
+    STATIC_REQUIRE(safe_readable_extent(0, SAO_CSHOST_SDK_TABLE_V1_SIZE) ==
+                   SAO_CSHOST_SDK_TABLE_V1_SIZE);
+    STATIC_REQUIRE(safe_readable_extent(static_cast<uint32_t>(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE +
+                                                              4096),
+                                        sizeof(cs_managed_sdk_table)) ==
+                   sizeof(cs_managed_sdk_table));
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE < SAO_CSHOST_SDK_TABLE_V2_SIZE);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V2_SIZE < SAO_CSHOST_SDK_TABLE_CURRENT_SIZE);
+}
+
+TEST_CASE("C# component publish gate constant orders V1 < V2 < CURRENT",
+          "[plugins][csharp][bridge][abi][publish]") {
+    // The publish gate accepts any producer struct_size >= V1 so binaries that
+    // were compiled against the 72-byte prefix keep landing OK. The exact
+    // publish call requires a real managed_component_s and is exercised in the
+    // .NET fixture-backed D16/D19 integration suites; here we only lock the
+    // constant ordering that authorizes forward-compatible producers.
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE == 72);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V2_SIZE == 88);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == 96);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V1_SIZE < SAO_CSHOST_SDK_TABLE_V2_SIZE);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_V2_SIZE < SAO_CSHOST_SDK_TABLE_CURRENT_SIZE);
+    STATIC_REQUIRE(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == sizeof(cs_managed_sdk_table));
+}
+
+TEST_CASE("C# flat pointer export exposes the compiled append-only slots",
+          "[plugins][csharp][bridge][flat_export]") {
+    size_t reported = 0;
+    REQUIRE(sao_plugins_cshost_get_sdk_table(nullptr, &reported) == SAO_ERR_BUFFER_TOO_SMALL);
+    // At least ten (V2 append-only window) and no more than the compiled tail.
+    REQUIRE(reported >= 10);
+    REQUIRE(reported * sizeof(void*) + sizeof(uint32_t) * 2 == sizeof(cs_managed_sdk_table));
+
+    std::vector<void*> pointers(reported, nullptr);
+    size_t actual = pointers.size();
+    REQUIRE(sao_plugins_cshost_get_sdk_table(pointers.data(), &actual) == SAO_OK);
+    REQUIRE(actual == reported);
+    for (size_t index = 0; index < actual; ++index) {
+        REQUIRE(pointers[index] != nullptr);
+    }
+
+    // The projected pointers must be a byte-for-byte copy of the compiled
+    // table's pointer window so managed IPC can index into it after reading
+    // struct_size for the append-only tail.
+    bridge_fixture fixture;
+    REQUIRE(fixture.table() != nullptr);
+    const auto* table_bytes = reinterpret_cast<const std::byte*>(fixture.table());
+    for (size_t index = 0; index < actual; ++index) {
+        void* expected = nullptr;
+        std::memcpy(&expected,
+                    table_bytes + sizeof(uint32_t) * 2 + index * sizeof(void*),
+                    sizeof(void*));
+        REQUIRE(pointers[index] == expected);
+    }
+
+    // Smaller than reported returns BUFFER_TOO_SMALL and updates the count.
+    size_t small = actual - 1;
+    REQUIRE(sao_plugins_cshost_get_sdk_table(pointers.data(), &small) ==
+            SAO_ERR_BUFFER_TOO_SMALL);
+    REQUIRE(small == reported);
 }

@@ -355,8 +355,12 @@ int32_t cshost_component_attach_contexts(managed_component_s* component, void* s
 int32_t cshost_component_publish_sdk_session(managed_component_s* component,
                                              const cs_managed_sdk_table* table,
                                              cs_managed_sdk_session_t session) noexcept {
+    // Accept any producer struct_size at or above the V1 prefix so binaries
+    // compiled against the original 72-byte layout keep publishing. The ABI
+    // version is fixed at 1 (append-only); appended slots are read only when
+    // struct_size covers them via safe_readable_extent on the managed side.
     if (component == nullptr || table == nullptr || session == nullptr ||
-        table->struct_size < sizeof(cs_managed_sdk_table) ||
+        table->struct_size < SAO_CSHOST_SDK_TABLE_V1_SIZE ||
         table->abi_version != SAO_CSHOST_SDK_TABLE_ABI_VERSION) {
         return SAO_ERR_INVALID_ARGUMENT;
     }

@@ -61,7 +61,22 @@ struct managed_callback;
 struct entity_callback_pair {
     void* snapshot = nullptr;
     void* action = nullptr;
+    void* action_v2 = nullptr;
 };
+
+// Per-thread pending action-v2 sink slot. Populated by callback_entity_action_v2
+// immediately before invoking the managed handler and consumed by
+// table_submit_action_result_v2. The token is a stable pointer into the
+// enclosing native invocation frame so the managed side can carry it opaquely
+// through the invocation struct without leaking sink pointers to caller code.
+struct pending_action_result {
+    void* token = nullptr;
+    loader::entity_action_result_sink_v2_fn sink = nullptr;
+    void* sink_user_data = nullptr;
+    bool consumed = false;
+};
+
+thread_local pending_action_result g_pending_action_result{};
 
 struct entity_registration {
     std::string provider_id;
@@ -435,6 +450,82 @@ int32_t SAO_PLUGINS_CALL callback_entity_action(const char* action_id_utf8,
     return pair == nullptr ? SAO_ERR_INVALID_ARGUMENT : invoke_callback(pair->action, &invocation);
 }
 
+// Direct-path forwarder that adapts the managed cs_managed_action_result_v2
+// layout to the loader's entity_action_result_v2 sink call. The two structs
+// share identical prefix layout (24-byte required prefix, ABI2 handled+result
+// pointer); a static assertion at the entity_provider header lock guarantees
+// this. sink_user_data is a pointer to the enclosing pending_action_result
+// slot so double-submit and stale invocation calls are diagnosed here without
+// touching loader-side state.
+static_assert(sizeof(cs_managed_action_result_v2) == sizeof(loader::entity_action_result_v2));
+static_assert(offsetof(cs_managed_action_result_v2, struct_size) ==
+              offsetof(loader::entity_action_result_v2, struct_size));
+static_assert(offsetof(cs_managed_action_result_v2, abi_version) ==
+              offsetof(loader::entity_action_result_v2, abi_version));
+static_assert(offsetof(cs_managed_action_result_v2, handled) ==
+              offsetof(loader::entity_action_result_v2, handled));
+static_assert(offsetof(cs_managed_action_result_v2, reserved) ==
+              offsetof(loader::entity_action_result_v2, reserved));
+static_assert(offsetof(cs_managed_action_result_v2, result_json_utf8) ==
+              offsetof(loader::entity_action_result_v2, result_json_utf8));
+
+int32_t SAO_PLUGINS_CALL forward_managed_action_result(const cs_managed_action_result_v2* result,
+                                                       void* sink_user_data) {
+    auto* pending = static_cast<pending_action_result*>(sink_user_data);
+    if (pending == nullptr || pending->sink == nullptr || result == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if (pending->consumed)
+        return SAO_ERR_HANDLE_INVALID;
+    const int32_t status = pending->sink(
+        reinterpret_cast<const loader::entity_action_result_v2*>(result), pending->sink_user_data);
+    if (status == SAO_OK)
+        pending->consumed = true;
+    return status;
+}
+
+// v3 action-v2 producer: forwards to the managed handler with the pending sink
+// wired via a thread-local slot. The token is the address of the pending slot
+// itself, which the managed side treats opaquely and passes back through the
+// submit path. Managed callers may also invoke the exposed sink pointer in the
+// invocation struct directly. Failure to submit before returning is a producer
+// error and is surfaced by the loader through its normal action-v2 contract.
+int32_t SAO_PLUGINS_CALL callback_entity_action_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    loader::entity_action_result_sink_v2_fn result_sink, void* result_sink_user_data,
+    void* user_data) {
+    auto* pair = static_cast<entity_callback_pair*>(user_data);
+    if (pair == nullptr || result_sink == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    pending_action_result saved = g_pending_action_result;
+    g_pending_action_result.token = &g_pending_action_result;
+    g_pending_action_result.sink = result_sink;
+    g_pending_action_result.sink_user_data = result_sink_user_data;
+    g_pending_action_result.consumed = false;
+    sdk_bridge_session* owning_session = nullptr;
+    void* target_token = pair->action_v2;
+    try {
+        std::lock_guard callback_lock(g_callbacks_mutex);
+        const auto found = g_callbacks.find(reinterpret_cast<uintptr_t>(target_token));
+        if (found != g_callbacks.end() && found->second != nullptr)
+            owning_session = found->second->owner;
+    } catch (...) {
+        g_pending_action_result = saved;
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    const cs_managed_entity_action_invocation_v2 invocation{
+        owning_session == nullptr ? nullptr
+                                  : reinterpret_cast<void*>(owning_session->handle),
+        g_pending_action_result.token,
+        action_id_utf8,
+        payload_json_utf8,
+        forward_managed_action_result,
+        &g_pending_action_result,
+    };
+    const int32_t status = invoke_callback(target_token, &invocation);
+    g_pending_action_result = saved;
+    return status;
+}
+
 void* callback_entry(cs_managed_callback_kind kind) noexcept {
     switch (kind) {
     case cs_managed_callback_kind::event:
@@ -447,6 +538,7 @@ void* callback_entry(cs_managed_callback_kind kind) noexcept {
         return reinterpret_cast<void*>(&callback_panel_action);
     case cs_managed_callback_kind::entity_snapshot:
     case cs_managed_callback_kind::entity_action:
+    case cs_managed_callback_kind::entity_action_v2:
         return reinterpret_cast<void*>(&invoke_managed);
     }
     return nullptr;
@@ -787,7 +879,10 @@ int32_t SAO_PLUGINS_CALL table_unregister_entity_provider(cs_managed_sdk_session
         }
     }
     if (owned_callbacks != nullptr) {
-        release_callback_token(owned_callbacks->action);
+        if (owned_callbacks->action_v2 != nullptr)
+            release_callback_token(owned_callbacks->action_v2);
+        if (owned_callbacks->action != nullptr)
+            release_callback_token(owned_callbacks->action);
         release_callback_token(owned_callbacks->snapshot);
     }
     return SAO_OK;
@@ -799,7 +894,12 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider_v2(
         descriptor->struct_size < sizeof(cs_managed_entity_provider_descriptor_v2) ||
         descriptor->provider_id_utf8 == nullptr || descriptor->provider_id_utf8[0] == '\0' ||
         descriptor->snapshot == nullptr || descriptor->action_handler == nullptr ||
-        descriptor->snapshot->kind != cs_managed_callback_kind::entity_snapshot ||
+        descriptor->snapshot->kind != cs_managed_callback_kind::entity_snapshot) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const bool use_action_v2 =
+        descriptor->action_handler->kind == cs_managed_callback_kind::entity_action_v2;
+    if (!use_action_v2 &&
         descriptor->action_handler->kind != cs_managed_callback_kind::entity_action) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
@@ -853,8 +953,10 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider_v2(
             clear_pending();
             return status;
         }
+        void** action_slot =
+            use_action_v2 ? &registration.callbacks->action_v2 : &registration.callbacks->action;
         status = wrap_managed_callback(session, descriptor->action_handler, &ignored_entry,
-                                       &registration.callbacks->action);
+                                       action_slot);
         if (status != SAO_OK) {
             release_callback_token(registration.callbacks->snapshot);
             clear_pending();
@@ -866,7 +968,10 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider_v2(
         if (descriptor->contribution_id_utf8 != nullptr &&
             descriptor->contribution_id_utf8[0] != '\0') {
             if (descriptor->root_id_utf8 == nullptr || descriptor->name_utf8 == nullptr) {
-                release_callback_token(registration.callbacks->action);
+                if (use_action_v2)
+                    release_callback_token(registration.callbacks->action_v2);
+                else
+                    release_callback_token(registration.callbacks->action);
                 release_callback_token(registration.callbacks->snapshot);
                 clear_pending();
                 return SAO_ERR_INVALID_ARGUMENT;
@@ -879,17 +984,36 @@ int32_t SAO_PLUGINS_CALL table_register_entity_provider_v2(
                     descriptor->priority};
             root_ptr = &root;
         }
-        loader::context_entity_provider_descriptor_v2 native{};
-        native.struct_size = sizeof(native);
-        native.provider_id_utf8 = registration.provider_id.c_str();
-        native.snapshot = callback_entity_snapshot_v2;
-        native.action_handler = callback_entity_action;
-        native.user_data = registration.callbacks.get();
-        native.root_contribution = root_ptr;
-        status =
-            loader::sao_plugins_ctx_register_entity_provider_v2(session->loader_context, &native);
+        if (use_action_v2) {
+            loader::context_entity_provider_descriptor_v3 native{};
+            native.struct_size = sizeof(native);
+            native.provider_id_utf8 = registration.provider_id.c_str();
+            native.snapshot = callback_entity_snapshot_v2;
+            native.action_handler = nullptr;
+            native.user_data = registration.callbacks.get();
+            native.root_contribution = root_ptr;
+            native.action_handler_v2 = callback_entity_action_v2;
+            native.action_user_data = registration.callbacks.get();
+            native.flags = 0;
+            native.reserved = 0;
+            status = loader::sao_plugins_ctx_register_entity_provider_v3(session->loader_context,
+                                                                         &native);
+        } else {
+            loader::context_entity_provider_descriptor_v2 native{};
+            native.struct_size = sizeof(native);
+            native.provider_id_utf8 = registration.provider_id.c_str();
+            native.snapshot = callback_entity_snapshot_v2;
+            native.action_handler = callback_entity_action;
+            native.user_data = registration.callbacks.get();
+            native.root_contribution = root_ptr;
+            status = loader::sao_plugins_ctx_register_entity_provider_v2(session->loader_context,
+                                                                         &native);
+        }
         if (status != SAO_OK) {
-            release_callback_token(registration.callbacks->action);
+            if (use_action_v2)
+                release_callback_token(registration.callbacks->action_v2);
+            else
+                release_callback_token(registration.callbacks->action);
             release_callback_token(registration.callbacks->snapshot);
             clear_pending();
             return status;
@@ -921,6 +1045,24 @@ int32_t SAO_PLUGINS_CALL table_emit_context(cs_managed_sdk_session_t opaque, con
     if (lease.get()->loader_context == nullptr)
         return SAO_ERR_NOT_INITIALIZED;
     return loader::sao_plugins_ctx_emit(lease.get()->loader_context, topic_utf8, payload_json_utf8);
+}
+
+int32_t SAO_PLUGINS_CALL table_submit_action_result_v2(cs_managed_sdk_session_t opaque,
+                                                       cs_managed_callback_token_t callback_token,
+                                                       const cs_managed_action_result_v2* result) {
+    if (callback_token == nullptr || result == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    session_call_lease lease;
+    const int32_t status = lease.acquire_handle(opaque);
+    if (status != SAO_OK)
+        return status;
+    if (g_pending_action_result.token != callback_token ||
+        g_pending_action_result.sink == nullptr) {
+        return SAO_ERR_HANDLE_INVALID;
+    }
+    if (g_pending_action_result.consumed)
+        return SAO_ERR_HANDLE_INVALID;
+    return forward_managed_action_result(result, &g_pending_action_result);
 }
 
 int32_t SAO_PLUGINS_CALL table_last_error(cs_managed_sdk_session_t opaque, char* out_error_utf8,
@@ -960,6 +1102,7 @@ const cs_managed_sdk_table kSdkTable{
     table_last_error,
     table_register_entity_provider_v2,
     table_emit_context,
+    table_submit_action_result_v2,
 };
 
 int32_t quiesce_entities(sdk_bridge_session* session) noexcept {
