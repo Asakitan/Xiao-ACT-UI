@@ -16,6 +16,7 @@ set(_sao_launcher_test_sources
     test_launcher_smoke.cpp
     test_args.cpp
     test_single_instance.cpp
+    test_stealth_strings.cpp
     test_working_dir.cpp
     test_init_pipeline.cpp
     test_entity_builtin_action_focused.cpp
@@ -34,6 +35,32 @@ foreach (_maybe
         list(APPEND _sao_launcher_test_sources ${_maybe})
     endif()
 endforeach()
+
+set(_sao_launcher_panel_test_libraries)
+if (TARGET sao::ui)
+    list(APPEND _sao_launcher_test_sources
+        test_plugin_manager_panel_focused.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/plugin_manager_panel_internal.cpp)
+    list(APPEND _sao_launcher_panel_test_libraries sao::ui)
+endif()
+if (TARGET sao::core AND TARGET sao::ui AND TARGET sao::rt_io)
+    list(APPEND _sao_launcher_test_sources
+        test_process_selector_panel_focused.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/process_selector_panel_internal.cpp)
+    list(APPEND _sao_launcher_panel_test_libraries
+        sao::core
+        sao::ui
+        sao::rt_io)
+endif()
+if (TARGET sao::ui AND TARGET sao::server::freetier::workshop_client)
+    list(APPEND _sao_launcher_test_sources
+        test_workshop_panel_focused.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/workshop_panel_internal.cpp)
+    list(APPEND _sao_launcher_panel_test_libraries
+        sao::ui
+        sao::server::freetier::workshop_client)
+endif()
+list(REMOVE_DUPLICATES _sao_launcher_panel_test_libraries)
 add_executable(sao_launcher_tests ${_sao_launcher_test_sources})
 
 add_executable(sao_tool_launch_child_fixture
@@ -48,6 +75,8 @@ target_include_directories(sao_launcher_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/platform/ui/include
     ${CMAKE_SOURCE_DIR}/plugins/include
     ${CMAKE_SOURCE_DIR}/plugins/loader/include
+    # SAO_ENC_STR() header-only compile-time string encryption; no link dep.
+    ${CMAKE_SOURCE_DIR}/security/obfuscation/include
 )
 
 # We link the launcher's source files directly rather than the SaoAuto exe
@@ -92,6 +121,49 @@ target_compile_definitions(sao_launcher_tests
         SAO_CPP_ROOT_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
         SAO_TOOL_LAUNCH_CHILD_FIXTURE="$<TARGET_FILE:sao_tool_launch_child_fixture>"
 )
+
+# Stealth-strings regression test needs the built launcher exe (and
+# optionally sao_platform_net / sao_core shared libraries) to scan.
+# Resolve lazily: SaoAuto target lives in the parent launcher/ scope which
+# is add_subdirectory'd BEFORE tests/, so it is already defined here.  If
+# a slim configure disables a given target the define stays empty and the
+# corresponding case degrades to SUCCEED(... skipped).
+if (TARGET SaoAuto)
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_BINARY_PATH="$<TARGET_FILE:SaoAuto>"
+    )
+    add_dependencies(sao_launcher_tests SaoAuto)
+else()
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_BINARY_PATH=""
+    )
+endif()
+if (TARGET sao_platform_net)
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_PLATFORM_NET_PATH="$<TARGET_FILE:sao_platform_net>"
+    )
+    add_dependencies(sao_launcher_tests sao_platform_net)
+else()
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_PLATFORM_NET_PATH=""
+    )
+endif()
+if (TARGET sao_core)
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_CORE_PATH="$<TARGET_FILE:sao_core>"
+    )
+    add_dependencies(sao_launcher_tests sao_core)
+else()
+    target_compile_definitions(sao_launcher_tests
+        PRIVATE
+            SAO_STEALTH_SCAN_CORE_PATH=""
+    )
+endif()
 add_dependencies(sao_launcher_tests sao_tool_launch_child_fixture)
 if (TARGET sao::plugin_ai_editor)
     target_link_libraries(sao_launcher_tests PRIVATE sao::plugin_ai_editor)
@@ -100,6 +172,10 @@ if (TARGET sao::plugin_ai_editor)
 endif()
 if (TARGET sao::sdk AND TARGET sao::ui)
     target_link_libraries(sao_launcher_tests PRIVATE sao::sdk sao::ui)
+endif()
+if (_sao_launcher_panel_test_libraries)
+    target_link_libraries(sao_launcher_tests PRIVATE
+        ${_sao_launcher_panel_test_libraries})
 endif()
 if (TARGET cutover_diff)
     target_compile_definitions(sao_launcher_tests

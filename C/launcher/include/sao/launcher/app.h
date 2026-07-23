@@ -21,6 +21,17 @@
 namespace sao::launcher {
 
 // Exit codes.  Kept in sync with README.md's table.
+//
+// SAO_EXIT_HANDOFF_TO_PYTHON is kept at 100 to leave a clear gap between the
+// process-init failure codes (0..8) and the dispatch-only handoff signal.
+// dual_run.h historically declared a ``#define SAO_EXIT_HANDOFF_TO_PYTHON 100``
+// so C-only TUs that never included this header still saw the value.  The
+// ``#undef`` below removes that macro when both headers are visible in the
+// same TU so the enum entry (the ABI source of truth) declares cleanly; the
+// numeric value is preserved.
+#ifdef SAO_EXIT_HANDOFF_TO_PYTHON
+#undef SAO_EXIT_HANDOFF_TO_PYTHON
+#endif
 enum SaoLauncherExitCode : int {
     SAO_EXIT_OK = 0,
     SAO_EXIT_ALREADY_RUNNING = 1,
@@ -31,6 +42,7 @@ enum SaoLauncherExitCode : int {
     SAO_EXIT_UI_ONLINE_FAIL = 6,
     SAO_EXIT_CRASH = 7,
     SAO_EXIT_BAD_ARGS = 8,
+    SAO_EXIT_HANDOFF_TO_PYTHON = 100,
 };
 
 // Compact snapshot of the parsed command line + init state.  Kept flat so we

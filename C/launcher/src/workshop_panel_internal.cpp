@@ -451,6 +451,7 @@ const char* theme_override_json() noexcept {
 
 SaoPanelDescriptor panel_descriptor() noexcept {
     SaoPanelDescriptor descriptor{};
+    descriptor.struct_size = sizeof(SaoPanelDescriptor);
     descriptor.panel_id_utf8 = kPanelId;
     descriptor.title_utf8 = kPanelTitle;
     descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
@@ -523,7 +524,19 @@ class Owner::Impl final {
 
     ~Impl() {
         stop_and_join();
-        retire_panel(false);
+    }
+
+    bool shutdown_noexcept() noexcept {
+        stop_and_join();
+        if (panel_handle() == nullptr)
+            return true;
+        if (require_owner_thread() != SAO_STATUS_OK)
+            return false;
+        for (int attempt = 0; attempt < 2 && panel_handle() != nullptr; ++attempt) {
+            if (retire_panel() == SAO_STATUS_OK)
+                break;
+        }
+        return panel_handle() == nullptr;
     }
 
     sao_status_t open() {
@@ -540,13 +553,18 @@ class Owner::Impl final {
         sao_status_t status = ensure_panel();
         if (status != SAO_STATUS_OK)
             return status;
-        const bool was_visible = query_visible();
-        status = sao_ui_panel_show(panel_);
+        const sao_ui_panel_handle_t panel = panel_handle();
+        if (panel == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const bool was_visible = query_visible(panel);
+        status = sao_ui_panel_show(panel);
         if (status == SAO_STATUS_OK)
-            status = sao_ui_panel_bring_to_front(panel_);
+            status = sao_ui_panel_bring_to_front(panel);
         if (status != SAO_STATUS_OK)
             return status;
-        sync_visibility();
+        status = sync_visibility(panel);
+        if (status != SAO_STATUS_OK)
+            return status;
         if (!was_visible)
             return enqueue_list(1);
         return SAO_STATUS_OK;
@@ -556,11 +574,12 @@ class Owner::Impl final {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        if (panel_ == nullptr)
+        const sao_ui_panel_handle_t panel = panel_handle();
+        if (panel == nullptr)
             return SAO_STATUS_OK;
-        const sao_status_t status = sao_ui_panel_hide(panel_);
+        const sao_status_t status = sao_ui_panel_hide(panel);
         if (status == SAO_STATUS_OK)
-            sync_visibility();
+            return sync_visibility(panel);
         return status;
     }
 
@@ -568,14 +587,22 @@ class Owner::Impl final {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        sao_ui_panel_handle_t panel = nullptr;
         {
             std::lock_guard lock(mutex_);
             if (!online_ && panel_ == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
+            if (retiring_)
+                return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            panel = panel_;
         }
-        if (panel_ == nullptr)
+        if (panel == nullptr)
             return SAO_STATUS_OK;
-        sync_visibility();
+        sao_status_t status = sync_visibility(panel);
+        if (status != SAO_STATUS_OK)
+            return status;
+        if (!owns_panel(panel))
+            return SAO_STATUS_OK;
         apply_completions();
         bool hide_requested = false;
         {
@@ -584,28 +611,41 @@ class Owner::Impl final {
             hide_requested_ = false;
         }
         if (hide_requested) {
-            const sao_status_t hide_status = sao_ui_panel_hide(panel_);
+            const sao_status_t hide_status = sao_ui_panel_hide(panel);
             if (hide_status != SAO_STATUS_OK)
                 return hide_status;
+            status = sync_visibility(panel);
+            if (status != SAO_STATUS_OK)
+                return status;
+            if (!owns_panel(panel))
+                return SAO_STATUS_OK;
         }
         const sao_status_t publish_status = publish_spec(false);
         if (publish_status != SAO_STATUS_OK)
             return publish_status;
-        sync_visibility();
-        return SAO_STATUS_OK;
+        return sync_visibility(panel);
     }
 
     sao_status_t try_take_offline() {
-        stop_and_join();
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
-        return retire_panel(true);
+        stop_and_join();
+        return retire_panel();
     }
 
     void set_visibility_changed_callback(VisibilityChangedCallback callback) {
-        std::lock_guard lock(mutex_);
-        visibility_callback_ = std::move(callback);
+        VisibilityChangedCallback notify;
+        bool visible = false;
+        {
+            std::lock_guard lock(mutex_);
+            visibility_callback_ = std::move(callback);
+            if (visibility_callback_ && visibility_known_) {
+                notify = visibility_callback_;
+                visible = visible_;
+            }
+        }
+        invoke_visibility_callback(notify, visible);
     }
 
     sao_status_t dispatch_action(std::string_view action, std::string_view payload) {
@@ -642,9 +682,7 @@ class Owner::Impl final {
             return enqueue_list(page);
         }
         if (action == "workshop.close") {
-            std::lock_guard lock(mutex_);
-            hide_requested_ = true;
-            return SAO_STATUS_OK;
+            return request_hide();
         }
 
         std::string id;
@@ -658,6 +696,15 @@ class Owner::Impl final {
         if (action == "workshop.plugin.uninstall")
             return enqueue_task(Task{TaskKind::Uninstall, 0, 0, std::move(id)});
         return SAO_STATUS_ERR_NOT_FOUND;
+    }
+
+    sao_status_t dispatch_panel_event_for_testing(std::int32_t event_kind) {
+        return handle_panel_event(event_kind);
+    }
+
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept {
+        std::lock_guard lock(mutex_);
+        fail_next_unregister_status_ = status;
     }
 
     Snapshot snapshot() const {
@@ -698,6 +745,27 @@ class Owner::Impl final {
         }
     }
 
+    static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind, void* user_data) {
+        auto* self = static_cast<Impl*>(user_data);
+        if (self == nullptr)
+            return;
+        (void)self->handle_panel_event(event_kind);
+    }
+
+    sao_status_t handle_panel_event(std::int32_t event_kind) noexcept {
+        if (event_kind == SAO_UI_PANEL_EVENT_CLOSE)
+            return request_hide();
+        return SAO_STATUS_OK;
+    }
+
+    sao_status_t request_hide() noexcept {
+        std::lock_guard lock(mutex_);
+        if (!online_ || panel_ == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        hide_requested_ = true;
+        return SAO_STATUS_OK;
+    }
+
     sao_status_t require_owner_thread() const noexcept {
         if (compositor_ == nullptr)
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -705,53 +773,125 @@ class Owner::Impl final {
     }
 
     sao_status_t ensure_panel() {
-        if (panel_ != nullptr)
-            return SAO_STATUS_OK;
+        {
+            std::lock_guard lock(mutex_);
+            if (panel_ != nullptr)
+                return panel_ready_ ? SAO_STATUS_OK : SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
         const SaoPanelDescriptor descriptor = panel_descriptor();
-        sao_status_t status = sao_ui_panel_register(compositor_, &descriptor, &panel_, &body_);
+        sao_ui_panel_handle_t panel = nullptr;
+        sao_ui_panel_body_handle_t body = nullptr;
+        sao_status_t status = sao_ui_panel_register(compositor_, &descriptor, &panel, &body);
         if (status != SAO_STATUS_OK)
             return status;
-        status = sao_ui_panel_set_action_handler(panel_, &panel_action_callback, this);
+        {
+            std::lock_guard lock(mutex_);
+            panel_ = panel;
+            body_ = body;
+            panel_ready_ = false;
+            action_handler_attached_ = false;
+            event_handler_attached_ = false;
+        }
+        status = sao_ui_panel_set_action_handler(panel, &panel_action_callback, this);
+        if (status == SAO_STATUS_OK) {
+            std::lock_guard lock(mutex_);
+            action_handler_attached_ = true;
+        }
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_set_event_handler(panel, &panel_event_callback, this);
+        if (status == SAO_STATUS_OK) {
+            std::lock_guard lock(mutex_);
+            event_handler_attached_ = true;
+        }
         if (status == SAO_STATUS_OK)
             status = publish_spec(true);
+        if (status == SAO_STATUS_OK) {
+            std::lock_guard lock(mutex_);
+            if (panel_ != panel)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            panel_ready_ = true;
+            return SAO_STATUS_OK;
+        }
         if (status != SAO_STATUS_OK) {
-            (void)sao_ui_panel_set_action_handler(panel_, nullptr, nullptr);
-            (void)sao_ui_panel_unregister(panel_);
-            panel_ = nullptr;
-            body_ = nullptr;
+            const sao_status_t event_status =
+                sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
+            if (panel_is_gone(event_status)) {
+                clear_retired_panel(panel);
+                return status;
+            }
+            if (event_status == SAO_STATUS_OK) {
+                std::lock_guard lock(mutex_);
+                if (panel_ == panel)
+                    event_handler_attached_ = false;
+            }
+            const sao_status_t action_status =
+                sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+            if (panel_is_gone(action_status)) {
+                clear_retired_panel(panel);
+                return status;
+            }
+            if (action_status == SAO_STATUS_OK) {
+                std::lock_guard lock(mutex_);
+                if (panel_ == panel)
+                    action_handler_attached_ = false;
+            }
+            const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
+            if (unregister_status == SAO_STATUS_OK || panel_is_gone(unregister_status))
+                clear_retired_panel(panel);
             return status;
         }
-        return SAO_STATUS_OK;
+        return status;
     }
 
-    bool query_visible() const noexcept {
-        if (panel_ == nullptr)
+    sao_ui_panel_handle_t panel_handle() const noexcept {
+        std::lock_guard lock(mutex_);
+        return panel_;
+    }
+
+    bool owns_panel(sao_ui_panel_handle_t panel) const noexcept {
+        std::lock_guard lock(mutex_);
+        return panel_ == panel;
+    }
+
+    static bool query_visible(sao_ui_panel_handle_t panel) noexcept {
+        if (panel == nullptr)
             return false;
         SaoPanelState state{};
-        return sao_ui_panel_get_state(panel_, &state) == SAO_STATUS_OK && state.visible;
+        return sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK && state.visible;
     }
 
-    void sync_visibility() {
-        if (panel_ == nullptr)
+    static void invoke_visibility_callback(const VisibilityChangedCallback& callback,
+                                           bool visible) noexcept {
+        if (!callback)
             return;
+        try {
+            callback(visible);
+        } catch (...) {
+        }
+    }
+
+    sao_status_t sync_visibility(sao_ui_panel_handle_t panel) {
+        if (panel == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
         SaoPanelState state{};
-        if (sao_ui_panel_get_state(panel_, &state) != SAO_STATUS_OK)
-            return;
+        const sao_status_t status = sao_ui_panel_get_state(panel, &state);
+        if (status != SAO_STATUS_OK)
+            return status;
         VisibilityChangedCallback callback;
         bool changed = false;
         {
             std::lock_guard lock(mutex_);
-            changed = visible_ != state.visible;
+            if (panel_ != panel)
+                return SAO_STATUS_OK;
+            changed = !visibility_known_ || visible_ != state.visible;
+            visibility_known_ = true;
             visible_ = state.visible;
             if (changed)
                 callback = visibility_callback_;
         }
-        if (changed && callback) {
-            try {
-                callback(state.visible);
-            } catch (...) {
-            }
-        }
+        if (changed)
+            invoke_visibility_callback(callback, state.visible);
+        return SAO_STATUS_OK;
     }
 
     sao_status_t enqueue_list(std::uint32_t page) {
@@ -1072,11 +1212,13 @@ class Owner::Impl final {
     }
 
     sao_status_t publish_spec(bool force) {
-        if (body_ == nullptr)
-            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        sao_ui_panel_body_handle_t body = nullptr;
         std::string spec;
         {
             std::lock_guard lock(mutex_);
+            body = body_;
+            if (body == nullptr)
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
             if (!force && !dirty_)
                 return SAO_STATUS_OK;
             spec = build_spec();
@@ -1086,10 +1228,12 @@ class Owner::Impl final {
             }
         }
         const sao_status_t status = sao_ui_panel_body_set_spec(
-            body_, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
+            body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
         if (status != SAO_STATUS_OK)
             return status;
         std::lock_guard lock(mutex_);
+        if (body_ != body)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
         last_spec_ = std::move(spec);
         dirty_ = false;
         return SAO_STATUS_OK;
@@ -1110,40 +1254,167 @@ class Owner::Impl final {
         }
     }
 
-    sao_status_t retire_panel(bool report_status) noexcept {
-        sao_ui_panel_handle_t panel = panel_;
-        if (panel == nullptr)
-            return SAO_STATUS_OK;
-        sao_status_t first_status = SAO_STATUS_OK;
-        const sao_status_t hide_status = sao_ui_panel_hide(panel);
-        if (hide_status != SAO_STATUS_OK && first_status == SAO_STATUS_OK)
-            first_status = hide_status;
-        const sao_status_t handler_status =
-            sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
-        if (handler_status != SAO_STATUS_OK && first_status == SAO_STATUS_OK)
-            first_status = handler_status;
-        const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
-        if (unregister_status != SAO_STATUS_OK && first_status == SAO_STATUS_OK)
-            first_status = unregister_status;
-        if (unregister_status == SAO_STATUS_OK || !report_status) {
+    static bool panel_is_gone(sao_status_t status) noexcept {
+        return status == SAO_STATUS_ERR_HANDLE_INVALID || status == SAO_STATUS_ERR_NOT_FOUND;
+    }
+
+    void clear_retired_panel(sao_ui_panel_handle_t panel) noexcept {
+        VisibilityChangedCallback callback;
+        bool notify = false;
+        {
+            std::lock_guard lock(mutex_);
+            if (panel_ != panel)
+                return;
             panel_ = nullptr;
             body_ = nullptr;
-            VisibilityChangedCallback callback;
-            bool notify = false;
-            {
-                std::lock_guard lock(mutex_);
-                notify = visible_;
-                visible_ = false;
+            panel_ready_ = false;
+            action_handler_attached_ = false;
+            event_handler_attached_ = false;
+            hide_requested_ = false;
+            notify = visibility_known_ && visible_;
+            visibility_known_ = true;
+            visible_ = false;
+            if (notify)
                 callback = visibility_callback_;
+        }
+        if (notify)
+            invoke_visibility_callback(callback, false);
+    }
+
+    sao_status_t restore_handlers(sao_ui_panel_handle_t panel, bool restore_action,
+                                  bool restore_event) noexcept {
+        sao_status_t first_status = SAO_STATUS_OK;
+        bool action_attached = !restore_action;
+        bool event_attached = !restore_event;
+        if (restore_action) {
+            const sao_status_t status =
+                sao_ui_panel_set_action_handler(panel, &panel_action_callback, this);
+            if (panel_is_gone(status)) {
+                clear_retired_panel(panel);
+                return SAO_STATUS_OK;
             }
-            if (notify && callback) {
-                try {
-                    callback(false);
-                } catch (...) {
-                }
+            action_attached = status == SAO_STATUS_OK;
+            if (status != SAO_STATUS_OK)
+                first_status = status;
+        }
+        if (restore_event) {
+            const sao_status_t status =
+                sao_ui_panel_set_event_handler(panel, &panel_event_callback, this);
+            if (panel_is_gone(status)) {
+                clear_retired_panel(panel);
+                return SAO_STATUS_OK;
+            }
+            event_attached = status == SAO_STATUS_OK;
+            if (status != SAO_STATUS_OK && first_status == SAO_STATUS_OK)
+                first_status = status;
+        }
+        {
+            std::lock_guard lock(mutex_);
+            if (panel_ == panel) {
+                if (restore_action)
+                    action_handler_attached_ = action_attached;
+                if (restore_event)
+                    event_handler_attached_ = event_attached;
             }
         }
-        return report_status ? first_status : SAO_STATUS_OK;
+        return first_status;
+    }
+
+    sao_status_t retire_panel() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            if (retiring_)
+                return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            retiring_ = true;
+        }
+        const sao_status_t status = retire_panel_claimed();
+        {
+            std::lock_guard lock(mutex_);
+            retiring_ = false;
+        }
+        return status;
+    }
+
+    sao_status_t retire_panel_claimed() noexcept {
+        const sao_ui_panel_handle_t panel = panel_handle();
+        if (panel == nullptr)
+            return SAO_STATUS_OK;
+
+        sao_status_t status = sao_ui_panel_hide(panel);
+        if (panel_is_gone(status)) {
+            clear_retired_panel(panel);
+            return SAO_STATUS_OK;
+        }
+        if (status != SAO_STATUS_OK)
+            return status;
+        status = sync_visibility(panel);
+        if (panel_is_gone(status)) {
+            clear_retired_panel(panel);
+            return SAO_STATUS_OK;
+        }
+        if (status != SAO_STATUS_OK)
+            return status;
+
+        bool detach_action = false;
+        bool detach_event = false;
+        {
+            std::lock_guard lock(mutex_);
+            if (panel_ != panel)
+                return SAO_STATUS_OK;
+            detach_action = action_handler_attached_;
+            detach_event = event_handler_attached_;
+        }
+
+        bool event_detached = false;
+        if (detach_event) {
+            status = sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
+            if (panel_is_gone(status)) {
+                clear_retired_panel(panel);
+                return SAO_STATUS_OK;
+            }
+            if (status != SAO_STATUS_OK)
+                return status;
+            event_detached = true;
+            std::lock_guard lock(mutex_);
+            if (panel_ == panel)
+                event_handler_attached_ = false;
+        }
+
+        bool action_detached = false;
+        if (detach_action) {
+            status = sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+            if (panel_is_gone(status)) {
+                clear_retired_panel(panel);
+                return SAO_STATUS_OK;
+            }
+            if (status != SAO_STATUS_OK) {
+                const sao_status_t rollback = restore_handlers(panel, false, event_detached);
+                if (!owns_panel(panel))
+                    return SAO_STATUS_OK;
+                return rollback == SAO_STATUS_OK ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
+            }
+            action_detached = true;
+            std::lock_guard lock(mutex_);
+            if (panel_ == panel)
+                action_handler_attached_ = false;
+        }
+
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(mutex_);
+            injected = std::exchange(fail_next_unregister_status_, SAO_STATUS_OK);
+        }
+        const bool unregister_called = injected == SAO_STATUS_OK;
+        status = unregister_called ? sao_ui_panel_unregister(panel) : injected;
+        if (status == SAO_STATUS_OK || (unregister_called && panel_is_gone(status))) {
+            clear_retired_panel(panel);
+            return SAO_STATUS_OK;
+        }
+
+        const sao_status_t rollback = restore_handlers(panel, action_detached, event_detached);
+        if (!owns_panel(panel))
+            return SAO_STATUS_OK;
+        return rollback == SAO_STATUS_OK ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
     }
 
     sao_ui_compositor_handle_t compositor_{};
@@ -1159,6 +1430,7 @@ class Owner::Impl final {
     sao_status_t startup_status_{SAO_STATUS_OK};
     sao_ui_panel_handle_t panel_{};
     sao_ui_panel_body_handle_t body_{};
+    sao_status_t fail_next_unregister_status_{SAO_STATUS_OK};
     VisibilityChangedCallback visibility_callback_;
     std::vector<PluginSummary> items_;
     std::optional<PluginDetail> detail_;
@@ -1177,8 +1449,13 @@ class Owner::Impl final {
     bool accepting_{true};
     bool online_{};
     bool visible_{};
+    bool visibility_known_{};
     bool worker_active_{};
     bool hide_requested_{};
+    bool panel_ready_{};
+    bool retiring_{};
+    bool action_handler_attached_{};
+    bool event_handler_attached_{};
     bool dirty_{true};
 };
 
@@ -1189,7 +1466,10 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_d
              Operations operations)
     : impl_(std::make_unique<Impl>(compositor, std::move(base_dir), std::move(operations))) {}
 
-Owner::~Owner() = default;
+Owner::~Owner() {
+    if (impl_ != nullptr && !impl_->shutdown_noexcept())
+        (void)impl_.release();
+}
 
 sao_status_t Owner::open() {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->open();
@@ -1225,6 +1505,16 @@ sao_status_t Owner::dispatch_action_for_testing(std::string_view action,
     } catch (...) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+}
+
+sao_status_t Owner::dispatch_panel_event_for_testing(std::int32_t event_kind) {
+    return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
+                            : impl_->dispatch_panel_event_for_testing(event_kind);
+}
+
+void Owner::fail_next_unregister_for_testing(sao_status_t status) {
+    if (impl_ != nullptr)
+        impl_->fail_next_unregister_for_testing(status);
 }
 
 Snapshot Owner::snapshot() const {

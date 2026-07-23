@@ -8,12 +8,14 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <iterator>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -90,6 +92,14 @@ std::vector<std::uint32_t> visible_pids(const Snapshot& snapshot) {
 }
 
 } // namespace
+
+TEST_CASE("process selector default attach requires the borrowed proxy",
+          "[launcher][process_selector][attach][proxy][focused]") {
+    const Operations operations =
+        sao::launcher::process_selector_panel::make_default_operations(nullptr);
+    REQUIRE(static_cast<bool>(operations.attach));
+    CHECK(operations.attach(321) == SAO_STATUS_ERR_NOT_INITIALIZED);
+}
 
 TEST_CASE("process selector sorts, excludes and filters deterministic snapshots",
           "[launcher][process_selector][focused]") {
@@ -242,6 +252,10 @@ TEST_CASE("process selector reuses one headless panel and emits identity payload
         CHECK(Json::parse(theme)["colors"]["APP_ACCENT"] == "#25d7f2");
 
         Snapshot snapshot{};
+        REQUIRE(sao_ui_panel_hide(first_panel) == SAO_STATUS_OK);
+        REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+        CHECK_FALSE(snapshot.visible);
+        REQUIRE(sao_ui_panel_show(first_panel) == SAO_STATUS_OK);
         REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
         REQUIRE(snapshot.visible);
         const Json spec = Json::parse(snapshot.rendered_spec_json);
@@ -311,4 +325,90 @@ TEST_CASE("process selector renders empty and attach failure states",
         CHECK(snapshot.status_text.find("Attach failed") != std::string::npos);
         CHECK_FALSE(snapshot.attached_process.has_value());
     }
+}
+
+TEST_CASE("process selector keeps owner-thread rejection mutation free",
+          "[launcher][process_selector][owner_thread][lifecycle][focused]") {
+    HeadlessCompositor compositor;
+    Operations operations{};
+    operations.current_process_id = 999;
+    operations.enumerate_snapshot = [](std::vector<ProcessRecord>& out) {
+        out = {process(81, 8100, R"(D:\Games\Threaded\ThreadedGame.exe)")};
+        return SAO_STATUS_OK;
+    };
+    operations.query_process = [](std::uint32_t, ProcessRecord&) {
+        return SAO_STATUS_ERR_NOT_FOUND;
+    };
+    operations.attach = [](std::uint32_t) { return SAO_STATUS_OK; };
+
+    Owner owner(compositor.get(), std::move(operations));
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(compositor.layer_count() == 1);
+
+    std::atomic<sao_status_t> close_status{SAO_STATUS_OK};
+    std::atomic<sao_status_t> offline_status{SAO_STATUS_OK};
+    std::thread foreign([&] {
+        close_status.store(owner.close());
+        offline_status.store(owner.take_offline());
+    });
+    foreign.join();
+
+    CHECK(close_status.load() == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(offline_status.load() == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(compositor.layer_count() == 1);
+    Snapshot snapshot{};
+    REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+    CHECK(snapshot.panel_created);
+    CHECK(snapshot.visible);
+
+    REQUIRE(owner.close() == SAO_STATUS_OK);
+    REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+    CHECK(snapshot.panel_created);
+    CHECK_FALSE(snapshot.visible);
+    CHECK(compositor.layer_count() == 1);
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    CHECK(compositor.layer_count() == 0);
+}
+
+TEST_CASE("process selector take offline is retryable and reversible",
+          "[launcher][process_selector][offline][retry][focused]") {
+    HeadlessCompositor compositor;
+    Owner* owner_ptr = nullptr;
+    std::optional<sao_status_t> nested_offline_status;
+    int enumerate_calls = 0;
+    Operations operations{};
+    operations.current_process_id = 999;
+    operations.enumerate_snapshot = [&](std::vector<ProcessRecord>& out) {
+        ++enumerate_calls;
+        if (owner_ptr != nullptr && !nested_offline_status.has_value())
+            nested_offline_status = owner_ptr->take_offline();
+        out = {process(91, 9100, R"(D:\Games\Retry\RetryGame.exe)")};
+        return SAO_STATUS_OK;
+    };
+    operations.query_process = [](std::uint32_t, ProcessRecord&) {
+        return SAO_STATUS_ERR_NOT_FOUND;
+    };
+    operations.attach = [](std::uint32_t) { return SAO_STATUS_OK; };
+
+    Owner owner(compositor.get(), std::move(operations));
+    owner_ptr = &owner;
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(nested_offline_status.has_value());
+    CHECK(*nested_offline_status == SAO_UI_PANEL_STATUS_ERR_BUSY);
+    CHECK(compositor.layer_count() == 1);
+
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    CHECK(compositor.layer_count() == 0);
+    Snapshot snapshot{};
+    REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+    CHECK_FALSE(snapshot.panel_created);
+    CHECK_FALSE(snapshot.visible);
+    CHECK(snapshot.rendered_spec_json.empty());
+    CHECK(owner.take_offline() == SAO_STATUS_OK);
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    CHECK(enumerate_calls == 2);
+    CHECK(compositor.layer_count() == 1);
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    CHECK(compositor.layer_count() == 0);
 }

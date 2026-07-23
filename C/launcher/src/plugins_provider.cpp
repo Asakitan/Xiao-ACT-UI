@@ -1142,6 +1142,7 @@ createPlatformCompositorLayer(void*, loader::plugin_context_platform_session_t p
                                        std::to_string(layer->provider_token);
 
         SaoLayerConfig config{};
+        config.struct_size = sizeof(SaoLayerConfig);
         config.name_utf8 = layer_name.c_str();
         config.x = spec->x;
         config.y = spec->y;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -56,10 +57,14 @@ struct Snapshot {
 };
 
 struct Operations {
-    // Launcher injects a callback that captures its opaque registry and calls
-    // sao_plugins_reload_all(). The panel never owns or inspects that registry.
+    std::function<Snapshot()> snapshot;
+    std::function<sao_status_t(std::string_view)> enable;
+    std::function<sao_status_t(std::string_view)> disable;
+    std::function<sao_status_t(std::string_view)> reload;
     std::function<sao_status_t()> reload_all;
 };
+
+using ReloadAllHandler = std::function<sao_status_t()>;
 
 [[nodiscard]] std::string_view plugin_state_label(PluginState state) noexcept;
 [[nodiscard]] bool plugin_state_is_transitioning(PluginState state) noexcept;
@@ -73,6 +78,9 @@ struct Operations {
 
 struct Owner final {
     explicit Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept;
+    Owner(sao_ui_compositor_handle_t borrowed_compositor,
+          ReloadAllHandler reload_all_handler) noexcept;
+    Owner(sao_ui_compositor_handle_t borrowed_compositor, Operations operations) noexcept;
     ~Owner();
 
     Owner(const Owner&) = delete;
@@ -85,6 +93,7 @@ struct Owner final {
     // Registers once, refreshes, shows, and raises the existing instance on
     // repeated calls. The compositor is borrowed and must outlive this owner.
     [[nodiscard]] sao_status_t open() noexcept;
+    [[nodiscard]] sao_status_t close() noexcept;
     [[nodiscard]] sao_status_t refresh() noexcept;
 
     // Detaches callbacks and unregisters the compositor panel. BUSY keeps the
@@ -100,6 +109,7 @@ struct Owner final {
     [[nodiscard]] sao_status_t
     dispatch_action_for_testing(std::string_view action_id,
                                 std::string_view payload_json = {}) noexcept;
+    [[nodiscard]] sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
 
   private: // Pimpl state.
     struct Impl;

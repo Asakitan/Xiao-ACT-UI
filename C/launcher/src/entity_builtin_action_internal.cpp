@@ -131,7 +131,20 @@ sao_status_t reload_plugins(State& state, const Operations& operations) noexcept
     return fail(state, status);
 }
 
+sao_status_t run_owned_action(State& state, RunOwnedActionFn action,
+                              const Operations& operations) noexcept {
+    if (action == nullptr) {
+        return fail(state, SAO_STATUS_ERR_NOT_INITIALIZED);
+    }
+    return fail(state, action(operations.user_data));
+}
+
 } // namespace
+
+bool should_show_shared_fisheye(const SharedFisheyeVisibility& visibility) noexcept {
+    return visibility.workshop || visibility.plugin_manager || visibility.process_selector ||
+           visibility.entity_menu;
+}
 
 sao_status_t authorization_status(std::int32_t action, const State& state) noexcept {
     const bool controls_ready = state.authority.controls;
@@ -213,11 +226,17 @@ sao_status_t dispatch(std::int32_t action, State& state, const Operations& opera
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
         return reload_plugins(state, operations);
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
+        return run_owned_action(state, operations.set_fisheye_procedural, operations);
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
+        return run_owned_action(state, operations.set_fisheye_live, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
+        return run_owned_action(state, operations.open_workshop, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
+        return run_owned_action(state, operations.open_process_selector, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
+        return run_owned_action(state, operations.open_plugin_manager, operations);
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
+        return run_owned_action(state, operations.open_plugin_status, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
     case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:

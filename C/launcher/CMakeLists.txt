@@ -63,6 +63,20 @@ set(SAO_LAUNCHER_SOURCES
     src/user_menu.cpp
 )
 
+set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)
+if (TARGET sao::ui AND TARGET sao::rt_io AND TARGET sao::sdk AND
+    TARGET sao::server::freetier::workshop_client)
+    list(APPEND SAO_LAUNCHER_HEADERS
+        src/plugin_manager_panel_internal.h
+        src/process_selector_panel_internal.h
+        src/workshop_panel_internal.h)
+    list(APPEND SAO_LAUNCHER_SOURCES
+        src/plugin_manager_panel_internal.cpp
+        src/process_selector_panel_internal.cpp
+        src/workshop_panel_internal.cpp)
+    set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION ON)
+endif()
+
 if (TARGET sao::ui)
     list(APPEND SAO_LAUNCHER_SOURCES
         src/entity_builtin_action_internal.cpp)
@@ -164,6 +178,8 @@ target_include_directories(SaoAuto
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/platform/core/include
+    # SAO_ENC_STR() header-only compile-time string encryption; no link dep.
+    ${CMAKE_SOURCE_DIR}/security/obfuscation/include
 )
 target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi)
 if (TARGET sao::core)
@@ -173,6 +189,17 @@ if (TARGET sao::core)
 endif()
 if (TARGET sao::ui)
     target_link_libraries(SaoAuto PRIVATE sao::ui)
+endif()
+if (SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    target_link_libraries(SaoAuto PRIVATE
+        sao::ui
+        sao::rt_io
+        sao::server::freetier::workshop_client)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_SHARED_PANEL_COMPOSITION=1)
+else()
+    message(STATUS
+        "launcher: shared workshop/process/plugin panels unavailable; retaining fail-closed Entity actions")
 endif()
 
 if (TARGET sao::plugin_ai_editor)

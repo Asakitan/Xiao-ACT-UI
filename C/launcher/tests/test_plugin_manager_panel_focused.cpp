@@ -10,6 +10,9 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -161,6 +164,27 @@ TEST_CASE("Plugin Manager plugin actions carry the plugin id as the payload",
     CHECK_FALSE(reload->value("disabled", false));
 }
 
+TEST_CASE("Plugin Manager production constructor enables injected Reload All exactly once",
+          "[launcher][plugin_manager][panel][reload_all][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    REQUIRE(compositor != nullptr);
+
+    int reload_all_calls = 0;
+    Panel::Owner owner(compositor, [&] {
+        ++reload_all_calls;
+        return SAO_STATUS_OK;
+    });
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    CHECK(reload_all_calls == 0);
+    REQUIRE(owner.dispatch_action_for_testing("plugin_manager.reload_all") == SAO_STATUS_OK);
+    CHECK(reload_all_calls == 1);
+
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
 TEST_CASE("Plugin Manager headless owner opens once reuses and closes cleanly",
           "[launcher][plugin_manager][panel][headless][lifecycle][focused]") {
     sao_ui_compositor_handle_t compositor = nullptr;
@@ -168,14 +192,49 @@ TEST_CASE("Plugin Manager headless owner opens once reuses and closes cleanly",
     REQUIRE(compositor != nullptr);
     REQUIRE(compositor_layer_count(compositor) == 0);
 
+    int snapshot_calls = 0;
     int reload_all_calls = 0;
-    Panel::Owner owner(compositor);
-    REQUIRE(owner.set_operations({.reload_all = [&] {
+    std::vector<std::string> enabled;
+    std::vector<std::string> disabled;
+    std::vector<std::string> reloaded;
+    Panel::Operations operations;
+    operations.snapshot = [&] {
+        ++snapshot_calls;
+        Panel::Snapshot snapshot;
+        snapshot.loader_available = true;
+        snapshot.plugins.push_back({
+            .plugin_id = "fixture.plugin-id",
+            .name = "Fixture Plugin",
+            .version = "1.2.3",
+            .language = "lua",
+            .description = "Injected loader-free snapshot",
+            .source_path = "C:/fixtures/plugin.json",
+            .state = Panel::PluginState::loaded_active,
+            .source = Panel::PluginSource::user,
+            .manifest_enabled = true,
+        });
+        return snapshot;
+    };
+    operations.enable = [&](std::string_view plugin_id) {
+        enabled.emplace_back(plugin_id);
+        return SAO_STATUS_OK;
+    };
+    operations.disable = [&](std::string_view plugin_id) {
+        disabled.emplace_back(plugin_id);
+        return SAO_STATUS_OK;
+    };
+    operations.reload = [&](std::string_view plugin_id) {
+        reloaded.emplace_back(plugin_id);
+        return SAO_STATUS_OK;
+    };
+    operations.reload_all = [&] {
         ++reload_all_calls;
         return SAO_STATUS_OK;
-    }}) == SAO_STATUS_OK);
+    };
+    Panel::Owner owner(compositor, std::move(operations));
 
     REQUIRE(owner.open() == SAO_STATUS_OK);
+    CHECK(snapshot_calls == 1);
     REQUIRE(owner.is_registered());
     REQUIRE(owner.is_visible());
     const sao_ui_panel_handle_t first = owner.panel_handle();
@@ -188,18 +247,42 @@ TEST_CASE("Plugin Manager headless owner opens once reuses and closes cleanly",
     CHECK(std::string_view(descriptor.title_utf8) == "Plugin Manager");
 
     REQUIRE(owner.open() == SAO_STATUS_OK);
+    CHECK(snapshot_calls == 2);
     CHECK(owner.panel_handle() == first);
     CHECK(compositor_layer_count(compositor) == 1);
 
     REQUIRE(owner.dispatch_action_for_testing("plugin_manager.reload_all") == SAO_STATUS_OK);
     CHECK(reload_all_calls == 1);
+    CHECK(snapshot_calls == 3);
     CHECK(owner.panel_handle() == first);
 
-    REQUIRE(sao_ui_panel_hide(first) == SAO_STATUS_OK);
+    REQUIRE(owner.dispatch_action_for_testing("plugin_manager.enable", "\"fixture.plugin-id\"") ==
+            SAO_STATUS_OK);
+    REQUIRE(owner.dispatch_action_for_testing("plugin_manager.disable", "\"fixture.plugin-id\"") ==
+            SAO_STATUS_OK);
+    REQUIRE(owner.dispatch_action_for_testing("plugin_manager.reload", "\"fixture.plugin-id\"") ==
+            SAO_STATUS_OK);
+    CHECK(enabled == std::vector<std::string>{"fixture.plugin-id"});
+    CHECK(disabled == std::vector<std::string>{"fixture.plugin-id"});
+    CHECK(reloaded == std::vector<std::string>{"fixture.plugin-id"});
+    CHECK(snapshot_calls == 6);
+
+    REQUIRE(owner.dispatch_event_for_testing(SAO_UI_PANEL_EVENT_CLOSE) == SAO_STATUS_OK);
+    CHECK_FALSE(owner.is_visible());
+    CHECK(owner.is_registered());
+    CHECK(owner.panel_handle() == first);
+    CHECK(compositor_layer_count(compositor) == 1);
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    CHECK(owner.is_visible());
+    CHECK(owner.panel_handle() == first);
+    CHECK(snapshot_calls == 7);
+
+    REQUIRE(owner.close() == SAO_STATUS_OK);
     CHECK_FALSE(owner.is_visible());
     REQUIRE(owner.open() == SAO_STATUS_OK);
     CHECK(owner.is_visible());
     CHECK(owner.panel_handle() == first);
+    CHECK(snapshot_calls == 8);
 
     REQUIRE(owner.take_offline() == SAO_STATUS_OK);
     CHECK_FALSE(owner.is_registered());
@@ -212,5 +295,106 @@ TEST_CASE("Plugin Manager headless owner opens once reuses and closes cleanly",
     CHECK(missing == nullptr);
     CHECK(owner.take_offline() == SAO_STATUS_OK);
 
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Plugin Manager rejects foreign-thread lifecycle mutations before state changes",
+          "[launcher][plugin_manager][panel][owner_thread][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    REQUIRE(compositor != nullptr);
+
+    Panel::Operations operations;
+    operations.snapshot = [] {
+        Panel::Snapshot snapshot;
+        snapshot.loader_available = true;
+        return snapshot;
+    };
+    Panel::Owner owner(compositor, std::move(operations));
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    const sao_ui_panel_handle_t panel = owner.panel_handle();
+    REQUIRE(panel != nullptr);
+
+    sao_status_t open_status = SAO_STATUS_OK;
+    sao_status_t close_status = SAO_STATUS_OK;
+    sao_status_t refresh_status = SAO_STATUS_OK;
+    sao_status_t operations_status = SAO_STATUS_OK;
+    sao_status_t action_status = SAO_STATUS_OK;
+    sao_status_t teardown_status = SAO_STATUS_OK;
+    std::thread foreign([&] {
+        open_status = owner.open();
+        close_status = owner.close();
+        refresh_status = owner.refresh();
+        operations_status = owner.set_operations({});
+        action_status = owner.dispatch_action_for_testing("plugin_manager.refresh");
+        teardown_status = owner.take_offline();
+    });
+    foreign.join();
+
+    CHECK(open_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(close_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(refresh_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(operations_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(action_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(teardown_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(owner.is_registered());
+    CHECK(owner.is_visible());
+    CHECK(owner.panel_handle() == panel);
+    CHECK(compositor_layer_count(compositor) == 1);
+
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("Plugin Manager callback teardown is BUSY then succeeds on explicit retry",
+          "[launcher][plugin_manager][panel][teardown][reentrant][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    REQUIRE(compositor != nullptr);
+
+    Panel::Owner* owner_address = nullptr;
+    sao_status_t nested_teardown = SAO_STATUS_OK;
+    int snapshot_calls = 0;
+    Panel::Operations operations;
+    operations.snapshot = [&] {
+        ++snapshot_calls;
+        Panel::Snapshot snapshot;
+        snapshot.loader_available = true;
+        snapshot.plugins.push_back({
+            .plugin_id = "fixture.plugin-id",
+            .name = "Fixture Plugin",
+            .version = "1",
+            .language = "native",
+            .state = Panel::PluginState::loaded_active,
+            .source = Panel::PluginSource::built_in,
+            .manifest_enabled = true,
+        });
+        return snapshot;
+    };
+    operations.reload = [&](std::string_view plugin_id) {
+        CHECK(plugin_id == "fixture.plugin-id");
+        REQUIRE(owner_address != nullptr);
+        nested_teardown = owner_address->take_offline();
+        return SAO_STATUS_OK;
+    };
+    Panel::Owner owner(compositor, std::move(operations));
+    owner_address = &owner;
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    const sao_ui_panel_handle_t panel = owner.panel_handle();
+    REQUIRE(panel != nullptr);
+    REQUIRE(owner.dispatch_action_for_testing("plugin_manager.reload", "\"fixture.plugin-id\"") ==
+            SAO_STATUS_OK);
+    CHECK(nested_teardown == SAO_UI_PANEL_STATUS_ERR_BUSY);
+    CHECK(snapshot_calls == 2);
+    CHECK(owner.is_registered());
+    CHECK(owner.is_visible());
+    CHECK(owner.panel_handle() == panel);
+    CHECK(compositor_layer_count(compositor) == 1);
+
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    CHECK_FALSE(owner.is_registered());
+    CHECK(owner.panel_handle() == nullptr);
+    CHECK(compositor_layer_count(compositor) == 0);
     REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }

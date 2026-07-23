@@ -11,10 +11,10 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <iterator>
 #include <limits>
 #include <mutex>
@@ -335,26 +335,6 @@ Json parse_payload(std::string_view payload_json, bool& valid) {
     return valid ? std::move(payload) : Json{};
 }
 
-void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
-                                       const std::uint8_t* payload_json_utf8,
-                                       std::size_t payload_len, void* user_data) {
-    auto* owner = static_cast<Owner*>(user_data);
-    if (owner == nullptr || action_id_utf8 == nullptr ||
-        (payload_json_utf8 == nullptr && payload_len != 0U)) {
-        return;
-    }
-    const std::string_view payload(
-        payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
-        payload_len);
-    (void)owner->dispatch_action(action_id_utf8, payload);
-}
-
-void SAO_UI_CALL panel_event_callback(std::int32_t event_kind, void* user_data) {
-    auto* owner = static_cast<Owner*>(user_data);
-    if (owner != nullptr && event_kind == SAO_UI_PANEL_EVENT_CLOSE)
-        (void)owner->close();
-}
-
 } // namespace
 
 struct Owner::State {
@@ -364,17 +344,38 @@ struct Owner::State {
     sao_ui_compositor_handle_t compositor{};
     Operations operations;
     mutable std::mutex mutex;
-    std::atomic<bool> panel_initializing{};
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
+    std::size_t operations_in_flight{};
+    std::size_t callbacks_in_flight{};
     bool visible{};
-    bool destroying{};
+    bool accepting{true};
+    bool creating{};
+    bool retiring{};
+    bool action_handler_attached{};
+    bool event_handler_attached{};
     FilterMode filter{FilterMode::all};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text{"Not refreshed yet."};
     std::vector<ProcessRecord> processes;
     std::optional<ProcessRecord> attached_process;
     std::string rendered_spec_json;
+};
+
+struct Owner::OperationGuard {
+    explicit OperationGuard(Owner& value) noexcept
+        : owner(&value), status(value.begin_operation()) {
+        if (status != SAO_STATUS_OK)
+            owner = nullptr;
+    }
+
+    ~OperationGuard() {
+        if (owner != nullptr)
+            owner->end_operation();
+    }
+
+    Owner* owner{};
+    sao_status_t status{SAO_STATUS_ERR_NOT_INITIALIZED};
 };
 
 Operations make_default_operations(sao_rt_io_proxy_handle_t proxy) {
@@ -429,23 +430,8 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, Operations operations)
 Owner::~Owner() noexcept {
     if (!state_)
         return;
-    sao_ui_panel_handle_t panel = nullptr;
-    {
-        std::lock_guard lock(state_->mutex);
-        state_->destroying = true;
-        panel = state_->panel;
-    }
-    if (panel != nullptr) {
-        (void)sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_unregister(panel);
-    }
-    {
-        std::lock_guard lock(state_->mutex);
-        state_->panel = nullptr;
-        state_->body = nullptr;
-        state_->visible = false;
-    }
+    if (take_offline() != SAO_STATUS_OK)
+        std::terminate();
 }
 
 sao_status_t Owner::require_owner_thread() const noexcept {
@@ -454,31 +440,118 @@ sao_status_t Owner::require_owner_thread() const noexcept {
     return sao_ui_compositor_require_owner_thread(state_->compositor);
 }
 
+sao_status_t Owner::begin_operation() noexcept {
+    const sao_status_t owner_status = require_owner_thread();
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    std::lock_guard lock(state_->mutex);
+    if (!state_->accepting || state_->retiring)
+        return SAO_STATUS_ERR_CANCELLED;
+    ++state_->operations_in_flight;
+    return SAO_STATUS_OK;
+}
+
+void Owner::end_operation() noexcept {
+    if (!state_)
+        return;
+    std::lock_guard lock(state_->mutex);
+    if (state_->operations_in_flight != 0U)
+        --state_->operations_in_flight;
+}
+
+bool Owner::begin_callback() noexcept {
+    if (!state_)
+        return false;
+    std::lock_guard lock(state_->mutex);
+    if (!state_->accepting || state_->retiring)
+        return false;
+    ++state_->callbacks_in_flight;
+    return true;
+}
+
+void Owner::end_callback() noexcept {
+    if (!state_)
+        return;
+    std::lock_guard lock(state_->mutex);
+    if (state_->callbacks_in_flight != 0U)
+        --state_->callbacks_in_flight;
+}
+
+void Owner::panel_action_callback(const char* action_id_utf8, const std::uint8_t* payload_json_utf8,
+                                  std::size_t payload_len, void* user_data) noexcept {
+    auto* owner = static_cast<Owner*>(user_data);
+    if (owner == nullptr || action_id_utf8 == nullptr ||
+        (payload_json_utf8 == nullptr && payload_len != 0U) || !owner->begin_callback()) {
+        return;
+    }
+    struct CallbackGuard {
+        Owner& owner;
+        ~CallbackGuard() {
+            owner.end_callback();
+        }
+    } callback{*owner};
+    try {
+        const std::string_view payload(
+            payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
+            payload_len);
+        (void)owner->dispatch_action(action_id_utf8, payload);
+    } catch (...) {
+    }
+}
+
+void Owner::panel_event_callback(std::int32_t event_kind, void* user_data) noexcept {
+    auto* owner = static_cast<Owner*>(user_data);
+    if (owner == nullptr || !owner->begin_callback())
+        return;
+    struct CallbackGuard {
+        Owner& owner;
+        ~CallbackGuard() {
+            owner.end_callback();
+        }
+    } callback{*owner};
+    try {
+        owner->handle_panel_event(event_kind);
+    } catch (...) {
+    }
+}
+
+void Owner::handle_panel_event(std::int32_t event_kind) noexcept {
+    if (event_kind == SAO_UI_PANEL_EVENT_CLOSE) {
+        (void)close();
+        return;
+    }
+    if (event_kind != SAO_UI_PANEL_EVENT_SHOW && event_kind != SAO_UI_PANEL_EVENT_HIDE)
+        return;
+    std::lock_guard lock(state_->mutex);
+    state_->visible = event_kind == SAO_UI_PANEL_EVENT_SHOW;
+}
+
 sao_status_t Owner::ensure_panel() noexcept {
     const sao_status_t owner_status = require_owner_thread();
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
     {
         std::lock_guard lock(state_->mutex);
-        if (state_->destroying)
+        if (!state_->accepting || state_->retiring)
             return SAO_STATUS_ERR_CANCELLED;
         if (state_->panel != nullptr && state_->body != nullptr)
             return SAO_STATUS_OK;
+        if (state_->panel != nullptr || state_->body != nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (state_->creating)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        state_->creating = true;
     }
-
-    bool expected = false;
-    if (!state_->panel_initializing.compare_exchange_strong(expected, true,
-                                                            std::memory_order_acq_rel)) {
-        return SAO_STATUS_ERR_CANCELLED;
-    }
-    struct InitializationGuard {
-        std::atomic<bool>& flag;
-        ~InitializationGuard() {
-            flag.store(false, std::memory_order_release);
+    struct CreationGuard {
+        State& state;
+        ~CreationGuard() {
+            std::lock_guard lock(state.mutex);
+            state.creating = false;
         }
-    } initialization{state_->panel_initializing};
+    } creation{*state_};
 
     SaoPanelDescriptor descriptor{};
+    descriptor.struct_size = sizeof(SaoPanelDescriptor);
     descriptor.panel_id_utf8 = kPanelId;
     descriptor.title_utf8 = kPanelTitle;
     descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
@@ -506,30 +579,54 @@ sao_status_t Owner::ensure_panel() noexcept {
     sao_status_t status = sao_ui_panel_register(state_->compositor, &descriptor, &panel, &body);
     if (status != SAO_STATUS_OK)
         return status;
-    status = sao_ui_panel_set_action_handler(panel, &panel_action_callback, this);
-    if (status == SAO_STATUS_OK)
-        status = sao_ui_panel_set_event_handler(panel, &panel_event_callback, this);
-    if (status != SAO_STATUS_OK) {
-        (void)sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_unregister(panel);
-        return status;
-    }
 
-    bool accepted = false;
-    {
-        std::lock_guard lock(state_->mutex);
-        if (!state_->destroying && state_->panel == nullptr) {
+    bool action_attached = false;
+    bool event_attached = false;
+    status = sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, this);
+    action_attached = status == SAO_STATUS_OK;
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, this);
+        event_attached = status == SAO_STATUS_OK;
+    }
+    if (status != SAO_STATUS_OK) {
+        sao_status_t rollback_status = SAO_STATUS_OK;
+        if (event_attached) {
+            const sao_status_t detach_status =
+                sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
+            if (detach_status == SAO_STATUS_OK)
+                event_attached = false;
+            else
+                rollback_status = detach_status;
+        }
+        if (action_attached) {
+            const sao_status_t detach_status =
+                sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+            if (detach_status == SAO_STATUS_OK)
+                action_attached = false;
+            else if (rollback_status == SAO_STATUS_OK)
+                rollback_status = detach_status;
+        }
+        const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
+        if (unregister_status == SAO_STATUS_OK)
+            return rollback_status == SAO_STATUS_OK ? status : rollback_status;
+        {
+            std::lock_guard lock(state_->mutex);
             state_->panel = panel;
             state_->body = body;
-            accepted = true;
+            state_->action_handler_attached = action_attached;
+            state_->event_handler_attached = event_attached;
+            state_->accepting = false;
         }
+        return rollback_status == SAO_STATUS_OK ? unregister_status
+                                                : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
     }
-    if (!accepted) {
-        (void)sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
-        (void)sao_ui_panel_unregister(panel);
-        return SAO_STATUS_ERR_CANCELLED;
+
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->panel = panel;
+        state_->body = body;
+        state_->action_handler_attached = true;
+        state_->event_handler_attached = true;
     }
     return SAO_STATUS_OK;
 }
@@ -572,6 +669,9 @@ sao_status_t Owner::publish() noexcept {
 }
 
 sao_status_t Owner::open() noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     const sao_status_t panel_status = ensure_panel();
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
@@ -599,9 +699,9 @@ sao_status_t Owner::open() noexcept {
 }
 
 sao_status_t Owner::close() noexcept {
-    const sao_status_t owner_status = require_owner_thread();
-    if (owner_status != SAO_STATUS_OK)
-        return owner_status;
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     sao_ui_panel_handle_t panel = nullptr;
     {
         std::lock_guard lock(state_->mutex);
@@ -618,7 +718,108 @@ sao_status_t Owner::close() noexcept {
     return status;
 }
 
+sao_status_t Owner::take_offline() noexcept {
+    if (!state_)
+        return SAO_STATUS_OK;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->panel == nullptr && state_->body == nullptr && !state_->creating &&
+            !state_->retiring && state_->operations_in_flight == 0U &&
+            state_->callbacks_in_flight == 0U) {
+            return SAO_STATUS_OK;
+        }
+    }
+    const sao_status_t owner_status = require_owner_thread();
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+
+    sao_ui_panel_handle_t panel = nullptr;
+    bool had_action_handler = false;
+    bool had_event_handler = false;
+    bool was_accepting = false;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->creating || state_->retiring || state_->operations_in_flight != 0U ||
+            state_->callbacks_in_flight != 0U) {
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        }
+        if (state_->panel == nullptr) {
+            if (state_->body != nullptr)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            state_->visible = false;
+            return SAO_STATUS_OK;
+        }
+        if (state_->body == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        state_->retiring = true;
+        was_accepting = state_->accepting;
+        state_->accepting = false;
+        panel = state_->panel;
+        had_action_handler = state_->action_handler_attached;
+        had_event_handler = state_->event_handler_attached;
+    }
+
+    bool action_attached = had_action_handler;
+    bool event_attached = had_event_handler;
+    sao_status_t status = SAO_STATUS_OK;
+    if (had_event_handler) {
+        status = sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
+        if (status == SAO_STATUS_OK)
+            event_attached = false;
+    }
+    if (status == SAO_STATUS_OK && had_action_handler) {
+        status = sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+        if (status == SAO_STATUS_OK)
+            action_attached = false;
+    }
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_panel_unregister(panel);
+
+    if (status == SAO_STATUS_OK) {
+        std::lock_guard lock(state_->mutex);
+        if (state_->panel != panel) {
+            state_->retiring = false;
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        state_->panel = nullptr;
+        state_->body = nullptr;
+        state_->visible = false;
+        state_->action_handler_attached = false;
+        state_->event_handler_attached = false;
+        state_->rendered_spec_json.clear();
+        state_->accepting = true;
+        state_->retiring = false;
+        return SAO_STATUS_OK;
+    }
+
+    bool rollback_ok = true;
+    if (had_action_handler && !action_attached) {
+        const sao_status_t restore_status =
+            sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, this);
+        action_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && action_attached;
+    }
+    if (had_event_handler && !event_attached) {
+        const sao_status_t restore_status =
+            sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, this);
+        event_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && event_attached;
+    }
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->action_handler_attached = action_attached;
+        state_->event_handler_attached = event_attached;
+        state_->accepting = was_accepting && rollback_ok && action_attached == had_action_handler &&
+                            event_attached == had_event_handler;
+        state_->retiring = false;
+    }
+    return rollback_ok ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
+}
+
 sao_status_t Owner::refresh() noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     const sao_status_t panel_status = ensure_panel();
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
@@ -665,6 +866,9 @@ sao_status_t Owner::refresh() noexcept {
 sao_status_t Owner::set_filter(FilterMode filter) noexcept {
     if (filter != FilterMode::all && filter != FilterMode::likely_game)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     const sao_status_t panel_status = ensure_panel();
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
@@ -682,6 +886,9 @@ sao_status_t Owner::set_filter(FilterMode filter) noexcept {
 sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
     if (identity.pid == 0U || identity.pid == 4U || identity.start_time_100ns == 0U)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     const sao_status_t panel_status = ensure_panel();
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
@@ -767,6 +974,9 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
 
 sao_status_t Owner::dispatch_action(std::string_view action_id,
                                     std::string_view payload_json) noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
     bool valid = false;
     Json payload = parse_payload(payload_json, valid);
     if (!valid)
@@ -800,13 +1010,11 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
 sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
     if (!state_)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
-    sao_ui_panel_handle_t panel = nullptr;
     try {
         Snapshot copy{};
         {
             std::lock_guard lock(state_->mutex);
-            panel = state_->panel;
-            copy.panel_created = panel != nullptr;
+            copy.panel_created = state_->panel != nullptr;
             copy.visible = state_->visible;
             copy.filter = state_->filter;
             copy.last_status = state_->last_status;
@@ -815,11 +1023,6 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
             copy.visible_processes = select_visible(copy.all_processes, copy.filter);
             copy.attached_process = state_->attached_process;
             copy.rendered_spec_json = state_->rendered_spec_json;
-        }
-        if (panel != nullptr) {
-            SaoPanelState panel_state{};
-            if (sao_ui_panel_get_state(panel, &panel_state) == SAO_STATUS_OK)
-                copy.visible = panel_state.visible;
         }
         out = std::move(copy);
         return SAO_STATUS_OK;

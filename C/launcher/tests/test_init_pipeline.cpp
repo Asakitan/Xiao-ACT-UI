@@ -16,6 +16,18 @@
 #include <vector>
 #include <windows.h>
 
+// Private launcher headers must be included BEFORE sao/launcher/init_pipeline.h
+// because init_pipeline.h defines the historical SAO_STATUS_* macros
+// (SAO_STATUS_OK, SAO_STATUS_INVALID_ARGUMENT, ...) as preprocessor tokens.
+// The private headers pull in sao/core/status.h which defines those same
+// identifiers as enum members of sao_status_e — the collision breaks the enum
+// declaration if the macro is already in scope.  Reversing the include order
+// lets the enum be parsed first; the subsequent macro redefinitions still
+// evaluate to identical integer values so downstream ABI comparisons keep
+// working.
+#include "entity_action_routes_internal.h"
+#include "tool_launch_internal.h"
+
 #include "sao/launcher/app.h"
 #include "sao/launcher/dual_run.h"
 #include "sao/launcher/init_pipeline.h"
@@ -444,6 +456,7 @@ size_t countStep(const std::vector<std::string>& steps, const char* name) {
 } // namespace
 
 TEST_CASE("launcher_init_pipeline_run_no_deps_returns_ok", "[launcher][init_pipeline]") {
+    DualRunChildGuard dual_run_child_guard;
     CompositionRecorder composition;
     CompositionHookGuard composition_guard(composition);
     TeardownRecorder rec;
@@ -1180,22 +1193,21 @@ TEST_CASE("launcher_init_failure_shutdown_retries_owned_platform_context",
     REQUIRE(countStep(composition.steps, "platform_teardown") == 2);
 }
 
+// Declared in launcher/src/single_instance.cpp — a test-only debug helper
+// that exposes the opaque mutex name single_instance.cpp will race for. The
+// literal name pattern is deliberately not repeated in this test so that
+// future stealth renames (e.g. moving the 4F5A prefix or bumping the hash
+// mixer) do not require updating this fixture.
+extern "C" void sao_launcher_debug_build_single_instance_mutex_name(
+    wchar_t* out, std::size_t out_cap) noexcept;
+
 TEST_CASE("launcher_single_instance_second_run_fails", "[launcher][init_pipeline]") {
+    DualRunChildGuard dual_run_child_guard;
     // Acquire the mutex directly (mirroring what a first launcher
     // instance would do), then run the pipeline.  It must return
     // SAO_EXIT_ALREADY_RUNNING because the mutex is held.
-    //
-    // We reuse the same fnv1a64/GetModuleFileNameW recipe from
-    // single_instance.cpp so the mutex name matches exactly.
-    wchar_t exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    uint64_t h = 1469598103934665603ULL;
-    for (const wchar_t* p = exe; *p; ++p) {
-        h ^= static_cast<uint64_t>(*p);
-        h *= 1099511628211ULL;
-    }
     wchar_t name[128]{};
-    _snwprintf_s(name, 128, _TRUNCATE, L"Global\\SaoAuto.Instance.%016llx", h);
+    sao_launcher_debug_build_single_instance_mutex_name(name, 128);
 
     HANDLE m = CreateMutexW(nullptr, FALSE, name);
     REQUIRE(m != nullptr);
@@ -1221,4 +1233,87 @@ TEST_CASE("launcher_single_instance_second_run_fails", "[launcher][init_pipeline
     REQUIRE(exit_code == SAO_EXIT_ALREADY_RUNNING);
 
     CloseHandle(m);
+}
+
+// Adversarial recon coverage — the launcher exit-code contract now exposes
+// SAO_EXIT_HANDOFF_TO_PYTHON via the SaoLauncherExitCode enum in app.h; the
+// numeric value (100) is preserved so any TU still consuming the older
+// dual_run.h #define sees the same integer.  The ``#undef`` below shrugs off
+// the dual_run.h macro so this test case can reference the fully qualified
+// enum member.
+#ifdef SAO_EXIT_HANDOFF_TO_PYTHON
+#undef SAO_EXIT_HANDOFF_TO_PYTHON
+#endif
+TEST_CASE("launcher_exit_handoff_to_python_reachable_via_enum",
+          "[launcher][init_pipeline][exit_code][focused]") {
+    // Enum member is directly comparable to the well-known integer value.
+    CHECK(static_cast<int>(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON) == 100);
+    // Enum member does not collide with any process-init failure code.
+    CHECK(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON != sao::launcher::SAO_EXIT_OK);
+    CHECK(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON != sao::launcher::SAO_EXIT_BAD_ARGS);
+    CHECK(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON !=
+          sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL);
+    // The enum is the ABI source of truth; document that the well-known
+    // dispatch signal keeps the historical value that the dual_run.h macro
+    // used to advertise.
+    CHECK(static_cast<int>(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON) == 100);
+}
+
+// Adversarial recon coverage — the launcher previously called
+// AiEditorProcessOwner::take_offline() twice (once in sao_ui_take_offline,
+// again in teardown_platform_context). The duplicate call was removed but the
+// invariant matters: the owner must return SAO_STATUS_OK on the second call
+// even after a successful first call.
+TEST_CASE("launcher_ai_editor_owner_take_offline_is_idempotent",
+          "[launcher][init_pipeline][ai_editor][idempotency][focused]") {
+    wchar_t temp_path[MAX_PATH]{};
+    REQUIRE(GetTempPathW(MAX_PATH, temp_path) != 0);
+    wchar_t base_dir[MAX_PATH]{};
+    REQUIRE(GetTempFileNameW(temp_path, L"aid", 0, base_dir) != 0);
+    DeleteFileW(base_dir);
+    std::error_code error;
+    REQUIRE(std::filesystem::create_directories(std::filesystem::path{base_dir}, error));
+
+    sao::launcher::tool_launch::AiEditorProcessOwner owner(base_dir);
+    // Never opened — take_offline still succeeds because the owner has
+    // nothing to drain.
+    const sao_status_t first_status = owner.take_offline();
+    REQUIRE(first_status == SAO_STATUS_OK);
+    // Second call must not report a double-free / not-initialised error.
+    const sao_status_t second_status = owner.take_offline();
+    REQUIRE(second_status == SAO_STATUS_OK);
+    // A third call — for good measure — still succeeds so the invariant is
+    // not order-dependent.
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+
+    sao::launcher::tool_launch::AiEditorLaunchSnapshot snap{};
+    REQUIRE(owner.snapshot(snap) == SAO_STATUS_OK);
+    CHECK(snap.phase == sao::launcher::tool_launch::AiEditorLaunchPhase::idle);
+
+    std::filesystem::remove_all(std::filesystem::path{base_dir}, error);
+}
+
+// Adversarial recon coverage — sao_ui_take_offline used to close the
+// invocation gate itself before entity_provider_publication::clear() closed
+// it again on the same store. The duplicate close was removed; the invariant
+// under test here is that the gate close operation is idempotent enough that
+// two independent calls do not corrupt the store's state.
+TEST_CASE("launcher_route_store_close_invocation_gate_is_idempotent",
+          "[launcher][init_pipeline][entity][invocation_gate][idempotency][focused]") {
+    sao::launcher::entity_action_routes::EntityActionRouteStore store;
+    // First close — the gate was never opened; the store still accepts and
+    // returns SAO_STATUS_OK immediately.
+    const sao_status_t first_status = store.close_invocation_gate();
+    REQUIRE(first_status == SAO_STATUS_OK);
+    // Second close — must not corrupt the store; the accepting flag is still
+    // set so close returns SAO_STATUS_OK again.
+    const sao_status_t second_status = store.close_invocation_gate();
+    REQUIRE(second_status == SAO_STATUS_OK);
+    // The publish-friendly path is still usable after the double close.
+    sao::launcher::entity_action_routes::EntityActionRouteStore::PreparedPublication publication;
+    REQUIRE(store.prepare({}, publication) == SAO_STATUS_OK);
+    REQUIRE(publication.commit() == SAO_STATUS_OK);
+    // Post-publish close is still idempotent.
+    REQUIRE(store.close_invocation_gate() == SAO_STATUS_OK);
+    REQUIRE(store.close_invocation_gate() == SAO_STATUS_OK);
 }

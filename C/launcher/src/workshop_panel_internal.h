@@ -121,17 +121,26 @@ class Owner final {
     sao_status_t service_ui();
     sao_status_t tick();
 
-    // Stops acceptance, requests cancellation, joins the jthread, and retires
-    // the native panel on the compositor owner thread. Retry after a UI teardown
-    // error; successful retirement is idempotent.
+    // Owner-thread teardown. The owner-thread preflight runs before acceptance
+    // or worker state changes. UI retirement failures preserve the panel handle
+    // and callback bindings for a later retry; successful retirement is
+    // idempotent.
     sao_status_t try_take_offline();
 
+    // Replacing the callback publishes the current known visibility once, then
+    // reports later transitions exactly once. Before the panel has established
+    // a visibility state, registration is silent.
     void set_visibility_changed_callback(VisibilityChangedCallback callback);
 
     // Internal action seam used by focused tests and launcher adapters. It has
     // the same bounded JSON validation and enqueue-only behavior as panel clicks.
     sao_status_t dispatch_action_for_testing(std::string_view action,
                                              std::string_view payload_json = {});
+
+    // Focused lifecycle seams. Panel close events remain enqueue-only and are
+    // serviced by the compositor owner thread.
+    sao_status_t dispatch_panel_event_for_testing(std::int32_t event_kind);
+    void fail_next_unregister_for_testing(sao_status_t status);
 
     [[nodiscard]] Snapshot snapshot() const;
 

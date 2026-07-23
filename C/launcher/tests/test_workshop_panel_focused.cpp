@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -226,6 +227,15 @@ bool service_until(Owner& owner, const std::function<bool()>& predicate, int att
     return false;
 }
 
+bool wait_until(const std::function<bool()>& predicate, int attempts = 1000) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (predicate())
+            return true;
+        std::this_thread::sleep_for(2ms);
+    }
+    return false;
+}
+
 std::size_t panel_count() {
     std::size_t count = 0;
     REQUIRE(sao_ui_panel_registry_count(&count) == SAO_STATUS_OK);
@@ -380,5 +390,143 @@ TEST_CASE("Workshop owner reuses one panel across repeated opens",
     CHECK(visibility == std::vector<bool>{true, false, true});
 
     REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
+    CHECK(panel_count() == before);
+}
+
+TEST_CASE("Workshop foreign-thread teardown preserves the online worker and panel",
+          "[launcher][workshop][focused][owner_thread]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    backend.delay = 250ms;
+    Owner owner(compositor.get(), base.root, backend.operations());
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(wait_until([&] { return backend.active.load() == 1; }));
+    const sao_ui_panel_handle_t panel = owner.snapshot().panel;
+    REQUIRE(panel != nullptr);
+
+    std::atomic<sao_status_t> foreign_status{SAO_STATUS_OK};
+    std::thread foreign([&] { foreign_status.store(owner.try_take_offline()); });
+    foreign.join();
+
+    CHECK(foreign_status.load() == SAO_STATUS_ERR_ACCESS_DENIED);
+    const auto after_foreign = owner.snapshot();
+    CHECK(after_foreign.online);
+    CHECK(after_foreign.panel == panel);
+    CHECK(after_foreign.visible);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+    CHECK(backend.list_calls.load() == 1);
+    REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
+}
+
+TEST_CASE("Workshop close events defer owner-thread hide and publish exact visibility",
+          "[launcher][workshop][focused][close_event][visibility]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    Owner owner(compositor.get(), base.root, backend.operations());
+    std::vector<bool> first_callback;
+    std::vector<bool> replacement_callback;
+
+    owner.set_visibility_changed_callback([&](bool visible) { first_callback.push_back(visible); });
+    CHECK(first_callback.empty());
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+    CHECK(first_callback == std::vector<bool>{true});
+
+    owner.set_visibility_changed_callback(
+        [&](bool visible) { replacement_callback.push_back(visible); });
+    CHECK(replacement_callback == std::vector<bool>{true});
+
+    std::atomic<sao_status_t> event_status{SAO_STATUS_ERR_UNKNOWN};
+    std::thread event_thread([&] {
+        event_status.store(owner.dispatch_panel_event_for_testing(SAO_UI_PANEL_EVENT_CLOSE));
+    });
+    event_thread.join();
+    CHECK(event_status.load() == SAO_STATUS_OK);
+    CHECK(owner.snapshot().visible);
+
+    REQUIRE(owner.service_ui() == SAO_STATUS_OK);
+    CHECK_FALSE(owner.snapshot().visible);
+    CHECK(first_callback == std::vector<bool>{true});
+    CHECK(replacement_callback == std::vector<bool>{true, false});
+
+    REQUIRE(owner.dispatch_panel_event_for_testing(SAO_UI_PANEL_EVENT_CLOSE) == SAO_STATUS_OK);
+    REQUIRE(owner.service_ui() == SAO_STATUS_OK);
+    CHECK(replacement_callback == std::vector<bool>{true, false});
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 2; }));
+    CHECK(replacement_callback == std::vector<bool>{true, false, true});
+    REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
+    CHECK(replacement_callback == std::vector<bool>{true, false, true, false});
+}
+
+TEST_CASE("Workshop offline retirement is retryable after unregister failure",
+          "[launcher][workshop][focused][teardown][retry]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    const std::size_t before = panel_count();
+    Owner owner(compositor.get(), base.root, backend.operations());
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+    const sao_ui_panel_handle_t panel = owner.snapshot().panel;
+    REQUIRE(panel != nullptr);
+    owner.fail_next_unregister_for_testing(SAO_STATUS_ERR_OS_CALL_FAILED);
+
+    CHECK(owner.try_take_offline() == SAO_STATUS_ERR_OS_CALL_FAILED);
+    const auto failed = owner.snapshot();
+    CHECK_FALSE(failed.online);
+    CHECK_FALSE(failed.visible);
+    CHECK_FALSE(failed.busy);
+    CHECK(failed.panel == panel);
+    CHECK(panel_count() == before + 1);
+    CHECK(owner.dispatch_action_for_testing("workshop.refresh") == SAO_STATUS_ERR_NOT_INITIALIZED);
+
+    REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
+    CHECK(owner.snapshot().panel == nullptr);
+    CHECK(panel_count() == before);
+    CHECK(owner.try_take_offline() == SAO_STATUS_OK);
+}
+
+TEST_CASE("Workshop teardown rejects visibility callback reentry",
+          "[launcher][workshop][focused][teardown][reentry]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    const std::size_t before = panel_count();
+    Owner owner(compositor.get(), base.root, backend.operations());
+    std::vector<sao_status_t> reentrant_statuses;
+
+    owner.set_visibility_changed_callback([&](bool visible) {
+        if (!visible)
+            reentrant_statuses.push_back(owner.try_take_offline());
+    });
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+
+    REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
+    CHECK(reentrant_statuses == std::vector<sao_status_t>{SAO_UI_PANEL_STATUS_ERR_BUSY});
+    CHECK(owner.snapshot().panel == nullptr);
+    CHECK(panel_count() == before);
+}
+
+TEST_CASE("Workshop destructor retries a transient unregister failure without losing the handle",
+          "[launcher][workshop][focused][destructor][retry]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    const std::size_t before = panel_count();
+
+    {
+        Owner owner(compositor.get(), base.root, backend.operations());
+        REQUIRE(owner.open() == SAO_STATUS_OK);
+        REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+        owner.fail_next_unregister_for_testing(SAO_STATUS_ERR_OS_CALL_FAILED);
+    }
+
     CHECK(panel_count() == before);
 }

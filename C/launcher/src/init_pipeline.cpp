@@ -31,6 +31,13 @@
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
 
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION) &&                                              \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#include "plugin_manager_panel_internal.h"
+#include "process_selector_panel_internal.h"
+#include "workshop_panel_internal.h"
+#endif
+
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION) &&                                           \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "entity_provider_publication_internal.h"
@@ -60,6 +67,10 @@
 #include "sao/ui/compositor.h"
 #include "sao/ui/dc_mutation.h"
 #include "sao/ui/entity_shell.h"
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+#include "sao/ui/fisheye_backdrop.h"
+#include "sao/ui/panel_sdk.h"
+#endif
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/streaming_flow.h"
 #include "sao/ui/theme.h"
@@ -873,6 +884,13 @@ struct sao_platform_ctx {
     sao_ui_compositor_handle_t compositor;
     bool sdk_compositor_bound;
     sao_ui_entity_shell_handle_t entity_shell;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    sao_ui_fisheye_backdrop_handle_t fisheye_backdrop;
+    std::unique_ptr<sao::launcher::plugin_manager_panel::Owner> plugin_manager_panel;
+    std::unique_ptr<sao::launcher::process_selector_panel::Owner> process_selector_panel;
+    std::unique_ptr<sao::launcher::workshop_panel::Owner> workshop_panel;
+    bool workshop_panel_visible;
+#endif
     bool home_hotkey_registered;
     bool insert_hotkey_registered;
     SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
@@ -916,6 +934,157 @@ create_settings_owner(const wchar_t* base_dir,
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 }
+
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+struct SharedPanelVisibilityProbe {
+    bool plugin_manager = false;
+    bool process_selector = false;
+};
+
+sao_status_t reload_plugins(void* user_data);
+
+void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t panel,
+                                                 const SaoPanelDescriptor* descriptor,
+                                                 void* user_data) {
+    auto* visibility = static_cast<SharedPanelVisibilityProbe*>(user_data);
+    if (visibility == nullptr || descriptor == nullptr || descriptor->panel_id_utf8 == nullptr)
+        return;
+    const bool plugin_manager =
+        std::strcmp(descriptor->panel_id_utf8,
+                    sao::launcher::plugin_manager_panel::kPanelId.data()) == 0;
+    const bool process_selector = std::strcmp(descriptor->panel_id_utf8,
+                                              sao::launcher::process_selector_panel::kPanelId) == 0;
+    if (!plugin_manager && !process_selector)
+        return;
+    SaoPanelState state{};
+    if (sao_ui_panel_get_state(panel, &state) != SAO_STATUS_OK)
+        return;
+    visibility->plugin_manager = visibility->plugin_manager || (plugin_manager && state.visible);
+    visibility->process_selector =
+        visibility->process_selector || (process_selector && state.visible);
+}
+
+sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr || ctx->fisheye_backdrop == nullptr)
+        return SAO_STATUS_OK;
+
+    SharedPanelVisibilityProbe panels;
+    sao_status_t status = sao_ui_panel_registry_iterate(&collect_shared_panel_visibility, &panels);
+    if (status != SAO_STATUS_OK)
+        return status;
+
+    SaoUiEntityShellSnapshot entity{};
+    if (ctx->entity_shell != nullptr) {
+        status = sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &entity);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+
+    const sao::launcher::entity_builtin_action::SharedFisheyeVisibility visibility{
+        ctx->workshop_panel_visible,
+        panels.plugin_manager,
+        panels.process_selector,
+        entity.overlay_visible && entity.menu_visible,
+    };
+    if (!sao::launcher::entity_builtin_action::should_show_shared_fisheye(visibility))
+        return sao_ui_fisheye_backdrop_hide(ctx->fisheye_backdrop);
+
+    SaoOverlayHostClientRect host_bounds{};
+    status = sao_ui_overlay_host_get_client_rect(ctx->overlay_host, &host_bounds);
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (host_bounds.width <= 0 || host_bounds.height <= 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const SaoUiFisheyeBackdropRect local_bounds{
+        0,
+        0,
+        host_bounds.width,
+        host_bounds.height,
+    };
+    return sao_ui_fisheye_backdrop_show(
+        ctx->fisheye_backdrop, &local_bounds,
+        sao::launcher::entity_builtin_action::kSharedFisheyeBackdropZOrder);
+}
+
+sao_status_t tick_shared_fisheye(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr || ctx->fisheye_backdrop == nullptr)
+        return SAO_STATUS_OK;
+    const sao_status_t visibility_status = update_shared_fisheye_visibility(ctx);
+    if (visibility_status != SAO_STATUS_OK)
+        return visibility_status;
+    return sao_ui_fisheye_backdrop_tick(ctx->fisheye_backdrop);
+}
+
+sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* ctx) noexcept {
+    if (base_dir == nullptr || ctx == nullptr || ctx->compositor == nullptr ||
+        ctx->rt_io_proxy == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    sao_status_t status = sao_ui_fisheye_backdrop_create(ctx->compositor, &ctx->fisheye_backdrop);
+    if (status != SAO_STATUS_OK)
+        return status;
+    try {
+        ctx->plugin_manager_panel = std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
+            ctx->compositor, [ctx] { return reload_plugins(ctx); });
+        ctx->process_selector_panel =
+            std::make_unique<sao::launcher::process_selector_panel::Owner>(ctx->compositor,
+                                                                           ctx->rt_io_proxy);
+        ctx->workshop_panel = std::make_unique<sao::launcher::workshop_panel::Owner>(
+            ctx->compositor, std::filesystem::path(base_dir));
+        ctx->workshop_panel->set_visibility_changed_callback([ctx](bool visible) {
+            ctx->workshop_panel_visible = visible;
+            (void)update_shared_fisheye_visibility(ctx);
+        });
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+}
+
+sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (ctx->workshop_panel) {
+        const sao_status_t status = ctx->workshop_panel->try_take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->workshop_panel->set_visibility_changed_callback({});
+        ctx->workshop_panel.reset();
+        ctx->workshop_panel_visible = false;
+        ctx->builtin_action_state.authority.workshop = false;
+    }
+    if (ctx->process_selector_panel) {
+        const sao_status_t status = ctx->process_selector_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->process_selector_panel.reset();
+        ctx->builtin_action_state.authority.process_selector = false;
+    }
+    if (ctx->plugin_manager_panel) {
+        const sao_status_t status = ctx->plugin_manager_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->plugin_manager_panel.reset();
+        ctx->builtin_action_state.authority.plugin_manager = false;
+        ctx->builtin_action_state.authority.plugin_status = false;
+    }
+    if (ctx->fisheye_backdrop != nullptr) {
+        const sao_status_t status = sao_ui_fisheye_backdrop_try_destroy(ctx->fisheye_backdrop);
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->fisheye_backdrop = nullptr;
+        ctx->builtin_action_state.authority.fisheye_procedural = false;
+        ctx->builtin_action_state.authority.fisheye_live = false;
+    }
+    return SAO_STATUS_OK;
+}
+#else
+sao_status_t tick_shared_fisheye(sao_platform_ctx*) noexcept {
+    return SAO_STATUS_OK;
+}
+#endif
 
 SaoUiThemeId runtime_theme_id(sao::launcher::settings_theme::PanelTheme theme) noexcept {
     return theme == sao::launcher::settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT
@@ -1033,11 +1202,72 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.fisheye_procedural = source.fisheye_procedural;
     target.fisheye_live = source.fisheye_live;
     target.theme = source.theme;
+    target.about = source.about;
     target.controls =
         source.controls && !ctx->builtin_action_state.controls_degraded
             ? sao::launcher::entity_provider_publication::ControlPublicationStatus::ready
             : sao::launcher::entity_provider_publication::ControlPublicationStatus::
                   degraded_internal;
+}
+
+sao_status_t sync_plugin_runtime_authority(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    auto& action = ctx->builtin_action_state.authority;
+    auto& publication = ctx->entity_provider_publication.builtin_authority;
+    if (ctx->plugins_registry == nullptr) {
+        action.plugin_runtime = false;
+        action.reload_plugins = false;
+        action.plugin_manager = false;
+        action.plugin_status = false;
+        sync_entity_publication_authority(ctx);
+        publication.plugin_runtime = sao::launcher::entity_provider_publication::
+            PluginRuntimePublicationStatus::not_applicable;
+        publication.python_runtime = sao::launcher::entity_provider_publication::
+            PythonRuntimePublicationStatus::not_applicable;
+        return SAO_STATUS_OK;
+    }
+
+    sao_plugins_status_snapshot_t plugins_status{};
+    plugins_status.struct_size = sizeof(plugins_status);
+    const sao_status_t status = sao_plugins_status_snapshot(ctx->plugins_registry, &plugins_status);
+    const bool plugin_runtime_ready =
+        status == SAO_STATUS_OK &&
+        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    const bool plugin_panel_ready = ctx->plugin_manager_panel != nullptr;
+#else
+    constexpr bool plugin_panel_ready = false;
+#endif
+    action.plugin_runtime = plugin_runtime_ready;
+    action.reload_plugins = plugin_runtime_ready;
+    action.plugin_manager = plugin_runtime_ready && plugin_panel_ready;
+    action.plugin_status = plugin_runtime_ready && plugin_panel_ready;
+    sync_entity_publication_authority(ctx);
+    publication.plugin_runtime =
+        plugin_runtime_ready
+            ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
+            : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
+                  degraded_internal;
+    if (status != SAO_STATUS_OK)
+        return status;
+
+    using PythonStatus = sao::launcher::entity_provider_publication::PythonRuntimePublicationStatus;
+    switch (plugins_status.python_runtime_status) {
+    case SAO_PLUGINS_PYTHON_RUNTIME_READY:
+        publication.python_runtime = PythonStatus::ready;
+        break;
+    case SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED:
+        publication.python_runtime = PythonStatus::degraded_unconfigured;
+        break;
+    case SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE:
+        publication.python_runtime = PythonStatus::degraded_unavailable;
+        break;
+    default:
+        publication.python_runtime = PythonStatus::degraded_host_unavailable;
+        break;
+    }
+    return SAO_STATUS_OK;
 }
 #endif
 
@@ -1078,6 +1308,58 @@ sao_status_t persist_streaming_mode(bool enabled, void* user_data) {
                : ctx->settings_owner->set_value_and_save("streaming_mode", enabled);
 }
 
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+sao_status_t open_workshop(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->workshop_panel)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = ctx->workshop_panel->open();
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
+}
+
+sao_status_t open_process_selector(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->process_selector_panel)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = ctx->process_selector_panel->open();
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
+}
+
+sao_status_t open_plugin_manager(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->plugin_manager_panel)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = ctx->plugin_manager_panel->open();
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
+}
+
+sao_status_t open_plugin_status(void* user_data) {
+    return open_plugin_manager(user_data);
+}
+
+sao_status_t set_fisheye_procedural(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    return ctx == nullptr || ctx->fisheye_backdrop == nullptr
+               ? SAO_STATUS_ERR_NOT_INITIALIZED
+               : sao_ui_fisheye_backdrop_set_mode(ctx->fisheye_backdrop,
+                                                  SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL);
+}
+
+sao_status_t set_fisheye_live(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    return ctx == nullptr || ctx->fisheye_backdrop == nullptr
+               ? SAO_STATUS_ERR_NOT_INITIALIZED
+               : sao_ui_fisheye_backdrop_set_mode(ctx->fisheye_backdrop,
+                                                  SAO_UI_FISHEYE_BACKDROP_MODE_LIVE);
+}
+#endif
+
 sao_status_t reload_plugins(void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || ctx->plugins_registry == nullptr) {
@@ -1085,22 +1367,8 @@ sao_status_t reload_plugins(void* user_data) {
     }
     const sao_status_t status = sao_plugins_reload_all(ctx->plugins_registry);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    sao_plugins_status_snapshot_t plugins_status{};
-    plugins_status.struct_size = sizeof(plugins_status);
-    const sao_status_t snapshot_status =
-        sao_plugins_status_snapshot(ctx->plugins_registry, &plugins_status);
-    const bool plugin_runtime_ready =
-        snapshot_status == SAO_STATUS_OK &&
-        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
-    ctx->builtin_action_state.authority.plugin_runtime = plugin_runtime_ready;
-    ctx->builtin_action_state.authority.reload_plugins = plugin_runtime_ready;
-    sync_entity_publication_authority(ctx);
-    ctx->entity_provider_publication.builtin_authority.plugin_runtime =
-        plugin_runtime_ready
-            ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
-            : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
-                  degraded_internal;
-    if (snapshot_status != SAO_STATUS_OK) {
+    const sao_status_t authority_status = sync_plugin_runtime_authority(ctx);
+    if (authority_status != SAO_STATUS_OK) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
 #endif
@@ -1199,15 +1467,28 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS: {
-        const sao::launcher::entity_builtin_action::Operations operations{
-            nullptr,
-            &persist_topmost_mode,
-            &apply_streaming_mode,
-            &persist_streaming_mode,
-            &reload_plugins,
-            &refresh_entity,
-            ctx,
-        };
+        sao::launcher::entity_builtin_action::Operations operations;
+        // apply_topmost_mode intentionally stays nullptr: the headless
+        // launcher has no owned z-order manager (see the authority.topmost
+        // = false comment in sao_platform_bringup). authorization_status()
+        // gates SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST closed via
+        // authority.topmost, so dispatch() never reaches toggle_topmost().
+        // If a future change promotes a z-order manager onto sao_platform_ctx,
+        // wire the apply function here alongside authority.topmost = true.
+        operations.persist_topmost_mode = &persist_topmost_mode;
+        operations.apply_streaming_mode = &apply_streaming_mode;
+        operations.persist_streaming_mode = &persist_streaming_mode;
+        operations.reload_plugins = &reload_plugins;
+        operations.refresh_entity = &refresh_entity;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+        operations.open_workshop = &open_workshop;
+        operations.open_process_selector = &open_process_selector;
+        operations.open_plugin_manager = &open_plugin_manager;
+        operations.open_plugin_status = &open_plugin_status;
+        operations.set_fisheye_procedural = &set_fisheye_procedural;
+        operations.set_fisheye_live = &set_fisheye_live;
+#endif
+        operations.user_data = ctx;
         const sao_status_t status = sao::launcher::entity_builtin_action::dispatch(
             action, ctx->builtin_action_state, operations);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -1326,9 +1607,25 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     action_authority.streaming = ctx->builtin_action_state.streaming_entitled;
     action_authority.save_settings = true;
     action_authority.ai_editor = sao::launcher::tool_launch::ai_editor_capability_available();
+    action_authority.workshop = false;
+    action_authority.process_selector = false;
+    action_authority.plugin_manager = false;
     action_authority.reload_plugins = false;
+    action_authority.plugin_status = false;
+    action_authority.fisheye_procedural = false;
+    action_authority.fisheye_live = false;
     action_authority.theme = true;
     action_authority.about = true;
+    // Topmost toggling is a compositor-thread z-order operation performed by
+    // sao_ui_z_order_manager. The headless launcher pipeline does not own a
+    // z-order manager (only the shipping compositor does), so there is no
+    // apply function to wire in the entity_action callback below. Leaving
+    // authority.topmost = false explicitly keeps the toggle out of the
+    // published menu until a future integration promotes the manager into
+    // the platform ctx and provides an apply hook. See toggle_topmost() in
+    // entity_builtin_action_internal.cpp — a nullptr apply_topmost_mode
+    // would otherwise short-circuit to SAO_STATUS_ERR_NOT_INITIALIZED.
+    action_authority.topmost = false;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
@@ -1393,6 +1690,16 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
     ctx->sdk_compositor_bound = true;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    status = create_shared_ui_owners(cfg->base_dir, ctx);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    action_authority.workshop = ctx->workshop_panel != nullptr;
+    action_authority.process_selector = ctx->process_selector_panel != nullptr;
+    action_authority.fisheye_procedural = ctx->fisheye_backdrop != nullptr;
+    action_authority.fisheye_live = ctx->fisheye_backdrop != nullptr;
+#endif
     status = sao_rt_io_window_rect_register(
         ctx->window_rect_controller,
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &ctx->window_rect_token);
@@ -1445,6 +1752,11 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         }
         ctx->ai_editor.reset();
     }
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    const sao_status_t shared_ui_status = retire_shared_ui_owners(ctx);
+    if (shared_ui_status != SAO_STATUS_OK)
+        return shared_ui_status;
+#endif
     if (ctx->insert_hotkey_registered) {
         (void)UnregisterHotKey(nullptr, kInsertHotkeyId);
         ctx->insert_hotkey_registered = false;
@@ -1540,55 +1852,10 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
         return SAO_STATUS_INVALID_ARGUMENT;
     ctx->plugins_registry = registry;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    auto& authority = ctx->entity_provider_publication.builtin_authority;
-    if (registry == nullptr) {
-        ctx->builtin_action_state.authority.plugin_runtime = false;
-        ctx->builtin_action_state.authority.reload_plugins = false;
-        sync_entity_publication_authority(ctx);
-        authority.plugin_runtime = sao::launcher::entity_provider_publication::
-            PluginRuntimePublicationStatus::not_applicable;
-        authority.python_runtime = sao::launcher::entity_provider_publication::
-            PythonRuntimePublicationStatus::not_applicable;
-        return SAO_STATUS_OK;
-    }
-    sao_plugins_status_snapshot_t plugins_status{};
-    plugins_status.struct_size = sizeof(plugins_status);
-    const sao_status_t status = sao_plugins_status_snapshot(registry, &plugins_status);
-    if (status != SAO_STATUS_OK) {
-        ctx->builtin_action_state.authority.plugin_runtime = false;
-        ctx->builtin_action_state.authority.reload_plugins = false;
-        sync_entity_publication_authority(ctx);
-        authority.plugin_runtime = sao::launcher::entity_provider_publication::
-            PluginRuntimePublicationStatus::degraded_internal;
-        return status;
-    }
-    const bool plugin_runtime_ready =
-        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
-    ctx->builtin_action_state.authority.plugin_runtime = plugin_runtime_ready;
-    ctx->builtin_action_state.authority.reload_plugins = plugin_runtime_ready;
-    sync_entity_publication_authority(ctx);
-    authority.plugin_runtime =
-        plugin_runtime_ready
-            ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
-            : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
-                  degraded_internal;
-    using PythonStatus = sao::launcher::entity_provider_publication::PythonRuntimePublicationStatus;
-    switch (plugins_status.python_runtime_status) {
-    case SAO_PLUGINS_PYTHON_RUNTIME_READY:
-        authority.python_runtime = PythonStatus::ready;
-        break;
-    case SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED:
-        authority.python_runtime = PythonStatus::degraded_unconfigured;
-        break;
-    case SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE:
-        authority.python_runtime = PythonStatus::degraded_unavailable;
-        break;
-    default:
-        authority.python_runtime = PythonStatus::degraded_host_unavailable;
-        break;
-    }
-#endif
+    return sync_plugin_runtime_authority(ctx);
+#else
     return SAO_STATUS_OK;
+#endif
 }
 
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
@@ -1616,7 +1883,9 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK)
         return status;
 #endif
-    status = sao_ui_compositor_tick(ctx->compositor);
+    status = tick_shared_fisheye(ctx);
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_compositor_tick(ctx->compositor);
     if (status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
@@ -1655,18 +1924,21 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
-    if (ctx->ai_editor) {
-        const sao_status_t ai_editor_status = ctx->ai_editor->take_offline();
-        if (ai_editor_status != SAO_STATUS_OK) {
-            return ai_editor_status;
-        }
-    }
+    // AiEditorProcessOwner::take_offline() is owned by teardown_platform_context
+    // (invoked by sao_platform_teardown after this function returns) so we do
+    // NOT drive it a second time here.  Calling take_offline twice was
+    // idempotent but produced churn on the ai_editor state machine on every
+    // normal shutdown.
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    const sao_status_t shared_ui_status = retire_shared_ui_owners(ctx);
+    if (shared_ui_status != SAO_STATUS_OK)
+        return shared_ui_status;
+#endif
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    status = ctx->entity_action_routes.close_invocation_gate();
-    if (status != SAO_STATUS_OK) {
-        return status;
-    }
+    // entity_provider_publication::clear() calls close_invocation_gate()
+    // itself as its first step; we do not close it separately here to avoid
+    // duplicating the transition-in-progress guard against the same store.
     ctx->builtin_action_state.authority.publication_available = false;
     sync_entity_publication_authority(ctx);
     status = sao::launcher::entity_provider_publication::clear(
@@ -1739,6 +2011,16 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
             status = ai_editor_status;
         }
     }
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    if (ctx->workshop_panel) {
+        const sao_status_t workshop_status = ctx->workshop_panel->service_ui();
+        if (status == SAO_STATUS_OK && workshop_status != SAO_STATUS_OK)
+            status = workshop_status;
+    }
+#endif
+    const sao_status_t fisheye_status = tick_shared_fisheye(ctx);
+    if (status == SAO_STATUS_OK && fisheye_status != SAO_STATUS_OK)
+        status = fisheye_status;
     const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     return status == SAO_STATUS_OK ? compositor_status : status;
 }
@@ -1758,14 +2040,22 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
     if (w_param == kHomeHotkeyId) {
         *out_handled = 1;
         const sao_status_t status = sao_ui_entity_shell_home(ctx->entity_shell);
+        const sao_status_t fisheye_status =
+            status == SAO_STATUS_OK ? tick_shared_fisheye(ctx) : status;
         const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
-        return status == SAO_STATUS_OK ? compositor_status : status;
+        return status != SAO_STATUS_OK
+                   ? status
+                   : (fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status);
     }
     if (w_param == kInsertHotkeyId) {
         *out_handled = 1;
         const sao_status_t status = sao_ui_entity_shell_insert(ctx->entity_shell);
+        const sao_status_t fisheye_status =
+            status == SAO_STATUS_OK ? tick_shared_fisheye(ctx) : status;
         const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
-        return status == SAO_STATUS_OK ? compositor_status : status;
+        return status != SAO_STATUS_OK
+                   ? status
+                   : (fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status);
     }
     return SAO_STATUS_OK;
 }

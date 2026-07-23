@@ -10,12 +10,15 @@
 #include "sao/launcher/dual_run.h"
 #include "sao/launcher/working_dir.h"
 
+#include "sao_security/obfuscation/enc_str.h"
+
 #include <windows.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <shlobj.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +65,21 @@ DualRunState& S() {
 // Wide-string helpers
 // ---------------------------------------------------------------------------
 
+// ASCII-only widening for identifiers decrypted from SAO_ENC_STR.  Opaque
+// identifiers below are pure 7-bit ASCII, so we do a byte-by-byte widen
+// instead of MultiByteToWideChar (which would leak decrypted plaintext into
+// an internal Kernel32 buffer for longer than necessary).
+void widen_ascii(const char* src, wchar_t* dst, size_t dst_cap) {
+    if (!dst || dst_cap == 0) return;
+    size_t i = 0;
+    if (src) {
+        for (; src[i] != '\0' && i + 1 < dst_cap; ++i) {
+            dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(src[i]));
+        }
+    }
+    dst[i] = L'\0';
+}
+
 void wcs_copy_to_fixed(wchar_t* dst, size_t dst_cap_elems, const wchar_t* src) {
     if (!dst || dst_cap_elems == 0) return;
     if (!src) { dst[0] = L'\0'; return; }
@@ -104,7 +122,14 @@ bool default_dual_run_config_path(wchar_t* out, size_t out_cap) {
         if (appdata) ::CoTaskMemFree(appdata);
         return false;
     }
-    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s\\SaoAuto\\dual_run.json", appdata);
+    // The persistent folder name/leaf stay compatible with existing user
+    // installs — we only wrap the literal in SAO_ENC_STR so it does not
+    // linger in .rdata plaintext.  If we ever rev the storage layout we
+    // will bump the leaf here without touching the API surface.
+    const auto suffix = SAO_ENC_STR("\\SaoAuto\\dual_run.json");
+    wchar_t wide_suffix[64]{};
+    widen_ascii(suffix.decrypt(), wide_suffix, std::size(wide_suffix));
+    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s%s", appdata, wide_suffix);
     ::CoTaskMemFree(appdata);
     return true;
 }
@@ -1094,7 +1119,13 @@ extern "C" sao_status_t sao_launcher_dual_run_acquire_driver_mutex(HANDLE* mutex
     if (!mutex_out) return SAO_STATUS_INVALID_ARGUMENT;
     *mutex_out = nullptr;
 
-    HANDLE m = ::CreateMutexW(nullptr, FALSE, L"Local\\SaoAutoLauncherDualRun");
+    // Opaque per-session mutex.  Replaces the plaintext
+    // "Local\\SaoAutoLauncherDualRun" identifier so ObjectManager scanners
+    // cannot pivot on the product name.
+    const auto opaque = SAO_ENC_STR("Local\\4F5A.dr");
+    wchar_t name[32]{};
+    widen_ascii(opaque.decrypt(), name, std::size(name));
+    HANDLE m = ::CreateMutexW(nullptr, FALSE, name);
     if (!m) return SAO_STATUS_INTERNAL;
     if (::GetLastError() == ERROR_ALREADY_EXISTS) {
         ::CloseHandle(m);

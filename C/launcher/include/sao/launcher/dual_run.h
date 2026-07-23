@@ -78,9 +78,13 @@ typedef int32_t sao_launcher_dual_run_mode_t;
                                                  // run — caller should exit.
 
 // Special exit code the launcher returns from wWinMain when
-// ``sao_launcher_dual_run_step_zero`` handed off to Python.  Kept out of the
-// SaoLauncherExitCode enum (which is a scoped enum in app.h) to avoid a
-// header cycle; init_pipeline.cpp maps it explicitly.
+// ``sao_launcher_dual_run_step_zero`` handed off to Python.  The value also
+// lives in the ``SaoLauncherExitCode`` enum declared in ``app.h`` — that
+// header is the ABI source of truth.  This ``#define`` is retained so
+// TU's that only include dual_run.h (for example dual_run.cpp itself, which
+// intentionally has no dependency on the App singleton) still see the same
+// integer.  When both headers land in one TU, ``app.h`` ``#undef``s this
+// macro before declaring the enum entry so the two views do not collide.
 #define SAO_EXIT_HANDOFF_TO_PYTHON  100
 
 // ---------------------------------------------------------------------------

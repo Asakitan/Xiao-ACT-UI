@@ -72,6 +72,11 @@ struct EntityBuiltinAuthorityState {
     bool fisheye_procedural = false;
     bool fisheye_live = false;
     bool theme = false;
+    // Whether the About root is currently exposing an actionable authority.
+    // Kept in sync with entity_builtin_action::Authority::about via
+    // sync_entity_publication_authority so both catalogs agree on
+    // dispatchability without adding a second registry.
+    bool about = false;
     PythonRuntimePublicationStatus python_runtime = PythonRuntimePublicationStatus::not_applicable;
     PluginRuntimePublicationStatus plugin_runtime = PluginRuntimePublicationStatus::not_applicable;
     ControlPublicationStatus controls = ControlPublicationStatus::ready;

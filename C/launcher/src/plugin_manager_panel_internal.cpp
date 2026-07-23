@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -118,6 +117,45 @@ std::string status_message(std::string_view operation, sao_status_t status) {
 
 #if SAO_LAUNCHER_PLUGIN_MANAGER_HAS_LOADER
 
+sao_status_t map_loader_status(std::int32_t status) noexcept {
+    namespace Loader = sao::plugins::loader;
+    switch (status) {
+    case SAO_OK:
+        return SAO_STATUS_OK;
+    case SAO_ERR_INVALID_ARGUMENT:
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    case SAO_ERR_NOT_INITIALIZED:
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    case SAO_ERR_HANDLE_INVALID:
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    case SAO_ERR_BUFFER_TOO_SMALL:
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    case SAO_ERR_OS_CALL_FAILED:
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    case SAO_ERR_NOT_IMPLEMENTED:
+    case Loader::SAO_PLUGINS_ERR_UNSUPPORTED:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case Loader::SAO_PLUGINS_ERR_ALREADY_EXISTS:
+        return SAO_STATUS_ERR_ALREADY_EXISTS;
+    case Loader::SAO_PLUGINS_ERR_NOT_FOUND:
+    case Loader::SAO_PLUGINS_ERR_DEPENDENCY_MISSING:
+        return SAO_STATUS_ERR_NOT_FOUND;
+    case Loader::SAO_PLUGINS_ERR_DEPENDENCY_CYCLE:
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    case Loader::SAO_PLUGINS_ERR_ABI_MISMATCH:
+    case Loader::SAO_PLUGINS_ERR_VERSION_MISMATCH:
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    case Loader::SAO_PLUGINS_ERR_CAPABILITY_MISMATCH:
+        return SAO_STATUS_ERR_CAPABILITY_MISSING;
+    case Loader::SAO_PLUGINS_ERR_BUSY:
+        return SAO_STATUS_ERR_TIMEOUT;
+    case Loader::SAO_PLUGINS_ERR_NOT_OWNER:
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    default:
+        return SAO_STATUS_ERR_SCRIPT_RUNTIME;
+    }
+}
+
 PluginState map_loader_state(sao::plugins::loader::lifecycle_state state) noexcept {
     static constexpr std::array<PluginState, 13> states{
         PluginState::unknown,       PluginState::discovered,
@@ -172,8 +210,12 @@ Snapshot snapshot_loader() {
     return snapshot;
 }
 
-sao_status_t run_plugin_operation(std::string_view plugin_id, std::string_view action) {
+sao_status_t run_loader_operation(
+    std::string_view plugin_id,
+    std::int32_t(SAO_PLUGINS_CALL* operation)(sao::plugins::loader::plugin_handle_t)) {
     namespace Loader = sao::plugins::loader;
+    if (operation == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     const Loader::registry_handle_t registry = Loader::sao_plugins_registry_instance();
     if (registry == nullptr)
         return SAO_STATUS_ERR_CAPABILITY_MISSING;
@@ -182,14 +224,27 @@ sao_status_t run_plugin_operation(std::string_view plugin_id, std::string_view a
         Loader::sao_plugins_registry_find(registry, owned_id.c_str());
     if (plugin == nullptr)
         return SAO_STATUS_ERR_NOT_FOUND;
+    return map_loader_status(operation(plugin));
+}
 
-    if (action == kActionEnable)
-        return static_cast<sao_status_t>(Loader::sao_plugins_lifecycle_enable(plugin));
-    if (action == kActionDisable)
-        return static_cast<sao_status_t>(Loader::sao_plugins_lifecycle_disable(plugin));
-    if (action == kActionReload)
-        return static_cast<sao_status_t>(Loader::sao_plugins_lifecycle_reload(plugin));
-    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+Operations make_default_operations() noexcept {
+    namespace Loader = sao::plugins::loader;
+    try {
+        Operations operations;
+        operations.snapshot = &snapshot_loader;
+        operations.enable = [](std::string_view plugin_id) {
+            return run_loader_operation(plugin_id, &Loader::sao_plugins_lifecycle_enable);
+        };
+        operations.disable = [](std::string_view plugin_id) {
+            return run_loader_operation(plugin_id, &Loader::sao_plugins_lifecycle_disable);
+        };
+        operations.reload = [](std::string_view plugin_id) {
+            return run_loader_operation(plugin_id, &Loader::sao_plugins_lifecycle_reload);
+        };
+        return operations;
+    } catch (...) {
+        return {};
+    }
 }
 
 #else
@@ -201,11 +256,23 @@ Snapshot snapshot_loader() {
     return snapshot;
 }
 
-sao_status_t run_plugin_operation(std::string_view, std::string_view) {
-    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+Operations make_default_operations() noexcept {
+    try {
+        Operations operations;
+        operations.snapshot = &snapshot_loader;
+        return operations;
+    } catch (...) {
+        return {};
+    }
 }
 
 #endif
+
+Operations make_default_operations_with_reload_all(ReloadAllHandler reload_all_handler) noexcept {
+    Operations operations = make_default_operations();
+    operations.reload_all = std::move(reload_all_handler);
+    return operations;
+}
 
 } // namespace
 
@@ -252,6 +319,7 @@ bool plugin_state_allows_reload(PluginState state) noexcept {
 
 SaoPanelDescriptor descriptor_for_testing() noexcept {
     SaoPanelDescriptor descriptor{};
+    descriptor.struct_size = sizeof(SaoPanelDescriptor);
     descriptor.panel_id_utf8 = kPanelId.data();
     descriptor.title_utf8 = "Plugin Manager";
     descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
@@ -372,12 +440,10 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
 }
 
 struct Owner::Impl {
-    explicit Impl(sao_ui_compositor_handle_t borrowed_compositor) noexcept
-        : compositor(borrowed_compositor) {}
+    Impl(sao_ui_compositor_handle_t borrowed_compositor, Operations initial_operations) noexcept
+        : compositor(borrowed_compositor), operations(std::move(initial_operations)) {}
 
-    ~Impl() {
-        shutdown_noexcept();
-    }
+    ~Impl() = default;
 
     struct CallbackLease final {
         explicit CallbackLease(Impl* candidate) noexcept : state(candidate) {
@@ -397,7 +463,6 @@ struct Owner::Impl {
                 std::lock_guard lock(state->mutex);
                 --state->callbacks_in_flight;
             }
-            state->cv.notify_all();
         }
 
         explicit operator bool() const noexcept {
@@ -413,7 +478,8 @@ struct Owner::Impl {
                                             std::size_t payload_len, void* user_data) {
         auto* state = static_cast<Impl*>(user_data);
         CallbackLease lease(state);
-        if (!lease || action_id_utf8 == nullptr)
+        if (!lease || action_id_utf8 == nullptr ||
+            (payload_json_utf8 == nullptr && payload_len != 0U))
             return;
         const std::string_view payload(
             payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
@@ -421,10 +487,27 @@ struct Owner::Impl {
         (void)state->dispatch(action_id_utf8, payload);
     }
 
+    static void SAO_UI_CALL event_callback(std::int32_t event_kind, void* user_data) {
+        auto* state = static_cast<Impl*>(user_data);
+        CallbackLease lease(state);
+        if (!lease)
+            return;
+        (void)state->dispatch_event(event_kind);
+    }
+
+    sao_status_t require_owner_thread() const noexcept {
+        if (compositor == nullptr)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return sao_ui_compositor_require_owner_thread(compositor);
+    }
+
     sao_status_t set_operations(Operations replacement) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
         try {
             std::lock_guard lock(mutex);
-            if (retiring)
+            if (retiring || callbacks_in_flight != 0U)
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
             operations = std::move(replacement);
             return SAO_STATUS_OK;
@@ -434,8 +517,9 @@ struct Owner::Impl {
     }
 
     sao_status_t open() noexcept {
-        if (compositor == nullptr)
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
         try {
             sao_ui_panel_handle_t existing = nullptr;
             {
@@ -446,6 +530,8 @@ struct Owner::Impl {
                 if (existing == nullptr) {
                     creating = true;
                     accepting = false;
+                } else if (!action_handler_attached || !event_handler_attached || !accepting) {
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
                 }
             }
 
@@ -469,13 +555,18 @@ struct Owner::Impl {
                 if (status == SAO_STATUS_OK) {
                     std::lock_guard lock(mutex);
                     action_handler_attached = true;
+                }
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_panel_set_event_handler(created_panel, &event_callback, this);
+                if (status == SAO_STATUS_OK) {
+                    std::lock_guard lock(mutex);
+                    event_handler_attached = true;
                     accepting = true;
                 }
                 if (status == SAO_STATUS_OK)
                     status = refresh_now();
                 if (status != SAO_STATUS_OK) {
-                    cleanup_failed_create();
-                    return status;
+                    return cleanup_failed_create(status);
                 }
                 existing = created_panel;
             } else {
@@ -498,7 +589,24 @@ struct Owner::Impl {
         }
     }
 
+    sao_status_t close() noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        sao_ui_panel_handle_t target = nullptr;
+        {
+            std::lock_guard lock(mutex);
+            if (creating || retiring)
+                return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            target = panel;
+        }
+        return target == nullptr ? SAO_STATUS_OK : sao_ui_panel_hide(target);
+    }
+
     sao_status_t refresh() noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
         try {
             {
                 std::lock_guard lock(mutex);
@@ -515,20 +623,32 @@ struct Owner::Impl {
 
     sao_status_t refresh_now() noexcept {
         try {
-            Snapshot snapshot = snapshot_loader();
+            std::function<Snapshot()> snapshot_operation;
             sao_ui_panel_body_handle_t target_body = nullptr;
+            std::string pending_error;
+            bool reload_all_available = false;
             {
                 std::lock_guard lock(mutex);
                 target_body = body;
-                snapshot.reload_all_available = static_cast<bool>(operations.reload_all);
-                if (!operation_error.empty()) {
-                    if (!snapshot.error_message.empty())
-                        snapshot.error_message.append(" ");
-                    snapshot.error_message.append(operation_error);
-                }
+                snapshot_operation = operations.snapshot;
+                reload_all_available = static_cast<bool>(operations.reload_all);
+                pending_error = operation_error;
             }
             if (target_body == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
+            Snapshot snapshot;
+            if (snapshot_operation) {
+                snapshot = snapshot_operation();
+            } else {
+                snapshot.error_message =
+                    "Plugin snapshot operation unavailable / 插件快照操作不可用。";
+            }
+            snapshot.reload_all_available = reload_all_available;
+            if (!pending_error.empty()) {
+                if (!snapshot.error_message.empty())
+                    snapshot.error_message.append(" ");
+                snapshot.error_message.append(pending_error);
+            }
             const std::string spec = build_spec_for_testing(snapshot);
             const sao_status_t status = sao_ui_panel_body_set_spec(
                 target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
@@ -539,6 +659,9 @@ struct Owner::Impl {
     }
 
     sao_status_t dispatch(std::string_view action_id, std::string_view payload_json) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
         if (action_id == kActionRefresh) {
             clear_operation_message();
             return refresh();
@@ -584,7 +707,29 @@ struct Owner::Impl {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
         const std::string plugin_id = payload.get<std::string>();
-        const sao_status_t operation = run_plugin_operation(plugin_id, action_id);
+        std::function<sao_status_t(std::string_view)> handler;
+        try {
+            std::lock_guard lock(mutex);
+            if (action_id == kActionEnable)
+                handler = operations.enable;
+            else if (action_id == kActionDisable)
+                handler = operations.disable;
+            else
+                handler = operations.reload;
+        } catch (...) {
+            set_operation_error("Plugin operation handler copy failed.");
+            (void)refresh();
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+
+        sao_status_t operation = SAO_STATUS_ERR_CAPABILITY_MISSING;
+        if (handler) {
+            try {
+                operation = handler(plugin_id);
+            } catch (...) {
+                operation = SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
         if (operation == SAO_STATUS_OK)
             clear_operation_message();
         else
@@ -594,9 +739,43 @@ struct Owner::Impl {
         return operation == SAO_STATUS_OK ? refresh_status : operation;
     }
 
+    sao_status_t dispatch_event(std::int32_t event_kind) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        return event_kind == SAO_UI_PANEL_EVENT_CLOSE ? close() : SAO_STATUS_OK;
+    }
+
+    sao_status_t dispatch_action_for_testing(std::string_view action_id,
+                                             std::string_view payload_json) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        CallbackLease lease(this);
+        return lease ? dispatch(action_id, payload_json) : SAO_UI_PANEL_STATUS_ERR_BUSY;
+    }
+
+    sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        CallbackLease lease(this);
+        return lease ? dispatch_event(event_kind) : SAO_UI_PANEL_STATUS_ERR_BUSY;
+    }
+
     sao_status_t take_offline() noexcept {
+        {
+            std::lock_guard lock(mutex);
+            if (panel == nullptr && !creating && !retiring)
+                return SAO_STATUS_OK;
+        }
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
         sao_ui_panel_handle_t target_panel = nullptr;
         bool had_action = false;
+        bool had_event = false;
+        bool was_accepting = false;
         {
             std::lock_guard lock(mutex);
             if (creating || retiring || callbacks_in_flight != 0U)
@@ -605,16 +784,23 @@ struct Owner::Impl {
                 return SAO_STATUS_OK;
             }
             retiring = true;
-            accepting = false;
             target_panel = panel;
             had_action = action_handler_attached;
+            had_event = event_handler_attached;
+            was_accepting = accepting;
+            accepting = false;
         }
 
         bool action_detached = !had_action;
+        bool event_detached = !had_event;
         sao_status_t status = SAO_STATUS_OK;
         if (had_action) {
             status = sao_ui_panel_set_action_handler(target_panel, nullptr, nullptr);
             action_detached = status == SAO_STATUS_OK;
+        }
+        if (status == SAO_STATUS_OK && had_event) {
+            status = sao_ui_panel_set_event_handler(target_panel, nullptr, nullptr);
+            event_detached = status == SAO_STATUS_OK;
         }
         if (status == SAO_STATUS_OK)
             status = sao_ui_panel_unregister(target_panel);
@@ -624,12 +810,19 @@ struct Owner::Impl {
             panel = nullptr;
             body = nullptr;
             action_handler_attached = false;
+            event_handler_attached = false;
             accepting = false;
             retiring = false;
             return SAO_STATUS_OK;
         }
 
         bool action_restored = !had_action;
+        bool event_restored = !had_event;
+        if (had_event && event_detached)
+            event_restored = sao_ui_panel_set_event_handler(target_panel, &event_callback, this) ==
+                             SAO_STATUS_OK;
+        else if (had_event)
+            event_restored = true;
         if (had_action && action_detached)
             action_restored = sao_ui_panel_set_action_handler(target_panel, &action_callback,
                                                               this) == SAO_STATUS_OK;
@@ -639,10 +832,11 @@ struct Owner::Impl {
         {
             std::lock_guard lock(mutex);
             action_handler_attached = had_action && action_restored;
-            accepting = action_restored;
+            event_handler_attached = had_event && event_restored;
+            accepting = was_accepting && action_handler_attached && event_handler_attached;
             retiring = false;
         }
-        return action_restored ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
+        return action_restored && event_restored ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
     }
 
     bool is_registered() const noexcept {
@@ -678,79 +872,62 @@ struct Owner::Impl {
     void finish_create_failure() noexcept {
         std::lock_guard lock(mutex);
         creating = false;
-        accepting = panel != nullptr && action_handler_attached;
+        accepting = panel != nullptr && action_handler_attached && event_handler_attached;
     }
 
-    void cleanup_failed_create() noexcept {
-        sao_ui_panel_handle_t failed_panel = nullptr;
-        bool detach_action = false;
+    sao_status_t cleanup_failed_create(sao_status_t primary_status) noexcept {
         {
             std::lock_guard lock(mutex);
-            failed_panel = panel;
-            detach_action = action_handler_attached;
-            accepting = false;
+            creating = false;
         }
-        if (failed_panel != nullptr && detach_action)
-            (void)sao_ui_panel_set_action_handler(failed_panel, nullptr, nullptr);
-        if (failed_panel != nullptr)
-            (void)sao_ui_panel_unregister(failed_panel);
-        std::lock_guard lock(mutex);
-        panel = nullptr;
-        body = nullptr;
-        action_handler_attached = false;
-        accepting = false;
-        creating = false;
+        const sao_status_t teardown_status = take_offline();
+        return teardown_status == SAO_STATUS_OK ? primary_status : teardown_status;
     }
 
-    void shutdown_noexcept() noexcept {
-        for (;;) {
-            const sao_status_t status = take_offline();
-            if (status != SAO_UI_PANEL_STATUS_ERR_BUSY)
-                break;
-            std::unique_lock lock(mutex);
-            cv.wait(lock, [&] { return callbacks_in_flight == 0U; });
-        }
-
-        sao_ui_panel_handle_t remaining = nullptr;
-        {
-            std::lock_guard lock(mutex);
-            remaining = panel;
-            accepting = false;
-            retiring = true;
-        }
-        if (remaining != nullptr) {
-            (void)sao_ui_panel_set_action_handler(remaining, nullptr, nullptr);
-            (void)sao_ui_panel_unregister(remaining);
-        }
-        std::lock_guard lock(mutex);
-        panel = nullptr;
-        body = nullptr;
-        action_handler_attached = false;
-        retiring = false;
+    bool shutdown_noexcept() noexcept {
+        return take_offline() == SAO_STATUS_OK;
     }
 
     sao_ui_compositor_handle_t compositor{};
     mutable std::mutex mutex;
-    std::condition_variable cv;
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
     Operations operations;
     std::string operation_error;
     std::size_t callbacks_in_flight{};
     bool action_handler_attached{};
+    bool event_handler_attached{};
     bool accepting{};
     bool creating{};
     bool retiring{};
 };
 
 Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept
-    : impl_(new (std::nothrow) Impl(borrowed_compositor)) {}
+    : Owner(borrowed_compositor, make_default_operations()) {}
 
-Owner::~Owner() = default;
+Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor,
+             ReloadAllHandler reload_all_handler) noexcept
+    : Owner(borrowed_compositor,
+            make_default_operations_with_reload_all(std::move(reload_all_handler))) {}
+
+Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor, Operations operations) noexcept
+    : impl_(new (std::nothrow) Impl(borrowed_compositor, std::move(operations))) {}
+
+Owner::~Owner() {
+    if (impl_ != nullptr && !impl_->shutdown_noexcept())
+        (void)impl_.release();
+}
 
 Owner::Owner(Owner&& other) noexcept = default;
 
-Owner& Owner::operator=(Owner&& other) noexcept = default;
+Owner& Owner::operator=(Owner&& other) noexcept {
+    if (this == &other)
+        return *this;
+    if (impl_ != nullptr && !impl_->shutdown_noexcept())
+        (void)impl_.release();
+    impl_ = std::move(other.impl_);
+    return *this;
+}
 
 sao_status_t Owner::set_operations(Operations operations) noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
@@ -759,6 +936,10 @@ sao_status_t Owner::set_operations(Operations operations) noexcept {
 
 sao_status_t Owner::open() noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->open();
+}
+
+sao_status_t Owner::close() noexcept {
+    return impl_ == nullptr ? SAO_STATUS_OK : impl_->close();
 }
 
 sao_status_t Owner::refresh() noexcept {
@@ -784,7 +965,12 @@ sao_ui_panel_handle_t Owner::panel_handle() const noexcept {
 sao_status_t Owner::dispatch_action_for_testing(std::string_view action_id,
                                                 std::string_view payload_json) noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
-                            : impl_->dispatch(action_id, payload_json);
+                            : impl_->dispatch_action_for_testing(action_id, payload_json);
+}
+
+sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept {
+    return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
+                            : impl_->dispatch_event_for_testing(event_kind);
 }
 
 } // namespace sao::launcher::plugin_manager_panel

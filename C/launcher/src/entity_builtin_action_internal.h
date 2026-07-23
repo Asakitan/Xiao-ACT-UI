@@ -14,6 +14,16 @@ using ApplyStreamingModeFn = sao_status_t (*)(bool enabled, void* user_data);
 using PersistStreamingModeFn = sao_status_t (*)(bool enabled, void* user_data);
 using ReloadPluginsFn = sao_status_t (*)(void* user_data);
 using RefreshEntityFn = sao_status_t (*)(void* user_data);
+using RunOwnedActionFn = sao_status_t (*)(void* user_data);
+
+inline constexpr std::int32_t kSharedFisheyeBackdropZOrder = -500'000'000;
+
+struct SharedFisheyeVisibility {
+    bool workshop = false;
+    bool plugin_manager = false;
+    bool process_selector = false;
+    bool entity_menu = false;
+};
 
 struct Authority {
     bool publication_available = false;
@@ -51,8 +61,16 @@ struct Operations {
     PersistStreamingModeFn persist_streaming_mode = nullptr;
     ReloadPluginsFn reload_plugins = nullptr;
     RefreshEntityFn refresh_entity = nullptr;
+    RunOwnedActionFn open_workshop = nullptr;
+    RunOwnedActionFn open_process_selector = nullptr;
+    RunOwnedActionFn open_plugin_manager = nullptr;
+    RunOwnedActionFn open_plugin_status = nullptr;
+    RunOwnedActionFn set_fisheye_procedural = nullptr;
+    RunOwnedActionFn set_fisheye_live = nullptr;
     void* user_data = nullptr;
 };
+
+bool should_show_shared_fisheye(const SharedFisheyeVisibility& visibility) noexcept;
 
 sao_status_t authorization_status(std::int32_t action, const State& state) noexcept;
 

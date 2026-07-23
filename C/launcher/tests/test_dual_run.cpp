@@ -340,7 +340,7 @@ TEST_CASE("dual_run_fallback_records_reason",
     int32_t did = sao_launcher_dual_run_maybe_fallback_to_python(
         &cfg, sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL, L"platform_bringup", &exit_code);
     REQUIRE(did == 1);
-    REQUIRE(exit_code == SAO_EXIT_HANDOFF_TO_PYTHON);
+    REQUIRE(exit_code == sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON);
 
     sao_dual_run_status st{};
     sao_launcher_dual_run_status(&st);
@@ -401,7 +401,7 @@ TEST_CASE("dual_run_init_pipeline_step_zero_python_only_short_circuits",
         REQUIRE(sao_launcher_dual_run_step_zero(&cfg, &cont, &exit_code)
                 == SAO_STATUS_OK);
         REQUIRE(cont == 0);
-        REQUIRE(exit_code == SAO_EXIT_HANDOFF_TO_PYTHON);
+        REQUIRE(exit_code == sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON);
 
         sao_dual_run_status st{};
         sao_launcher_dual_run_status(&st);

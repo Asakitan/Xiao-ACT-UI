@@ -2,6 +2,7 @@
 
 #include "sao/core/status.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -76,6 +77,8 @@ class Owner final {
   public:
     Owner(sao_ui_compositor_handle_t compositor, sao_rt_io_proxy_handle_t proxy);
     Owner(sao_ui_compositor_handle_t compositor, Operations operations);
+    // Destroy on the compositor owner thread, or complete take_offline()
+    // first. A live registration is never silently discarded.
     ~Owner() noexcept;
 
     Owner(const Owner&) = delete;
@@ -85,6 +88,9 @@ class Owner final {
 
     sao_status_t open() noexcept;
     sao_status_t close() noexcept;
+    // Owner-thread, retryable panel retirement. Any failure preserves the
+    // registered panel and callback ownership for a later retry.
+    sao_status_t take_offline() noexcept;
     sao_status_t refresh() noexcept;
     sao_status_t set_filter(FilterMode filter) noexcept;
     sao_status_t attach(ProcessIdentity identity) noexcept;
@@ -93,11 +99,22 @@ class Owner final {
     sao_status_t snapshot(Snapshot& out) const noexcept;
 
   private:
+    struct OperationGuard;
     struct State;
 
     sao_status_t require_owner_thread() const noexcept;
+    sao_status_t begin_operation() noexcept;
+    void end_operation() noexcept;
+    bool begin_callback() noexcept;
+    void end_callback() noexcept;
+    void handle_panel_event(std::int32_t event_kind) noexcept;
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
+
+    static void panel_action_callback(const char* action_id_utf8,
+                                      const std::uint8_t* payload_json_utf8,
+                                      std::size_t payload_len, void* user_data) noexcept;
+    static void panel_event_callback(std::int32_t event_kind, void* user_data) noexcept;
 
     std::unique_ptr<State> state_;
 };

@@ -2,13 +2,43 @@
 
 #include "sao/launcher/user_menu.h"
 
+#include "sao_security/obfuscation/enc_str.h"
+
+#include <cstddef>
 #include <cwchar>
 #include <iterator>
 
 namespace sao::launcher {
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"SaoAuto.Launcher.UserMenu";
+// ASCII-only widening for identifiers decrypted from SAO_ENC_STR.
+// Byte-by-byte widen to keep decrypted plaintext scoped to this TU.
+void widen_ascii(const char* src, wchar_t* dst, std::size_t dst_cap) {
+    if (!dst || dst_cap == 0) return;
+    std::size_t i = 0;
+    if (src) {
+        for (; src[i] != '\0' && i + 1 < dst_cap; ++i) {
+            dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(src[i]));
+        }
+    }
+    dst[i] = L'\0';
+}
+
+// Opaque window class name (replaces plaintext "SaoAuto.Launcher.UserMenu").
+// Wrap the static array in a struct so C++11 magic-statics give us
+// thread-safe once-initialisation across concurrent create() / destroy().
+const wchar_t* opaque_window_class_name() noexcept {
+    struct Widened {
+        wchar_t buf[32];
+        Widened() noexcept {
+            const auto enc = SAO_ENC_STR("4F5A.um");
+            widen_ascii(enc.decrypt(), buf, std::size(buf));
+        }
+    };
+    static const Widened w{};
+    return w.buf;
+}
+
 constexpr wchar_t kDocsIndexSuffix[] = L"\\docs\\html\\index.html";
 constexpr wchar_t kMenuTitle[] = L"SAO Auto";
 constexpr UINT kNotificationIconId = 1;
@@ -124,14 +154,15 @@ bool UserMenu::create(const wchar_t* base_dir) noexcept {
         window_class.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     }
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.lpszClassName = kWindowClassName;
+    const wchar_t* opaque_class = opaque_window_class_name();
+    window_class.lpszClassName = opaque_class;
     if (RegisterClassExW(&window_class) == 0) {
         destroy();
         return false;
     }
     window_class_registered_ = true;
 
-    window_ = CreateWindowExW(0, kWindowClassName, kMenuTitle, WS_OVERLAPPED, 0, 0, 0, 0,
+    window_ = CreateWindowExW(0, opaque_class, kMenuTitle, WS_OVERLAPPED, 0, 0, 0, 0,
                               nullptr, nullptr, instance_, this);
     if (!window_ || !addNotificationIcon()) {
         destroy();
@@ -152,7 +183,7 @@ void UserMenu::destroy() noexcept {
         window_ = nullptr;
     }
     if (window_class_registered_ && instance_) {
-        (void)UnregisterClassW(kWindowClassName, instance_);
+        (void)UnregisterClassW(opaque_window_class_name(), instance_);
         window_class_registered_ = false;
     }
 
