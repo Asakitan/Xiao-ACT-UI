@@ -21,6 +21,7 @@
 #include "tool_execution_monitor.h"
 #include "tool_result_cache.h"
 #include "tool_result_filter.h"
+#include "kernel_map_panel_provider.h"
 #include "webview_panel_registry.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
@@ -238,6 +239,10 @@ private:
     // webview_panel_registry.h.  Unconditionally compiled: even without
     // WebView2 the Node side needs a deterministic id + state surface.
     WebviewPanelRegistry webview_panels_;
+    // Built-in operator dashboard for the kernel-map bridge.  Idempotent
+    // singleton, constructed in initialize().  See
+    // kernel_map_panel_provider.h.
+    std::unique_ptr<KernelMapPanelProvider> kernel_map_panel_;
     mutable std::mutex webview_bridge_mutex_;
     WebviewPostMessageHandler webview_post_message_handler_;
     uint32_t maximum_event_queue_;

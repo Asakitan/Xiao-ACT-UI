@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
 
 #include <algorithm>
 #include <array>
@@ -5578,6 +5578,145 @@ TEST_CASE("AI Editor workflow.snapshot_variables mirrors the current variable "
                      {{"executionId", execution_id}})
                 .contains("result"));
     wait_for_workflow_completion(fixture.get(), execution_id, 5'000);
+}
+
+TEST_CASE("AI Editor conversation.duplicate copies the full conversation "
+          "and preserves the source",
+          "[plugins][ai_editor][native][storage][duplicate]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const std::string source_id = "conv-duplicate-source-full";
+    const Json source_document = {
+        {"id", source_id},
+        {"title", "Deployment review"},
+        {"systemPrompt", "Keep every decision and constraint."},
+        {"model", "gpt-duplicate"},
+        {"scope", "workspace"},
+        {"savedAt", int64_t{1}},
+        {"messageCount", 2},
+        {"pinned", true},
+        {"tags", Json::array({"review", "release"})},
+        {"messages",
+         Json::array({{{"role", "user"}, {"content", "Ship the exact runtime behavior."}},
+                      {{"role", "assistant"}, {"content", "The native contract is frozen."}}})}};
+    const Json imported = dispatch(
+        runtime, "conversation.import",
+        {{"payload", {{"format", "sao-conversation/1"}, {"conversation", source_document}}},
+         {"scope", "workspace"}});
+    REQUIRE(imported.contains("result"));
+    REQUIRE(imported["result"]["assignedIds"][0] == source_id);
+
+    const Json source_before = dispatch(runtime, "conversation.get", {{"id", source_id}})["result"];
+    const Json response = dispatch(runtime, "conversation.duplicate", {{"sourceId", source_id}});
+    REQUIRE(response.contains("result"));
+    const Json& duplicate = response["result"];
+    const std::string duplicate_id = duplicate["id"];
+
+    REQUIRE(!duplicate_id.empty());
+    REQUIRE(duplicate_id != source_id);
+    REQUIRE(duplicate["title"] == "Deployment review (copy)");
+    REQUIRE(duplicate["systemPrompt"] == source_before["systemPrompt"]);
+    REQUIRE(duplicate["model"] == source_before["model"]);
+    REQUIRE(duplicate["scope"] == source_before["scope"]);
+    REQUIRE(duplicate["messages"] == source_before["messages"]);
+    REQUIRE(duplicate["messageCount"] == source_before["messageCount"]);
+    REQUIRE(duplicate["tags"] == source_before["tags"]);
+    REQUIRE(duplicate["pinned"] == false);
+    REQUIRE(duplicate["sourceId"] == source_id);
+    REQUIRE(duplicate["duplicatedAt"] == duplicate["savedAt"]);
+    REQUIRE(duplicate["savedAt"].get<int64_t>() > source_before["savedAt"].get<int64_t>());
+
+    const Json persisted = dispatch(runtime, "conversation.get", {{"id", duplicate_id}})["result"];
+    Json returned_document = duplicate;
+    returned_document.erase("sourceId");
+    returned_document.erase("duplicatedAt");
+    REQUIRE(persisted == returned_document);
+
+    const Json source_after = dispatch(runtime, "conversation.get", {{"id", source_id}})["result"];
+    REQUIRE(source_after == source_before);
+}
+
+TEST_CASE("AI Editor conversation.duplicate supports empty conversations and "
+          "title scope overrides",
+          "[plugins][ai_editor][native][storage][duplicate]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const std::string source_id = "conv-duplicate-source-empty";
+    const Json source_document = {{"id", source_id},
+                                  {"title", "Empty system thread"},
+                                  {"systemPrompt", "Retain this prompt."},
+                                  {"model", "gpt-empty"},
+                                  {"scope", "system"},
+                                  {"savedAt", int64_t{2}},
+                                  {"messageCount", 0},
+                                  {"pinned", true},
+                                  {"tags", Json::array({"empty"})},
+                                  {"messages", Json::array()}};
+    REQUIRE(dispatch(
+                runtime, "conversation.import",
+                {{"payload", {{"format", "sao-conversation/1"}, {"conversation", source_document}}},
+                 {"scope", "system"}})
+                .contains("result"));
+
+    const Json default_response =
+        dispatch(runtime, "conversation.duplicate", {{"sourceId", source_id}});
+    REQUIRE(default_response.contains("result"));
+    const Json& default_duplicate = default_response["result"];
+    REQUIRE(default_duplicate["title"] == "Empty system thread (copy)");
+    REQUIRE(default_duplicate["scope"] == "system");
+    REQUIRE(default_duplicate["messages"].is_array());
+    REQUIRE(default_duplicate["messages"].empty());
+    REQUIRE(default_duplicate["messageCount"] == 0);
+
+    const Json response = dispatch(
+        runtime, "conversation.duplicate",
+        {{"sourceId", source_id}, {"title", "Workspace empty copy"}, {"scope", "workspace"}});
+    REQUIRE(response.contains("result"));
+    const Json& duplicate = response["result"];
+    REQUIRE(duplicate["title"] == "Workspace empty copy");
+    REQUIRE(duplicate["scope"] == "workspace");
+    REQUIRE(duplicate["messages"].is_array());
+    REQUIRE(duplicate["messages"].empty());
+    REQUIRE(duplicate["messageCount"] == 0);
+    REQUIRE(duplicate["systemPrompt"] == "Retain this prompt.");
+    REQUIRE(duplicate["model"] == "gpt-empty");
+    REQUIRE(duplicate["tags"] == Json::array({"empty"}));
+    REQUIRE(duplicate["pinned"] == false);
+
+    const Json source_after = dispatch(runtime, "conversation.get", {{"id", source_id}})["result"];
+    REQUIRE(source_after["title"] == "Empty system thread");
+    REQUIRE(source_after["scope"] == "system");
+    REQUIRE(source_after["pinned"] == true);
+    REQUIRE(source_after["messages"].empty());
+
+    const Json missing = dispatch(runtime, "conversation.duplicate",
+                                  {{"sourceId", "conv-duplicate-does-not-exist"}});
+    REQUIRE(missing["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    const Json empty_source = dispatch(runtime, "conversation.duplicate", {{"sourceId", ""}});
+    REQUIRE(empty_source["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json missing_source = dispatch(runtime, "conversation.duplicate", Json::object());
+    REQUIRE(missing_source["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json non_string_source = dispatch(runtime, "conversation.duplicate", {{"sourceId", 42}});
+    REQUIRE(non_string_source["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json bad_title =
+        dispatch(runtime, "conversation.duplicate", {{"sourceId", source_id}, {"title", 42}});
+    REQUIRE(bad_title["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json bad_scope =
+        dispatch(runtime, "conversation.duplicate", {{"sourceId", source_id}, {"scope", "all"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json empty_scope =
+        dispatch(runtime, "conversation.duplicate", {{"sourceId", source_id}, {"scope", ""}});
+    REQUIRE(empty_scope["error"]["data"]["status"] == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("AI Editor conversation.branch forks a new conversation from "

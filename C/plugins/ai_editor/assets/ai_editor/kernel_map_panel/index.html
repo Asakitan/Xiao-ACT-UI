@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Kernel Map Bridge</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body data-panel="kernel-map">
+  <header class="panel-header">
+    <h1 class="panel-title">Kernel Map Bridge</h1>
+    <span class="panel-subtitle" data-role="bridge-availability">bridge: probing...</span>
+  </header>
+
+  <section class="panel-status" aria-label="Status summary">
+    <div class="status-row">
+      <span class="status-label">Status</span>
+      <span class="status-badge status-badge--unknown" data-role="status-badge">Unknown</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Mapped drivers</span>
+      <span class="status-value" data-role="mapped-count">0</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Last refresh</span>
+      <span class="status-value" data-role="last-refresh">never</span>
+    </div>
+  </section>
+
+  <section class="panel-actions" aria-label="Bridge control">
+    <button class="panel-button panel-button--primary"
+            type="button"
+            data-role="btn-activate"
+            data-cmd="activate">Activate</button>
+    <button class="panel-button panel-button--danger"
+            type="button"
+            data-role="btn-deactivate"
+            data-cmd="deactivate">Deactivate</button>
+  </section>
+
+  <section class="panel-list" aria-label="Mapped images">
+    <div class="list-header">
+      <span class="list-title">Mapped images</span>
+      <span class="list-hint" data-role="images-hint">no images loaded</span>
+    </div>
+    <ul class="image-list" data-role="image-list"></ul>
+    <template id="image-row-template">
+      <li class="image-row">
+        <code class="image-address"></code>
+        <button class="panel-button panel-button--secondary"
+                type="button"
+                data-cmd="unmap">Unload</button>
+      </li>
+    </template>
+  </section>
+
+  <section class="panel-footer">
+    <button class="panel-button panel-button--secondary"
+            type="button"
+            data-role="btn-refresh"
+            data-cmd="refresh">Refresh</button>
+    <button class="panel-button panel-button--secondary"
+            type="button"
+            data-role="btn-load-driver"
+            data-cmd="load_driver">Load driver...</button>
+  </section>
+
+  <section class="panel-log" aria-label="Bridge activity log">
+    <div class="log-title">Recent activity</div>
+    <ol class="log-entries" data-role="log-entries"></ol>
+  </section>
+
+  <script src="panel.js"></script>
+</body>
+</html>

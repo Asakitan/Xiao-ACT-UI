@@ -1,0 +1,258 @@
+/* Kernel Map Bridge panel styles.
+   Mimics the VSCode-dark palette used by the AI editor webview smoke
+   fixture (see .vscode/handoff archive) so the side panel blends into
+   the rest of the shell without a separate theme handshake. */
+
+:root {
+  --km-bg: #1e1e1e;
+  --km-bg-alt: #181818;
+  --km-surface: #252526;
+  --km-border: #3c3c3c;
+  --km-border-strong: #4a4a4a;
+  --km-fg: #cccccc;
+  --km-fg-muted: #8f8f8f;
+  --km-accent: #007acc;
+  --km-accent-hover: #1c8ce0;
+  --km-danger: #b93a3a;
+  --km-danger-hover: #d24747;
+  --km-active: #2ea043;
+  --km-inactive: #6f6f6f;
+  --km-warn: #d9822b;
+  --km-radius: 4px;
+  --km-gap: 10px;
+  --km-font: 12px "Segoe UI", "Microsoft YaHei", sans-serif;
+  --km-mono: 12px Consolas, "Cascadia Mono", monospace;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--km-bg);
+  color: var(--km-fg);
+  font: var(--km-font);
+}
+
+.panel-header {
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-surface);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.panel-subtitle {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--km-fg-muted);
+}
+
+.panel-status {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-bg);
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.status-label {
+  color: var(--km-fg-muted);
+}
+
+.status-value {
+  font: var(--km-mono);
+  color: var(--km-fg);
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--km-radius);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border: 1px solid var(--km-border-strong);
+  background: var(--km-inactive);
+  color: var(--km-fg);
+}
+
+.status-badge--active {
+  background: var(--km-active);
+  border-color: var(--km-active);
+  color: #0b1a10;
+}
+
+.status-badge--inactive {
+  background: var(--km-inactive);
+  border-color: var(--km-inactive);
+  color: #ffffff;
+}
+
+.status-badge--unknown {
+  background: var(--km-warn);
+  border-color: var(--km-warn);
+  color: #1c0f00;
+}
+
+.panel-actions {
+  display: flex;
+  gap: var(--km-gap);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-bg);
+}
+
+.panel-button {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--km-border-strong);
+  border-radius: var(--km-radius);
+  background: var(--km-surface);
+  color: var(--km-fg);
+  font: var(--km-font);
+  cursor: pointer;
+  transition: background 0.1s ease-in-out, border-color 0.1s ease-in-out;
+}
+
+.panel-button:hover:not(:disabled) {
+  background: #2f2f30;
+  border-color: var(--km-fg-muted);
+}
+
+.panel-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.panel-button--primary {
+  background: var(--km-accent);
+  border-color: var(--km-accent);
+  color: #ffffff;
+}
+
+.panel-button--primary:hover:not(:disabled) {
+  background: var(--km-accent-hover);
+  border-color: var(--km-accent-hover);
+}
+
+.panel-button--danger {
+  background: var(--km-danger);
+  border-color: var(--km-danger);
+  color: #ffffff;
+}
+
+.panel-button--danger:hover:not(:disabled) {
+  background: var(--km-danger-hover);
+  border-color: var(--km-danger-hover);
+}
+
+.panel-button--secondary {
+  padding: 4px 8px;
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.panel-list {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-bg-alt);
+}
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.list-title {
+  font-weight: 600;
+  color: var(--km-fg);
+}
+
+.list-hint {
+  font-size: 11px;
+  color: var(--km-fg-muted);
+}
+
+.image-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.image-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--km-radius);
+}
+
+.image-row + .image-row {
+  margin-top: 3px;
+}
+
+.image-row:hover {
+  border-color: var(--km-border);
+  background: #202021;
+}
+
+.image-address {
+  font: var(--km-mono);
+  color: #d7ba7d;
+}
+
+.panel-footer {
+  display: flex;
+  gap: var(--km-gap);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-bg);
+}
+
+.panel-log {
+  padding: 8px 14px 12px;
+  background: var(--km-bg);
+}
+
+.log-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--km-fg-muted);
+  margin-bottom: 4px;
+}
+
+.log-entries {
+  margin: 0;
+  padding: 0 0 0 16px;
+  max-height: 120px;
+  overflow-y: auto;
+  font: var(--km-mono);
+}
+
+.log-entries li {
+  padding: 1px 0;
+  color: var(--km-fg-muted);
+}
+
+.log-entries li.log--info { color: var(--km-fg); }
+.log-entries li.log--warn { color: var(--km-warn); }
+.log-entries li.log--error { color: var(--km-danger-hover); }
+.log-entries li.log--ok { color: var(--km-active); }

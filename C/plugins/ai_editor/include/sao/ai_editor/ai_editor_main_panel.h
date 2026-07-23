@@ -92,6 +92,9 @@ SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_o
     sao_ai_editor_main_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len);
 
 #if defined(SAO_AI_EDITOR_TESTING)
+int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_json_for_testing(
+    sao_ai_editor_main_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len);
+
 void SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_test_set_owner_preflight_pause(int32_t target);
 
 int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_test_owner_preflight_waiting_target(void);

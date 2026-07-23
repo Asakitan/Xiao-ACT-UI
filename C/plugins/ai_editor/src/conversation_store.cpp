@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -528,6 +529,58 @@ int32_t ConversationStore::import_conversation(const Json& conversation,
         out_id = std::move(id);
     }
     return status;
+}
+
+int32_t ConversationStore::duplicate(std::string_view source_id, std::string_view title,
+                                     std::string_view scope, Json& result) const {
+    if (!valid_simple_id(source_id)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (!scope.empty() && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json source;
+    const int32_t get_status = get(source_id, source);
+    if (get_status != SAO_AI_EDITOR_OK) {
+        return get_status;
+    }
+    if (!source.contains("messages") || !source["messages"].is_array()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string source_scope = source.value("scope", std::string{"workspace"});
+    const std::string target_scope = scope.empty() ? source_scope : std::string(scope);
+    if (target_scope != "workspace" && target_scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string source_title = source.value("title", std::string{"Untitled"});
+    const std::string duplicate_title =
+        title.empty() ? source_title + " (copy)" : std::string(title);
+    const std::string new_id = next_id();
+    const int64_t source_saved_at = source.value("savedAt", int64_t{0});
+    int64_t now = unix_milliseconds();
+    if (now <= source_saved_at && source_saved_at < std::numeric_limits<int64_t>::max()) {
+        now = source_saved_at + 1;
+    }
+    const Json& messages = source["messages"];
+    Json document{{"id", new_id},
+                  {"title", duplicate_title},
+                  {"systemPrompt", source.value("systemPrompt", std::string{})},
+                  {"model", source.value("model", std::string{})},
+                  {"scope", target_scope},
+                  {"savedAt", now},
+                  {"messageCount", messages.size()},
+                  {"pinned", false},
+                  {"tags", tags_to_json(read_tags(source))},
+                  {"messages", messages}};
+    const auto path = scopes_.history_root(target_scope) / (utf8_to_wide(new_id) + L".json");
+    const int32_t status = save(path, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = document;
+    result["sourceId"] = std::string(source_id);
+    result["duplicatedAt"] = now;
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ConversationStore::branch(std::string_view source_id,

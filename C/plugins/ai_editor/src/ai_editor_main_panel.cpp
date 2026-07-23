@@ -49,8 +49,11 @@ constexpr size_t kUiInputPreviewBytes = 1900U;
 constexpr size_t kMaximumVisibleMessages = 24U;
 constexpr size_t kMaximumMessageChunks = 4U;
 constexpr size_t kMaximumHistoryEntries = 10U;
+constexpr size_t kMaximumHistorySearchEntries = 100U;
+constexpr size_t kMaximumHistoryQueryBytes = 1024U;
 constexpr size_t kMaximumChoiceButtons = 6U;
 constexpr size_t kMaximumWorkerQueue = 64U;
+constexpr uint32_t kMaximumOrphanCancelAttempts = 2U;
 constexpr size_t kMaximumEventsPerDrain = 64U;
 constexpr size_t kMaximumPanelSpecBytes = 192U * 1024U;
 constexpr size_t kMaximumStreamedAssistantBytes = 512U * 1024U;
@@ -68,8 +71,10 @@ enum class RpcTaskKind {
     Generic,
     NewConversation,
     RefreshHistory,
+    SearchHistory,
     LoadConversation,
     DeleteConversation,
+    DuplicateConversation,
     SendMessage,
     DrainEvents,
     PollRun,
@@ -91,6 +96,7 @@ enum class RunPhase {
 enum class DialogIntent {
     None,
     EditComposer,
+    SearchHistory,
 };
 
 struct ChoiceItem {
@@ -106,6 +112,9 @@ struct HistoryEntry {
     std::string scope;
     int64_t saved_at{};
     size_t message_count{};
+    std::vector<std::string> matched_fields;
+    size_t match_count{};
+    bool search_result{};
 };
 
 struct RpcResponse {
@@ -124,6 +133,8 @@ struct RpcTask {
     json params{json::object()};
     std::string conversation_id;
     std::string title;
+    std::string scope;
+    std::string query;
     std::string prompt;
     std::string run_id;
     std::string provider_id;
@@ -137,6 +148,8 @@ struct RpcTask {
     json messages{json::array()};
     bool canonical_reload{};
     bool orphan_cleanup{};
+    uint32_t orphan_cancel_attempt{};
+    bool history_operation{};
 };
 
 struct RpcStepResult {
@@ -174,6 +187,8 @@ struct AiEditorMainPanelState {
     std::string composer_text;
     std::string pending_user_text;
     std::vector<HistoryEntry> history;
+    std::string history_query;
+    size_t history_total{};
     std::vector<ChoiceItem> providers{{"", "Auto (Settings)", ""}};
     std::vector<ChoiceItem> models{{"", "Auto (Settings)", ""}};
     std::vector<ChoiceItem> agents{{"", "None", ""}};
@@ -212,6 +227,7 @@ struct AiEditorMainPanelState {
     bool event_drain_pending{};
     bool event_drain_unavailable{};
     bool run_poll_pending{};
+    bool history_task_pending{};
     bool worker_active{};
     bool worker_stop_requested{};
     bool accepting{true};
@@ -718,30 +734,32 @@ std::string accepted_run_id(const RpcCompletion& completion) {
     return found->response.result.value("runId", std::string{});
 }
 
-bool completion_has_step(const RpcCompletion& completion, std::string_view method) {
+bool completion_has_successful_step(const RpcCompletion& completion, std::string_view method) {
     return std::ranges::any_of(completion.steps, [&](const RpcStepResult& step) {
-        return step.method == method;
+        return step.method == method && step.response.ok;
     });
 }
 
-void queue_orphan_cancel_locked(AiEditorMainPanelState& state, uint64_t generation,
-                                std::string run_id) {
+bool queue_orphan_cancel_locked(AiEditorMainPanelState& state, uint64_t generation,
+                                std::string run_id, uint32_t attempt = 1U) {
     if (run_id.empty() || state.worker_stop_requested || !state.accepting ||
-        state.rpc_queue.size() >= kMaximumWorkerQueue) {
-        return;
-    }
+        state.rpc_queue.size() >= kMaximumWorkerQueue || attempt == 0U ||
+        attempt > kMaximumOrphanCancelAttempts)
+        return false;
     const bool already_queued = std::ranges::any_of(state.rpc_queue, [&](const RpcTask& queued) {
         return queued.kind == RpcTaskKind::CancelRun && queued.orphan_cleanup &&
                queued.run_id == run_id;
     });
     if (already_queued)
-        return;
+        return true;
     RpcTask cancel;
     cancel.kind = RpcTaskKind::CancelRun;
     cancel.generation = generation;
     cancel.run_id = std::move(run_id);
     cancel.orphan_cleanup = true;
+    cancel.orphan_cancel_attempt = attempt;
     state.rpc_queue.push_front(std::move(cancel));
+    return true;
 }
 
 RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
@@ -784,15 +802,44 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
         (void)append("conversation.list",
                      {{"scope", "all"}, {"limit", kMaximumHistoryEntries}});
         break;
+    case RpcTaskKind::SearchHistory:
+        (void)append("conversation.search", {{"query", completion.task.query},
+                                             {"scope", "all"},
+                                             {"limit", kMaximumHistorySearchEntries}});
+        break;
     case RpcTaskKind::LoadConversation:
         (void)append("conversation.get", {{"id", completion.task.conversation_id}});
         break;
     case RpcTaskKind::DeleteConversation:
         if (append("conversation.delete", {{"id", completion.task.conversation_id}})) {
+            if (completion.task.query.empty()) {
             (void)append("conversation.list",
                          {{"scope", "all"}, {"limit", kMaximumHistoryEntries}});
+        } else {
+                (void)append("conversation.search", {{"query", completion.task.query},
+                                                     {"scope", "all"},
+                                                     {"limit", kMaximumHistorySearchEntries}});
+            }
         }
         break;
+    case RpcTaskKind::DuplicateConversation: {
+        json params{{"sourceId", completion.task.conversation_id}};
+        if (!completion.task.title.empty())
+            params["title"] = completion.task.title;
+        if (!completion.task.scope.empty())
+            params["scope"] = completion.task.scope;
+        if (append("conversation.duplicate", std::move(params))) {
+            if (completion.task.query.empty()) {
+                (void)append("conversation.list",
+                             {{"scope", "all"}, {"limit", kMaximumHistoryEntries}});
+            } else {
+                (void)append("conversation.search", {{"query", completion.task.query},
+                                                     {"scope", "all"},
+                                                     {"limit", kMaximumHistorySearchEntries}});
+            }
+        }
+        break;
+    }
     case RpcTaskKind::SendMessage: {
         if (task_cancelled(state, completion.task)) {
             completion.cancelled = true;
@@ -921,16 +968,29 @@ void rpc_worker_main(AiEditorMainPanelState* state) {
         }
         {
             std::lock_guard lock(state->mutex);
-            if (!completion.cancelled && completion.task.generation != 0U &&
-                (completion.task.generation != state->conversation_generation ||
-                 completion.task.generation <= state->cancelled_generation)) {
+            const bool orphan_cancel = completion.task.kind == RpcTaskKind::CancelRun &&
+                                       completion.task.orphan_cleanup;
+            if (orphan_cancel) {
+                completion.task.generation = 0U;
+                if (!completion_has_successful_step(completion, "run.cancel") &&
+                    completion.task.orphan_cancel_attempt < kMaximumOrphanCancelAttempts &&
+                    queue_orphan_cancel_locked(
+                        *state, 0U, completion.task.run_id,
+                        completion.task.orphan_cancel_attempt + 1U)) {
+                    completion.cancelled = true;
+                }
+            } else if (!completion.cancelled && completion.task.generation != 0U &&
+                       (completion.task.generation != state->conversation_generation ||
+                        completion.task.generation <= state->cancelled_generation)) {
                 completion.cancelled = true;
             }
             if (completion.cancelled && completion.task.kind == RpcTaskKind::SendMessage &&
-                !completion_has_step(completion, "run.cancel")) {
+                !completion_has_successful_step(completion, "run.cancel")) {
                 completion.task.run_id = accepted_run_id(completion);
-                queue_orphan_cancel_locked(*state, completion.task.generation,
-                                           completion.task.run_id);
+                if (!queue_orphan_cancel_locked(*state, completion.task.generation,
+                                                completion.task.run_id)) {
+                    state->run_error = "Failed to queue orphan run cancellation.";
+                }
             }
             state->worker_active = false;
             if (!state->worker_stop_requested)
@@ -1078,6 +1138,42 @@ std::vector<HistoryEntry> parse_history(const json& value) {
         entry.message_count = item.value("messageCount", size_t{0});
         entries.push_back(std::move(entry));
         if (entries.size() >= kMaximumHistoryEntries)
+            break;
+    }
+    return entries;
+}
+
+std::vector<HistoryEntry> parse_history_search_results(const json& value) {
+    std::vector<HistoryEntry> entries;
+    if (!value.is_object())
+        return entries;
+    const json results = value.value("results", json::array());
+    if (!results.is_array())
+        return entries;
+    for (const auto& item : results) {
+        if (!item.is_object())
+            continue;
+        HistoryEntry entry;
+        entry.id = item.value("id", std::string{});
+        if (entry.id.empty() || entry.id.size() > 1024U)
+            continue;
+        entry.title = compact_text(item.value("title", std::string{"Untitled"}), 500U);
+        entry.scope = compact_text(item.value("scope", std::string{"workspace"}), 64U);
+        entry.saved_at = item.value("savedAt", int64_t{0});
+        entry.match_count = item.value("matchCount", size_t{0});
+        entry.search_result = true;
+        const json matched_fields = item.value("matchedFields", json::array());
+        if (matched_fields.is_array()) {
+            for (const auto& field : matched_fields) {
+                if (!field.is_string())
+                    continue;
+                const std::string label = compact_text(field.get<std::string>(), 64U);
+                if (!label.empty())
+                    entry.matched_fields.push_back(label);
+            }
+        }
+        entries.push_back(std::move(entry));
+        if (entries.size() >= kMaximumHistorySearchEntries)
             break;
     }
     return entries;
@@ -1381,6 +1477,10 @@ bool apply_run_event(AiEditorMainPanelState& state, const json& envelope,
 }
 
 void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
+    if (completion.task.history_operation) {
+        std::lock_guard lock(state.mutex);
+        state.history_task_pending = false;
+    }
     bool reconcile_cancelled_start = false;
     if (completion.cancelled) {
         std::lock_guard lock(state.mutex);
@@ -1413,6 +1513,7 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
     const bool generation_sensitive =
         completion.task.kind == RpcTaskKind::NewConversation ||
         completion.task.kind == RpcTaskKind::LoadConversation ||
+        completion.task.kind == RpcTaskKind::DuplicateConversation ||
         completion.task.kind == RpcTaskKind::SendMessage ||
         completion.task.kind == RpcTaskKind::PollRun ||
         (completion.task.kind == RpcTaskKind::CancelRun && !completion.task.orphan_cleanup);
@@ -1473,8 +1574,10 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             else if (step.method == "workflows.list_defs")
                 apply_choice_items(state.workflows,
                                    step.response.result.value("items", json::array()), "Workflow");
-            else if (step.method == "conversation.list")
+            else if (step.method == "conversation.list" && state.history_query.empty()) {
                 state.history = parse_history(step.response.result);
+                state.history_total = state.history.size();
+            }
         }
         if (!state.selections_initialized) {
             state.selected_provider = configured_provider;
@@ -1523,11 +1626,37 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                                       last.response.result.value("id", std::string{}));
         break;
     case RpcTaskKind::RefreshHistory:
-        if (!last.response.ok)
+        if (!last.response.ok) {
             record_completion_output(state, last);
-        else {
+            std::lock_guard lock(state.mutex);
+            state.run_error = "History refresh failed: " +
+                              compact_text(last.response.error, 1000U);
+        } else {
             std::lock_guard lock(state.mutex);
             state.history = parse_history(last.response.result);
+            state.history_query.clear();
+            state.history_total = state.history.size();
+            state.run_error.clear();
+        }
+        break;
+    case RpcTaskKind::SearchHistory:
+        if (!last.response.ok || !last.response.result.is_object()) {
+            record_completion_output(state, last);
+            std::lock_guard lock(state.mutex);
+            state.run_error = "History search failed: " +
+                              (last.response.ok
+                                   ? std::string{"conversation.search returned invalid results"}
+                                   : compact_text(last.response.error, 1000U));
+            break;
+        }
+        {
+            std::lock_guard lock(state.mutex);
+            state.history_query =
+                clamp_utf8_bytes(last.response.result.value("query", completion.task.query),
+                                 kMaximumHistoryQueryBytes);
+            state.history = parse_history_search_results(last.response.result);
+            state.history_total = last.response.result.value("total", state.history.size());
+            state.run_error.clear();
         }
         break;
     case RpcTaskKind::LoadConversation:
@@ -1562,16 +1691,127 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             if (!step.response.ok)
                 record_completion_output(state, step);
         std::lock_guard lock(state.mutex);
-        if (completion.steps.front().response.ok &&
-            state.conversation_id == completion.task.conversation_id) {
+        const bool deleted = completion.steps.front().response.ok;
+        if (!deleted) {
+            state.run_error = "Conversation delete failed: " +
+                              compact_text(completion.steps.front().response.error, 1100U);
+            break;
+        }
+        if (state.conversation_id == completion.task.conversation_id) {
             state.conversation_id.clear();
             state.conversation_title = "New Chat";
             state.conversation_messages = json::array();
             state.pending_user_text.clear();
             state.streamed_assistant_text.clear();
         }
-        if (completion.steps.size() > 1 && completion.steps.back().response.ok)
-            state.history = parse_history(completion.steps.back().response.result);
+        if (completion.steps.size() > 1 && completion.steps.back().response.ok) {
+            if (completion.steps.back().method == "conversation.search") {
+                state.history =
+                    parse_history_search_results(completion.steps.back().response.result);
+                state.history_total =
+                    completion.steps.back().response.result.value("total", state.history.size());
+            } else {
+                state.history = parse_history(completion.steps.back().response.result);
+                state.history_total = state.history.size();
+            }
+            state.run_error.clear();
+        } else {
+            const size_t removed = std::erase_if(state.history, [&](const HistoryEntry& entry) {
+                return entry.id == completion.task.conversation_id;
+            });
+            if (removed != 0 && state.history_total != 0)
+                --state.history_total;
+            const std::string detail = completion.steps.size() > 1
+                                           ? compact_text(completion.steps.back().response.error,
+                                                          900U)
+                                           : "history refresh was not reached";
+            state.run_error = "Conversation deleted, but history refresh failed: " + detail;
+        }
+        break;
+    }
+    case RpcTaskKind::DuplicateConversation: {
+        const auto duplicate =
+            std::ranges::find_if(completion.steps, [](const RpcStepResult& step) {
+                return step.method == "conversation.duplicate";
+            });
+        if (duplicate == completion.steps.end() || !duplicate->response.ok ||
+            !duplicate->response.result.is_object() ||
+            duplicate->response.result.value("id", std::string{}).empty()) {
+            if (duplicate != completion.steps.end() && !duplicate->response.ok)
+                record_completion_output(state, *duplicate);
+            std::lock_guard lock(state.mutex);
+            state.run_status = "duplicate error";
+            state.run_error =
+                duplicate == completion.steps.end() ? "conversation.duplicate was not reached"
+                : duplicate->response.ok ? "conversation.duplicate returned no conversation id"
+                                         : compact_text(duplicate->response.error, 1200U);
+            break;
+        }
+        for (const auto& step : completion.steps)
+            if (!step.response.ok)
+                record_completion_output(state, step);
+        {
+            std::lock_guard lock(state.mutex);
+            apply_conversation_document(state, duplicate->response.result);
+            state.pending_user_text.clear();
+            state.streamed_assistant_text.clear();
+            state.thinking_status.clear();
+            state.refusal_status.clear();
+            state.tool_status.clear();
+            state.usage_status.clear();
+            state.active_run_id.clear();
+            state.event_drain_pending = false;
+            state.run_poll_pending = false;
+            state.terminal_reload_run_id.clear();
+            state.run_phase = RunPhase::Idle;
+            state.run_status = "idle";
+            if (completion.steps.size() > 1 && completion.steps.back().response.ok) {
+                if (completion.steps.back().method == "conversation.search") {
+                    state.history =
+                        parse_history_search_results(completion.steps.back().response.result);
+                    state.history_total = completion.steps.back().response.result.value(
+                        "total", state.history.size());
+                } else {
+                    state.history = parse_history(completion.steps.back().response.result);
+                    state.history_total = state.history.size();
+                }
+                state.run_error.clear();
+            } else {
+                if (state.history_query.empty()) {
+                    HistoryEntry entry;
+                    entry.id = duplicate->response.result.value("id", std::string{});
+                    entry.title = compact_text(
+                        duplicate->response.result.value("title", std::string{"Untitled"}),
+                        500U);
+                    entry.model = compact_text(
+                        duplicate->response.result.value("model", std::string{}), 256U);
+                    entry.scope = compact_text(
+                        duplicate->response.result.value("scope", std::string{"workspace"}),
+                        64U);
+                    entry.saved_at =
+                        duplicate->response.result.value("savedAt", int64_t{0});
+                    entry.message_count =
+                        duplicate->response.result.value("messageCount", size_t{0});
+                    if (std::ranges::find(state.history, entry.id, &HistoryEntry::id) ==
+                        state.history.end()) {
+                        state.history.insert(state.history.begin(), std::move(entry));
+                        if (state.history.size() > kMaximumHistoryEntries)
+                            state.history.resize(kMaximumHistoryEntries);
+                        if (state.history_total < std::numeric_limits<size_t>::max())
+                            ++state.history_total;
+                    }
+                }
+                const std::string detail = completion.steps.size() > 1
+                                               ? compact_text(
+                                                     completion.steps.back().response.error, 900U)
+                                               : "history refresh was not reached";
+                state.run_error = "Conversation duplicated, but history refresh failed: " +
+                                  detail + ". Use Refresh History to retry.";
+            }
+        }
+        append_output_line(state, "[" + format_iso_timestamp() + "] duplicated conversation " +
+                                      completion.task.conversation_id + " -> " +
+                                      duplicate->response.result.value("id", std::string{}));
         break;
     }
     case RpcTaskKind::SendMessage: {
@@ -1810,6 +2050,8 @@ json choice_card(std::string title, std::string action, const std::vector<Choice
 std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_bound) {
     json nodes = json::array();
     nodes.push_back(text_node("AI Editor", "title", 30));
+    const bool history_actions_disabled =
+        !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
 
     json header = json::array();
     json badges = json::array();
@@ -1843,9 +2085,10 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                         "primary",
                                         !launcher_bound ||
                                             state.run_phase == RunPhase::Running ||
-                                            state.run_phase == RunPhase::Cancelling));
+                                            state.run_phase == RunPhase::Cancelling ||
+                                            state.history_task_pending));
     quick_actions.push_back(button_node("history.refresh", "Refresh History", "history.refresh",
-                                        json::object(), "default", !launcher_bound));
+                                        json::object(), "default", history_actions_disabled));
     quick_actions.push_back(
         button_node("settings.open", "Settings", "settings.open"));
     quick_actions.push_back(button_node("gpu.hunt", "GPU Hunt", "gpu.hunt"));
@@ -1920,8 +2163,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     json conversation = json::array();
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
-        conversation.push_back(text_node(
-            "No messages yet. Click the composer field or Edit Composer, enter a prompt, then Send.",
+        conversation.push_back(text_node("No messages yet. Click the composer field or Edit "
+                                         "Composer, enter a prompt, then Send.",
             "muted", 42));
     } else {
         size_t begin = 0;
@@ -2014,7 +2257,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                            selectors_disabled));
     composer_actions.push_back(button_node(
         "chat.send", "Send", "chat.send", json::object(), "primary",
-        !launcher_bound || state.composer_text.empty() || selectors_disabled));
+        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
+            state.history_task_pending));
     composer_actions.push_back(button_node(
         "chat.stop", "Stop", "chat.stop", json::object(), "danger",
         !run_is_active(state.run_phase)));
@@ -2024,28 +2268,68 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     nodes.push_back(card_node("Composer", std::move(composer), "gold"));
 
     json history = json::array();
+    json history_actions = json::array();
+    history_actions.push_back(button_node("history.search", "Search...", "history.search",
+                                          json::object(), "primary", history_actions_disabled));
+    history_actions.push_back(button_node("history.clear_search", "Clear Search",
+                                          "history.clear_search", json::object(), "ghost",
+                                          history_actions_disabled || state.history_query.empty()));
+    history_actions.push_back(button_node("history.refresh.section", "Refresh", "history.refresh",
+                                          json::object(), "default", history_actions_disabled));
+    history.push_back(row_node(std::move(history_actions)));
+    json history_status = json::array();
+    if (state.history_query.empty()) {
+        history_status.push_back(
+            badge_node("Conversations: " + std::to_string(state.history_total), "muted"));
+    } else {
+        history_status.push_back(
+            badge_node("Query: " + compact_text(state.history_query, 420U), "accent"));
+        history_status.push_back(badge_node("Results: " + std::to_string(state.history_total) +
+                                                " · showing " +
+                                                std::to_string(state.history.size()),
+                                            "ok"));
+    }
+    if (state.history_task_pending)
+        history_status.push_back(badge_node("History request in progress", "warn"));
+    history.push_back(row_node(std::move(history_status)));
     if (state.history.empty()) {
         history.push_back(text_node(
-            launcher_bound ? "No history loaded yet. Use Refresh History."
-                           : "History is unavailable while the backend is detached.",
+            !
+            launcher_bound               ? "History is unavailable while the backend is detached."
+            : state.history_query.empty() ? "No history loaded yet. Use Refresh History."
+                           : "No conversations matched the current search query.",
             "muted", 34));
     } else {
         for (size_t index = 0; index < state.history.size(); ++index) {
             const auto& entry = state.history[index];
             json summary = json::array();
             summary.push_back(text_node(compact_text(entry.title, 160U), "value", 26));
+            if (entry.search_result) {
+                summary.push_back(
+                    text_node(entry.scope + " · " + format_saved_at(entry.saved_at), "muted", 30));
+                json matches = json::array();
+                for (const auto& field : entry.matched_fields)
+                    matches.push_back(badge_node("Matched: " + field, "accent"));
+                matches.push_back(
+                    badge_node("Matches: " + std::to_string(entry.match_count), "ok"));
+                summary.push_back(row_node(std::move(matches)));
+            } else {
             summary.push_back(text_node(
                 std::to_string(entry.message_count) + " messages · " + entry.scope + " · " +
                     (entry.model.empty() ? "auto model" : entry.model) + " · " +
                     format_saved_at(entry.saved_at),
                 "muted", 30));
+            }
             json actions = json::array();
             actions.push_back(button_node("history.load." + std::to_string(index), "Load",
                                           "history.load", {{"id", entry.id}}, "primary",
-                                          run_is_active(state.run_phase)));
+                                          history_actions_disabled));
             actions.push_back(button_node("history.delete." + std::to_string(index), "Delete",
                                           "history.delete", {{"id", entry.id}}, "danger",
-                                          run_is_active(state.run_phase)));
+                                          history_actions_disabled));
+            actions.push_back(button_node("history.duplicate." + std::to_string(index),
+                                          "Duplicate / 复制", "history.duplicate",
+                                          {{"id", entry.id}}, "default", history_actions_disabled));
             summary.push_back(row_node(std::move(actions)));
             history.push_back(card_node(compact_text(entry.id, 500U), std::move(summary),
                                         entry.id == state.conversation_id ? "ok" : "cyan"));
@@ -2132,19 +2416,26 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                           json::object(), "default",
                                           !launcher_bound ||
                                               state.run_phase == RunPhase::Running ||
-                                              state.run_phase == RunPhase::Cancelling));
+                                              state.run_phase == RunPhase::Cancelling ||
+                                              state.history_task_pending));
     compact_actions.push_back(button_node("compact.composer.edit", "Edit Composer",
                                           "composer.edit", json::object(), "default",
                                           selectors_disabled));
     compact_actions.push_back(button_node(
         "compact.chat.send", "Send", "chat.send", json::object(), "primary",
-        !launcher_bound || state.composer_text.empty() || selectors_disabled));
+        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
+            state.history_task_pending));
     compact_actions.push_back(button_node("compact.chat.stop", "Stop", "chat.stop",
                                           json::object(), "danger",
                                           !run_is_active(state.run_phase)));
     compact_actions.push_back(button_node("compact.history.refresh", "Refresh History",
                                           "history.refresh", json::object(), "ghost",
-                                          !launcher_bound));
+                                          history_actions_disabled));
+    compact_actions.push_back(button_node("compact.history.search", "Search...", "history.search",
+                                          json::object(), "ghost", history_actions_disabled));
+    compact_actions.push_back(button_node("compact.history.clear_search", "Clear Search",
+                                          "history.clear_search", json::object(), "ghost",
+                                          history_actions_disabled || state.history_query.empty()));
     compact_composer.push_back(row_node(std::move(compact_actions)));
     compact_nodes.push_back(card_node("Composer", std::move(compact_composer), "gold"));
     return json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact_nodes)}}.dump();
@@ -2249,30 +2540,46 @@ bool dialog_visible(AiEditorMainPanelState& state) {
     return sao_ui_dialog_is_visible(state.dialog, &visible) == SAO_STATUS_OK && visible;
 }
 
+void search_history(AiEditorMainPanelState& state, std::string query);
+
 void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* input_text_utf8,
                                         size_t input_text_len, void* user_data) {
     auto* state = static_cast<AiEditorMainPanelState*>(user_data);
     if (state == nullptr || require_owner_thread(state->compositor) != SAO_AI_EDITOR_OK)
         return;
-    std::lock_guard lock(state->mutex);
-    const DialogIntent intent = state->pending_dialog;
+    DialogIntent intent = DialogIntent::None;
+    std::string input;
+    {
+    std::lock_guard lock(state->mutex); intent = state->pending_dialog;
     state->pending_dialog = DialogIntent::None;
-    if (!state->accepting || intent != DialogIntent::EditComposer ||
+    if (!state->accepting ||
         (pressed != SAO_UI_DIALOG_BTN_OK && pressed != SAO_UI_DIALOG_BTN_YES)) {
         return;
     }
     if (input_text_utf8 == nullptr && input_text_len != 0) {
-        state->run_error = "Composer dialog returned an invalid buffer.";
+        state->run_error = "Input dialog returned an invalid buffer.";
         return;
     }
-    if (input_text_len > kMaximumComposerBytes) {
-        state->run_error = "Composer text exceeds the 48 KiB limit.";
-        return;
-    }
-    state->composer_text = input_text_utf8 == nullptr
+        input = input_text_utf8 == nullptr
                                ? std::string{}
                                : std::string(input_text_utf8, input_text_len);
+        if (intent == DialogIntent::EditComposer) {
+            if (input_text_len > kMaximumComposerBytes) {
+                state->run_error = "Composer text exceeds the 48 KiB limit.";
+                return;
+            }
+            state->composer_text = std::move(input);
     state->run_error.clear();
+            return;
+        }
+        if (intent != DialogIntent::SearchHistory)
+            return;
+        if (input_text_len > kMaximumHistoryQueryBytes) {
+            state->run_error = "History search query exceeds the 1 KiB limit.";
+            return;
+        }
+    }
+    search_history(*state, std::move(input));
 }
 
 void show_composer_dialog(AiEditorMainPanelState& state) {
@@ -2310,7 +2617,59 @@ void show_composer_dialog(AiEditorMainPanelState& state) {
             std::lock_guard lock(state.mutex);
             state.pending_dialog = DialogIntent::None;
         }
-        append_output_line(state, "[error] composer dialog show failed: " +
+        append_output_line(state, "[error] composer dialog show failed: " + std::to_string(show_status));
+    }
+}
+
+void show_history_search_dialog(AiEditorMainPanelState& state) {
+    {
+        std::lock_guard lock(state.mutex);
+        if (run_is_active(state.run_phase)) {
+            state.run_error = "Stop the active run before searching history.";
+            return;
+        }
+        if (state.history_task_pending) {
+            state.run_error = "Wait for the current history request to finish.";
+            return;
+        }
+    }
+    if (dialog_visible(state)) {
+        append_output_line(state, "[warn] finish or dismiss the current input dialog first");
+        return;
+    }
+    const sao_status_t create_status = ensure_dialog(state);
+    if (create_status != SAO_STATUS_OK) {
+        append_output_line(state, "[error] history search dialog create failed: " +
+                                      std::to_string(create_status));
+        return;
+    }
+    std::string default_value;
+    {
+        std::lock_guard lock(state.mutex);
+        default_value = state.history_query;
+        state.pending_dialog = DialogIntent::SearchHistory;
+    }
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_INPUT;
+    spec.title_utf8 = "Search History";
+    spec.message_utf8 =
+        "Search conversation titles and messages across all history scopes. Empty input clears "
+        "the search.";
+    spec.input_prompt_utf8 = "Query";
+    spec.input_default_utf8 = default_value.c_str();
+    spec.input_max_length = static_cast<int32_t>(kMaximumHistoryQueryBytes);
+    spec.width = 640;
+    spec.height = 300;
+    spec.draggable = true;
+    spec.dismiss_on_esc = true;
+    const sao_status_t show_status =
+        sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state);
+    if (show_status != SAO_STATUS_OK) {
+        {
+            std::lock_guard lock(state.mutex);
+            state.pending_dialog = DialogIntent::None;
+        }
+        append_output_line(state, "[error] history search dialog show failed: " +
                                       std::to_string(show_status));
     }
 }
@@ -2398,9 +2757,12 @@ uint64_t cancel_starting_generation_locked(AiEditorMainPanelState& state,
             continue;
         completion.cancelled = true;
         if (completion.task.kind == RpcTaskKind::SendMessage &&
-            !completion_has_step(completion, "run.cancel")) {
+            !completion_has_successful_step(completion, "run.cancel")) {
             completion.task.run_id = accepted_run_id(completion);
-            queue_orphan_cancel_locked(state, cancelled_generation, completion.task.run_id);
+            if (!queue_orphan_cancel_locked(state, cancelled_generation,
+                                            completion.task.run_id)) {
+                state.run_error = "Failed to queue orphan run cancellation.";
+            }
         }
     }
     state.conversation_generation =
@@ -2423,6 +2785,7 @@ void queue_orphan_run_cancel(AiEditorMainPanelState& state, uint64_t generation,
     cancel.generation = generation;
     cancel.run_id = std::move(run_id);
     cancel.orphan_cleanup = true;
+    cancel.orphan_cancel_attempt = 1U;
     std::string error;
     if (!queue_rpc_task(state, std::move(cancel), &error))
         append_output_line(state, "[warn] orphan run.cancel not queued: " + error);
@@ -2436,6 +2799,10 @@ void begin_new_conversation(AiEditorMainPanelState& state) {
         std::lock_guard lock(state.mutex);
         if (state.run_phase == RunPhase::Running || state.run_phase == RunPhase::Cancelling) {
             state.run_error = "Stop the active run before starting a new conversation.";
+            return;
+        }
+        if (state.history_task_pending) {
+            state.run_error = "Wait for the current history request before starting a new chat.";
             return;
         }
         if (state.run_phase == RunPhase::Starting) {
@@ -2476,10 +2843,59 @@ void begin_new_conversation(AiEditorMainPanelState& state) {
     }
 }
 
+bool claim_history_operation(AiEditorMainPanelState& state, RpcTask& task) {
+    std::lock_guard lock(state.mutex);
+    if (run_is_active(state.run_phase)) {
+        state.run_error = "Stop the active run before changing the history view.";
+        return false;
+    }
+    if (state.history_task_pending) {
+        state.run_error = "Wait for the current history request to finish.";
+        return false;
+    }
+    state.history_task_pending = true;
+    state.run_error.clear();
+    task.history_operation = true;
+    return true;
+}
+
+bool enqueue_history_operation(AiEditorMainPanelState& state, RpcTask task,
+                               std::string_view method) {
+    if (enqueue_or_report(state, std::move(task), method))
+        return true;
+    std::lock_guard lock(state.mutex);
+    state.history_task_pending = false;
+    return false;
+}
+
 void queue_history_refresh(AiEditorMainPanelState& state) {
     RpcTask task;
-    task.kind = RpcTaskKind::RefreshHistory;
-    (void)enqueue_or_report(state, std::move(task), "conversation.list");
+    {
+        std::lock_guard lock(state.mutex);
+        task.query = state.history_query;
+    }
+    task.kind = task.query.empty() ? RpcTaskKind::RefreshHistory : RpcTaskKind::SearchHistory;
+    if (!claim_history_operation(state, task))
+        return;
+    const std::string_view method =
+        task.query.empty() ? "conversation.list" : "conversation.search";
+    (void)enqueue_history_operation(state, std::move(task), method);
+}
+
+void search_history(AiEditorMainPanelState& state, std::string query) {
+    query = trim_copy(query);
+    if (query.size() > kMaximumHistoryQueryBytes) {
+        append_output_line(state, "[error] history search query exceeds the 1 KiB limit");
+        return;
+    }
+    RpcTask task;
+    task.query = std::move(query);
+    task.kind = task.query.empty() ? RpcTaskKind::RefreshHistory : RpcTaskKind::SearchHistory;
+    if (!claim_history_operation(state, task))
+        return;
+    const std::string_view method =
+        task.query.empty() ? "conversation.list" : "conversation.search";
+    (void)enqueue_history_operation(state, std::move(task), method);
 }
 
 void load_history_conversation(AiEditorMainPanelState& state, std::string id) {
@@ -2488,16 +2904,14 @@ void load_history_conversation(AiEditorMainPanelState& state, std::string id) {
         return;
     }
     RpcTask task;
+    task.kind = RpcTaskKind::LoadConversation;
+    if (!claim_history_operation(state, task))
+        return;
     {
         std::lock_guard lock(state.mutex);
-        if (run_is_active(state.run_phase)) {
-            state.run_error = "Stop the active run before loading history.";
-            return;
-        }
         state.conversation_generation =
             state.generation_atomic.fetch_add(1, std::memory_order_relaxed) + 1;
         state.starting_cancelled_generation = 0;
-        task.kind = RpcTaskKind::LoadConversation;
         task.generation = state.conversation_generation;
         task.conversation_id = std::move(id);
         state.conversation_id = task.conversation_id;
@@ -2517,7 +2931,7 @@ void load_history_conversation(AiEditorMainPanelState& state, std::string id) {
         state.run_status = "loading history";
         state.run_error.clear();
     }
-    if (!enqueue_or_report(state, std::move(task), "conversation.get")) {
+    if (!enqueue_history_operation(state, std::move(task), "conversation.get")) {
         std::lock_guard lock(state.mutex);
         state.run_status = "load error";
     }
@@ -2529,16 +2943,39 @@ void delete_history_conversation(AiEditorMainPanelState& state, std::string id) 
         return;
     }
     RpcTask task;
+    task.kind = RpcTaskKind::DeleteConversation;
+    if (!claim_history_operation(state, task))
+        return;
     {
         std::lock_guard lock(state.mutex);
-        if (run_is_active(state.run_phase)) {
-            state.run_error = "Stop the active run before deleting history.";
-            return;
-        }
-        task.kind = RpcTaskKind::DeleteConversation;
         task.conversation_id = id;
+        task.query = state.history_query;
     }
-    (void)enqueue_or_report(state, std::move(task), "conversation.delete");
+    (void)enqueue_history_operation(state, std::move(task), "conversation.delete");
+}
+
+void duplicate_history_conversation(AiEditorMainPanelState& state, std::string id,
+                                    std::string title, std::string scope) {
+    if (id.empty()) {
+        append_output_line(state, "[error] history.duplicate requires a conversation id");
+        return;
+    }
+    RpcTask task;
+    task.kind = RpcTaskKind::DuplicateConversation;
+    if (!claim_history_operation(state, task))
+        return;
+    {
+        std::lock_guard lock(state.mutex);
+        state.conversation_generation =
+            state.generation_atomic.fetch_add(1, std::memory_order_relaxed) + 1;
+        state.starting_cancelled_generation = 0;
+        task.generation = state.conversation_generation;
+        task.conversation_id = std::move(id);
+        task.title = std::move(title);
+        task.scope = std::move(scope);
+        task.query = state.history_query;
+    }
+    (void)enqueue_history_operation(state, std::move(task), "conversation.duplicate");
 }
 
 void send_composer(AiEditorMainPanelState& state) {
@@ -2548,6 +2985,10 @@ void send_composer(AiEditorMainPanelState& state) {
         std::lock_guard lock(state.mutex);
         if (run_is_active(state.run_phase)) {
             state.run_error = "A run is already active. Stop it before sending another message.";
+            return;
+        }
+        if (state.history_task_pending) {
+            state.run_error = "Wait for the current history request before sending.";
             return;
         }
         if (trim_copy(state.composer_text).empty()) {
@@ -2797,10 +3238,21 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         state->composer_text.clear();
     } else if (action == "history.list" || action == "history.refresh") {
         queue_history_refresh(*state);
+    } else if (action == "history.search") {
+        if (payload.contains("query"))
+            search_history(*state, payload_string(payload, "query"));
+        else
+            show_history_search_dialog(*state);
+    } else if (action == "history.clear_search") {
+        search_history(*state, {});
     } else if (action == "history.load") {
         load_history_conversation(*state, payload_string(payload, "id"));
     } else if (action == "history.delete") {
         delete_history_conversation(*state, payload_string(payload, "id"));
+    } else if (action == "history.duplicate") {
+        duplicate_history_conversation(*state, payload_string(payload, "id"),
+                                       payload_string(payload, "title"),
+                                       payload_string(payload, "scope"));
     } else if (action == "settings.open") {
         show_settings_panel(*state);
     } else if (action == "gpu.hunt") {
@@ -3089,6 +3541,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
                                     : "Waiting for asynchronous runtime initialization...";
 
         SaoPanelDescriptor descriptor{};
+        descriptor.struct_size = sizeof(SaoPanelDescriptor);
         descriptor.panel_id_utf8 = SAO_AI_EDITOR_MAIN_PANEL_ID;
         descriptor.title_utf8 = "AI Editor";
         descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
@@ -3355,6 +3808,53 @@ sao_ai_editor_main_panel_dispatch_action_for_testing(sao_ai_editor_main_panel_t 
     panel_action_callback(action_id_utf8, payload_json_utf8, payload_len, &lease.state());
     return SAO_AI_EDITOR_OK;
 }
+
+#if defined(SAO_AI_EDITOR_TESTING)
+extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_json_for_testing(
+    sao_ai_editor_main_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len) {
+    ApiLease lease(panel);
+    if (!lease)
+        return lease.status();
+    if (out_len == nullptr || (buffer_utf8 == nullptr && buffer_cap != 0))
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    json snapshot;
+    {
+        std::lock_guard state_lock(lease.state().mutex);
+        json history = json::array();
+        for (const auto& entry : lease.state().history) {
+            history.push_back({{"id", entry.id},
+                               {"title", entry.title},
+                               {"scope", entry.scope},
+                               {"messageCount", entry.message_count},
+                               {"matchedFields", entry.matched_fields},
+                               {"matchCount", entry.match_count},
+                               {"searchResult", entry.search_result}});
+        }
+        json spec = json::parse(lease.state().last_spec, nullptr, false, false);
+        if (spec.is_discarded())
+            spec = json::object();
+        snapshot = {{"conversationId", lease.state().conversation_id},
+                    {"conversationTitle", lease.state().conversation_title},
+                    {"conversationMessages", lease.state().conversation_messages},
+                    {"historyQuery", lease.state().history_query},
+                    {"historyTotal", lease.state().history_total},
+                    {"historyTaskPending", lease.state().history_task_pending},
+                    {"history", std::move(history)},
+                    {"runStatus", lease.state().run_status},
+                    {"spec", std::move(spec)}};
+    }
+    const std::string encoded = snapshot.dump();
+    *out_len = encoded.size();
+    if (buffer_utf8 == nullptr || buffer_cap == 0)
+        return encoded.empty() ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+    if (buffer_cap < encoded.size())
+        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+    std::memcpy(buffer_utf8, encoded.data(), encoded.size());
+    if (buffer_cap > encoded.size())
+        buffer_utf8[encoded.size()] = '\0';
+    return SAO_AI_EDITOR_OK;
+}
+#endif
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_main_panel_snapshot_output_for_testing(sao_ai_editor_main_panel_t panel,

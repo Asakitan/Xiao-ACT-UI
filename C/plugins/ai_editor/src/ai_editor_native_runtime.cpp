@@ -2,7 +2,11 @@
 
 #include "ai_editor_settings.h"
 #include "chat_provider_router.h"
+#include "kernel_map_commands.h"
+#include "kernel_map_panel_provider.h"
+#include "kernel_map_tools.h"
 #include "native_runtime_internal.h"
+#include "sao/ai_editor/kernel_map_bridge.h"
 #include "sha256_helper.h"
 
 #include <windows.h>
@@ -869,6 +873,27 @@ int32_t NativeRuntime::initialize() {
         mcp_client_.get(), this, &NativeRuntime::mcp_notification_trampoline);
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
+    // kernel_map wiring: surface the four kernelMap.* tool descriptors on
+    // tools/list and register the sao.kernelMap.* command handlers.  Both
+    // registrations are idempotent (see kernel_map_tools.cpp /
+    // kernel_map_commands.cpp) so re-initialising the runtime does not
+    // duplicate entries.  The Bridge is a process-wide singleton; sharing
+    // one instance between the tool + command paths keeps a single wire
+    // channel serialising the operator's requests.
+    auto& kernel_map_bridge = sao::ai_editor::kernel_map::shared_bridge();
+    sao::ai_editor::kernel_map::register_kernel_map_tools(
+        tools_, kernel_map_bridge);
+    sao::ai_editor::kernel_map::register_kernel_map_commands(
+        *extension_host_, kernel_map_bridge);
+    // Operator-facing kernel map dashboard.  Constructs the panel
+    // provider and registers it in the webview panel registry so the
+    // sidebar surfaces the built-in view.  Registration is idempotent;
+    // when the on-disk assets are missing the provider falls back to a
+    // built-in stub HTML that still exercises the message dispatch.
+    kernel_map_panel_ = std::make_unique<KernelMapPanelProvider>();
+    (void)kernel_map_panel_->register_with_runtime(
+        webview_panels_,
+        options_.system_root + "/assets/ai_editor/kernel_map_panel");
     return SAO_AI_EDITOR_OK;
 }
 
@@ -1288,6 +1313,28 @@ int32_t NativeRuntime::invoke(std::string_view method,
         const std::string scope = params.value("scope", std::string{"all"});
         std::lock_guard<std::mutex> lock(store_mutex_);
         return conversations_.list_tags_stats(scope, result);
+    }
+    if (method == "conversation.duplicate") {
+        if (!params.contains("sourceId") || !params["sourceId"].is_string() ||
+            params["sourceId"].get_ref<const std::string&>().empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (params.contains("title") && !params["title"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (params.contains("scope") && !params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string source_id = params["sourceId"].get<std::string>();
+        const std::string title =
+            params.contains("title") ? params["title"].get<std::string>() : std::string{};
+        const bool has_scope = params.contains("scope");
+        const std::string scope = has_scope ? params["scope"].get<std::string>() : std::string{};
+        if (has_scope && scope != "workspace" && scope != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.duplicate(source_id, title,scope, result);
     }
     if (method == "conversation.branch") {
         if (!params.contains("sourceId") ||

@@ -64,6 +64,9 @@ int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_dispatch_action_for_test
 int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_snapshot_json_for_testing(
     sao_ai_editor_settings_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len);
 
+int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_submit_dialog_for_testing(
+    sao_ai_editor_settings_panel_t panel, const char* input_text_utf8, size_t input_text_len);
+
 int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_set_teardown_failures_for_testing(
     sao_ai_editor_settings_panel_t panel, bool fail_unregister_once, bool fail_restore_action,
     bool fail_restore_event);

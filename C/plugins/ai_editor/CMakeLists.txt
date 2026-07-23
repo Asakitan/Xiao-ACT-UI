@@ -49,6 +49,33 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
     endif()
 endif()
 
+# gpu_hunt bridge/panel/tool/adapter translation units are local-only
+# (see top-level .gitignore rule **/gpu_hunt_*.cpp).  A clean checkout is
+# expected to succeed; each source is added only when the file is actually
+# present.  Missing sources also skip the sao::gpu_hunt link below.
+set(_SAO_AI_EDITOR_GPU_HUNT_SOURCES
+    src/gpu_hunt_bridge.cpp
+    src/gpu_hunt_central_panel.cpp
+    src/gpu_hunt_sdk_adapter.cpp
+    src/gpu_hunt_tool.cpp
+)
+set(_SAO_AI_EDITOR_GPU_HUNT_PRESENT_SOURCES "")
+set(_SAO_AI_EDITOR_GPU_HUNT_MISSING_SOURCES "")
+foreach (_sao_ai_editor_gpu_hunt_src IN LISTS _SAO_AI_EDITOR_GPU_HUNT_SOURCES)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_sao_ai_editor_gpu_hunt_src}")
+        list(APPEND _SAO_AI_EDITOR_GPU_HUNT_PRESENT_SOURCES
+            "${_sao_ai_editor_gpu_hunt_src}")
+    else()
+        list(APPEND _SAO_AI_EDITOR_GPU_HUNT_MISSING_SOURCES
+            "${_sao_ai_editor_gpu_hunt_src}")
+    endif()
+endforeach()
+if (_SAO_AI_EDITOR_GPU_HUNT_MISSING_SOURCES)
+    message(STATUS
+        "sao_plugin_ai_editor: gpu_hunt sources not present in this checkout: "
+        "${_SAO_AI_EDITOR_GPU_HUNT_MISSING_SOURCES}")
+endif()
+
 add_library(sao_plugin_ai_editor SHARED
     src/ai_editor_launcher_process.cpp
     src/ai_editor_ipc_win32.cpp
@@ -61,10 +88,11 @@ add_library(sao_plugin_ai_editor SHARED
     src/chat_provider_router.cpp
     src/conversation_store.cpp
     src/extension_host.cpp
-    src/gpu_hunt_bridge.cpp
-    src/gpu_hunt_central_panel.cpp
-    src/gpu_hunt_sdk_adapter.cpp
-    src/gpu_hunt_tool.cpp
+    ${_SAO_AI_EDITOR_GPU_HUNT_PRESENT_SOURCES}
+    src/kernel_map_bridge.cpp
+    src/kernel_map_commands.cpp
+    src/kernel_map_panel_provider.cpp
+    src/kernel_map_tools.cpp
     src/mcp_client.cpp
     src/mcp_codec.cpp
     src/mcp_server.cpp
@@ -105,7 +133,6 @@ target_link_libraries(sao_plugin_ai_editor PUBLIC
 )
 target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
-    sao::gpu_hunt
     sao::rt_io
     sao::sdk
     bcrypt
@@ -113,6 +140,14 @@ target_link_libraries(sao_plugin_ai_editor PRIVATE
     shell32
     winhttp
 )
+# Link sao::gpu_hunt only when at least one gpu_hunt-consuming source is
+# present; on a clean checkout without gpu_hunt local-only sources the
+# alias resolves to a stub INTERFACE library (see platform/CMakeLists.txt).
+# Linking the stub is harmless but there is no consumer, so skip it to
+# keep the dependency graph honest.
+if (_SAO_AI_EDITOR_GPU_HUNT_PRESENT_SOURCES)
+    target_link_libraries(sao_plugin_ai_editor PRIVATE sao::gpu_hunt)
+endif()
 
 add_executable(sao_ai_editor WIN32
     src/sao_ai_editor_main.cpp
@@ -158,6 +193,19 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/prompts/"
     DESTINATION "assets/ai_editor/prompts"
     COMPONENT ship
     FILES_MATCHING PATTERN "*.json"
+)
+
+# Kernel Map operator dashboard assets — HTML/JS/CSS bundle loaded by
+# the KernelMapPanelProvider at runtime.  Ships alongside the other
+# ai_editor assets so options.system_root + "/assets/ai_editor/..."
+# resolves cleanly.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel/"
+    DESTINATION "assets/ai_editor/kernel_map_panel"
+    COMPONENT ship
+    FILES_MATCHING
+        PATTERN "*.html"
+        PATTERN "*.js"
+        PATTERN "*.css"
 )
 
 if (SAO_BUILD_TESTS)

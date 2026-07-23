@@ -176,6 +176,40 @@ if (TARGET sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests)
     )
 endif()
 
+add_executable(sao_plugin_ai_editor_kernel_map_tests
+    kernel_map_bridge_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_bridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_commands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_tools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_tool_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/scope_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_secret_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_result_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/sha256_helper.cpp
+)
+target_compile_features(sao_plugin_ai_editor_kernel_map_tests PRIVATE
+    cxx_std_20
+)
+target_compile_definitions(sao_plugin_ai_editor_kernel_map_tests PRIVATE
+    SAO_AI_EDITOR_TESTING
+)
+target_include_directories(sao_plugin_ai_editor_kernel_map_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_link_libraries(sao_plugin_ai_editor_kernel_map_tests PRIVATE
+    Catch2::Catch2WithMain
+    nlohmann_json::nlohmann_json
+    sao::rt_io
+    bcrypt
+    crypt32
+)
+catch_discover_tests(sao_plugin_ai_editor_kernel_map_tests
+    TEST_PREFIX "plugins_ai_editor.kernel_map."
+    PROPERTIES LABELS "plugins;ai_editor;kernel_map"
+)
+
 add_executable(sao_plugin_ai_editor_settings_contract_tests
     test_ai_editor_settings_contract.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/ai_editor_settings.cpp
@@ -200,4 +234,43 @@ target_link_libraries(sao_plugin_ai_editor_settings_contract_tests PRIVATE
 catch_discover_tests(sao_plugin_ai_editor_settings_contract_tests
     TEST_PREFIX "plugins_ai_editor.settings."
     PROPERTIES LABELS "plugins;ai_editor;settings;contract"
+)
+
+# Kernel Map Bridge operator dashboard — message-dispatch contract.
+# Compiles kernel_map_panel_provider.cpp + webview_panel_registry.cpp
+# straight into the test target so the mock bridge (declared in
+# kernel_map_panel_test.cpp) can substitute for the peer's real
+# kernel_map::Bridge without needing the DLL or sao::rt_io to link.
+add_executable(sao_plugin_ai_editor_kernel_map_panel_tests
+    kernel_map_panel_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_panel_provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/webview_panel_registry.cpp
+)
+target_compile_features(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
+    cxx_std_20
+)
+target_include_directories(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+# SAO_AI_EDITOR_BUILDING_DLL keeps the SAO_AI_EDITOR_API markers on
+# the exported classes evaluating to dllexport when the panel provider
+# is compiled into the standalone test binary; without it the marker
+# picks up dllimport and the linker cannot find its own symbols.
+# SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB tells the panel provider
+# translation unit to skip the __has_include probe for the peer's
+# kernel_map_bridge.h so the mock IKernelMapBridge is the only path;
+# a build without the peer header on disk would otherwise fail here.
+target_compile_definitions(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
+    SAO_AI_EDITOR_BUILDING_DLL
+    SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB=1
+)
+target_link_libraries(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
+    Catch2::Catch2WithMain
+    nlohmann_json::nlohmann_json
+    user32
+)
+catch_discover_tests(sao_plugin_ai_editor_kernel_map_panel_tests
+    TEST_PREFIX "plugins_ai_editor.kernel_map_panel."
+    PROPERTIES LABELS "plugins;ai_editor;kernel_map;panel"
 )

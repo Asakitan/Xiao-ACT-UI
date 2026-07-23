@@ -1588,6 +1588,12 @@ bool state_dirty(const AiEditorSettingsPanelState& state) {
            !state.pending_secret_values.empty() || !state.pending_secret_clears.empty();
 }
 
+bool followup_load_active(const AiEditorSettingsPanelState& state) noexcept {
+    return state.raw_load_pending || state.effective_load_pending ||
+           state.rpc_kind == RpcKind::LoadRawScope ||
+           state.rpc_kind == RpcKind::LoadEffective;
+}
+
 const FieldMeta* find_field(const AiEditorSettingsPanelState& state,
                             std::string_view key) noexcept {
     const auto found = std::ranges::find(state.fields, key, &FieldMeta::key);
@@ -2069,7 +2075,7 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
     const std::string token = stable_token(field.key);
     const bool interaction_locked = !state.values_loaded || state.save_phase == SavePhase::Saving ||
                                     state.rpc_kind != RpcKind::None || state.save_pending ||
-                                    !dependencies_met;
+                                    followup_load_active(state) || !dependencies_met;
     if (field.kind == FieldKind::Boolean) {
         actions.push_back(button_node("field." + token + ".toggle", "Toggle / 切换", "field.toggle",
                                       {{"key", field.key}}, "primary", interaction_locked));
@@ -2112,6 +2118,8 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
 std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     json nodes = json::array();
     const bool dirty = state_dirty(state);
+    const bool synchronization_locked = state.rpc_kind != RpcKind::None || state.save_pending ||
+                                        followup_load_active(state);
     nodes.push_back(text_node(dirty ? "AI Editor Settings *" : "AI Editor Settings",
                               dirty ? "warn" : "title", 30));
     nodes.push_back(text_node("Scope priority: Plugin > Workspace > System. Only the selected "
@@ -2141,7 +2149,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
         scope_buttons.push_back(button_node(
             "scope." + std::string(scope), std::move(label), "scope.select", {{"scope", scope}},
             state.selected_scope == scope ? "primary" : "default",
-            plugin_unavailable || state.rpc_kind != RpcKind::None || state.save_pending));
+            plugin_unavailable || synchronization_locked));
     }
     scope_children.push_back(row_node(std::move(scope_buttons)));
     scope_children.push_back(text_node(
@@ -2307,20 +2315,24 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     json footer_actions = json::array();
     footer_actions.push_back(
         button_node("footer.apply", "Apply / 应用", "draft.apply", json::object(), "primary",
-                    !dirty || !state.values_loaded || state.save_phase == SavePhase::Saving));
+                    !dirty || !state.values_loaded || state.save_phase == SavePhase::Saving ||
+                        synchronization_locked));
     footer_actions.push_back(button_node("footer.discard", "Discard / 丢弃", "draft.discard",
                                          json::object(), "danger",
-                                         !dirty || state.save_phase == SavePhase::Saving));
+                                         !dirty || state.save_phase == SavePhase::Saving ||
+                                             synchronization_locked));
     footer_actions.push_back(button_node("footer.reload", "Reload / 重新加载", "draft.reload",
                                          json::object(), "default",
-                                         state.save_phase == SavePhase::Saving));
+                                         state.save_phase == SavePhase::Saving ||
+                                             synchronization_locked));
     footer_actions.push_back(button_node("footer.reset_section", "Reset Section / 重置本页",
                                          "draft.reset_section", json::object(), "ghost",
                                          state.active_page == "overview" ||
                                              !state.search_query.empty() ||
                                              state.review_filter != "all" ||
                                              !state.values_loaded ||
-                                             state.save_phase == SavePhase::Saving));
+                                             state.save_phase == SavePhase::Saving ||
+                                             synchronization_locked));
     footer.push_back(row_node(std::move(footer_actions)));
     nodes.push_back(card_node("Actions", std::move(footer), dirty ? "warn" : "ok"));
 
@@ -3055,6 +3067,11 @@ void queue_save(AiEditorSettingsPanelState& state) {
     std::lock_guard lock(state.mutex);
     if (state.save_phase == SavePhase::Saving || state.save_pending)
         return;
+    if (followup_load_active(state) || state.rpc_kind != RpcKind::None) {
+        state.last_error = "Settings are synchronizing; wait before applying changes. / "
+                           "设置正在同步，请等待完成后再应用。";
+        return;
+    }
     if (!state_dirty(state)) {
         state.status_message = "No pending changes / 没有待保存更改";
         return;
@@ -3333,6 +3350,12 @@ void SAO_UI_CALL dialog_result_callback(SaoUiDialogButton pressed, const char* i
         state->last_error.clear();
         return;
     }
+    if (state->rpc_kind != RpcKind::None || state->save_pending ||
+        followup_load_active(*state)) {
+        state->last_error = "Settings changed while the dialog was open; wait for synchronization "
+                            "and try again. / 设置同步状态已变化，请等待后重试。";
+        return;
+    }
     if (pending.intent == DialogIntent::ConfirmReload) {
         discard_draft(*state);
         state->load_pending = true;
@@ -3342,6 +3365,11 @@ void SAO_UI_CALL dialog_result_callback(SaoUiDialogButton pressed, const char* i
     const FieldMeta* field = find_field(*state, pending.field_key);
     if (field == nullptr) {
         state->last_error = "Setting metadata is no longer available: " + pending.field_key;
+        return;
+    }
+    if (!field_dependencies_satisfied(*state, *field)) {
+        state->last_error =
+            "Setting dependency is no longer satisfied: " + dependency_display(*state, *field);
         return;
     }
     if (pending.intent == DialogIntent::ConfirmClearSecret) {
@@ -3627,7 +3655,8 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
     if (mutates_draft) {
         std::lock_guard lock(state.mutex);
         if (!state.values_loaded || state.save_phase == SavePhase::Saving ||
-            state.rpc_kind == RpcKind::LoadScope) {
+            state.rpc_kind != RpcKind::None || state.save_pending ||
+            followup_load_active(state)) {
             state.last_error = "Settings are synchronizing; wait for the current load/save. / "
                                "设置正在同步，请等待当前加载或保存完成。";
             return;
@@ -3644,7 +3673,8 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
         std::lock_guard lock(state.mutex);
         if (*scope == state.selected_scope)
             return;
-        if (state.rpc_kind != RpcKind::None || state.save_pending) {
+        if (state.rpc_kind != RpcKind::None || state.save_pending ||
+            followup_load_active(state)) {
             state.last_error = "Scope switch blocked while settings are synchronizing. / "
                                "设置同步期间不能切换作用域。";
             return;
@@ -3698,15 +3728,23 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
             state.last_error = "Open one category before Reset Section.";
             return;
         }
-        size_t count = 0;
+        std::vector<const FieldMeta*> resettable;
+        size_t skipped = 0;
         for (const auto& item : state.fields) {
             if (item.page != state.active_page)
                 continue;
-            reset_field(state, item);
-            ++count;
+            if (!field_dependencies_satisfied(state, item)) {
+                ++skipped;
+                continue;
+            }
+            resettable.push_back(&item);
         }
+        for (const FieldMeta* item : resettable)
+            reset_field(state, *item);
         state.status_message =
-            "Reset queued for " + std::to_string(count) + " fields in this section.";
+            "Reset queued for " + std::to_string(resettable.size()) + " fields in this section.";
+        if (skipped != 0)
+            state.status_message += " Skipped " + std::to_string(skipped) + " unavailable fields.";
         return;
     }
     if (action == "draft.apply") {
@@ -3731,6 +3769,13 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
         if (!field_dependencies_satisfied(state, *field_meta)) {
             state.last_error = "Setting dependency is not satisfied: " +
                                dependency_display(state, *field_meta);
+            return;
+        }
+        if ((action == "field.toggle" && field_meta->kind != FieldKind::Boolean) ||
+            (action == "field.select" && field_meta->kind != FieldKind::Enum) ||
+            (action == "field.clear" && !is_secret_field(*field_meta)) ||
+            (action == "field.edit" && field_meta->kind == FieldKind::Boolean)) {
+            state.last_error = "Setting action does not match field type: " + field_meta->key;
             return;
         }
     }
@@ -4008,6 +4053,25 @@ extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_dispatch_acti
     }
 }
 
+extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_submit_dialog_for_testing(
+    sao_ai_editor_settings_panel_t panel, const char* input_text_utf8, size_t input_text_len) {
+    if (input_text_utf8 == nullptr && input_text_len != 0)
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    ApiLease lease(panel, true);
+    if (!lease)
+        return lease.status();
+    try {
+        dialog_result_callback(SAO_UI_DIALOG_BTN_OK, input_text_utf8, input_text_len,
+                               &lease.state());
+        const int32_t hide_status = hide_active_dialog(lease.state());
+        if (hide_status != SAO_AI_EDITOR_OK)
+            return hide_status;
+        return map_ui_status(refresh_body(lease.state(), true));
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+}
+
 extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_snapshot_json_for_testing(
     sao_ai_editor_settings_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len) {
     if (out_len == nullptr || (buffer_utf8 == nullptr && buffer_cap != 0))
@@ -4150,6 +4214,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_p
                 : "Connecting to settings backend...";
 
         SaoPanelDescriptor descriptor{};
+        descriptor.struct_size = sizeof(SaoPanelDescriptor);
         descriptor.panel_id_utf8 = SAO_AI_EDITOR_SETTINGS_PANEL_ID;
         descriptor.title_utf8 = "AI Editor Settings";
         descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;

@@ -83,6 +83,14 @@ public:
                                 bool overwrite,
                                 std::string& out_id) const;
 
+    // Create a complete copy of a conversation with a fresh id and savedAt.
+    // Title defaults to source.title + " (copy)" and an empty scope selects
+    // the source scope.  Messages, systemPrompt, model, and tags are copied;
+    // pinned is always reset to false.  Emits the full new conversation plus
+    // sourceId and duplicatedAt.
+    int32_t duplicate(std::string_view source_id, std::string_view title, std::string_view scope,
+                      Json& result) const;
+
     // Fork a new conversation whose messages are the first
     // `message_index + 1` entries of the source (i.e. up to and including
     // the entry at `message_index`).  The new conversation inherits the
