@@ -23,6 +23,18 @@
 #define SAO_AI_EDITOR_HAS_WEBVIEW 0
 #endif
 
+#ifndef SAO_AI_EDITOR_MAIN_SOURCE
+#define SAO_AI_EDITOR_MAIN_SOURCE ""
+#endif
+
+#ifndef SAO_AI_EDITOR_CMAKE_SOURCE
+#define SAO_AI_EDITOR_CMAKE_SOURCE ""
+#endif
+
+#ifndef SAO_AI_EDITOR_WEBVIEW_SOURCE
+#define SAO_AI_EDITOR_WEBVIEW_SOURCE ""
+#endif
+
 namespace {
 
 using Json = nlohmann::json;
@@ -139,14 +151,13 @@ BOOL CALLBACK inspect_top_level_window(HWND window, LPARAM parameter) {
         return TRUE;
     }
 
-    std::array<wchar_t, 256> title{};
-    GetWindowTextW(window, title.data(), static_cast<int>(title.size()));
-    if (std::wstring_view(title.data()) != L"SAO AI Editor") {
+    std::array<wchar_t, 128> class_name{};
+    if (GetClassNameW(window, class_name.data(), static_cast<int>(class_name.size())) <= 0 ||
+        std::wstring_view(class_name.data()) != L"{B6D9F274-3E15-4A82-91CF-7D48B3E5A0F6}") {
         return TRUE;
     }
     snapshot.window = window;
-    EnumChildWindows(window, inspect_child_window,
-                     reinterpret_cast<LPARAM>(&snapshot));
+    EnumChildWindows(window, inspect_child_window, reinterpret_cast<LPARAM>(&snapshot));
     return FALSE;
 }
 
@@ -200,6 +211,22 @@ std::string read_all(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     REQUIRE(input.good());
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+DWORD run_child_and_wait(const std::filesystem::path& executable, std::wstring arguments,
+                         const std::filesystem::path& working_directory) {
+    std::wstring command_line = L"\"" + executable.native() + L"\" " + std::move(arguments);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process_info{};
+    REQUIRE(CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                           nullptr, working_directory.c_str(), &startup, &process_info));
+    ProcessGuard process{process_info.hProcess};
+    CloseHandle(process_info.hThread);
+    REQUIRE(WaitForSingleObject(process.value, 5000) == WAIT_OBJECT_0);
+    DWORD exit_code = 0;
+    REQUIRE(GetExitCodeProcess(process.value, &exit_code));
+    return exit_code;
 }
 
 } // namespace
@@ -298,8 +325,8 @@ TEST_CASE("production AI Editor child dispatches native runtime requests",
     REQUIRE(exit_code == 0);
 }
 
-TEST_CASE("production AI Editor child creates its native Win32 UI",
-          "[plugins][ai_editor][production_child][ui]") {
+TEST_CASE("AI Editor hidden NativeWindow remains a UI smoke fixture",
+          "[plugins][ai_editor][production_child][ui][fixture]") {
     TemporaryDirectory temporary;
     const auto workspace = temporary.path() / L"ui smoke workspace";
     const auto profile = temporary.path() / L"ui smoke profile";
@@ -317,16 +344,15 @@ TEST_CASE("production AI Editor child creates its native Win32 UI",
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process_info{};
-    REQUIRE(CreateProcessW(nullptr, command_line.data(), nullptr, nullptr,
-                           FALSE, 0, nullptr, executable.parent_path().c_str(),
-                           &startup, &process_info));
+    REQUIRE(CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                           executable.parent_path().c_str(), &startup, &process_info));
     ProcessGuard process{process_info.hProcess};
     CloseHandle(process_info.hThread);
 
     (void)WaitForInputIdle(process.value, 2000);
-    const WindowSnapshot snapshot =
-        wait_for_editor_window(process_info.dwProcessId, process.value);
+    const WindowSnapshot snapshot = wait_for_editor_window(process_info.dwProcessId, process.value);
     REQUIRE(snapshot.window != nullptr);
+    REQUIRE_FALSE(IsWindowVisible(snapshot.window));
     REQUIRE(snapshot.edit_count >= 2);
     REQUIRE(snapshot.has_send_button);
     REQUIRE(snapshot.has_clear_button);
@@ -338,9 +364,8 @@ TEST_CASE("production AI Editor child creates its native Win32 UI",
     REQUIRE(exit_code == 0);
 }
 
-TEST_CASE("production AI Editor child compiles and propagates the WebView "
-          "bridge path",
-          "[plugins][ai_editor][production_child][webview]") {
+TEST_CASE("production WebView mode requires the complete compositor bridge",
+        "[plugins][ai_editor][production_child][webview][fail_closed]") {
     TemporaryDirectory temporary;
     const auto workspace = temporary.path() / L"webview workspace";
     REQUIRE(std::filesystem::create_directories(workspace));
@@ -350,25 +375,49 @@ TEST_CASE("production AI Editor child compiles and propagates the WebView "
         SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
     REQUIRE(std::filesystem::is_regular_file(executable));
 #if SAO_AI_EDITOR_HAS_WEBVIEW
-    REQUIRE_FALSE(std::filesystem::exists(
-        executable.parent_path() / L"WebView2Loader.dll"));
+    REQUIRE_FALSE(std::filesystem::exists(executable.parent_path() / L"WebView2Loader.dll"));
 #endif
-    std::wstring command_line =
-        L"\"" + executable.native() + L"\" --webview --workspace \"" +
-        workspace.native() + L"\"";
+    const std::wstring base = L"--webview --workspace \"" + workspace.native() + L"\"";
+    CHECK(run_child_and_wait(executable, base, temporary.path()) == 2);
+    CHECK(run_child_and_wait(executable, base + L" --sao-mmf-name Local\\SaoFrame",
+                             temporary.path()) == 2);
+    CHECK(run_child_and_wait(executable, base + L" --sao-input-ring-name Local\\SaoInput",
+                             temporary.path()) == 2);
+    CHECK(run_child_and_wait(executable,
+                             base + L" --hidden --sao-mmf-name Local\\SaoFrame"
+                                    L" --sao-input-ring-name Local\\SaoInput",
+                             temporary.path()) == 2);
+    CHECK(run_child_and_wait(executable,
+                             base + L" --sao-mmf-name Local\\SaoFrame"
+                                    L" --sao-input-ring-name Local\\SaoInput",
+                             temporary.path()) == 12);
+}
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process_info{};
-    REQUIRE(CreateProcessW(nullptr, command_line.data(), nullptr, nullptr,
-                           FALSE, CREATE_NO_WINDOW, nullptr,
-                           temporary.path().c_str(), &startup,
-                           &process_info));
-    ProcessGuard process{process_info.hProcess};
-    CloseHandle(process_info.hThread);
+TEST_CASE("shipping AI Editor excludes standalone panel entry points",
+          "[plugins][ai_editor][production_child][shipping][focused]") {
+    const std::string main_source = read_all(SAO_AI_EDITOR_MAIN_SOURCE);
+    CHECK(main_source.find("gpu_hunt_panel_show") == std::string::npos);
+    CHECK(main_source.find("--gpu-hunt") == std::string::npos);
 
-    REQUIRE(WaitForSingleObject(process.value, 5000) == WAIT_OBJECT_0);
-    DWORD exit_code = 0;
-    REQUIRE(GetExitCodeProcess(process.value, &exit_code));
-    REQUIRE(exit_code == 12);
+    const std::string cmake_source = read_all(SAO_AI_EDITOR_CMAKE_SOURCE);
+    CHECK(cmake_source.find("src/gpu_hunt_panel.cpp") == std::string::npos);
+
+    const std::string webview_source = read_all(SAO_AI_EDITOR_WEBVIEW_SOURCE);
+    CHECK(webview_source.find("ShowWindow(") == std::string::npos);
+    CHECK(webview_source.find("WS_OVERLAPPEDWINDOW") ==
+          std::string::npos);
+    CHECK(webview_source.find("WS_POPUP") != std::string::npos);
+
+    TemporaryDirectory temporary;
+    const std::filesystem::path executable =
+        SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
+    REQUIRE(std::filesystem::is_regular_file(executable));
+    CHECK(run_child_and_wait(executable, L"--gpu-hunt", temporary.path()) ==
+          2);
+    CHECK(run_child_and_wait(executable, LR"(--sao-ai-editor-pipe \\.\pipe\sao-visible-child)",
+                             temporary.path()) == 2);
+    CHECK(run_child_and_wait(
+              executable,
+              LR"(--sao-ai-editor-pipe \\.\pipe\sao-headless-child --headless --sao-mmf-name Local\Unexpected)",
+              temporary.path()) == 2);
 }

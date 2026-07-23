@@ -1,7 +1,6 @@
 #include "sao/ai_editor/ai_editor_native.h"
 
 #include "mcp_server.h"
-#include "gpu_hunt_panel.h"
 #include "window_hardening.h"
 #if SAO_AI_EDITOR_HAS_WEBVIEW
 #include "webview_bridge.h"
@@ -41,7 +40,6 @@ constexpr int kOutputEditId = 1001;
 constexpr int kRequestEditId = 1002;
 constexpr int kSendButtonId = 1003;
 constexpr int kClearButtonId = 1004;
-constexpr int kGpuHuntButtonId = 1005;
 constexpr wchar_t kWindowClassName[] = L"{B6D9F274-3E15-4A82-91CF-7D48B3E5A0F6}";
 constexpr wchar_t kWindowTitle[] = L"";
 constexpr std::string_view kHandshakeRequest = "SAO_AI_EDITOR_HELLO 1";
@@ -106,9 +104,8 @@ struct Arguments final {
     std::optional<std::filesystem::path> cli_params_file;
     std::optional<std::filesystem::path> workspace;
     std::optional<std::filesystem::path> node_executable;
-    // Phase C wire-up: when --sao-mmf-name is supplied the webview HWND
-    // hides off-screen and its rendered content is streamed to the named
-    // MMF ring for a main-process compositor layer to consume.
+    // WebView2 is an off-screen technical surface. Both bridge names are
+    // required and its pixels are exposed only through the main compositor.
     std::wstring sao_mmf_name;
     std::wstring sao_input_ring_name;
     int sao_init_width = 0;
@@ -121,23 +118,25 @@ struct Arguments final {
     bool extension_host_mode = false;
     bool webview_mode = false;
     bool cli_mode = false;
-    bool gpu_hunt_only = false;
     bool show_help = false;
 };
 
 void print_usage() {
     constexpr wchar_t usage[] =
         L"Usage: SaoAiEditor.exe --sao-ai-editor-pipe <pipe> "
-        L"[--workspace <directory>] [--headless]\n"
+        L"[--workspace <directory>] --headless\n"
         L"       SaoAiEditor.exe --ui-smoke-test [--workspace <directory>] "
         L"[--hidden] [--auto-exit-ms <milliseconds>]\n"
         L"       SaoAiEditor.exe --mcp-server [--workspace <directory>]\n"
         L"       SaoAiEditor.exe --extension-host [--workspace <directory>] "
         L"[--node-executable <path>]\n"
+        L"       SaoAiEditor.exe --webview --sao-mmf-name <name> "
+        L"--sao-input-ring-name <name> [--workspace <directory>] "
+        L"[--webview-url <url>] [--sao-init-width <pixels>] "
+        L"[--sao-init-height <pixels>]\n"
         L"       SaoAiEditor.exe --cli --cli-method <method> "
         L"[--cli-params <json>] [--cli-params-file <path>] "
-        L"[--workspace <directory>]\n"
-        L"       SaoAiEditor.exe --gpu-hunt\n";
+        L"[--workspace <directory>]\n";
     std::fputws(usage, stderr);
     OutputDebugStringW(usage);
 }
@@ -217,13 +216,6 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
                 return false;
             }
             result.cli_mode = true;
-            continue;
-        }
-        if (argument == L"--gpu-hunt") {
-            if (result.gpu_hunt_only) {
-                return false;
-            }
-            result.gpu_hunt_only = true;
             continue;
         }
         if (argument != L"--sao-ai-editor-pipe" &&
@@ -313,35 +305,32 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
     if (result.show_help) {
         return true;
     }
-    if (result.gpu_hunt_only) {
-        // --gpu-hunt is a self-contained pop-up mode driven by the SAO
-        // menu's Tools entry; no pipe / workspace / auto-exit are meaningful.
-        return result.pipe_name.empty() && !result.mcp_server &&
-               !result.extension_host_mode && !result.webview_mode &&
-               !result.cli_mode && !result.ui_smoke_test &&
-               !result.headless && !result.hidden_window &&
-               !result.workspace.has_value() &&
-               !result.node_executable.has_value() &&
-               result.auto_exit_ms == 0;
-    }
+    const bool has_webview_options =
+        !result.webview_url.empty() || !result.sao_mmf_name.empty() ||
+        !result.sao_input_ring_name.empty() || result.sao_init_width != 0 ||
+        result.sao_init_height != 0;
     if (result.mcp_server) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
                !result.headless && !result.hidden_window &&
                !result.extension_host_mode &&
                !result.node_executable.has_value() &&
-               result.auto_exit_ms == 0;
+               result.auto_exit_ms == 0 && !has_webview_options;
     }
     if (result.extension_host_mode) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
                !result.headless && !result.hidden_window &&
                !result.mcp_server && !result.webview_mode &&
-               !result.cli_mode && result.auto_exit_ms == 0;
+               !result.cli_mode && result.auto_exit_ms == 0 &&
+               !has_webview_options;
     }
     if (result.webview_mode) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
-               !result.headless && !result.mcp_server && !result.cli_mode &&
+               !result.headless && !result.hidden_window &&
+               !result.mcp_server && !result.cli_mode &&
                !result.extension_host_mode &&
-               !result.node_executable.has_value();
+               !result.node_executable.has_value() &&
+               result.auto_exit_ms == 0 && !result.sao_mmf_name.empty() &&
+               !result.sao_input_ring_name.empty();
     }
     if (result.cli_mode) {
         if (result.cli_method.empty()) {
@@ -357,13 +346,14 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
         return false;
     }
     if (result.ui_smoke_test) {
-        return result.pipe_name.empty() && !result.headless;
+        return result.pipe_name.empty() && !result.headless &&
+               !has_webview_options;
     }
     if (result.pipe_name.empty()) {
         return false;
     }
-    return !result.headless ||
-           (!result.hidden_window && result.auto_exit_ms == 0);
+    return result.headless && !result.hidden_window &&
+           result.auto_exit_ms == 0 && !has_webview_options;
 }
 
 bool is_local_pipe_name(std::wstring_view name) {
@@ -786,7 +776,6 @@ struct UiState final {
     HWND request_edit = nullptr;
     HWND send_button = nullptr;
     HWND clear_button = nullptr;
-    HWND gpu_hunt_button = nullptr;
     HWND status_bar = nullptr;
     DWORD auto_exit_ms = 0;
     int exit_code = 0;
@@ -884,11 +873,6 @@ void layout_controls(HWND window, UiState& state) {
                button_height, TRUE);
     MoveWindow(state.clear_button, margin + button_width + gap, button_top,
                button_width, button_height, TRUE);
-    // GPU Hunt button lives to the right of the primary buttons so it does
-    // not shift the muscle memory for Send / Clear.
-    MoveWindow(state.gpu_hunt_button,
-               margin + (button_width + gap) * 2, button_top,
-               button_width + 24, button_height, TRUE);
 }
 
 bool create_controls(HWND window, UiState& state) {
@@ -918,17 +902,11 @@ bool create_controls(HWND window, UiState& state) {
         0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kClearButtonId)),
         instance, nullptr);
-    state.gpu_hunt_button = CreateWindowExW(
-        0, L"BUTTON", L"GPU Hunt",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, window,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGpuHuntButtonId)),
-        instance, nullptr);
     state.status_bar = CreateWindowExW(
         0, STATUSCLASSNAMEW, L"Ready", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, window, nullptr, instance, nullptr);
     if (state.output_edit == nullptr || state.request_edit == nullptr ||
         state.send_button == nullptr || state.clear_button == nullptr ||
-        state.gpu_hunt_button == nullptr ||
         state.status_bar == nullptr) {
         return false;
     }
@@ -936,7 +914,7 @@ bool create_controls(HWND window, UiState& state) {
     const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     for (HWND control : {state.output_edit, state.request_edit,
                          state.send_button, state.clear_button,
-                         state.gpu_hunt_button, state.status_bar}) {
+                         state.status_bar}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     }
     append_output(state, L"SAO AI Editor native runtime ready.\r\n");
@@ -981,16 +959,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             LOWORD(wparam) == kClearButtonId) {
             SetWindowTextW(state->output_edit, L"");
             set_status(*state, L"Output cleared");
-            return 0;
-        }
-        if (HIWORD(wparam) == BN_CLICKED &&
-            LOWORD(wparam) == kGpuHuntButtonId) {
-            HINSTANCE inst = reinterpret_cast<HINSTANCE>(
-                GetWindowLongPtrW(window, GWLP_HINSTANCE));
-            HWND panel = sao::ai_editor::gpu_hunt_panel_show(inst);
-            set_status(*state,
-                panel != nullptr ? L"GPU Hunt panel opened"
-                                 : L"GPU Hunt panel failed to open");
             return 0;
         }
         break;
@@ -1172,8 +1140,7 @@ int run_ui_smoke(HINSTANCE instance, int show_command,
     return run_ui(instance, show_command, smoke_arguments, session);
 }
 
-int run_child(HINSTANCE instance, int show_command,
-              const Arguments& arguments) {
+int run_child(const Arguments& arguments) {
     if (!is_local_pipe_name(arguments.pipe_name)) {
         return 3;
     }
@@ -1205,15 +1172,11 @@ int run_child(HINSTANCE instance, int show_command,
         return 8;
     }
 
-    if (arguments.headless) {
-        session->attach_pipe(pipe.get());
-        const int result = run_pipe_requests(session, pipe.get(), nullptr);
-        session->detach_pipe(pipe.get());
-        session->close();
-        return result;
-    }
-    return run_ui(instance, show_command, arguments, session,
-                  std::move(pipe));
+    session->attach_pipe(pipe.get());
+    const int result = run_pipe_requests(session, pipe.get(), nullptr);
+    session->detach_pipe(pipe.get());
+    session->close();
+    return result;
 }
 
 } // namespace
@@ -1327,46 +1290,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             }
             return sao::ai_editor::native::run_mcp_server_stdio(*workspace);
         }
-        if (arguments.gpu_hunt_only) {
-            // Standalone GPU Hunt panel mode: no main window, no IPC
-            // handshake, no runtime.  We just register a hidden owner window
-            // so the panel is anchored to a HWND owned by this HINSTANCE,
-            // show the panel, then pump messages until it closes.  The panel
-            // itself already owns its own message loop timer; we just need
-            // the process to stay alive.
-            INITCOMMONCONTROLSEX icce{};
-            icce.dwSize = sizeof(icce);
-            icce.dwICC  = ICC_STANDARD_CLASSES | ICC_BAR_CLASSES;
-            InitCommonControlsEx(&icce);
-            HWND panel = sao::ai_editor::gpu_hunt_panel_show(instance);
-            if (panel == nullptr) {
-                return 15;
-            }
-            MSG msg{};
-            while (true) {
-                BOOL rc = GetMessageW(&msg, nullptr, 0, 0);
-                if (rc == 0 || rc == -1) {
-                    break;
-                }
-                // Once the panel window has been destroyed and its class
-                // singleton cleared, exit the loop.
-                if (!IsWindow(panel)) {
-                    // Drain any remaining posted messages then bail.
-                    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                        TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
-                    }
-                    break;
-                }
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            // The GpuHuntTool singleton owns a background tick thread; its
-            // static destructor stops it during CRT teardown, so we do not
-            // need to explicitly wire that here.  Reaching this point means
-            // the panel window was closed and the message pump drained.
-            return 0;
-        }
         if (arguments.extension_host_mode) {
             const auto workspace = resolve_workspace(arguments.workspace);
             if (!workspace.has_value()) {
@@ -1437,7 +1360,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (arguments.ui_smoke_test) {
             return run_ui_smoke(instance, show_command, arguments);
         }
-        return run_child(instance, show_command, arguments);
+        return run_child(arguments);
     } catch (...) {
         return 1;
     }

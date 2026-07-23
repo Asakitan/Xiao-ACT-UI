@@ -9,7 +9,8 @@
 
 namespace sao::ai_editor::native {
 
-// Config for a single WebView2 window.
+// Config for one off-screen WebView2 technical surface. The HWND is never a
+// user-visible panel; the SaoAuto compositor is the only visible consumer.
 struct WebViewConfig {
     std::string url;              // navigate target (about:blank if empty)
     std::string user_data_folder; // required by WebView2
@@ -21,27 +22,18 @@ struct WebViewConfig {
     // `runtime_handle` to be non-null.
     bool bridge_native_runtime = true;
     sao_ai_editor_runtime_t runtime_handle = nullptr;
-    // Phase C wire-up: when `sao_mmf_name_utf8` is non-empty, the WebView2
-    // HWND is moved off-screen (SetWindowPos to -32000, -32000) and its
-    // rendered content is captured via PrintWindow into a MMF ring at
-    // ~30 fps.  A main-process compositor layer consuming that MMF then
-    // renders the webview inside the compositor.  Leave empty to keep
-    // the legacy visible-HWND behaviour (standalone SaoAiEditor.exe run).
+    // Required compositor bridge frame ring. The WebView2 HWND is created
+    // off-screen and captured into this SOPF-compatible MMF source.
     std::string sao_mmf_name_utf8;
-    // Optional shared-memory input event ring name.  When non-empty the
-    // bridge polls the ring for InputEvent records and forwards them via
-    // SendMessage to the WebView2 HWND, unblocking keyboard/mouse routing
-    // from the main-process compositor.  Ignored when
-    // `sao_mmf_name_utf8` is empty (input ring is only meaningful when
-    // the visible HWND is off-screen).
+    // Required compositor input ring. The bridge polls InputEvent records
+    // and forwards them to the off-screen WebView2 HWND.
     std::string sao_input_ring_name_utf8;
 };
 
-// Blocking helper: creates an STA window, boots CoreWebView2, spins a
-// modal message pump, and returns when the user closes the window (or
-// `stop_signaled` becomes true).  Returns SAO_AI_EDITOR_OK on clean
-// shutdown, or a domain error when WebView2Loader/CoreWebView2 setup
-// fails (missing runtime, missing loader, etc.).
+// Blocking helper: creates an off-screen STA surface, boots CoreWebView2,
+// spins its message pump, and returns after a bridge close request or setup
+// failure. Missing/invalid MMF or input rings fail closed before WebView2 is
+// exposed; no visible fallback exists.
 SAO_AI_EDITOR_API int32_t run_webview_bridge(const WebViewConfig& config);
 
 // Detection helper — returns true iff WebView2Loader.dll can be loaded

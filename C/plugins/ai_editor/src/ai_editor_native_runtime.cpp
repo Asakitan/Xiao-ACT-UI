@@ -1,5 +1,6 @@
 #include "sao/ai_editor/ai_editor_native.h"
 
+#include "ai_editor_settings.h"
 #include "chat_provider_router.h"
 #include "native_runtime_internal.h"
 #include "sha256_helper.h"
@@ -20,6 +21,10 @@
 
 namespace sao::ai_editor::native {
 namespace {
+
+constexpr uint32_t kDefaultEventDrainLimit = 32U;
+constexpr uint32_t kMaximumEventDrainLimit = 64U;
+constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
 
 std::string status_message(int32_t status) {
     switch (status) {
@@ -124,6 +129,590 @@ std::string mode_of(const Json& params) {
 
 bool supported_mode(std::string_view mode) {
     return mode == "agent" || mode == "ask" || mode == "plan";
+}
+
+int32_t parse_event_drain_limit(const Json& params, uint32_t& limit) {
+    limit = kDefaultEventDrainLimit;
+    const auto found = params.find("limit");
+    if (found == params.end()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if (!found->is_number_integer()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    uint64_t requested = 0;
+    if (found->is_number_unsigned()) {
+        requested = found->get<uint64_t>();
+    } else {
+        const int64_t signed_requested = found->get<int64_t>();
+        if (signed_requested <= 0) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        requested = static_cast<uint64_t>(signed_requested);
+    }
+    if (requested == 0 || requested > kMaximumEventDrainLimit) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    limit = static_cast<uint32_t>(requested);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::string approval_of(const Json& params) {
+    std::string approval = params.value("approval", "default");
+    std::transform(approval.begin(), approval.end(), approval.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return approval;
+}
+
+bool supported_approval(std::string_view approval) {
+    return approval == "default" || approval == "bypass" ||
+           approval == "autopilot";
+}
+
+bool auto_approves(std::string_view approval) {
+    return approval == "bypass" || approval == "autopilot";
+}
+
+std::string permission_value(const Json& value) {
+    if (!value.is_string()) {
+        return {};
+    }
+    std::string permission = value.get<std::string>();
+    std::transform(permission.begin(), permission.end(), permission.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return permission == "allowed" || permission == "confirm" ||
+                   permission == "disabled"
+               ? permission
+               : std::string{};
+}
+
+int mode_restriction(std::string_view mode) {
+    if (mode == "agent") {
+        return 0;
+    }
+    if (mode == "plan") {
+        return 1;
+    }
+    return mode == "ask" ? 2 : -1;
+}
+
+std::string stricter_mode(std::string_view left, std::string_view right) {
+    return mode_restriction(left) >= mode_restriction(right)
+               ? std::string(left)
+               : std::string(right);
+}
+
+std::string stricter_approval(std::string_view settings_approval,
+                              std::string_view request_approval) {
+    if (settings_approval == "default" || request_approval == "default") {
+        return "default";
+    }
+    return std::string(request_approval);
+}
+
+int permission_restriction(std::string_view permission) {
+    if (permission == "allowed") {
+        return 0;
+    }
+    if (permission == "confirm") {
+        return 1;
+    }
+    return permission == "disabled" ? 2 : -1;
+}
+
+std::string default_permission(std::string_view mode,
+                               std::string_view category) {
+    if (category == "read") {
+        return "allowed";
+    }
+    if (category != "write" && category != "execute") {
+        return {};
+    }
+    if (mode == "ask") {
+        return "disabled";
+    }
+    return mode == "plan" ? "confirm" : "allowed";
+}
+
+int32_t validate_permissions(const Json& permissions) {
+    if (!permissions.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    for (const std::string_view category : {"read", "write", "execute"}) {
+        const std::string key(category);
+        if (permissions.contains(key) &&
+            permission_value(permissions[key]).empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    if (!permissions.contains("tools")) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if (!permissions["tools"].is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    for (const auto& [_name, value] : permissions["tools"].items()) {
+        if (permission_value(value).empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+struct RuntimePolicySnapshot final {
+    std::string settings_mode;
+    std::string request_mode;
+    std::string effective_mode;
+    std::string settings_approval;
+    std::string request_approval;
+    std::string effective_approval;
+    Json settings_permissions = Json::object();
+    Json request_permissions = Json::object();
+    bool request_permission_layer{};
+};
+
+int32_t prepare_runtime_policy(const ScopeStore& scopes,
+                               const Json& request,
+                               RuntimePolicySnapshot& policy) {
+    if (!request.is_object() ||
+        (request.contains("mode") && !request["mode"].is_string()) ||
+        (request.contains("approval") &&
+         !request["approval"].is_string()) ||
+        (request.contains("permissions") &&
+         !request["permissions"].is_object())) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+
+    Json settings;
+    const int32_t settings_status = AiEditorSettings::prepare_runtime_request(
+        scopes, Json::object(), settings);
+    if (settings_status != SAO_AI_EDITOR_OK) {
+        return settings_status;
+    }
+
+    policy.settings_mode = mode_of(settings);
+    policy.request_mode = request.contains("mode")
+                              ? mode_of(request)
+                              : policy.settings_mode;
+    policy.settings_approval = approval_of(settings);
+    policy.request_approval = request.contains("approval")
+                                  ? approval_of(request)
+                                  : policy.settings_approval;
+    if (!supported_mode(policy.settings_mode) ||
+        !supported_mode(policy.request_mode) ||
+        !supported_approval(policy.settings_approval) ||
+        !supported_approval(policy.request_approval)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+
+    policy.settings_permissions =
+        settings.value("permissions", Json::object());
+    policy.request_permissions =
+        request.value("permissions", Json::object());
+    int32_t status = validate_permissions(policy.settings_permissions);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    status = validate_permissions(policy.request_permissions);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+
+    policy.effective_mode =
+        stricter_mode(policy.settings_mode, policy.request_mode);
+    policy.effective_approval = stricter_approval(
+        policy.settings_approval, policy.request_approval);
+    policy.request_permission_layer =
+        request.contains("mode") || request.contains("permissions");
+    return SAO_AI_EDITOR_OK;
+}
+
+struct PermissionResolution final {
+    std::string permission;
+    std::string source;
+};
+
+int32_t permission_entry(const Json& source,
+                         std::string_view name,
+                         bool& found,
+                         std::string& permission) {
+    found = false;
+    permission.clear();
+    if (!source.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string key(name);
+    if (!source.contains(key)) {
+        return SAO_AI_EDITOR_OK;
+    }
+    found = true;
+    permission = permission_value(source[key]);
+    return permission.empty() ? SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
+                              : SAO_AI_EDITOR_OK;
+}
+
+int32_t resolve_permission_layer(const Json& permissions,
+                                 std::string_view mode,
+                                 std::string_view requested_name,
+                                 std::string_view canonical_name,
+                                 std::string_view category,
+                                 std::string_view layer,
+                                 PermissionResolution& resolution) {
+    const Json* tool_permissions = nullptr;
+    if (permissions.contains("tools")) {
+        if (!permissions["tools"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        tool_permissions = &permissions["tools"];
+    }
+    const auto resolve_name = [&](std::string_view name,
+                                  std::string_view source_name,
+                                  PermissionResolution& output) -> int32_t {
+        bool found = false;
+        std::string permission;
+        int32_t status = permission_entry(
+            permissions, name, found, permission);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        if (!found && tool_permissions != nullptr) {
+            status = permission_entry(
+                *tool_permissions, name, found, permission);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+        }
+        if (found) {
+            output.permission = std::move(permission);
+            output.source = std::string(layer) + "." +
+                            std::string(source_name);
+        }
+        return SAO_AI_EDITOR_OK;
+    };
+
+    int32_t status = resolve_name(requested_name, "tool", resolution);
+    if (status != SAO_AI_EDITOR_OK || !resolution.permission.empty()) {
+        return status;
+    }
+    if (canonical_name != requested_name) {
+        status = resolve_name(canonical_name, "canonical", resolution);
+        if (status != SAO_AI_EDITOR_OK || !resolution.permission.empty()) {
+            return status;
+        }
+    }
+
+    bool found = false;
+    std::string permission;
+    status = permission_entry(permissions, category, found, permission);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    if (found) {
+        resolution.permission = std::move(permission);
+        resolution.source = std::string(layer) + ".category";
+        return SAO_AI_EDITOR_OK;
+    }
+
+    resolution.permission = default_permission(mode, category);
+    resolution.source = std::string(layer) + ".mode";
+    return resolution.permission.empty()
+               ? SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
+               : SAO_AI_EDITOR_OK;
+}
+
+int32_t tool_permission_category(const Json* descriptor,
+                                 std::string_view canonical_name,
+                                 std::string& category) {
+    category.clear();
+    if (descriptor == nullptr || !descriptor->is_object()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if (descriptor->contains("category")) {
+        if (!(*descriptor)["category"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        category = (*descriptor)["category"].get<std::string>();
+        std::transform(category.begin(), category.end(), category.begin(),
+                       [](unsigned char character) {
+                           return static_cast<char>(std::tolower(character));
+                       });
+        if (category == "read" || category == "write" ||
+            category == "execute") {
+            return SAO_AI_EDITOR_OK;
+        }
+        category.clear();
+    }
+    if (!descriptor->contains("readOnly") ||
+        !(*descriptor)["readOnly"].is_boolean()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if ((*descriptor)["readOnly"].get<bool>()) {
+        category = "read";
+    } else {
+        category = canonical_name == "editFile" ? "write" : "execute";
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t resolve_tool_permission(const RuntimePolicySnapshot& policy,
+                                std::string_view requested_name,
+                                std::string_view canonical_name,
+                                const Json* descriptor,
+                                PermissionResolution& resolution,
+                                std::string& category) {
+    int32_t status = tool_permission_category(
+        descriptor, canonical_name, category);
+    if (status != SAO_AI_EDITOR_OK || category.empty()) {
+        return status;
+    }
+
+    PermissionResolution settings_resolution;
+    status = resolve_permission_layer(
+        policy.settings_permissions, policy.settings_mode, requested_name,
+        canonical_name, category, "settings", settings_resolution);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    resolution = settings_resolution;
+
+    if (policy.request_permission_layer) {
+        PermissionResolution request_resolution;
+        status = resolve_permission_layer(
+            policy.request_permissions, policy.request_mode, requested_name,
+            canonical_name, category, "request", request_resolution);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        const int settings_restriction =
+            permission_restriction(settings_resolution.permission);
+        const int request_restriction =
+            permission_restriction(request_resolution.permission);
+        if (request_restriction > settings_restriction ||
+            (request_restriction == settings_restriction &&
+             request_resolution.source.find(".mode") == std::string::npos)) {
+            resolution = std::move(request_resolution);
+        }
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+const Json* find_tool_descriptor(const Json& tools, std::string_view name) {
+    if (!tools.is_array()) {
+        return nullptr;
+    }
+    for (const auto& tool : tools) {
+        if (tool.is_object() && tool.value("name", std::string{}) == name) {
+            return &tool;
+        }
+    }
+    return nullptr;
+}
+
+struct ToolExecutionPlan final {
+    std::string mode;
+    Json arguments = Json::object();
+    PermissionResolution permission;
+    std::string category;
+};
+
+int32_t prepare_tool_execution(const RuntimePolicySnapshot& policy,
+                               std::string_view requested_name,
+                               std::string_view resolved_name,
+                               const Json* descriptor,
+                               const Json& arguments,
+                               ToolExecutionPlan& plan) {
+    if (!arguments.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    plan.mode = policy.effective_mode;
+    plan.arguments = arguments;
+    const int32_t status = resolve_tool_permission(
+        policy, requested_name, resolved_name, descriptor,
+        plan.permission, plan.category);
+    if (status != SAO_AI_EDITOR_OK || plan.permission.permission.empty()) {
+        return status;
+    }
+    if (plan.permission.permission == "disabled") {
+        return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+    }
+    if (plan.permission.permission == "allowed") {
+        plan.mode = "agent";
+        return SAO_AI_EDITOR_OK;
+    }
+
+    plan.mode = "plan";
+    const bool confirmed =
+        plan.arguments.contains("confirmed") &&
+        plan.arguments["confirmed"].is_boolean() &&
+        plan.arguments["confirmed"].get<bool>();
+    if (!confirmed && !auto_approves(policy.effective_approval)) {
+        return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+    }
+    if (!confirmed) {
+        plan.arguments["confirmed"] = true;
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t apply_tool_permissions(const RuntimePolicySnapshot& policy,
+                               Json& tools) {
+    if (!tools.is_array()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    for (auto& tool : tools) {
+        if (!tool.is_object() || !tool.contains("name") ||
+            !tool["name"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string name = tool["name"].get<std::string>();
+        const std::string alias_of =
+            tool.value("aliasOf", name);
+        PermissionResolution resolution;
+        std::string category;
+        const int32_t status = resolve_tool_permission(
+            policy, name, alias_of, &tool, resolution, category);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        if (resolution.permission.empty()) {
+            continue;
+        }
+        tool["permission"] = resolution.permission;
+        tool["permissionSource"] = resolution.source;
+        tool["permissionCategory"] = category;
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+Json reported_permission_overrides(const RuntimePolicySnapshot& policy) {
+    if (!policy.request_permission_layer ||
+        policy.request_permissions.empty()) {
+        return policy.settings_permissions;
+    }
+    if (policy.settings_permissions.empty()) {
+        return policy.request_permissions;
+    }
+    return Json{{"settings", policy.settings_permissions},
+                {"request", policy.request_permissions}};
+}
+
+struct SecretSnapshot final {
+    bool present{};
+    std::string value;
+};
+
+int32_t snapshot_secret(SecretStore& secrets,
+                        std::string_view key,
+                        SecretSnapshot& snapshot) {
+    snapshot = {};
+    const int32_t status = secrets.get(key, snapshot.value);
+    if (status == SAO_AI_EDITOR_OK) {
+        snapshot.present = true;
+        return SAO_AI_EDITOR_OK;
+    }
+    return status == SAO_AI_EDITOR_ERR_NOT_FOUND ? SAO_AI_EDITOR_OK : status;
+}
+
+int32_t write_secret(SecretStore& secrets,
+                     std::string_view key,
+                     std::string_view value) {
+    if (!value.empty()) {
+        return secrets.set(key, value);
+    }
+    const int32_t status = secrets.erase(key);
+    return status == SAO_AI_EDITOR_ERR_NOT_FOUND ? SAO_AI_EDITOR_OK : status;
+}
+
+int32_t restore_secret(SecretStore& secrets,
+                       std::string_view key,
+                       const SecretSnapshot& snapshot) {
+    if (snapshot.present) {
+        return secrets.set(key, snapshot.value);
+    }
+    const int32_t status = secrets.erase(key);
+    return status == SAO_AI_EDITOR_ERR_NOT_FOUND ? SAO_AI_EDITOR_OK : status;
+}
+
+bool scope_exists(const ScopeStore& scopes,
+                  std::string_view scope,
+                  std::string_view plugin_id) {
+    const Json described = scopes.describe_scopes();
+    if (!described.is_array()) {
+        return false;
+    }
+    for (const auto& entry : described) {
+        if (!entry.is_object() || entry.value("scope", std::string{}) != scope) {
+            continue;
+        }
+        if (scope != "plugin" ||
+            entry.value("pluginId", std::string{}) == plugin_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int32_t apply_workflow_approval_policy(const Json& params,
+                                       WorkflowDefinition& definition) {
+    const std::string approval = approval_of(params);
+    if (!supported_approval(approval)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (auto_approves(approval)) {
+        for (auto& step : definition.steps) {
+            step.requires_confirmation = false;
+        }
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+void copy_chat_option(Json& body, const Json& params,
+                      std::string_view output_key,
+                      std::initializer_list<std::string_view> input_keys) {
+    for (const auto input_key : input_keys) {
+        const std::string key(input_key);
+        if (params.contains(key)) {
+            body[std::string(output_key)] = params[key];
+            return;
+        }
+    }
+}
+
+int32_t build_openai_chat_body(const Json& params, std::string_view model,
+                               Json messages, bool stream, Json& body) {
+    if (model.empty() || !messages.is_array() || messages.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    body = Json{{"model", model},
+                {"messages", std::move(messages)},
+                {"stream", stream}};
+    copy_chat_option(body, params, "temperature", {"temperature"});
+    copy_chat_option(body, params, "max_tokens", {"max_tokens", "maxTokens"});
+    copy_chat_option(body, params, "top_p", {"top_p", "topP"});
+    copy_chat_option(body, params, "top_k", {"top_k", "topK"});
+    copy_chat_option(body, params, "frequency_penalty",
+                     {"frequency_penalty", "frequencyPenalty"});
+    copy_chat_option(body, params, "presence_penalty",
+                     {"presence_penalty", "presencePenalty"});
+    copy_chat_option(body, params, "stop", {"stop"});
+    copy_chat_option(body, params, "seed", {"seed"});
+    copy_chat_option(body, params, "logit_bias", {"logit_bias", "logitBias"});
+    copy_chat_option(body, params, "logprobs", {"logprobs"});
+    copy_chat_option(body, params, "top_logprobs",
+                     {"top_logprobs", "topLogprobs"});
+    copy_chat_option(body, params, "n", {"n"});
+    copy_chat_option(body, params, "user", {"user"});
+    copy_chat_option(body, params, "tools", {"tools"});
+    copy_chat_option(body, params, "tool_choice", {"tool_choice", "toolChoice"});
+    copy_chat_option(body, params, "response_format",
+                     {"response_format", "responseFormat"});
+    copy_chat_option(body, params, "parallel_tool_calls",
+                     {"parallel_tool_calls", "parallelToolCalls"});
+    return SAO_AI_EDITOR_OK;
 }
 
 Json registry_summary(const Json& registry, std::string_view kind) {
@@ -400,6 +989,60 @@ int32_t NativeRuntime::dispatch(const Json& request, Json& response) {
 int32_t NativeRuntime::invoke(std::string_view method,
                               const Json& params,
                               Json& result) {
+    if (method == "events.drain") {
+        uint32_t limit = 0;
+        const int32_t limit_status = parse_event_drain_limit(params, limit);
+        if (limit_status != SAO_AI_EDITOR_OK) {
+            result = Json{{"parameter", "limit"},
+                          {"minimum", 1},
+                          {"maximum", kMaximumEventDrainLimit},
+                          {"default", kDefaultEventDrainLimit}};
+            return limit_status;
+        }
+
+        Json drained = Json::array();
+        size_t selected = 0;
+        size_t selected_bytes = 0;
+        std::lock_guard<std::mutex> lock(event_mutex_);
+        for (auto event = events_.cbegin();
+             event != events_.cend() && selected < limit; ++event) {
+            const size_t event_bytes = event->size();
+            if (event_bytes > kMaximumEventDrainBytes) {
+                if (selected == 0) {
+                    result = Json{{"maximumBatchBytes", kMaximumEventDrainBytes},
+                                  {"nextEventBytes", event_bytes}};
+                    return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+                }
+                break;
+            }
+            if (selected_bytes > kMaximumEventDrainBytes - event_bytes) {
+                break;
+            }
+            Json notification = Json::parse(*event, nullptr, false);
+            if (notification.is_discarded()) {
+                result = Json{{"message", "queued event is not valid JSON"},
+                              {"eventIndex", selected}};
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+            drained.push_back(std::move(notification));
+            selected_bytes += event_bytes;
+            ++selected;
+        }
+
+        const size_t remaining = events_.size() - selected;
+        const bool closed = stopping_ && remaining == 0;
+        result = Json{{"events", std::move(drained)},
+                      {"count", selected},
+                      {"remaining", remaining},
+                      {"hasMore", remaining != 0},
+                      {"stopping", stopping_},
+                      {"closed", closed},
+                      {"limit", limit}};
+        for (size_t index = 0; index < selected; ++index) {
+            events_.pop_front();
+        }
+        return SAO_AI_EDITOR_OK;
+    }
     if (method == "runtime.initialize") {
         Json config;
         {
@@ -419,6 +1062,24 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method == "scopes.list") {
         result = scopes_.describe_scopes();
         return SAO_AI_EDITOR_OK;
+    }
+    if (method == "settings.describe") {
+        result = AiEditorSettings::describe(scopes_);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "settings.load") {
+        if (secrets_ == nullptr) {
+            return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return AiEditorSettings::load(scopes_, *secrets_, params, result);
+    }
+    if (method == "settings.save") {
+        if (secrets_ == nullptr) {
+            return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return AiEditorSettings::save(scopes_, *secrets_, params, result);
     }
     if (method == "config.load") {
         std::lock_guard<std::mutex> lock(store_mutex_);
@@ -456,10 +1117,49 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return status;
     }
     if (method == "permission.get") {
-        const std::string mode = mode_of(params);
-        result = permission_policy(mode);
-        return result.is_null() ? SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
-                                : SAO_AI_EDITOR_OK;
+        RuntimePolicySnapshot policy;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = prepare_runtime_policy(
+                scopes_, params, policy);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+        }
+        result = permission_policy(policy.effective_mode);
+        if (result.is_null()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        for (const std::string_view category : {"read", "write", "execute"}) {
+            PermissionResolution resolution;
+            const int32_t status = resolve_permission_layer(
+                policy.settings_permissions, policy.settings_mode, {}, {},
+                category, "settings", resolution);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+            if (policy.request_permission_layer) {
+                PermissionResolution request_resolution;
+                const int32_t request_status = resolve_permission_layer(
+                    policy.request_permissions, policy.request_mode, {}, {},
+                    category, "request", request_resolution);
+                if (request_status != SAO_AI_EDITOR_OK) {
+                    return request_status;
+                }
+                if (permission_restriction(request_resolution.permission) >
+                    permission_restriction(resolution.permission)) {
+                    resolution = std::move(request_resolution);
+                }
+            }
+            result[std::string(category)] = resolution.permission;
+        }
+        result["settingsMode"] = policy.settings_mode;
+        result["requestedMode"] = policy.request_mode;
+        result["approval"] = policy.effective_approval;
+        result["settingsApproval"] = policy.settings_approval;
+        result["requestedApproval"] = policy.request_approval;
+        result["overrides"] = reported_permission_overrides(policy);
+        return SAO_AI_EDITOR_OK;
     }
     if (method == "conversation.create") {
         std::lock_guard<std::mutex> lock(store_mutex_);
@@ -804,6 +1504,9 @@ int32_t NativeRuntime::invoke(std::string_view method,
             if (params.contains(field)) {
                 chat_params[key] = params[field];
             }
+        }
+        if (params.contains("timeoutMs")) {
+            chat_params["timeoutMs"] = params["timeoutMs"];
         }
         const uint32_t timeout_ms = params.value("timeoutMs", 60'000U);
         std::string summary_text;
@@ -1426,10 +2129,11 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // Resolve the (possibly-new) provider before we build the
         // execution so an invalid provider payload doesn't leak a
         // half-registered execution into workflow_executions_.
+        Json prepared_params;
         Json provider;
         std::string api_key;
         const int32_t provider_status =
-            resolve_provider(params, provider, api_key);
+            resolve_provider(params, prepared_params, provider, api_key);
         if (provider_status != SAO_AI_EDITOR_OK) {
             return provider_status;
         }
@@ -1437,11 +2141,22 @@ int32_t NativeRuntime::invoke(std::string_view method,
             provider["apiKey"] = api_key;
         }
         const std::string model =
-            params.value("model", provider.value("model", std::string{}));
-        if (model.empty() || provider.value("endpoint", "").empty()) {
+            prepared_params.value("model",
+                                  provider.value("model", std::string{}));
+        ProviderRoute route = normalise_provider(provider, model);
+        if (model.empty() || route.endpoint.empty()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        const uint32_t chat_timeout = params.value("timeoutMs", 60'000U);
+        provider["endpoint"] = route.endpoint;
+        provider["model"] = model;
+        provider["type"] = route.type;
+        const uint32_t chat_timeout =
+            prepared_params.value("timeoutMs", 60'000U);
+        const int32_t approval_status =
+            apply_workflow_approval_policy(prepared_params, definition);
+        if (approval_status != SAO_AI_EDITOR_OK) {
+            return approval_status;
+        }
         const bool keep_variables = params.value("keepVariables", true);
         // Seed the initial input from the persisted record so
         // interpolations like {{input}} still resolve when
@@ -1721,41 +2436,69 @@ int32_t NativeRuntime::invoke(std::string_view method,
         if (!valid_simple_id(id)) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        if (provider.contains("apiKey")) {
-            if (!provider["apiKey"].is_string() || secrets_ == nullptr) {
-                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-            }
-            const std::string secret_key = "provider/" + id + "/apiKey";
-            const std::string secret_value =
-                provider["apiKey"].get<std::string>();
-            const int32_t protected_status =
-                secret_value.empty() ? secrets_->erase(secret_key)
-                                     : secrets_->set(secret_key, secret_value);
-            if (protected_status != SAO_AI_EDITOR_OK &&
-                protected_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
-                return protected_status;
-            }
-            provider.erase("apiKey");
-        }
         std::string scope;
         std::string plugin_id;
         if (!parse_scope_key(params["scope"].get<std::string>(), scope,
                              plugin_id)) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
+
+        const bool changes_secret = provider.contains("apiKey");
+        std::string secret_value;
+        if (changes_secret) {
+            if (!provider["apiKey"].is_string() || secrets_ == nullptr) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            secret_value = provider["apiKey"].get<std::string>();
+            provider.erase("apiKey");
+        }
+
         std::lock_guard<std::mutex> lock(store_mutex_);
+        if (!scope_exists(scopes_, scope, plugin_id)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string secret_key = "provider/" + id + "/apiKey";
+        SecretSnapshot previous_secret;
+        if (changes_secret) {
+            const int32_t snapshot_status = snapshot_secret(
+                *secrets_, secret_key, previous_secret);
+            if (snapshot_status != SAO_AI_EDITOR_OK) {
+                return snapshot_status;
+            }
+            const int32_t secret_status = write_secret(
+                *secrets_, secret_key, secret_value);
+            if (secret_status != SAO_AI_EDITOR_OK) {
+                return secret_status;
+            }
+        }
+
         const int32_t status = scopes_.save_registry_item(
             "providers", scope, plugin_id, id, provider);
-        if (status == SAO_AI_EDITOR_OK) {
-            result = provider;
-            result["scope"] = params["scope"];
+        if (status != SAO_AI_EDITOR_OK) {
+            if (!changes_secret) {
+                return status;
+            }
+            const int32_t rollback_status = restore_secret(
+                *secrets_, secret_key, previous_secret);
+            result = Json{{"operation", "providers.configure"},
+                          {"registryStatus", status},
+                          {"secretRollbackStatus", rollback_status},
+                          {"secretRestored",
+                           rollback_status == SAO_AI_EDITOR_OK}};
+            return rollback_status == SAO_AI_EDITOR_OK
+                       ? status
+                       : SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
-        return status;
+        result = provider;
+        result["scope"] = params["scope"];
+        return SAO_AI_EDITOR_OK;
     }
     if (method == "models.list") {
+        Json prepared_params;
         Json provider;
         std::string secret;
-        const int32_t status = resolve_provider(params, provider, secret);
+        const int32_t status = resolve_provider(
+            params, prepared_params, provider, secret);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -1769,28 +2512,103 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return SAO_AI_EDITOR_OK;
     }
     if (method == "tools.list") {
-        const std::string mode = mode_of(params);
-        if (!supported_mode(mode)) {
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        RuntimePolicySnapshot policy;
+        Json tools;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = prepare_runtime_policy(
+                scopes_, params, policy);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+            tools = tools_.describe(policy.effective_mode);
         }
-        result = Json{{"mode", mode}, {"tools", tools_.describe(mode)}};
+        const int32_t permission_status = apply_tool_permissions(policy, tools);
+        if (permission_status != SAO_AI_EDITOR_OK) {
+            return permission_status;
+        }
+        result = Json{{"mode", policy.effective_mode},
+                      {"settingsMode", policy.settings_mode},
+                      {"requestedMode", policy.request_mode},
+                      {"approval", policy.effective_approval},
+                      {"overrides", reported_permission_overrides(policy)},
+                      {"tools", std::move(tools)}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "tools.call") {
+        RuntimePolicySnapshot policy;
+        Json tool_descriptors;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = prepare_runtime_policy(
+                scopes_, params, policy);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+            tool_descriptors = tools_.describe(policy.effective_mode);
+        }
         if (!params.contains("name") || !params["name"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        const std::string mode = mode_of(params);
-        if (!supported_mode(mode)) {
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        }
         const Json arguments = params.value("arguments", Json::object());
-        const std::string requested_name = params["name"].get<std::string>();
+        const std::string requested_name =
+            params["name"].get<std::string>();
         // Resolve aliases *before* firing hooks so the audit payload sees the
         // canonical tool name (matches the value passed to tool_filter).  The
-        // alias table read is cheap + independent of store_mutex_, so we do it
-        // outside the lock we take for execute().
+        // descriptor and policy are snapshots, so filesystem I/O below never
+        // runs while store_mutex_ is held.
         const std::string resolved_name = tools_.resolve_alias(requested_name);
+        const Json* descriptor = find_tool_descriptor(
+            tool_descriptors, requested_name);
+        if (descriptor == nullptr && resolved_name != requested_name) {
+            descriptor = find_tool_descriptor(tool_descriptors, resolved_name);
+        }
+        ToolExecutionPlan execution;
+        const int32_t policy_status = prepare_tool_execution(
+            policy, requested_name, resolved_name, descriptor, arguments,
+            execution);
+        if (policy_status != SAO_AI_EDITOR_OK) {
+            if (policy_status == SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED) {
+                result = Json{{"confirmationRequired", true},
+                              {"tool", requested_name},
+                              {"permissionSource",
+                               execution.permission.source},
+                              {"permissionCategory", execution.category}};
+            }
+            const auto before_hooks =
+                tools_.snapshot_hooks("before", resolved_name);
+            for (const auto& hook : before_hooks) {
+                Json payload{{"hookId", hook.id},
+                             {"phase", "before"},
+                             {"tool", resolved_name},
+                             {"arguments", arguments}};
+                if (resolved_name != requested_name) {
+                    payload["requestedTool"] = requested_name;
+                }
+                emit(hook.emit_event, payload);
+            }
+            tool_monitor_.record_invocation(resolved_name);
+            tool_monitor_.record_error(resolved_name);
+            const auto error_hooks =
+                tools_.snapshot_hooks("error", resolved_name);
+            for (const auto& hook : error_hooks) {
+                Json payload{{"hookId", hook.id},
+                             {"phase", "error"},
+                             {"tool", resolved_name},
+                             {"arguments", arguments},
+                             {"status", policy_status},
+                             {"durationMs", 0}};
+                if (resolved_name != requested_name) {
+                    payload["requestedTool"] = requested_name;
+                }
+                if (policy_status ==
+                    SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED) {
+                    payload["errorResult"] = result;
+                }
+                emit(hook.emit_event, payload);
+            }
+            return policy_status;
+        }
         // Before-phase hooks fire even when the tool ends up returning
         // NOT_FOUND — the payload includes the tool name that failed to
         // dispatch, which is exactly what an audit sink wants to record.
@@ -1800,7 +2618,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
             Json payload{{"hookId", hook.id},
                          {"phase", "before"},
                          {"tool", resolved_name},
-                         {"arguments", arguments}};
+                         {"arguments", execution.arguments}};
             if (resolved_name != requested_name) {
                 payload["requestedTool"] = requested_name;
             }
@@ -1816,8 +2634,8 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // read-only calls try the cache and short-circuit on hit.  observe()
         // is a no-op for read-only tools; lookup() returns nullopt for
         // uncached tools (mutations, custom).  See tool_result_cache.h.
-        tool_cache_.observe(resolved_name, arguments);
-        if (auto hit = tool_cache_.lookup(resolved_name, arguments)) {
+        tool_cache_.observe(resolved_name, execution.arguments);
+        if (auto hit = tool_cache_.lookup(resolved_name, execution.arguments)) {
             result = hit->result;
             const int64_t now_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1829,7 +2647,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
                 result["cacheAgeMs"] = age_ms;
             }
             Json hit_payload{{"tool", resolved_name},
-                             {"arguments", arguments},
+                             {"arguments", execution.arguments},
                              {"cacheAgeMs", age_ms}};
             if (resolved_name != requested_name) {
                 hit_payload["requestedTool"] = requested_name;
@@ -1849,7 +2667,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
                 Json payload{{"hookId", hook.id},
                              {"phase", "after"},
                              {"tool", resolved_name},
-                             {"arguments", arguments},
+                             {"arguments", execution.arguments},
                              {"result", result},
                              {"durationMs", 0},
                              {"cacheHit", true}};
@@ -1860,11 +2678,8 @@ int32_t NativeRuntime::invoke(std::string_view method,
             }
             return SAO_AI_EDITOR_OK;
         }
-        int32_t status;
-        {
-            std::lock_guard<std::mutex> lock(store_mutex_);
-            status = tools_.execute(mode, requested_name, arguments, result);
-        }
+        const int32_t status = tools_.execute(
+            execution.mode, requested_name, execution.arguments, result);
         const auto call_end = std::chrono::steady_clock::now();
         const auto duration_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1875,7 +2690,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // violation, schema failure) so retries do not return the error
         // payload as if it were the ground truth.
         if (status == SAO_AI_EDITOR_OK) {
-            tool_cache_.record(resolved_name, arguments, result);
+            tool_cache_.record(resolved_name, execution.arguments, result);
             tool_monitor_.record_result(resolved_name, result, duration_ms,
                                         /*cache_hit=*/false);
         } else {
@@ -1897,7 +2712,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
                 Json payload{{"hookId", hook.id},
                              {"phase", "after"},
                              {"tool", resolved_name},
-                             {"arguments", arguments},
+                             {"arguments", execution.arguments},
                              {"result", result},
                              {"durationMs", duration_ms}};
                 if (resolved_name != requested_name) {
@@ -1912,7 +2727,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
                 Json payload{{"hookId", hook.id},
                              {"phase", "error"},
                              {"tool", resolved_name},
-                             {"arguments", arguments},
+                             {"arguments", execution.arguments},
                              {"status", status},
                              {"durationMs", duration_ms}};
                 if (resolved_name != requested_name) {
@@ -2657,11 +3472,6 @@ int32_t NativeRuntime::batch_invoke_agents(const Json& params, Json& result) {
                             : top_default_provider;
         std::string model = entry.value(
             "model", default_model.empty() ? agent.model : default_model);
-        if ((!provider.is_object() || provider.empty()) && model.empty()) {
-            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-            slot.error = "provider or model missing";
-            continue;
-        }
         slot.model = model;
         // Build the messages array from the agent's system prompt + user
         // turn.  Unlike agents.invoke, batch mode never consults conversation
@@ -2677,6 +3487,11 @@ int32_t NativeRuntime::batch_invoke_agents(const Json& params, Json& result) {
         }
         if (!model.empty()) {
             chat_params["model"] = model;
+        }
+        if (entry.contains("timeoutMs")) {
+            chat_params["timeoutMs"] = entry["timeoutMs"];
+        } else if (params.contains("timeoutMs")) {
+            chat_params["timeoutMs"] = params["timeoutMs"];
         }
         chat_params["messages"] = std::move(messages);
         // Forward a small allowlist of chat.run knobs so callers can pass
@@ -2808,16 +3623,20 @@ int32_t NativeRuntime::batch_invoke_agents(const Json& params, Json& result) {
 }
 
 int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
-    if (!params.contains("toolCalls") || !params["toolCalls"].is_array() ||
-        params["toolCalls"].empty()) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    RuntimePolicySnapshot policy;
+    Json tool_descriptors;
+    {
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        const int32_t status = prepare_runtime_policy(
+            scopes_, params, policy);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        tool_descriptors = tools_.describe(policy.effective_mode);
     }
-    // mode is validated up-front: unlike batch_invoke_agents (where each
-    // per-agent slot could conceivably carry its own override), the entire
-    // dispatch shares a single permission policy so a stray "chat" mode
-    // should fail fast instead of silently downgrading every call to agent.
-    const std::string mode = mode_of(params);
-    if (!supported_mode(mode)) {
+    if (!params.contains("toolCalls") ||
+        !params["toolCalls"].is_array() ||
+        params["toolCalls"].empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     const Json& tool_calls = params["toolCalls"];
@@ -2839,6 +3658,8 @@ int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
     struct Slot final {
         std::string id;        // caller-supplied opaque id (echoed back)
         std::string name;      // tool name (empty on validation failure)
+        std::string resolved_name;
+        std::string execution_mode;
         Json arguments = Json::object();
         Json result_payload = Json::object();
         std::string error;
@@ -2910,6 +3731,31 @@ int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
                 continue;
             }
         }
+        slot.resolved_name = tools_.resolve_alias(slot.name);
+        const Json* descriptor = find_tool_descriptor(
+            tool_descriptors, slot.name);
+        if (descriptor == nullptr && slot.resolved_name != slot.name) {
+            descriptor = find_tool_descriptor(
+                tool_descriptors, slot.resolved_name);
+        }
+        ToolExecutionPlan execution;
+        const int32_t policy_status = prepare_tool_execution(
+            policy, slot.name, slot.resolved_name, descriptor,
+            slot.arguments, execution);
+        if (policy_status != SAO_AI_EDITOR_OK) {
+            slot.status = policy_status;
+            slot.error = status_message(policy_status);
+            if (policy_status == SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED) {
+                slot.result_payload =
+                    Json{{"confirmationRequired", true},
+                         {"tool", slot.name},
+                         {"permissionSource", execution.permission.source},
+                         {"permissionCategory", execution.category}};
+            }
+            continue;
+        }
+        slot.execution_mode = std::move(execution.mode);
+        slot.arguments = std::move(execution.arguments);
         slot.ready = true;
     }
 
@@ -2941,7 +3787,8 @@ int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
                 try {
                     Json tool_result;
                     const int32_t status = tools_.execute(
-                        mode, slot.name, slot.arguments, tool_result);
+                        slot.execution_mode, slot.name, slot.arguments,
+                        tool_result);
                     slot.status = status;
                     if (status == SAO_AI_EDITOR_OK) {
                         slot.result_payload = std::move(tool_result);
@@ -3005,6 +3852,10 @@ int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
         results.push_back(std::move(entry_result));
     }
     result = Json{{"results", std::move(results)},
+                  {"mode", policy.effective_mode},
+                  {"settingsMode", policy.settings_mode},
+                  {"requestedMode", policy.request_mode},
+                  {"approval", policy.effective_approval},
                   {"successCount", success},
                   {"failureCount", failure},
                   {"totalMs", total_ms}};
@@ -3813,50 +4664,41 @@ int32_t NativeRuntime::dispatch_auth(std::string_view method,
 int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
                                      std::string& out_content,
                                      std::function<void(const Json&)> on_delta) {
+    Json prepared_params;
     Json provider;
     std::string api_key;
-    int32_t status = resolve_provider(params, provider, api_key);
+    int32_t status = resolve_provider(
+        params, prepared_params, provider, api_key);
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
     const std::string model =
-        params.value("model", provider.value("model", std::string{}));
+        prepared_params.value("model",
+                              provider.value("model", std::string{}));
     if (model.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    Json messages = params.value("messages", Json::array());
+    Json messages = prepared_params.value("messages", Json::array());
     if (!messages.is_array() || messages.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     // Force stream=true whenever the caller supplied an on_delta callback so
     // upper layers (workflow / agents.invoke) can observe intermediate tokens
     // without having to explicitly set stream in params.
-    const bool stream = params.value("stream", false) ||
+    const bool stream = prepared_params.value("stream", false) ||
                         static_cast<bool>(on_delta);
-    Json body{{"model", model},
-              {"messages", std::move(messages)},
-              {"stream", stream}};
-    // Forward every mainstream OpenAI-compat sampling knob straight into the
-    // request body.  Missing fields are silently dropped so callers only pay
-    // for what they set; per-provider translation (Anthropic max_tokens,
-    // Gemini generationConfig, etc.) happens inside build_provider_request
-    // so unsupported knobs get pruned rather than smuggled through as
-    // provider-illegal keys.
-    for (const std::string_view field :
-         {"temperature", "max_tokens", "top_p", "top_k", "frequency_penalty",
-          "presence_penalty", "stop", "seed", "logit_bias", "logprobs",
-          "top_logprobs", "n", "user", "tools", "tool_choice",
-          "response_format", "parallel_tool_calls"}) {
-        if (params.contains(field)) {
-            body[std::string(field)] = params[field];
-        }
+    Json body;
+    const int32_t body_status = build_openai_chat_body(
+        prepared_params, model, std::move(messages), stream, body);
+    if (body_status != SAO_AI_EDITOR_OK) {
+        return body_status;
     }
     Json provider_with_key = provider;
     if (!api_key.empty()) {
         provider_with_key["apiKey"] = api_key;
     }
     ProviderRoute route = normalise_provider(provider_with_key, model);
-    if (route.endpoint.empty() && route.type == "openai") {
+    if (route.endpoint.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     ProviderRequest provider_request;
@@ -3872,14 +4714,14 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
     request.extra_headers = provider_request.extra_headers;
     request.request_json = provider_request.body_json;
     request.provider_type = route.type;
-    request.timeout_ms = timeout_ms;
+    request.timeout_ms = prepared_params.value("timeoutMs", timeout_ms);
     request.stream = stream;
     // Retry policy precedence: chat.run params.retry > provider.retry >
     // default (max_attempts=3).  run_chat_sync has no runId to attach
     // chat.retry events to, so retries are silent from the caller's view
     // but still honour the same backoff / status matrix as start_chat.
-    if (params.contains("retry")) {
-        request.retry = RetryPolicy::from_json(params["retry"]);
+    if (prepared_params.contains("retry")) {
+        request.retry = RetryPolicy::from_json(prepared_params["retry"]);
     } else if (provider.contains("retry")) {
         request.retry = RetryPolicy::from_json(provider["retry"]);
     }
@@ -4007,9 +4849,11 @@ int32_t NativeRuntime::dispatch_workflow(std::string_view method,
                                     definition)) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
+        Json prepared_params;
         Json provider;
         std::string api_key;
-        int32_t status = resolve_provider(params, provider, api_key);
+        int32_t status = resolve_provider(
+            params, prepared_params, provider, api_key);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -4017,11 +4861,21 @@ int32_t NativeRuntime::dispatch_workflow(std::string_view method,
             provider["apiKey"] = api_key;
         }
         const std::string model =
-            params.value("model", provider.value("model", std::string{}));
-        if (model.empty() || provider.value("endpoint", "").empty()) {
+            prepared_params.value("model",
+                                  provider.value("model", std::string{}));
+        ProviderRoute route = normalise_provider(provider, model);
+        if (model.empty() || route.endpoint.empty()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        const uint32_t chat_timeout = params.value("timeoutMs", 60'000U);
+        provider["endpoint"] = route.endpoint;
+        provider["model"] = model;
+        provider["type"] = route.type;
+        const uint32_t chat_timeout =
+            prepared_params.value("timeoutMs", 60'000U);
+        status = apply_workflow_approval_policy(prepared_params, definition);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
         Json input = params.contains("input") ? params["input"]
                                               : params.value("inputs",
                                                               Json::object());
@@ -4138,49 +4992,26 @@ int32_t NativeRuntime::dispatch_workflow(std::string_view method,
 }
 
 int32_t NativeRuntime::resolve_provider(const Json& params,
+                                        Json& prepared_params,
                                         Json& provider,
                                         std::string& api_key) {
-    if (params.contains("provider")) {
-        if (!params["provider"].is_object()) {
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (secrets_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
+    }
+    {
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        int32_t status = AiEditorSettings::prepare_chat_request(
+            scopes_, *secrets_, params, prepared_params, provider, api_key);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
         }
-        provider = params["provider"];
-        if (provider.contains("apiKey") && provider["apiKey"].is_string()) {
-            api_key = provider["apiKey"].get<std::string>();
+        RuntimePolicySnapshot policy;
+        status = prepare_runtime_policy(scopes_, params, policy);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
         }
-    } else {
-        const std::string provider_id = params.value("providerId", "");
-        if (!valid_simple_id(provider_id)) {
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        }
-        Json registry;
-        {
-            std::lock_guard<std::mutex> lock(store_mutex_);
-            const int32_t status = scopes_.load_registry(
-                "providers", Json::array(), registry);
-            if (status != SAO_AI_EDITOR_OK) {
-                return status;
-            }
-        }
-        for (const auto& item : registry) {
-            if (item.is_object() && item.value("id", "") == provider_id) {
-                provider = item;
-                break;
-            }
-        }
-        if (provider.is_null()) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
-        }
-        if (secrets_ != nullptr) {
-            std::string secret_value;
-            const int32_t secret_status = secrets_->get(
-                "provider/" + provider_id + "/apiKey", secret_value);
-            if (secret_status == SAO_AI_EDITOR_OK) {
-                api_key = std::move(secret_value);
-            } else if (secret_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
-                return secret_status;
-            }
-        }
+        prepared_params["mode"] = policy.effective_mode;
+        prepared_params["approval"] = policy.effective_approval;
     }
     if (api_key.empty() && provider.contains("apiKeyEnv") &&
         provider["apiKeyEnv"].is_string()) {
@@ -4190,19 +5021,22 @@ int32_t NativeRuntime::resolve_provider(const Json& params,
 }
 
 int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
+    Json prepared_params;
     Json provider;
     std::string api_key;
-    int32_t status = resolve_provider(params, provider, api_key);
+    int32_t status = resolve_provider(
+        params, prepared_params, provider, api_key);
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
-    const std::string endpoint = provider.value("endpoint", "");
-    const std::string model = params.value("model", provider.value("model", ""));
-    if (endpoint.empty() || model.empty()) {
+    const std::string model = prepared_params.value(
+        "model", provider.value("model", std::string{}));
+    if (model.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    Json messages = params.value("messages", Json::array());
-    const std::string conversation_id = params.value("conversationId", "");
+    Json messages = prepared_params.value("messages", Json::array());
+    const std::string conversation_id =
+        prepared_params.value("conversationId", "");
     if (messages.empty() && !conversation_id.empty()) {
         Json conversation;
         {
@@ -4217,20 +5051,12 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     if (!messages.is_array() || messages.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const bool stream = params.value("stream", true);
-    Json body{{"model", model}, {"messages", std::move(messages)},
-              {"stream", stream}};
-    // Mirror run_chat_sync's full sampling-knob forward list so streaming
-    // start_chat clients see the same params surface as the sync helper.
-    // build_provider_request handles provider-specific translation/pruning.
-    for (const std::string_view field :
-         {"temperature", "max_tokens", "top_p", "top_k", "frequency_penalty",
-          "presence_penalty", "stop", "seed", "logit_bias", "logprobs",
-          "top_logprobs", "n", "user", "tools", "tool_choice",
-          "response_format", "parallel_tool_calls"}) {
-        if (params.contains(field)) {
-            body[std::string(field)] = params[field];
-        }
+    const bool stream = prepared_params.value("stream", true);
+    Json body;
+    const int32_t body_status = build_openai_chat_body(
+        prepared_params, model, std::move(messages), stream, body);
+    if (body_status != SAO_AI_EDITOR_OK) {
+        return body_status;
     }
     Json provider_with_key = provider;
     if (!api_key.empty()) {
@@ -4238,7 +5064,7 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     }
     ProviderRoute route = normalise_provider(provider_with_key, model);
     if (route.endpoint.empty()) {
-        route.endpoint = endpoint;
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     ProviderRequest provider_request;
     const int32_t build_status =
@@ -4253,13 +5079,13 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     request.extra_headers = provider_request.extra_headers;
     request.request_json = provider_request.body_json;
     request.provider_type = route.type;
-    request.timeout_ms = params.value("timeoutMs", 60'000U);
+    request.timeout_ms = prepared_params.value("timeoutMs", 60'000U);
     request.stream = stream;
     // Retry policy precedence: chat.run params.retry > provider.retry >
     // default (max_attempts=3).  execute_chat picks this up and emits
     // chat.retry via the RetryNotifyCallback before each backoff sleep.
-    if (params.contains("retry")) {
-        request.retry = RetryPolicy::from_json(params["retry"]);
+    if (prepared_params.contains("retry")) {
+        request.retry = RetryPolicy::from_json(prepared_params["retry"]);
     } else if (provider.contains("retry")) {
         request.retry = RetryPolicy::from_json(provider["retry"]);
     }

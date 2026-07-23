@@ -106,10 +106,7 @@ struct WebViewSession {
     DWORD ui_thread_id = 0;
     std::unordered_map<WebviewPostRequest*,
                        std::shared_ptr<WebviewPostRequest>> pending_posts;
-    // Phase C wire-up: MMF capture + input ring bridge state.
-    // Both are non-null iff the launcher supplied a
-    // WebViewConfig::sao_mmf_name_utf8; the HWND then sits off-screen
-    // and the compositor layer consumes the MMF output.
+    // Off-screen frame capture and compositor input bridge state.
     std::unique_ptr<sao::ai_editor::WindowCaptureToMmf> mmf_capture;
     std::unique_ptr<sao::ai_editor::InputEventRingReader> input_reader;
     bool off_screen = false;
@@ -892,7 +889,11 @@ bool webview_runtime_available() {
 
 int32_t run_webview_bridge(const WebViewConfig& config) {
     if (config.user_data_folder.empty() ||
-        !valid_utf8(config.user_data_folder)) {
+        !valid_utf8(config.user_data_folder) ||
+        config.sao_mmf_name_utf8.empty() ||
+        !valid_utf8(config.sao_mmf_name_utf8) ||
+        config.sao_input_ring_name_utf8.empty() ||
+        !valid_utf8(config.sao_input_ring_name_utf8)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     if (config.bridge_native_runtime &&
@@ -955,10 +956,11 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     const std::wstring title = config.window_title.empty()
         ? std::wstring()
         : utf8_to_wide(config.window_title);
+    const int32_t width_px = std::max(320, config.width);
+    const int32_t height_px = std::max(240, config.height);
     HWND window = CreateWindowExW(
-        0, kWindowClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, std::max(320, config.width),
-        std::max(240, config.height), nullptr, nullptr,
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kWindowClassName, title.c_str(),
+        WS_POPUP, -32000, -32000, width_px, height_px, nullptr, nullptr,
         window_class.hInstance, session.get());
     if (window == nullptr) {
         FreeLibrary(loader);
@@ -971,54 +973,34 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         session->ui_thread_id = GetCurrentThreadId();
     }
 
-    const bool compositor_mode = !config.sao_mmf_name_utf8.empty();
-    if (compositor_mode) {
-        const int32_t width_px = std::max(320, config.width);
-        const int32_t height_px = std::max(240, config.height);
-        const std::wstring mmf_name_wide =
-            utf8_to_wide(config.sao_mmf_name_utf8);
-        if (!mmf_name_wide.empty()) {
-            auto capture =
-                std::make_unique<sao::ai_editor::WindowCaptureToMmf>();
-            if (capture->init(mmf_name_wide.c_str(), window, width_px,
-                              height_px)) {
-                std::lock_guard<std::mutex> guard(session->mutex);
-                session->mmf_capture = std::move(capture);
-                session->off_screen = true;
-            }
-        }
-        if (session->mmf_capture && !config.sao_input_ring_name_utf8.empty()) {
-            const std::wstring ring_name_wide =
-                utf8_to_wide(config.sao_input_ring_name_utf8);
-            if (!ring_name_wide.empty()) {
-                auto reader =
-                    std::make_unique<sao::ai_editor::InputEventRingReader>();
-                if (reader->open(ring_name_wide.c_str())) {
-                    std::lock_guard<std::mutex> guard(session->mutex);
-                    session->input_reader = std::move(reader);
-                }
-            }
-        }
-        if (session->off_screen) {
-            // Move the visible HWND off the virtual desktop so DWM keeps
-            // rendering it (PrintWindow still works) but no user pixel
-            // hits the screen; the compositor layer consuming the MMF
-            // is now the only visible surface.
-            (void)SetWindowPos(window, HWND_TOP, -32000, -32000, width_px,
-                                height_px,
-                                SWP_NOACTIVATE | SWP_NOZORDER);
-            (void)SetTimer(window, /*kCaptureTimerId=*/ 0xA01u, 33u,
-                            nullptr);
-            if (session->input_reader) {
-                (void)SetTimer(window, /*kInputTimerId=*/ 0xA02u, 5u,
-                                nullptr);
-            }
-        }
+    const std::wstring mmf_name_wide = utf8_to_wide(config.sao_mmf_name_utf8);
+    const std::wstring ring_name_wide =
+        utf8_to_wide(config.sao_input_ring_name_utf8);
+    auto capture = std::make_unique<sao::ai_editor::WindowCaptureToMmf>();
+    auto reader = std::make_unique<sao::ai_editor::InputEventRingReader>();
+    if (mmf_name_wide.empty() || ring_name_wide.empty() ||
+        !capture->init(mmf_name_wide.c_str(), window, width_px, height_px) ||
+        !reader->open(ring_name_wide.c_str())) {
+        DestroyWindow(window);
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-
-    if (!compositor_mode || !session->off_screen) {
-        ShowWindow(window, SW_SHOW);
-        UpdateWindow(window);
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        session->mmf_capture = std::move(capture);
+        session->input_reader = std::move(reader);
+        session->off_screen = true;
+    }
+    // This root HWND is an off-screen WebView2 rendering surface, never a
+    // panel. Its only visible output is the SOPF MMF consumed by SaoAuto's
+    // single compositor.
+    if (!SetWindowPos(window, nullptr, -32000, -32000, width_px, height_px,
+                      SWP_NOACTIVATE | SWP_NOZORDER) ||
+        SetTimer(window, /*kCaptureTimerId=*/0xA01u, 33u, nullptr) == 0 ||
+        SetTimer(window, /*kInputTimerId=*/0xA02u, 5u, nullptr) == 0) {
+        DestroyWindow(window);
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
 
     const std::wstring user_data =

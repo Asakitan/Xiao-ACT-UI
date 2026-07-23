@@ -32,6 +32,7 @@
 #include "sao/ai_editor/openai_codec.h"
 
 #include "../src/chat_provider_router.h"
+#include "../src/native_secret_store.h"
 #include "../src/tool_result_filter.h"
 #if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
 #include "../src/webview_bridge.h"
@@ -923,6 +924,118 @@ TEST_CASE("AI Editor file tools enforce mode permissions and workspace bounds",
             SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION);
 }
 
+TEST_CASE("AI Editor tool permission resolver applies tool alias category and mode precedence",
+          "[plugins][ai_editor][native][tools][permissions][policy]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "writeMemo"},
+                      {"description", "Write one memo"},
+                      {"readOnly", false}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "runMemo"},
+                      {"description", "Execute one memo action"},
+                      {"readOnly", false}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.register_alias",
+                     {{"alias", "memoAlias"},
+                      {"target", "writeMemo"}})
+                .contains("result"));
+
+    REQUIRE(dispatch(
+                runtime, "settings.save",
+                {{"scope", "workspace"},
+                 {"settings",
+                  {{"mode", "plan"},
+                   {"approval", "default"},
+                   {"permissions",
+                    {{"read", "disabled"},
+                     {"write", "confirm"},
+                     {"execute", "disabled"},
+                     {"tools",
+                      {{"writeMemo", "allowed"},
+                       {"memoAlias", "disabled"}}}}}}}})
+                .contains("result"));
+
+    const Json listed = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(listed["mode"] == "plan");
+    REQUIRE(listed["approval"] == "default");
+    std::unordered_map<std::string, Json> descriptors;
+    for (const auto& tool : listed["tools"]) {
+        descriptors.emplace(tool["name"].get<std::string>(), tool);
+    }
+    REQUIRE(descriptors["readFile"]["permission"] == "disabled");
+    REQUIRE(descriptors["readFile"]["permissionCategory"] == "read");
+    REQUIRE(descriptors["editFile"]["permission"] == "confirm");
+    REQUIRE(descriptors["editFile"]["permissionCategory"] == "write");
+    REQUIRE(descriptors["runMemo"]["permission"] == "disabled");
+    REQUIRE(descriptors["runMemo"]["permissionCategory"] == "execute");
+    REQUIRE(descriptors["writeMemo"]["permission"] == "allowed");
+    REQUIRE(descriptors["memoAlias"]["permission"] == "disabled");
+
+    const Json read_denied = dispatch(
+        runtime, "tools.call",
+        {{"name", "readFile"},
+         {"arguments", {{"path", "missing.txt"}}}});
+    REQUIRE(read_denied["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    const Json execute_denied = dispatch(
+        runtime, "tools.call",
+        {{"name", "runMemo"}, {"arguments", Json::object()}});
+    REQUIRE(execute_denied["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    const Json canonical_allowed = dispatch(
+        runtime, "tools.call",
+        {{"name", "writeMemo"},
+         {"arguments", {{"text", "ok"}}}});
+    REQUIRE(canonical_allowed.contains("result"));
+    REQUIRE(canonical_allowed["result"]["name"] == "writeMemo");
+
+    const Json alias_denied = dispatch(
+        runtime, "tools.call",
+        {{"name", "memoAlias"},
+         {"arguments", {{"text", "blocked"}}}});
+    REQUIRE(alias_denied["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    const Json request_cannot_loosen = dispatch(
+        runtime, "tools.call",
+        {{"mode", "agent"},
+         {"approval", "autopilot"},
+         {"permissions", {{"tools", {{"editFile", "allowed"}}}}},
+         {"name", "editFile"},
+         {"arguments", {{"path", "must-confirm.txt"},
+                          {"content", "blocked"}}}});
+    REQUIRE(request_cannot_loosen["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED);
+    REQUIRE_FALSE(std::filesystem::exists(
+        fixture.workspace() / L"must-confirm.txt"));
+
+    const Json batch = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "canonical"}, {"name", "writeMemo"},
+                   {"arguments", {{"text", "ok"}}}},
+              Json{{"id", "alias"}, {"name", "memoAlias"},
+                   {"arguments", {{"text", "blocked"}}}},
+              Json{{"id", "execute"}, {"name", "runMemo"},
+                   {"arguments", Json::object()}}})},
+         {"concurrency", 3}});
+    REQUIRE(batch.contains("result"));
+    REQUIRE(batch["result"]["successCount"] == 1);
+    REQUIRE(batch["result"]["failureCount"] == 2);
+    REQUIRE(batch["result"]["results"][0]["status"] == "completed");
+    REQUIRE(batch["result"]["results"][1]["error"] ==
+            "permission denied");
+    REQUIRE(batch["result"]["results"][2]["error"] ==
+            "permission denied");
+}
+
 TEST_CASE("AI Editor chat runs cancel stale work and emit versioned events",
           "[plugins][ai_editor][native][runs]") {
     RuntimeFixture fixture;
@@ -1026,6 +1139,98 @@ TEST_CASE("AI Editor providers.configure persists secrets via DPAPI vault",
         vault_document["entries"]["provider/openai-fixture/apiKey"];
     REQUIRE(!ciphertext.empty());
     REQUIRE(ciphertext.find("sk-secret-payload") == std::string::npos);
+}
+
+TEST_CASE("AI Editor providers.configure validates before mutation and rolls back on save failure",
+          "[plugins][ai_editor][native][secrets][transaction]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    constexpr std::string_view provider_id = "transaction-fixture";
+    const std::string secret_key =
+        "provider/" + std::string(provider_id) + "/apiKey";
+
+    REQUIRE(dispatch(
+                runtime, "providers.configure",
+                {{"scope", "workspace"},
+                 {"provider",
+                  {{"id", provider_id},
+                   {"endpoint", "http://127.0.0.1:1/v1"},
+                   {"model", "fixture-model"},
+                   {"apiKey", "old-secret"}}}})
+                .contains("result"));
+
+    const Json initialized = dispatch(runtime, "runtime.initialize");
+    std::filesystem::path system_root;
+    for (const auto& scope : initialized["result"]["scopes"]) {
+        if (scope.value("scope", "") == "system") {
+            system_root = std::filesystem::path(
+                sao::ai_editor::native::utf8_to_wide(
+                    scope.value("path", "")));
+            break;
+        }
+    }
+    REQUIRE_FALSE(system_root.empty());
+    sao::ai_editor::native::SecretStore secrets(
+        system_root / L"secrets" / L"ai_editor.vault.json");
+    std::string stored_secret;
+    REQUIRE(secrets.get(secret_key, stored_secret) == SAO_AI_EDITOR_OK);
+    REQUIRE(stored_secret == "old-secret");
+
+    const Json invalid_scope = dispatch(
+        runtime, "providers.configure",
+        {{"scope", "plugin:not-configured"},
+         {"provider",
+          {{"id", provider_id},
+           {"endpoint", "http://127.0.0.1:2/v1"},
+           {"model", "fixture-model"},
+           {"apiKey", "must-not-be-written"}}}});
+    REQUIRE(invalid_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(secrets.get(secret_key, stored_secret) == SAO_AI_EDITOR_OK);
+    REQUIRE(stored_secret == "old-secret");
+
+    const auto providers_directory =
+        fixture.workspace() / L".sao" / L"providers";
+    auto providers_backup = providers_directory;
+    providers_backup += L".transaction-backup";
+    REQUIRE(std::filesystem::exists(providers_directory));
+    std::filesystem::rename(providers_directory, providers_backup);
+    {
+        std::ofstream blocker(providers_directory, std::ios::binary);
+        REQUIRE(blocker.good());
+        blocker << "not a directory";
+    }
+
+    const Json failed = dispatch(
+        runtime, "providers.configure",
+        {{"scope", "workspace"},
+         {"provider",
+          {{"id", provider_id},
+           {"endpoint", "http://127.0.0.1:3/v1"},
+           {"model", "fixture-model"},
+           {"apiKey", "new-secret"}}}});
+    REQUIRE(failed["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+    REQUIRE(failed["error"]["data"]["details"]["registryStatus"] ==
+            SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+    REQUIRE(failed["error"]["data"]["details"]["secretRollbackStatus"] ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(failed["error"]["data"]["details"]["secretRestored"] == true);
+    REQUIRE(secrets.get(secret_key, stored_secret) == SAO_AI_EDITOR_OK);
+    REQUIRE(stored_secret == "old-secret");
+
+    std::filesystem::remove(providers_directory);
+    std::filesystem::rename(providers_backup, providers_directory);
+    const Json providers = dispatch(runtime, "providers.list")["result"]["items"];
+    bool found = false;
+    for (const auto& provider : providers) {
+        if (provider.value("id", "") == provider_id) {
+            found = true;
+            REQUIRE(provider.value("endpoint", "") ==
+                    "http://127.0.0.1:1/v1");
+        }
+    }
+    REQUIRE(found);
 }
 
 TEST_CASE("AI Editor chat.run reuses configured providers via encrypted secrets",
@@ -2349,6 +2554,15 @@ TEST_CASE("run_webview_bridge fails closed with invalid config",
     REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
             SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
     config.user_data_folder = "C:/tmp/sao-webview-fixture";
+    config.bridge_native_runtime = false;
+    config.sao_mmf_name_utf8 = "Local\\SaoFrame";
+    REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    config.sao_mmf_name_utf8.clear();
+    config.sao_input_ring_name_utf8 = "Local\\SaoInput";
+    REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    config.sao_mmf_name_utf8 = "Local\\SaoFrame";
     config.bridge_native_runtime = true;
     config.runtime_handle = nullptr;
     REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
@@ -2919,6 +3133,394 @@ TEST_CASE("Gemini SSE decoder handles split chunks across feeds",
     }
 }
 
+TEST_CASE("Provider router builds OpenAI Responses request body and endpoint",
+          "[plugins][ai_editor][native][providers][openai][responses]") {
+    Json openai_body{
+        {"model", "gpt-test"},
+        {"messages",
+         Json::array(
+             {Json{{"role", "system"}, {"content", "System guide"}},
+              Json{{"role", "developer"}, {"content", "Developer guide"}},
+              Json{{"role", "user"}, {"content", "hello"}},
+              Json{{"role", "assistant"},
+                   {"content", ""},
+                   {"tool_calls",
+                    Json::array({Json{{"id", "call-1"},
+                                      {"type", "function"},
+                                      {"function",
+                                       Json{{"name", "readFile"},
+                                            {"arguments",
+                                             R"({"path":"README.md"})"}}}}})}},
+              Json{{"role", "tool"},
+                   {"tool_call_id", "call-1"},
+                   {"content", "file contents"}}})},
+        {"stream", false},
+        {"max_tokens", 321},
+        {"temperature", 0.25},
+        {"parallel_tool_calls", false},
+        {"tools",
+         Json::array({Json{{"type", "function"},
+                           {"function",
+                            Json{{"name", "readFile"},
+                                 {"description", "Read a file"},
+                                 {"parameters",
+                                  Json{{"type", "object"},
+                                       {"properties",
+                                        Json{{"path",
+                                              Json{{"type", "string"}}}}}}}}}}})},
+        {"response_format",
+         Json{{"type", "json_schema"},
+              {"json_schema",
+               Json{{"name", "answer"},
+                    {"strict", true},
+                    {"schema",
+                     Json{{"type", "object"},
+                          {"properties",
+                           Json{{"answer", Json{{"type", "string"}}}}}}}}}}}};
+    const Json provider{
+        {"type", "openai"},
+        {"transport", "responses"},
+        {"endpoint",
+         "https://proxy.example/v1/chat/completions?next=/responses"},
+        {"apiKey", "sk-response"},
+        {"extra_headers", Json{{"X-Trace", "trace-1"}}},
+        {"extra_body",
+         Json{{"model", "must-not-win"},
+              {"input", "must-not-win"},
+              {"store", false},
+              {"metadata",
+               Json{{"source", "test"},
+                  {"model", "metadata-model"}}}}}};
+    const auto route = sao::ai_editor::native::normalise_provider(
+        provider, "gpt-test");
+    REQUIRE(route.transport == "responses");
+    REQUIRE(route.endpoint ==
+            "https://proxy.example/v1/responses?next=/responses");
+
+    sao::ai_editor::native::ProviderRequest request;
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                route, openai_body, request) == SAO_AI_EDITOR_OK);
+    REQUIRE(request.endpoint ==
+            "https://proxy.example/v1/responses?next=/responses");
+    REQUIRE(request.authorization == "Bearer sk-response");
+    REQUIRE(request.extra_headers == "X-Trace: trace-1\r\n");
+    const Json body = Json::parse(request.body_json);
+    REQUIRE(body["model"] == "gpt-test");
+    REQUIRE(body["instructions"] == "System guide\nDeveloper guide");
+    REQUIRE(body["max_output_tokens"] == 321);
+    REQUIRE(body["temperature"] == 0.25);
+    REQUIRE(body["parallel_tool_calls"] == false);
+    REQUIRE(body["store"] == false);
+    REQUIRE(body["metadata"]["source"] == "test");
+    REQUIRE(body["metadata"]["model"] == "metadata-model");
+    REQUIRE_FALSE(body.contains("messages"));
+    REQUIRE_FALSE(body.contains("max_tokens"));
+    REQUIRE_FALSE(body.contains("response_format"));
+    REQUIRE(body["input"].size() == 3);
+    REQUIRE(body["input"][0]["role"] == "user");
+    REQUIRE(body["input"][1]["type"] == "function_call");
+    REQUIRE(body["input"][1]["call_id"] == "call-1");
+    REQUIRE(body["input"][2]["type"] == "function_call_output");
+    REQUIRE(body["input"][2]["call_id"] == "call-1");
+    REQUIRE(body["tools"][0]["type"] == "function");
+    REQUIRE(body["tools"][0]["name"] == "readFile");
+    REQUIRE_FALSE(body["tools"][0].contains("function"));
+    REQUIRE(body["text"]["format"]["type"] == "json_schema");
+    REQUIRE(body["text"]["format"]["name"] == "answer");
+}
+
+TEST_CASE("Provider router endpoint markers only match URL path",
+          "[plugins][ai_editor][native][providers][endpoint]") {
+    const auto chat = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"transport", "chat_completions"},
+             {"endpoint", "https://proxy.example/v1?next=/responses"}},
+        "gpt-test");
+    REQUIRE(chat.endpoint ==
+            "https://proxy.example/v1/chat/completions?next=/responses");
+
+    const auto responses = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"transport", "responses"},
+             {"endpoint",
+              "https://proxy.example/v1?next=/chat/completions"}},
+        "gpt-test");
+    REQUIRE(responses.endpoint ==
+            "https://proxy.example/v1/responses?next=/chat/completions");
+    REQUIRE(sao::ai_editor::native::is_openai_responses_endpoint(
+        responses.endpoint));
+    REQUIRE_FALSE(sao::ai_editor::native::is_openai_responses_endpoint(
+        "https://proxy.example/v1?next=/responses"));
+}
+
+TEST_CASE("Provider router decodes OpenAI Responses output",
+          "[plugins][ai_editor][native][providers][openai][responses]") {
+    sao::ai_editor::native::ProviderRoute route;
+    route.type = "openai";
+    route.transport = "responses";
+    route.endpoint = "https://api.openai.com/v1/responses";
+    const std::string payload = R"({
+        "id":"resp-1","model":"gpt-test","status":"completed",
+        "output":[
+          {"type":"reasoning","summary":[{"type":"summary_text","text":"brief"}]},
+          {"type":"message","role":"assistant","content":[
+            {"type":"output_text","text":"hello"},
+            {"type":"refusal","refusal":"policy note"}]},
+          {"type":"function_call","call_id":"call-1","name":"readFile",
+           "arguments":"{\"path\":\"README.md\"}"}],
+        "usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}})";
+    Json result;
+    REQUIRE(sao::ai_editor::native::decode_provider_response(
+                route, payload, result) == SAO_AI_EDITOR_OK);
+    REQUIRE(result["ok"] == true);
+    REQUIRE(result["id"] == "resp-1");
+    REQUIRE(result["content"] == "hello");
+    REQUIRE(result["thinking"] == "brief");
+    REQUIRE(result["refusal"] == "policy note");
+    REQUIRE(result["toolCalls"].size() == 1);
+    REQUIRE(result["toolCalls"][0]["id"] == "call-1");
+    REQUIRE(result["toolCalls"][0]["name"] == "readFile");
+    REQUIRE(result["usage"]["output_tokens"] == 7);
+    REQUIRE(result["finishReason"] == "completed");
+}
+
+TEST_CASE("OpenAI Responses SSE codec maps typed events",
+          "[plugins][ai_editor][native][providers][openai][responses][sse]") {
+    sao::ai_editor::native::OpenAiResponsesSseCodec codec;
+    const std::string stream =
+        "event: response.output_text.delta\n"
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,"
+        "\"delta\":\"hel\"}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,"
+        "\"delta\":\"lo\"}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,"
+        "\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\","
+        "\"name\":\"readFile\",\"arguments\":\"\"}}\n\n"
+        "data: {\"type\":\"response.function_call_arguments.delta\","
+        "\"output_index\":1,\"delta\":\"{\\\"path\\\":\"}\n\n"
+        "data: {\"type\":\"response.function_call_arguments.done\","
+        "\"output_index\":1,\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\",\"output\":[{\"type\":\"function_call\","
+        "\"call_id\":\"call-1\",\"name\":\"readFile\","
+        "\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}],"
+        "\"usage\":{\"input_tokens\":5,\"output_tokens\":7}}}\n\n";
+    const size_t cut = stream.find("response.function_call_arguments.delta") +
+                       17;
+    REQUIRE(cut < stream.size());
+    Json first;
+    REQUIRE(codec.feed(std::string_view(stream.data(), cut), first) ==
+            SAO_AI_EDITOR_OK);
+    Json second;
+    REQUIRE(codec.feed(
+                std::string_view(stream.data() + cut, stream.size() - cut),
+                second) == SAO_AI_EDITOR_OK);
+    Json events = first;
+    for (auto& event : second) {
+        events.push_back(std::move(event));
+    }
+    REQUIRE(events.size() == 7);
+    REQUIRE(events[0]["type"] == "delta");
+    REQUIRE(events[0]["content"] == "hel");
+    REQUIRE(events[1]["content"] == "lo");
+    REQUIRE(events[2]["type"] == "tool_delta");
+    REQUIRE(events[2]["arguments"] == "{\"path\":");
+    REQUIRE(events[3]["arguments"] == "{\"path\":\"README.md\"}");
+    REQUIRE(events[4]["type"] == "message_delta");
+    REQUIRE(events[4]["usage"]["output_tokens"] == 7);
+    REQUIRE(events[5]["type"] == "tool_calls_final");
+    REQUIRE(events[5]["tool_calls"][0]["id"] == "call-1");
+    REQUIRE(events[5]["tool_calls"][0]["function"]["arguments"] ==
+            "{\"path\":\"README.md\"}");
+    REQUIRE(events[6]["type"] == "done");
+
+    Json trailing;
+    REQUIRE(codec.feed("data: [DONE]\n\n", trailing) == SAO_AI_EDITOR_OK);
+    REQUIRE(trailing.empty());
+}
+
+TEST_CASE("chat.run routes non-stream OpenAI Responses over HTTP",
+          "[plugins][ai_editor][native][providers][openai][responses]"
+          "[integration]") {
+    const std::string body = R"({
+        "id":"resp-http-1","model":"gpt-test","status":"completed",
+        "output":[{"type":"message","role":"assistant","content":[
+          {"type":"output_text","text":"responses-http"}]}],
+        "usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json params{
+        {"provider", Json{{"id", "responses-fixture"},
+                           {"type", "openai"},
+                           {"transport", "responses"},
+                           {"endpoint", server.endpoint()},
+                           {"apiKey", "fixture-key"}}},
+        {"model", "gpt-test"},
+        {"messages",
+         Json::array({Json{{"role", "system"}, {"content", "guide"}},
+                      Json{{"role", "user"}, {"content", "hello"}}})},
+        {"stream", false},
+        {"timeoutMs", 5'000}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json request_body = Json::parse(bodies.front());
+    REQUIRE(request_body["model"] == "gpt-test");
+    REQUIRE(request_body["instructions"] == "guide");
+    REQUIRE(request_body["input"][0]["role"] == "user");
+    REQUIRE_FALSE(request_body.contains("messages"));
+
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "run.status", {{"runId", run_id}})
+                     ["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+    REQUIRE(status["result"]["content"] == "responses-http");
+    REQUIRE(status["result"]["usage"]["output_tokens"] == 2);
+}
+
+TEST_CASE("chat.run routes streaming OpenAI Responses SSE over HTTP",
+          "[plugins][ai_editor][native][providers][openai][responses][sse]"
+          "[integration]") {
+    const std::string sse =
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,"
+        "\"delta\":\"streamed \"}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,"
+        "\"delta\":\"response\"}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\",\"output\":[],"
+        "\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}}\n\n";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+        "Content-Length: " +
+        std::to_string(sse.size()) +
+        "\r\nConnection: close\r\n\r\n" + sse);
+    RuntimeFixture fixture;
+    const Json params{
+        {"provider", Json{{"id", "responses-stream-fixture"},
+                           {"type", "openai"},
+                           {"transport", "responses"},
+                           {"endpoint", server.endpoint()},
+                           {"apiKey", "fixture-key"}}},
+        {"model", "gpt-test"},
+        {"messages",
+         Json::array({Json{{"role", "user"}, {"content", "hello"}}})},
+        {"stream", true},
+        {"timeoutMs", 5'000}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json request_body = Json::parse(bodies.front());
+    REQUIRE(request_body["stream"] == true);
+    REQUIRE(request_body.contains("input"));
+    REQUIRE_FALSE(request_body.contains("messages"));
+
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "run.status", {{"runId", run_id}})
+                     ["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+    REQUIRE(status["result"]["content"] == "streamed response");
+    REQUIRE(status["result"]["metrics"]["completionTokens"] == 2);
+}
+
+TEST_CASE("Provider router rejects unsupported transport and unsafe headers",
+          "[plugins][ai_editor][native][providers][headers]") {
+    const Json body{{"model", "gpt-test"},
+                    {"messages",
+                     Json::array({Json{{"role", "user"},
+                                       {"content", "hello"}}})},
+                    {"stream", false}};
+    sao::ai_editor::native::ProviderRequest request;
+
+    auto unsupported = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"transport", "legacy_magic"},
+             {"endpoint", "https://api.openai.com/v1"}},
+        "gpt-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                unsupported, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const std::string nul_value("safe\0smuggled", 13);
+    auto nul_header = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"endpoint", "https://api.openai.com/v1"},
+             {"extra_headers", Json{{"X-Test", nul_value}}}},
+        "gpt-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                nul_header, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    Json too_many = Json::object();
+    for (int index = 0; index < 33; ++index) {
+        too_many["X-Test-" + std::to_string(index)] = "value";
+    }
+    auto count_limited = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"endpoint", "https://api.openai.com/v1"},
+             {"extra_headers", std::move(too_many)}},
+        "gpt-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                count_limited, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    Json provider_count = Json::object();
+    for (int index = 0; index < 31; ++index) {
+        provider_count["X-Provider-Test-" + std::to_string(index)] = "value";
+    }
+    auto provider_count_limited =
+        sao::ai_editor::native::normalise_provider(
+            Json{{"type", "anthropic"},
+                 {"endpoint", "https://api.anthropic.com/v1"},
+                 {"apiKey", "ANTHROPIC-KEY"},
+                 {"extra_headers", std::move(provider_count)}},
+            "claude-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                provider_count_limited, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    auto value_limited = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"endpoint", "https://api.openai.com/v1"},
+             {"extra_headers", Json{{"X-Test", std::string(4097, 'x')}}}},
+        "gpt-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                value_limited, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    auto managed_header = sao::ai_editor::native::normalise_provider(
+        Json{{"type", "openai"},
+             {"endpoint", "https://api.openai.com/v1"},
+             {"extra_headers", Json{{"Authorization", "overridden"}}}},
+        "gpt-test");
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                managed_header, body, request) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("Provider router builds Anthropic native body with system + apiKey",
           "[plugins][ai_editor][native][providers][anthropic]") {
     Json openai_body{
@@ -2989,15 +3591,20 @@ TEST_CASE("Provider router builds Gemini contents with parts and api key",
         sao::ai_editor::native::normalise_provider(
             Json{{"type", "gemini"},
                  {"endpoint",
-                  "https://generativelanguage.googleapis.com/v1beta/models"},
+                   "https://generativelanguage.googleapis.com/v1beta/models"
+                   "?next=:generateContent"},
                  {"apiKey", "GEM-KEY"}},
             "gemini-2.0-flash");
     sao::ai_editor::native::ProviderRequest request;
     REQUIRE(sao::ai_editor::native::build_provider_request(route, openai_body,
                                                             request) ==
             SAO_AI_EDITOR_OK);
-    REQUIRE(request.endpoint.find(":generateContent") != std::string::npos);
-    REQUIRE(request.endpoint.find("key=GEM-KEY") != std::string::npos);
+        REQUIRE(request.endpoint ==
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.0-flash:generateContent?next=:generateContent");
+    REQUIRE(request.endpoint.find("key=GEM-KEY") == std::string::npos);
+    REQUIRE(request.extra_headers.find("x-goog-api-key: GEM-KEY") !=
+            std::string::npos);
     REQUIRE(request.authorization.empty());
     const Json parsed = Json::parse(request.body_json);
     REQUIRE(parsed["contents"][0]["role"] == "user");

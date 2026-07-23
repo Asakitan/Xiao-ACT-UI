@@ -185,6 +185,7 @@ private:
               std::string_view run_id = {});
     bool is_current(const std::shared_ptr<RunState>& run) const;
     int32_t resolve_provider(const Json& params,
+                             Json& prepared_params,
                              Json& provider,
                              std::string& api_key);
     static Json permission_policy(std::string_view mode);
