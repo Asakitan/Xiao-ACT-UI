@@ -132,8 +132,16 @@ struct SaoUiLayerInputRect {
     int32_t height;
 };
 
-// Compositor creation config.
+// Compositor creation config. struct_size MUST be the first field so future
+// ABI additions can extend the tail while the platform reads only the bytes
+// the caller understands. Legacy callers (struct_size == 0) are treated as
+// SAO_UI_COMPOSITOR_CONFIG_V1_SIZE.
 struct SaoCompositorConfig {
+    // Byte size of the config the caller understands. Set to
+    // sizeof(SaoCompositorConfig). A value of 0 means "compiled-time size"
+    // for compatibility with callers that predate ABI minor 8.
+    uint32_t    struct_size;
+
     // Refresh-rate cap.  0 → auto-detect via GetDeviceCaps(VREFRESH),
     // clamped 60..240 Hz.  Fallback 60 on failure (matches
     // `overlay_compositor._detect_refresh_hz`).
@@ -148,9 +156,23 @@ struct SaoCompositorConfig {
     bool        enable_rgn_cache;
 };
 
+// Canonical byte size of the v1 compositor config. x64 packing:
+// 4 (struct_size) + 4 (target_hz) + 1 + 1 (2 bools) + trailing 2-byte pad
+// to align to 4 for the struct.
+#define SAO_UI_COMPOSITOR_CONFIG_V1_SIZE 12u
+
 // Layer creation config — one struct so extension fields don't ripple
-// through 12 argument overloads.
+// through 12 argument overloads. struct_size MUST be the first field so
+// future ABI additions can extend the tail while the platform reads only the
+// bytes the caller understands. Legacy callers (struct_size == 0) are treated
+// as SAO_UI_LAYER_CONFIG_V1_SIZE.
 struct SaoLayerConfig {
+    // Byte size of the config the caller understands. Set to
+    // sizeof(SaoLayerConfig). A value of 0 means "compiled-time size" for
+    // compatibility with callers that predate ABI minor 8.
+    uint32_t    struct_size;
+    uint32_t    _reserved0; // 8-byte align next pointer; must be zero.
+
     // Unique across the process.  Layer reuse FAILS (see the leak
     // note above); caller must destroy an existing layer first.
     const char* name_utf8;
@@ -194,6 +216,11 @@ struct SaoLayerConfig {
     int32_t     target_fps;
 };
 
+// Canonical byte size of the v1 layer config. x64 packing:
+// 4 (struct_size) + 4 (_reserved0) + 8 (name_utf8) + 20 (5 int32) + 4 (4 bool)
+// + 4 (target_fps). No trailing pad needed since the struct alignment is 8.
+#define SAO_UI_LAYER_CONFIG_V1_SIZE 48u
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_create(
     sao_ui_overlay_host_handle_t host,
     const SaoCompositorConfig* config,
@@ -224,6 +251,17 @@ SAO_UI_API sao_ui_overlay_host_handle_t SAO_UI_CALL sao_ui_compositor_host(
 
 SAO_UI_API void* SAO_UI_CALL sao_ui_compositor_host_hwnd(
     sao_ui_compositor_handle_t handle);
+
+// Read the compositor host's current DPI (added in ABI 1.7). Both axes are
+// filled from the overlay host's cached WM_DPICHANGED value; Windows exposes a
+// single scalar DPI per HWND, so the x and y outputs always agree. A NULL
+// compositor, headless compositor with no host, or a host that has never
+// received WM_DPICHANGED yields the default 96/96. Callers may pass either
+// out pointer as NULL to skip that axis.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_host_dpi(
+    sao_ui_compositor_handle_t compositor,
+    uint32_t* out_dpi_x,
+    uint32_t* out_dpi_y);
 
 // Validate that the caller is the compositor owner/render thread. Process-
 // level binders use this before borrowing a compositor whose lifetime they do
@@ -494,4 +532,18 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_list_layers(
 
 #ifdef __cplusplus
 }  // extern "C"
+#endif
+
+#if defined(__cplusplus)
+// struct_size MUST be the first byte-position 0..3 field so the platform can
+// safely read it back even when the caller was compiled against an older
+// (shorter) or newer (longer) variant of the struct.
+static_assert(offsetof(SaoCompositorConfig, struct_size) == 0u,
+              "SaoCompositorConfig::struct_size must be the first field");
+static_assert(offsetof(SaoLayerConfig, struct_size) == 0u,
+              "SaoLayerConfig::struct_size must be the first field");
+static_assert(sizeof(SaoCompositorConfig) == SAO_UI_COMPOSITOR_CONFIG_V1_SIZE,
+              "SaoCompositorConfig v1 size drift");
+static_assert(sizeof(SaoLayerConfig) == SAO_UI_LAYER_CONFIG_V1_SIZE,
+              "SaoLayerConfig v1 size drift");
 #endif

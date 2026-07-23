@@ -21,6 +21,8 @@ enum SaoUiFisheyeBackdropMode : int32_t {
 };
 
 struct SaoUiFisheyeBackdropRect {
+    // Compositor host-local pixels. (0, 0) is the overlay host client
+    // origin, not the virtual-desktop or monitor origin.
     int32_t x;
     int32_t y;
     int32_t width;
@@ -40,6 +42,10 @@ struct SaoUiFisheyeBackdropState {
     bool live_available;
     sao_status_t last_status;
     uint64_t frame_generation;
+    // Actual live-path lifecycle, independent from the desired mode/visibility.
+    // These fields are appended to preserve the existing field order.
+    bool live_worker_running;
+    bool live_resources_active;
 };
 
 // The compositor is borrowed and must outlive the service. Passing NULL creates
@@ -62,11 +68,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_set_mode(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_get_mode(
     sao_ui_fisheye_backdrop_handle_t handle, SaoUiFisheyeBackdropMode* out_mode);
 
-// Publish the target foreground surface. Repeated calls reuse the existing
-// layer and only update geometry/z-order during the next owner-thread tick.
+// Publish the target foreground surface. rect is compositor host-local;
+// repeated calls reuse the existing layer and only update geometry/z-order
+// during the next owner-thread tick.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_show(
     sao_ui_fisheye_backdrop_handle_t handle, const SaoUiFisheyeBackdropRect* rect, int32_t z_order);
 
+// Hiding wakes the live worker immediately. The next owner-thread tick safely
+// joins/reaps it and applies layer visibility while preserving one-layer reuse.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_fisheye_backdrop_hide(sao_ui_fisheye_backdrop_handle_t handle);
 

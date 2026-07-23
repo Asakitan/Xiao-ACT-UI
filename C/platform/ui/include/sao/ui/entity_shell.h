@@ -74,6 +74,13 @@ struct SaoUiEntityShellSnapshot {
     sao_status_t last_status;
 };
 
+// ABI v1 root descriptor. struct_size MUST be the first field so the
+// platform can safely read the caller's declared size. The array ABI has no
+// element stride field; every descriptor's struct_size must equal
+// sizeof(SaoUiEntityRootItem) at the caller side (which equals
+// SAO_UI_ENTITY_ROOT_ITEM_V1_SIZE when both sides are compiled against
+// ABI minor 8). Future ABI additions extending the tail must ship together
+// with a matching platform-side reader that gates on struct_size.
 struct SaoUiEntityRootItem {
     size_t struct_size;
     const char* root_id_utf8;
@@ -85,6 +92,11 @@ struct SaoUiEntityRootItem {
     const SaoUiMenuItem* children;
     size_t child_count;
 };
+
+// Canonical byte size of the v1 root descriptor. x64 packing:
+// 8 (struct_size) + 8+8+8 (3 char*) + 4 (int32) + 1 (bool) + 3 (pad) + 8
+// (children) + 8 (child_count).
+#define SAO_UI_ENTITY_ROOT_ITEM_V1_SIZE 56u
 
 struct SaoUiEntityRootSnapshot {
     size_t root_count;
@@ -185,4 +197,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_snapshot_bgra(
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(__cplusplus)
+static_assert(offsetof(SaoUiEntityRootItem, struct_size) == 0u,
+              "SaoUiEntityRootItem::struct_size must be the first field");
+static_assert(sizeof(SaoUiEntityRootItem) == SAO_UI_ENTITY_ROOT_ITEM_V1_SIZE,
+              "SaoUiEntityRootItem v1 size drift");
 #endif

@@ -497,6 +497,7 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel(void* ctx_impl,
 
     // Build a full SaoPanelDescriptor from the SDK subset.
     SaoPanelDescriptor full{};
+    full.struct_size = sizeof(SaoPanelDescriptor);
     full.panel_id_utf8 = descriptor->panel_id_utf8;
     full.title_utf8 = descriptor->title_utf8;
     full.anchor = SAO_UI_PANEL_ANCHOR_ABSOLUTE;

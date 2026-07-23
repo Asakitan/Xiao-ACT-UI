@@ -249,6 +249,7 @@ void SAO_UI_CALL unregister_during_snapshot(sao_ui_panel_handle_t panel,
 
 SaoPanelDescriptor make_descriptor(const char* id, int32_t z_class, int32_t z_within) {
     SaoPanelDescriptor d{};
+    d.struct_size = sizeof(SaoPanelDescriptor);
     d.panel_id_utf8 = id;
     d.title_utf8 = "Test Panel";
     d.anchor = SAO_UI_PANEL_ANCHOR_ABSOLUTE;
@@ -1478,4 +1479,46 @@ TEST_CASE("panel_geometry_handler_replacement_waits_for_old_generation",
     CHECK(replaced.load());
     CHECK(replacement_status.load() == SAO_STATUS_OK);
     REQUIRE(sao_ui_panel_unregister(panel) == SAO_STATUS_OK);
+}
+
+// ABI struct_size guard: legacy callers that predate ABI minor 8 keep working
+// (struct_size == 0 is treated as the v1 compiled size); other values must
+// fit within [V1_SIZE, sizeof(struct)] or the platform rejects them with
+// SAO_STATUS_ERR_ABI_MISMATCH.
+TEST_CASE("panel_register struct_size guard accepts legacy zero",
+          "[ui][panel_sdk][abi][struct_size]") {
+    auto desc = make_descriptor("panel_sdk_test_abi_zero", SAO_UI_PANEL_Z_NORMAL, 0);
+    desc.struct_size = 0u; // legacy caller
+    sao_ui_panel_handle_t panel = nullptr;
+    sao_ui_panel_body_handle_t body = nullptr;
+    REQUIRE(sao_ui_panel_register(nullptr, &desc, &panel, &body) == SAO_STATUS_OK);
+    REQUIRE(panel != nullptr);
+    // Readback advertises the platform's compiled size regardless of what the
+    // caller declared, so downstream consumers can trust the field.
+    SaoPanelDescriptor readback{};
+    REQUIRE(sao_ui_panel_get_descriptor(panel, &readback) == SAO_STATUS_OK);
+    CHECK(readback.struct_size == sizeof(SaoPanelDescriptor));
+    REQUIRE(sao_ui_panel_unregister(panel) == SAO_STATUS_OK);
+}
+
+TEST_CASE("panel_register struct_size guard rejects under-size",
+          "[ui][panel_sdk][abi][struct_size]") {
+    auto desc = make_descriptor("panel_sdk_test_abi_under", SAO_UI_PANEL_Z_NORMAL, 0);
+    desc.struct_size = SAO_UI_PANEL_DESCRIPTOR_V1_SIZE - 1u;
+    sao_ui_panel_handle_t panel = nullptr;
+    sao_ui_panel_body_handle_t body = nullptr;
+    CHECK(sao_ui_panel_register(nullptr, &desc, &panel, &body) == SAO_STATUS_ERR_ABI_MISMATCH);
+    CHECK(panel == nullptr);
+    CHECK(body == nullptr);
+}
+
+TEST_CASE("panel_register struct_size guard rejects over-size",
+          "[ui][panel_sdk][abi][struct_size]") {
+    auto desc = make_descriptor("panel_sdk_test_abi_over", SAO_UI_PANEL_Z_NORMAL, 0);
+    desc.struct_size = sizeof(SaoPanelDescriptor) + 4u;
+    sao_ui_panel_handle_t panel = nullptr;
+    sao_ui_panel_body_handle_t body = nullptr;
+    CHECK(sao_ui_panel_register(nullptr, &desc, &panel, &body) == SAO_STATUS_ERR_ABI_MISMATCH);
+    CHECK(panel == nullptr);
+    CHECK(body == nullptr);
 }

@@ -110,6 +110,7 @@ sao_sdk_status_t start_runtime_locked(SharedRuntime& runtime) {
     bool created_compositor = false;
     if (runtime.compositor == nullptr) {
         SaoCompositorConfig config{};
+        config.struct_size = sizeof(SaoCompositorConfig);
         config.enable_temporal_union = true;
         config.enable_rgn_cache = true;
         const sao_status_t status =

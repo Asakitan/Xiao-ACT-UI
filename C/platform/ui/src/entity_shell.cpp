@@ -90,6 +90,28 @@ constexpr int32_t kWheelDeltaPerNotch = 120;
 
 static_assert(kChildPhysicalCapacity == 8);
 
+// Convert a desktop-space screen coordinate into a host-local coordinate,
+// dividing by host_dpi/96 before subtracting the host origin. Windows exposes
+// a single scalar DPI per top-level HWND, so both axes share host_dpi. When
+// host_dpi is the standard 96 this reduces to a pure subtraction and cannot
+// regress unscaled callers. host_dpi == 0 is coerced to 96 for safety.
+inline int64_t screen_to_host_dpi(int32_t screen_pt, int32_t host_origin,
+                                  uint32_t host_dpi) noexcept {
+    const uint32_t dpi = host_dpi == 0u ? 96u : host_dpi;
+    // screen_pt and host_origin share the desktop physical coordinate space.
+    // Subtract in physical space first to get the host-local delta, then
+    // scale that delta down to host logical pixels. Integer math avoids
+    // floating drift on 120/144 DPI monitors and never touches signed
+    // overflow because desktop coordinates fit in int32.
+    const int64_t desktop_local =
+        static_cast<int64_t>(screen_pt) - static_cast<int64_t>(host_origin);
+    if (dpi == 96u) {
+        return desktop_local;
+    }
+    return desktop_local * static_cast<int64_t>(96) /
+           static_cast<int64_t>(dpi);
+}
+
 struct OwnedMenuItem {
     std::string name;
     std::string icon;
@@ -303,7 +325,10 @@ sao_status_t build_root_candidate(const SaoUiEntityRootItem* roots, size_t root_
         size_t total_children = 0;
         for (size_t root_index = 0; root_index < root_count; ++root_index) {
             const auto& source = roots[root_index];
-            if (source.struct_size != sizeof(SaoUiEntityRootItem))
+            // SaoUiEntityRootItem has no per-element stride field, so we
+            // require exact size equality. SAO_UI_ENTITY_ROOT_ITEM_V1_SIZE
+            // and sizeof(SaoUiEntityRootItem) are compile-time locked equal.
+            if (source.struct_size != SAO_UI_ENTITY_ROOT_ITEM_V1_SIZE)
                 return SAO_STATUS_ERR_ABI_MISMATCH;
             if ((source.children == nullptr && source.child_count > 0) ||
                 source.child_count > kMaxChildrenPerRoot ||
@@ -1100,6 +1125,14 @@ struct sao_ui_entity_shell_s {
 
 namespace {
 
+// Read the overlay host's current DPI without holding shell->mutex. Returns
+// 96 when the shell has no host or the host has never received WM_DPICHANGED.
+uint32_t host_dpi_snapshot(const sao_ui_entity_shell_s* shell) noexcept {
+    if (shell == nullptr || shell->host == nullptr) return 96u;
+    const uint32_t dpi = sao_ui_overlay_host_current_dpi(shell->host);
+    return dpi == 0u ? 96u : dpi;
+}
+
 bool entity_input_screen_point(EntityLayerInputBinding* binding, float local_x, float local_y,
                                int32_t* out_x, int32_t* out_y) {
     if (binding == nullptr || binding->shell == nullptr || out_x == nullptr || out_y == nullptr)
@@ -1860,8 +1893,14 @@ bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
         snapshot.displayed_parent_idx < 0 || snapshot.rows.empty()) {
         return false;
     }
-    const int64_t local_x = static_cast<int64_t>(screen_x) - shell->origin_x - shell->menu_x;
-    const int64_t local_y = static_cast<int64_t>(screen_y) - shell->origin_y - shell->menu_y;
+    const uint32_t host_dpi = host_dpi_snapshot(shell);
+    // DPI-aware: scale the desktop screen point down before subtracting the
+    // host origin, then subtract the layer origin (already in host-local
+    // logical pixels).
+    const int64_t local_x =
+        screen_to_host_dpi(screen_x, shell->origin_x, host_dpi) - shell->menu_x;
+    const int64_t local_y =
+        screen_to_host_dpi(screen_y, shell->origin_y, host_dpi) - shell->menu_y;
     if (local_y < kChildOriginY)
         return false;
     const int64_t slot = (local_y - kChildOriginY) / kChildRowStride;
@@ -1889,8 +1928,12 @@ bool root_column_hit_locked(const sao_ui_entity_shell_s* shell, int32_t screen_x
                             int32_t screen_y) {
     if (!shell->menu_visible)
         return false;
-    const int64_t local_x = static_cast<int64_t>(screen_x) - shell->origin_x - shell->menu_x;
-    const int64_t local_y = static_cast<int64_t>(screen_y) - shell->origin_y - shell->menu_y;
+    const uint32_t host_dpi = host_dpi_snapshot(shell);
+    // DPI-aware: convert screen point to host-local before subtracting menu origin.
+    const int64_t local_x =
+        screen_to_host_dpi(screen_x, shell->origin_x, host_dpi) - shell->menu_x;
+    const int64_t local_y =
+        screen_to_host_dpi(screen_y, shell->origin_y, host_dpi) - shell->menu_y;
     const int64_t bottom = kMenuPad + static_cast<int64_t>(visible_root_count(shell)) * kMenuSlot;
     return local_x >= kMenuPad && local_x < kMenuPad + kMenuSlot && local_y >= kMenuPad &&
            local_y < bottom;
@@ -2016,8 +2059,10 @@ sao_status_t dispatch_entity_action(sao_ui_entity_shell_s* shell,
 MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
     if (!shell->menu_visible)
         return {};
-    const int64_t host_x = static_cast<int64_t>(screen_x) - shell->origin_x;
-    const int64_t host_y = static_cast<int64_t>(screen_y) - shell->origin_y;
+    const uint32_t host_dpi = host_dpi_snapshot(shell);
+    // DPI-aware: convert desktop coords to host-local before further math.
+    const int64_t host_x = screen_to_host_dpi(screen_x, shell->origin_x, host_dpi);
+    const int64_t host_y = screen_to_host_dpi(screen_y, shell->origin_y, host_dpi);
     const int64_t local_x = host_x - shell->menu_x;
     const int64_t local_y = host_y - shell->menu_y;
     if (local_x < 0 || local_y < 0 || local_x >= kMenuWidth || local_y >= kMenuHeight ||
@@ -2162,6 +2207,7 @@ static sao_status_t create_entity_shell(
     }
     if (status == SAO_STATUS_OK) {
         SaoLayerConfig layer{};
+        layer.struct_size = sizeof(SaoLayerConfig);
         layer.name_utf8 = "entity.nervegear";
         layer.x = shell->nervegear_x;
         layer.y = shell->nervegear_y;
@@ -2182,6 +2228,7 @@ static sao_status_t create_entity_shell(
     }
     if (status == SAO_STATUS_OK) {
         SaoLayerConfig layer{};
+        layer.struct_size = sizeof(SaoLayerConfig);
         layer.name_utf8 = "entity.menu";
         layer.x = shell->menu_x;
         layer.y = shell->menu_y;

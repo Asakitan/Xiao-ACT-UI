@@ -63,7 +63,19 @@ enum sao_ui_panel_z_class_e : int32_t {
     SAO_UI_PANEL_Z_BOTTOM = 2,
 };
 
+// ABI v1 (ABI minor 8) descriptor. struct_size MUST be the first field so
+// future ABI additions can extend the tail while the platform reads only the
+// bytes the caller understands. Callers compiled against ABI minor 7 or older
+// (no struct_size field) still work: when struct_size == 0 the platform
+// interprets the record as its compile-time sizeof, matching the legacy
+// layout below.
 struct SaoPanelDescriptor {
+    // Byte size of the descriptor the caller understands. Set to
+    // sizeof(SaoPanelDescriptor) on the caller side. A value of 0 means
+    // "compiled-time size" for compatibility with legacy callers that predate
+    // the guard; the platform treats it as SAO_UI_PANEL_DESCRIPTOR_V1_SIZE.
+    uint32_t struct_size;
+    uint32_t _reserved0; // 8-byte align next pointer; must be zero.
     const char* panel_id_utf8; // unique across process
     const char* title_utf8;
     // Anchor + geometry.  When anchor != ABSOLUTE, (x, y) act as pixel
@@ -108,6 +120,14 @@ struct SaoPanelDescriptor {
     bool auto_scroll; // wrap body in scroll view
     uint8_t _pad[6];
 };
+
+// Canonical byte size of the v1 descriptor. Locked here so the ABI-hardening
+// tests can STATIC_REQUIRE it and later ABI minors can append fields only when
+// the size expectation is updated in lockstep. x64 packing: 4 (struct_size)
+// + 4 (_reserved0) + 8+8 (2 char*) + 40 (10 int32) + 8 (8 bool) + 8 (2 int32
+// z_class fields) + 8 (char*) + 8 (2 int32 follow offsets) + 8 (char*)
+// + 8 (const void*) + 16 (4 uint32) + 4 (float) + 8 (2 bool + 6 uint8 pad).
+#define SAO_UI_PANEL_DESCRIPTOR_V1_SIZE 136u
 
 // Register a panel using the modern descriptor path.  Allocates a
 // compositor layer, wires the input router, and returns the panel +
@@ -207,4 +227,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_set_geometry_persist_handler(
 
 #ifdef __cplusplus
 } // extern "C"
+#endif
+
+#if defined(__cplusplus)
+// struct_size MUST be the first field so the platform can safely read the
+// caller's declared size even when caller and platform disagree on the tail.
+static_assert(offsetof(SaoPanelDescriptor, struct_size) == 0u,
+              "SaoPanelDescriptor::struct_size must be the first field");
+static_assert(sizeof(SaoPanelDescriptor) == SAO_UI_PANEL_DESCRIPTOR_V1_SIZE,
+              "SaoPanelDescriptor v1 size drift");
 #endif

@@ -177,10 +177,13 @@ std::vector<uint8_t> pixels(sao_ui_entity_shell_handle_t shell) {
 
 } // namespace
 
-TEST_CASE("Entity roots default to five entries on UI ABI 1.5", "[ui][entity_roots]") {
+TEST_CASE("Entity roots default to five entries on current UI ABI",
+          "[ui][entity_roots]") {
+    // Major stays at 1; minor is versioned and bumps as additive APIs land
+    // (compositor_host_dpi at 7, descriptor struct_size guards at 8).  The
+    // root-count contract below is what this case actually pins.
     CHECK(SAO_UI_ABI_VERSION_MAJOR == 1U);
-    CHECK(SAO_UI_ABI_VERSION_MINOR == 5U);
-    CHECK(SAO_UI_ABI_VERSION == 0x00010005U);
+    CHECK(SAO_UI_ABI_VERSION_MINOR >= 5U);
     CHECK(sao_ui_abi_version() == SAO_UI_ABI_VERSION);
 
     const auto config = make_config();

@@ -260,9 +260,9 @@ void rotate_source_coordinate(uint32_t rotation, int64_t local_x, int64_t local_
 sao_status_t render_live_impl(const uint8_t* source_bgra, size_t source_bytes,
                               uint32_t source_width, uint32_t source_height, uint32_t source_stride,
                               int32_t source_origin_x, int32_t source_origin_y, uint32_t rotation,
-                              const SaoUiFisheyeBackdropRect& rect,
+                              const SaoUiFisheyeBackdropRect& desktop_rect,
                               std::vector<uint8_t>* out_frame) {
-    if (source_bgra == nullptr || out_frame == nullptr || !valid_rect(rect)) {
+    if (source_bgra == nullptr || out_frame == nullptr || !valid_rect(desktop_rect)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     size_t checked_source_bytes = 0;
@@ -270,8 +270,8 @@ sao_status_t render_live_impl(const uint8_t* source_bgra, size_t source_bytes,
         source_bytes < checked_source_bytes) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    const uint32_t width = static_cast<uint32_t>(rect.width);
-    const uint32_t height = static_cast<uint32_t>(rect.height);
+    const uint32_t width = static_cast<uint32_t>(desktop_rect.width);
+    const uint32_t height = static_cast<uint32_t>(desktop_rect.height);
     const uint32_t stride = width * kBytesPerPixel;
     size_t output_bytes = 0;
     if (!checked_frame_layout(width, height, stride, &output_bytes)) {
@@ -295,12 +295,12 @@ sao_status_t render_live_impl(const uint8_t* source_bgra, size_t source_bytes,
                 (static_cast<float>(y) + 0.5F - half_height) / std::max(half_height, 1.0F);
             const float radius_sq = nx * nx + ny * ny;
             const float lens_scale = 1.0F - 0.24F * std::clamp(radius_sq, 0.0F, 1.55F);
-            const double target_x =
-                static_cast<double>(rect.x) + (static_cast<double>(nx * lens_scale) * 0.5 + 0.5) *
-                                                  static_cast<double>(rect.width - 1);
-            const double target_y =
-                static_cast<double>(rect.y) + (static_cast<double>(ny * lens_scale) * 0.5 + 0.5) *
-                                                  static_cast<double>(rect.height - 1);
+            const double target_x = static_cast<double>(desktop_rect.x) +
+                                    (static_cast<double>(nx * lens_scale) * 0.5 + 0.5) *
+                                        static_cast<double>(desktop_rect.width - 1);
+            const double target_y = static_cast<double>(desktop_rect.y) +
+                                    (static_cast<double>(ny * lens_scale) * 0.5 + 0.5) *
+                                        static_cast<double>(desktop_rect.height - 1);
             const int64_t local_x = static_cast<int64_t>(std::llround(target_x)) - source_origin_x;
             const int64_t local_y = static_cast<int64_t>(std::llround(target_y)) - source_origin_y;
             uint32_t source_x = 0;
@@ -349,6 +349,8 @@ struct sao_ui_fisheye_backdrop_s {
     bool live_available{false};
     sao_status_t last_status{SAO_STATUS_OK};
     uint64_t frame_generation{0};
+    bool live_worker_running{false};
+    bool live_resources_active{false};
 
     bool worker_report_pending{false};
     bool worker_report_live_available{false};
@@ -360,6 +362,113 @@ struct sao_ui_fisheye_backdrop_s {
 };
 
 namespace {
+
+sao_status_t desktop_capture_rect(sao_ui_fisheye_backdrop_s* backdrop,
+                                  const SaoUiFisheyeBackdropRect& host_local_rect,
+                                  SaoUiFisheyeBackdropRect* out_desktop_rect) {
+    if (out_desktop_rect == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    *out_desktop_rect = host_local_rect;
+    if (backdrop->compositor == nullptr) {
+        return SAO_STATUS_OK;
+    }
+    const sao_ui_overlay_host_handle_t host = sao_ui_compositor_host(backdrop->compositor);
+    if (host == nullptr) {
+        return SAO_STATUS_OK;
+    }
+
+    SaoOverlayHostClientRect host_rect{};
+    const sao_status_t host_status = sao_ui_overlay_host_get_client_rect(host, &host_rect);
+    if (host_status != SAO_STATUS_OK) {
+        return host_status;
+    }
+    // DPI-aware: host_local_rect is in host logical pixels, host_rect origin
+    // is in desktop physical pixels. Scale the local extent up by host_dpi/96
+    // before adding to the desktop origin so DXGI capture reads the correct
+    // physical rectangle on 120/144 DPI monitors. host_dpi == 96 is a no-op.
+    const uint32_t host_dpi = sao_ui_overlay_host_current_dpi(host);
+    const uint32_t dpi = host_dpi == 0u ? 96u : host_dpi;
+    int64_t local_x = host_local_rect.x;
+    int64_t local_y = host_local_rect.y;
+    int64_t local_w = host_local_rect.width;
+    int64_t local_h = host_local_rect.height;
+    if (dpi != 96u) {
+        local_x = local_x * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
+        local_y = local_y * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
+        local_w = local_w * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
+        local_h = local_h * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
+    }
+    const int64_t desktop_x = static_cast<int64_t>(host_rect.x) + local_x;
+    const int64_t desktop_y = static_cast<int64_t>(host_rect.y) + local_y;
+    if (desktop_x < std::numeric_limits<int32_t>::min() ||
+        desktop_x > std::numeric_limits<int32_t>::max() ||
+        desktop_y < std::numeric_limits<int32_t>::min() ||
+        desktop_y > std::numeric_limits<int32_t>::max() ||
+        local_w < 0 || local_h < 0 ||
+        local_w > std::numeric_limits<int32_t>::max() ||
+        local_h > std::numeric_limits<int32_t>::max()) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    out_desktop_rect->x = static_cast<int32_t>(desktop_x);
+    out_desktop_rect->y = static_cast<int32_t>(desktop_y);
+    out_desktop_rect->width = static_cast<int32_t>(local_w);
+    out_desktop_rect->height = static_cast<int32_t>(local_h);
+    return valid_rect(*out_desktop_rect) ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
+}
+
+void destroy_live_resources(sao_ui_fisheye_backdrop_s* backdrop,
+                            sao_ui_dxgi_dup_handle_t* duplication) {
+    sao_ui_dxgi_dup_destroy(*duplication);
+    *duplication = nullptr;
+    std::lock_guard lock(backdrop->mutex);
+    backdrop->live_resources_active = false;
+}
+
+sao_status_t stop_and_join_live_worker(sao_ui_fisheye_backdrop_s* backdrop) {
+    if (!backdrop->worker.joinable()) {
+        std::lock_guard lock(backdrop->mutex);
+        backdrop->live_worker_running = false;
+        backdrop->live_resources_active = false;
+        return SAO_STATUS_OK;
+    }
+    backdrop->worker.request_stop();
+    backdrop->worker_cv.notify_all();
+    try {
+        backdrop->worker.join();
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    std::lock_guard lock(backdrop->mutex);
+    backdrop->live_worker_running = false;
+    backdrop->live_resources_active = false;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t reap_live_worker_if_inactive(sao_ui_fisheye_backdrop_s* backdrop) {
+    bool should_reap = false;
+    {
+        std::lock_guard lock(backdrop->mutex);
+        const bool live_requested = backdrop->desired_visible &&
+                                    backdrop->desired_mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE;
+        should_reap =
+            backdrop->worker.joinable() && (!live_requested || !backdrop->live_worker_running);
+    }
+    if (!should_reap) {
+        return SAO_STATUS_OK;
+    }
+    const sao_status_t status = stop_and_join_live_worker(backdrop);
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
+    std::lock_guard lock(backdrop->mutex);
+    if (!backdrop->desired_visible || backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) {
+        backdrop->live_available = false;
+        backdrop->worker_report_pending = false;
+        backdrop->worker_report_frames = 0;
+    }
+    return SAO_STATUS_OK;
+}
 
 void publish_worker_report(sao_ui_fisheye_backdrop_s* backdrop, uint64_t revision,
                            sao_status_t status, bool live_available, bool frame_published) {
@@ -398,12 +507,14 @@ bool wait_for_live_work(sao_ui_fisheye_backdrop_s* backdrop, std::stop_token sto
                         uint64_t* out_revision) {
     std::unique_lock lock(backdrop->mutex);
     const bool ready = backdrop->worker_cv.wait(lock, stop_token, [&] {
-        return backdrop->destroying ||
+        return backdrop->destroying || !backdrop->desired_visible ||
+               backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE ||
                (backdrop->desired_visible &&
                 backdrop->desired_mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE &&
                 backdrop->layer != nullptr && valid_rect(backdrop->desired_geometry.rect));
     });
-    if (!ready || stop_token.stop_requested() || backdrop->destroying) {
+    if (!ready || stop_token.stop_requested() || backdrop->destroying ||
+        !backdrop->desired_visible || backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) {
         return false;
     }
     *out_geometry = backdrop->desired_geometry;
@@ -493,85 +604,103 @@ void live_worker(std::stop_token stop_token, sao_ui_fisheye_backdrop_s* backdrop
     uint64_t previous_revision = 0;
     bool has_current_live_frame = false;
 
-    while (!stop_token.stop_requested()) {
-        BackdropGeometry geometry{};
-        sao_ui_layer_handle_t layer = nullptr;
-        uint64_t revision = 0;
-        if (!wait_for_live_work(backdrop, stop_token, &geometry, &layer, &revision)) {
-            break;
-        }
-        if (previous_revision != revision) {
-            previous_revision = revision;
-            has_current_live_frame = false;
-        }
+    try {
+        while (!stop_token.stop_requested()) {
+            BackdropGeometry geometry{};
+            sao_ui_layer_handle_t layer = nullptr;
+            uint64_t revision = 0;
+            if (!wait_for_live_work(backdrop, stop_token, &geometry, &layer, &revision)) {
+                break;
+            }
+            if (previous_revision != revision) {
+                previous_revision = revision;
+                has_current_live_frame = false;
+            }
 
-        if (duplication == nullptr) {
-            SaoDxgiDupConfig config{};
-            config.output_index = 0;
-            config.adapter_index = 0;
-            config.acquire_timeout_ms = kLiveAcquireTimeoutMs;
-            config.auto_recover = true;
-            const sao_status_t create_status = sao_ui_dxgi_dup_create(&config, &duplication);
-            if (create_status != SAO_STATUS_OK) {
-                publish_worker_report(backdrop, revision, create_status, false, false);
-                wait_live_retry(backdrop, stop_token, revision, kLiveCreateRetryDelay);
+            if (duplication == nullptr) {
+                SaoDxgiDupConfig config{};
+                config.output_index = 0;
+                config.adapter_index = 0;
+                config.acquire_timeout_ms = kLiveAcquireTimeoutMs;
+                config.auto_recover = true;
+                const sao_status_t create_status = sao_ui_dxgi_dup_create(&config, &duplication);
+                if (create_status != SAO_STATUS_OK) {
+                    publish_worker_report(backdrop, revision, create_status, false, false);
+                    wait_live_retry(backdrop, stop_token, revision, kLiveCreateRetryDelay);
+                    continue;
+                }
+                std::lock_guard lock(backdrop->mutex);
+                backdrop->live_resources_active = true;
+            }
+            if (stop_token.stop_requested()) {
+                break;
+            }
+
+            SaoDxgiDupFrame frame{};
+            const sao_status_t acquire_status = sao_ui_dxgi_dup_acquire_frame(duplication, &frame);
+            if (acquire_status == SAO_STATUS_ERR_TIMEOUT) {
+                if (!has_current_live_frame) {
+                    publish_worker_report(backdrop, revision, acquire_status, false, false);
+                }
                 continue;
             }
-        }
-
-        SaoDxgiDupFrame frame{};
-        const sao_status_t acquire_status = sao_ui_dxgi_dup_acquire_frame(duplication, &frame);
-        if (acquire_status == SAO_STATUS_ERR_TIMEOUT) {
-            if (!has_current_live_frame) {
+            if (acquire_status != SAO_STATUS_OK) {
+                has_current_live_frame = false;
                 publish_worker_report(backdrop, revision, acquire_status, false, false);
+                if (acquire_status == SAO_STATUS_ERR_DEVICE_LOST) {
+                    destroy_live_resources(backdrop, &duplication);
+                }
+                wait_live_retry(backdrop, stop_token, revision, kLiveRetryDelay);
+                continue;
             }
-            continue;
-        }
-        if (acquire_status != SAO_STATUS_OK) {
-            has_current_live_frame = false;
-            publish_worker_report(backdrop, revision, acquire_status, false, false);
-            if (acquire_status == SAO_STATUS_ERR_DEVICE_LOST) {
-                sao_ui_dxgi_dup_destroy(duplication);
-                duplication = nullptr;
+
+            uint32_t source_stride = 0;
+            sao_status_t status = SAO_STATUS_OK;
+            if (frame.last_present_time == 0 || frame.width == 0 || frame.height == 0) {
+                status = SAO_STATUS_ERR_TIMEOUT;
+            } else {
+                status = copy_held_dxgi_frame(duplication, frame, &source, &source_stride);
             }
-            wait_live_retry(backdrop, stop_token, revision, kLiveRetryDelay);
-            continue;
-        }
+            const sao_status_t release_status = sao_ui_dxgi_dup_release_frame(duplication);
+            if (status == SAO_STATUS_OK && release_status != SAO_STATUS_OK) {
+                status = release_status;
+            }
+            SaoUiFisheyeBackdropRect capture_rect{};
+            if (status == SAO_STATUS_OK) {
+                status = desktop_capture_rect(backdrop, geometry.rect, &capture_rect);
+            }
+            if (status == SAO_STATUS_OK) {
+                status = render_live_impl(source.data(), source.size(), frame.width, frame.height,
+                                          source_stride, frame.origin_x, frame.origin_y,
+                                          frame.rotation, capture_rect, &warped);
+            }
+            if (status == SAO_STATUS_OK) {
+                status = upload_live_if_current(backdrop, geometry, layer, revision, warped);
+            }
+            if (status == SAO_STATUS_ERR_CANCELLED) {
+                continue;
+            }
 
-        uint32_t source_stride = 0;
-        sao_status_t status = SAO_STATUS_OK;
-        if (frame.last_present_time == 0 || frame.width == 0 || frame.height == 0) {
-            status = SAO_STATUS_ERR_TIMEOUT;
-        } else {
-            status = copy_held_dxgi_frame(duplication, frame, &source, &source_stride);
+            if (status == SAO_STATUS_OK) {
+                has_current_live_frame = true;
+                publish_worker_report(backdrop, revision, SAO_STATUS_OK, true, true);
+            } else {
+                has_current_live_frame = false;
+                publish_worker_report(backdrop, revision, status, false, false);
+                wait_live_retry(backdrop, stop_token, revision, kLiveRetryDelay);
+            }
         }
-        const sao_status_t release_status = sao_ui_dxgi_dup_release_frame(duplication);
-        if (status == SAO_STATUS_OK && release_status != SAO_STATUS_OK) {
-            status = release_status;
-        }
-        if (status == SAO_STATUS_OK) {
-            status = render_live_impl(source.data(), source.size(), frame.width, frame.height,
-                                      source_stride, frame.origin_x, frame.origin_y, frame.rotation,
-                                      geometry.rect, &warped);
-        }
-        if (status == SAO_STATUS_OK) {
-            status = upload_live_if_current(backdrop, geometry, layer, revision, warped);
-        }
-        if (status == SAO_STATUS_ERR_CANCELLED) {
-            continue;
-        }
-
-        if (status == SAO_STATUS_OK) {
-            has_current_live_frame = true;
-            publish_worker_report(backdrop, revision, SAO_STATUS_OK, true, true);
-        } else {
-            has_current_live_frame = false;
-            publish_worker_report(backdrop, revision, status, false, false);
-            wait_live_retry(backdrop, stop_token, revision, kLiveRetryDelay);
+    } catch (...) {
+        if (previous_revision != 0) {
+            publish_worker_report(backdrop, previous_revision, SAO_STATUS_ERR_UNKNOWN, false,
+                                  false);
         }
     }
 
-    sao_ui_dxgi_dup_destroy(duplication);
+    destroy_live_resources(backdrop, &duplication);
+    std::lock_guard lock(backdrop->mutex);
+    backdrop->live_worker_running = false;
+    backdrop->live_available = false;
 }
 
 sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
@@ -646,17 +775,12 @@ sao_ui_fisheye_backdrop_try_destroy(sao_ui_fisheye_backdrop_handle_t handle) {
         layer = handle->layer;
         handle->layer = nullptr;
     }
-    handle->worker.request_stop();
-    handle->worker_cv.notify_all();
-    try {
-        if (handle->worker.joinable()) {
-            handle->worker.join();
-        }
-    } catch (...) {
+    const sao_status_t worker_status = stop_and_join_live_worker(handle);
+    if (worker_status != SAO_STATUS_OK) {
         std::lock_guard lock(handle->mutex);
         handle->destroying = false;
         handle->layer = layer;
-        return SAO_STATUS_ERR_UNKNOWN;
+        return worker_status;
     }
 
     sao_ui_layer_destroy(layer);
@@ -771,6 +895,12 @@ sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
     if (std::this_thread::get_id() != handle->owner_thread) {
         return SAO_STATUS_ERR_ACCESS_DENIED;
     }
+    const sao_status_t worker_status = reap_live_worker_if_inactive(handle);
+    if (worker_status != SAO_STATUS_OK) {
+        std::lock_guard lock(handle->mutex);
+        handle->last_status = worker_status;
+        return worker_status;
+    }
 
     BackdropGeometry geometry{};
     SaoUiFisheyeBackdropMode mode = SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL;
@@ -812,6 +942,7 @@ sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
 
     if (layer == nullptr && visible) {
         SaoLayerConfig config{};
+        config.struct_size = sizeof(SaoLayerConfig);
         config.name_utf8 = handle->layer_name.c_str();
         config.x = geometry.rect.x;
         config.y = geometry.rect.y;
@@ -914,10 +1045,17 @@ sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
     if (visible && mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) {
         try {
             if (!handle->worker.joinable()) {
+                {
+                    std::lock_guard lock(handle->mutex);
+                    handle->live_worker_running = true;
+                    handle->live_resources_active = false;
+                }
                 handle->worker = std::jthread(live_worker, handle);
             }
         } catch (...) {
             std::lock_guard lock(handle->mutex);
+            handle->live_worker_running = false;
+            handle->live_resources_active = false;
             handle->last_status = SAO_STATUS_ERR_UNKNOWN;
             handle->live_available = false;
             return SAO_STATUS_ERR_UNKNOWN;
@@ -953,6 +1091,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_get_state(
     out_state->live_available = handle->live_available;
     out_state->last_status = handle->last_status;
     out_state->frame_generation = handle->frame_generation;
+    out_state->live_worker_running = handle->live_worker_running;
+    out_state->live_resources_active = handle->live_resources_active;
     return SAO_STATUS_OK;
 }
 

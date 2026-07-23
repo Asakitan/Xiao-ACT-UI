@@ -1261,6 +1261,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
         if (compositor != nullptr) {
             const std::string layer_name = "panel." + panel->id;
             SaoLayerConfig layer_config{};
+            layer_config.struct_size = sizeof(SaoLayerConfig);
             layer_config.name_utf8 = layer_name.c_str();
             layer_config.x = panel->state.x;
             layer_config.y = panel->state.y;

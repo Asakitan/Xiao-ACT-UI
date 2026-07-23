@@ -1371,6 +1371,92 @@ TEST_CASE("render_spine_dcomp_upload_resize_present_or_skip",
     sao_ui_d3d11_device_destroy(device);
 }
 
+// Split fail_closed_mmf_source semantics: a producer restart / mapping-gone
+// event must retain the last-good frame (reconnect path), while a structural
+// header break must hard-reset the cached frame. Present is expected to
+// return NOT_INITIALIZED in the headless fixture; state observation is done
+// via compositor_snapshot_bgra.
+TEST_CASE("render_spine_mmf_reconnect_retains_last_good_frame",
+          "[ui][render_spine][interop][mmf][reconnect]") {
+    constexpr uint32_t slot_stride = 16;
+    constexpr size_t mapping_bytes = SAO_UI_SOPF_MMF_HEADER_BYTES +
+        3u * slot_stride;
+    const std::array<uint8_t, 8> good = {
+        0x08, 0x10, 0x18, 0x20, 0x20, 0x18, 0x10, 0x20};
+    std::string mmf_name;
+    UiInteropFixtureGuard fixture;
+    create_headless_mmf_layer("sopf_reconnect_retention", &fixture);
+    {
+        ScopedFileMapping mapping(mapping_bytes);
+        REQUIRE(mapping.mapping != nullptr);
+        REQUIRE(mapping.view != nullptr);
+        mmf_name = mapping.name;
+        const auto header = sopf_v2_header(slot_stride, 2, 0);
+        write_mmf_header(mapping, header);
+        write_mmf_slot(mapping, slot_stride, 0, good);
+        write_mmf_v2_footer(mapping, slot_stride, 0, 2);
+        REQUIRE(sao_ui_layer_set_mmf_source(
+                    fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
+                SAO_STATUS_ERR_NOT_INITIALIZED);
+        uint32_t w = 0;
+        uint32_t h = 0;
+        REQUIRE(compositor_snapshot(fixture.compositor, &w, &h) ==
+                std::vector<uint8_t>(good.begin(), good.end()));
+    }
+    // Mapping closed here (RAII on ScopedFileMapping). OpenFileMappingA on
+    // the next refresh will return NULL: the reconnect entry point retains
+    // the cached BGRA and bumps the miss counter instead of clearing.
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
+                SAO_STATUS_ERR_NOT_INITIALIZED);
+        uint32_t w = 0;
+        uint32_t h = 0;
+        CHECK(compositor_snapshot(fixture.compositor, &w, &h) ==
+              std::vector<uint8_t>(good.begin(), good.end()));
+    }
+    REQUIRE(sao_ui_layer_set_mmf_source(fixture.layer, nullptr) ==
+            SAO_STATUS_OK);
+}
+
+TEST_CASE("render_spine_mmf_hard_reset_clears_last_good_frame",
+          "[ui][render_spine][interop][mmf][fail_closed]") {
+    constexpr uint32_t slot_stride = 16;
+    constexpr size_t mapping_bytes = SAO_UI_SOPF_MMF_HEADER_BYTES +
+        3u * slot_stride;
+    ScopedFileMapping mapping(mapping_bytes);
+    REQUIRE(mapping.mapping != nullptr);
+    REQUIRE(mapping.view != nullptr);
+    const std::array<uint8_t, 8> good = {
+        0x08, 0x10, 0x18, 0x20, 0x20, 0x18, 0x10, 0x20};
+    auto header = sopf_v2_header(slot_stride, 2, 0);
+    write_mmf_header(mapping, header);
+    write_mmf_slot(mapping, slot_stride, 0, good);
+    write_mmf_v2_footer(mapping, slot_stride, 0, 2);
+
+    UiInteropFixtureGuard fixture;
+    create_headless_mmf_layer("sopf_hard_reset", &fixture);
+    REQUIRE(sao_ui_layer_set_mmf_source(
+                fixture.layer, mapping.name.c_str()) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
+            SAO_STATUS_ERR_NOT_INITIALIZED);
+    uint32_t w = 0;
+    uint32_t h = 0;
+    REQUIRE(compositor_snapshot(fixture.compositor, &w, &h) ==
+            std::vector<uint8_t>(good.begin(), good.end()));
+
+    // Corrupt the magic in-place: still a valid mapping (reconnect would
+    // silently succeed) so the failure lands on decode_mmf_header, which
+    // must take the hard path and drop the cached frame.
+    header.magic ^= 1u;
+    write_mmf_header(mapping, header);
+    REQUIRE(sao_ui_compositor_present(fixture.compositor) ==
+            SAO_STATUS_ERR_NOT_INITIALIZED);
+    require_empty_snapshot(fixture.compositor);
+    REQUIRE(sao_ui_layer_set_mmf_source(fixture.layer, nullptr) ==
+            SAO_STATUS_OK);
+}
+
 #else
 
 TEST_CASE("render_spine_windows_resources_skipped", "[ui][render_spine][ui_parity][resource]") {

@@ -651,6 +651,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_create(
         win->render_user_data = config->render_fn_user_data;
         if (compositor != nullptr) {
             SaoLayerConfig layer_config{};
+            layer_config.struct_size = sizeof(SaoLayerConfig);
             layer_config.name_utf8 = win->name.c_str();
             layer_config.x = win->x;
             layer_config.y = win->y;

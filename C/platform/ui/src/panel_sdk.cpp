@@ -576,7 +576,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(sao_ui_compositor_hand
         *out_panel = nullptr;
     if (out_body != nullptr)
         *out_body = nullptr;
-    if (descriptor == nullptr || descriptor->panel_id_utf8 == nullptr ||
+    if (descriptor == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    // ABI v1 guard (see SAO_UI_PANEL_DESCRIPTOR_V1_SIZE). struct_size == 0
+    // keeps legacy callers (compiled before ABI minor 8) working; other
+    // values must fit within the platform's compiled struct so callers
+    // cannot claim to send fields the platform does not know about.
+    {
+        const uint32_t declared = descriptor->struct_size == 0u
+                                      ? SAO_UI_PANEL_DESCRIPTOR_V1_SIZE
+                                      : descriptor->struct_size;
+        if (declared < SAO_UI_PANEL_DESCRIPTOR_V1_SIZE ||
+            declared > sizeof(SaoPanelDescriptor)) {
+            return SAO_STATUS_ERR_ABI_MISMATCH;
+        }
+    }
+    if (descriptor->panel_id_utf8 == nullptr ||
         descriptor->panel_id_utf8[0] == '\0' || !std::isfinite(descriptor->initial_opacity) ||
         (descriptor->z_class != SAO_UI_PANEL_Z_BOTTOM &&
          descriptor->z_class != SAO_UI_PANEL_Z_NORMAL &&
@@ -620,6 +635,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(sao_ui_compositor_hand
             rec->icon_pixels.assign(pixels, pixels + bytes);
         }
         rec->descriptor_cache = *descriptor;
+        // Force our internal record to advertise the platform's compiled
+        // size regardless of the caller's declaration.
+        rec->descriptor_cache.struct_size = sizeof(SaoPanelDescriptor);
+        rec->descriptor_cache._reserved0 = 0u;
         rec->compositor = compositor;
         rec->visible = descriptor->visible;
         rec->opacity_0_to_1 = std::clamp(descriptor->initial_opacity, 0.0F, 1.0F);

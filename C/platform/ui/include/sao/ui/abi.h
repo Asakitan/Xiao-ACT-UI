@@ -25,7 +25,14 @@
 #define SAO_UI_CALL __cdecl
 
 #define SAO_UI_ABI_VERSION_MAJOR 1u
-#define SAO_UI_ABI_VERSION_MINOR 6u
+// Minor 8 adds a leading uint32_t struct_size field to SaoPanelDescriptor,
+// SaoCompositorConfig, and SaoLayerConfig so future ABI additions can extend
+// the tail while the platform reads only bytes the caller understands. Legacy
+// callers (struct_size == 0) are treated as their canonical v1 sizes
+// (SAO_UI_PANEL_DESCRIPTOR_V1_SIZE / SAO_UI_COMPOSITOR_CONFIG_V1_SIZE /
+// SAO_UI_LAYER_CONFIG_V1_SIZE) so no source or binary caller has to change
+// for the guard alone. Minor 7 added sao_ui_compositor_host_dpi().
+#define SAO_UI_ABI_VERSION_MINOR 8u
 #define SAO_UI_ABI_VERSION ((SAO_UI_ABI_VERSION_MAJOR << 16) | SAO_UI_ABI_VERSION_MINOR)
 
 #ifdef __cplusplus

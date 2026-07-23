@@ -60,10 +60,16 @@
 // Compile-time invariants.
 // ---------------------------------------------------------------------------
 
-// SaoLayerConfig layout stability -- reject accidental reorder.
-static_assert(offsetof(SaoLayerConfig, name_utf8) == 0,
-              "SaoLayerConfig.name_utf8 must be first field");
-static_assert(offsetof(SaoLayerConfig, x) == sizeof(void*),
+// SaoLayerConfig layout stability -- reject accidental reorder. As of ABI
+// minor 8, struct_size is the first field so the platform can safely read
+// the caller's declared size before dereferencing later fields. name_utf8
+// sits at 16 (struct_size 0..3 + _reserved0 4..7 + 8-byte pointer align).
+static_assert(offsetof(SaoLayerConfig, struct_size) == 0,
+              "SaoLayerConfig.struct_size must be first field");
+static_assert(offsetof(SaoLayerConfig, name_utf8) == 2 * sizeof(uint32_t),
+              "SaoLayerConfig.name_utf8 must immediately follow the ABI header");
+static_assert(offsetof(SaoLayerConfig, x) ==
+                  offsetof(SaoLayerConfig, name_utf8) + sizeof(void*),
               "SaoLayerConfig.x must immediately follow name_utf8");
 // Guard the z_order field position (used by set_z_order semantics).
 static_assert(offsetof(SaoLayerConfig, z_order)
@@ -136,6 +142,11 @@ struct sao_ui_layer_s {
     std::string mmf_name;
     uint64_t    mmf_last_generation{0};
     bool        mmf_has_last_generation{false};
+    // Reconnect miss counter. Reset to 0 on any successful frame publish or
+    // structural fail-closed reset; bumped on each OpenFileMappingA /
+    // MapViewOfFile miss so the reconnect path can retain the last-good
+    // frame and diagnostics can observe how long a producer has been away.
+    uint32_t    mmf_reconnect_attempts{0};
     void*       shared_handle{nullptr};
     uint32_t    shared_width{0};
     uint32_t    shared_height{0};
@@ -805,6 +816,15 @@ bool refresh_shared_texture_locked(sao_ui_layer_s* layer,
         return false;
     }
     if (FAILED(device->GetDeviceRemovedReason())) {
+        // Device was removed after we opened / allocated the shared texture,
+        // staging texture, and keyed mutex earlier in this call (or on a
+        // prior tick). Every one of those COM pointers is now dangling: the
+        // caller will observe DEVICE_LOST, tear the compositor down, and
+        // rebuild fresh. Without this cleanup the layer would keep holding
+        // released COM refs, so both the immediate rebuild and the next
+        // refresh would silently reuse invalid memory.
+        release_shared_texture_objects(layer);
+        clear_bgra_cache(layer);
         return false;
     }
     KeyedMutexReleaseGuard keyed_guard{
@@ -870,9 +890,33 @@ void reset_mmf_generation(sao_ui_layer_s* layer) {
     layer->mmf_has_last_generation = false;
 }
 
-void fail_closed_mmf_source(sao_ui_layer_s* layer) {
+// Hard fail-closed reset: the header decoded but validation exposed a
+// structural error the producer must never emit. Clears the cached frame
+// and the last generation. Used for magic/version/stride/geometry breakage
+// and any second-decode disagreement mid-copy.
+void fail_closed_mmf_source_hard(sao_ui_layer_s* layer) {
+    layer->mmf_reconnect_attempts = 0;
     reset_mmf_generation(layer);
     if (clear_bgra_cache(layer)) mark_layer_dirty(layer);
+}
+
+// Reconnect fail-closed: the mapping is temporarily unavailable
+// (OpenFileMappingA / MapViewOfFile returned NULL) but the layer state we
+// have is still the last known-good producer frame. Retain the cached BGRA
+// and the last generation, and bump an attempt counter so the caller can
+// observe how many polls have passed without a reconnect. This lets the
+// visible layer keep showing the last frame instead of collapsing to empty
+// pixels the moment the producer restarts.
+void fail_closed_mmf_source_reconnect(sao_ui_layer_s* layer) {
+    if (layer->mmf_reconnect_attempts != std::numeric_limits<uint32_t>::max()) {
+        ++layer->mmf_reconnect_attempts;
+    }
+}
+
+// Legacy alias retained for existing call sites that still bundle both
+// semantics into a single hard clear. Prefer the split entry points above.
+void fail_closed_mmf_source(sao_ui_layer_s* layer) {
+    fail_closed_mmf_source_hard(layer);
 }
 
 bool decode_mmf_header(const void* bytes, MmfHeaderValues* out) {
@@ -985,21 +1029,25 @@ void refresh_mmf_source_locked(sao_ui_layer_s* layer) {
     if (layer->mmf_name.empty()) return;
     HANDLE mapping = ::OpenFileMappingA(FILE_MAP_READ, FALSE, layer->mmf_name.c_str());
     if (mapping == nullptr) {
-        fail_closed_mmf_source(layer);
+        // Producer restart or race: retain the last-good frame; the
+        // reconnect counter tracks how many polls have missed.
+        fail_closed_mmf_source_reconnect(layer);
         return;
     }
     const WinHandleGuard mapping_guard{mapping};
     const void* header_view = ::MapViewOfFile(
         mapping, FILE_MAP_READ, 0, 0, SAO_UI_SOPF_MMF_HEADER_BYTES);
     if (header_view == nullptr) {
-        fail_closed_mmf_source(layer);
+        // Mapping opened but MapViewOfFile failed - still transient; treat
+        // as a reconnect miss so we don't drop the last good frame.
+        fail_closed_mmf_source_reconnect(layer);
         return;
     }
     MmfHeaderValues initial_header{};
     {
         const MappedViewGuard header_guard{header_view};
         if (!decode_mmf_header(header_view, &initial_header)) {
-            fail_closed_mmf_source(layer);
+            fail_closed_mmf_source_hard(layer);
             return;
         }
     }
@@ -1007,33 +1055,35 @@ void refresh_mmf_source_locked(sao_ui_layer_s* layer) {
     size_t mapping_bytes = 0;
     if (!validate_mmf_header_locked(
             layer, initial_header, &frame_bytes, &mapping_bytes)) {
-        fail_closed_mmf_source(layer);
+        fail_closed_mmf_source_hard(layer);
         return;
     }
     const void* ring_view = ::MapViewOfFile(
         mapping, FILE_MAP_READ, 0, 0, mapping_bytes);
     if (ring_view == nullptr) {
-        fail_closed_mmf_source(layer);
+        // Full ring view failed; header already decoded so treat as
+        // transient reconnect.
+        fail_closed_mmf_source_reconnect(layer);
         return;
     }
     const MappedViewGuard ring_guard{ring_view};
     const auto* ring = static_cast<const uint8_t*>(ring_view);
     MmfHeaderValues before{};
     if (!decode_mmf_header(ring, &before)) {
-        fail_closed_mmf_source(layer);
+        fail_closed_mmf_source_hard(layer);
         return;
     }
     size_t checked_frame_bytes = 0;
     size_t checked_mapping_bytes = 0;
     if (!validate_mmf_header_locked(
             layer, before, &checked_frame_bytes, &checked_mapping_bytes)) {
-        fail_closed_mmf_source(layer);
+        fail_closed_mmf_source_hard(layer);
         return;
     }
     if (!same_mmf_structure(initial_header, before) ||
         frame_bytes != checked_frame_bytes ||
         mapping_bytes != checked_mapping_bytes) {
-        fail_closed_mmf_source(layer);
+        fail_closed_mmf_source_hard(layer);
         return;
     }
     if (layer->mmf_has_last_generation &&
@@ -1068,7 +1118,9 @@ void refresh_mmf_source_locked(sao_ui_layer_s* layer) {
     MmfHeaderValues after{};
     if (!decode_mmf_header(ring, &after) ||
         !same_mmf_structure(before, after)) {
-        fail_closed_mmf_source(layer);
+        // Header changed mid-copy: producer restructured the ring. This is
+        // a hard invariant violation, not a reconnect - drop the frame.
+        fail_closed_mmf_source_hard(layer);
         return;
     }
     if (after.published_generation != before.published_generation ||
@@ -1088,6 +1140,9 @@ void refresh_mmf_source_locked(sao_ui_layer_s* layer) {
     layer->bgra_stride = before.frame_width * 4u;
     layer->mmf_last_generation = before.published_generation;
     layer->mmf_has_last_generation = true;
+    // Successful frame publish resets the reconnect attempt counter so a
+    // fresh producer restart starts observing misses from zero again.
+    layer->mmf_reconnect_attempts = 0;
     mark_layer_dirty(layer);
 #else
     (void)layer;
@@ -1339,6 +1394,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_handle = nullptr;
+    // ABI v1 guard. struct_size == 0 keeps legacy callers (compiled before
+    // ABI minor 8) working: their record is exactly the compile-time size.
+    // Any other value must be within [V1_SIZE, sizeof(SaoCompositorConfig)]
+    // so the caller cannot claim to send fields the platform does not know.
+    if (config != nullptr) {
+        const uint32_t declared =
+            config->struct_size == 0u ? SAO_UI_COMPOSITOR_CONFIG_V1_SIZE : config->struct_size;
+        if (declared < SAO_UI_COMPOSITOR_CONFIG_V1_SIZE ||
+            declared > sizeof(SaoCompositorConfig)) {
+            return SAO_STATUS_ERR_ABI_MISMATCH;
+        }
+    }
     try {
         // Host can be null in headless/tests; the compositor holds a
         // reference but headless paths never dereference it.  RGN sync /
@@ -1350,7 +1417,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
         comp->host = host;
         if (config != nullptr) {
             comp->config = *config;
+            // Force our internal record to advertise the platform's compiled
+            // size regardless of the caller's declaration.
+            comp->config.struct_size = sizeof(SaoCompositorConfig);
         } else {
+            comp->config.struct_size = sizeof(SaoCompositorConfig);
             comp->config.target_hz = 0;
             comp->config.enable_temporal_union = true;
             comp->config.enable_rgn_cache = true;
@@ -1513,6 +1584,26 @@ extern "C" void* SAO_UI_CALL sao_ui_compositor_host_hwnd(
         : sao_ui_overlay_host_hwnd(handle->host);
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_host_dpi(
+    sao_ui_compositor_handle_t compositor,
+    uint32_t* out_dpi_x,
+    uint32_t* out_dpi_y) {
+    // Both axes fall back to the standard 96 DPI when no host is attached or
+    // the host has not yet received WM_DPICHANGED. Windows exposes a single
+    // scalar DPI per HWND (multi-monitor per-monitor DPI aware v2 still
+    // reports one scalar to the top-level window), so x and y agree here.
+    uint32_t dpi = 96u;
+    if (compositor != nullptr && compositor->host != nullptr) {
+        const uint32_t reported = sao_ui_overlay_host_current_dpi(compositor->host);
+        if (reported != 0u) {
+            dpi = reported;
+        }
+    }
+    if (out_dpi_x != nullptr) *out_dpi_x = dpi;
+    if (out_dpi_y != nullptr) *out_dpi_y = dpi;
+    return SAO_STATUS_OK;
+}
+
 // ---------------------------------------------------------------------------
 // Layer lifecycle.
 // ---------------------------------------------------------------------------
@@ -1525,6 +1616,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_create(
     *out_layer = nullptr;
     if (compositor == nullptr || config == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    // ABI v1 guard (see SAO_UI_LAYER_CONFIG_V1_SIZE). struct_size == 0 keeps
+    // legacy callers working; other values must fit within the platform's
+    // compiled struct.
+    {
+        const uint32_t declared =
+            config->struct_size == 0u ? SAO_UI_LAYER_CONFIG_V1_SIZE : config->struct_size;
+        if (declared < SAO_UI_LAYER_CONFIG_V1_SIZE ||
+            declared > sizeof(SaoLayerConfig)) {
+            return SAO_STATUS_ERR_ABI_MISMATCH;
+        }
     }
     if (config->name_utf8 == nullptr || config->name_utf8[0] == '\0') {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;

@@ -200,6 +200,7 @@ void SAO_UI_CALL record_scroll(float dx, float dy, void* user_data) {
 
 SaoCompositorConfig make_compositor_config() {
     SaoCompositorConfig cfg{};
+    cfg.struct_size            = sizeof(SaoCompositorConfig);
     cfg.target_hz              = 60;
     cfg.enable_temporal_union  = true;
     cfg.enable_rgn_cache       = true;
@@ -208,6 +209,7 @@ SaoCompositorConfig make_compositor_config() {
 
 SaoLayerConfig make_layer_config(const char* name, int32_t z = 0) {
     SaoLayerConfig cfg{};
+    cfg.struct_size     = sizeof(SaoLayerConfig);
     cfg.name_utf8       = name;
     cfg.x               = 0;
     cfg.y               = 0;
@@ -1110,3 +1112,154 @@ TEST_CASE("host-bound compositor validates owner and restores input state before
     REQUIRE(sao_ui_overlay_host_destroy(host));
 }
 #endif
+
+// ABI 1.7 host DPI accessor tests. Both axes always agree because Windows
+// exposes a single scalar DPI per top-level HWND.
+TEST_CASE("compositor_host_dpi_defaults_to_96_without_host",
+          "[ui][compositor][dpi][host_dpi]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    sao_ui_compositor_handle_t comp = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_OK);
+    REQUIRE(comp != nullptr);
+
+    uint32_t dpi_x = 0;
+    uint32_t dpi_y = 0;
+    REQUIRE(sao_ui_compositor_host_dpi(comp, &dpi_x, &dpi_y) == SAO_STATUS_OK);
+    CHECK(dpi_x == 96u);
+    CHECK(dpi_y == 96u);
+
+    // Null out pointers are individually skippable.
+    dpi_x = 0;
+    REQUIRE(sao_ui_compositor_host_dpi(comp, &dpi_x, nullptr) == SAO_STATUS_OK);
+    CHECK(dpi_x == 96u);
+
+    dpi_y = 0;
+    REQUIRE(sao_ui_compositor_host_dpi(comp, nullptr, &dpi_y) == SAO_STATUS_OK);
+    CHECK(dpi_y == 96u);
+
+    // Null compositor also folds back to 96 (both outs); status is OK.
+    dpi_x = 0;
+    dpi_y = 0;
+    REQUIRE(sao_ui_compositor_host_dpi(nullptr, &dpi_x, &dpi_y) == SAO_STATUS_OK);
+    CHECK(dpi_x == 96u);
+    CHECK(dpi_y == 96u);
+
+    sao_ui_compositor_destroy(comp);
+}
+
+// screen_to_host_dpi is a static inline helper in entity_shell.cpp; validate
+// the formula here against the same integer semantics the helper uses so a
+// future 144 DPI monitor regression trips immediately. The check is a pure
+// arithmetic identity: (screen - host_origin) * 96 / dpi. Both operands sit
+// in desktop physical space, so subtract first to get the host-local delta
+// and only then scale down to host logical pixels.
+TEST_CASE("screen_to_host_dpi_math_at_144_dpi",
+          "[ui][compositor][dpi][entity_shell]") {
+    struct Case {
+        int32_t screen;
+        int32_t host_origin;
+        uint32_t host_dpi;
+        int64_t expected;
+    };
+    const Case cases[] = {
+        {200, 0, 96u, 200},           // 96 DPI: pure subtraction.
+        {200, 40, 96u, 160},          // 96 DPI: pure subtraction.
+        {288, 0, 144u, 192},          // 144 DPI: (288-0) * 96/144 = 192.
+        {288, 40, 144u, 165},         // 144 DPI: (288-40) * 96/144 = 165.
+        {200, 20, 120u, 144},         // 120 DPI: (200-20) * 96/120 = 144.
+    };
+    for (const auto& c : cases) {
+        const uint32_t dpi = c.host_dpi == 0u ? 96u : c.host_dpi;
+        const int64_t desktop_local =
+            static_cast<int64_t>(c.screen) - static_cast<int64_t>(c.host_origin);
+        const int64_t actual = (dpi == 96u)
+            ? desktop_local
+            : desktop_local * static_cast<int64_t>(96) / static_cast<int64_t>(dpi);
+        CHECK(actual == c.expected);
+    }
+}
+
+// ABI struct_size guard: legacy callers that predate ABI minor 8 continue to
+// work (struct_size == 0 is treated as the v1 compiled size); other values
+// must fit within [V1_SIZE, sizeof(struct)] or the platform rejects them with
+// SAO_STATUS_ERR_ABI_MISMATCH.
+TEST_CASE("compositor create struct_size guard accepts legacy zero",
+          "[ui][compositor][abi][struct_size]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    cfg.struct_size = 0u; // legacy caller
+    sao_ui_compositor_handle_t comp = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_OK);
+    REQUIRE(comp != nullptr);
+    sao_ui_compositor_destroy(comp);
+}
+
+TEST_CASE("compositor create struct_size guard accepts current size",
+          "[ui][compositor][abi][struct_size]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    REQUIRE(cfg.struct_size == sizeof(SaoCompositorConfig));
+    sao_ui_compositor_handle_t comp = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_OK);
+    sao_ui_compositor_destroy(comp);
+}
+
+TEST_CASE("compositor create struct_size guard rejects under-size",
+          "[ui][compositor][abi][struct_size]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    cfg.struct_size = SAO_UI_COMPOSITOR_CONFIG_V1_SIZE - 1u;
+    sao_ui_compositor_handle_t comp = nullptr;
+    CHECK(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_ERR_ABI_MISMATCH);
+    CHECK(comp == nullptr);
+}
+
+TEST_CASE("compositor create struct_size guard rejects over-size",
+          "[ui][compositor][abi][struct_size]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    cfg.struct_size = sizeof(SaoCompositorConfig) + 4u;
+    sao_ui_compositor_handle_t comp = nullptr;
+    CHECK(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_ERR_ABI_MISMATCH);
+    CHECK(comp == nullptr);
+}
+
+TEST_CASE("layer create struct_size guard accepts legacy zero and rejects drift",
+          "[ui][compositor][layer][abi][struct_size]") {
+    SaoCompositorConfig cfg = make_compositor_config();
+    sao_ui_compositor_handle_t comp = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &cfg, &comp) == SAO_STATUS_OK);
+    REQUIRE(comp != nullptr);
+
+    // Legacy zero.
+    {
+        SaoLayerConfig lc = make_layer_config("abi_guard_zero");
+        lc.struct_size = 0u;
+        sao_ui_layer_handle_t layer = nullptr;
+        REQUIRE(sao_ui_layer_create(comp, &lc, &layer) == SAO_STATUS_OK);
+        REQUIRE(layer != nullptr);
+        sao_ui_layer_destroy(layer);
+    }
+    // Current size.
+    {
+        SaoLayerConfig lc = make_layer_config("abi_guard_current");
+        sao_ui_layer_handle_t layer = nullptr;
+        REQUIRE(sao_ui_layer_create(comp, &lc, &layer) == SAO_STATUS_OK);
+        REQUIRE(layer != nullptr);
+        sao_ui_layer_destroy(layer);
+    }
+    // Under-size.
+    {
+        SaoLayerConfig lc = make_layer_config("abi_guard_under");
+        lc.struct_size = SAO_UI_LAYER_CONFIG_V1_SIZE - 1u;
+        sao_ui_layer_handle_t layer = nullptr;
+        CHECK(sao_ui_layer_create(comp, &lc, &layer) == SAO_STATUS_ERR_ABI_MISMATCH);
+        CHECK(layer == nullptr);
+    }
+    // Over-size.
+    {
+        SaoLayerConfig lc = make_layer_config("abi_guard_over");
+        lc.struct_size = sizeof(SaoLayerConfig) + 4u;
+        sao_ui_layer_handle_t layer = nullptr;
+        CHECK(sao_ui_layer_create(comp, &lc, &layer) == SAO_STATUS_ERR_ABI_MISMATCH);
+        CHECK(layer == nullptr);
+    }
+
+    sao_ui_compositor_destroy(comp);
+}

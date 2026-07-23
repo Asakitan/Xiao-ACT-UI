@@ -42,6 +42,18 @@ typedef struct sao_ui_popup_s* sao_ui_popup_handle_t;
 // submenu_count > 0; the entry_id then identifies the "expand" event
 // (chosen_entry_id in the callback, dismissed=false) even when the
 // user is just navigating.
+//
+// ABI stability contract (intentional non-guard):
+//   SaoUiPopupEntry deliberately has NO leading struct_size field. Entries
+//   are almost always passed as an array (SaoUiPopupSpec::entries[]) whose
+//   packing depends on element stride == sizeof(SaoUiPopupEntry), so adding
+//   a per-element size field would either require a separate stride field
+//   in every array ABI (SaoUiPopupSpec, refresh_entries) or force every
+//   caller to reinitialise the field on each element with no independent
+//   value. Instead, this struct is frozen: any future field additions must
+//   ship as a new "v2" struct with a distinct type name and a distinct
+//   registration entry point (mirroring the context/native provider v1→v2
+//   pattern in the plugins ABI). Do NOT append fields here.
 struct SaoUiPopupEntry {
     const char* label_utf8;
     const char* icon_utf8;              // optional glyph (nullable)
@@ -80,7 +92,7 @@ struct SaoUiPopupSpec {
 
     // Behavior
     bool        cascade_from_top;       // popup.py cascade_mode
-    bool        allow_keyboard_nav;     // arrow keys + Enter
+    bool        allow_keyboard_nav;     // arrows + Enter; ESC always dismisses
     bool        dismiss_on_focus_out;
     bool        _pad;
     int32_t     fade_in_ms;             // default 450 (matches Python)

@@ -84,9 +84,11 @@ void SAO_UI_CALL on_result(
 
 // Convenience: create + show, returns handle.
 sao_ui_popup_handle_t make_and_show(
-    TestPopupCtx& ctx, sao_ui_compositor_handle_t compositor = nullptr) {
+    TestPopupCtx& ctx,
+    sao_ui_compositor_handle_t compositor = nullptr,
+    sao_ui_theme_handle_t theme = nullptr) {
     sao_ui_popup_handle_t h = nullptr;
-    REQUIRE(sao_ui_popup_create(compositor, nullptr, &h) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_popup_create(compositor, theme, &h) == SAO_STATUS_OK);
     REQUIRE(h != nullptr);
     REQUIRE(sao_ui_popup_show(h, &ctx.spec, &on_result, &ctx) == SAO_STATUS_OK);
     return h;
@@ -235,6 +237,40 @@ TEST_CASE("popup_dispatch_escape_closes", "[ui][popup][interpreter]") {
     sao_ui_popup_destroy(h);
 }
 
+TEST_CASE("popup keyboard navigation flag gates navigation but keeps escape dismissal",
+          "[ui][popup][interpreter][focused]") {
+    TestPopupCtx ctx;
+    ctx.spec.allow_keyboard_nav = false;
+    auto* h = make_and_show(ctx);
+
+    REQUIRE(sao_ui_popup_key_press(h, SAO_UI_POPUP_KEY_DOWN) ==
+            SAO_STATUS_ERR_ACCESS_DENIED);
+    REQUIRE(sao_ui_popup_key_press(h, SAO_UI_POPUP_KEY_ENTER) ==
+            SAO_STATUS_ERR_ACCESS_DENIED);
+    REQUIRE(ctx.callback_calls.load() == 0);
+    bool visible = false;
+    REQUIRE(sao_ui_popup_is_visible(h, &visible) == SAO_STATUS_OK);
+    REQUIRE(visible);
+
+    REQUIRE(sao_ui_popup_key_press(h, SAO_UI_POPUP_KEY_ESC) == SAO_STATUS_OK);
+    REQUIRE(ctx.callback_calls.load() == 1);
+    REQUIRE(ctx.was_dismissed.load());
+    sao_ui_popup_destroy(h);
+}
+
+TEST_CASE("popup disabling selected entry rehomes keyboard selection",
+          "[ui][popup][interpreter][focused]") {
+    TestPopupCtx ctx;
+    auto* h = make_and_show(ctx);
+
+    REQUIRE(sao_ui_popup_set_entry_enabled(h, 1, false) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_popup_key_press(h, SAO_UI_POPUP_KEY_ENTER) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_popup_key_press(h, SAO_UI_POPUP_KEY_ENTER) == SAO_STATUS_OK);
+    REQUIRE(ctx.callback_calls.load() == 1);
+    REQUIRE(ctx.chosen_id.load() == 30);
+    sao_ui_popup_destroy(h);
+}
+
 TEST_CASE("popup_hit_test_top_level", "[ui][popup][interpreter]") {
     TestPopupCtx ctx;
     auto* h = make_and_show(ctx);
@@ -342,5 +378,65 @@ TEST_CASE("popup compositor renders expands and dispatches leaf click",
     REQUIRE(layer_count(compositor) == 0);
 
     sao_ui_popup_destroy(popup);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("popup disabled row hover matches nonselectable separator",
+          "[ui][popup][compositor][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+
+    TestPopupCtx ctx;
+    auto* popup = make_and_show(ctx, compositor);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(
+                compositor, kMouseMove, 150, 232, -1, 0) == SAO_STATUS_OK);
+    const std::vector<uint8_t> separator_pixels =
+        compositor_snapshot(compositor, nullptr, nullptr);
+
+    REQUIRE(sao_ui_compositor_dispatch_mouse(
+                compositor, kMouseMove, 150, 240, -1, 0) == SAO_STATUS_OK);
+    const std::vector<uint8_t> disabled_pixels =
+        compositor_snapshot(compositor, nullptr, nullptr);
+    REQUIRE(disabled_pixels == separator_pixels);
+
+    REQUIRE(sao_ui_compositor_dispatch_mouse(
+                compositor, kLeftButtonDown, 150, 240, 0, 0) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(
+                compositor, kLeftButtonUp, 150, 240, 0, 0) == SAO_STATUS_OK);
+    REQUIRE(ctx.callback_calls.load() == 0);
+    REQUIRE(layer_count(compositor) == 1);
+
+    sao_ui_popup_destroy(popup);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("popup theme override controls compositor palette",
+          "[ui][popup][compositor][theme][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    sao_ui_theme_handle_t theme = nullptr;
+    REQUIRE(sao_ui_theme_create(&theme) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_set_active(theme, SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+
+    TestPopupCtx ctx;
+    auto* popup = make_and_show(ctx, compositor, theme);
+    const std::vector<uint8_t> inherited_light =
+        compositor_snapshot(compositor, nullptr, nullptr);
+    REQUIRE(sao_ui_popup_hide(popup) == SAO_STATUS_OK);
+
+    ctx.spec.theme_override = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_popup_show(popup, &ctx.spec, &on_result, &ctx) == SAO_STATUS_OK);
+    const std::vector<uint8_t> overridden_dark =
+        compositor_snapshot(compositor, nullptr, nullptr);
+    REQUIRE(overridden_dark != inherited_light);
+
+    SaoUiPopupSpec invalid_spec = ctx.spec;
+    invalid_spec.theme_override = static_cast<SaoUiThemeId>(SAO_UI_THEME_COUNT + 1);
+    REQUIRE(sao_ui_popup_show(popup, &invalid_spec, &on_result, &ctx) ==
+            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(compositor_snapshot(compositor, nullptr, nullptr) == overridden_dark);
+
+    sao_ui_popup_destroy(popup);
+    sao_ui_theme_destroy(theme);
     REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }

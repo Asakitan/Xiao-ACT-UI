@@ -75,6 +75,20 @@ bool has_visible_variation(const std::vector<uint8_t>& frame) {
     return false;
 }
 
+SaoUiFisheyeBackdropState wait_for_worker_state(sao_ui_fisheye_backdrop_handle_t backdrop,
+                                                bool running) {
+    SaoUiFisheyeBackdropState state{};
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        REQUIRE(sao_ui_fisheye_backdrop_get_state(backdrop, &state) == SAO_STATUS_OK);
+        if (state.live_worker_running == running) {
+            return state;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(state.live_worker_running == running);
+    return state;
+}
+
 } // namespace
 
 TEST_CASE("fisheye backdrop procedural pixels are styled premultiplied glass",
@@ -204,6 +218,37 @@ TEST_CASE("fisheye backdrop reuses one compositor layer across show and hide",
     REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
+TEST_CASE("fisheye backdrop rect uses compositor host-local coordinates",
+          "[ui][fisheye_backdrop][coordinates]") {
+    sao_ui_compositor_handle_t compositor = make_headless_compositor();
+    sao_ui_fisheye_backdrop_handle_t backdrop = nullptr;
+    REQUIRE(sao_ui_fisheye_backdrop_create(compositor, &backdrop) == SAO_STATUS_OK);
+
+    const SaoUiFisheyeBackdropRect rect{13, 9, 32, 20};
+    REQUIRE(sao_ui_fisheye_backdrop_show(backdrop, &rect, 90) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_tick(backdrop) == SAO_STATUS_OK);
+
+    SaoUiFisheyeBackdropState state{};
+    REQUIRE(sao_ui_fisheye_backdrop_get_state(backdrop, &state) == SAO_STATUS_OK);
+    CHECK(state.geometry.rect.x == rect.x);
+    CHECK(state.geometry.rect.y == rect.y);
+
+    uint32_t width = 0;
+    uint32_t height = 0;
+    const std::vector<uint8_t> frame = snapshot_compositor(compositor, &width, &height);
+    REQUIRE(width == static_cast<uint32_t>(rect.x + rect.width));
+    REQUIRE(height == static_cast<uint32_t>(rect.y + rect.height));
+    REQUIRE(frame.size() == static_cast<size_t>(width) * height * kBytesPerPixel);
+    const size_t outside_offset = 3U;
+    const size_t local_origin_offset =
+        (static_cast<size_t>(rect.y) * width + static_cast<size_t>(rect.x)) * kBytesPerPixel;
+    CHECK(frame[outside_offset] == 0U);
+    CHECK(frame[local_origin_offset + 3U] > 0U);
+
+    REQUIRE(sao_ui_fisheye_backdrop_try_destroy(backdrop) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
 TEST_CASE("fisheye backdrop live mode preserves procedural fallback",
           "[ui][fisheye_backdrop][live][fallback]") {
     sao_ui_compositor_handle_t compositor = make_headless_compositor();
@@ -245,6 +290,77 @@ TEST_CASE("fisheye backdrop live mode preserves procedural fallback",
     CHECK(std::any_of(frame.begin(), frame.end(), [](uint8_t value) { return value != 0U; }));
 
     REQUIRE(sao_ui_fisheye_backdrop_try_destroy(backdrop) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("fisheye backdrop live worker releases on hide and procedural mode",
+          "[ui][fisheye_backdrop][live][lifecycle]") {
+    sao_ui_compositor_handle_t compositor = make_headless_compositor();
+    const size_t baseline = layer_count(compositor);
+    sao_ui_fisheye_backdrop_handle_t backdrop = nullptr;
+    REQUIRE(sao_ui_fisheye_backdrop_create(compositor, &backdrop) == SAO_STATUS_OK);
+
+    const SaoUiFisheyeBackdropRect rect{0, 0, 64, 40};
+    REQUIRE(sao_ui_fisheye_backdrop_show(backdrop, &rect, 180) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_set_mode(backdrop, SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_tick(backdrop) == SAO_STATUS_OK);
+    SaoUiFisheyeBackdropState state = wait_for_worker_state(backdrop, true);
+    CHECK(state.mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE);
+    CHECK(state.visible);
+    CHECK_FALSE((state.live_resources_active && !state.live_worker_running));
+    CHECK(layer_count(compositor) == baseline + 1U);
+
+    sao_status_t off_owner_tick = SAO_STATUS_OK;
+    std::thread off_owner([&] { off_owner_tick = sao_ui_fisheye_backdrop_tick(backdrop); });
+    off_owner.join();
+    CHECK(off_owner_tick == SAO_STATUS_ERR_ACCESS_DENIED);
+    state = wait_for_worker_state(backdrop, true);
+
+    sao_status_t off_owner_destroy = SAO_STATUS_OK;
+    std::thread off_owner_teardown(
+        [&] { off_owner_destroy = sao_ui_fisheye_backdrop_try_destroy(backdrop); });
+    off_owner_teardown.join();
+    CHECK(off_owner_destroy == SAO_STATUS_ERR_ACCESS_DENIED);
+    state = wait_for_worker_state(backdrop, true);
+
+    REQUIRE(sao_ui_fisheye_backdrop_hide(backdrop) == SAO_STATUS_OK);
+    state = wait_for_worker_state(backdrop, false);
+    CHECK_FALSE(state.visible);
+    CHECK_FALSE(state.live_resources_active);
+    REQUIRE(sao_ui_fisheye_backdrop_tick(backdrop) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_get_state(backdrop, &state) == SAO_STATUS_OK);
+    CHECK_FALSE(state.live_worker_running);
+    CHECK_FALSE(state.live_resources_active);
+    CHECK(state.layer_present);
+    CHECK(layer_count(compositor) == baseline + 1U);
+
+    REQUIRE(sao_ui_fisheye_backdrop_show(backdrop, &rect, 180) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_tick(backdrop) == SAO_STATUS_OK);
+    state = wait_for_worker_state(backdrop, true);
+    CHECK(state.visible);
+    CHECK(state.mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE);
+
+    REQUIRE(sao_ui_fisheye_backdrop_set_mode(backdrop, SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL) ==
+            SAO_STATUS_OK);
+    state = wait_for_worker_state(backdrop, false);
+    CHECK(state.mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL);
+    CHECK_FALSE(state.live_resources_active);
+    REQUIRE(sao_ui_fisheye_backdrop_tick(backdrop) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_fisheye_backdrop_get_state(backdrop, &state) == SAO_STATUS_OK);
+    CHECK(state.visible);
+    CHECK(state.mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL);
+    CHECK_FALSE(state.live_worker_running);
+    CHECK_FALSE(state.live_resources_active);
+    CHECK(state.last_status == SAO_STATUS_OK);
+    CHECK(state.layer_present);
+    CHECK(layer_count(compositor) == baseline + 1U);
+
+    const std::vector<uint8_t> frame = snapshot_compositor(compositor);
+    CHECK(has_visible_variation(frame));
+
+    REQUIRE(sao_ui_fisheye_backdrop_try_destroy(backdrop) == SAO_STATUS_OK);
+    CHECK(layer_count(compositor) == baseline);
     REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
