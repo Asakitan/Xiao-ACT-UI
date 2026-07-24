@@ -77,6 +77,13 @@ struct EntityBuiltinAuthorityState {
     // sync_entity_publication_authority so both catalogs agree on
     // dispatchability without adding a second registry.
     bool about = false;
+    // Mirror of entity_builtin_action::Authority::runtime_installer. When
+    // false the Panel exposes plugin runtimes as unavailable and hides the
+    // reload/plugin-manager entries so users cannot try to activate hosts
+    // whose runtime binaries never arrived. Kept in sync by
+    // sync_entity_publication_authority so both catalogs agree without a
+    // second registry.
+    bool runtime_installer = true;
     PythonRuntimePublicationStatus python_runtime = PythonRuntimePublicationStatus::not_applicable;
     PluginRuntimePublicationStatus plugin_runtime = PluginRuntimePublicationStatus::not_applicable;
     ControlPublicationStatus controls = ControlPublicationStatus::ready;

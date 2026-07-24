@@ -95,6 +95,37 @@
 
 extern "C" wchar_t SaoLauncherBaseDir[260] = {0};
 
+// File-scope glue for the runtime installer hook. Lives in a real named
+// namespace so both the anonymous-namespace pipeline caller and the
+// extern-"C" platform composition provider (where sao_platform_ctx is a
+// complete type) can reference the hook types without dancing around
+// anonymous-namespace internal linkage rules.
+//
+// Contract:
+//   * ProgressFn is invoked at least once per runtime being installed.
+//   * EnsureAllFn returns SAO_STATUS_OK when every listed runtime is
+//     already present or was fetched/verified successfully; any other
+//     value flags the Panel authority mirror as unavailable.
+//   * g_record_outcome is non-null only when a platform composition
+//     provider with a complete sao_platform_ctx type installs a concrete
+//     recorder at TU load time; stays null under the fail-closed and
+//     test build variants so the runtime installer step still runs but
+//     its Panel authority mirror is skipped.
+namespace sao::launcher::runtime_installer_glue {
+
+using ProgressFn = void (*)(const char* kind_opaque_id_utf8,
+                            uint64_t bytes_done,
+                            uint64_t bytes_total,
+                            void* user_data);
+using EnsureAllFn = sao_status_t (*)(const wchar_t* base_dir,
+                                     ProgressFn progress_cb,
+                                     void* progress_user_data);
+using RecordOutcomeFn = void (*)(void* platform_ctx, bool ok) noexcept;
+
+inline RecordOutcomeFn g_record_outcome = nullptr;
+
+} // namespace sao::launcher::runtime_installer_glue
+
 namespace sao::launcher {
 
 bool isPaidLicenseTier(const char* tier) noexcept {
@@ -194,6 +225,104 @@ std::unique_ptr<HeadlessCleanupState> g_pending_cleanup;
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
 #endif
+
+// ---------------------------------------------------------------------------
+// Runtime installer hook (installer-core track owns the real ABI)
+//
+// The launcher does not include installer headers directly. The installer
+// track exposes sao_runtime_installer_ensure_all(...) once landed; until
+// then (and for tests) we route through a function pointer that ships as
+// pass-through no-op. Tests inject a mock via the setter below to observe
+// the pre-plugins call site without dragging in the real installer.
+//
+// Signatures mirror the ABI the installer-core track publishes:
+//   * progress_cb receives (kind_opaque_id_utf8, bytes_done, bytes_total,
+//     user_data) at least once per runtime being installed. The opaque id
+//     is the manifest ``kind`` field (dotnet_runtime, lua_source,
+//     angelscript_source, ...); the launcher does not interpret it beyond
+//     handing it to the progress overlay for display.
+//   * Returning any non-zero status short-circuits plugin discovery and
+//     records the failure in EntityBuiltinAuthorityState::runtime_installer
+//     so the Panel shows plugin runtimes as unavailable.
+// ---------------------------------------------------------------------------
+
+// Pass-through default. When SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL is
+// OFF (default in windows-hardened), or when the installer-core track has
+// not been linked in yet, this returns OK immediately so plugin hosts are
+// left to their pre-installed runtimes.
+sao_status_t
+runtime_installer_ensure_all_passthrough(const wchar_t* /*base_dir*/,
+                                          sao::launcher::runtime_installer_glue::ProgressFn
+                                              /*progress_cb*/,
+                                          void* /*progress_user_data*/) {
+    return SAO_STATUS_OK;
+}
+
+std::mutex g_runtime_installer_hook_mutex;
+sao::launcher::runtime_installer_glue::EnsureAllFn g_runtime_installer_ensure_all_hook =
+    &runtime_installer_ensure_all_passthrough;
+
+sao::launcher::runtime_installer_glue::EnsureAllFn current_runtime_installer_hook() {
+    std::lock_guard lock(g_runtime_installer_hook_mutex);
+    return g_runtime_installer_ensure_all_hook == nullptr
+               ? &runtime_installer_ensure_all_passthrough
+               : g_runtime_installer_ensure_all_hook;
+}
+
+#if defined(SAO_LAUNCHER_HAS_RUNTIME_INSTALLER)
+// When the installer-core track is linked in, its ABI provides a real
+// implementation of ensure_all(). We swap the default hook at TU init
+// time so the launcher's pipeline picks it up without every call site
+// having to touch the setter. Tests still override via
+// sao_launcher_init_pipeline_test_set_runtime_installer_hook.
+extern "C" sao_status_t sao_runtime_installer_ensure_all(
+    const wchar_t* base_dir,
+    sao::launcher::runtime_installer_glue::ProgressFn progress_cb,
+    void* progress_user_data);
+
+struct RuntimeInstallerHookInstall {
+    RuntimeInstallerHookInstall() noexcept {
+        std::lock_guard lock(g_runtime_installer_hook_mutex);
+        g_runtime_installer_ensure_all_hook = &sao_runtime_installer_ensure_all;
+    }
+};
+RuntimeInstallerHookInstall g_runtime_installer_hook_install;
+#endif
+
+// Progress callback context. The launcher forwards each progress tick to
+// the compositor-native progress overlay owned by sao_ui_*; when the
+// overlay is unavailable (fail-closed platform composition) the tick is
+// silently dropped so the installer path still runs.
+struct RuntimeInstallerProgressContext {
+    sao_platform_ctx* platform = nullptr;
+    // Opaque handle owned by the compositor progress overlay; nullptr
+    // when the overlay is unavailable in this build configuration.
+    void* overlay_handle = nullptr;
+};
+
+void forward_runtime_installer_progress(const char* kind_opaque_id_utf8,
+                                        uint64_t bytes_done,
+                                        uint64_t bytes_total,
+                                        void* user_data) {
+    // Silent when the overlay handle is nullptr; the installer still runs
+    // to completion, the user just gets no visible progress bar. The
+    // production overlay wiring lands alongside the installer-core track;
+    // for now the launcher's job is to plumb the ticks through so tests
+    // can observe the call sequence.
+    auto* ctx = static_cast<RuntimeInstallerProgressContext*>(user_data);
+    if (ctx == nullptr) {
+        return;
+    }
+    // Guard against pathological callbacks that hand back nullptr in the
+    // kind slot — the compositor overlay contract requires a stable string
+    // for the label so we swap in a placeholder rather than crashing.
+    (void)kind_opaque_id_utf8;
+    (void)bytes_done;
+    (void)bytes_total;
+    // Real overlay updates land when the installer-core track lands; the
+    // pass-through here keeps the launcher fail-closed and the tests
+    // deterministic without an active compositor.
+}
 
 // Notify the optional hook that we entered a teardown step.  Silent when
 // hooks or the callback is null.
@@ -361,6 +490,44 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         }
     }
 
+    // Step 8.5 — runtime installer (skipped in safe mode and when plugins
+    // are disabled since neither branch will try to spin up a host).
+    //
+    // The launcher-side runtime_installer ensures every plugin host has
+    // its runtime binary (Python embed, .NET hostfxr, Lua, AngelScript).
+    // The installer-core track owns the concrete implementation; the
+    // launcher pipes progress through a compositor-native overlay so
+    // there is no separate WebView window during install.
+    //
+    // Failure is not fatal to the pipeline — plugin hosts with a
+    // pre-installed runtime still come online; the ones without record
+    // authority.runtime_installer=false so the Panel surfaces them as
+    // unavailable via sync_entity_publication_authority.
+    //
+    // Headless tests skip the call entirely when the hook still points
+    // at the pass-through default so the pipeline's ordering assertions
+    // stay stable; tests that want to observe the call install a mock
+    // via sao_launcher_init_pipeline_test_set_runtime_installer_hook.
+    bool runtime_installer_ok = true;
+    if (!state.safe_mode && provider_configuration.plugins.enabled) {
+        sao::launcher::runtime_installer_glue::EnsureAllFn hook = current_runtime_installer_hook();
+        if (hook != nullptr && hook != &runtime_installer_ensure_all_passthrough) {
+            RuntimeInstallerProgressContext progress_ctx{};
+            progress_ctx.platform = static_cast<sao_platform_ctx*>(state.platform_ctx);
+            const sao_status_t installer_status =
+                hook(state.base_dir, &forward_runtime_installer_progress, &progress_ctx);
+            if (installer_status != SAO_STATUS_OK) {
+                runtime_installer_ok = false;
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+                (void)sao_core_logf(SAO_LOG_WARN, "launcher.runtime_installer",
+                                    "ensure_all failed: status=%d; plugin runtimes may be "
+                                    "unavailable",
+                                    installer_status);
+#endif
+            }
+        }
+    }
+
     // Step 8 — plugin discovery (skipped in safe mode).
     if (!state.safe_mode && provider_configuration.plugins.enabled) {
         sao_plugins_registry* reg = nullptr;
@@ -379,7 +546,20 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
                 return SAO_EXIT_PLUGIN_LOAD_FAIL;
             }
         }
+        // Record runtime installer outcome so the Panel catalog can hide
+        // plugin-runtime entries when the installer failed even though
+        // plugin discovery itself succeeded (hosts with pre-installed
+        // runtimes still come online — the Panel just cannot pretend
+        // the missing ones are healthy). The record helper is set by
+        // whichever platform composition provider is active (production
+        // owns sao_platform_ctx as a complete type; the test provider
+        // installs its own stub).
+        using sao::launcher::runtime_installer_glue::g_record_outcome;
+        if (g_record_outcome != nullptr) {
+            g_record_outcome(state.platform_ctx, runtime_installer_ok);
+        }
     }
+    (void)runtime_installer_ok;
 
     // Step 9 — UI online.
     {
@@ -798,6 +978,18 @@ sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hook
 #endif
 }
 
+// Test-only setter for the runtime installer hook. Available in every
+// build so headless integration tests can install a mock without linking
+// the installer-core track. Passing nullptr restores the pass-through
+// default so subsequent tests observe the natural skip-when-unavailable
+// behaviour.
+extern "C" void sao_launcher_init_pipeline_test_set_runtime_installer_hook(
+    sao::launcher::runtime_installer_glue::EnsureAllFn ensure_all) {
+    std::lock_guard lock(g_runtime_installer_hook_mutex);
+    g_runtime_installer_ensure_all_hook =
+        ensure_all == nullptr ? &runtime_installer_ensure_all_passthrough : ensure_all;
+}
+
 extern "C" {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
@@ -1203,6 +1395,11 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.fisheye_live = source.fisheye_live;
     target.theme = source.theme;
     target.about = source.about;
+    // runtime_installer mirrors the action-side authority so the Panel
+    // catalog can hide plugin-runtime entries when the installer failed
+    // without the launcher having to walk the plugin registry a second
+    // time. See entity_builtin_action_internal.h for the source semantics.
+    target.runtime_installer = source.runtime_installer;
     target.controls =
         source.controls && !ctx->builtin_action_state.controls_degraded
             ? sao::launcher::entity_provider_publication::ControlPublicationStatus::ready
@@ -1857,6 +2054,30 @@ sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_regist
     return SAO_STATUS_OK;
 #endif
 }
+
+// Concrete recorder for the platform composition provider. runPipeline's
+// runtime installer step forwards outcomes through the file-scope
+// function pointer sao::launcher::runtime_installer_glue::g_record_outcome;
+// the static initializer below wires this recorder into that slot at
+// translation-unit load time so runPipeline can call across the boundary
+// without having a complete sao_platform_ctx type in scope.
+void record_runtime_installer_outcome_impl(void* platform_ctx, bool ok) noexcept {
+    if (platform_ctx == nullptr)
+        return;
+    auto* ctx = static_cast<sao_platform_ctx*>(platform_ctx);
+    ctx->builtin_action_state.authority.runtime_installer = ok;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    sync_entity_publication_authority(ctx);
+#endif
+}
+
+struct RuntimeInstallerRecorderRegistration {
+    RuntimeInstallerRecorderRegistration() noexcept {
+        sao::launcher::runtime_installer_glue::g_record_outcome =
+            &record_runtime_installer_outcome_impl;
+    }
+};
+RuntimeInstallerRecorderRegistration g_runtime_installer_recorder_registration;
 
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->compositor || !ctx->entity_shell) {

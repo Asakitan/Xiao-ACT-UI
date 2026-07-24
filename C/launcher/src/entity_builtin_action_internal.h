@@ -43,6 +43,15 @@ struct Authority {
     bool fisheye_live = false;
     bool theme = false;
     bool about = false;
+    // Tracks whether the launcher-side runtime installer completed successfully
+    // for every plugin runtime the manifest enumerated. When set to false the
+    // Panel surfaces plugin runtimes as unavailable so users understand why a
+    // Python/Lua/AngelScript/C# plugin refused to load. Set to true both when
+    // every runtime installed cleanly and when the SAO_PLUGINS_ENABLE_RUNTIME_
+    // AUTOINSTALL toggle is OFF (repro/hardened builds) — in that case plugin
+    // hosts still rely on their pre-installed runtimes and the Panel does not
+    // pretend the installer failed.
+    bool runtime_installer = true;
 };
 
 struct State {

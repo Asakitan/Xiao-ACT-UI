@@ -309,6 +309,34 @@ target_link_libraries(SaoAuto PRIVATE
     crypt32        # current-user DPAPI for secure settings envelopes
 )
 
+# Runtime installer wiring.  SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL flips
+# the launcher-side ensure_all() call site.  Windows-tests configures
+# with the flag ON so the pipeline can exercise the fetch path in CI;
+# windows-hardened defaults OFF for reproducibility (no network fetch
+# during a hardened build's smoke run).  Callers may override at
+# configure time via -DSAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL=ON/OFF.
+if (NOT DEFINED SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
+    if (SAO_HARDENED_BUILD)
+        set(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL OFF
+            CACHE BOOL
+            "Enable the launcher-side plugin runtime auto-installer")
+    else()
+        set(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL ON
+            CACHE BOOL
+            "Enable the launcher-side plugin runtime auto-installer")
+    endif()
+endif()
+mark_as_advanced(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
+
+if (SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL AND TARGET sao_runtime_installer)
+    target_link_libraries(SaoAuto PRIVATE sao_runtime_installer)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_HAS_RUNTIME_INSTALLER=1)
+else()
+    message(STATUS
+        "launcher: runtime installer disabled or unavailable; pass-through hook stays active")
+endif()
+
 # rollout slice — rollout_manager depends on freetier telemetry_client
 # for its record_success / record_failure telemetry publishes.  When the
 # server subsystem is disabled rollout_manager compiles a no-op emit path.
