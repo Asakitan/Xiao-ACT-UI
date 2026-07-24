@@ -24,6 +24,7 @@
     { "name": "directx-headers","version>=": "1.611.0" },
     { "name": "lua",            "version>=": "5.4.6" },
     { "name": "angelscript",    "version>=": "2.36.1" },
+    { "name": "python3",        "version>=": "3.11.8" },
     { "name": "imgui",          "version>=": "1.90.0" },
     { "name": "blake3",         "version>=": "1.5.0" },
     { "name": "re2",            "version>=": "20240102" },
@@ -45,7 +46,14 @@
       "description": "Include heavyweight dependencies used only by the CLI tools.",
       "dependencies": [
         "libzip",
-        "cli11"
+        "cli11",
+        "python3"
+      ]
+    },
+    "with-python3": {
+      "description": "Resolve the Python 3.11 embedded runtime via vcpkg (alternative to FetchContent).",
+      "dependencies": [
+        "python3"
       ]
     }
   },

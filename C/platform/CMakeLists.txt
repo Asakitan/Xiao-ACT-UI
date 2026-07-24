@@ -43,6 +43,10 @@ add_subdirectory(rt_io)
 add_subdirectory(ui)
 add_subdirectory(sdk)
 add_subdirectory(scripting)
+# runtime_installer -- fail-closed downloader for missing plugin-host
+# language runtimes (CPython embed, .NET 8, Lua 5.4, AngelScript).
+# Always ON; the module has no external vcpkg dependency of its own.
+add_subdirectory(runtime_installer)
 
 # gpu_hunt: local-only sources live outside the tracked tree (see the top-
 # level .gitignore rules for **/gpu_hunt/ and **/gpu_hunt_*.cpp).  A clean
@@ -71,5 +75,6 @@ target_link_libraries(sao_platform INTERFACE
     sao::ui
     sao::sdk
     sao::scripting
+    sao::runtime_installer
     sao::gpu_hunt)
 target_compile_features(sao_platform INTERFACE cxx_std_20)

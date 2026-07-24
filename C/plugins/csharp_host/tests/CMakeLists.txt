@@ -1,3 +1,34 @@
+# Shared helper that stamps DOTNET_ROOT / PATH / SAO_CSHARP_HOSTFXR_DIR on
+# every test so a build-tree-fetched runtime is discoverable without needing
+# a system-wide .NET install.  The values are propagated verbatim from the
+# csharp_host CMakeLists resolution result and default to empty strings when
+# no runtime was resolved (in which case the tests fall back to their
+# existing PATH-based LoadLibrary("hostfxr") probe).
+set(_sao_csharp_test_env "")
+if (SAO_CSHARP_DOTNET_ROOT)
+    list(APPEND _sao_csharp_test_env
+        "DOTNET_ROOT=${SAO_CSHARP_DOTNET_ROOT}")
+endif()
+if (SAO_CSHARP_HOSTFXR_DIR)
+    list(APPEND _sao_csharp_test_env
+        "SAO_CSHARP_HOSTFXR_DIR=${SAO_CSHARP_HOSTFXR_DIR}")
+    if (WIN32)
+        # ctest merges list items with ';' which is also the PATH separator
+        # on Windows, so we splice the fetched host directory onto whatever
+        # PATH the ctest harness inherits.  The extra literal ';' delimiter
+        # is required because CMake would otherwise merge the two segments.
+        list(APPEND _sao_csharp_test_env
+            "PATH=${SAO_CSHARP_HOSTFXR_DIR};$ENV{PATH}")
+    endif()
+endif()
+
+function(_sao_csharp_apply_test_env test_name)
+    if (_sao_csharp_test_env)
+        set_property(TEST ${test_name} APPEND PROPERTY
+            ENVIRONMENT "${_sao_csharp_test_env}")
+    endif()
+endfunction()
+
 add_executable(test_plugins_csharp_host test_cs.cpp)
 target_link_libraries(test_plugins_csharp_host PRIVATE sao_plugins_csharp_host)
 target_compile_features(test_plugins_csharp_host PRIVATE cxx_std_17)
@@ -5,6 +36,7 @@ target_compile_features(test_plugins_csharp_host PRIVATE cxx_std_17)
 target_compile_definitions(test_plugins_csharp_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
 add_test(NAME plugins_csharp_host_smoke COMMAND test_plugins_csharp_host)
 set_tests_properties(plugins_csharp_host_smoke PROPERTIES LABELS "plugins;csharp")
+_sao_csharp_apply_test_env(plugins_csharp_host_smoke)
 
 # hostfxr 可用性与保留编译接口单测
 add_executable(test_plugins_csharp_host_cs_host test_cs_host.cpp)
@@ -14,6 +46,7 @@ target_compile_definitions(test_plugins_csharp_host_cs_host PRIVATE SAO_PLUGINS_
 add_test(NAME plugins_csharp_host_cs_host
          COMMAND test_plugins_csharp_host_cs_host)
 set_tests_properties(plugins_csharp_host_cs_host PROPERTIES LABELS "plugins;csharp")
+_sao_csharp_apply_test_env(plugins_csharp_host_cs_host)
 
 # hello_csharp 真加载 + OnLoad/OnTick/OnUnload
 find_package(Catch2 3 QUIET CONFIG)
@@ -34,6 +67,7 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
              COMMAND test_plugins_csharp_host_contracts)
     set_tests_properties(plugins_csharp_host_contracts PROPERTIES
         LABELS "plugins;csharp;contract;no_runtime")
+    _sao_csharp_apply_test_env(plugins_csharp_host_contracts)
 
     add_executable(test_plugins_csharp_sdk_bridge test_cs_sdk_bridge.cpp)
     target_link_libraries(test_plugins_csharp_sdk_bridge PRIVATE
@@ -50,6 +84,7 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     add_test(NAME plugins_csharp_sdk_bridge COMMAND test_plugins_csharp_sdk_bridge)
     set_tests_properties(plugins_csharp_sdk_bridge PROPERTIES
         LABELS "plugins;csharp;bridge;no_runtime")
+    _sao_csharp_apply_test_env(plugins_csharp_sdk_bridge)
 
     add_executable(test_plugins_csharp_host_hello test_hello_csharp.cpp)
     target_link_libraries(test_plugins_csharp_host_hello PRIVATE
@@ -66,6 +101,7 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     add_test(NAME plugins_csharp_host_hello COMMAND test_plugins_csharp_host_hello)
     set_tests_properties(plugins_csharp_host_hello
         PROPERTIES LABELS "plugins;csharp;lifecycle;requires_dotnet_sdk")
+    _sao_csharp_apply_test_env(plugins_csharp_host_hello)
 
     # cs_sandbox 真实装 (ALC policy 记账 + hostfxr 降级).
     # 无 .NET SDK 也能跑 (mock hostfxr 探测).
@@ -83,6 +119,7 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
              COMMAND test_plugins_csharp_host_sandbox)
     set_tests_properties(plugins_csharp_host_sandbox
         PROPERTIES LABELS "plugins;csharp;sandbox")
+    _sao_csharp_apply_test_env(plugins_csharp_host_sandbox)
 
     add_executable(test_plugins_csharp_loader_adapter
         test_cs_loader_adapter.cpp)
@@ -154,6 +191,7 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_csharp_loader_adapter PROPERTIES
         LABELS "plugins;csharp;generic;requires_dotnet_fixture"
         RESOURCE_LOCK "sao_launcher_process_resources")
+    _sao_csharp_apply_test_env(plugins_csharp_loader_adapter)
 
     add_test(NAME plugins_csharp_managed_entity_v2
              COMMAND test_plugins_csharp_loader_adapter
@@ -161,4 +199,5 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_csharp_managed_entity_v2 PROPERTIES
         LABELS "plugins;csharp;generic;entity;v2;focused;requires_dotnet_fixture"
         RESOURCE_LOCK "sao_launcher_process_resources")
+    _sao_csharp_apply_test_env(plugins_csharp_managed_entity_v2)
 endif()

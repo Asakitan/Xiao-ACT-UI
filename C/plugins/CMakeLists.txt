@@ -27,6 +27,12 @@ option(SAO_PLUGINS_LEGACY_FACADE_ONLY
     "只构建 legacy facade、loader 及其本地测试"
     OFF)
 
+# ── 共享 runtime manifest (无构建产物, 仅注册 cache 变量 + install 规则) ─
+# Must precede per-host subdirectories so their FetchContent gates can read
+# SAO_PLUGINS_RUNTIME_CACHE_DIR / SAO_PLUGINS_RUNTIME_MANIFEST if they choose
+# to.
+add_subdirectory(runtimes)
+
 # ── v2 分层模块 ────────────────────────────────────────────────────────
 add_subdirectory(loader)
 set(SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_loader)

@@ -107,16 +107,23 @@ option(SAO_HARDENED_BUILD   "Hardened release: LTO/CFG/CET/ASLR/DEP"            
 # Global compile posture
 # ---------------------------------------------------------------------------
 if (MSVC)
-    add_compile_options(
-        /W4                 # warning level 4
-        /permissive-        # strict conformance
-        /utf-8              # source + exec charset = UTF-8
-        /MP                 # parallel compilation
-        /GR-                # disable RTTI globally (subsystems that need it opt in)
-        /guard:cf           # control-flow guard
-        /Zc:__cplusplus     # correct __cplusplus macro
-        /Zc:preprocessor    # standards-conforming preprocessor
-    )
+    # Language-scoped so MASM (as_callfunc_x64_msvc_asm.asm in the
+    # FetchContent-provided AngelScript runtime) does not receive C/C++
+    # compiler switches that ml64 rejects (/permissive-, /utf-8, /MP,
+    # /GR-, /guard:cf, /Zc:*).  Every C or C++ TU still sees the full
+    # posture; MASM sees only the /nologo /Fo… flags MSBuild injects.
+    foreach (_sao_msvc_lang IN ITEMS C CXX)
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/W4>"                 # warning level 4
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/permissive->"        # strict conformance
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/utf-8>"              # source + exec charset = UTF-8
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/MP>"                 # parallel compilation
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/GR->"                # disable RTTI globally (opt-in per target)
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/guard:cf>"           # control-flow guard
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/Zc:__cplusplus>"     # correct __cplusplus macro
+            "$<$<COMPILE_LANGUAGE:${_sao_msvc_lang}>:/Zc:preprocessor>"    # standards-conforming preprocessor
+        )
+    endforeach()
     add_compile_definitions(
         UNICODE
         _UNICODE
@@ -169,8 +176,9 @@ if (MSVC)
     endif()
 
     # /std:c++20 already set by CMAKE_CXX_STANDARD, but reinforce here so
-    # CMake generators (Ninja, VS2022) both honour it.
-    add_compile_options(/std:c++20)
+    # CMake generators (Ninja, VS2022) both honour it.  Language-scoped so
+    # ml64/MASM does not choke on it — see the compile-options block above.
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/std:c++20>")
 endif()
 
 # ---------------------------------------------------------------------------

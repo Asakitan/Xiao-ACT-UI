@@ -1,29 +1,31 @@
 # -*- coding: utf-8 -*-
-# SAO Auto - 远程更新服务 (独立 FastAPI)
+# update_host — 与 C++ 客户端 (sao_updater + sao_workshop_client) 对齐的 HTTP 服务
 #
-# 部署:
-# uvicorn sao_auto.update_host.app:app --host 0.0.0.0 --port 9973
+# ── Update wire (对齐 sao_auto/C/server/freetier/updater/updater.h) ──
+#   GET  /update/{channel}/{target}/latest.json
+#           → { "version", "url", "sha256", "size", "notes" }
+#   GET  /update/{channel}/{target}/artifacts/{filename}
+#           → binary
+#   POST /update/{channel}/{target}/publish?version=&notes=&force_update=&minimum_version=
+#           header: X-API-Key: <publish_api_key>
+#           body:   application/octet-stream = 更新包 zip
+#           → 保存到 artifacts/, 计算 sha256, 更新 latest.json
 #
-# 配置 (环境变量或 update_host_config.json):
-# UPDATE_HOST_RELEASE_DIR  : 发布包根目录, 内含 channel/<channel>/manifest.json + 包文件
-# UPDATE_HOST_DOWNLOADS    : 下载根目录 (默认同 RELEASE_DIR)
+# ── Workshop wire (对齐 sao_auto/C/server/freetier/workshop_client/workshop_client.h) ──
+#   GET  /api/v1/workshop/plugins?page=N&size=M&tag=T
+#           → { "items": [...summary], "total": N }
+#   GET  /api/v1/workshop/plugins/{id}
+#           → { ...summary, description, sha256, signature_alg, size_bytes, min_major/minor/patch }
+#   GET  /api/v1/workshop/plugins/{id}/download
+#           → binary (.sao-plugin zip)
+#   POST /api/v1/workshop/plugins/{id}/publish?version=&name=&tag=&author=&signature_alg=&min_major=&min_minor=&min_patch=
+#           header: X-API-Key + 可选 X-SaoAuto-Description
+#           body:   application/octet-stream = .sao-plugin zip
 #
-# manifest 文件: <RELEASE_DIR>/<channel>/<target>/manifest.json
-# {
-# "version": "2.1.0",
-# "minimum_version": "2.0.1",
-# "force_update": false,
-# "package_type": "runtime-delta",
-# "target": "windows-x64",
-# "channel": "stable",
-# "download_url": "/downloads/stable/windows-x64/update-2.1.0.zip",
-# "sha256": "...",
-# "size": 12345,
-# "notes": "...",
-# "published_at": "2026-04-19T12:00:00Z"
-# }
-#
-# 发布脚本: 见 publish_release.py
+# 端口 15018 对外不变（uvicorn 绑 9973 时依赖反代）。存储 layout:
+#   releases/update/{channel}/{target}/latest.json + artifacts/*.zip
+#   releases/workshop/{plugin_id}/meta.json + versions/*.sao-plugin
+#   releases/workshop/_catalog.json （全 plugin 列表缓存）
 
 from __future__ import annotations
 
@@ -31,33 +33,36 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
-import tempfile
 import time
-import zipfile
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import FileResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
-except Exception as e:  # pragma: no cover
-    raise SystemExit(f"FastAPI 未安装: pip install fastapi uvicorn  ({e})")
+from fastapi import FastAPI, HTTPException, Header, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 
+
+# ── 路径 ────────────────────────────────────────────────────────────────
 
 if getattr(sys, "frozen", False):
     HERE = os.path.dirname(sys.executable)
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
 
-DEFAULT_RELEASE_DIR = os.environ.get(
-    "UPDATE_HOST_RELEASE_DIR", os.path.join(HERE, "releases")
-)
-DOWNLOADS_DIR = os.environ.get("UPDATE_HOST_DOWNLOADS", DEFAULT_RELEASE_DIR)
+RELEASE_DIR = os.environ.get("UPDATE_HOST_RELEASE_DIR", os.path.join(HERE, "releases"))
 HOST_CONFIG_PATH = os.path.join(HERE, "update_host_config.json")
 
+UPDATE_ROOT = os.path.join(RELEASE_DIR, "update")
+WORKSHOP_ROOT = os.path.join(RELEASE_DIR, "workshop")
+WORKSHOP_CATALOG_PATH = os.path.join(WORKSHOP_ROOT, "_catalog.json")
+
+os.makedirs(UPDATE_ROOT, exist_ok=True)
+os.makedirs(WORKSHOP_ROOT, exist_ok=True)
+
+
+# ── config ─────────────────────────────────────────────────────────────
 
 def _load_host_config() -> dict:
     if not os.path.exists(HOST_CONFIG_PATH):
@@ -71,15 +76,18 @@ def _load_host_config() -> dict:
 
 
 def _save_host_config(data: dict) -> None:
-    os.makedirs(os.path.dirname(HOST_CONFIG_PATH), exist_ok=True)
-    with open(HOST_CONFIG_PATH, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(HOST_CONFIG_PATH) or ".", exist_ok=True)
+    tmp = HOST_CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, HOST_CONFIG_PATH)
 
 
-def _get_local_publish_api_key() -> str:
-    config = _load_host_config()
-    value = config.get("publish_api_key", "")
-    return value.strip() if isinstance(value, str) else ""
+def _get_publish_api_key() -> str:
+    env_key = os.environ.get("SAO_UPDATE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    return (_load_host_config().get("publish_api_key", "") or "").strip()
 
 
 def _bind_publish_api_key(api_key: str) -> str:
@@ -92,1077 +100,509 @@ def _bind_publish_api_key(api_key: str) -> str:
     return value
 
 
-def _safe_channel_target(channel: str, target: str) -> tuple[str, str]:
-    safe_channel = "".join(c for c in channel if c.isalnum() or c in "-_") or "stable"
-    safe_target = "".join(c for c in target if c.isalnum() or c in "-_") or "windows-x64"
-    return safe_channel, safe_target
+def _get_base_url_from_request(request: Request) -> str:
+    fwd_proto = request.headers.get("x-forwarded-proto", "")
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    scheme = fwd_proto or request.url.scheme
+    if fwd_host:
+        return f"{scheme}://{fwd_host}"
+    return f"{scheme}://{request.url.netloc}"
 
 
-def _anchor_key(channel: str, target: str) -> str:
-    safe_channel, safe_target = _safe_channel_target(channel, target)
-    return f"{safe_channel}/{safe_target}"
+# ── 校验辅助 ────────────────────────────────────────────────────────────
+
+_SEG_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
+_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,63}$")
+_VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){1,3}([A-Za-z0-9\-.+]*)?$")
 
 
-def _get_anchor(channel: str, target: str) -> dict:
-    safe_channel, safe_target = _safe_channel_target(channel, target)
-    config = _load_host_config()
-    anchors = config.get("anchors") if isinstance(config.get("anchors"), dict) else {}
-    item = anchors.get(_anchor_key(safe_channel, safe_target), {}) if isinstance(anchors, dict) else {}
-    if isinstance(item, dict) and (item.get("commit") or item.get("version")):
-        return {
-            "channel": safe_channel,
-            "target": safe_target,
-            "commit": str(item.get("commit") or ""),
-            "commit_short": str(item.get("commit_short") or ""),
-            "version": str(item.get("version") or ""),
-            "synced_at": str(item.get("synced_at") or ""),
-            "source": str(item.get("source") or "manual-sync"),
-        }
-
-    manifest = _load_manifest(safe_channel, safe_target)
-    if isinstance(manifest, dict) and (manifest.get("commit") or manifest.get("version")):
-        return {
-            "channel": safe_channel,
-            "target": safe_target,
-            "commit": str(manifest.get("commit") or ""),
-            "commit_short": str(manifest.get("commit_short") or ""),
-            "version": str(manifest.get("version") or ""),
-            "synced_at": str(manifest.get("published_at") or ""),
-            "source": "manifest",
-        }
-
-    return {
-        "channel": safe_channel,
-        "target": safe_target,
-        "commit": "",
-        "commit_short": "",
-        "version": "",
-        "synced_at": "",
-        "source": "",
-    }
+def _safe_seg(v: str) -> str:
+    if not v or not _SEG_RE.match(v) or ".." in v:
+        raise HTTPException(400, f"invalid path segment: {v!r}")
+    return v
 
 
-def _set_anchor(
-    channel: str,
-    target: str,
-    commit: str,
-    commit_short: str = "",
-    version: str = "",
-    source: str = "manual-sync",
-) -> dict:
-    safe_channel, safe_target = _safe_channel_target(channel, target)
-    commit = (commit or "").strip()
-    if not commit:
-        raise ValueError("missing commit")
-
-    config = _load_host_config()
-    anchors = config.get("anchors") if isinstance(config.get("anchors"), dict) else {}
-    payload = {
-        "commit": commit,
-        "commit_short": (commit_short or "").strip() or commit[:8],
-        "version": (version or "").strip(),
-        "synced_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": (source or "manual-sync").strip(),
-    }
-    anchors[_anchor_key(safe_channel, safe_target)] = payload
-    config["anchors"] = anchors
-    _save_host_config(config)
-    return {
-        "channel": safe_channel,
-        "target": safe_target,
-        **payload,
-    }
+def _safe_plugin_id(v: str) -> str:
+    if not v or not _PLUGIN_ID_RE.match(v) or ".." in v:
+        raise HTTPException(400, f"invalid plugin id: {v!r}")
+    return v
 
 
-def _normalize_url(url: str, base_url: str) -> str:
-    if not url:
-        return ""
-    if url.startswith(("http://", "https://")):
-        return url
-    if url.startswith("/"):
-        return base_url.rstrip("/") + url
-    return base_url.rstrip("/") + "/" + url
+def _safe_version(v: str) -> str:
+    if not v or not _VERSION_RE.match(v):
+        raise HTTPException(400, f"invalid version: {v!r}")
+    return v
 
 
-# ── Version comparison (mirrors sao_updater._parse_version) ──────────
-def _parse_version(v: str) -> tuple:
-    raw = (v or "").strip().lstrip("vV")
-    if not raw:
-        return (0, 0, 0, 0), ()
-
-    core_text = ""
-    suffix_text = raw
-    for idx, ch in enumerate(raw):
-        if not (ch.isdigit() or ch == "."):
-            core_text = raw[:idx]
-            suffix_text = raw[idx:].lstrip("-+_.")
-            break
-    else:
-        core_text = raw
-        suffix_text = ""
-
-    parts = []
-    for chunk in core_text.split(".") if core_text else []:
-        try:
-            parts.append(int(chunk))
-        except Exception:
-            parts.append(0)
-    while len(parts) < 4:
-        parts.append(0)
-
-    suffix_tokens = []
-    token = []
-    for ch in suffix_text:
-        if ch.isalnum():
-            token.append(ch)
-            continue
-        if token:
-            text = "".join(token)
-            if text.isdigit():
-                suffix_tokens.append((1, int(text)))
-            else:
-                suffix_tokens.append((0, text.lower()))
-            token = []
-    if token:
-        text = "".join(token)
-        if text.isdigit():
-            suffix_tokens.append((1, int(text)))
-        else:
-            suffix_tokens.append((0, text.lower()))
-
-    return tuple(parts[:4]), tuple(suffix_tokens)
+def _require_api_key(x_api_key: Optional[str], request: Request):
+    expected = _get_publish_api_key()
+    if not expected:
+        # 首次调用时接受任何 key 并绑定（首启自 bootstrap）
+        first = (x_api_key or "").strip()
+        if not first:
+            raise HTTPException(401, "publish_api_key not set; provide X-API-Key to bind")
+        _bind_publish_api_key(first)
+        return
+    got = (x_api_key or "").strip()
+    if not got or not hmac.compare_digest(got, expected):
+        raise HTTPException(403, "invalid X-API-Key")
 
 
-def compare_versions(a: str, b: str) -> int:
-    pa, pb = _parse_version(a), _parse_version(b)
-    core_a, suffix_a = pa
-    core_b, suffix_b = pb
-    if core_a < core_b:
-        return -1
-    if core_a > core_b:
-        return 1
-
-    if not suffix_a and not suffix_b:
-        return 0
-    if suffix_a and not suffix_b:
-        return 1
-    if suffix_b and not suffix_a:
-        return -1
-
-    for token_a, token_b in zip(suffix_a, suffix_b):
-        if token_a == token_b:
-            continue
-        if token_a[0] != token_b[0]:
-            return -1 if token_a[0] < token_b[0] else 1
-        if token_a[1] < token_b[1]:
-            return -1
-        if token_a[1] > token_b[1]:
-            return 1
-
-    if len(suffix_a) < len(suffix_b):
-        return -1
-    if len(suffix_a) > len(suffix_b):
-        return 1
-    return 0
-
-
-# ── Manifest / version-chain helpers ─────────────────────────────────
-def _load_manifest(channel: str, target: str) -> Optional[dict]:
-    safe_channel, safe_target = _safe_channel_target(channel, target)
-    path = os.path.join(DEFAULT_RELEASE_DIR, safe_channel, safe_target, "manifest.json")
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _load_versioned_manifest(channel: str, target: str, version: str) -> Optional[dict]:
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    safe_ver = "".join(c for c in version if c.isalnum() or c in ".-")
-    path = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg, f"manifest-{safe_ver}.json")
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _load_versions_index(channel: str, target: str) -> list:
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    target_dir = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
-    versions: set[str] = set()
-
-    path = os.path.join(target_dir, "versions.json")
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                versions.update(v for v in data if isinstance(v, str) and v.strip())
-        except Exception:
-            pass
-
-    # Self-heal: discover versions from per-version manifest files so that
-    # manually-placed or out-of-band published versions are never invisible.
-    _PREFIX = "manifest-"
-    _SUFFIX = ".json"
-    if os.path.isdir(target_dir):
-        try:
-            for entry in os.listdir(target_dir):
-                if entry.startswith(_PREFIX) and entry.endswith(_SUFFIX):
-                    ver = entry[len(_PREFIX):-len(_SUFFIX)]
-                    if ver:
-                        versions.add(ver)
-        except Exception:
-            pass
-
-    return sorted(versions, key=lambda v: _parse_version(v))
-
-
-def _save_versions_index(channel: str, target: str, versions: list):
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    d = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "versions.json")
-    sorted_versions = sorted(set(versions), key=lambda v: _parse_version(v))
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(sorted_versions, f, ensure_ascii=False, indent=2)
-
-
-def _find_next_version(versions: list, current: str) -> str:
-    # Return the first version in the sorted list that is > current.
-    for v in versions:
-        if compare_versions(v, current) > 0:
-            return v
-    return ""
-
-
-def _safe_version_tag(version: str) -> str:
-    return "".join(c for c in (version or "") if c.isalnum() or c in ".-") or "0.0.0"
-
-
-def _release_target_dir(channel: str, target: str) -> str:
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    return os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
-
-
-def _manifest_zip_path(channel: str, target: str, manifest: dict) -> str:
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    target_dir = _release_target_dir(safe_ch, safe_tg)
-    download_url = str(manifest.get("download_url") or "").strip()
-    prefix = f"/downloads/{safe_ch}/{safe_tg}/"
-    if download_url.startswith(prefix):
-        rel = download_url[len(prefix):].lstrip("/")
-        rel = rel.replace("/", os.sep)
-        path = os.path.normpath(os.path.join(target_dir, rel))
-        target_root = os.path.normpath(target_dir)
-        if path == target_root or path.startswith(target_root + os.sep):
-            return path
-    safe_ver = _safe_version_tag(str(manifest.get("version") or ""))
-    safe_type = str(manifest.get("package_type") or "runtime-delta")
-    return os.path.join(target_dir, f"update-{safe_ver}-{safe_type}.zip")
-
-
-def _sha256_file(path: str) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
+def _sha256_hex_of_file(path: str) -> str:
+    h = hashlib.sha256()
     with open(path, "rb") as f:
-        while True:
-            chunk = f.read(64 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def _build_cumulative_delta_manifest(
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+# ── FastAPI ────────────────────────────────────────────────────────────
+
+app = FastAPI(title="SAO Update+Workshop Host", version="3.0.0-cpp")
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "server": "sao-update-host",
+        "version": "3.0.0-cpp",
+        "time": _now_utc_iso(),
+    }
+
+
+# ══ Update Path ═════════════════════════════════════════════════════════
+
+def _update_dir(channel: str, target: str) -> str:
+    return os.path.join(UPDATE_ROOT, _safe_seg(channel), _safe_seg(target))
+
+
+def _update_latest_path(channel: str, target: str) -> str:
+    return os.path.join(_update_dir(channel, target), "latest.json")
+
+
+def _update_artifacts_dir(channel: str, target: str) -> str:
+    return os.path.join(_update_dir(channel, target), "artifacts")
+
+
+@app.get("/update/{channel}/{target}/latest.json")
+async def get_update_latest(channel: str, target: str, request: Request):
+    p = _update_latest_path(channel, target)
+    if not os.path.isfile(p):
+        # 无内容时返回 empty manifest（C++ 客户端会比较版本 → has_update=0）
+        return JSONResponse({
+            "version": "0.0.0",
+            "url": "",
+            "sha256": "",
+            "size": 0,
+            "notes": "no release published yet",
+        })
+    with open(p, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    # 若 url 是相对路径，改成绝对 URL 供 C++ updater 直接 GET
+    url = manifest.get("url", "")
+    if url and not url.startswith(("http://", "https://")):
+        base = _get_base_url_from_request(request)
+        url = base.rstrip("/") + "/" + url.lstrip("/")
+        manifest = dict(manifest, url=url)
+    # 严格 5 字段返回
+    return {
+        "version": str(manifest.get("version", "")),
+        "url": str(manifest.get("url", "")),
+        "sha256": str(manifest.get("sha256", "")),
+        "size": int(manifest.get("size", 0)),
+        "notes": str(manifest.get("notes", "")),
+    }
+
+
+@app.get("/update/{channel}/{target}/artifacts/{filename}")
+async def get_update_artifact(channel: str, target: str, filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "invalid filename")
+    p = os.path.join(_update_artifacts_dir(channel, target), filename)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "artifact not found")
+    return FileResponse(p, media_type="application/zip", filename=filename)
+
+
+@app.post("/update/{channel}/{target}/publish")
+async def publish_update(
     channel: str,
     target: str,
-    current: str,
-    latest_manifest: dict,
-) -> Optional[dict]:
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    latest_ver = str(latest_manifest.get("version") or "").strip()
-    if not current or not latest_ver:
-        return None
-
-    versions = _load_versions_index(safe_ch, safe_tg)
-    if latest_ver not in versions:
-        versions.append(latest_ver)
-        versions = sorted(set(versions), key=_parse_version)
-
-    chain_versions = [
-        v for v in versions
-        if compare_versions(v, current) > 0 and compare_versions(v, latest_ver) <= 0
-    ]
-    if len(chain_versions) <= 1:
-        return None
-
-    chain_manifests = []
-    merged_min_version = ""
-    merged_force_update = bool(latest_manifest.get("force_update"))
-    for ver in chain_versions:
-        manifest = latest_manifest if ver == latest_ver else _load_versioned_manifest(safe_ch, safe_tg, ver)
-        if not isinstance(manifest, dict):
-            return None
-        if str(manifest.get("package_type") or "") != "runtime-delta":
-            return None
-        min_ver = str(manifest.get("minimum_version") or "").strip()
-        if min_ver:
-            if compare_versions(current, min_ver) < 0:
-                return None
-            if (not merged_min_version) or compare_versions(min_ver, merged_min_version) > 0:
-                merged_min_version = min_ver
-        if bool(manifest.get("force_update")):
-            merged_force_update = True
-        zip_path = _manifest_zip_path(safe_ch, safe_tg, manifest)
-        if not os.path.isfile(zip_path):
-            return None
-        chain_manifests.append(manifest)
-
-    chain_sig = hashlib.sha256(
-        json.dumps(
-            [
-                {
-                    "version": str(item.get("version") or ""),
-                    "sha256": str(item.get("sha256") or ""),
-                    "size": int(item.get("size") or 0),
-                    "package_type": str(item.get("package_type") or ""),
-                }
-                for item in chain_manifests
-            ],
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-
-    merged_dir = os.path.join(_release_target_dir(safe_ch, safe_tg), "_merged")
-    os.makedirs(merged_dir, exist_ok=True)
-    merged_name = (
-        f"update-{_safe_version_tag(current)}-to-{_safe_version_tag(latest_ver)}"
-        f"-runtime-delta-{chain_sig}.zip"
-    )
-    merged_path = os.path.join(merged_dir, merged_name)
-
-    if not os.path.isfile(merged_path):
-        tmp_path = merged_path + ".tmp"
-        entries: dict[str, bytes] = {}
-        try:
-            for manifest in chain_manifests:
-                zip_path = _manifest_zip_path(safe_ch, safe_tg, manifest)
-                with zipfile.ZipFile(zip_path, "r") as src:
-                    for info in src.infolist():
-                        if info.is_dir():
-                            continue
-                        entries[info.filename] = src.read(info.filename)
-
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
-                for arcname in sorted(entries):
-                    dst.writestr(arcname, entries[arcname])
-            os.replace(tmp_path, merged_path)
-        except Exception as exc:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-            try:
-                print(f"[update_host] cumulative delta build failed: {exc}")
-            except Exception:
-                pass
-            return None
-
-    digest, size = _sha256_file(merged_path)
-    merged_manifest = dict(latest_manifest)
-    merged_manifest.update({
-        "version": latest_ver,
-        "minimum_version": merged_min_version,
-        "force_update": merged_force_update,
-        "package_type": "runtime-delta",
-        "target": safe_tg,
-        "channel": safe_ch,
-        "download_url": f"/downloads/{safe_ch}/{safe_tg}/_merged/{merged_name}",
-        "sha256": digest,
-        "size": size,
-        "merged_from": current,
-        "merged_versions": chain_versions,
-    })
-    return merged_manifest
-
-
-def _build_fullpack_plus_delta_manifest(
-    channel: str,
-    target: str,
-    current: str,
-    latest_manifest: dict,
-) -> Optional[dict]:
-    # 当用户版本低于最后一个 full-package 时, 把该 fullpack + 后续
-    # runtime-delta 合并成一个 zip 一次性下发, 避免客户端多轮更新.
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    latest_ver = str(latest_manifest.get("version") or "").strip()
-    if not current or not latest_ver:
-        return None
-
-    versions = _load_versions_index(safe_ch, safe_tg)
-    if latest_ver not in versions:
-        versions.append(latest_ver)
-        versions = sorted(set(versions), key=_parse_version)
-
-    chain = [
-        v for v in versions
-        if compare_versions(v, current) > 0 and compare_versions(v, latest_ver) <= 0
-    ]
-    if not chain:
-        return None
-
-    last_fullpack_ver = ""
-    last_fullpack_manifest = None
-    for ver in chain:
-        vm = (
-            latest_manifest if ver == latest_ver
-            else _load_versioned_manifest(safe_ch, safe_tg, ver)
-        )
-        if vm and str(vm.get("package_type") or "") == "full-package":
-            last_fullpack_ver = ver
-            last_fullpack_manifest = vm
-
-    if not last_fullpack_manifest:
-        return None
-
-    tail_deltas = [
-        v for v in chain
-        if compare_versions(v, last_fullpack_ver) > 0
-    ]
-
-    if not tail_deltas:
-        return last_fullpack_manifest
-
-    tail_manifests = []
-    for ver in tail_deltas:
-        vm = (
-            latest_manifest if ver == latest_ver
-            else _load_versioned_manifest(safe_ch, safe_tg, ver)
-        )
-        if not isinstance(vm, dict):
-            return last_fullpack_manifest
-        if str(vm.get("package_type") or "") != "runtime-delta":
-            return last_fullpack_manifest
-        zip_path = _manifest_zip_path(safe_ch, safe_tg, vm)
-        if not os.path.isfile(zip_path):
-            return last_fullpack_manifest
-        tail_manifests.append(vm)
-
-    fp_zip = _manifest_zip_path(safe_ch, safe_tg, last_fullpack_manifest)
-    if not os.path.isfile(fp_zip):
-        return last_fullpack_manifest
-
-    merged_force_update = bool(last_fullpack_manifest.get("force_update"))
-    merged_min_version = str(last_fullpack_manifest.get("minimum_version") or "").strip()
-    for vm in tail_manifests:
-        if bool(vm.get("force_update")):
-            merged_force_update = True
-        mv = str(vm.get("minimum_version") or "").strip()
-        if mv and ((not merged_min_version) or compare_versions(mv, merged_min_version) > 0):
-            merged_min_version = mv
-
-    all_manifests = [last_fullpack_manifest] + tail_manifests
-    chain_sig = hashlib.sha256(
-        json.dumps(
-            [
-                {
-                    "version": str(item.get("version") or ""),
-                    "sha256": str(item.get("sha256") or ""),
-                    "size": int(item.get("size") or 0),
-                    "package_type": str(item.get("package_type") or ""),
-                }
-                for item in all_manifests
-            ],
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-
-    merged_dir = os.path.join(_release_target_dir(safe_ch, safe_tg), "_merged")
-    os.makedirs(merged_dir, exist_ok=True)
-    merged_name = (
-        f"update-{_safe_version_tag(last_fullpack_ver)}-to-"
-        f"{_safe_version_tag(latest_ver)}-full-package-{chain_sig}.zip"
-    )
-    merged_path = os.path.join(merged_dir, merged_name)
-
-    if not os.path.isfile(merged_path):
-        tmp_path = merged_path + ".tmp"
-        entries: dict[str, bytes] = {}
-        try:
-            with zipfile.ZipFile(fp_zip, "r") as src:
-                for info in src.infolist():
-                    if info.is_dir():
-                        continue
-                    entries[info.filename] = src.read(info.filename)
-
-            for vm in tail_manifests:
-                zip_path = _manifest_zip_path(safe_ch, safe_tg, vm)
-                with zipfile.ZipFile(zip_path, "r") as src:
-                    for info in src.infolist():
-                        if info.is_dir():
-                            continue
-                        entries[info.filename] = src.read(info.filename)
-
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
-                for arcname in sorted(entries):
-                    dst.writestr(arcname, entries[arcname])
-            os.replace(tmp_path, merged_path)
-        except Exception as exc:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-            try:
-                print(f"[update_host] fullpack+delta build failed: {exc}")
-            except Exception:
-                pass
-            return last_fullpack_manifest
-
-    digest, size = _sha256_file(merged_path)
-    merged_manifest = dict(latest_manifest)
-    merged_manifest.update({
-        "version": latest_ver,
-        "minimum_version": merged_min_version,
-        "force_update": merged_force_update,
-        "package_type": "full-package",
-        "target": safe_tg,
-        "channel": safe_ch,
-        "download_url": f"/downloads/{safe_ch}/{safe_tg}/_merged/{merged_name}",
-        "sha256": digest,
-        "size": size,
-        "merged_from": current,
-        "merged_versions": [last_fullpack_ver] + tail_deltas,
-    })
-    return merged_manifest
-
-
-def _empty_manifest_response(channel: str, target: str, current: Optional[str] = None) -> dict:
-    safe_channel, safe_target = _safe_channel_target(channel, target)
-    return {
-        "available": False,
-        "detail": "manifest not found",
-        "version": (current or "").strip(),
-        "minimum_version": "",
-        "force_update": False,
-        "package_type": "",
-        "target": safe_target,
-        "channel": safe_channel,
-        "download_url": "",
-        "sha256": "",
-        "size": 0,
-        "notes": "",
-        "published_at": "",
-    }
-
-
-app = FastAPI(title="SAO Auto Update Host", version="1.0.0")
-
-# 始终挂载 /downloads。否则如果服务启动时 releases 目录还不存在,
-# /api/update/latest 之后即使能读到后续写入的 manifest, /downloads/*
-# 仍然因为路由未挂载而持续返回 404, 表现为“能检测到更新但点击下载失败”。
-app.mount("/downloads", StaticFiles(directory=DOWNLOADS_DIR, check_dir=False), name="downloads")
-
-
-@app.get("/api/health")
-def health():
-    return {
-        "ok": True,
-        "release_dir": DEFAULT_RELEASE_DIR,
-        "downloads_dir": DOWNLOADS_DIR,
-        "downloads_dir_exists": os.path.isdir(DOWNLOADS_DIR),
-    }
-
-
-@app.get("/api/update/latest")
-def latest(
     request: Request,
-    channel: str = "stable",
-    target: str = "windows-x64",
-    current: Optional[str] = None,
+    version: str = Query(...),
+    notes: str = Query(""),
+    force_update: bool = Query(False),
+    minimum_version: str = Query(""),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    # 按版本链顺序下发更新.
-    #
-    # 规则:
-    # 1. current 未提供 → 返回最新 manifest (向后兼容)
-    # 2. current >= latest.version → available=false (已是最新)
-    # 3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
-    # 4. 尝试累积 delta (全链 runtime-delta 时合并成一个 zip)
-    # 5. 链中存在 full-package → 合并最后一个 fullpack + 后续 delta 为一个 zip
-    # 6. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
-    # 7. 找不到 / 文件缺失 → 回退返回最新 manifest
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    latest_manifest = _load_manifest(safe_ch, safe_tg)
-    if not latest_manifest:
-        return JSONResponse(_empty_manifest_response(channel, target, current))
+    _require_api_key(x_api_key, request)
+    _safe_seg(channel)
+    _safe_seg(target)
+    _safe_version(version)
 
-    base_url = str(request.base_url).rstrip("/")
-    current_ver = (current or "").strip()
-    latest_ver = latest_manifest.get("version", "")
+    art_dir = _update_artifacts_dir(channel, target)
+    os.makedirs(art_dir, exist_ok=True)
 
-    def _finalize(m: dict) -> JSONResponse:
-        m = dict(m)
-        m.setdefault("available", True)
-        m["download_url"] = _normalize_url(m.get("download_url", ""), base_url)
-        return JSONResponse(m)
+    filename = f"update-{version}.zip"
+    dest_path = os.path.join(art_dir, filename)
 
-    # (1) No current → return latest
-    if not current_ver:
-        return _finalize(latest_manifest)
-
-    # (2) Client >= latest → up to date
-    if compare_versions(current_ver, latest_ver) >= 0:
-        resp = _empty_manifest_response(channel, target, current)
-        resp["version"] = latest_ver
-        return JSONResponse(resp)
-
-    # (3) minimum_version force jump
-    min_ver = (latest_manifest.get("minimum_version") or "").strip()
-    if min_ver and compare_versions(current_ver, min_ver) < 0:
-        return _finalize(latest_manifest)
-
-    # If every version between current -> latest is a runtime-delta and none
-    # of them requires a newer minimum_version than the client already has,
-    # collapse the whole chain into one cumulative delta zip.
-    cumulative_manifest = _build_cumulative_delta_manifest(
-        safe_ch, safe_tg, current_ver, latest_manifest,
-    )
-    if cumulative_manifest:
-        return _finalize(cumulative_manifest)
-
-    # (4) Fullpack gate: if any full-package version sits between current
-    #     and latest, merge the LAST fullpack + subsequent runtime-deltas
-    #     into one zip so the client updates in a single round.
-    fp_merged = _build_fullpack_plus_delta_manifest(
-        safe_ch, safe_tg, current_ver, latest_manifest,
-    )
-    if fp_merged:
-        return _finalize(fp_merged)
-
-    # (5) Sequential: find next version after current
-    next_ver = _find_next_version(versions, current_ver)
-    if next_ver and next_ver != latest_ver:
-        versioned = _load_versioned_manifest(safe_ch, safe_tg, next_ver)
-        if versioned:
-            return _finalize(versioned)
-
-    # (6) Fallback to latest
-    return _finalize(latest_manifest)
-
-
-@app.get("/api/update/summary")
-def summary():
-    # 列出所有 channel/target 的最新版本.
-    out = []
-    if not os.path.isdir(DEFAULT_RELEASE_DIR):
-        return {"channels": []}
-    for channel in sorted(os.listdir(DEFAULT_RELEASE_DIR)):
-        chan_dir = os.path.join(DEFAULT_RELEASE_DIR, channel)
-        if not os.path.isdir(chan_dir):
-            continue
-        for target in sorted(os.listdir(chan_dir)):
-            t_dir = os.path.join(chan_dir, target)
-            mf = os.path.join(t_dir, "manifest.json")
-            if not os.path.exists(mf):
-                continue
-            try:
-                with open(mf, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                out.append({
-                    "channel": channel,
-                    "target": target,
-                    "version": data.get("version"),
-                    "package_type": data.get("package_type"),
-                    "published_at": data.get("published_at"),
-                    "force_update": bool(data.get("force_update")),
-                })
-            except Exception:
-                continue
-    return {"channels": out}
-
-
-@app.get("/api/update/anchor")
-def get_anchor(channel: str = "stable", target: str = "windows-x64"):
-    return JSONResponse(_get_anchor(channel, target))
-
-
-@app.get("/")
-def root():
-    return {
-        "name": "SAO Auto Update Host",
-        "endpoints": [
-            "/api/health",
-            "/api/update/latest",
-            "/api/update/summary",
-            "/api/update/anchor",
-            "POST /api/update/anchor",
-            "POST /api/update/publish",
-            "POST /api/update/upload/init",
-            "POST /api/update/upload/chunk",
-            "POST /api/update/upload/complete",
-            "/api/workshop/catalog",
-            "/api/workshop/detail/{plugin_id}",
-            "/api/workshop/download/{plugin_id}",
-            "POST /api/workshop/publish/init",
-            "POST /api/workshop/publish/chunk",
-            "POST /api/workshop/publish/complete",
-            "GET /api/workshop/manage",
-            "DELETE /api/workshop/plugin/{plugin_id}",
-            "PATCH /api/workshop/plugin/{plugin_id}",
-            "/downloads/*",
-        ],
-    }
-
-
-# ── 发布上传 (dev_publish.py --upload 调用) ──────────────────────────
-_PUBLISH_API_KEY = _get_local_publish_api_key()
-
-
-def _authorize_publish_request(request: Request) -> None:
-    api_key = request.headers.get("X-API-Key", "")
-    global _PUBLISH_API_KEY
-    local_api_key = _PUBLISH_API_KEY or _get_local_publish_api_key()
-    if not local_api_key:
-        local_api_key = _bind_publish_api_key(api_key)
-        _PUBLISH_API_KEY = local_api_key
-    # 常数时间比较 — 防 API key 时序侧信道
-    if not local_api_key or not hmac.compare_digest(str(api_key), str(local_api_key)):
-        raise HTTPException(status_code=401, detail="invalid or missing API key")
-
-
-@app.post("/api/update/anchor")
-def sync_anchor(
-    request: Request,
-    channel: str = "stable",
-    target: str = "windows-x64",
-    commit: str = "",
-    commit_short: str = "",
-    version: str = "",
-    source: str = "manual-sync",
-):
-    _authorize_publish_request(request)
+    # 流式接收 body → 落盘 → SHA-256
+    tmp_path = dest_path + ".uploading"
+    total = 0
+    h = hashlib.sha256()
     try:
-        return JSONResponse(_set_anchor(channel, target, commit, commit_short, version, source))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@app.post("/api/update/publish")
-async def publish(
-    request: Request,
-    version: str,
-    package_type: str = "runtime-delta",
-    force_update: str = "false",
-    notes: str = "",
-    minimum_version: str = "",
-    channel: str = "stable",
-    target: str = "windows-x64",
-    commit: str = "",
-    commit_short: str = "",
-    anchor_commit: str = "",
-    anchor_commit_short: str = "",
-    anchor_version: str = "",
-):
-    # 接收 dev_publish.py 上传的 zip 包并写入 releases/.
-    _authorize_publish_request(request)
-
-    # ── Sanitize ──
-    safe_ch, safe_tg = _safe_channel_target(channel, target)
-    safe_ver = "".join(c for c in version if c.isalnum() or c in ".-") or "0.0.0"
-    safe_type = package_type if package_type in ("runtime-delta", "full-package") else "runtime-delta"
-
-    target_dir = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
-    os.makedirs(target_dir, exist_ok=True)
-
-    fname = f"update-{safe_ver}-{safe_type}.zip"
-    dst = os.path.join(target_dir, fname)
-
-    hasher = hashlib.sha256()
-    size = 0
-    with open(dst, "wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
-            hasher.update(chunk)
-            size += len(chunk)
-
-    if size == 0:
+        with open(tmp_path, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                out.write(chunk)
+                h.update(chunk)
+                total += len(chunk)
+        if total == 0:
+            raise HTTPException(400, "empty request body")
+        os.replace(tmp_path, dest_path)
+    except HTTPException:
         try:
-            os.remove(dst)
+            os.remove(tmp_path)
         except OSError:
             pass
-        raise HTTPException(status_code=400, detail="empty body")
+        raise
+    except Exception as e:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(500, f"write failed: {e}")
 
-    digest = hasher.hexdigest()
+    sha256_hex = h.hexdigest()
 
     manifest = {
-        "version": safe_ver,
-        "minimum_version": minimum_version,
-        "force_update": force_update.lower() in ("true", "1", "yes"),
-        "package_type": safe_type,
-        "target": safe_tg,
-        "channel": safe_ch,
-        "download_url": f"/downloads/{safe_ch}/{safe_tg}/{fname}",
-        "sha256": digest,
-        "size": size,
+        "version": version,
+        "url": f"/update/{channel}/{target}/artifacts/{filename}",
+        "sha256": sha256_hex,
+        "size": total,
         "notes": notes,
-        "commit": commit,
-        "commit_short": commit_short,
-        "anchor_commit": anchor_commit,
-        "anchor_commit_short": anchor_commit_short,
-        "anchor_version": anchor_version,
-        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "channel": channel,
+        "target": target,
+        "force_update": bool(force_update),
+        "minimum_version": minimum_version or "",
+        "published_at": _now_utc_iso(),
     }
 
-    manifest_path = os.path.join(target_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    latest_path = _update_latest_path(channel, target)
+    tmp = latest_path + ".tmp"
+    os.makedirs(os.path.dirname(latest_path) or ".", exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, latest_path)
 
-    # Per-version manifest + versions index (sequential delivery)
-    versioned_path = os.path.join(target_dir, f"manifest-{safe_ver}.json")
-    with open(versioned_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    versions = _load_versions_index(safe_ch, safe_tg)
-    if safe_ver not in versions:
-        versions.append(safe_ver)
-    _save_versions_index(safe_ch, safe_tg, versions)
-
-    if (commit or "").strip():
-        _set_anchor(
-            channel=safe_ch,
-            target=safe_tg,
-            commit=commit,
-            commit_short=commit_short,
-            version=safe_ver,
-            source="publish",
-        )
-
-    return JSONResponse(manifest)
-
-
-# ── 分片并行上传 ─────────────────────────────────────────────────────
-
-_CHUNK_UPLOAD_DIR = os.path.join(DEFAULT_RELEASE_DIR, "_chunks")
-_active_uploads: dict[str, dict] = {}
-_UPLOAD_TTL = 600
-
-
-def _cleanup_stale_uploads():
-    now = time.monotonic()
-    expired = [uid for uid, info in _active_uploads.items() if now - info["created"] > _UPLOAD_TTL]
-    for uid in expired:
-        info = _active_uploads.pop(uid, None)
-        if info:
-            chunk_dir = info.get("chunk_dir", "")
-            if chunk_dir and os.path.isdir(chunk_dir):
-                try:
-                    import shutil
-                    shutil.rmtree(chunk_dir, ignore_errors=True)
-                except Exception:
-                    pass
-
-
-@app.post("/api/update/upload/init")
-async def upload_init(
-    request: Request,
-    version: str,
-    file_size: int,
-    chunk_size: int = 4 * 1024 * 1024,
-    package_type: str = "runtime-delta",
-    force_update: str = "false",
-    notes: str = "",
-    minimum_version: str = "",
-    channel: str = "stable",
-    target: str = "windows-x64",
-    commit: str = "",
-    commit_short: str = "",
-    anchor_commit: str = "",
-    anchor_commit_short: str = "",
-    anchor_version: str = "",
-):
-    _authorize_publish_request(request)
-    _cleanup_stale_uploads()
-
-    if file_size <= 0:
-        raise HTTPException(400, "file_size must be > 0")
-    chunk_size = max(512 * 1024, min(chunk_size, 32 * 1024 * 1024))
-    total_chunks = (file_size + chunk_size - 1) // chunk_size
-
-    uid = secrets.token_hex(12)
-    os.makedirs(_CHUNK_UPLOAD_DIR, exist_ok=True)
-    chunk_dir = os.path.join(_CHUNK_UPLOAD_DIR, uid)
-    os.makedirs(chunk_dir, exist_ok=True)
-
-    _active_uploads[uid] = {
-        "created": time.monotonic(),
-        "chunk_dir": chunk_dir,
-        "chunk_size": chunk_size,
-        "file_size": file_size,
-        "total_chunks": total_chunks,
-        "received": set(),
-        "params": {
-            "version": version,
-            "package_type": package_type,
-            "force_update": force_update,
-            "notes": notes,
-            "minimum_version": minimum_version,
-            "channel": channel,
-            "target": target,
-            "commit": commit,
-            "commit_short": commit_short,
-            "anchor_commit": anchor_commit,
-            "anchor_commit_short": anchor_commit_short,
-            "anchor_version": anchor_version,
-        },
+    return {
+        "ok": True,
+        "version": version,
+        "sha256": sha256_hex,
+        "size": total,
+        "latest_url": manifest["url"],
     }
 
-    return JSONResponse({
-        "upload_id": uid,
-        "chunk_size": chunk_size,
-        "total_chunks": total_chunks,
-    })
 
-
-@app.post("/api/update/upload/chunk")
-async def upload_chunk(
-    request: Request,
-    upload_id: str,
-    index: int,
-):
-    _authorize_publish_request(request)
-
-    info = _active_uploads.get(upload_id)
-    if not info:
-        raise HTTPException(404, "upload session not found or expired")
-
-    if index < 0 or index >= info["total_chunks"]:
-        raise HTTPException(400, f"chunk index out of range [0, {info['total_chunks']})")
-
-    chunk_path = os.path.join(info["chunk_dir"], f"{index:06d}")
-    body = await request.body()
-    if not body:
-        raise HTTPException(400, "empty chunk")
-
-    with open(chunk_path, "wb") as f:
-        f.write(body)
-    info["received"].add(index)
-
-    return JSONResponse({
-        "index": index,
-        "size": len(body),
-        "received": len(info["received"]),
-        "total": info["total_chunks"],
-    })
-
-
-@app.post("/api/update/upload/complete")
-async def upload_complete(
-    request: Request,
-    upload_id: str,
-):
-    _authorize_publish_request(request)
-
-    info = _active_uploads.get(upload_id)
-    if not info:
-        raise HTTPException(404, "upload session not found or expired")
-
-    missing = set(range(info["total_chunks"])) - info["received"]
-    if missing:
-        raise HTTPException(400, f"missing {len(missing)} chunks: {sorted(missing)[:20]}")
-
-    params = info["params"]
-    safe_ch, safe_tg = _safe_channel_target(params["channel"], params["target"])
-    safe_ver = "".join(c for c in params["version"] if c.isalnum() or c in ".-") or "0.0.0"
-    safe_type = params["package_type"] if params["package_type"] in ("runtime-delta", "full-package") else "runtime-delta"
-
-    target_dir = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
-    os.makedirs(target_dir, exist_ok=True)
-    fname = f"update-{safe_ver}-{safe_type}.zip"
-    dst = os.path.join(target_dir, fname)
-
-    hasher = hashlib.sha256()
-    size = 0
-    tmp_dst = dst + ".assembling"
-    try:
-        with open(tmp_dst, "wb") as out:
-            for i in range(info["total_chunks"]):
-                chunk_path = os.path.join(info["chunk_dir"], f"{i:06d}")
-                with open(chunk_path, "rb") as cf:
-                    data = cf.read()
-                out.write(data)
-                hasher.update(data)
-                size += len(data)
-        os.replace(tmp_dst, dst)
-    except Exception as exc:
+@app.get("/update/{channel}/{target}/history")
+async def list_update_history(channel: str, target: str):
+    art_dir = _update_artifacts_dir(channel, target)
+    if not os.path.isdir(art_dir):
+        return {"items": []}
+    items = []
+    for name in sorted(os.listdir(art_dir), reverse=True):
+        if not name.endswith(".zip"):
+            continue
+        p = os.path.join(art_dir, name)
         try:
-            os.remove(tmp_dst)
+            st = os.stat(p)
+        except OSError:
+            continue
+        items.append({
+            "filename": name,
+            "size": st.st_size,
+            "mtime": int(st.st_mtime),
+        })
+    return {"items": items}
+
+
+# ══ Workshop Path ══════════════════════════════════════════════════════
+
+def _workshop_plugin_dir(plugin_id: str) -> str:
+    return os.path.join(WORKSHOP_ROOT, _safe_plugin_id(plugin_id))
+
+
+def _workshop_meta_path(plugin_id: str) -> str:
+    return os.path.join(_workshop_plugin_dir(plugin_id), "meta.json")
+
+
+def _workshop_versions_dir(plugin_id: str) -> str:
+    return os.path.join(_workshop_plugin_dir(plugin_id), "versions")
+
+
+def _load_meta(plugin_id: str) -> Optional[Dict[str, Any]]:
+    p = _workshop_meta_path(plugin_id)
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_meta(plugin_id: str, meta: Dict[str, Any]) -> None:
+    p = _workshop_meta_path(plugin_id)
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, p)
+
+
+def _summary_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(meta.get("id", "")),
+        "name": str(meta.get("name", "")),
+        "version": str(meta.get("version", "")),
+        "tag": str(meta.get("tag", "")),
+        "author": str(meta.get("author", "")),
+        "updated_ms": int(meta.get("updated_ms", 0)),
+        "rating": int(meta.get("rating", 0)),
+        "downloads": int(meta.get("downloads", 0)),
+    }
+
+
+def _rebuild_catalog() -> List[Dict[str, Any]]:
+    items = []
+    if os.path.isdir(WORKSHOP_ROOT):
+        for name in sorted(os.listdir(WORKSHOP_ROOT)):
+            if name.startswith("_"):
+                continue
+            meta = _load_meta(name)
+            if meta:
+                items.append(_summary_from_meta(meta))
+    catalog = {"items": items, "updated_at": _now_utc_iso()}
+    tmp = WORKSHOP_CATALOG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(catalog, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, WORKSHOP_CATALOG_PATH)
+    return items
+
+
+def _load_catalog_items() -> List[Dict[str, Any]]:
+    if os.path.isfile(WORKSHOP_CATALOG_PATH):
+        try:
+            with open(WORKSHOP_CATALOG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            items = data.get("items", [])
+            if isinstance(items, list):
+                return items
         except Exception:
             pass
-        raise HTTPException(500, f"assembly failed: {exc}") from exc
-    finally:
-        import shutil
-        shutil.rmtree(info["chunk_dir"], ignore_errors=True)
-        _active_uploads.pop(upload_id, None)
+    return _rebuild_catalog()
 
-    digest = hasher.hexdigest()
-    manifest = {
-        "version": safe_ver,
-        "minimum_version": params["minimum_version"],
-        "force_update": params["force_update"].lower() in ("true", "1", "yes"),
-        "package_type": safe_type,
-        "target": safe_tg,
-        "channel": safe_ch,
-        "download_url": f"/downloads/{safe_ch}/{safe_tg}/{fname}",
-        "sha256": digest,
-        "size": size,
-        "notes": params["notes"],
-        "commit": params["commit"],
-        "commit_short": params["commit_short"],
-        "anchor_commit": params["anchor_commit"],
-        "anchor_commit_short": params["anchor_commit_short"],
-        "anchor_version": params["anchor_version"],
-        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+
+@app.get("/api/v1/workshop/plugins")
+async def list_workshop_plugins(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    tag: str = Query(""),
+):
+    items = _load_catalog_items()
+    if tag:
+        items = [it for it in items if str(it.get("tag", "")) == tag]
+    total = len(items)
+    start = (page - 1) * size
+    end = start + size
+    slice_ = items[start:end]
+    # 每个 item 必须含 C++ summary 全部字段
+    result = [
+        {
+            "id": str(it.get("id", "")),
+            "name": str(it.get("name", "")),
+            "version": str(it.get("version", "")),
+            "tag": str(it.get("tag", "")),
+            "author": str(it.get("author", "")),
+            "updated_ms": int(it.get("updated_ms", 0)),
+            "rating": int(it.get("rating", 0)),
+            "downloads": int(it.get("downloads", 0)),
+        }
+        for it in slice_
+    ]
+    return {"items": result, "total": total, "page": page, "size": size}
+
+
+@app.get("/api/v1/workshop/plugins/{plugin_id}")
+async def get_workshop_plugin_detail(plugin_id: str):
+    meta = _load_meta(_safe_plugin_id(plugin_id))
+    if meta is None:
+        raise HTTPException(404, "plugin not found")
+    return {
+        # summary
+        "id": str(meta.get("id", "")),
+        "name": str(meta.get("name", "")),
+        "version": str(meta.get("version", "")),
+        "tag": str(meta.get("tag", "")),
+        "author": str(meta.get("author", "")),
+        "updated_ms": int(meta.get("updated_ms", 0)),
+        "rating": int(meta.get("rating", 0)),
+        "downloads": int(meta.get("downloads", 0)),
+        # detail
+        "description": str(meta.get("description", "")),
+        "sha256": str(meta.get("sha256", "")),
+        "signature_alg": str(meta.get("signature_alg", "ed25519")),
+        "size_bytes": int(meta.get("size_bytes", 0)),
+        "min_major": int(meta.get("min_major", 0)),
+        "min_minor": int(meta.get("min_minor", 0)),
+        "min_patch": int(meta.get("min_patch", 0)),
     }
 
-    manifest_path = os.path.join(target_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    versioned_path = os.path.join(target_dir, f"manifest-{safe_ver}.json")
-    with open(versioned_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    versions = _load_versions_index(safe_ch, safe_tg)
-    if safe_ver not in versions:
-        versions.append(safe_ver)
-    _save_versions_index(safe_ch, safe_tg, versions)
+@app.get("/api/v1/workshop/plugins/{plugin_id}/download")
+async def download_workshop_plugin(plugin_id: str):
+    meta = _load_meta(_safe_plugin_id(plugin_id))
+    if meta is None:
+        raise HTTPException(404, "plugin not found")
+    version = str(meta.get("version", ""))
+    versions_dir = _workshop_versions_dir(plugin_id)
+    filename = f"{plugin_id}-{version}.sao-plugin"
+    p = os.path.join(versions_dir, filename)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "artifact not found")
 
-    if (params["commit"] or "").strip():
-        _set_anchor(
-            channel=safe_ch,
-            target=safe_tg,
-            commit=params["commit"],
-            commit_short=params["commit_short"],
-            version=safe_ver,
-            source="publish",
-        )
+    # 记一次下载
+    try:
+        meta["downloads"] = int(meta.get("downloads", 0)) + 1
+        _save_meta(plugin_id, meta)
+        _rebuild_catalog()
+    except Exception:
+        pass
 
-    return JSONResponse(manifest)
+    return FileResponse(p, media_type="application/octet-stream", filename=filename)
 
 
-# ── Workshop (创意工坊) ──────────────────────────────────────────────
-try:
-    from update_host.workshop_routes import router as _workshop_router, init_workshop
-    init_workshop(DEFAULT_RELEASE_DIR, _authorize_publish_request)
-    app.include_router(_workshop_router)
-except Exception as _ws_exc:
-    print(f"[update_host] workshop routes not loaded: {_ws_exc}")
+@app.post("/api/v1/workshop/plugins/{plugin_id}/publish")
+async def publish_workshop_plugin(
+    plugin_id: str,
+    request: Request,
+    version: str = Query(...),
+    name: str = Query(""),
+    tag: str = Query(""),
+    author: str = Query(""),
+    signature_alg: str = Query("ed25519"),
+    min_major: int = Query(0),
+    min_minor: int = Query(0),
+    min_patch: int = Query(0),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_description: Optional[str] = Header(None, alias="X-SaoAuto-Description"),
+):
+    _require_api_key(x_api_key, request)
+    _safe_plugin_id(plugin_id)
+    _safe_version(version)
+    if signature_alg not in ("ed25519", "ecdsa-p256"):
+        raise HTTPException(400, "signature_alg must be 'ed25519' or 'ecdsa-p256'")
+
+    versions_dir = _workshop_versions_dir(plugin_id)
+    os.makedirs(versions_dir, exist_ok=True)
+    filename = f"{plugin_id}-{version}.sao-plugin"
+    dest_path = os.path.join(versions_dir, filename)
+
+    tmp_path = dest_path + ".uploading"
+    total = 0
+    h = hashlib.sha256()
+    try:
+        with open(tmp_path, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                out.write(chunk)
+                h.update(chunk)
+                total += len(chunk)
+        if total == 0:
+            raise HTTPException(400, "empty request body")
+        os.replace(tmp_path, dest_path)
+    except HTTPException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    except Exception as e:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(500, f"write failed: {e}")
+
+    prev = _load_meta(plugin_id) or {}
+    meta = {
+        "id": plugin_id,
+        "name": name or prev.get("name", plugin_id),
+        "version": version,
+        "tag": tag or prev.get("tag", ""),
+        "author": author or prev.get("author", ""),
+        "updated_ms": _now_ms(),
+        "rating": int(prev.get("rating", 0)),
+        "downloads": int(prev.get("downloads", 0)),
+        "description": x_description or prev.get("description", ""),
+        "sha256": h.hexdigest(),
+        "signature_alg": signature_alg,
+        "size_bytes": total,
+        "min_major": int(min_major),
+        "min_minor": int(min_minor),
+        "min_patch": int(min_patch),
+        "published_at": _now_utc_iso(),
+    }
+    _save_meta(plugin_id, meta)
+    _rebuild_catalog()
+
+    return {
+        "ok": True,
+        "id": plugin_id,
+        "version": version,
+        "sha256": meta["sha256"],
+        "size": total,
+    }
+
+
+@app.delete("/api/v1/workshop/plugins/{plugin_id}")
+async def delete_workshop_plugin(
+    plugin_id: str,
+    request: Request,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    _require_api_key(x_api_key, request)
+    plugin_id = _safe_plugin_id(plugin_id)
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    if not os.path.isdir(plugin_dir):
+        raise HTTPException(404, "plugin not found")
+    import shutil
+    shutil.rmtree(plugin_dir, ignore_errors=True)
+    _rebuild_catalog()
+    return {"ok": True, "id": plugin_id}
+
+
+# ══ Admin/Debug ═════════════════════════════════════════════════════════
+
+@app.get("/api/v1/workshop/refresh_catalog")
+async def refresh_catalog(x_api_key: Optional[str] = Header(None, alias="X-API-Key"), request: Request = None):
+    _require_api_key(x_api_key, request)
+    items = _rebuild_catalog()
+    return {"ok": True, "items": len(items)}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("UPDATE_HOST_PORT", "9973"))
+    uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=120)

@@ -56,13 +56,23 @@
     },
     {
       "name": "windows-tests",
-      "displayName": "Windows x64 Tests",
-      "description": "Isolated Debug test build with CTest and SAO subsystem tests enabled.",
+      "displayName": "Windows x64 Tests (all runtimes ON)",
+      "description": "Isolated Debug test build with CTest, SAO subsystem tests, and every plugin host runtime enabled (Python, Lua 5.4, AngelScript, Emma, C#).  Missing external runtimes are auto-fetched via FetchContent so a clean checkout can complete configure without pre-installed vendor SDKs.",
       "inherits": "windows-base",
       "cacheVariables": {
         "SAO_HARDENED_BUILD": "OFF",
         "SAO_BUILD_TESTS": "ON",
-        "BUILD_TESTING": "ON"
+        "BUILD_TESTING": "ON",
+        "SAO_PLUGINS_ENABLE_PYTHON": "ON",
+        "SAO_PLUGINS_ENABLE_LUA": "ON",
+        "SAO_PLUGINS_ENABLE_ANGEL": "ON",
+        "SAO_PLUGINS_ENABLE_EMMA": "ON",
+        "SAO_PLUGINS_ENABLE_CSHARP": "ON",
+        "SAO_PLUGINS_BUILD_LEGACY_V1": "ON",
+        "SAO_PLUGINS_LUA_AUTO_FETCH": "ON",
+        "SAO_PLUGINS_ANGEL_AUTO_FETCH": "ON",
+        "SAO_PLUGINS_CSHARP_AUTO_FETCH": "ON",
+        "SAO_PLUGINS_PYTHON_AUTO_FETCH": "ON"
       }
     },
     {
