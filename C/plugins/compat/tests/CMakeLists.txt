@@ -52,6 +52,27 @@ add_test(NAME plugins_compat_manifest_fixture_parity
 set_tests_properties(plugins_compat_manifest_fixture_parity
     PROPERTIES LABELS "plugins;manifest;fixture_parity;lifecycle")
 
+foreach(target IN ITEMS
+        test_plugins_compat
+        test_plugins_compat_py_v1_manifest
+        test_plugins_compat_runtime
+        test_plugins_compat_v1_ctx_provider
+        test_manifest_fixture_parity)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${target} PRIVATE -UNDEBUG)
+    endif()
+endforeach()
+
+set_tests_properties(
+    plugins_compat_smoke
+    plugins_compat_py_v1_manifest
+    plugins_compat_runtime
+    plugins_compat_v1_ctx_provider
+    plugins_compat_manifest_fixture_parity
+    PROPERTIES TIMEOUT 30)
+
 if (NOT TARGET Catch2::Catch2WithMain)
     find_package(Catch2 3 CONFIG REQUIRED)
 endif()

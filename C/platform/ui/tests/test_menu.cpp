@@ -338,7 +338,7 @@ TEST_CASE("menu_dynamic_reorder_preserves_active_name_and_children",
     sao_ui_menu_handle_t menu = make_vertical_menu();
     REQUIRE(sao_ui_menu_set_children(menu, "alpha", kAlphaChildren, 2) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_activate(menu, 0) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_menu_tick(menu, 200) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_menu_tick(menu, 220) == SAO_STATUS_OK);
 
     const SaoUiMenuItem reordered[] = {
         kDynamicRoots[1],
@@ -354,7 +354,7 @@ TEST_CASE("menu_dynamic_reorder_preserves_active_name_and_children",
     SaoUiMenuPhase phase = SAO_UI_MENU_PHASE_CLOSED;
     REQUIRE(sao_ui_menu_get_phase(menu, &phase) == SAO_STATUS_OK);
     CHECK(phase == SAO_UI_MENU_PHASE_CHILD_OPENING);
-    REQUIRE(sao_ui_menu_tick(menu, 200) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_menu_tick(menu, 220) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_get_phase(menu, &phase) == SAO_STATUS_OK);
     CHECK(phase == SAO_UI_MENU_PHASE_CHILD_OPEN);
     CHECK(sao_ui_menu_activate_child(menu, 2, 1) == SAO_STATUS_OK);
@@ -398,7 +398,7 @@ TEST_CASE("menu_child_activation_enters_opening_then_open",
     SaoUiMenuPhase phase = SAO_UI_MENU_PHASE_CLOSED;
     REQUIRE(sao_ui_menu_get_phase(menu, &phase) == SAO_STATUS_OK);
     CHECK(phase == SAO_UI_MENU_PHASE_CHILD_OPENING);
-    REQUIRE(sao_ui_menu_tick(menu, 199) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_menu_tick(menu, 219) == SAO_STATUS_OK);
     REQUIRE(sao_ui_menu_get_phase(menu, &phase) == SAO_STATUS_OK);
     CHECK(phase == SAO_UI_MENU_PHASE_CHILD_OPENING);
     REQUIRE(sao_ui_menu_tick(menu, 1) == SAO_STATUS_OK);

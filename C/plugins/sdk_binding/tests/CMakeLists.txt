@@ -4,7 +4,7 @@ target_compile_features(test_plugins_sdk_binding PRIVATE cxx_std_17)
 target_compile_definitions(test_plugins_sdk_binding PRIVATE SAO_PLUGINS_BUILDING_DLL)
 add_test(NAME plugins_sdk_binding_smoke COMMAND test_plugins_sdk_binding)
 set_tests_properties(plugins_sdk_binding_smoke
-	PROPERTIES LABELS "plugins;sdk_binding")
+	PROPERTIES LABELS "plugins;sdk_binding" TIMEOUT 30)
 
 add_executable(test_plugins_sdk_binding_dispatch test_sdk_bind.cpp)
 target_link_libraries(test_plugins_sdk_binding_dispatch PRIVATE sao_plugins_sdk_binding)
@@ -12,4 +12,12 @@ target_compile_features(test_plugins_sdk_binding_dispatch PRIVATE cxx_std_17)
 target_compile_definitions(test_plugins_sdk_binding_dispatch PRIVATE SAO_PLUGINS_BUILDING_DLL)
 add_test(NAME plugins_sdk_binding_dispatch COMMAND test_plugins_sdk_binding_dispatch)
 set_tests_properties(plugins_sdk_binding_dispatch
-	PROPERTIES LABELS "plugins;sdk_binding;dispatch")
+	PROPERTIES LABELS "plugins;sdk_binding;dispatch" TIMEOUT 30)
+
+foreach(target IN ITEMS test_plugins_sdk_binding test_plugins_sdk_binding_dispatch)
+	if(MSVC)
+		target_compile_options(${target} PRIVATE /UNDEBUG)
+	else()
+		target_compile_options(${target} PRIVATE -UNDEBUG)
+	endif()
+endforeach()
