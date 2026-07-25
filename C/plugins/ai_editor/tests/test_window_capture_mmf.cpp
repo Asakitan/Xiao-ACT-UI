@@ -1,7 +1,7 @@
 // Catch2 tests for WindowCaptureToMmf (window_capture_mmf.h).
 //
-// Uses a real short-lived STATIC window as the capture target so
-// PrintWindow round-trips through the actual OS path.  Verifies:
+// Uses a real short-lived, visible off-screen STATIC window as the capture
+// target so PrintWindow round-trips through the actual OS path.  Verifies:
 //   * init succeeds with a valid HWND
 //   * init rejects invalid inputs
 //   * capture_and_publish bumps generation (proving it wrote a slot)
@@ -37,8 +37,12 @@ struct DummyTarget {
     DummyTarget(int w, int h) {
         hwnd = ::CreateWindowExW(
             WS_EX_TOOLWINDOW, L"STATIC", L"cap_target", WS_POPUP,
-            0, 0, w, h, nullptr, nullptr,
+            -32000, -32000, w, h, nullptr, nullptr,
             ::GetModuleHandleW(nullptr), nullptr);
+        if (hwnd != nullptr) {
+            ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            ::UpdateWindow(hwnd);
+        }
     }
     ~DummyTarget() {
         if (hwnd != nullptr) {
@@ -104,6 +108,7 @@ TEST_CASE("WindowCaptureToMmf capture_and_publish bumps generation",
           "[ai_editor][window_capture]") {
     DummyTarget target(32, 24);
     REQUIRE(target.hwnd != nullptr);
+    REQUIRE(::IsWindowVisible(target.hwnd));
     const auto name = unique_capture_mmf(L"CapPublishTest");
 
     sao::ai_editor::WindowCaptureToMmf cap;

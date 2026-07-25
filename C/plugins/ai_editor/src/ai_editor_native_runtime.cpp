@@ -4342,8 +4342,8 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
             result = Json{{"message", "createWebviewPanel failed"}};
             return status;
         }
-        emit("vscode.window.webviewPanel.created",
-             panel_state_to_json(state));
+                emit("vscode.window.webviewPanel.created",
+                         panel_state_to_json(state));
         result = panel_state_to_json(state);
         return SAO_AI_EDITOR_OK;
     }
@@ -4515,12 +4515,12 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
     }
     if (method == "vscode.window.listWebviewPanels") {
         Json array = Json::array();
-        for (const auto& panel : webview_panels_.list_alive()) {
+        for (const auto& panel : webview_panels_.list_alive(WebviewPanelOwner::extension_host)) {
             array.push_back(panel_state_to_json(panel));
         }
         result = Json{{"panels", std::move(array)},
-                      {"totalCreated",
-                       static_cast<int64_t>(webview_panels_.total_created())}};
+                      {"totalCreated", static_cast<int64_t>(webview_panels_.total_created(
+                                           WebviewPanelOwner::extension_host))}};
         return SAO_AI_EDITOR_OK;
     }
     // vscode.commands.executeCommand loops back through the extension host

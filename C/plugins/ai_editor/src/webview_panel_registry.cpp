@@ -18,11 +18,16 @@ std::string WebviewPanelRegistry::mint_id_locked() {
     return "wvp-" + std::to_string(pid) + "-" + std::to_string(seq);
 }
 
-int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint,
-                                     const std::string& view_type,
-                                     const std::string& title,
-                                     const WebviewPanelOptions& options,
+int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std::string& view_type,
+                                     const std::string& title, const WebviewPanelOptions& options,
                                      WebviewPanelState& out_state) {
+    return create(panel_id_hint, view_type, title, options, WebviewPanelOwner::extension_host,
+                  out_state);
+}
+
+int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std::string& view_type,
+                                     const std::string& title, const WebviewPanelOptions& options,
+                                     WebviewPanelOwner owner, WebviewPanelState& out_state) {
     if (view_type.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -38,6 +43,7 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint,
     state.view_type = view_type;
     state.title = title;
     state.options = options;
+    state.owner = owner;
     state.visible = true;
     state.disposed = false;
     state.created_ms = now_ms();
@@ -161,9 +167,32 @@ std::vector<WebviewPanelState> WebviewPanelRegistry::list_alive() const {
     return out;
 }
 
+std::vector<WebviewPanelState> WebviewPanelRegistry::list_alive(WebviewPanelOwner owner) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<WebviewPanelState> out;
+    out.reserve(panels_.size());
+    for (const auto& entry : panels_) {
+        if (!entry.second.disposed && entry.second.owner == owner) {
+            out.push_back(entry.second);
+        }
+    }
+    return out;
+}
+
 size_t WebviewPanelRegistry::total_created() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return total_created_;
+}
+
+size_t WebviewPanelRegistry::total_created(WebviewPanelOwner owner) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t total = 0;
+    for (const auto& entry : panels_) {
+        if (entry.second.owner == owner) {
+            ++total;
+        }
+    }
+    return total;
 }
 
 void WebviewPanelRegistry::clear() {

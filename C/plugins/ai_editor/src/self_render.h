@@ -4,7 +4,7 @@
 //
 // Owns a top-down DIB section (BGRA, 4-byte aligned stride), and
 // exposes primitives (clear / fill_rect / rounded_rect / draw_text)
-// implemented on top of GDI SelectObject + FillRect / DrawTextW.
+// implemented with direct BGRA fills plus GDI RoundRect / DrawTextW.
 // After drawing a frame the caller memcpys pixels() into
 // MmfFrameWriter::current_slot_pixels() and calls commit_frame().
 //
@@ -141,16 +141,23 @@ public:
     }
 
     void fill_rect(int x, int y, int w, int h, uint32_t bgra) {
-        if (dc_ == nullptr || w <= 0 || h <= 0) {
+        if (pixels_ == nullptr || w <= 0 || h <= 0) {
             return;
         }
-        RECT r{x, y, x + w, y + h};
-        HBRUSH brush = ::CreateSolidBrush(bgra_to_colorref(bgra));
-        if (brush == nullptr) {
+        RECT requested{x, y, x + w, y + h};
+        RECT bounds{0, 0, width_, height_};
+        RECT clipped{};
+        if (::IntersectRect(&clipped, &requested, &bounds) == FALSE) {
             return;
         }
-        ::FillRect(dc_, &r, brush);
-        ::DeleteObject(brush);
+        ::GdiFlush();
+        for (LONG row = clipped.top; row < clipped.bottom; ++row) {
+            uint32_t* row_pixels = reinterpret_cast<uint32_t*>(
+                pixels_ + static_cast<size_t>(row) * static_cast<size_t>(stride_));
+            for (LONG column = clipped.left; column < clipped.right; ++column) {
+                row_pixels[column] = bgra;
+            }
+        }
     }
 
     void rounded_rect(int x, int y, int w, int h, int radius, uint32_t fill_bgra,

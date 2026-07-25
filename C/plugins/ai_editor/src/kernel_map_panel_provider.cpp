@@ -289,11 +289,9 @@ int32_t KernelMapPanelProvider::register_with_runtime(
                           {"kind", "operator-dashboard"}};
 
     WebviewPanelState state;
-    int32_t status = registry.create(std::string{kKernelMapPanelId},
-                                     std::string{kKernelMapViewType},
-                                     std::string{kKernelMapPanelTitle},
-                                     options,
-                                     state);
+    int32_t status = registry.create(
+        std::string{kKernelMapPanelId}, std::string{kKernelMapViewType},
+        std::string{kKernelMapPanelTitle}, options, WebviewPanelOwner::native_runtime, state);
     if (status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
         // Registry rejects duplicate ids — treat as "already registered"
         // by another instance and simply reuse the entry.

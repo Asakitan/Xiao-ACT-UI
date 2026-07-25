@@ -50,15 +50,15 @@ public:
 
     bool init(const wchar_t* mmf_name, HWND target, int width, int height) {
         shutdown();
-        if (mmf_name == nullptr || target == nullptr || width <= 0 ||
-            height <= 0) {
+        if (mmf_name == nullptr || target == nullptr || !::IsWindow(target) ||
+            width <= 0 || height <= 0) {
             return false;
         }
         if (!fb_.init(width, height)) {
             return false;
         }
         if (!writer_.init(mmf_name, static_cast<uint32_t>(width),
-                          static_cast<uint32_t>(height))) {
+                      static_cast<uint32_t>(height))) {
             fb_.shutdown();
             return false;
         }

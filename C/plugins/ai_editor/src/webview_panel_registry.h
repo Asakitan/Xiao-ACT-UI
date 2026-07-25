@@ -22,6 +22,11 @@
 
 namespace sao::ai_editor::native {
 
+enum class WebviewPanelOwner : uint8_t {
+    extension_host,
+    native_runtime,
+};
+
 struct WebviewPanelOptions final {
     bool enable_scripts = true;
     bool retain_context_when_hidden = false;
@@ -37,6 +42,7 @@ struct WebviewPanelState final {
     std::string title;
     std::string html;             // last setWebviewHtml payload
     WebviewPanelOptions options;
+    WebviewPanelOwner owner = WebviewPanelOwner::extension_host;
     bool visible = false;         // reveal → true, hide/dispose → false
     bool disposed = false;
     int64_t created_ms = 0;
@@ -62,6 +68,10 @@ public:
                    const std::string& title,
                    const WebviewPanelOptions& options,
                    WebviewPanelState& out_state);
+
+    int32_t create(const std::string& panel_id_hint, const std::string& view_type,
+                   const std::string& title, const WebviewPanelOptions& options,
+                   WebviewPanelOwner owner, WebviewPanelState& out_state);
 
     // Mark the panel visible and record the reveal timestamp.  Returns
     // NOT_FOUND when the id is missing, PROTOCOL when disposed.
@@ -99,8 +109,14 @@ public:
     // surface the current WebView2 fleet.
     std::vector<WebviewPanelState> list_alive() const;
 
+    // List only non-disposed panels owned by one lifecycle domain.
+    std::vector<WebviewPanelState> list_alive(WebviewPanelOwner owner) const;
+
     // Total create-count (including disposed) for diagnostics.
     size_t total_created() const;
+
+    // Total create-count (including disposed) for one lifecycle domain.
+    size_t total_created(WebviewPanelOwner owner) const;
 
     // Wipe everything.  Used by tests and by native runtime shutdown.
     void clear();
