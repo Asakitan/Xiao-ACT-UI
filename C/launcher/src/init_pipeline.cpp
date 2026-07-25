@@ -45,6 +45,7 @@
 #endif
 
 #include <cstring>
+#include <cstdio>
 #include <cwchar>
 #include <filesystem>
 #include <memory>
@@ -60,6 +61,7 @@
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #undef SAO_STATUS_OK
+#include "sao/rt_io/engine_registry.h"
 #include "sao/rt_io/proxy.h"
 #include "sao/rt_io/window_rect.h"
 #include "sao/sdk/sao_sdk.h"
@@ -177,6 +179,7 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
     config.log_level = log_level_storage;
     config.safe_mode = state.safe_mode ? 1 : 0;
     config.streaming_entitled = state.no_license || state.streaming_entitled ? 1 : 0;
+    config.rt_io_operator = state.rt_io_operator ? 1 : 0;
     return true;
 }
 
@@ -190,6 +193,101 @@ constexpr int32_t kHomeHotkeyId = 0x5341;
 constexpr int32_t kInsertHotkeyId = 0x5342;
 constexpr int kMaximumTeardownAttempts = 3;
 constexpr int kMaximumStreamingReleaseAttempts = 2;
+constexpr uint64_t kRtIoMandatoryLiveStepMask =
+    ((uint64_t{1} << 9u) - 1u) |
+    (uint64_t{1} << 13u) |
+    (uint64_t{1} << 14u) |
+    (uint64_t{1} << 15u) |
+    (uint64_t{1} << 16u);
+
+bool rtIoOperatorOptionsValid(
+    const sao_launcher_rt_io_operator_options_t* options) noexcept {
+    return options != nullptr &&
+        options->struct_size == sizeof(*options) &&
+        options->reserved == 0u;
+}
+
+uint64_t requestedRtIoLiveStepMask(
+    const sao_launcher_rt_io_operator_options_t& options) noexcept {
+    uint64_t mask = kRtIoMandatoryLiveStepMask;
+    if (options.input_checks != 0u) {
+        mask |= uint64_t{1} << 9u;
+        mask |= uint64_t{1} << 10u;
+    }
+    if (options.r5_check != 0u)
+        mask |= uint64_t{1} << 11u;
+    if (options.mf_check != 0u)
+        mask |= uint64_t{1} << 12u;
+    return mask;
+}
+
+void initializeRtIoOperatorReport(
+    const sao_launcher_rt_io_operator_options_t* options,
+    uint32_t stage,
+    sao_launcher_rt_io_operator_report_t* report) noexcept {
+    if (report == nullptr)
+        return;
+    *report = {};
+    report->struct_size = sizeof(*report);
+    report->stage = stage;
+    report->status = SAO_STATUS_INTERNAL;
+    report->operation_status = SAO_STATUS_INTERNAL;
+    report->failure_classification =
+        SAO_LAUNCHER_RT_IO_FAILURE_NOT_SUBMITTED;
+    if (options == nullptr)
+        return;
+    report->preflight_only = options->preflight_only != 0u ? 1u : 0u;
+    report->input_checks = options->input_checks != 0u ? 1u : 0u;
+    report->r5_check = options->r5_check != 0u ? 1u : 0u;
+    report->mf_check = options->mf_check != 0u ? 1u : 0u;
+    report->exit_after_validation =
+        options->exit_after_validation != 0u ? 1u : 0u;
+    report->requested_step_mask = requestedRtIoLiveStepMask(*options);
+}
+
+const char* rtIoOperatorStageName(uint32_t stage) noexcept {
+    switch (stage) {
+    case SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT:
+        return "preflight";
+    case SAO_LAUNCHER_RT_IO_STAGE_INIT:
+        return "init";
+    case SAO_LAUNCHER_RT_IO_STAGE_LIVE:
+        return "live";
+    case SAO_LAUNCHER_RT_IO_STAGE_STATUS:
+        return "status";
+    case SAO_LAUNCHER_RT_IO_STAGE_CLEANUP:
+        return "cleanup";
+    default:
+        return "unknown";
+    }
+}
+
+const char* rtIoOperatorFailureName(uint32_t failure) noexcept {
+    switch (failure) {
+    case SAO_LAUNCHER_RT_IO_FAILURE_NONE:
+        return "none";
+    case SAO_LAUNCHER_RT_IO_FAILURE_NOT_SUBMITTED:
+        return "not_submitted";
+    case SAO_LAUNCHER_RT_IO_FAILURE_CALL:
+        return "call";
+    case SAO_LAUNCHER_RT_IO_FAILURE_PREFLIGHT_INCOMPLETE:
+        return "preflight_incomplete";
+    case SAO_LAUNCHER_RT_IO_FAILURE_INIT_INCOMPLETE:
+        return "init_incomplete";
+    case SAO_LAUNCHER_RT_IO_FAILURE_LIVE_INCOMPLETE:
+        return "live_incomplete";
+    case SAO_LAUNCHER_RT_IO_FAILURE_STATUS_INCONSISTENT:
+        return "status_inconsistent";
+    case SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE:
+        return "cleanup_incomplete";
+    default:
+        return "unknown";
+    }
+}
+
+const char* jsonBool(uint32_t value) noexcept {
+    return value != 0u ? "true" : "false";
+}
 
 struct HeadlessCleanupState {
     ~HeadlessCleanupState() {
@@ -978,6 +1076,214 @@ sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hook
 #endif
 }
 
+extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
+    const sao_launcher_rt_io_operator_report_t* report,
+    char* out_utf8, size_t out_capacity,
+    size_t* out_bytes_written) {
+    if (out_bytes_written != nullptr)
+        *out_bytes_written = 0u;
+    if (report == nullptr || out_utf8 == nullptr || out_capacity == 0u ||
+        report->struct_size != sizeof(*report)) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    const int written = std::snprintf(
+        out_utf8, out_capacity,
+        "{\"stage\":\"%s\",\"status\":%d,\"operation_status\":%d,"
+        "\"success\":%s,\"complete\":%s,"
+        "\"preflight_only\":%s,\"input_checks\":%s,"
+        "\"r5_check\":%s,\"mf_check\":%s,"
+        "\"exit_after_validation\":%s,"
+        "\"requested_step_mask\":%llu,\"attempted_step_mask\":%llu,"
+        "\"passed_step_mask\":%llu,\"unknown_step_mask\":%llu,"
+        "\"partial_step_mask\":%llu,\"selected_engine\":%u,"
+        "\"runtime_tier\":%u,\"backend\":%u,"
+        "\"selected_backend\":%u,\"driver_strategy\":%u,"
+        "\"residue_gate\":%u,\"residue_count\":%u,"
+        "\"unknown_count\":%u,\"is_admin\":%u,\"is_elevated\":%u,"
+        "\"load_driver_privilege_present\":%u,"
+        "\"load_driver_privilege_enabled\":%u,\"hvci_enabled\":%u,"
+        "\"vbs_enabled\":%u,\"provider_observable\":%u,"
+        "\"admission_mask\":%u,"
+        "\"capability_mask\":%u,\"restore_mask\":%u,"
+        "\"state_observed\":%s,\"resources_absent\":%s,"
+        "\"loaded\":%s,\"probe_passed\":%s,"
+        "\"backend_ready\":%s,\"call_authenticated\":%s,"
+        "\"call_transport_complete\":%s,"
+        "\"call_request_id_matched\":%s,\"call_committed\":%s,"
+        "\"cleanup_acknowledged\":%s,\"cleanup_clean\":%s,"
+        "\"cleanup_keep_running\":%s,\"provider_retained\":%s,"
+        "\"wiper_joined\":%s,\"engine_cleanup_confirmed\":%s,"
+        "\"etw_restore_confirmed\":%s,"
+        "\"last_failure_code\":%d,\"last_failure_stage\":%u,"
+        "\"failure_classification\":\"%s\"}",
+        rtIoOperatorStageName(report->stage), report->status,
+        report->operation_status, jsonBool(report->success),
+        jsonBool(report->complete), jsonBool(report->preflight_only),
+        jsonBool(report->input_checks), jsonBool(report->r5_check),
+        jsonBool(report->mf_check), jsonBool(report->exit_after_validation),
+        static_cast<unsigned long long>(report->requested_step_mask),
+        static_cast<unsigned long long>(report->attempted_step_mask),
+        static_cast<unsigned long long>(report->passed_step_mask),
+        static_cast<unsigned long long>(report->unknown_step_mask),
+        static_cast<unsigned long long>(report->partial_step_mask),
+        report->selected_engine, report->runtime_tier, report->backend,
+        report->selected_backend, report->driver_strategy,
+        report->residue_gate, report->residue_count, report->unknown_count,
+        report->is_admin, report->is_elevated,
+        report->load_driver_privilege_present,
+        report->load_driver_privilege_enabled, report->hvci_enabled,
+        report->vbs_enabled, report->provider_observable,
+        report->admission_mask, report->capability_mask,
+        report->restore_mask, jsonBool(report->state_observed),
+        jsonBool(report->resources_absent), jsonBool(report->loaded),
+        jsonBool(report->probe_passed), jsonBool(report->backend_ready),
+        jsonBool(report->call_authenticated),
+        jsonBool(report->call_transport_complete),
+        jsonBool(report->call_request_id_matched),
+        jsonBool(report->call_committed),
+        jsonBool(report->cleanup_acknowledged),
+        jsonBool(report->cleanup_clean),
+        jsonBool(report->cleanup_keep_running),
+        jsonBool(report->provider_retained), jsonBool(report->wiper_joined),
+        jsonBool(report->engine_cleanup_confirmed),
+        jsonBool(report->etw_restore_confirmed), report->last_failure_code,
+        report->last_failure_stage,
+        rtIoOperatorFailureName(report->failure_classification));
+    if (written < 0) {
+        out_utf8[0] = '\0';
+        return SAO_STATUS_INTERNAL;
+    }
+    const size_t required = static_cast<size_t>(written);
+    if (required >= out_capacity) {
+        out_utf8[0] = '\0';
+        if (out_bytes_written != nullptr)
+            *out_bytes_written = required + 1u;
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    if (out_bytes_written != nullptr)
+        *out_bytes_written = required;
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t sao_launcher_rt_io_operator_run(
+    sao_platform_ctx* ctx,
+    const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_output_fn output,
+    void* output_user_data, int32_t* out_ready) {
+    constexpr sao_status_t kNotSubmitted = -4085;
+    if (out_ready != nullptr)
+        *out_ready = 0;
+    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) ||
+        output == nullptr || out_ready == nullptr) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+
+    auto emit = [&](const sao_launcher_rt_io_operator_report_t& report) {
+        char json[2048]{};
+        size_t written = 0u;
+        const sao_status_t status = sao_launcher_rt_io_operator_format_json(
+            &report, json, sizeof(json), &written);
+        if (status == SAO_STATUS_OK && written != 0u)
+            output(json, output_user_data);
+        return status;
+    };
+    auto prepare_not_submitted = [&](uint32_t stage) {
+        sao_launcher_rt_io_operator_report_t report{};
+        initializeRtIoOperatorReport(options, stage, &report);
+        report.status = kNotSubmitted;
+        report.operation_status = kNotSubmitted;
+        return report;
+    };
+
+    sao_status_t overall = SAO_STATUS_OK;
+    sao_launcher_rt_io_operator_report_t preflight =
+        prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT);
+    sao_status_t stage_status = sao_platform_rt_io_operator_preflight(
+        ctx, options, &preflight);
+    if (preflight.status == SAO_STATUS_INTERNAL)
+        preflight.status = stage_status;
+    if (preflight.operation_status == SAO_STATUS_INTERNAL)
+        preflight.operation_status = stage_status;
+    if (stage_status != SAO_STATUS_OK || preflight.success == 0u) {
+        overall = stage_status != SAO_STATUS_OK ? stage_status
+                                                : SAO_STATUS_INTERNAL;
+    }
+    if (emit(preflight) != SAO_STATUS_OK)
+        overall = SAO_STATUS_INTERNAL;
+
+    if (options->preflight_only != 0u)
+        return overall;
+
+    sao_launcher_rt_io_operator_report_t init =
+        prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_INIT);
+    sao_launcher_rt_io_operator_report_t live =
+        prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_LIVE);
+    sao_launcher_rt_io_operator_report_t status =
+        prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_STATUS);
+
+    if (overall == SAO_STATUS_OK) {
+        stage_status = sao_platform_rt_io_operator_init(ctx, options, &init);
+        if (init.status == SAO_STATUS_INTERNAL)
+            init.status = stage_status;
+        if (init.operation_status == SAO_STATUS_INTERNAL)
+            init.operation_status = stage_status;
+        if (stage_status != SAO_STATUS_OK || init.success == 0u) {
+            overall = stage_status != SAO_STATUS_OK ? stage_status
+                                                    : SAO_STATUS_INTERNAL;
+        }
+    }
+    if (emit(init) != SAO_STATUS_OK)
+        overall = SAO_STATUS_INTERNAL;
+
+    if (overall == SAO_STATUS_OK) {
+        stage_status = sao_platform_rt_io_operator_live_validate(
+            ctx, options, &live);
+        if (live.status == SAO_STATUS_INTERNAL)
+            live.status = stage_status;
+        if (live.operation_status == SAO_STATUS_INTERNAL)
+            live.operation_status = stage_status;
+        if (stage_status != SAO_STATUS_OK || live.success == 0u) {
+            overall = stage_status != SAO_STATUS_OK ? stage_status
+                                                    : SAO_STATUS_INTERNAL;
+        }
+    }
+    if (emit(live) != SAO_STATUS_OK)
+        overall = SAO_STATUS_INTERNAL;
+
+    if (overall == SAO_STATUS_OK) {
+        stage_status = sao_platform_rt_io_operator_status(ctx, options, &status);
+        if (status.status == SAO_STATUS_INTERNAL)
+            status.status = stage_status;
+        if (status.operation_status == SAO_STATUS_INTERNAL)
+            status.operation_status = stage_status;
+        if (stage_status != SAO_STATUS_OK || status.success == 0u) {
+            overall = stage_status != SAO_STATUS_OK ? stage_status
+                                                    : SAO_STATUS_INTERNAL;
+        }
+    }
+    if (emit(status) != SAO_STATUS_OK)
+        overall = SAO_STATUS_INTERNAL;
+
+    sao_launcher_rt_io_operator_report_t cleanup =
+        prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_CLEANUP);
+    const sao_status_t cleanup_status = sao_platform_rt_io_operator_cleanup(
+        ctx, options, &cleanup);
+    if (cleanup.status == SAO_STATUS_INTERNAL)
+        cleanup.status = cleanup_status;
+    if (cleanup.operation_status == SAO_STATUS_INTERNAL)
+        cleanup.operation_status = cleanup_status;
+    if (cleanup_status != SAO_STATUS_OK || cleanup.success == 0u) {
+        overall = cleanup_status != SAO_STATUS_OK ? cleanup_status
+                                                  : SAO_STATUS_INTERNAL;
+    }
+    if (emit(cleanup) != SAO_STATUS_OK)
+        overall = SAO_STATUS_INTERNAL;
+
+    if (overall == SAO_STATUS_OK)
+        *out_ready = 1;
+    return overall;
+}
+
 // Test-only setter for the runtime installer hook. Available in every
 // build so headless integration tests can install a mock without linking
 // the installer-core track. Passing nullptr restores the pass-through
@@ -1065,6 +1371,91 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                                                             g_composition_test_hooks.user_data)
                : SAO_STATUS_OK;
 }
+sao_status_t sao_platform_rt_io_operator_preflight(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+    if (!g_composition_test_hooks.rt_io_operator_preflight) {
+        if (out_report != nullptr) {
+            out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->failure_classification =
+                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        }
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    return g_composition_test_hooks.rt_io_operator_preflight(
+        ctx, options, out_report, g_composition_test_hooks.user_data);
+}
+sao_status_t sao_platform_rt_io_operator_init(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+    if (!g_composition_test_hooks.rt_io_operator_init) {
+        if (out_report != nullptr) {
+            out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->failure_classification =
+                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        }
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    return g_composition_test_hooks.rt_io_operator_init(
+        ctx, options, out_report, g_composition_test_hooks.user_data);
+}
+sao_status_t sao_platform_rt_io_operator_live_validate(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+    if (!g_composition_test_hooks.rt_io_operator_live_validate) {
+        if (out_report != nullptr) {
+            out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->failure_classification =
+                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        }
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    return g_composition_test_hooks.rt_io_operator_live_validate(
+        ctx, options, out_report, g_composition_test_hooks.user_data);
+}
+sao_status_t sao_platform_rt_io_operator_status(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+    if (!g_composition_test_hooks.rt_io_operator_status) {
+        if (out_report != nullptr) {
+            out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->failure_classification =
+                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        }
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    return g_composition_test_hooks.rt_io_operator_status(
+        ctx, options, out_report, g_composition_test_hooks.user_data);
+}
+sao_status_t sao_platform_rt_io_operator_cleanup(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+    if (!g_composition_test_hooks.rt_io_operator_cleanup) {
+        if (out_report != nullptr) {
+            out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+            out_report->failure_classification =
+                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        }
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    return g_composition_test_hooks.rt_io_operator_cleanup(
+        ctx, options, out_report, g_composition_test_hooks.user_data);
+}
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 struct sao_platform_ctx {
     sao_rt_io_proxy_handle_t rt_io_proxy;
@@ -1088,6 +1479,8 @@ struct sao_platform_ctx {
     SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
+    bool rt_io_operator_shutdown = false;
+    sao_launcher_rt_io_operator_report_t rt_io_cleanup_report{};
     bool nervgear_mode{true};
     bool streaming_flow_started = false;
     sao_plugins_registry* plugins_registry = nullptr;
@@ -1756,6 +2149,541 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     return SAO_STATUS_ERR_NOT_FOUND;
 }
 
+uint32_t rt_io_operator_restore_mask(
+    const SaoRtIoProductionStateWireV1& state) noexcept {
+    uint32_t mask = 0u;
+    if (state.retain_for_recovery != 0u || state.restore_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED;
+    if (state.handle_recovery_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_HANDLE;
+    if (state.mf_restore_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_MF;
+    if (state.ob_restore_pending != 0u || state.ob_restore_state != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_OB;
+    if (state.ob_recovery_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_OB_RECOVERY;
+    if (state.hid.shared_restore_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_HID_SHARED;
+    if (state.native_io_pending != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_NATIVE_IO;
+    if (state.active_r3_maps != 0u || state.r3_operations_inflight != 0u ||
+        state.r3_close_in_progress != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_R3_ACTIVITY;
+    if (state.cached_write_state == 3u || state.cached_write_state == 4u ||
+        state.cached_write_in_flight != 0u ||
+        state.cached_write_cleanup_owner != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_CACHED_WRITE;
+    if (state.r1_state == 3u || state.r2_state == 3u ||
+        state.r3_state == 3u)
+        mask |= SAO_LAUNCHER_RT_IO_RESTORE_RESOURCE_UNKNOWN;
+    return mask;
+}
+
+uint32_t rt_io_operator_admission_mask(
+    const SaoRtIoProductionStateWireV1& state) noexcept {
+    uint32_t mask = 0u;
+    if (state.r3_map_admission_open != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP;
+    if (state.cached_write_state == 2u &&
+        state.cached_write_binding_valid != 0u &&
+        state.cached_write_binding_current != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE;
+    if (state.hid_shared_owner_current != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_ADMISSION_HID_OWNER;
+    if (state.hid_shared_probe_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_ADMISSION_HID_PROBE;
+    return mask;
+}
+
+uint32_t rt_io_operator_capability_mask(
+    const SaoRtIoProductionStateWireV1& state) noexcept {
+    uint32_t mask = 0u;
+    if (state.hid.r3_shared_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_R3_SHARED;
+    if (state.hid.r5_direct_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT;
+    if (state.hid.mf_ready != 0u || state.mf_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_MF;
+    if (state.hid_mouse_provenance != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE;
+    if (state.hid_keyboard_provenance != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE;
+    if (state.ob_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_OB;
+    if (state.watchdog_hooks_ready != 0u)
+        mask |= SAO_LAUNCHER_RT_IO_CAP_WATCHDOG;
+    return mask;
+}
+
+bool rt_io_operator_production_header_valid(
+    const SaoRtIoProductionStateWireV1& state) noexcept {
+    return std::memcmp(state.header.magic,
+                       SAO_RT_IO_PRODUCTION_STATE_WIRE_MAGIC, 4u) == 0 &&
+        state.header.version == SAO_RT_IO_PRODUCTION_STATE_WIRE_VERSION &&
+        state.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
+        state.header.struct_size == sizeof(state) &&
+        state.header.reserved == 0u;
+}
+
+bool rt_io_operator_production_enums_known(
+    const SaoRtIoProductionStateWireV1& state) noexcept {
+    return state.r1_state <= 3u && state.r2_state <= 3u &&
+        state.r3_state <= 3u && state.cached_write_state <= 4u &&
+        state.hid.selected_backend <= 3u;
+}
+
+void rt_io_operator_copy_call(
+    const SaoRtIoCallResult& call,
+    sao_launcher_rt_io_operator_report_t* report) noexcept {
+    report->call_authenticated = call.authenticated != 0u ? 1u : 0u;
+    report->call_transport_complete =
+        call.transport_complete != 0u ? 1u : 0u;
+    report->call_request_id_matched =
+        call.request_id_matched != 0u ? 1u : 0u;
+    report->call_committed =
+        call.outcome == SAO_RT_IO_OUTCOME_COMMITTED ? 1u : 0u;
+}
+
+void rt_io_operator_copy_state(
+    const SaoRtIoProductionStateWireV1& state,
+    sao_launcher_rt_io_operator_report_t* report) noexcept {
+    report->state_observed =
+        rt_io_operator_production_header_valid(state) ? 1u : 0u;
+    report->selected_backend = state.hid.selected_backend;
+    report->admission_mask = rt_io_operator_admission_mask(state);
+    report->capability_mask = rt_io_operator_capability_mask(state);
+    report->restore_mask = rt_io_operator_restore_mask(state);
+    report->provider_retained = state.retain_for_recovery != 0u ? 1u : 0u;
+    report->wiper_joined = state.wiper_joined != 0u ? 1u : 0u;
+    report->engine_cleanup_confirmed =
+        state.engine_cleanup_confirmed != 0u ? 1u : 0u;
+    report->etw_restore_confirmed =
+        state.etw_restore_confirmed != 0u ? 1u : 0u;
+    report->resources_absent =
+        state.r1_state == 0u && state.r2_state == 0u &&
+                state.r3_state == 0u
+            ? 1u
+            : 0u;
+    report->last_failure_code = state.last_failure_code;
+    report->last_failure_stage = state.last_failure_stage;
+}
+
+bool rt_io_operator_call_complete(
+    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    return report.call_authenticated != 0u &&
+        report.call_transport_complete != 0u &&
+        report.call_request_id_matched != 0u &&
+        report.call_committed != 0u;
+}
+
+bool rt_io_operator_state_has_no_unknown_or_restore(
+    const SaoRtIoProductionStateWireV1& state,
+    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    return report.state_observed != 0u &&
+        rt_io_operator_production_enums_known(state) &&
+        report.restore_mask == 0u;
+}
+
+bool rt_io_operator_state_clean(
+    const SaoRtIoProductionStateWireV1& state,
+    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    return rt_io_operator_state_has_no_unknown_or_restore(state, report) &&
+        report.resources_absent != 0u && state.ci_mutation_active == 0u &&
+        state.callbacks_suppressed == 0u && state.watchdog_started == 0u &&
+        state.native_io_pending == 0u && state.auxiliary_handle_count == 0u &&
+        state.r1_handle_open == 0u && state.r3_handle_open == 0u &&
+        state.cached_write_state == 0u && state.cached_write_in_flight == 0u &&
+        state.r3_map_admission_open == 0u && state.active_r3_maps == 0u &&
+        state.r3_operations_inflight == 0u && report.admission_mask == 0u &&
+        report.provider_retained == 0u;
+}
+
+uint32_t rt_io_operator_live_options(
+    const sao_launcher_rt_io_operator_options_t& options) noexcept {
+    uint32_t flags = 0u;
+    if (options.input_checks != 0u) {
+        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_MOUSE_ZERO_MOVE;
+        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_F24_DOWN_UP;
+    }
+    if (options.r5_check != 0u)
+        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_R5_FALLBACK_PROBE;
+    if (options.mf_check != 0u)
+        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_MF_FALLBACK_DIAGNOSTIC;
+    return flags;
+}
+
+sao_status_t prepare_rt_io_operator_shutdown(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    if (ctx->process_selector_panel) {
+        const sao_status_t status =
+            ctx->process_selector_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->process_selector_panel.reset();
+        ctx->builtin_action_state.authority.process_selector = false;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        sync_entity_publication_authority(ctx);
+#endif
+    }
+#endif
+    if (ctx->window_rect_registered) {
+        const sao_status_t status = sao_rt_io_window_rect_revoke(
+            ctx->window_rect_controller, &ctx->window_rect_token);
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->window_rect_registered = false;
+        ctx->window_rect_token = {};
+    }
+    if (ctx->window_rect_controller != nullptr) {
+        sao_rt_io_window_rect_controller_destroy(ctx->window_rect_controller);
+        ctx->window_rect_controller = nullptr;
+    }
+    return SAO_STATUS_OK;
+}
+
+sao_status_t sao_platform_rt_io_operator_preflight(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
+        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+
+    SaoRtIoPreflightV2Resp response{};
+    SaoRtIoCallResult call{};
+    const sao_status_t status = sao_rt_io_proxy_preflight_v2(
+        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    out_report->status = status;
+    out_report->operation_status = response.operation_status;
+    rt_io_operator_copy_call(call, out_report);
+    rt_io_operator_copy_state(response.production, out_report);
+    out_report->residue_gate = response.residue_gate;
+    out_report->residue_count = response.residue_count;
+    out_report->unknown_count = response.unknown_count;
+    out_report->is_admin = response.is_admin;
+    out_report->is_elevated = response.is_elevated;
+    out_report->load_driver_privilege_present =
+        response.load_driver_privilege_present;
+    out_report->load_driver_privilege_enabled =
+        response.load_driver_privilege_enabled;
+    out_report->hvci_enabled = response.hvci_enabled;
+    out_report->vbs_enabled = response.vbs_enabled;
+    out_report->provider_observable = response.provider_observable;
+    const bool observations_complete =
+        response.is_admin == SAO_RT_IO_OBSERVATION_TRUE &&
+        response.is_elevated == SAO_RT_IO_OBSERVATION_TRUE &&
+        response.load_driver_privilege_present == SAO_RT_IO_OBSERVATION_TRUE &&
+        response.load_driver_privilege_enabled == SAO_RT_IO_OBSERVATION_TRUE &&
+        response.hvci_enabled != SAO_RT_IO_OBSERVATION_UNKNOWN &&
+        response.vbs_enabled != SAO_RT_IO_OBSERVATION_UNKNOWN &&
+        response.provider_observable == SAO_RT_IO_OBSERVATION_TRUE;
+    const bool complete = status == SAO_STATUS_OK &&
+        response.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) &&
+        response.residue_gate == SAO_RT_IO_OPERATOR_RESIDUE_GATE_CLEAN &&
+        response.residue_count == 0u && response.unknown_count == 0u &&
+        response.r1_asset.status == SAO_STATUS_OK &&
+        response.r1_asset.valid != 0u &&
+        response.r3_asset.status == SAO_STATUS_OK &&
+        response.r3_asset.valid != 0u && observations_complete &&
+        rt_io_operator_state_clean(response.production, *out_report) &&
+        response.production.last_failure_code == SAO_STATUS_OK &&
+        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+    out_report->complete = complete ? 1u : 0u;
+    out_report->success = out_report->complete;
+    out_report->failure_classification = complete
+        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+        : (status != SAO_STATUS_OK
+               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+               : SAO_LAUNCHER_RT_IO_FAILURE_PREFLIGHT_INCOMPLETE);
+    return complete ? SAO_STATUS_OK
+                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+}
+
+sao_status_t sao_platform_rt_io_operator_init(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
+        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+
+    SaoRtIoInitV2Resp response{};
+    SaoRtIoCallResult call{};
+    const sao_status_t status = sao_rt_io_proxy_init_v2(
+        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    out_report->status = status;
+    out_report->operation_status = response.operation_status;
+    rt_io_operator_copy_call(call, out_report);
+    rt_io_operator_copy_state(response.production, out_report);
+    out_report->selected_engine = response.selected_engine;
+    out_report->backend = response.backend;
+    out_report->runtime_tier = response.backend;
+    out_report->driver_strategy = response.driver_strategy;
+    out_report->loaded = response.loaded != 0u ? 1u : 0u;
+    out_report->probe_passed = response.probe_passed != 0u ? 1u : 0u;
+    out_report->last_failure_code = response.last_failure_code;
+    out_report->last_failure_stage = response.last_failure_stage;
+    const bool complete = status == SAO_STATUS_OK &&
+        response.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) &&
+        response.selected_engine == SAO_RT_IO_ENGINE_PHYSRW &&
+        response.backend == SAO_RT_IO_TIER_E &&
+        response.driver_strategy == SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW &&
+        response.loaded != 0u && response.probe_passed != 0u &&
+        response.response_committed != 0u &&
+        rt_io_operator_state_has_no_unknown_or_restore(
+            response.production, *out_report) &&
+        response.production.r1_state != 0u &&
+        response.production.r3_state != 0u &&
+        response.production.r1_probe_ready != 0u &&
+        response.production.r3_probe_ready != 0u &&
+        response.production.cached_write_state == 2u &&
+        response.last_failure_code == SAO_STATUS_OK &&
+        response.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+    out_report->complete = complete ? 1u : 0u;
+    out_report->success = out_report->complete;
+    out_report->failure_classification = complete
+        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+        : (status != SAO_STATUS_OK
+               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+               : SAO_LAUNCHER_RT_IO_FAILURE_INIT_INCOMPLETE);
+    return complete ? SAO_STATUS_OK
+                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+}
+
+sao_status_t sao_platform_rt_io_operator_live_validate(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
+        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+
+    SaoRtIoLiveValidateV1Resp response{};
+    SaoRtIoCallResult call{};
+    const uint32_t live_options = rt_io_operator_live_options(*options);
+    const sao_status_t status = sao_rt_io_proxy_live_validate_v1(
+        ctx->rt_io_proxy, live_options, options->timeout_ms,
+        &response, &call);
+    out_report->status = status;
+    out_report->operation_status = response.operation_status;
+    rt_io_operator_copy_call(call, out_report);
+    rt_io_operator_copy_state(response.final_state, out_report);
+    out_report->attempted_step_mask = response.attempted_mask;
+    out_report->passed_step_mask = response.passed_mask;
+    out_report->unknown_step_mask = response.unknown_mask;
+    out_report->partial_step_mask = response.partial_mask;
+    const uint64_t requested_mask = out_report->requested_step_mask;
+    constexpr uint32_t required_admission =
+        SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP |
+        SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE |
+        SAO_LAUNCHER_RT_IO_ADMISSION_HID_OWNER |
+        SAO_LAUNCHER_RT_IO_ADMISSION_HID_PROBE;
+    constexpr uint32_t required_capabilities =
+        SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
+        SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
+        SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE |
+        SAO_LAUNCHER_RT_IO_CAP_OB |
+        SAO_LAUNCHER_RT_IO_CAP_WATCHDOG;
+    const bool complete = status == SAO_STATUS_OK &&
+        response.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) &&
+        response.options == live_options && response.terminal_step == UINT32_MAX &&
+        response.step_count == SAO_RT_IO_LIVE_VALIDATE_STEP_COUNT &&
+        response.attempted_mask == requested_mask &&
+        response.passed_mask == requested_mask &&
+        response.unknown_mask == 0u && response.partial_mask == 0u &&
+        response.active_r3_maps_before == 0u &&
+        response.active_r3_maps_after == 0u &&
+        rt_io_operator_state_has_no_unknown_or_restore(
+            response.final_state, *out_report) &&
+        (out_report->admission_mask & required_admission) == required_admission &&
+        (out_report->capability_mask & required_capabilities) ==
+            required_capabilities &&
+        out_report->selected_backend != 0u &&
+        response.final_state.last_failure_code == SAO_STATUS_OK &&
+        response.final_state.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+    out_report->complete = complete ? 1u : 0u;
+    out_report->success = out_report->complete;
+    out_report->failure_classification = complete
+        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+        : (status != SAO_STATUS_OK
+               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+               : SAO_LAUNCHER_RT_IO_FAILURE_LIVE_INCOMPLETE);
+    return complete ? SAO_STATUS_OK
+                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+}
+
+sao_status_t sao_platform_rt_io_operator_status(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
+        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+
+    SaoRtIoStatusV2Resp response{};
+    SaoRtIoCallResult call{};
+    const sao_status_t status = sao_rt_io_proxy_status_v2(
+        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    out_report->status = status;
+    out_report->operation_status = response.operation_status;
+    rt_io_operator_copy_call(call, out_report);
+    rt_io_operator_copy_state(response.production, out_report);
+    out_report->selected_engine = response.runtime_engine;
+    out_report->runtime_tier = response.runtime_tier;
+    out_report->backend = response.runtime_tier;
+    out_report->driver_strategy = response.driver_strategy;
+    out_report->backend_ready = response.backend_ready != 0u ? 1u : 0u;
+    out_report->attempted_step_mask =
+        response.last_live_validation.attempted_mask;
+    out_report->passed_step_mask = response.last_live_validation.passed_mask;
+    out_report->unknown_step_mask = response.last_live_validation.unknown_mask;
+    out_report->partial_step_mask = response.last_live_validation.partial_mask;
+    const uint64_t requested_mask = out_report->requested_step_mask;
+    const bool live_consistent =
+        response.last_live_validation.operation_status == SAO_STATUS_OK &&
+        response.last_live_validation.options ==
+            rt_io_operator_live_options(*options) &&
+        response.last_live_validation.terminal_step == UINT32_MAX &&
+        response.last_live_validation.attempted_mask == requested_mask &&
+        response.last_live_validation.passed_mask == requested_mask &&
+        response.last_live_validation.unknown_mask == 0u &&
+        response.last_live_validation.partial_mask == 0u &&
+        response.last_live_validation.final_state.last_failure_code ==
+            response.production.last_failure_code &&
+        response.last_live_validation.final_state.last_failure_stage ==
+            response.production.last_failure_stage &&
+        response.last_live_validation.final_state.hid.selected_backend ==
+            response.production.hid.selected_backend &&
+        response.last_live_validation.final_state.cached_write_state ==
+            response.production.cached_write_state &&
+        response.last_live_validation.final_state.r1_state ==
+            response.production.r1_state &&
+        response.last_live_validation.final_state.r2_state ==
+            response.production.r2_state &&
+        response.last_live_validation.final_state.r3_state ==
+            response.production.r3_state &&
+        response.last_live_validation.final_state.active_r3_maps ==
+            response.production.active_r3_maps &&
+        response.last_live_validation.final_state.r3_operations_inflight ==
+            response.production.r3_operations_inflight &&
+        rt_io_operator_restore_mask(
+            response.last_live_validation.final_state) ==
+            rt_io_operator_restore_mask(response.production) &&
+        rt_io_operator_admission_mask(
+            response.last_live_validation.final_state) ==
+            rt_io_operator_admission_mask(response.production) &&
+        rt_io_operator_capability_mask(
+            response.last_live_validation.final_state) ==
+            rt_io_operator_capability_mask(response.production);
+    const bool complete = status == SAO_STATUS_OK &&
+        response.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) &&
+        response.runtime_engine == SAO_RT_IO_ENGINE_PHYSRW &&
+        response.runtime_tier == SAO_RT_IO_TIER_E &&
+        response.driver_strategy == SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW &&
+        response.backend_ready != 0u && live_consistent &&
+        rt_io_operator_state_has_no_unknown_or_restore(
+            response.production, *out_report) &&
+        response.production.last_failure_code == SAO_STATUS_OK &&
+        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+    out_report->complete = complete ? 1u : 0u;
+    out_report->success = out_report->complete;
+    out_report->failure_classification = complete
+        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+        : (status != SAO_STATUS_OK
+               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+               : SAO_LAUNCHER_RT_IO_FAILURE_STATUS_INCONSISTENT);
+    return complete ? SAO_STATUS_OK
+                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+}
+
+sao_status_t sao_platform_rt_io_operator_cleanup(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) ||
+        out_report == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->rt_io_operator_shutdown) {
+        *out_report = ctx->rt_io_cleanup_report;
+        return out_report->success != 0u ? SAO_STATUS_OK
+                                         : out_report->status;
+    }
+    if (ctx->rt_io_proxy == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+
+    sao_status_t status = prepare_rt_io_operator_shutdown(ctx);
+    if (status != SAO_STATUS_OK) {
+        out_report->status = status;
+        out_report->operation_status = status;
+        out_report->failure_classification =
+            SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        return status;
+    }
+
+    SaoRtIoShutdownRespV1 response{};
+    SaoRtIoCallResult call{};
+    status = sao_rt_io_proxy_call(
+        ctx->rt_io_proxy, SAO_RT_IO_CMD_SHUTDOWN, nullptr, 0u,
+        options->timeout_ms, reinterpret_cast<uint8_t*>(&response),
+        sizeof(response), &call);
+    out_report->status = status;
+    out_report->operation_status = response.cleanup_status;
+    rt_io_operator_copy_call(call, out_report);
+    rt_io_operator_copy_state(response.production, out_report);
+    out_report->cleanup_acknowledged = response.acknowledged != 0u ? 1u : 0u;
+    out_report->cleanup_clean = response.clean_shutdown != 0u ? 1u : 0u;
+    out_report->cleanup_keep_running = response.keep_running != 0u ? 1u : 0u;
+    out_report->provider_retained = response.retained_for_retry != 0u ||
+            response.production.retain_for_recovery != 0u
+        ? 1u
+        : 0u;
+    const bool response_header_valid =
+        std::memcmp(response.header.magic,
+                    SAO_RT_IO_SHUTDOWN_EXTENSION_MAGIC, 4u) == 0 &&
+        response.header.version == SAO_RT_IO_SHUTDOWN_EXTENSION_VERSION &&
+        response.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
+        response.header.struct_size == sizeof(response) &&
+        response.header.reserved == 0u;
+    const bool complete = status == SAO_STATUS_OK &&
+        response.cleanup_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && response_header_valid &&
+        response.acknowledged != 0u && response.retained_for_retry == 0u &&
+        response.clean_shutdown != 0u && response.keep_running == 0u &&
+        rt_io_operator_state_clean(response.production, *out_report) &&
+        response.production.wiper_joined != 0u &&
+        response.production.engine_cleanup_confirmed != 0u &&
+        response.production.etw_restore_confirmed != 0u &&
+        response.production.last_failure_code == SAO_STATUS_OK &&
+        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+    out_report->complete = complete ? 1u : 0u;
+    out_report->success = out_report->complete;
+    out_report->failure_classification = complete
+        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+        : (status != SAO_STATUS_OK
+               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+               : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE);
+    if (complete) {
+        sao_rt_io_proxy_handle_t proxy = ctx->rt_io_proxy;
+        ctx->rt_io_proxy = nullptr;
+        ctx->rt_io_operator_shutdown = true;
+        ctx->rt_io_cleanup_report = *out_report;
+        sao_rt_io_proxy_destroy(proxy);
+        return SAO_STATUS_OK;
+    }
+    return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
+}
+
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
     if (!cfg || !ctx_out || !cfg->base_dir)
         return SAO_STATUS_INVALID_ARGUMENT;
@@ -1846,6 +2774,9 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     SaoRtIoProxyConfig rt_io_cfg{};
     rt_io_cfg.session_name_utf8 = "launcher";
     rt_io_cfg.strict_bootstrap = 1;
+    rt_io_cfg.driver_strategy = cfg->rt_io_operator != 0
+        ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
+        : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
     status = sao_rt_io_proxy_open(&rt_io_cfg, &ctx->rt_io_proxy);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
@@ -2019,9 +2950,14 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         ctx->window_rect_controller = nullptr;
     }
     if (ctx->rt_io_proxy) {
-        const sao_status_t proxy_status = sao_rt_io_proxy_close(ctx->rt_io_proxy);
-        if (proxy_status != SAO_STATUS_OK) {
-            return proxy_status;
+        if (ctx->rt_io_operator_shutdown) {
+            sao_rt_io_proxy_destroy(ctx->rt_io_proxy);
+        } else {
+            const sao_status_t proxy_status =
+                sao_rt_io_proxy_close(ctx->rt_io_proxy);
+            if (proxy_status != SAO_STATUS_OK) {
+                return proxy_status;
+            }
         }
         ctx->rt_io_proxy = nullptr;
     }
@@ -2303,6 +3239,66 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t, intpt
                                    int32_t* out_handled) {
     if (out_handled)
         *out_handled = 0;
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_rt_io_operator_preflight(
+    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+    if (out_report != nullptr) {
+        out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+    }
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_rt_io_operator_init(
+    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+    if (out_report != nullptr) {
+        out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+    }
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_rt_io_operator_live_validate(
+    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+    if (out_report != nullptr) {
+        out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+    }
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_rt_io_operator_status(
+    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+    if (out_report != nullptr) {
+        out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+    }
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_rt_io_operator_cleanup(
+    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(
+        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+    if (out_report != nullptr) {
+        out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+    }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 #endif

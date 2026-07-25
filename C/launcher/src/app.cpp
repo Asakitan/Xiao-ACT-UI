@@ -17,6 +17,7 @@
 #include "launcher_lifecycle.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace sao::launcher {
 
@@ -24,26 +25,42 @@ namespace {
 
 constexpr UINT kUiFrameIntervalMs = 16;
 
-// Full-stack smoke harness helper.  When ``--smoke`` is on, we attach
-// (or allocate) a console so the parent test process can capture stdout,
-// then print a single ``tag`` line.  All other invocations are silent —
-// production users never see this output.
-void smokePrint(const AppState& state, const char* tag) noexcept {
-    if (!state.smoke_mode) {
+// Console-readable smoke/operator output.  Prefer an inherited stdout pipe
+// so subprocess harnesses keep deterministic capture; allocate a console only
+// when the process has no usable output handle.
+void consolePrintLine(const char* line) noexcept {
+    if (line == nullptr)
         return;
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE) {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+            (void)AllocConsole();
+        }
+        output = GetStdHandle(STD_OUTPUT_HANDLE);
     }
-    // AttachConsole first — a Catch2 subprocess spawned with a pipe
-    // already gives us a real console handle.  If there is no parent
-    // console (e.g. double-clicked exe running by hand), fall back to
-    // AllocConsole so the fputs below still lands somewhere visible.
-    if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
-        (void)AllocConsole();
+    if (output != nullptr && output != INVALID_HANDLE_VALUE) {
+        DWORD written = 0u;
+        const DWORD size = static_cast<DWORD>(std::strlen(line));
+        if (WriteFile(output, line, size, &written, nullptr) &&
+            written == size) {
+            static constexpr char newline[] = "\r\n";
+            (void)WriteFile(output, newline, sizeof(newline) - 1u,
+                            &written, nullptr);
+            return;
+        }
     }
-    FILE* out = nullptr;
-    (void)freopen_s(&out, "CONOUT$", "w", stdout);
-    std::fputs(tag, stdout);
+    std::fputs(line, stdout);
     std::fputs("\n", stdout);
     std::fflush(stdout);
+}
+
+void smokePrint(const AppState& state, const char* tag) noexcept {
+    if (state.smoke_mode)
+        consolePrintLine(tag);
+}
+
+void rtIoOperatorPrint(const char* line, void*) noexcept {
+    consolePrintLine(line);
 }
 
 } // namespace
@@ -51,6 +68,12 @@ void smokePrint(const AppState& state, const char* tag) noexcept {
 App& App::instance() noexcept {
     static App instance;
     return instance;
+}
+
+bool shouldEmitRtIoReady(const AppState& state,
+                         bool validation_ready) noexcept {
+    return state.rt_io_operator && !state.rt_io_preflight_only &&
+        validation_ready;
 }
 
 int App::run() {
@@ -192,8 +215,11 @@ int App::run() {
     // leaks under a subprocess).  Regular launches keep going.
     if (state_.smoke_mode && state_.exit_after_init) {
         smokePrint(state_, "READY");
-        shutdown();
-        return finish(SAO_EXIT_OK, nullptr);
+        smoke_ready_printed_ = true;
+        if (!state_.rt_io_operator) {
+            shutdown();
+            return finish(SAO_EXIT_OK, nullptr);
+        }
     }
 
     // 10. UI online.  Displays panels + hotkeys.
@@ -207,9 +233,19 @@ int App::run() {
     // ``--smoke`` is set (no ``--exit-after-init``) we still print READY
     // before falling through to the message loop so
     // interactive smoke inspection works.
-    if (state_.smoke_mode) {
+    if (state_.smoke_mode && !smoke_ready_printed_) {
         smokePrint(state_, "READY");
-        if (state_.exit_after_init) {
+        smoke_ready_printed_ = true;
+    }
+
+    if (state_.rt_io_operator) {
+        rc = runRtIoOperator();
+        if (rc != SAO_EXIT_OK) {
+            return fail(rc, L"rt_io_operator", "rt_io_operator");
+        }
+        if (state_.rt_io_preflight_only ||
+            state_.rt_io_exit_after_validation ||
+            (state_.smoke_mode && state_.exit_after_init)) {
             shutdown();
             return finish(SAO_EXIT_OK, nullptr);
         }
@@ -343,6 +379,32 @@ int App::bringUpUi() {
     if (!user_menu_.create(state_.base_dir)) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
+    return SAO_EXIT_OK;
+}
+
+int App::runRtIoOperator() {
+    sao_launcher_rt_io_operator_options_t options{};
+    options.struct_size = sizeof(options);
+    options.preflight_only = state_.rt_io_preflight_only ? 1u : 0u;
+    options.input_checks = state_.rt_io_input_checks ? 1u : 0u;
+    options.r5_check = state_.rt_io_r5_check ? 1u : 0u;
+    options.mf_check = state_.rt_io_mf_check ? 1u : 0u;
+    options.exit_after_validation =
+        state_.rt_io_exit_after_validation ? 1u : 0u;
+    options.timeout_ms = 120000u;
+
+    int32_t ready = 0;
+    const sao_status_t status = sao_launcher_rt_io_operator_run(
+        static_cast<sao_platform_ctx*>(state_.platform_ctx), &options,
+        &rtIoOperatorPrint, nullptr, &ready);
+    if (status != SAO_STATUS_OK)
+        return SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
+    if (state_.rt_io_preflight_only)
+        return ready == 0 ? SAO_EXIT_OK
+                          : SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
+    if (!shouldEmitRtIoReady(state_, ready != 0))
+        return SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
+    consolePrintLine("RT_IO_READY");
     return SAO_EXIT_OK;
 }
 

@@ -98,6 +98,12 @@ TEST_CASE("AppState default state is safe", "[launcher][smoke]") {
     AppState s{};
     REQUIRE(s.safe_mode == false);
     REQUIRE(s.no_license == false);
+    REQUIRE(s.rt_io_operator == false);
+    REQUIRE(s.rt_io_preflight_only == false);
+    REQUIRE(s.rt_io_input_checks == false);
+    REQUIRE(s.rt_io_r5_check == false);
+    REQUIRE(s.rt_io_mf_check == false);
+    REQUIRE(s.rt_io_exit_after_validation == false);
     REQUIRE(s.config_path[0] == L'\0');
     REQUIRE(s.log_level[0] == L'\0');
     REQUIRE(s.base_dir[0] == L'\0');
@@ -116,6 +122,7 @@ TEST_CASE("Exit code enum matches README contract", "[launcher][smoke]") {
     REQUIRE(SAO_EXIT_UI_ONLINE_FAIL     == 6);
     REQUIRE(SAO_EXIT_CRASH              == 7);
     REQUIRE(SAO_EXIT_BAD_ARGS           == 8);
+    REQUIRE(SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL == 9);
 }
 
 TEST_CASE("composition test provider exposes successful UI message wrappers",

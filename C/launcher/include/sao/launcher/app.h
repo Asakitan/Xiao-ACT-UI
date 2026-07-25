@@ -42,6 +42,7 @@ enum SaoLauncherExitCode : int {
     SAO_EXIT_UI_ONLINE_FAIL = 6,
     SAO_EXIT_CRASH = 7,
     SAO_EXIT_BAD_ARGS = 8,
+    SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL = 9,
     SAO_EXIT_HANDOFF_TO_PYTHON = 100,
 };
 
@@ -60,6 +61,12 @@ struct AppState {
     // survives into a shipped exe — they are purely a test entry point.
     bool smoke_mode = false;
     bool exit_after_init = false;
+    bool rt_io_operator = false;
+    bool rt_io_preflight_only = false;
+    bool rt_io_input_checks = false;
+    bool rt_io_r5_check = false;
+    bool rt_io_mf_check = false;
+    bool rt_io_exit_after_validation = false;
     wchar_t config_path[MAX_PATH] = {0};
     wchar_t log_level[16] = {0};
 
@@ -75,6 +82,9 @@ struct AppState {
     bool license_active = false;
     bool streaming_entitled = false;
 };
+
+bool shouldEmitRtIoReady(const AppState& state,
+                         bool validation_ready) noexcept;
 
 // The launcher singleton.  Only one instance lives per process.
 class App {
@@ -97,6 +107,7 @@ class App {
     int bringUpPlatform();
     int discoverPlugins();
     int bringUpUi();
+    int runRtIoOperator();
 
     // Main loop.  Blocks until WM_QUIT is posted.  Runs after every step
     // above succeeded.
@@ -122,6 +133,7 @@ class App {
     HANDLE dual_run_driver_mutex_ = nullptr;
     bool dual_run_driver_acquired_ = false;
     bool security_initialized_ = false;
+    bool smoke_ready_printed_ = false;
     bool shutdown_called_ = false;
 };
 

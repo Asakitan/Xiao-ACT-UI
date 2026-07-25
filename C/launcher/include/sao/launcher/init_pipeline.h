@@ -46,6 +46,7 @@ typedef struct sao_platform_config {
     const char* log_level;      // "trace" .. "critical"; NULL == "info"
     int32_t safe_mode;          // non-zero disables non-essential threads
     int32_t streaming_entitled; // verified paid tier or dev bypass
+    int32_t rt_io_operator;     // non-zero selects typed PHYSRW proxy strategy
 } sao_platform_config;
 
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out);
@@ -146,6 +147,157 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms);
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
                                    intptr_t l_param, int32_t* out_handled);
 
+// ---------------------------------------------------------------------------
+// RT I/O operator flow.
+//
+// The launcher-facing structs deliberately contain only sanitized scalar
+// observations.  The typed rt_io response PODs and proxy handle remain owned
+// by the platform composition provider and never cross this boundary.
+// ---------------------------------------------------------------------------
+enum sao_launcher_rt_io_operator_stage_e : uint32_t {
+    SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT = 1u,
+    SAO_LAUNCHER_RT_IO_STAGE_INIT = 2u,
+    SAO_LAUNCHER_RT_IO_STAGE_LIVE = 3u,
+    SAO_LAUNCHER_RT_IO_STAGE_STATUS = 4u,
+    SAO_LAUNCHER_RT_IO_STAGE_CLEANUP = 5u,
+};
+
+enum sao_launcher_rt_io_operator_failure_e : uint32_t {
+    SAO_LAUNCHER_RT_IO_FAILURE_NONE = 0u,
+    SAO_LAUNCHER_RT_IO_FAILURE_NOT_SUBMITTED = 1u,
+    SAO_LAUNCHER_RT_IO_FAILURE_CALL = 2u,
+    SAO_LAUNCHER_RT_IO_FAILURE_PREFLIGHT_INCOMPLETE = 3u,
+    SAO_LAUNCHER_RT_IO_FAILURE_INIT_INCOMPLETE = 4u,
+    SAO_LAUNCHER_RT_IO_FAILURE_LIVE_INCOMPLETE = 5u,
+    SAO_LAUNCHER_RT_IO_FAILURE_STATUS_INCONSISTENT = 6u,
+    SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE = 7u,
+};
+
+enum sao_launcher_rt_io_operator_admission_bit_e : uint32_t {
+    SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP = 1u << 0u,
+    SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE = 1u << 1u,
+    SAO_LAUNCHER_RT_IO_ADMISSION_HID_OWNER = 1u << 2u,
+    SAO_LAUNCHER_RT_IO_ADMISSION_HID_PROBE = 1u << 3u,
+};
+
+enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
+    SAO_LAUNCHER_RT_IO_CAP_R3_SHARED = 1u << 0u,
+    SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT = 1u << 1u,
+    SAO_LAUNCHER_RT_IO_CAP_MF = 1u << 2u,
+    SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE = 1u << 3u,
+    SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE = 1u << 4u,
+    SAO_LAUNCHER_RT_IO_CAP_OB = 1u << 5u,
+    SAO_LAUNCHER_RT_IO_CAP_WATCHDOG = 1u << 6u,
+};
+
+enum sao_launcher_rt_io_operator_restore_bit_e : uint32_t {
+    SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED = 1u << 0u,
+    SAO_LAUNCHER_RT_IO_RESTORE_HANDLE = 1u << 1u,
+    SAO_LAUNCHER_RT_IO_RESTORE_MF = 1u << 2u,
+    SAO_LAUNCHER_RT_IO_RESTORE_OB = 1u << 3u,
+    SAO_LAUNCHER_RT_IO_RESTORE_OB_RECOVERY = 1u << 4u,
+    SAO_LAUNCHER_RT_IO_RESTORE_HID_SHARED = 1u << 5u,
+    SAO_LAUNCHER_RT_IO_RESTORE_NATIVE_IO = 1u << 6u,
+    SAO_LAUNCHER_RT_IO_RESTORE_R3_ACTIVITY = 1u << 7u,
+    SAO_LAUNCHER_RT_IO_RESTORE_CACHED_WRITE = 1u << 8u,
+    SAO_LAUNCHER_RT_IO_RESTORE_RESOURCE_UNKNOWN = 1u << 9u,
+};
+
+typedef struct sao_launcher_rt_io_operator_options {
+    uint32_t struct_size;
+    uint32_t preflight_only;
+    uint32_t input_checks;
+    uint32_t r5_check;
+    uint32_t mf_check;
+    uint32_t exit_after_validation;
+    uint32_t timeout_ms;
+    uint32_t reserved;
+} sao_launcher_rt_io_operator_options_t;
+
+typedef struct sao_launcher_rt_io_operator_report {
+    uint32_t struct_size;
+    uint32_t stage;
+    sao_status_t status;
+    sao_status_t operation_status;
+    uint32_t failure_classification;
+    uint32_t success;
+    uint32_t complete;
+    uint32_t preflight_only;
+    uint32_t input_checks;
+    uint32_t r5_check;
+    uint32_t mf_check;
+    uint32_t exit_after_validation;
+    uint64_t requested_step_mask;
+    uint64_t attempted_step_mask;
+    uint64_t passed_step_mask;
+    uint64_t unknown_step_mask;
+    uint64_t partial_step_mask;
+    uint32_t selected_engine;
+    uint32_t runtime_tier;
+    uint32_t backend;
+    uint32_t selected_backend;
+    uint32_t driver_strategy;
+    uint32_t residue_gate;
+    uint32_t residue_count;
+    uint32_t unknown_count;
+    uint32_t is_admin;
+    uint32_t is_elevated;
+    uint32_t load_driver_privilege_present;
+    uint32_t load_driver_privilege_enabled;
+    uint32_t hvci_enabled;
+    uint32_t vbs_enabled;
+    uint32_t provider_observable;
+    uint32_t admission_mask;
+    uint32_t capability_mask;
+    uint32_t restore_mask;
+    uint32_t state_observed;
+    uint32_t resources_absent;
+    uint32_t loaded;
+    uint32_t probe_passed;
+    uint32_t backend_ready;
+    uint32_t call_authenticated;
+    uint32_t call_transport_complete;
+    uint32_t call_request_id_matched;
+    uint32_t call_committed;
+    uint32_t cleanup_acknowledged;
+    uint32_t cleanup_clean;
+    uint32_t cleanup_keep_running;
+    uint32_t provider_retained;
+    uint32_t wiper_joined;
+    uint32_t engine_cleanup_confirmed;
+    uint32_t etw_restore_confirmed;
+    int32_t last_failure_code;
+    uint32_t last_failure_stage;
+} sao_launcher_rt_io_operator_report_t;
+
+typedef void (*sao_launcher_rt_io_operator_output_fn)(const char* line_utf8,
+                                                       void* user_data);
+
+sao_status_t sao_platform_rt_io_operator_preflight(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t sao_platform_rt_io_operator_init(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t sao_platform_rt_io_operator_live_validate(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t sao_platform_rt_io_operator_status(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t sao_platform_rt_io_operator_cleanup(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_report_t* out_report);
+
+sao_status_t sao_launcher_rt_io_operator_format_json(
+    const sao_launcher_rt_io_operator_report_t* report, char* out_utf8,
+    size_t out_capacity, size_t* out_bytes_written);
+
+sao_status_t sao_launcher_rt_io_operator_run(
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_output_fn output, void* output_user_data,
+    int32_t* out_ready);
+
 // Test-only composition seams.  Production providers call the stable rt_io,
 // UI, and security ABIs directly; tests install these hooks to verify launch
 // ordering without launching a helper or creating a real HWND.
@@ -168,6 +320,21 @@ struct sao_launcher_composition_test_hooks_t {
     sao_status_t (*ui_tick)(sao_platform_ctx* ctx, uint32_t elapsed_ms, void* user_data);
     sao_status_t (*ui_handle_message)(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
                                       intptr_t l_param, int32_t* out_handled, void* user_data);
+    sao_status_t (*rt_io_operator_preflight)(
+        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_init)(
+        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_live_validate)(
+        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_status)(
+        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_cleanup)(
+        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
     void* user_data;
 };
 

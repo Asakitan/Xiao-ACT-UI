@@ -89,3 +89,75 @@ TEST_CASE("unknown args are rejected", "[launcher][args]") {
     REQUIRE_FALSE(parseCommandLineFromArgv(2, const_cast<wchar_t* const*>(args), s, exit_flag, code));
     REQUIRE(code == SAO_EXIT_BAD_ARGS);
 }
+
+TEST_CASE("RT I/O operator flags parse independently from smoke",
+          "[launcher][args][rt_io_operator]") {
+    AppState state{};
+    bool exit_flag = true;
+    int code = -1;
+    const wchar_t* args[] = {
+        L"SaoAuto.exe",
+        L"--rt-io-operator",
+        L"--rt-io-input-checks",
+        L"--rt-io-r5-check",
+        L"--rt-io-mf-check",
+        L"--rt-io-exit-after-validation",
+    };
+    REQUIRE(parseCommandLineFromArgv(
+        6, const_cast<wchar_t* const*>(args), state, exit_flag, code));
+    CHECK(state.rt_io_operator);
+    CHECK_FALSE(state.rt_io_preflight_only);
+    CHECK(state.rt_io_input_checks);
+    CHECK(state.rt_io_r5_check);
+    CHECK(state.rt_io_mf_check);
+    CHECK(state.rt_io_exit_after_validation);
+    CHECK_FALSE(state.smoke_mode);
+    CHECK_FALSE(state.exit_after_init);
+    CHECK_FALSE(exit_flag);
+}
+
+TEST_CASE("RT I/O subordinate flags imply operator but never smoke",
+          "[launcher][args][rt_io_operator]") {
+    const wchar_t* flags[] = {
+        L"--rt-io-preflight-only",
+        L"--rt-io-input-checks",
+        L"--rt-io-r5-check",
+        L"--rt-io-mf-check",
+        L"--rt-io-exit-after-validation",
+    };
+    for (const wchar_t* flag : flags) {
+        CAPTURE(flag);
+        AppState state{};
+        bool exit_flag = false;
+        int code = -1;
+        wchar_t* args[] = {
+            const_cast<wchar_t*>(L"SaoAuto.exe"),
+            const_cast<wchar_t*>(flag),
+        };
+        REQUIRE(parseCommandLineFromArgv(
+            2, args, state, exit_flag, code));
+        CHECK(state.rt_io_operator);
+        CHECK_FALSE(state.smoke_mode);
+        CHECK_FALSE(state.exit_after_init);
+    }
+}
+
+TEST_CASE("ordinary smoke flags do not enable RT I/O operator",
+          "[launcher][args][rt_io_operator][smoke]") {
+    AppState state{};
+    bool exit_flag = false;
+    int code = -1;
+    const wchar_t* args[] = {
+        L"SaoAuto.exe", L"--smoke", L"--exit-after-init",
+    };
+    REQUIRE(parseCommandLineFromArgv(
+        3, const_cast<wchar_t* const*>(args), state, exit_flag, code));
+    CHECK(state.smoke_mode);
+    CHECK(state.exit_after_init);
+    CHECK_FALSE(state.rt_io_operator);
+    CHECK_FALSE(state.rt_io_preflight_only);
+    CHECK_FALSE(state.rt_io_input_checks);
+    CHECK_FALSE(state.rt_io_r5_check);
+    CHECK_FALSE(state.rt_io_mf_check);
+    CHECK_FALSE(state.rt_io_exit_after_validation);
+}

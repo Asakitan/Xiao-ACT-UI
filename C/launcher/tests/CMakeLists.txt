@@ -19,6 +19,7 @@ set(_sao_launcher_test_sources
     test_stealth_strings.cpp
     test_working_dir.cpp
     test_init_pipeline.cpp
+    test_rt_io_operator_focused.cpp
     test_entity_builtin_action_focused.cpp
     test_entity_action_routes_focused.cpp
     test_settings_owner_focused.cpp

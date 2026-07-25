@@ -89,6 +89,35 @@ bool parseCommandLineFromArgv(int argc,
             state.exit_after_init = true;
             continue;
         }
+        if (wcsEqualsCI(a, L"--rt-io-operator")) {
+            state.rt_io_operator = true;
+            continue;
+        }
+        if (wcsEqualsCI(a, L"--rt-io-preflight-only")) {
+            state.rt_io_operator = true;
+            state.rt_io_preflight_only = true;
+            continue;
+        }
+        if (wcsEqualsCI(a, L"--rt-io-input-checks")) {
+            state.rt_io_operator = true;
+            state.rt_io_input_checks = true;
+            continue;
+        }
+        if (wcsEqualsCI(a, L"--rt-io-r5-check")) {
+            state.rt_io_operator = true;
+            state.rt_io_r5_check = true;
+            continue;
+        }
+        if (wcsEqualsCI(a, L"--rt-io-mf-check")) {
+            state.rt_io_operator = true;
+            state.rt_io_mf_check = true;
+            continue;
+        }
+        if (wcsEqualsCI(a, L"--rt-io-exit-after-validation")) {
+            state.rt_io_operator = true;
+            state.rt_io_exit_after_validation = true;
+            continue;
+        }
         if (wcsEqualsCI(a, L"--no-license")) {
 #if SAO_LAUNCHER_HARDENED
             // Refuse in hardened builds.
@@ -135,6 +164,12 @@ void printHelp() noexcept {
         L"  --smoke               Enable console-attached full-stack smoke mode;\r\n"
         L"                        skip GUI message loop, print READY on stdout\r\n"
         L"  --exit-after-init     With --smoke, return after platform init is ready\r\n"
+        L"  --rt-io-operator      Run the typed RT I/O operator validation flow\r\n"
+        L"  --rt-io-preflight-only  Run read-only preflight, then cleanly exit\r\n"
+        L"  --rt-io-input-checks  Add mouse-zero and F24 down/up checks\r\n"
+        L"  --rt-io-r5-check      Add the explicit R5 fallback diagnostic\r\n"
+        L"  --rt-io-mf-check      Add the explicit MF fallback diagnostic\r\n"
+        L"  --rt-io-exit-after-validation  Exit after operator cleanup\r\n"
         L"  --config=<path>       Override config file location\r\n"
         L"  --log-level=<lvl>     trace|debug|info|warn|error|critical\r\n"
         L"  --version, -v         Print version and exit\r\n"
