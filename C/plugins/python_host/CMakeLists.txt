@@ -76,6 +76,9 @@ if (Python3_FOUND)
         $<$<CONFIG:Debug>:Py_NO_LINK_LIB>
     )
     target_link_libraries(sao_plugins_python_host PUBLIC Python3::Python)
+    install(IMPORTED_RUNTIME_ARTIFACTS Python3::Python
+        RUNTIME DESTINATION bin
+        COMPONENT ship)
     set(_sao_python_resolved ON)
 endif()
 

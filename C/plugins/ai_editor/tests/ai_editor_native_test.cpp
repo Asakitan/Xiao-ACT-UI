@@ -4544,7 +4544,8 @@ Json wait_for_workflow_completion(sao_ai_editor_runtime_t runtime,
         status = dispatch(runtime, "workflows.status",
                           {{"executionId", execution_id}})["result"];
         const std::string current = status.value("status", "");
-        if (current != "running" && current != "pending") {
+        if (current == "completed" || current == "failed" ||
+            current == "cancelled") {
             return status;
         }
         Sleep(20);

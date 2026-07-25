@@ -77,23 +77,23 @@ double monotonic_seconds() {
         : static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
 }
 
-bool initialize_winrt(bool* out_uninitialize) {
-    const HRESULT hr = ::RoInitialize(RO_INIT_MULTITHREADED);
-    *out_uninitialize = hr == S_OK || hr == S_FALSE;
-    return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+bool ensure_winrt_thread_initialized() {
+    static thread_local const bool initialized = [] {
+        const HRESULT hr = ::RoInitialize(RO_INIT_MULTITHREADED);
+        return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+    }();
+    return initialized;
 }
 
 bool wgc_runtime_supported() {
     static const bool supported = [] {
-        bool uninitialize = false;
-        if (!initialize_winrt(&uninitialize)) return false;
+        if (!ensure_winrt_thread_initialized()) return false;
         bool result = false;
         try {
             result = GraphicsCaptureSession::IsSupported();
         } catch (...) {
             result = false;
         }
-        if (uninitialize) ::RoUninitialize();
         return result;
     }();
     return supported;
@@ -107,7 +107,6 @@ struct WgcBackend {
     bool disable_cursor = true;
     int32_t state = SAO_UI_GPU_CAPTURE_STOPPED;
     DWORD apartment_thread = 0;
-    bool ro_uninitialize = false;
     winrt::com_ptr<ID3D11Device> d3d_device;
     winrt::com_ptr<ID3D11DeviceContext> d3d_context;
     winrt::com_ptr<ID3D11Texture2D> staging;
@@ -220,9 +219,7 @@ void receive_wgc_frame(WgcBackend* backend) {
 
 sao_status_t start_wgc_session(WgcBackend& backend) {
     if (backend.apartment_thread == 0) {
-        bool uninitialize = false;
-        if (!initialize_winrt(&uninitialize)) return SAO_STATUS_ERR_NOT_IMPLEMENTED;
-        backend.ro_uninitialize = uninitialize;
+        if (!ensure_winrt_thread_initialized()) return SAO_STATUS_ERR_NOT_IMPLEMENTED;
         backend.apartment_thread = ::GetCurrentThreadId();
     } else if (backend.apartment_thread != ::GetCurrentThreadId()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -305,13 +302,6 @@ extern "C" void SAO_UI_CALL sao_ui_gpu_capture_destroy(
     sao_ui_gpu_capture_handle_t handle) {
     if (handle == nullptr) return;
     (void)sao_ui_gpu_capture_stop(handle);
-#if defined(SAO_UI_HAS_WGC)
-    if (handle->backend->ro_uninitialize &&
-        handle->backend->apartment_thread == ::GetCurrentThreadId()) {
-        ::RoUninitialize();
-        handle->backend->ro_uninitialize = false;
-    }
-#endif
     delete handle;
 }
 

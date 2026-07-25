@@ -166,13 +166,13 @@ target_link_libraries(sao_ai_editor PRIVATE
 )
 
 install(TARGETS sao_ai_editor sao_plugin_ai_editor
-    RUNTIME DESTINATION "."
+    RUNTIME DESTINATION "bin"
     COMPONENT ship
 )
 
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
-    DESTINATION "assets/ai_editor"
+    DESTINATION "bin/assets/ai_editor"
     COMPONENT ship
 )
 
@@ -180,17 +180,17 @@ install(FILES
 # AgentRegistry / WorkflowRegistry as scope="market" (builtin=false so
 # users can override or delete them via the normal save/delete flow).
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/agents/"
-    DESTINATION "assets/ai_editor/agents"
+    DESTINATION "bin/assets/ai_editor/agents"
     COMPONENT ship
     FILES_MATCHING PATTERN "*.json"
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workflows/"
-    DESTINATION "assets/ai_editor/workflows"
+    DESTINATION "bin/assets/ai_editor/workflows"
     COMPONENT ship
     FILES_MATCHING PATTERN "*.json"
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/prompts/"
-    DESTINATION "assets/ai_editor/prompts"
+    DESTINATION "bin/assets/ai_editor/prompts"
     COMPONENT ship
     FILES_MATCHING PATTERN "*.json"
 )
@@ -200,7 +200,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/prompts/"
 # ai_editor assets so options.system_root + "/assets/ai_editor/..."
 # resolves cleanly.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel/"
-    DESTINATION "assets/ai_editor/kernel_map_panel"
+    DESTINATION "bin/assets/ai_editor/kernel_map_panel"
     COMPONENT ship
     FILES_MATCHING
         PATTERN "*.html"
