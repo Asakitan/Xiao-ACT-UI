@@ -2189,11 +2189,12 @@ TEST_CASE("dependency requirements reject path names and escaped package targets
     }
 }
 
-TEST_CASE("topological ordering rejects missing dependencies and cycles",
-          "[plugins][loader][deps][lifecycle]") {
+TEST_CASE("topological ordering skips virtual requirements and preserves real dependency rules",
+          "[plugins][loader][deps][lifecycle][virtual][focused]") {
     auto c = add_plugin(make_manifest("topo_c", fs::path{}));
     auto b = add_plugin(make_manifest("topo_b", fs::path{}, {"topo_c"}));
-    auto a = add_plugin(make_manifest("topo_a", fs::path{}, {"topo_b>=1"}));
+    auto a = add_plugin(make_manifest(
+        "topo_a", fs::path{}, {"act_platform>=1.0", "runtime_feature:unioverlay", "topo_b>=1"}));
     plugin_handle_t input[] = {a, c, b};
     plugin_handle_t output[3]{};
     REQUIRE(sao_plugins_lifecycle_topo_sort(input, 3, output) == SAO_OK);
@@ -2204,7 +2205,7 @@ TEST_CASE("topological ordering rejects missing dependencies and cycles",
     remove_plugin(b);
     remove_plugin(c);
 
-    auto missing = add_plugin(make_manifest("topo_missing", fs::path{}, {"absent"}));
+    auto missing = add_plugin(make_manifest("topo_missing", fs::path{}, {"topo_b>=1"}));
     plugin_handle_t missing_output{};
     REQUIRE(sao_plugins_lifecycle_topo_sort(&missing, 1, &missing_output) ==
             SAO_PLUGINS_ERR_DEPENDENCY_MISSING);
@@ -2218,6 +2219,25 @@ TEST_CASE("topological ordering rejects missing dependencies and cycles",
             SAO_PLUGINS_ERR_DEPENDENCY_CYCLE);
     remove_plugin(cycle_a);
     remove_plugin(cycle_b);
+}
+
+TEST_CASE("virtual platform requirement reaches native loading without a registry plugin",
+          "[plugins][loader][deps][lifecycle][native][virtual][focused]") {
+    TempDirectory temp(L"virtual_platform_dependency");
+    const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+    REQUIRE(fs::is_regular_file(fixture));
+    const auto copied = temp.path / L"native_fixture.dll";
+    REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+
+    auto manifest = make_native_fixture_manifest("virtual_platform_load", temp.path);
+    manifest.requires_list = {"act_platform>=1.0", "runtime_feature:unioverlay"};
+    auto handle = add_plugin(std::move(manifest));
+
+    CHECK(sao_plugins_registry_find(sao_plugins_registry_instance(), "act_platform") == nullptr);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_disabled);
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    remove_plugin(handle);
 }
 
 TEST_CASE("host adapter lifecycle executes symmetric transitions", "[plugins][loader][lifecycle]") {

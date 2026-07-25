@@ -67,6 +67,8 @@ std::string dependency_id(std::string requirement) {
     const auto stop = requirement.find_first_of("<>=!~; ");
     if (stop != std::string::npos)
         requirement.resize(stop);
+    if (requirement == "act_platform")
+        return {};
     return requirement;
 }
 
