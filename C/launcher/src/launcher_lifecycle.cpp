@@ -69,8 +69,16 @@ bool initializeTelemetry(std::array<char, 128>& anon_id) noexcept {
 } // namespace
 
 sao_status_t prepareLauncherLifecycle(
-    LauncherLifecycleDecision& decision) noexcept {
+    LauncherLifecycleDecision& decision,
+    bool force_cpp_only) noexcept {
     decision = {};
+    if (force_cpp_only) {
+        sao_launcher_dual_run_config_default(&decision.dual_config);
+        decision.selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+        decision.dual_config.mode = decision.selected_mode;
+        return SAO_STATUS_OK;
+    }
+
     (void)sao_launcher_dual_run_config_load(&decision.dual_config);
     LARGE_INTEGER started{};
     if (QueryPerformanceCounter(&started)) {

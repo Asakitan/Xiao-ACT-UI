@@ -265,6 +265,19 @@ endif()
 if (SAO_BUILD_LICENSE)
     add_subdirectory(license)
 endif()
+
+# The helper backend is declared while the platform tree is configured, before
+# the license targets exist.  Complete the helper-local production license
+# wiring here after the SDK target has been created.
+if (TARGET sao_platform_rt_io_helper_license AND
+    TARGET sao::license::sdk AND
+    TARGET sao::license::client)
+    target_link_libraries(sao_platform_rt_io_helper_license PRIVATE
+        sao::license::sdk
+        sao::license::client)
+    target_compile_definitions(sao_platform_rt_io_helper_license PRIVATE
+        SAO_RT_IO_HELPER_HAS_LICENSE_SDK=1)
+endif()
 if (SAO_BUILD_SHELL)
     add_subdirectory(shell)
 endif()
@@ -281,6 +294,64 @@ if (SAO_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+set(_SAO_LAUNCHER_RUNTIME_TARGETS)
+if (TARGET SaoAuto)
+    foreach (_sao_launcher_runtime_target IN ITEMS
+            sao_runtime_installer
+            sao_shell_protocol
+            sao_shell_crypter
+            sao_license_sdk
+            sao_license_client
+            sao_license_protocol
+            sao_security_anti_debug
+            sao_platform_sdk
+            sao_platform_ui
+            sao_platform_engine
+            sao_security_anti_screencap)
+        if (TARGET ${_sao_launcher_runtime_target})
+            list(APPEND _SAO_LAUNCHER_RUNTIME_TARGETS
+                ${_sao_launcher_runtime_target})
+        endif()
+    endforeach()
+    if (_SAO_LAUNCHER_RUNTIME_TARGETS)
+        install(TARGETS ${_SAO_LAUNCHER_RUNTIME_TARGETS}
+            RUNTIME DESTINATION bin
+            COMPONENT ship)
+    endif()
+endif()
+
+if (TARGET SaoRtIoHelper)
+    set(_SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+    set(_SAO_RT_IO_HELPER_STAGE_COMMANDS)
+    foreach (_sao_rt_io_helper_runtime_target IN ITEMS
+            sao_license_sdk
+            sao_license_client
+            sao_license_protocol
+            sao_security_driver_loader
+            sao_security_crypto
+            sao_security_anti_debug
+            sao_core)
+        if (TARGET ${_sao_rt_io_helper_runtime_target})
+            list(APPEND _SAO_RT_IO_HELPER_RUNTIME_TARGETS
+                ${_sao_rt_io_helper_runtime_target})
+            list(APPEND _SAO_RT_IO_HELPER_STAGE_COMMANDS
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "$<TARGET_FILE:${_sao_rt_io_helper_runtime_target}>"
+                    "$<TARGET_FILE_DIR:SaoRtIoHelper>")
+        endif()
+    endforeach()
+    if (_SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+        add_custom_target(sao_rt_io_helper_runtime_stage
+            ${_SAO_RT_IO_HELPER_STAGE_COMMANDS}
+            DEPENDS ${_SAO_RT_IO_HELPER_RUNTIME_TARGETS}
+            VERBATIM)
+        add_dependencies(SaoRtIoHelper sao_rt_io_helper_runtime_stage)
+        install(TARGETS ${_SAO_RT_IO_HELPER_RUNTIME_TARGETS}
+            RUNTIME DESTINATION bin/runtime/helper
+            COMPONENT ship)
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Ship staging and audit
 #
@@ -293,12 +364,27 @@ if (TARGET SaoAuto)
     set(SAO_SHIP_STAGE_DIRECTORY "${CMAKE_BINARY_DIR}/ship" CACHE PATH
         "Temporary install root inspected by sao_release_artifact_audit")
 
+    set(_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+        SaoAuto
+        ${_SAO_LAUNCHER_RUNTIME_TARGETS})
+    if (TARGET sao_plugin_ai_editor)
+        list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+            sao_plugin_ai_editor)
+    endif()
+    if (TARGET sao_ai_editor)
+        list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES sao_ai_editor)
+    endif()
+    if (TARGET SaoRtIoHelper)
+        list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES SaoRtIoHelper)
+    endif()
+    list(REMOVE_DUPLICATES _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)
+
     add_custom_target(sao_release_ship_stage
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SAO_SHIP_STAGE_DIRECTORY}"
         COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
             --config $<CONFIG> --component ship
             --prefix "${SAO_SHIP_STAGE_DIRECTORY}"
-        DEPENDS SaoAuto
+        DEPENDS ${_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES}
         COMMENT "Staging installable release artifacts"
         VERBATIM
     )

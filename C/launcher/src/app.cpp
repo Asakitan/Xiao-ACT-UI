@@ -85,7 +85,8 @@ int App::run() {
     }
 
     LauncherLifecycleDecision lifecycle;
-    if (prepareLauncherLifecycle(lifecycle) != SAO_STATUS_OK) {
+    if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) !=
+        SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     const auto finish = [&](int exit_code, const char* hint) {

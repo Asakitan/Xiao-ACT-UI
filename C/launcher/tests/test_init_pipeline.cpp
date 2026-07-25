@@ -35,6 +35,7 @@
 #include "sao/launcher/rollout.h"
 #include "sao/launcher/shutdown.h"
 #include "sao/plugins/loader/loader_status.h"
+#include "launcher_lifecycle.h"
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/core/logging.h"
@@ -454,6 +455,33 @@ struct ProductionRolloutGuard {
 
     std::filesystem::path directory;
     std::string directory_utf8;
+};
+
+struct DualRunInvocationRecorder {
+    static inline int probe_calls = 0;
+    static inline int spawn_calls = 0;
+
+    static void reset() {
+        probe_calls = 0;
+        spawn_calls = 0;
+    }
+
+    static void probe(sao_dual_run_python_probe* out) {
+        ++probe_calls;
+        *out = {};
+        out->available = 1;
+        lstrcpynW(out->path, L"E:\\Py\\python.exe", 260);
+        out->major = 3;
+        out->minor = 11;
+    }
+
+    static int spawn(const wchar_t*, const wchar_t*, const wchar_t*,
+                     sao_dual_run_spawn_result* result) {
+        ++spawn_calls;
+        *result = {};
+        result->pid = 4242;
+        return 0;
+    }
 };
 
 size_t countStep(const std::vector<std::string>& steps, const char* name) {
@@ -1022,6 +1050,104 @@ TEST_CASE("launcher_headless_production_path_applies_rollout_and_persists_anon_i
 #else
     SUCCEED("telemetry client is not linked; rollout used explicit anon-id fallback");
 #endif
+}
+
+TEST_CASE("RT I/O operator lifecycle forces inactive CPP-only selection",
+          "[launcher][init_pipeline][rollout][rt_io_operator][forced_cpp]") {
+    ProductionRolloutGuard guard;
+    sao_rollout_config rollout{};
+    sao_rollout_config_default(&rollout);
+    rollout.cpp_percent = 0;
+    REQUIRE(sao_rollout_config_save(&rollout) == SAO_STATUS_OK);
+
+    DualRunInvocationRecorder::reset();
+    sao_launcher_dual_run_set_test_probe_hook(
+        &DualRunInvocationRecorder::probe);
+    sao_launcher_dual_run_set_test_spawn_hook(
+        &DualRunInvocationRecorder::spawn);
+
+    sao::launcher::LauncherLifecycleDecision lifecycle;
+    REQUIRE(sao::launcher::prepareLauncherLifecycle(lifecycle, true) ==
+            SAO_STATUS_OK);
+    CHECK(lifecycle.selected_mode == SAO_DUAL_RUN_MODE_CPP_ONLY);
+    CHECK(lifecycle.dual_config.mode == SAO_DUAL_RUN_MODE_CPP_ONLY);
+    CHECK_FALSE(lifecycle.active);
+    CHECK_FALSE(lifecycle.telemetry_started);
+    CHECK(lifecycle.start_qpc == 0);
+    CHECK(DualRunInvocationRecorder::probe_calls == 0);
+    CHECK(DualRunInvocationRecorder::spawn_calls == 0);
+
+    sao::launcher::completeLauncherLifecycle(
+        lifecycle, sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL,
+        "forced_operator_test");
+
+    sao_rollout_stats stats{};
+    REQUIRE(sao_rollout_stats_load(&stats) == SAO_STATUS_OK);
+    CHECK(stats.total_successes == 0);
+    CHECK(stats.total_failures == 0);
+    CHECK(stats.recent_count == 0);
+
+    sao_rollout_config after{};
+    REQUIRE(sao_rollout_config_load(&after) == SAO_STATUS_OK);
+    CHECK(after.cpp_percent == 0);
+    CHECK(after.retreat_history_count == 0);
+}
+
+TEST_CASE("headless RT I/O operator bypasses rollout and Python handoff",
+          "[launcher][init_pipeline][rollout][rt_io_operator][forced_cpp]") {
+    ProductionRolloutGuard guard;
+    sao_rollout_config rollout{};
+    sao_rollout_config_default(&rollout);
+    rollout.cpp_percent = 0;
+    REQUIRE(sao_rollout_config_save(&rollout) == SAO_STATUS_OK);
+
+    DualRunInvocationRecorder::reset();
+    sao_launcher_dual_run_set_test_probe_hook(
+        &DualRunInvocationRecorder::probe);
+    sao_launcher_dual_run_set_test_spawn_hook(
+        &DualRunInvocationRecorder::spawn);
+
+    CompositionRecorder composition;
+    CompositionHookGuard composition_guard(composition);
+    TeardownRecorder teardown;
+    sao_launcher_init_hooks_t hooks{};
+    hooks.poll_should_exit = &TeardownRecorder::pollExitImmediately;
+    hooks.on_teardown_step = &TeardownRecorder::onStep;
+    hooks.user_data = &teardown;
+    wchar_t argv0[] = L"SaoAutoTests.exe";
+    wchar_t operator_arg[] = L"--rt-io-preflight-only";
+    wchar_t* argv[] = {argv0, operator_arg};
+    int exit_code = -1;
+
+    REQUIRE(sao_launcher_init_pipeline_run(2, argv, &hooks, &exit_code) ==
+            SAO_STATUS_OK);
+    CHECK(exit_code == SAO_EXIT_OK);
+    CHECK(DualRunInvocationRecorder::probe_calls == 0);
+    CHECK(DualRunInvocationRecorder::spawn_calls == 0);
+    CHECK(findStep(composition.steps, "platform_bringup") >= 0);
+
+    sao_dual_run_status dual_status{};
+    sao_launcher_dual_run_status(&dual_status);
+    CHECK(dual_status.mode == SAO_DUAL_RUN_MODE_CPP_ONLY);
+
+        composition.security_status = SAO_STATUS_INTERNAL;
+        exit_code = -1;
+        CHECK(sao_launcher_init_pipeline_run(2, argv, &hooks, &exit_code) ==
+            SAO_STATUS_INTERNAL);
+        CHECK(exit_code == sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL);
+        CHECK(DualRunInvocationRecorder::probe_calls == 0);
+        CHECK(DualRunInvocationRecorder::spawn_calls == 0);
+
+    sao_rollout_stats stats{};
+    REQUIRE(sao_rollout_stats_load(&stats) == SAO_STATUS_OK);
+    CHECK(stats.total_successes == 0);
+    CHECK(stats.total_failures == 0);
+    CHECK(stats.recent_count == 0);
+
+    sao_rollout_config after{};
+    REQUIRE(sao_rollout_config_load(&after) == SAO_STATUS_OK);
+    CHECK(after.cpp_percent == 0);
+    CHECK(after.retreat_history_count == 0);
 }
 
 TEST_CASE("launcher_headless_records_results_and_checks_auto_retreat",

@@ -16,7 +16,8 @@ struct LauncherLifecycleDecision {
 };
 
 sao_status_t prepareLauncherLifecycle(
-    LauncherLifecycleDecision& decision) noexcept;
+    LauncherLifecycleDecision& decision,
+    bool force_cpp_only = false) noexcept;
 
 void completeLauncherLifecycle(
     LauncherLifecycleDecision& decision,

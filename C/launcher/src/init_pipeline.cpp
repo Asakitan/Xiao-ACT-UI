@@ -973,7 +973,8 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     }
 
     LauncherLifecycleDecision lifecycle;
-    if (prepareLauncherLifecycle(lifecycle) != SAO_STATUS_OK) {
+    if (prepareLauncherLifecycle(lifecycle, state.rt_io_operator) !=
+        SAO_STATUS_OK) {
         if (exit_code_out)
             *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
         return SAO_STATUS_INTERNAL;
