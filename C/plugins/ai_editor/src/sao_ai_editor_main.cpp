@@ -47,6 +47,25 @@ constexpr std::string_view kHandshakeResponse = "SAO_AI_EDITOR_READY 1";
 constexpr std::string_view kShutdownRequest = "shutdown";
 constexpr std::string_view kShutdownResponse = "shutdown-ok";
 
+// Dark palette lifted verbatim from the SAO theme's dark table
+// (platform/ui/include/sao/ui/theme.h: APP_BG/APP_CARD/APP_TEXT tokens),
+// duplicated here in plain Win32 GDI form. This window only exists when
+// WebView2 is unavailable, so it deliberately stays independent of
+// sao::ui rather than adding a link dependency for a text-only fallback.
+constexpr COLORREF kSaoAppBg = RGB(0x0A, 0x0E, 0x14);
+constexpr COLORREF kSaoAppCard = RGB(0x11, 0x18, 0x20);
+constexpr COLORREF kSaoAppText = RGB(0xE8, 0xF4, 0xF8);
+
+HBRUSH sao_app_bg_brush() noexcept {
+    static const HBRUSH brush = CreateSolidBrush(kSaoAppBg);
+    return brush;
+}
+
+HBRUSH sao_app_card_brush() noexcept {
+    static const HBRUSH brush = CreateSolidBrush(kSaoAppCard);
+    return brush;
+}
+
 class ScopedHandle final {
 public:
     ScopedHandle() = default;
@@ -949,6 +968,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     case WM_SIZE:
         layout_controls(window, *state);
         return 0;
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC: {
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(dc, kSaoAppText);
+        SetBkColor(dc, kSaoAppCard);
+        return reinterpret_cast<LRESULT>(sao_app_card_brush());
+    }
     case WM_COMMAND:
         if (HIWORD(wparam) == BN_CLICKED &&
             LOWORD(wparam) == kSendButtonId) {
@@ -1022,8 +1048,7 @@ public:
         window_class.hInstance = instance_;
         window_class.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
         window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        window_class.hbrBackground =
-            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        window_class.hbrBackground = sao_app_bg_brush();
         window_class.lpszClassName = kWindowClassName;
         window_class.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
         if (RegisterClassExW(&window_class) == 0 &&
