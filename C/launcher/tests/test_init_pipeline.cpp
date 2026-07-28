@@ -995,6 +995,48 @@ TEST_CASE("launcher_platform_config_applies_core_log_filter", "[launcher][loggin
 #endif
 }
 
+TEST_CASE("launcher platform config propagates only explicit RT I/O dev license bypass",
+          "[launcher][init_pipeline][rt_io_operator][license]") {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    sao::launcher::AppState state{};
+    state.rt_io_operator = true;
+    char log_level[32]{};
+    sao_platform_config config{};
+
+    REQUIRE(sao::launcher::buildPlatformConfig(state, config, log_level, sizeof(log_level)));
+    REQUIRE(config.rt_io_operator == 1);
+    REQUIRE(config.rt_io_dev_license_bypass == 0);
+
+    state.no_license = true;
+    REQUIRE(sao::launcher::buildPlatformConfig(state, config, log_level, sizeof(log_level)));
+    REQUIRE(config.rt_io_operator == 1);
+    REQUIRE(config.rt_io_dev_license_bypass == 1);
+#else
+    SUCCEED("core log provider is absent; platform config fails closed");
+#endif
+}
+
+TEST_CASE("launcher platform config propagates the RT I/O status-page override",
+          "[launcher][init_pipeline][rt_io_operator][status_page]") {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    sao::launcher::AppState state{};
+    state.rt_io_operator = true;
+    char log_level[32]{};
+    sao_platform_config config{};
+
+    REQUIRE(sao::launcher::buildPlatformConfig(state, config, log_level, sizeof(log_level)));
+    REQUIRE(config.rt_io_operator == 1);
+    REQUIRE(config.rt_io_force_status_page == 0);
+
+    state.rt_io_force_status_page = true;
+    REQUIRE(sao::launcher::buildPlatformConfig(state, config, log_level, sizeof(log_level)));
+    REQUIRE(config.rt_io_operator == 1);
+    REQUIRE(config.rt_io_force_status_page == 1);
+#else
+    SUCCEED("core log provider is absent; platform config fails closed");
+#endif
+}
+
 TEST_CASE("launcher_headless_production_path_applies_rollout_and_persists_anon_id",
           "[launcher][init_pipeline][rollout][telemetry]") {
     ProductionRolloutGuard guard;

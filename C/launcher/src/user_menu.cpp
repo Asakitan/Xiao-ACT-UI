@@ -4,12 +4,33 @@
 
 #include "sao_security/obfuscation/enc_str.h"
 
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
+#include "sao/ui/dialog.h"
+#endif
+
 #include <cstddef>
 #include <cwchar>
 #include <iterator>
 
 namespace sao::launcher {
 namespace {
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+// Same lookup as tool_launch_internal.cpp's borrow_platform_compositor():
+// the compositor is already bound into the SDK platform binding by the
+// time UserMenu can show an error (bringUpUi() calls sao_ui_bring_online()
+// before user_menu_.create()), so no owning reference needs to be threaded
+// through UserMenu's constructor.
+sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
+    void* raw = nullptr;
+    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK) {
+        return nullptr;
+    }
+    return static_cast<sao_ui_compositor_handle_t>(raw);
+}
+#endif
 
 // ASCII-only widening for identifiers decrypted from SAO_ENC_STR.
 // Byte-by-byte widen to keep decrypted plaintext scoped to this TU.
@@ -297,11 +318,26 @@ void UserMenu::openUserGuide() noexcept {
 }
 
 void UserMenu::showMenuUnavailableError() const noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (sao_ui_compositor_handle_t compositor = borrow_platform_compositor()) {
+        sao_ui_dialog_show_error(compositor, nullptr, "SAO Auto",
+                                  "启动器菜单暂时不可用，请稍后重试。", nullptr, nullptr);
+        return;
+    }
+#endif
     MessageBoxW(window_, L"启动器菜单暂时不可用，请稍后重试。", kMenuTitle,
                 MB_OK | MB_ICONERROR | MB_TASKMODAL);
 }
 
 void UserMenu::showUserGuideUnavailableError() const noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (sao_ui_compositor_handle_t compositor = borrow_platform_compositor()) {
+        sao_ui_dialog_show_error(compositor, nullptr, "SAO Auto",
+                                  "用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。",
+                                  nullptr, nullptr);
+        return;
+    }
+#endif
     MessageBoxW(window_, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", kMenuTitle,
                 MB_OK | MB_ICONERROR | MB_TASKMODAL);
 }

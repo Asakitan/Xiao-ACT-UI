@@ -68,6 +68,7 @@
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/dc_mutation.h"
+#include "sao/ui/dialog.h"
 #include "sao/ui/entity_shell.h"
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
 #include "sao/ui/fisheye_backdrop.h"
@@ -180,6 +181,8 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
     config.safe_mode = state.safe_mode ? 1 : 0;
     config.streaming_entitled = state.no_license || state.streaming_entitled ? 1 : 0;
     config.rt_io_operator = state.rt_io_operator ? 1 : 0;
+    config.rt_io_dev_license_bypass = state.no_license ? 1 : 0;
+    config.rt_io_force_status_page = state.rt_io_force_status_page ? 1 : 0;
     return true;
 }
 
@@ -199,6 +202,35 @@ constexpr uint64_t kRtIoMandatoryLiveStepMask =
     (uint64_t{1} << 14u) |
     (uint64_t{1} << 15u) |
     (uint64_t{1} << 16u);
+constexpr uint32_t kRtIoObservationUnknown = 0u;
+constexpr uint32_t kRtIoObservationTrue = 2u;
+constexpr uint32_t kRtIoFailureStageNone = 0u;
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+static_assert(kRtIoObservationUnknown == SAO_RT_IO_OBSERVATION_UNKNOWN);
+static_assert(kRtIoObservationTrue == SAO_RT_IO_OBSERVATION_TRUE);
+static_assert(kRtIoFailureStageNone == SAO_RT_IO_FAILURE_STAGE_NONE);
+#endif
+
+bool rtIoOperatorPreflightObservationsComplete(uint32_t is_admin, uint32_t is_elevated,
+                                               uint32_t load_driver_privilege_present,
+                                               uint32_t load_driver_privilege_enabled,
+                                               uint32_t hvci_enabled, uint32_t vbs_enabled,
+                                               uint32_t provider_observable) noexcept {
+    return is_admin == kRtIoObservationTrue && is_elevated == kRtIoObservationTrue &&
+           load_driver_privilege_present == kRtIoObservationTrue &&
+           load_driver_privilege_enabled != kRtIoObservationUnknown &&
+           hvci_enabled != kRtIoObservationUnknown && vbs_enabled != kRtIoObservationUnknown &&
+           provider_observable == kRtIoObservationTrue;
+}
+
+bool rtIoOperatorPreflightFailureStateReady(int32_t last_failure_code,
+                                            uint32_t last_failure_stage) noexcept {
+    return last_failure_stage == kRtIoFailureStageNone &&
+           (last_failure_code == SAO_STATUS_OK ||
+            last_failure_code == SAO_STATUS_ERR_NOT_INITIALIZED);
+}
 
 bool rtIoOperatorOptionsValid(
     const sao_launcher_rt_io_operator_options_t* options) noexcept {
@@ -558,7 +590,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         }
     }
 
-    // Step 7 — platform bring-up.
+    // Step 7 — security init.
     {
         sao_security_config cfg{};
         cfg.enable_anti_debug = 1;
@@ -626,7 +658,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         }
     }
 
-    // Step 8 — plugin discovery (skipped in safe mode).
+    // Step 9 — plugin discovery (skipped in safe mode).
     if (!state.safe_mode && provider_configuration.plugins.enabled) {
         sao_plugins_registry* reg = nullptr;
         sao_status_t s =
@@ -659,7 +691,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     }
     (void)runtime_installer_ok;
 
-    // Step 9 — UI online.
+    // Step 10 — UI online.
     {
         sao_status_t s = sao_ui_bring_online(static_cast<sao_platform_ctx*>(state.platform_ctx));
         if (s != SAO_STATUS_OK) {
@@ -668,7 +700,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         ui_online = true;
     }
 
-    // Step 10 — pump the message loop until the hook (or WM_QUIT) tells
+    // Step 11 — pump the message loop until the hook (or WM_QUIT) tells
     // us to exit.  Tests supply a hook that returns non-zero on the
     // first call so the pipeline exits immediately and we can observe
     // teardown ordering.
@@ -930,6 +962,26 @@ sao_status_t applyNervgearModeTransaction(bool& mode, NervgearModeSetFn set_shel
 
 } // namespace
 
+#if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+namespace sao::launcher::testing {
+
+bool rt_io_operator_preflight_observations_complete_for_test(
+    uint32_t is_admin, uint32_t is_elevated, uint32_t load_driver_privilege_present,
+    uint32_t load_driver_privilege_enabled, uint32_t hvci_enabled, uint32_t vbs_enabled,
+    uint32_t provider_observable) noexcept {
+    return ::rtIoOperatorPreflightObservationsComplete(
+        is_admin, is_elevated, load_driver_privilege_present, load_driver_privilege_enabled,
+        hvci_enabled, vbs_enabled, provider_observable);
+}
+
+bool rt_io_operator_preflight_failure_state_ready_for_test(int32_t last_failure_code,
+                                                           uint32_t last_failure_stage) noexcept {
+    return ::rtIoOperatorPreflightFailureStateReady(last_failure_code, last_failure_stage);
+}
+
+} // namespace sao::launcher::testing
+#endif
+
 extern "C" sao_status_t sao_launcher_init_pipeline_retry_pending_cleanup(void) {
     return retryPendingCleanup();
 }
@@ -1116,6 +1168,8 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         "\"wiper_joined\":%s,\"engine_cleanup_confirmed\":%s,"
         "\"etw_restore_confirmed\":%s,"
         "\"last_failure_code\":%d,\"last_failure_stage\":%u,"
+        "\"r3_uc_patch_failure_reason\":%u,"
+        "\"hid_fallback_reason\":%u,"
         "\"failure_classification\":\"%s\"}",
         rtIoOperatorStageName(report->stage), report->status,
         report->operation_status, jsonBool(report->success),
@@ -1148,7 +1202,8 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         jsonBool(report->provider_retained), jsonBool(report->wiper_joined),
         jsonBool(report->engine_cleanup_confirmed),
         jsonBool(report->etw_restore_confirmed), report->last_failure_code,
-        report->last_failure_stage,
+        report->last_failure_stage, report->r3_uc_patch_failure_reason,
+        report->hid_fallback_reason,
         rtIoOperatorFailureName(report->failure_classification));
     if (written < 0) {
         out_utf8[0] = '\0';
@@ -2145,8 +2200,14 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     if (sao::launcher::openUserDocsIndex(SaoLauncherBaseDir, owner)) {
         return SAO_STATUS_OK;
     }
-    MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", L"SAO Auto",
-                MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    if (ctx != nullptr && ctx->compositor != nullptr) {
+        sao_ui_dialog_show_error(ctx->compositor, nullptr, "SAO Auto",
+                                  "用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。",
+                                  nullptr, nullptr);
+    } else {
+        MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", L"SAO Auto",
+                    MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    }
     return SAO_STATUS_ERR_NOT_FOUND;
 }
 
@@ -2267,6 +2328,8 @@ void rt_io_operator_copy_state(
             : 0u;
     report->last_failure_code = state.last_failure_code;
     report->last_failure_stage = state.last_failure_stage;
+    report->r3_uc_patch_failure_reason = state.r3_uc_patch_failure_reason;
+    report->hid_fallback_reason = state.hid.fallback_reason;
 }
 
 bool rt_io_operator_call_complete(
@@ -2373,14 +2436,10 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     out_report->hvci_enabled = response.hvci_enabled;
     out_report->vbs_enabled = response.vbs_enabled;
     out_report->provider_observable = response.provider_observable;
-    const bool observations_complete =
-        response.is_admin == SAO_RT_IO_OBSERVATION_TRUE &&
-        response.is_elevated == SAO_RT_IO_OBSERVATION_TRUE &&
-        response.load_driver_privilege_present == SAO_RT_IO_OBSERVATION_TRUE &&
-        response.load_driver_privilege_enabled == SAO_RT_IO_OBSERVATION_TRUE &&
-        response.hvci_enabled != SAO_RT_IO_OBSERVATION_UNKNOWN &&
-        response.vbs_enabled != SAO_RT_IO_OBSERVATION_UNKNOWN &&
-        response.provider_observable == SAO_RT_IO_OBSERVATION_TRUE;
+    const bool observations_complete = rtIoOperatorPreflightObservationsComplete(
+        response.is_admin, response.is_elevated, response.load_driver_privilege_present,
+        response.load_driver_privilege_enabled, response.hvci_enabled, response.vbs_enabled,
+        response.provider_observable);
     const bool complete = status == SAO_STATUS_OK &&
         response.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&
@@ -2391,8 +2450,8 @@ sao_status_t sao_platform_rt_io_operator_preflight(
         response.r3_asset.status == SAO_STATUS_OK &&
         response.r3_asset.valid != 0u && observations_complete &&
         rt_io_operator_state_clean(response.production, *out_report) &&
-        response.production.last_failure_code == SAO_STATUS_OK &&
-        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+        rtIoOperatorPreflightFailureStateReady(response.production.last_failure_code,
+                                               response.production.last_failure_stage);
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
     out_report->failure_classification = complete
@@ -2422,6 +2481,11 @@ sao_status_t sao_platform_rt_io_operator_init(
     rt_io_operator_copy_call(call, out_report);
     rt_io_operator_copy_state(response.production, out_report);
     out_report->selected_engine = response.selected_engine;
+    // The init-stage wire response only names this field `backend`; mirror
+    // it into `runtime_tier` too so a consumer reading either report field
+    // sees the same selected tier regardless of which stage last ran (the
+    // status stage below does the same mirroring from its own `runtime_tier`
+    // wire field).  Keep both report fields — removing either is an ABI break.
     out_report->backend = response.backend;
     out_report->runtime_tier = response.backend;
     out_report->driver_strategy = response.driver_strategy;
@@ -2539,6 +2603,9 @@ sao_status_t sao_platform_rt_io_operator_status(
     rt_io_operator_copy_call(call, out_report);
     rt_io_operator_copy_state(response.production, out_report);
     out_report->selected_engine = response.runtime_engine;
+    // Mirrors the init-stage assignment above: the status-stage wire
+    // response only names this field `runtime_tier`, so both report fields
+    // are set from it here for the same reason.
     out_report->runtime_tier = response.runtime_tier;
     out_report->backend = response.runtime_tier;
     out_report->driver_strategy = response.driver_strategy;
@@ -2772,13 +2839,23 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
-    SaoRtIoProxyConfig rt_io_cfg{};
-    rt_io_cfg.session_name_utf8 = "launcher";
-    rt_io_cfg.strict_bootstrap = 1;
-    rt_io_cfg.driver_strategy = cfg->rt_io_operator != 0
+    SaoRtIoProxyConfigV2 rt_io_cfg{};
+    rt_io_cfg.struct_size = sizeof(rt_io_cfg);
+    rt_io_cfg.abi_version = SAO_RT_IO_PROXY_CONFIG_ABI_VERSION;
+    rt_io_cfg.ready_policy = SAO_RT_IO_PROXY_READY_POLICY_STRICT_PRODUCTION;
+    rt_io_cfg.legacy_config.session_name_utf8 = "launcher";
+    rt_io_cfg.legacy_config.strict_bootstrap = 1;
+    rt_io_cfg.legacy_config.driver_strategy = cfg->rt_io_operator != 0
         ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
         : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
-    status = sao_rt_io_proxy_open(&rt_io_cfg, &ctx->rt_io_proxy);
+    rt_io_cfg.legacy_config.dev_license_bypass =
+        cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
+    // Operator mode hides the F12 status page by default (stealth posture);
+    // rt_io_force_status_page is an explicit opt-in override so the page
+    // stays reachable when the operator deliberately wants it.
+    rt_io_cfg.legacy_config.disable_status_page =
+        (cfg->rt_io_operator != 0 && cfg->rt_io_force_status_page == 0) ? 1u : 0u;
+    status = sao_rt_io_proxy_open_v2(&rt_io_cfg, &ctx->rt_io_proxy);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }

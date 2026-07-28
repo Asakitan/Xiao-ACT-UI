@@ -61,6 +61,14 @@ set(SAO_LAUNCHER_SOURCES
     src/provider_config.cpp
     src/launcher_lifecycle.cpp
     src/user_menu.cpp
+    # Phase 12 (Python parity closure): hotkey manager + config panel.
+    src/hotkey_manager.cpp
+    src/hotkey_config_panel.cpp
+    # Phase 13: settings editor UI + profiles.
+    src/settings_config_panel.cpp
+    src/settings_profiles.cpp
+    # Phase 14: install_npcap + native comdlg32 file picker fallback.
+    src/install_npcap.cpp
 )
 
 set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)

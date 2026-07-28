@@ -118,6 +118,10 @@ bool parseCommandLineFromArgv(int argc,
             state.rt_io_exit_after_validation = true;
             continue;
         }
+        if (wcsEqualsCI(a, L"--rt-io-status-page")) {
+            state.rt_io_force_status_page = true;
+            continue;
+        }
         if (wcsEqualsCI(a, L"--no-license")) {
 #if SAO_LAUNCHER_HARDENED
             // Refuse in hardened builds.
@@ -170,6 +174,8 @@ void printHelp() noexcept {
         L"  --rt-io-r5-check      Add the explicit R5 fallback diagnostic\r\n"
         L"  --rt-io-mf-check      Add the explicit MF fallback diagnostic\r\n"
         L"  --rt-io-exit-after-validation  Exit after operator cleanup\r\n"
+        L"  --rt-io-status-page   Keep the helper F12 status page enabled even\r\n"
+        L"                        under --rt-io-operator\r\n"
         L"  --config=<path>       Override config file location\r\n"
         L"  --log-level=<lvl>     trace|debug|info|warn|error|critical\r\n"
         L"  --version, -v         Print version and exit\r\n"

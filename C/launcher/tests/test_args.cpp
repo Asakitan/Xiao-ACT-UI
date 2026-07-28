@@ -160,4 +160,28 @@ TEST_CASE("ordinary smoke flags do not enable RT I/O operator",
     CHECK_FALSE(state.rt_io_r5_check);
     CHECK_FALSE(state.rt_io_mf_check);
     CHECK_FALSE(state.rt_io_exit_after_validation);
+    CHECK_FALSE(state.rt_io_force_status_page);
+}
+
+TEST_CASE("RT I/O status-page override parses independently from operator",
+          "[launcher][args][rt_io_operator][status_page]") {
+    AppState with_operator{};
+    bool exit_flag = false;
+    int code = -1;
+    const wchar_t* with_operator_args[] = {
+        L"SaoAuto.exe", L"--rt-io-operator", L"--rt-io-status-page",
+    };
+    REQUIRE(parseCommandLineFromArgv(
+        3, const_cast<wchar_t* const*>(with_operator_args), with_operator,
+        exit_flag, code));
+    CHECK(with_operator.rt_io_operator);
+    CHECK(with_operator.rt_io_force_status_page);
+
+    // The override flag alone never implies operator mode.
+    AppState alone{};
+    const wchar_t* alone_args[] = {L"SaoAuto.exe", L"--rt-io-status-page"};
+    REQUIRE(parseCommandLineFromArgv(
+        2, const_cast<wchar_t* const*>(alone_args), alone, exit_flag, code));
+    CHECK_FALSE(alone.rt_io_operator);
+    CHECK(alone.rt_io_force_status_page);
 }

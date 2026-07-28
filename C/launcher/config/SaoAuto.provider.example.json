@@ -1,0 +1,42 @@
+{
+    "_comment": "Launcher provider config — 部署方拷贝为 SaoAuto.provider.json 并按 <REPLACE-*> 提示填写。启动时用 --config=<绝对或相对路径> 指向本文件。所有服务器 URL 必须是 Python config.py (sao_auto/python/config.py:392-395) 里编码的外部端口，因为云上端口映射不对等 (内部 9973 → 外部 15018，license 内外都 15522)。",
+
+    "license": {
+        "enabled": true,
+
+        "_endpoint_comment": "License server 外部端口 15522 (server_config.json 里 port=15522；云端内外一致直开)。HTTPS 强制。C++ 客户端会在这个 URL 后追加 /activate /verify /heartbeat /renew /revoke。",
+        "endpoint": "https://doi.sakisense.top:15522",
+
+        "_build_id_comment": "每个可发布构建的唯一稳定 ID (可以是 semver + short commit，如 5.1.0+ab12cd3)。服务器用它在 /activate 时 look-up build_master_key。同一物理机 build 同一版本必须用相同 build_id。",
+        "build_id": "<REPLACE-WITH-BUILD-ID>",
+
+        "_server_ed25519_pubkey_comment": "首次跑 license_server 时 stdout 打印的 '[license_server] Ed25519 pubkey: <64-hex>'。也可通过 GET /pubkey (公开路由) 获取。64 个 lowercase hex 字符 = 32B raw pubkey。C++ 客户端用它验响应签名。",
+        "server_ed25519_pubkey": "0000000000000000000000000000000000000000000000000000000000000000",
+
+        "_responses_prevalidated_comment": "必须 false (parseLicense line 138)。true 时 launcher config 加载失败 SAO_STATUS_INVALID_ARGUMENT。这是安全默认：所有响应必须过客户端本地验签。",
+        "responses_prevalidated": false,
+
+        "_heartbeat_interval_ms_comment": "客户端 heartbeat 间隔 (ms)。0 = 用客户端默认 300000 (5 分钟)。服务器 next_heartbeat_ms 建议值一致。",
+        "heartbeat_interval_ms": 300000
+    },
+
+    "_shell_comment": "Shell (crypter stub) provider — 生产不用可留空对象或删。填了但没实现会 SAO_STATUS_NOT_IMPLEMENTED。",
+    "shell": {},
+
+    "_plugins_comment": "Plugins 加载策略 — roots/user_roots/manifests 至少一非空。相对路径按本 config file 所在目录解析。",
+    "plugins": {
+        "enabled": true,
+        "workspace_walkup": false,
+        "max_depth": 1,
+        "roots": ["../plugins"],
+        "user_roots": [],
+        "manifests": []
+    },
+
+    "_env_hints_comment": "以下不属于本 JSON，但部署时需设的环境变量：",
+    "_env_hints": {
+        "SAO_WORKSHOP_BASE_URL": "http://doi.sakisense.top:15018/api/v1/workshop  (对齐 Python DEFAULT_UPDATE_HOST；未设时 workshop_client.cpp:37 硬编码默认已同址，仍推荐显式设)",
+        "SAO_UPDATE_HOST":       "http://doi.sakisense.top:15018                   (dev_publish CLI 兜底，客户端 updater 由 launcher 主动传 URL 不看这个)",
+        "SAO_UPDATE_API_KEY":    "<publish_api_key>                                 (dev_publish 上传时的 X-API-Key，首次连接自动 bind)"
+    }
+}

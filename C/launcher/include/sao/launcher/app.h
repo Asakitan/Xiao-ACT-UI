@@ -67,6 +67,9 @@ struct AppState {
     bool rt_io_r5_check = false;
     bool rt_io_mf_check = false;
     bool rt_io_exit_after_validation = false;
+    // Overrides the default operator-mode stealth posture that hides the
+    // helper's F12 status page.  Does not itself enable rt_io_operator.
+    bool rt_io_force_status_page = false;
     wchar_t config_path[MAX_PATH] = {0};
     wchar_t log_level[16] = {0};
 

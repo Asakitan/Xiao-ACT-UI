@@ -3,6 +3,7 @@
 
 #include "sao/license/client/client_public.h"
 #include "sao/license/sdk/license_sdk.h"
+#include "sao/license/sdk/license_status.h"
 #include "sao_core/sao_status.h"
 
 #include <windows.h>
@@ -200,6 +201,12 @@ extern "C" sao_status_t sao_license_verify(sao_license_result* out) {
     if (status == SAO_OK) status = sao_license_sdk_get_expiry_ms(&expiry_ms);
     if (status == SAO_OK) status = sao_license_sdk_get_hwid(hwid.data());
     if (status != SAO_OK) {
+        if (status == SAO_LICENSE_ERR_HWID_MISMATCH) {
+            strncpy_s(out->error_msg, sizeof(out->error_msg),
+                      "hardware identity changed; reactivation required",
+                      _TRUNCATE);
+            return SAO_STATUS_LICENSE_HWID_MISMATCH;
+        }
         strncpy_s(out->error_msg, sizeof(out->error_msg),
                   "license verification failed", _TRUNCATE);
         return SAO_STATUS_LICENSE_INVALID;

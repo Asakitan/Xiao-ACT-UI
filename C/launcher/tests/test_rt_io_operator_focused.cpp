@@ -2,11 +2,21 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "sao/core/status.h"
 #include "sao/launcher/app.h"
 #include "sao/launcher/init_pipeline.h"
 
 #include <string>
 #include <vector>
+
+namespace sao::launcher::testing {
+bool rt_io_operator_preflight_observations_complete_for_test(
+    uint32_t is_admin, uint32_t is_elevated, uint32_t load_driver_privilege_present,
+    uint32_t load_driver_privilege_enabled, uint32_t hvci_enabled, uint32_t vbs_enabled,
+    uint32_t provider_observable) noexcept;
+bool rt_io_operator_preflight_failure_state_ready_for_test(int32_t last_failure_code,
+                                                           uint32_t last_failure_stage) noexcept;
+} // namespace sao::launcher::testing
 
 namespace {
 
@@ -17,6 +27,7 @@ constexpr uint64_t kDefaultRequestedMask =
     (uint64_t{1} << 15u) |
     (uint64_t{1} << 16u);
 constexpr uint64_t kAllRequestedMask = (uint64_t{1} << 17u) - 1u;
+constexpr int32_t kNotInitializedStatus = SAO_STATUS_ERR_NOT_INITIALIZED;
 constexpr uint32_t kAdmissionMask =
     SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP |
     SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE |
@@ -274,6 +285,28 @@ TEST_CASE("RT I/O preflight-only performs no mutating operator stage",
     CHECK(recorder.calls == std::vector<std::string>{"preflight"});
     REQUIRE(recorder.lines.size() == 1u);
     CHECK(contains(recorder.lines[0], "\"preflight_only\":true"));
+}
+
+TEST_CASE("RT I/O preflight accepts a present but disabled load-driver privilege",
+          "[launcher][rt_io_operator][preflight][privilege]") {
+    using sao::launcher::testing::rt_io_operator_preflight_observations_complete_for_test;
+
+    CHECK(rt_io_operator_preflight_observations_complete_for_test(2u, 2u, 2u, 1u, 1u, 2u, 2u));
+    CHECK_FALSE(
+        rt_io_operator_preflight_observations_complete_for_test(2u, 2u, 2u, 0u, 1u, 2u, 2u));
+    CHECK_FALSE(
+        rt_io_operator_preflight_observations_complete_for_test(2u, 2u, 1u, 1u, 1u, 2u, 2u));
+}
+
+TEST_CASE("RT I/O preflight accepts only clean or never-initialized provider history",
+          "[launcher][rt_io_operator][preflight][provider_history]") {
+    using sao::launcher::testing::rt_io_operator_preflight_failure_state_ready_for_test;
+
+    CHECK(rt_io_operator_preflight_failure_state_ready_for_test(SAO_STATUS_OK, 0u));
+    CHECK(rt_io_operator_preflight_failure_state_ready_for_test(kNotInitializedStatus, 0u));
+    CHECK_FALSE(rt_io_operator_preflight_failure_state_ready_for_test(kNotInitializedStatus, 1u));
+    CHECK_FALSE(
+        rt_io_operator_preflight_failure_state_ready_for_test(SAO_STATUS_INVALID_ARGUMENT, 0u));
 }
 
 TEST_CASE("RT I/O unknown live state fails and still performs cleanup",

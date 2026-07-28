@@ -47,6 +47,10 @@ typedef struct sao_platform_config {
     int32_t safe_mode;          // non-zero disables non-essential threads
     int32_t streaming_entitled; // verified paid tier or dev bypass
     int32_t rt_io_operator;     // non-zero selects typed PHYSRW proxy strategy
+    int32_t rt_io_dev_license_bypass; // explicit non-hardened --no-license propagation
+    int32_t rt_io_force_status_page; // non-zero keeps the helper F12 status page
+                                      // enabled even when rt_io_operator would
+                                      // otherwise disable it
 } sao_platform_config;
 
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out);
@@ -268,6 +272,8 @@ typedef struct sao_launcher_rt_io_operator_report {
     uint32_t etw_restore_confirmed;
     int32_t last_failure_code;
     uint32_t last_failure_stage;
+    uint32_t r3_uc_patch_failure_reason;
+    uint32_t hid_fallback_reason;
 } sao_launcher_rt_io_operator_report_t;
 
 typedef void (*sao_launcher_rt_io_operator_output_fn)(const char* line_utf8,
