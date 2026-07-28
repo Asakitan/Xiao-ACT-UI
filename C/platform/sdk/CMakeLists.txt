@@ -13,6 +13,10 @@ set(SAO_PLATFORM_SDK_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_net_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_process_provider.cpp
+    # Phase 7 (Python parity closure): TTS SAPI backend.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_tts_wire.cpp
+    # Phase 8 (Python parity closure): SDK sound (procedural / font).
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_sound_wire.cpp
 )
 
 add_library(sao_platform_sdk SHARED ${SAO_PLATFORM_SDK_SOURCES})

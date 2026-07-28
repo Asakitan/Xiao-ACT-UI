@@ -22,6 +22,8 @@ add_library(sao_platform_core STATIC
     # Game-agnostic engine detection and IL2CPP runtime probing.
     src/engine_detector.cpp
     src/il2cpp_probe.cpp
+    # Phase 14 (Python parity closure): lightweight per-section profiler.
+    src/perf_probe.cpp
 )
 add_library(sao::core ALIAS sao_platform_core)
 

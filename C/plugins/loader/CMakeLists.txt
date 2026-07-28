@@ -11,6 +11,11 @@ add_library(sao_plugins_loader STATIC
     src/plugin_lifecycle.cpp
     src/plugin_isolation.cpp
     src/plugin_context.cpp
+    # Phase 14 (Python parity closure): per-event record/skip policy,
+    # encrypted native-loader path, script sandbox path check.
+    src/selective_parsing.cpp
+    src/native_loader_encrypted.cpp
+    src/script_path_sandbox.cpp
 )
 add_library(sao::plugins::loader ALIAS sao_plugins_loader)
 
@@ -32,7 +37,9 @@ endif()
 find_package(nlohmann_json 3 CONFIG REQUIRED)
 target_link_libraries(sao_plugins_loader
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE shell32)
+    PRIVATE shell32
+    # Phase 14 native_loader_encrypted uses AES-GCM decrypt from security/crypto.
+    PRIVATE $<TARGET_NAME_IF_EXISTS:sao_security_crypto>)
 
 if (SAO_BUILD_TESTS)
     add_subdirectory(tests)

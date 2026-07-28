@@ -110,6 +110,17 @@ add_library(sao_plugin_ai_editor SHARED
     src/webview_panel_registry.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
+    # Phase 10 (Python parity closure): live SDK dumper for 4 game engines,
+    # chat-callable via native_tool_registry.
+    src/sdk_dumper/sdk_dumper_base.cpp
+    src/sdk_dumper/sdk_dumper_il2cpp.cpp
+    src/sdk_dumper/sdk_dumper_mono.cpp
+    src/sdk_dumper/sdk_dumper_unreal.cpp
+    src/sdk_dumper/sdk_dumper_source.cpp
+    # Phase 11 (Python parity closure): VSCode API host-side shim +
+    # Streamable HTTP MCP transport (companion to existing stdio server).
+    src/vscode_api_shim.cpp
+    src/mcp_server_http.cpp
 )
 if (SAO_BUILD_WEBVIEW_BRIDGE)
     target_sources(sao_plugin_ai_editor PRIVATE src/webview_bridge.cpp)
@@ -135,6 +146,8 @@ target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
     sao::rt_io
     sao::sdk
+    # Phase 10 (SDK dumper) — engine adapter access via mem_probe.
+    sao::mem_probe
     bcrypt
     crypt32
     shell32

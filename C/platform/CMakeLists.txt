@@ -43,6 +43,10 @@ add_subdirectory(rt_io)
 add_subdirectory(ui)
 add_subdirectory(sdk)
 add_subdirectory(scripting)
+# mem_probe — Phase 4-6 (Python parity closure): user-mode CE-style scanner,
+# BFS pointer chain, engine adapter (il2cpp/mono/unreal/native). Depends only
+# on platform/core (process/memory/module iter).
+add_subdirectory(mem_probe)
 # runtime_installer -- fail-closed downloader for missing plugin-host
 # language runtimes (CPython embed, .NET 8, Lua 5.4, AngelScript).
 # Always ON; the module has no external vcpkg dependency of its own.
@@ -76,5 +80,6 @@ target_link_libraries(sao_platform INTERFACE
     sao::sdk
     sao::scripting
     sao::runtime_installer
-    sao::gpu_hunt)
+    sao::gpu_hunt
+    sao::mem_probe)
 target_compile_features(sao_platform INTERFACE cxx_std_20)

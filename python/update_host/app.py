@@ -285,12 +285,22 @@ async def publish_update(
 
     sha256_hex = h.hexdigest()
 
+    # C++ updater 用 max_body=256KB 拉 latest.json（updater.cpp:165）；这里 truncate notes
+    # 保 200KB 上限，留 56KB 余量给其他字段 + JSON overhead。
+    NOTES_MAX_BYTES = 200 * 1024
+    notes_safe = notes
+    if notes_safe:
+        enc = notes_safe.encode("utf-8", errors="replace")
+        if len(enc) > NOTES_MAX_BYTES:
+            enc = enc[:NOTES_MAX_BYTES]
+            notes_safe = enc.decode("utf-8", errors="ignore") + "\n[truncated]"
+
     manifest = {
         "version": version,
         "url": f"/update/{channel}/{target}/artifacts/{filename}",
         "sha256": sha256_hex,
         "size": total,
-        "notes": notes,
+        "notes": notes_safe,
         "channel": channel,
         "target": target,
         "force_update": bool(force_update),
@@ -370,6 +380,19 @@ def _save_meta(plugin_id: str, meta: Dict[str, Any]) -> None:
     os.replace(tmp, p)
 
 
+_UINT32_MAX = 0xFFFFFFFF
+
+
+def _clamp_u32(v: Any) -> int:
+    # C++ workshop_client 用 uint32_t 接收 rating/downloads，超 4.29B 会 wrap；此处 clamp。
+    n = int(v or 0)
+    if n < 0:
+        return 0
+    if n > _UINT32_MAX:
+        return _UINT32_MAX
+    return n
+
+
 def _summary_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": str(meta.get("id", "")),
@@ -378,8 +401,8 @@ def _summary_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
         "tag": str(meta.get("tag", "")),
         "author": str(meta.get("author", "")),
         "updated_ms": int(meta.get("updated_ms", 0)),
-        "rating": int(meta.get("rating", 0)),
-        "downloads": int(meta.get("downloads", 0)),
+        "rating": _clamp_u32(meta.get("rating", 0)),
+        "downloads": _clamp_u32(meta.get("downloads", 0)),
     }
 
 
@@ -435,8 +458,8 @@ async def list_workshop_plugins(
             "tag": str(it.get("tag", "")),
             "author": str(it.get("author", "")),
             "updated_ms": int(it.get("updated_ms", 0)),
-            "rating": int(it.get("rating", 0)),
-            "downloads": int(it.get("downloads", 0)),
+            "rating": _clamp_u32(it.get("rating", 0)),
+            "downloads": _clamp_u32(it.get("downloads", 0)),
         }
         for it in slice_
     ]
@@ -456,16 +479,16 @@ async def get_workshop_plugin_detail(plugin_id: str):
         "tag": str(meta.get("tag", "")),
         "author": str(meta.get("author", "")),
         "updated_ms": int(meta.get("updated_ms", 0)),
-        "rating": int(meta.get("rating", 0)),
-        "downloads": int(meta.get("downloads", 0)),
+        "rating": _clamp_u32(meta.get("rating", 0)),
+        "downloads": _clamp_u32(meta.get("downloads", 0)),
         # detail
         "description": str(meta.get("description", "")),
         "sha256": str(meta.get("sha256", "")),
         "signature_alg": str(meta.get("signature_alg", "ed25519")),
         "size_bytes": int(meta.get("size_bytes", 0)),
-        "min_major": int(meta.get("min_major", 0)),
-        "min_minor": int(meta.get("min_minor", 0)),
-        "min_patch": int(meta.get("min_patch", 0)),
+        "min_major": _clamp_u32(meta.get("min_major", 0)),
+        "min_minor": _clamp_u32(meta.get("min_minor", 0)),
+        "min_patch": _clamp_u32(meta.get("min_patch", 0)),
     }
 
 
@@ -481,11 +504,13 @@ async def download_workshop_plugin(plugin_id: str):
     if not os.path.isfile(p):
         raise HTTPException(404, "artifact not found")
 
-    # 记一次下载
+    # 记一次下载 (uint32 clamp — C++ 端存 uint32_t，超 4.29B 直接不再递增)
     try:
-        meta["downloads"] = int(meta.get("downloads", 0)) + 1
-        _save_meta(plugin_id, meta)
-        _rebuild_catalog()
+        cur = _clamp_u32(meta.get("downloads", 0))
+        if cur < _UINT32_MAX:
+            meta["downloads"] = cur + 1
+            _save_meta(plugin_id, meta)
+            _rebuild_catalog()
     except Exception:
         pass
 
@@ -553,15 +578,15 @@ async def publish_workshop_plugin(
         "tag": tag or prev.get("tag", ""),
         "author": author or prev.get("author", ""),
         "updated_ms": _now_ms(),
-        "rating": int(prev.get("rating", 0)),
-        "downloads": int(prev.get("downloads", 0)),
+        "rating": _clamp_u32(prev.get("rating", 0)),
+        "downloads": _clamp_u32(prev.get("downloads", 0)),
         "description": x_description or prev.get("description", ""),
         "sha256": h.hexdigest(),
         "signature_alg": signature_alg,
         "size_bytes": total,
-        "min_major": int(min_major),
-        "min_minor": int(min_minor),
-        "min_patch": int(min_patch),
+        "min_major": _clamp_u32(min_major),
+        "min_minor": _clamp_u32(min_minor),
+        "min_patch": _clamp_u32(min_patch),
         "published_at": _now_utc_iso(),
     }
     _save_meta(plugin_id, meta)

@@ -74,6 +74,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# The helper keeps its historical build output under bin/<config>/helper for
+# existing tests.  A second, canonical runtime package is staged after a
+# successful helper build so strict bootstrap exercises the same directory
+# shape used by installation.
+set(SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/runtime/helper")
+set(SAO_RT_IO_HELPER_CANONICAL_EXECUTABLE
+    "${SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY}/WdiSvcHost.exe")
+
 # ---------------------------------------------------------------------------
 # Subsystem toggles
 #
@@ -262,6 +271,11 @@ endif()
 if (SAO_BUILD_SECURITY)
     add_subdirectory(security)
 endif()
+if (TARGET sao_platform_rt_io_helper_stealth_tests AND
+    TARGET sao_security_anti_debug)
+    target_link_libraries(sao_platform_rt_io_helper_stealth_tests PRIVATE
+        sao_security_anti_debug)
+endif()
 if (SAO_BUILD_LICENSE)
     add_subdirectory(license)
 endif()
@@ -322,7 +336,11 @@ endif()
 
 if (TARGET SaoRtIoHelper)
     set(_SAO_RT_IO_HELPER_RUNTIME_TARGETS)
-    set(_SAO_RT_IO_HELPER_STAGE_COMMANDS)
+    set(_SAO_RT_IO_HELPER_STAGE_COMMANDS
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:SaoRtIoHelper>"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY}")
     foreach (_sao_rt_io_helper_runtime_target IN ITEMS
             sao_license_sdk
             sao_license_client
@@ -337,7 +355,10 @@ if (TARGET SaoRtIoHelper)
             list(APPEND _SAO_RT_IO_HELPER_STAGE_COMMANDS
                 COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                     "$<TARGET_FILE:${_sao_rt_io_helper_runtime_target}>"
-                    "$<TARGET_FILE_DIR:SaoRtIoHelper>")
+                    "$<TARGET_FILE_DIR:SaoRtIoHelper>/$<TARGET_FILE_NAME:${_sao_rt_io_helper_runtime_target}>"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "$<TARGET_FILE:${_sao_rt_io_helper_runtime_target}>"
+                    "${SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY}/$<TARGET_FILE_NAME:${_sao_rt_io_helper_runtime_target}>")
         endif()
     endforeach()
     if (_SAO_RT_IO_HELPER_RUNTIME_TARGETS)
@@ -350,6 +371,44 @@ if (TARGET SaoRtIoHelper)
             RUNTIME DESTINATION bin/runtime/helper
             COMPONENT ship)
     endif()
+endif()
+
+# The canonical raw drivers are external operator assets, not source-tree
+# build inputs. General source builds remain valid when the configured store
+# is absent; when it exists, component installation requires the exact R1/R3
+# pair and fails if either canonical file is missing.
+set(SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY
+    "${CMAKE_SOURCE_DIR}/../../driver store" CACHE PATH
+    "Optional external canonical R1/R3 driver store used by ship staging")
+cmake_path(ABSOLUTE_PATH SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY
+    BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    NORMALIZE
+    OUTPUT_VARIABLE _sao_rt_io_driver_store_source_directory)
+if (EXISTS "${_sao_rt_io_driver_store_source_directory}")
+    # Fail at configure time, not at `cmake --install` time: a directory that
+    # exists but is missing one canonical file would otherwise pass
+    # configuration and only fail deep into ship staging.
+    set(_sao_rt_io_missing_ship_drivers "")
+    foreach (_sao_rt_io_ship_driver IN ITEMS R1.sys R3.sys)
+        if (NOT EXISTS "${_sao_rt_io_driver_store_source_directory}/${_sao_rt_io_ship_driver}")
+            list(APPEND _sao_rt_io_missing_ship_drivers "${_sao_rt_io_ship_driver}")
+        endif()
+    endforeach()
+    if (_sao_rt_io_missing_ship_drivers)
+        message(FATAL_ERROR
+            "SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY "
+            "'${_sao_rt_io_driver_store_source_directory}' exists but is "
+            "missing: ${_sao_rt_io_missing_ship_drivers}. Ship staging "
+            "requires the exact R1/R3 pair — restore the missing file(s) or "
+            "point SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY elsewhere for a "
+            "driver-less build.")
+    endif()
+    foreach (_sao_rt_io_ship_driver IN ITEMS R1.sys R3.sys)
+        install(FILES
+            "${_sao_rt_io_driver_store_source_directory}/${_sao_rt_io_ship_driver}"
+            DESTINATION "bin/driver store"
+            COMPONENT ship)
+    endforeach()
 endif()
 
 # ---------------------------------------------------------------------------

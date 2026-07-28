@@ -118,43 +118,6 @@ target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
     user32
 )
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_panel.cpp")
-    add_executable(sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests
-        gpu_hunt_legacy_compatibility_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_central_panel.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_panel.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
-    )
-    target_compile_features(
-        sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests PRIVATE
-        cxx_std_20
-    )
-    target_compile_definitions(
-        sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests PRIVATE
-        SAO_AI_EDITOR_BUILDING_DLL
-        SAO_AI_EDITOR_TESTING
-        SAO_AI_EDITOR_LEGACY_GPU_HUNT_COMPAT_TEST=1
-    )
-    target_include_directories(
-        sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    )
-    target_link_libraries(
-        sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests PRIVATE
-        Catch2::Catch2WithMain
-        nlohmann_json::nlohmann_json
-        sao::gpu_hunt
-        sao::rt_io
-        sao::sdk
-        sao::ui
-        comctl32
-        gdi32
-        user32
-    )
-endif()
-
 include(CTest)
 include(Catch)
 catch_discover_tests(sao_plugin_ai_editor_tests
@@ -169,12 +132,6 @@ catch_discover_tests(sao_plugin_ai_editor_gpu_hunt_tests
     TEST_PREFIX "plugins_ai_editor.gpu_hunt."
     PROPERTIES LABELS "plugins;ai_editor;gpu_hunt"
 )
-if (TARGET sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests)
-    catch_discover_tests(sao_plugin_ai_editor_gpu_hunt_legacy_compatibility_tests
-        TEST_PREFIX "plugins_ai_editor.gpu_hunt.compatibility."
-        PROPERTIES LABELS "plugins;ai_editor;gpu_hunt;compatibility;standalone_hwnd"
-    )
-endif()
 
 add_executable(sao_plugin_ai_editor_kernel_map_tests
     kernel_map_bridge_test.cpp
