@@ -46,7 +46,8 @@ target_compile_features(sao_platform_ui_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_ui_tests)
+catch_discover_tests(sao_platform_ui_tests
+    PROPERTIES SKIP_RETURN_CODE 4)
 
 # ── theme slice — G3.1 flat-token theme tests ──────────────────
 # Isolated target so it stays green even if the shared overlay/comp
