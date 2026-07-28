@@ -136,17 +136,56 @@ SandboxSlot* current_slot_from_builtins() {
         PyCapsule_GetPointer(cap, "sao.sandbox.slot"));
 }
 
+// Phase 3 (P0 sandbox permission gate) — 声明特定 permission 的插件解禁对应
+// FFI/net 模块。star_resonance / hide_seek 的 packet_capture / SendInput 走
+// ctypes, 之前无条件被 kDefaultBlacklist 拒。permission → unlock 表:
+//   input_control  → ctypes, ctypes.util, ctypes.wintypes, _ctypes
+//   memory_access  → ctypes, _ctypes
+//   packet_capture → ctypes, _ctypes, _socket, socket, _ssl, ssl
+// subprocess / os.system 保持无条件 block, permission 不解禁。
+bool permission_unlocks_module(uint32_t perm, const char* name, bool strict) {
+    auto match = [name, strict](const char* pattern) {
+        return matches_module_name(name, pattern, strict);
+    };
+    const bool input_ctl = (perm & static_cast<uint32_t>(permission_flag::input_control)) != 0;
+    const bool mem_access = (perm & static_cast<uint32_t>(permission_flag::memory_access)) != 0;
+    const bool pkt_cap = (perm & static_cast<uint32_t>(permission_flag::packet_capture)) != 0;
+    if (input_ctl || mem_access || pkt_cap) {
+        if (match("ctypes") || match("ctypes.util") || match("ctypes.wintypes") ||
+            match("_ctypes")) {
+            return true;
+        }
+    }
+    if (pkt_cap) {
+        if (match("_socket") || match("socket") || match("_ssl") || match("ssl")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool module_allowed(SandboxSlot* slot, const char* name) {
     if (slot == nullptr || name == nullptr) return true;
     const bool strict = slot->cfg.strict_submodule_check;
 
-    // 1. 显式 blacklist 永远拒 (包括 unsafe).
+    // 1. 显式 blacklist 拒, 但若 permission 解禁则视为未命中。
     for (const auto& b : slot->extra_blacklist) {
-        if (matches_module_name(name, b.c_str(), strict)) return false;
+        if (matches_module_name(name, b.c_str(), strict)) {
+            if (permission_unlocks_module(slot->cfg.permissions, name, strict))
+                break; // 允许穿透 blacklist, 由后续 whitelist/permission 决策
+            return false;
+        }
     }
     for (const char* const* p = kDefaultBlacklist; *p != nullptr; ++p) {
-        if (matches_module_name(name, *p, strict)) return false;
+        if (matches_module_name(name, *p, strict)) {
+            if (permission_unlocks_module(slot->cfg.permissions, name, strict))
+                break;
+            return false;
+        }
     }
+    // 若 permission 允了这个模块, 直接过。
+    if (permission_unlocks_module(slot->cfg.permissions, name, strict))
+        return true;
 
     // 2. unsafe=1 → 只要不在 blacklist 就允.
     if (slot->unsafe) return true;

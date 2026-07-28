@@ -62,6 +62,23 @@ constexpr method_mapping kDefaultMappings[] = {
     {"toast", sdk_method_id::method_toast},
     {"register_report_view", sdk_method_id::method_register_report_view},
     {"register_timer", sdk_method_id::method_register_timer},
+    // Phase 2 (P0 compat shim): 补 v1 老插件用到但未 alias 的 method。
+    // sdk_method_id enum 都已有对应值; 之前只是 shim table 没 alias, 派发时
+    // 命中 kUnknownMethod。全部追加后老插件的 register_* 调用直通 C loader。
+    {"register_parser_adapter", sdk_method_id::method_register_parser_adapter},
+    {"register_exporter", sdk_method_id::method_register_exporter},
+    {"register_formatter", sdk_method_id::method_register_formatter},
+    {"register_trigger_type", sdk_method_id::method_register_trigger_type},
+    {"register_data_source", sdk_method_id::method_register_data_source},
+    {"register_engine", sdk_method_id::method_register_engine},
+    {"register_render_hook", sdk_method_id::method_register_render_hook},
+    {"clear_overlay", sdk_method_id::method_set_overlay},
+    {"open_file", sdk_method_id::method_open_file},
+    {"open_window", sdk_method_id::method_open_file},
+    {"get_snapshot", sdk_method_id::method_get_snapshot},
+    {"snapshot_value", sdk_method_id::method_get_snapshot},
+    {"recent_events", sdk_method_id::method_get_snapshot},
+    {"load_local", sdk_method_id::method_load_local},
 };
 
 constexpr const char* kSpecialMethods[] = {"metadata"};

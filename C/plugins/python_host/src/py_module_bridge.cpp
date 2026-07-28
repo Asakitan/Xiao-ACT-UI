@@ -2102,11 +2102,13 @@ PyObject* PluginContext_get_mem_attr(PluginContextObject* self, void*) {
     return d;
 }
 PyObject* PluginContext_get_owner_attr(PluginContextObject* self, void*) {
+    // Phase 1 (P0 compat shim): owner facade — 无条件返回一个真实 SimpleNamespace,
+    // 让老 Python 插件 (star_resonance 等) 的 owner._x=42 / getattr(owner, '_x', None)
+    // 属性存取直接生效, 不再触发 `if owner is None: return` 短路。
+    // 之前只在 controlled_test_shim=True 时生成; 现在默认路径也生成。
     PyObject* owner = PyDict_GetItemString(self->extras, "engine_owner");
     if (owner != nullptr)
         return Py_NewRef(owner);
-    if (!self->controlled_test_shim)
-        Py_RETURN_NONE;
     PyObject* types = PyImport_ImportModule("types");
     if (types == nullptr)
         return nullptr;
@@ -2124,6 +2126,7 @@ PyObject* PluginContext_get_owner_attr(PluginContextObject* self, void*) {
     }
     return owner;
 }
+
 
 PyGetSetDef PluginContext_getset[] = {
     {"plugin_id", reinterpret_cast<getter>(PluginContext_get_plugin_id_attr), nullptr, nullptr,
@@ -3798,6 +3801,55 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_
     PyObject_SetAttrString(plugins_mod, "PluginContext", pc_cls);
     PyObject_SetAttrString(act_platform_mod, "plugins", plugins_mod);
     PyDict_SetItemString(mods, "act_platform.plugins", plugins_mod);
+
+    // Phase 2 (P0 compat shim): 追加 act_platform.runtime 子 module。
+    // star_resonance 的 plugin.py:160 会做:
+    //   from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager
+    // 这里注入两个函数, 返回挂在 owner 上的共享对象 (若无则建 no-op stub).
+    if (PyDict_GetItemString(mods, "act_platform.runtime") == nullptr) {
+        PyObject* runtime_mod = PyModule_New("act_platform.runtime");
+        if (runtime_mod != nullptr) {
+            PyObject* globals = PyModule_GetDict(runtime_mod);
+            const char* runtime_src =
+                "import types\n"
+                "def ensure_act_event_bus(owner):\n"
+                "    bus = getattr(owner, '_event_bus', None)\n"
+                "    if bus is None:\n"
+                "        bus = types.SimpleNamespace()\n"
+                "        bus.subscribe = lambda *a, **kw: None\n"
+                "        bus.unsubscribe = lambda *a, **kw: None\n"
+                "        bus.publish = lambda *a, **kw: None\n"
+                "        bus.emit = lambda *a, **kw: None\n"
+                "        try:\n"
+                "            setattr(owner, '_event_bus', bus)\n"
+                "        except Exception:\n"
+                "            pass\n"
+                "    return bus\n"
+                "\n"
+                "def ensure_act_plugin_manager(owner, load=False):\n"
+                "    pm = getattr(owner, '_plugin_manager', None)\n"
+                "    if pm is None:\n"
+                "        pm = types.SimpleNamespace()\n"
+                "        pm.get_plugin = lambda name: None\n"
+                "        pm.list_plugins = lambda: []\n"
+                "        pm.register = lambda *a, **kw: None\n"
+                "        try:\n"
+                "            setattr(owner, '_plugin_manager', pm)\n"
+                "        except Exception:\n"
+                "            pass\n"
+                "    return pm\n";
+            PyObject* res = PyRun_String(runtime_src, Py_file_input, globals, globals);
+            if (res != nullptr) {
+                Py_DECREF(res);
+                PyObject_SetAttrString(act_platform_mod, "runtime", runtime_mod);
+                PyDict_SetItemString(mods, "act_platform.runtime", runtime_mod);
+            } else {
+                PyErr_Clear();
+            }
+            Py_DECREF(runtime_mod);
+        }
+    }
+
     Py_DECREF(act_platform_mod);
     Py_DECREF(plugins_mod);
     Py_DECREF(pc_cls);

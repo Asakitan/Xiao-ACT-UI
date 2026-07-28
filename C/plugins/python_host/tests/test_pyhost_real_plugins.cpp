@@ -912,6 +912,60 @@ TEST_CASE("pyhost_add_hotkey_from_python_fires_on_key", "[pyhost][real_plugins]"
     Py_DECREF(ctx);
 }
 
+// ══════════════════════════════════════════════════════════
+// Phase 1 (owner facade) — 验证 ctx.engine.owner 不再是 None,
+// star_resonance 的 `if owner is None: return` 短路不触发。
+// ══════════════════════════════════════════════════════════
+TEST_CASE("pyhost_owner_facade_not_none", "[pyhost][owner_facade]") {
+    REQUIRE(ensure_host() != nullptr);
+    // 用一个内联的 minimal plugin fixture — 不依赖真实 plugin dir。
+    // 直接从 host 拿一个 ctx PyObject 通过 controlled_test_shim 路径。
+    // Note: g_host 已 controlled_test_shim=true; 但 owner facade fix 让
+    // 无 controlled shim 时也应返回 SimpleNamespace。
+    PyGILState_STATE gil = PyGILState_Ensure();
+
+    // Import sao_sdk, 创建 PluginContext 实例。
+    PyObject* sao_sdk = PyImport_ImportModule("sao_sdk");
+    REQUIRE(sao_sdk != nullptr);
+    PyObject* ctx_type = PyObject_GetAttrString(sao_sdk, "PluginContext");
+    Py_DECREF(sao_sdk);
+    if (ctx_type == nullptr) {
+        // 老 host build 无 PluginContext type export → skip。
+        PyErr_Clear();
+        PyGILState_Release(gil);
+        SKIP("PluginContext type not exported");
+    }
+    PyObject* ctx = PyObject_CallNoArgs(ctx_type);
+    Py_DECREF(ctx_type);
+    REQUIRE(ctx != nullptr);
+
+    // ctx.engine 应是 ctx 自己 (EngineAccess alias)。
+    PyObject* engine = PyObject_GetAttrString(ctx, "engine");
+    REQUIRE(engine != nullptr);
+    CHECK(engine == ctx);
+
+    // ctx.engine.owner 应是真实对象, 不是 None (Phase 1 fix)。
+    PyObject* owner = PyObject_GetAttrString(engine, "owner");
+    REQUIRE(owner != nullptr);
+    CHECK(owner != Py_None);
+
+    // set_owner_attr / getattr 往返。
+    PyObject* value = PyLong_FromLong(42);
+    REQUIRE(value != nullptr);
+    if (PyObject_SetAttrString(owner, "_x", value) == 0) {
+        PyObject* readback = PyObject_GetAttrString(owner, "_x");
+        REQUIRE(readback != nullptr);
+        CHECK(PyLong_AsLong(readback) == 42);
+        Py_DECREF(readback);
+    }
+    Py_DECREF(value);
+
+    Py_DECREF(owner);
+    Py_DECREF(engine);
+    Py_DECREF(ctx);
+    PyGILState_Release(gil);
+}
+
 // ── 最终收尾 (Catch2 session 结束时 shutdown) ──
 struct TeardownSentinel {
     ~TeardownSentinel() {
