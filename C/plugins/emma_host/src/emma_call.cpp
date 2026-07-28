@@ -347,6 +347,9 @@ class callback_lease {
                 emma_plugin_runtime::callback_record::one_shot_state::armed) {
                 return false;
             }
+            callback->one_shot_phase =
+                emma_plugin_runtime::callback_record::one_shot_state::claimed;
+            callback->accepting = false;
         }
         ++callback->in_flight;
         callback_ = callback;
@@ -360,13 +363,8 @@ class callback_lease {
         std::lock_guard lock(callback_->mutex);
         if (!callback_->one_shot)
             return true;
-        if (callback_->one_shot_phase !=
-            emma_plugin_runtime::callback_record::one_shot_state::armed) {
-            return false;
-        }
-        callback_->one_shot_phase = emma_plugin_runtime::callback_record::one_shot_state::claimed;
-        callback_->accepting = false;
-        return true;
+        return callback_->one_shot_phase ==
+               emma_plugin_runtime::callback_record::one_shot_state::claimed;
     }
 
     void defer(std::vector<emma_value> arguments) {
@@ -375,7 +373,7 @@ class callback_lease {
         std::lock_guard lock(callback_->mutex);
         if (callback_->one_shot &&
             callback_->one_shot_phase ==
-                emma_plugin_runtime::callback_record::one_shot_state::armed) {
+                emma_plugin_runtime::callback_record::one_shot_state::claimed) {
             callback_->one_shot_phase =
                 emma_plugin_runtime::callback_record::one_shot_state::fired_pending;
             callback_->accepting = false;
