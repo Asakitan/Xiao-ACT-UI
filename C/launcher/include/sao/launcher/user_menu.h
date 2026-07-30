@@ -37,7 +37,7 @@ private:
                           WPARAM w_param,
                           LPARAM l_param) noexcept;
     bool addNotificationIcon() noexcept;
-    void showContextMenu() noexcept;
+    void showContextMenu(const POINT* activation_point = nullptr) noexcept;
     void openUserGuide() noexcept;
     void showMenuUnavailableError() const noexcept;
     void showUserGuideUnavailableError() const noexcept;

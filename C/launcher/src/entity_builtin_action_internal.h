@@ -39,6 +39,7 @@ struct Authority {
     bool plugin_manager = false;
     bool reload_plugins = false;
     bool plugin_status = false;
+    bool license_activation = false;
     bool fisheye_procedural = false;
     bool fisheye_live = false;
     bool theme = false;
@@ -74,6 +75,7 @@ struct Operations {
     RunOwnedActionFn open_process_selector = nullptr;
     RunOwnedActionFn open_plugin_manager = nullptr;
     RunOwnedActionFn open_plugin_status = nullptr;
+    RunOwnedActionFn open_license_panel = nullptr;
     RunOwnedActionFn set_fisheye_procedural = nullptr;
     RunOwnedActionFn set_fisheye_live = nullptr;
     void* user_data = nullptr;

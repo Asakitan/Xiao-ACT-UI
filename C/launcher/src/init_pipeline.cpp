@@ -33,6 +33,7 @@
 
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION) &&                                              \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#include "license_panel_internal.h"
 #include "plugin_manager_panel_internal.h"
 #include "process_selector_panel_internal.h"
 #include "workshop_panel_internal.h"
@@ -44,6 +45,9 @@
 #include "sao/plugins/loader/entity_provider.h"
 #endif
 
+#include <array>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <cstdio>
 #include <cwchar>
@@ -51,6 +55,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <thread>
 #include <windows.h>
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
@@ -62,6 +67,7 @@
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/rt_io/engine_registry.h"
+#include "sao/rt_io/helper_bootstrap.h"
 #include "sao/rt_io/proxy.h"
 #include "sao/rt_io/window_rect.h"
 #include "sao/sdk/sao_sdk.h"
@@ -82,6 +88,18 @@
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/anti_debug/probes.h"
+#endif
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER) &&                                         \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#include "sao_security/anti_dump/erase_headers.h"
+#include "sao_security/anti_dump/snapshot_detect.h"
+#endif
+#if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER) &&                                      \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#include "sao_security/user_evasion/api.h"
+#include "sao_security/user_evasion/halo_gate.h"
+#include "sao_security/user_evasion/indirect_syscall.h"
+#include "sao_security/user_evasion/unhook.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -597,6 +615,9 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         cfg.enable_anti_dump = 1;
         cfg.enable_anti_screencap = 1;
         cfg.enable_obfuscation_runtime = 1;
+        cfg.enable_user_evasion = 1;
+        cfg.strict_user_evasion = 0;
+        cfg.anti_debug_poll_interval_seconds = 5;
         if (sao_security_init(&cfg) != SAO_STATUS_OK) {
             return SAO_EXIT_PLATFORM_INIT_FAIL;
         }
@@ -709,7 +730,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT)
-                    return SAO_EXIT_OK;
+                    return static_cast<int>(msg.wParam);
                 int32_t handled = 0;
                 if (sao_ui_handle_message(static_cast<sao_platform_ctx*>(state.platform_ctx),
                                           msg.message, msg.wParam, msg.lParam,
@@ -751,6 +772,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         KillTimer(nullptr, kUiFrameTimerId);
         if (result < 0)
             return SAO_EXIT_UI_ONLINE_FAIL;
+        return static_cast<int>(msg.wParam);
     }
 
     return SAO_EXIT_OK;
@@ -1352,6 +1374,221 @@ extern "C" void sao_launcher_init_pipeline_test_set_runtime_installer_hook(
         ensure_all == nullptr ? &runtime_installer_ensure_all_passthrough : ensure_all;
 }
 
+#if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                             \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+namespace {
+
+constexpr uint32_t kDefaultAntiDebugPollIntervalSeconds = 5u;
+
+struct AntiDebugWorkerState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::thread worker;
+    bool stop_requested = false;
+};
+
+AntiDebugWorkerState& anti_debug_worker_state() {
+    static AntiDebugWorkerState state;
+    return state;
+}
+
+void log_anti_debug_result(const char* phase, sao_status_t status,
+                           const SaoSecurityAntiDebugEvidence& evidence) noexcept {
+    if (status == SAO_STATUS_OK &&
+        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_ALLOW) {
+        return;
+    }
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    (void)sao_core_logf(
+        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK ? SAO_LOG_ERROR
+                                                                  : SAO_LOG_WARN,
+        "launcher.security.anti_debug",
+        "%s status=%d verdict=%u positive_mask=0x%llx unavailable_mask=0x%llx reason_bits=0x%llx",
+        phase, static_cast<int>(status), evidence.verdict,
+        static_cast<unsigned long long>(evidence.positive_mask),
+        static_cast<unsigned long long>(evidence.unavailable_mask),
+        static_cast<unsigned long long>(evidence.reason_bits));
+#else
+    std::fprintf(stderr,
+                 "anti_debug %s status=%d verdict=%u positive=0x%llx unavailable=0x%llx\n",
+                 phase, static_cast<int>(status), evidence.verdict,
+                 static_cast<unsigned long long>(evidence.positive_mask),
+                 static_cast<unsigned long long>(evidence.unavailable_mask));
+#endif
+}
+
+void anti_debug_worker_main(uint32_t interval_seconds, DWORD launcher_thread_id) noexcept {
+    AntiDebugWorkerState& state = anti_debug_worker_state();
+    try {
+        for (;;) {
+            std::unique_lock lock(state.mutex);
+            if (state.cv.wait_for(lock, std::chrono::seconds(interval_seconds),
+                                  [&state] { return state.stop_requested; })) {
+                return;
+            }
+            lock.unlock();
+
+            SaoSecurityAntiDebugEvidence evidence{};
+            evidence.struct_size = SAO_SECURITY_ANTI_DEBUG_EVIDENCE_SIZE;
+            evidence.abi_version = SAO_SECURITY_ANTI_DEBUG_EVIDENCE_ABI_VERSION;
+            const sao_status_t status = sao_security_anti_debug_evaluate(
+                SAO_SECURITY_ANTI_DEBUG_POLICY_FAIL_STRONG, &evidence);
+            log_anti_debug_result("periodic", status, evidence);
+            if (status == SAO_STATUS_OK &&
+                evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK) {
+                if (!PostThreadMessageW(launcher_thread_id, WM_QUIT,
+                                        static_cast<WPARAM>(
+                                            sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL),
+                                        0)) {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+                    (void)sao_core_logf(SAO_LOG_ERROR, "launcher.security.anti_debug",
+                                        "failed to post policy shutdown error=%lu",
+                                        static_cast<unsigned long>(GetLastError()));
+#endif
+                    (void)TerminateProcess(GetCurrentProcess(),
+                                           static_cast<UINT>(
+                                               sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL));
+                }
+                return;
+            }
+        }
+    } catch (...) {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+        (void)sao_core_log(SAO_LOG_ERROR, "launcher.security.anti_debug",
+                           "periodic worker terminated after an unexpected exception");
+#endif
+    }
+}
+
+void stop_anti_debug_worker() noexcept {
+    AntiDebugWorkerState& state = anti_debug_worker_state();
+    std::thread worker;
+    {
+        std::lock_guard lock(state.mutex);
+        state.stop_requested = true;
+        state.cv.notify_all();
+        worker = std::move(state.worker);
+    }
+    if (worker.joinable()) {
+        try {
+            worker.join();
+        } catch (...) {
+            if (worker.joinable())
+                worker.detach();
+        }
+    }
+    {
+        std::lock_guard lock(state.mutex);
+        state.stop_requested = false;
+    }
+}
+
+sao_status_t start_anti_debug_worker(uint32_t interval_seconds) noexcept {
+    stop_anti_debug_worker();
+    if (interval_seconds == 0)
+        interval_seconds = kDefaultAntiDebugPollIntervalSeconds;
+    try {
+        AntiDebugWorkerState& state = anti_debug_worker_state();
+        std::lock_guard lock(state.mutex);
+        state.stop_requested = false;
+        state.worker = std::thread(anti_debug_worker_main, interval_seconds,
+                                   GetCurrentThreadId());
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_INTERNAL;
+    }
+}
+
+#if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER)
+struct UserEvasionEvidence {
+    uint32_t abi_version = 0;
+    int32_t ntdll_verify_status = SAO_STATUS_NOT_IMPLEMENTED;
+    uint32_t ntdll_hook_count = 0;
+    uint32_t halo_resolved_count = 0;
+    uint32_t halo_hooked_count = 0;
+    uint32_t halo_unavailable_count = 0;
+    int32_t syscall_gadget_status = SAO_STATUS_NOT_IMPLEMENTED;
+    uint32_t syscall_gadget_available = 0;
+};
+
+uint32_t user_evasion_hash(const char* name) noexcept {
+    uint32_t hash = 0;
+    while (*name != '\0') {
+        hash = (hash >> 13) | (hash << 19);
+        hash += static_cast<uint8_t>(*name++);
+    }
+    return hash;
+}
+
+UserEvasionEvidence collect_user_evasion_evidence() {
+    UserEvasionEvidence evidence{};
+    evidence.abi_version = sao_security_user_evasion_abi_version();
+    evidence.ntdll_verify_status =
+        sao_security_user_evasion_unhook_verify(&evidence.ntdll_hook_count);
+
+    constexpr std::array<const char*, 3> targets = {
+        "NtClose",
+        "NtQuerySystemTime",
+        "NtQueryInformationProcess",
+    };
+    for (const char* target : targets) {
+        const uint32_t hash = user_evasion_hash(target);
+        uint32_t ssn = 0;
+        const int32_t status =
+            sao_security_user_evasion_halo_gate_resolve(hash, 32u, &ssn);
+        if (status != SAO_STATUS_OK) {
+            ++evidence.halo_unavailable_count;
+            continue;
+        }
+        SaoHaloGateProbe probe{};
+        if (sao_security_user_evasion_halo_gate_last_probe(&probe) != SAO_STATUS_OK ||
+            probe.target_hash != hash || probe.resolved_ssn != ssn) {
+            ++evidence.halo_unavailable_count;
+            continue;
+        }
+        ++evidence.halo_resolved_count;
+        if (probe.target_was_hooked != 0)
+            ++evidence.halo_hooked_count;
+    }
+
+    void* gadget = nullptr;
+    evidence.syscall_gadget_status =
+        sao_security_user_evasion_find_syscall_gadget(nullptr, &gadget);
+    evidence.syscall_gadget_available =
+        evidence.syscall_gadget_status == SAO_STATUS_OK && gadget != nullptr ? 1u : 0u;
+    return evidence;
+}
+
+bool evaluate_user_evasion(bool strict) {
+    const UserEvasionEvidence evidence = collect_user_evasion_evidence();
+    const bool incomplete = evidence.abi_version == 0 ||
+                            (evidence.ntdll_verify_status != SAO_STATUS_OK &&
+                             evidence.halo_resolved_count == 0);
+    const bool finding = evidence.ntdll_hook_count != 0 ||
+                         evidence.halo_hooked_count != 0 || incomplete;
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    (void)sao_core_logf(
+        finding ? SAO_LOG_WARN : SAO_LOG_INFO, "launcher.security.user_evasion",
+        "abi=0x%08x verify_status=%d hook_count=%u halo_resolved=%u halo_hooked=%u halo_unavailable=%u gadget_status=%d gadget_available=%u verdict=%s",
+        evidence.abi_version, evidence.ntdll_verify_status, evidence.ntdll_hook_count,
+        evidence.halo_resolved_count, evidence.halo_hooked_count,
+        evidence.halo_unavailable_count, evidence.syscall_gadget_status,
+        evidence.syscall_gadget_available,
+        finding ? (strict ? "block" : "warn") : "allow");
+#else
+    std::fprintf(stderr,
+                 "user_evasion abi=0x%08x hooks=%u halo_hooked=%u verdict=%s\n",
+                 evidence.abi_version, evidence.ntdll_hook_count,
+                 evidence.halo_hooked_count,
+                 finding ? (strict ? "block" : "warn") : "allow");
+#endif
+    return !finding || !strict;
+}
+#endif
+
+} // namespace
+#endif
+
 extern "C" {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
@@ -1529,6 +1766,8 @@ struct sao_platform_ctx {
     std::unique_ptr<sao::launcher::process_selector_panel::Owner> process_selector_panel;
     std::unique_ptr<sao::launcher::workshop_panel::Owner> workshop_panel;
     bool workshop_panel_visible;
+    std::unique_ptr<sao::launcher::license_panel::Owner> license_panel;
+    bool license_panel_visible;
 #endif
     bool home_hotkey_registered;
     bool insert_hotkey_registered;
@@ -1538,6 +1777,7 @@ struct sao_platform_ctx {
     bool rt_io_operator_shutdown = false;
     sao_launcher_rt_io_operator_report_t rt_io_cleanup_report{};
     bool nervgear_mode{true};
+    bool screencap_protection{true};
     bool streaming_flow_started = false;
     sao_plugins_registry* plugins_registry = nullptr;
     sao::launcher::entity_builtin_action::State builtin_action_state;
@@ -1676,6 +1916,10 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
             ctx->workshop_panel_visible = visible;
             (void)update_shared_fisheye_visibility(ctx);
         });
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+        ctx->license_panel = std::make_unique<sao::launcher::license_panel::Owner>(
+            ctx->compositor);
+#endif
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1711,6 +1955,16 @@ sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
         ctx->builtin_action_state.authority.plugin_manager = false;
         ctx->builtin_action_state.authority.plugin_status = false;
     }
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+    if (ctx->license_panel) {
+        const sao_status_t status = ctx->license_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->license_panel.reset();
+        ctx->license_panel_visible = false;
+        ctx->builtin_action_state.authority.license_activation = false;
+    }
+#endif
     if (ctx->fisheye_backdrop != nullptr) {
         const sao_status_t status = sao_ui_fisheye_backdrop_try_destroy(ctx->fisheye_backdrop);
         if (status != SAO_STATUS_OK)
@@ -1765,6 +2019,52 @@ sao_status_t map_sdk_runtime_status(sao_sdk_status_t status) noexcept {
 }
 
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept;
+
+void write_platform_bringup_diagnostic(const char* line, int length) noexcept {
+    if (line == nullptr || length <= 0)
+        return;
+    HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0u;
+    (void)WriteFile(output, line, static_cast<DWORD>(length), &written, nullptr);
+}
+
+sao_status_t trace_platform_bringup_failure(const char* stage,
+                                            sao_status_t failure_status) noexcept {
+    wchar_t enabled[2]{};
+    if (GetEnvironmentVariableW(L"SAO_LAUNCHER_STARTUP_DIAGNOSTICS", enabled,
+                                static_cast<DWORD>(std::size(enabled))) == 0u) {
+        return failure_status;
+    }
+
+    char line[512]{};
+    int length = sprintf_s(line, sizeof(line), "SAO_STARTUP stage=%s status=%d\r\n",
+                           stage != nullptr ? stage : "unknown", failure_status);
+    write_platform_bringup_diagnostic(line, length);
+
+    if (stage == nullptr || std::strcmp(stage, "rt_io_proxy_open_v2") != 0)
+        return failure_status;
+
+    SaoRtIoHelperLaunchDiagnostics diagnostics{};
+    diagnostics.struct_size = sizeof(diagnostics);
+    diagnostics.abi_version = SAO_RT_IO_HELPER_LAUNCH_DIAGNOSTICS_ABI_VERSION;
+    const sao_status_t diagnostics_status =
+        sao_rt_io_helper_get_last_launch_diagnostics(&diagnostics);
+    length = sprintf_s(
+        line, sizeof(line),
+        "SAO_STARTUP helper_diagnostics_status=%d launch_status=%d flags=0x%08X "
+        "requested_ppid=%u effective_ppid=%u ppid_reason=%u ppid_os_error=%u "
+        "requested_strict=%u effective_strict=%u strict_reason=%u identity_mismatch=0x%08X\r\n",
+        diagnostics_status, diagnostics.status, diagnostics.flags,
+        diagnostics.requested_ppid_policy, diagnostics.effective_ppid_policy,
+        diagnostics.ppid_reason, diagnostics.ppid_os_error,
+        diagnostics.requested_strict_bootstrap_policy,
+        diagnostics.effective_strict_bootstrap_policy, diagnostics.strict_reason,
+        diagnostics.identity_mismatch_fields);
+    write_platform_bringup_diagnostic(line, length);
+    return failure_status;
+}
 
 sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx, sao_platform_ctx** ctx_out,
                                        sao_status_t failure_status) noexcept {
@@ -1825,6 +2125,54 @@ sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask
                                           &result);
 }
 
+sao_status_t set_helper_window_protection(
+    sao_platform_ctx* ctx, void* hwnd, bool enable) {
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || hwnd == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
+    uint8_t payload[9]{};
+    for (uint32_t index = 0u; index < 8u; ++index) {
+        payload[index] = static_cast<uint8_t>((value >> (index * 8u)) & 0xFFu);
+    }
+    payload[8] = enable ? 1u : 0u;
+    uint8_t response[1]{};
+    SaoRtIoCallResult call{};
+    const sao_status_t status = sao_rt_io_proxy_call(
+        ctx->rt_io_proxy, SAO_RT_IO_CMD_SET_WINDOW_PROT,
+        payload, sizeof(payload), 5000u, response, sizeof(response), &call);
+    if (status != SAO_STATUS_OK) return status;
+    if (call.outcome != SAO_RT_IO_OUTCOME_COMMITTED || call.authenticated == 0u ||
+        call.transport_complete == 0u || call.request_id_matched == 0u ||
+        call.payload_bytes != sizeof(response) || response[0] == 0u) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    return SAO_STATUS_OK;
+}
+
+sao_status_t SAO_UI_CALL apply_overlay_protection_provider(
+    void* render_hwnd, void* control_hwnd, void* owner_hwnd,
+    bool enable, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    void* windows[3]{render_hwnd, control_hwnd, owner_hwnd};
+    size_t completed = 0u;
+    for (; completed < 3u; ++completed) {
+        if (windows[completed] == nullptr) continue;
+        const sao_status_t status = set_helper_window_protection(
+            ctx, windows[completed], enable);
+        if (status == SAO_STATUS_OK) continue;
+        while (completed > 0u) {
+            --completed;
+            if (windows[completed] != nullptr) {
+                (void)set_helper_window_protection(
+                    ctx, windows[completed], !enable);
+            }
+        }
+        return status;
+    }
+    return SAO_STATUS_OK;
+}
+
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
 void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     const auto& source = ctx->builtin_action_state.authority;
@@ -1837,6 +2185,7 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.ai_editor = source.ai_editor;
     target.workshop = source.workshop;
     target.process_selector = source.process_selector;
+    target.license_activation = source.license_activation;
     target.plugin_manager = source.plugin_manager;
     target.reload_plugins = source.reload_plugins;
     target.plugin_status = source.plugin_status;
@@ -1937,8 +2286,9 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
                 static_cast<sao_platform_ctx*>(context)->overlay_host);
         },
         [](bool exclude, void* context) {
+            auto* ctx = static_cast<sao_platform_ctx*>(context);
             return sao_ui_overlay_host_set_capture_mode(
-                static_cast<sao_platform_ctx*>(context)->overlay_host, exclude);
+                ctx->overlay_host, exclude && ctx->screencap_protection);
         },
         [](bool exclude, void*) -> sao_status_t {
             return sao_streaming_flow_set_mode(exclude) == 0 ? SAO_STATUS_ERR_NOT_INITIALIZED
@@ -1987,6 +2337,17 @@ sao_status_t open_plugin_manager(void* user_data) {
 
 sao_status_t open_plugin_status(void* user_data) {
     return open_plugin_manager(user_data);
+}
+
+sao_status_t open_license_panel(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->license_panel)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = ctx->license_panel->open();
+    if (status != SAO_STATUS_OK)
+        return status;
+    (void)update_shared_fisheye_visibility(ctx);
+    return SAO_STATUS_OK;
 }
 
 sao_status_t set_fisheye_procedural(void* user_data) {
@@ -2111,6 +2472,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
+    case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS: {
         sao::launcher::entity_builtin_action::Operations operations;
@@ -2131,6 +2493,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         operations.open_process_selector = &open_process_selector;
         operations.open_plugin_manager = &open_plugin_manager;
         operations.open_plugin_status = &open_plugin_status;
+        operations.open_license_panel = &open_license_panel;
         operations.set_fisheye_procedural = &set_fisheye_procedural;
         operations.set_fisheye_live = &set_fisheye_live;
 #endif
@@ -2235,8 +2598,7 @@ uint32_t rt_io_operator_restore_mask(
         state.cached_write_in_flight != 0u ||
         state.cached_write_cleanup_owner != 0u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_CACHED_WRITE;
-    if (state.r1_state == 3u || state.r2_state == 3u ||
-        state.r3_state == 3u)
+    if (state.r1_state == 3u || state.r3_state == 3u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_RESOURCE_UNKNOWN;
     return mask;
 }
@@ -2289,7 +2651,7 @@ bool rt_io_operator_production_header_valid(
 
 bool rt_io_operator_production_enums_known(
     const SaoRtIoProductionStateWireV1& state) noexcept {
-    return state.r1_state <= 3u && state.r2_state <= 3u &&
+    return state.r1_state <= 3u && state.reserved_resource_state_2 == 0u &&
         state.r3_state <= 3u && state.cached_write_state <= 4u &&
         state.hid.selected_backend <= 3u;
 }
@@ -2322,7 +2684,7 @@ void rt_io_operator_copy_state(
     report->etw_restore_confirmed =
         state.etw_restore_confirmed != 0u ? 1u : 0u;
     report->resources_absent =
-        state.r1_state == 0u && state.r2_state == 0u &&
+        state.r1_state == 0u && state.reserved_resource_state_2 == 0u &&
                 state.r3_state == 0u
             ? 1u
             : 0u;
@@ -2635,8 +2997,8 @@ sao_status_t sao_platform_rt_io_operator_status(
             response.production.cached_write_state &&
         response.last_live_validation.final_state.r1_state ==
             response.production.r1_state &&
-        response.last_live_validation.final_state.r2_state ==
-            response.production.r2_state &&
+        response.last_live_validation.final_state.reserved_resource_state_2 == 0u &&
+        response.production.reserved_resource_state_2 == 0u &&
         response.last_live_validation.final_state.r3_state ==
             response.production.r3_state &&
         response.last_live_validation.final_state.active_r3_maps ==
@@ -2762,32 +3124,42 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (!ctx)
         return SAO_STATUS_INTERNAL;
 
+    const auto delete_and_fail = [&](const char* stage, sao_status_t failure_status) noexcept {
+        trace_platform_bringup_failure(stage, failure_status);
+        delete ctx;
+        return failure_status;
+    };
+    const auto rollback_and_fail = [&](const char* stage, sao_status_t failure_status) noexcept {
+        return rollback_platform_bringup(
+            ctx, ctx_out, trace_platform_bringup_failure(stage, failure_status));
+    };
+
     sao_status_t status = create_ai_editor_owner(cfg->base_dir, ctx->ai_editor);
     if (status != SAO_STATUS_OK) {
-        delete ctx;
-        return status;
+        return delete_and_fail("create_ai_editor_owner", status);
     }
     status = create_settings_owner(cfg->base_dir, ctx->settings_owner);
     if (status != SAO_STATUS_OK) {
-        delete ctx;
-        return status;
+        return delete_and_fail("create_settings_owner", status);
     }
     sao::launcher::settings_owner::LoadInfo load_info{};
     status = ctx->settings_owner->load(load_info);
     if (status != SAO_STATUS_OK) {
-        delete ctx;
-        return status;
+        return delete_and_fail("settings_owner_load", status);
     }
     status = ctx->settings_owner->get_truthy("nervgear_mode", true, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
-        delete ctx;
-        return status;
+        return delete_and_fail("settings_owner_nervgear_mode", status);
     }
     bool persisted_streaming_mode = false;
     status = ctx->settings_owner->get_truthy("streaming_mode", true, persisted_streaming_mode);
     if (status != SAO_STATUS_OK) {
-        delete ctx;
-        return status;
+        return delete_and_fail("settings_owner_streaming_mode", status);
+    }
+    status = ctx->settings_owner->get_truthy(
+        "sao_screencap_protection", true, ctx->screencap_protection);
+    if (status != SAO_STATUS_OK) {
+        return delete_and_fail("settings_owner_sao_screencap_protection", status);
     }
     ctx->builtin_action_state.topmost = false;
     ctx->builtin_action_state.streaming_entitled = cfg->streaming_entitled != 0;
@@ -2805,6 +3177,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     action_authority.plugin_manager = false;
     action_authority.reload_plugins = false;
     action_authority.plugin_status = false;
+    action_authority.license_activation = false;
     action_authority.fisheye_procedural = false;
     action_authority.fisheye_live = false;
     action_authority.theme = true;
@@ -2827,16 +3200,16 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     status =
         sao::launcher::settings_theme::read_process_theme(*ctx->settings_owner, restored_theme);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("settings_theme_read_process_theme", status);
     }
     status = sao_ui_theme_get_active_id(&ctx->previous_theme);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_theme_get_active_id", status);
     }
     ctx->restore_theme_on_rollback = true;
     status = sao_ui_theme_set_active_id(runtime_theme_id(restored_theme));
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_theme_set_active_id", status);
     }
 
     SaoRtIoProxyConfigV2 rt_io_cfg{};
@@ -2857,13 +3230,13 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         (cfg->rt_io_operator != 0 && cfg->rt_io_force_status_page == 0) ? 1u : 0u;
     status = sao_rt_io_proxy_open_v2(&rt_io_cfg, &ctx->rt_io_proxy);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("rt_io_proxy_open_v2", status);
     }
 
     status =
         sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("rt_io_window_rect_controller_create", status);
     }
 
     SaoUiDcMutationProviderV2 dc_mutation_provider{};
@@ -2874,35 +3247,40 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     status = sao_ui_dc_mutation_coordinator_create_ex_v2(&dc_mutation_provider,
                                                          &ctx->dc_mutation_coordinator);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_dc_mutation_coordinator_create", status);
     }
 
     SaoOverlayHostConfig overlay_cfg{};
     overlay_cfg.dc_mutation_coordinator = ctx->dc_mutation_coordinator;
+    overlay_cfg.sao_screencap_protection =
+        ctx->screencap_protection && ctx->builtin_action_state.streaming_mode;
+    overlay_cfg.protection_provider = &apply_overlay_protection_provider;
+    overlay_cfg.protection_provider_user_data = ctx;
     status = sao_ui_overlay_host_create(&overlay_cfg, &ctx->overlay_host);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_overlay_host_create", status);
     }
     const auto render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
     if (render_hwnd == nullptr) {
-        return rollback_platform_bringup(ctx, ctx_out, SAO_STATUS_ERR_HANDLE_INVALID);
+        return rollback_and_fail("ui_overlay_host_hwnd", SAO_STATUS_ERR_HANDLE_INVALID);
     }
     status = sao_ui_compositor_create(ctx->overlay_host, nullptr, &ctx->compositor);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_compositor_create", status);
     }
     status = map_sdk_runtime_status(sao_sdk_platform_bind_ui_compositor(ctx->compositor));
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("sdk_platform_bind_ui_compositor", status);
     }
     ctx->sdk_compositor_bound = true;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     status = create_shared_ui_owners(cfg->base_dir, ctx);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("create_shared_ui_owners", status);
     }
     action_authority.workshop = ctx->workshop_panel != nullptr;
     action_authority.process_selector = ctx->process_selector_panel != nullptr;
+    action_authority.license_activation = ctx->license_panel != nullptr;
     action_authority.fisheye_procedural = ctx->fisheye_backdrop != nullptr;
     action_authority.fisheye_live = ctx->fisheye_backdrop != nullptr;
 #endif
@@ -2910,19 +3288,19 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         ctx->window_rect_controller,
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &ctx->window_rect_token);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("rt_io_window_rect_register", status);
     }
     ctx->window_rect_registered = true;
 
     status = sao_streaming_flow_startup(2.0);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("streaming_flow_startup", status);
     }
     ctx->streaming_flow_started = true;
 
     status = apply_streaming_mode(ctx->builtin_action_state.streaming_mode, ctx);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("apply_streaming_mode", status);
     }
     SaoUiEntityShellConfig entity_cfg{};
     entity_cfg.action_fn = &entity_action;
@@ -2930,11 +3308,11 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     status =
         sao_ui_entity_shell_create_on_compositor(ctx->compositor, &entity_cfg, &ctx->entity_shell);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_entity_shell_create_on_compositor", status);
     }
     status = sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
-        return rollback_platform_bringup(ctx, ctx_out, status);
+        return rollback_and_fail("ui_entity_shell_set_nervgear_mode", status);
     }
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     auto& authority = ctx->entity_provider_publication.builtin_authority;
@@ -3247,11 +3625,23 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         }
     }
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    if (ctx->process_selector_panel) {
+        const sao_status_t process_selector_status = ctx->process_selector_panel->service_ui();
+        if (status == SAO_STATUS_OK && process_selector_status != SAO_STATUS_OK)
+            status = process_selector_status;
+    }
     if (ctx->workshop_panel) {
         const sao_status_t workshop_status = ctx->workshop_panel->service_ui();
         if (status == SAO_STATUS_OK && workshop_status != SAO_STATUS_OK)
             status = workshop_status;
     }
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+    if (ctx->license_panel) {
+        const sao_status_t license_status = ctx->license_panel->service_ui();
+        if (status == SAO_STATUS_OK && license_status != SAO_STATUS_OK)
+            status = license_status;
+    }
+#endif
 #endif
     const sao_status_t fisheye_status = tick_shared_fisheye(ctx);
     if (status == SAO_STATUS_OK && fisheye_status != SAO_STATUS_OK)
@@ -3398,16 +3788,69 @@ sao_status_t sao_security_shutdown(void) {
 sao_status_t sao_security_init(const sao_security_config* cfg) {
     if (!cfg)
         return SAO_STATUS_INVALID_ARGUMENT;
-    if (!cfg->enable_anti_debug)
+    stop_anti_debug_worker();
+    try {
+        if (cfg->enable_anti_debug) {
+            SaoSecurityAntiDebugEvidence evidence{};
+            evidence.struct_size = SAO_SECURITY_ANTI_DEBUG_EVIDENCE_SIZE;
+            evidence.abi_version = SAO_SECURITY_ANTI_DEBUG_EVIDENCE_ABI_VERSION;
+            const sao_status_t status = sao_security_anti_debug_evaluate(
+                SAO_SECURITY_ANTI_DEBUG_POLICY_FAIL_STRONG, &evidence);
+            log_anti_debug_result("startup", status, evidence);
+            if (status != SAO_STATUS_OK)
+                return status;
+            if (evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK)
+                return SAO_STATUS_PLATFORM_INIT_FAIL;
+        }
+#if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER)
+        if (cfg->enable_user_evasion && !evaluate_user_evasion(cfg->strict_user_evasion != 0))
+            return SAO_STATUS_PLATFORM_INIT_FAIL;
+#else
+        if (cfg->enable_user_evasion) {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+            (void)sao_core_log(SAO_LOG_WARN, "launcher.security.user_evasion",
+                               "provider unavailable; evidence collection skipped");
+#endif
+            if (cfg->strict_user_evasion)
+                return SAO_STATUS_NOT_IMPLEMENTED;
+        }
+#endif
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
+        if (cfg->enable_anti_dump) {
+            // Scrub this module's PE headers and start the snapshot watcher so
+            // later memory dumps capture a sanitized image.  Failures are
+            // non-fatal: a partially scrubbed image still leaks less than none.
+            HMODULE self_module = GetModuleHandleW(nullptr);
+            if (self_module != nullptr)
+                (void)sao_security_anti_dump_erase_headers(
+                    reinterpret_cast<void*>(self_module));
+            (void)sao_security_anti_dump_snapshot_watch_start(1000u);
+        }
+#endif
+        if (cfg->enable_anti_debug) {
+            const sao_status_t worker_status =
+                start_anti_debug_worker(cfg->anti_debug_poll_interval_seconds);
+            if (worker_status != SAO_STATUS_OK) {
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
+                (void)sao_security_anti_dump_snapshot_watch_stop();
+#endif
+                return worker_status;
+            }
+        }
         return SAO_STATUS_OK;
-
-    uint32_t score = 0;
-    sao_status_t status = sao_security_anti_debug_scan_all(&score);
-    if (status != SAO_STATUS_OK)
-        return status;
-    return score == 0 ? SAO_STATUS_OK : SAO_STATUS_PLATFORM_INIT_FAIL;
+    } catch (...) {
+        stop_anti_debug_worker();
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
+        (void)sao_security_anti_dump_snapshot_watch_stop();
+#endif
+        return SAO_STATUS_INTERNAL;
+    }
 }
 sao_status_t sao_security_shutdown(void) {
+    stop_anti_debug_worker();
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
+    (void)sao_security_anti_dump_snapshot_watch_stop();
+#endif
     return SAO_STATUS_OK;
 }
 #else

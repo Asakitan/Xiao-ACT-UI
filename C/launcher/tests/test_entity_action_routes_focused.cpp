@@ -2828,10 +2828,11 @@ TEST_CASE("Entity provider publication preserves canonical roots and clear mode"
     CHECK(tools.name == "Tools");
     CHECK(tools.icon == "T");
     CHECK(tools.action_id == 11);
-    REQUIRE(tools.children.size() == 3);
+    REQUIRE(tools.children.size() == 4);
     CHECK(tools.children[0].action_id == SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR);
     CHECK(tools.children[1].action_id == SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP);
     CHECK(tools.children[2].action_id == SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR);
+    CHECK(tools.children[3].action_id == SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION);
 
     const auto& plugins = published_root(roots, "Plugins");
     CHECK(plugins.name == "Plugins");
@@ -2909,10 +2910,12 @@ TEST_CASE("Entity builtins publish only activatable launcher-owned authorities",
     CHECK_FALSE(control[7].can_activate);
 
     const auto& tools = published_root(log.calls[0], "Tools").children;
-    REQUIRE(tools.size() == 3);
+    REQUIRE(tools.size() == 4);
     CHECK(tools[0].can_activate);
     CHECK_FALSE(tools[1].can_activate);
     CHECK_FALSE(tools[2].can_activate);
+    CHECK(tools[3].name == "授权激活 (License Activation)");
+    CHECK_FALSE(tools[3].can_activate);
 
     const auto& plugins = published_root(log.calls[0], "Plugins").children;
     REQUIRE(plugins.size() == 5);
@@ -3465,7 +3468,7 @@ TEST_CASE("Entity publication preflights the exact complete-tree child envelope"
                     state, contributions) == SAO_STATUS_OK);
     };
 
-    configure_candidate(1008);
+    configure_candidate(1007);
     g_catalog_fixture = &fixture;
     EntityActionRouteStore store;
     PublicationLog log;
@@ -3475,14 +3478,16 @@ TEST_CASE("Entity publication preflights the exact complete-tree child envelope"
                                                                 &fake_catalog_snapshot,
                                                                 &fake_set_roots) == SAO_STATUS_OK);
     REQUIRE(log.calls.size() == 1);
-    CHECK(snapshot(store).routes.size() == 1008);
+    CHECK(snapshot(store).routes.size() == 1007);
     CHECK(state.has_catalog_revision);
+    // 1007 contribution rows + 17 builtin children (license activation added a
+    // 17th builtin row under Tools) fill the 1024 budget exactly.
     CHECK(std::accumulate(log.calls[0].begin(), log.calls[0].end(), std::size_t{0},
                           [](std::size_t total, const auto& root) {
                               return total + root.children.size();
                           }) == 1024);
 
-    configure_candidate(1009);
+    configure_candidate(1008);
     CHECK(sao::launcher::entity_provider_publication::refresh(
               shell, store, state, false, &fake_catalog_snapshot, &fake_set_roots) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);

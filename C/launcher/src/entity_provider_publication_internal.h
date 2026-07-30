@@ -66,6 +66,7 @@ struct EntityBuiltinAuthorityState {
     bool ai_editor = false;
     bool workshop = false;
     bool process_selector = false;
+    bool license_activation = false;
     bool plugin_manager = false;
     bool reload_plugins = false;
     bool plugin_status = false;

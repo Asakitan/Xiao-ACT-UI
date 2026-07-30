@@ -344,11 +344,8 @@ SaoPanelDescriptor descriptor_for_testing() noexcept {
 
 std::string build_spec_for_testing(const Snapshot& snapshot) {
     Json nodes = Json::array();
-    nodes.push_back(text_node("Plugin Manager", "title", 30));
-    nodes.push_back(text_node(
-        "Launcher-native plugin lifecycle control. All actions refresh the canonical loader state.",
-        "muted", 36));
-
+    Json app_bar = Json::array();
+    app_bar.push_back(text_node("Plugin Manager", "title", 30));
     Json status_badges = Json::array();
     status_badges.push_back(badge_node(snapshot.loader_available
                                            ? "Loader available / 加载器可用"
@@ -356,7 +353,7 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                        snapshot.loader_available ? "ok" : "warn"));
     status_badges.push_back(
         badge_node(std::to_string(snapshot.plugins.size()) + " plugins / 个插件", "accent"));
-    nodes.push_back(row_node(std::move(status_badges)));
+    app_bar.push_back(row_node(std::move(status_badges)));
 
     Json toolbar = Json::array();
     toolbar.push_back(button_node("plugin-manager.refresh", "Refresh / 刷新",
@@ -364,14 +361,8 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
     toolbar.push_back(button_node("plugin-manager.reload-all", "Reload All / 全部重载",
                                   std::string(kActionReloadAll), Json(), "default",
                                   !snapshot.reload_all_available));
-    Json toolbar_card = Json::array();
-    toolbar_card.push_back(row_node(std::move(toolbar)));
-    if (!snapshot.reload_all_available) {
-        toolbar_card.push_back(text_node(
-            "Reload All awaits an injected launcher handler / Reload All 等待 launcher 注入回调。",
-            "muted", 30));
-    }
-    nodes.push_back(card_node("Actions / 操作", std::move(toolbar_card), "gold"));
+    app_bar.push_back(row_node(std::move(toolbar)));
+    nodes.push_back(card_node("Plugin Manager", std::move(app_bar), "gold"));
 
     if (!snapshot.error_message.empty()) {
         Json errors = Json::array();
@@ -381,58 +372,47 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
 
     if (!snapshot.loader_available) {
         Json unavailable = Json::array();
-        unavailable.push_back(text_node("Plugin loader unavailable / 插件加载器不可用。This "
-                                        "compositor panel can still be opened and closed.",
-                                        "warn", 48));
+        unavailable.push_back(
+            text_node("Plugin loader unavailable / 插件加载器不可用。", "warn", 40));
         nodes.push_back(card_node("Unavailable / 不可用", std::move(unavailable), "warn"));
     } else if (snapshot.plugins.empty()) {
         Json empty = Json::array();
         empty.push_back(text_node("No plugins discovered / 未发现插件。", "muted", 34));
         nodes.push_back(card_node("Plugins / 插件", std::move(empty), "cyan"));
     } else {
+        Json plugin_rows = Json::array();
+        plugin_rows.push_back(text_node("Plugins / 插件", "title", 26));
         for (std::size_t index = 0; index < snapshot.plugins.size(); ++index) {
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
-            Json children = Json::array();
-
-            Json badges = Json::array();
-            badges.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
-                                        state_style(plugin.state)));
-            badges.push_back(badge_node(std::string(source_label(plugin.source)), "muted"));
-            badges.push_back(badge_node(plugin.manifest_enabled ? "Configured enabled / 配置启用"
-                                                                : "Configured disabled / 配置禁用",
-                                        plugin.manifest_enabled ? "accent" : "muted"));
-            children.push_back(row_node(std::move(badges)));
-
-            children.push_back(text_node("ID: " + plugin.plugin_id, "mono", 24));
-            children.push_back(text_node(
-                "Version: " + plugin.version + " · Language: " + plugin.language, "value", 26));
-            children.push_back(text_node(plugin.description.empty() ? "No description / 无简介"
-                                                                    : plugin.description,
-                                         plugin.description.empty() ? "muted" : "value", 36));
-            children.push_back(
-                text_node("Source: " + (plugin.source_path.empty() ? std::string("unknown")
-                                                                   : plugin.source_path),
-                          "mono", 34));
-
-            Json actions = Json::array();
-            actions.push_back(
+            Json row = Json::array();
+            row.push_back(text_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
+                                    "value", 24));
+            row.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
+                                     state_style(plugin.state)));
+            row.push_back(badge_node(std::string(source_label(plugin.source)), "muted"));
+            row.push_back(text_node(plugin.version + " · " + plugin.language, "muted", 22));
+            row.push_back(
                 button_node("plugin-manager.toggle." + std::to_string(index),
                             active ? "Disable / 禁用" : "Enable / 启用",
                             active ? std::string(kActionDisable) : std::string(kActionEnable),
                             Json(plugin.plugin_id), active ? "danger" : "primary",
                             transitioning || !plugin_state_allows_enable(plugin.state)));
-            actions.push_back(button_node("plugin-manager.reload." + std::to_string(index),
-                                          "Reload / 重载", std::string(kActionReload),
-                                          Json(plugin.plugin_id), "default",
-                                          !plugin_state_allows_reload(plugin.state)));
-            children.push_back(row_node(std::move(actions)));
+            row.push_back(button_node("plugin-manager.reload." + std::to_string(index),
+                                      "Reload / 重载", std::string(kActionReload),
+                                      Json(plugin.plugin_id), "default",
+                                      !plugin_state_allows_reload(plugin.state)));
+            plugin_rows.push_back(row_node(std::move(row)));
 
-            nodes.push_back(card_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
-                                      std::move(children),
-                                      plugin.state == PluginState::failed ? "bad" : "cyan"));
+            std::string metadata = plugin.plugin_id;
+            if (!plugin.description.empty())
+                metadata += " · " + plugin.description;
+            metadata += " · " +
+                        (plugin.source_path.empty() ? std::string("unknown") : plugin.source_path);
+            plugin_rows.push_back(text_node(std::move(metadata), "mono", 26));
         }
+        nodes.push_back(card_node("Plugins / 插件", std::move(plugin_rows), "cyan"));
     }
 
     return Json{{"version", 1}, {"title", ""}, {"surface", "solid"}, {"nodes", std::move(nodes)}}

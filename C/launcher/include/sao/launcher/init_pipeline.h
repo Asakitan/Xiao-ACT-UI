@@ -65,6 +65,9 @@ typedef struct sao_security_config {
     int32_t enable_anti_dump;
     int32_t enable_anti_screencap;
     int32_t enable_obfuscation_runtime;
+    int32_t enable_user_evasion;
+    int32_t strict_user_evasion;
+    uint32_t anti_debug_poll_interval_seconds;
 } sao_security_config;
 
 sao_status_t sao_security_init(const sao_security_config* cfg);

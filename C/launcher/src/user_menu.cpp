@@ -2,6 +2,9 @@
 
 #include "sao/launcher/user_menu.h"
 
+#include "hotkey_config_panel.h"
+#include "settings_config_panel.h"
+
 #include "sao_security/obfuscation/enc_str.h"
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
@@ -13,6 +16,7 @@
 #include <cstddef>
 #include <cwchar>
 #include <iterator>
+#include <windowsx.h>
 
 namespace sao::launcher {
 namespace {
@@ -65,7 +69,9 @@ constexpr wchar_t kMenuTitle[] = L"SAO Auto";
 constexpr UINT kNotificationIconId = 1;
 constexpr UINT kNotificationMessage = WM_APP + 1;
 constexpr UINT kOpenUserGuideCommand = 1001;
-constexpr UINT kExitCommand = 1002;
+constexpr UINT kOpenSettingsCommand = 1002;
+constexpr UINT kOpenHotkeysCommand = 1003;
+constexpr UINT kExitCommand = 1004;
 
 class PopupMenu final {
 public:
@@ -86,8 +92,19 @@ private:
     HMENU handle_ = nullptr;
 };
 
-bool isMouseActivationMessage(UINT message) noexcept {
-    return message == WM_LBUTTONUP || message == WM_RBUTTONUP || message == WM_CONTEXTMENU;
+UINT notificationEvent(LPARAM l_param) noexcept {
+    const UINT packed = LOWORD(static_cast<DWORD_PTR>(l_param));
+    switch (packed) {
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONUP:
+    case WM_CONTEXTMENU:
+    case NIN_SELECT:
+    case NIN_KEYSELECT:
+        return packed;
+    default:
+        return static_cast<UINT>(l_param);
+    }
 }
 
 bool openExistingUserDocsIndex(const wchar_t* docs_index_path,
@@ -247,8 +264,24 @@ LRESULT UserMenu::handleMessage(HWND window,
         }
         return 0;
     }
-    if (message == kNotificationMessage && isMouseActivationMessage(static_cast<UINT>(l_param))) {
-        showContextMenu();
+    if (message == kNotificationMessage) {
+        const UINT event = notificationEvent(l_param);
+        if (event == WM_LBUTTONDBLCLK) {
+            sao::launcher::settings::open_config_panel();
+            return 0;
+        }
+        if (event == WM_LBUTTONUP || event == WM_RBUTTONUP || event == WM_CONTEXTMENU ||
+            event == NIN_SELECT || event == NIN_KEYSELECT) {
+            POINT activation{};
+            const POINT* activation_point = nullptr;
+            if (event == NIN_SELECT || event == NIN_KEYSELECT) {
+                activation.x = GET_X_LPARAM(w_param);
+                activation.y = GET_Y_LPARAM(w_param);
+                activation_point = &activation;
+            }
+            showContextMenu(activation_point);
+            return 0;
+        }
         return 0;
     }
     if (message == WM_CLOSE) {
@@ -280,21 +313,32 @@ bool UserMenu::addNotificationIcon() noexcept {
               static_cast<int>(std::size(notification_icon_.szTip)));
 
     notification_icon_added_ = Shell_NotifyIconW(NIM_ADD, &notification_icon_) != FALSE;
-    return notification_icon_added_;
+    if (!notification_icon_added_)
+        return false;
+    notification_icon_.uVersion = NOTIFYICON_VERSION_4;
+    if (!Shell_NotifyIconW(NIM_SETVERSION, &notification_icon_)) {
+        (void)Shell_NotifyIconW(NIM_DELETE, &notification_icon_);
+        notification_icon_added_ = false;
+        return false;
+    }
+    return true;
 }
 
-void UserMenu::showContextMenu() noexcept {
+void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     PopupMenu menu;
     if (!menu.get() ||
+        !AppendMenuW(menu.get(), MF_STRING, kOpenSettingsCommand, L"设置") ||
+        !AppendMenuW(menu.get(), MF_STRING, kOpenHotkeysCommand, L"快捷键") ||
         !AppendMenuW(menu.get(), MF_STRING, kOpenUserGuideCommand, L"关于 / 用户指南") ||
         !AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr) ||
         !AppendMenuW(menu.get(), MF_STRING, kExitCommand, L"退出")) {
         showMenuUnavailableError();
         return;
     }
+    (void)SetMenuDefaultItem(menu.get(), kOpenSettingsCommand, FALSE);
 
-    POINT cursor{};
-    if (!GetCursorPos(&cursor)) {
+    POINT cursor = activation_point == nullptr ? POINT{} : *activation_point;
+    if (activation_point == nullptr && !GetCursorPos(&cursor)) {
         showMenuUnavailableError();
         return;
     }
@@ -304,7 +348,11 @@ void UserMenu::showContextMenu() noexcept {
                                         cursor.x, cursor.y, 0, window_, nullptr);
     (void)PostMessageW(window_, WM_NULL, 0, 0);
 
-    if (command == kOpenUserGuideCommand) {
+    if (command == kOpenSettingsCommand) {
+        sao::launcher::settings::open_config_panel();
+    } else if (command == kOpenHotkeysCommand) {
+        sao::launcher::hotkey::open_config_panel();
+    } else if (command == kOpenUserGuideCommand) {
         openUserGuide();
     } else if (command == kExitCommand) {
         PostQuitMessage(0);

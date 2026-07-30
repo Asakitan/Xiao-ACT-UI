@@ -11,21 +11,30 @@
 #include "settings_config_panel.h"
 #include "settings_owner_internal.h"
 
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/dialog.h"
+#endif
+
 #include <atomic>
 #include <cstdio>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
 namespace sao::launcher::settings {
 
 namespace {
 std::atomic<sao::launcher::settings_owner::SettingsOwner*> g_owner{nullptr};
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
+    void* raw = nullptr;
+    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK)
+        return nullptr;
+    return static_cast<sao_ui_compositor_handle_t>(raw);
+}
+#endif
 }
 
 extern "C" void sao_launcher_settings_panel_set_owner(void* owner_opaque) {
@@ -34,17 +43,17 @@ extern "C" void sao_launcher_settings_panel_set_owner(void* owner_opaque) {
 }
 
 void open_config_panel() {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    sao_ui_compositor_handle_t compositor = borrow_platform_compositor();
+    if (compositor == nullptr)
+        return;
     auto* owner = g_owner.load();
     if (owner == nullptr) return;
     nlohmann::ordered_json snapshot;
     if (owner->snapshot(snapshot) != SAO_STATUS_OK) return;
     std::string body = "SAO Auto Settings\n\n" + snapshot.dump(2);
-#if defined(_WIN32)
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, body.c_str(), -1, nullptr, 0);
-    std::wstring w(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, body.c_str(), -1, w.data(), wlen);
-    MessageBoxW(nullptr, w.c_str(), L"SAO Auto — Settings",
-                 MB_OK | MB_ICONINFORMATION);
+    (void)sao_ui_dialog_show_info(compositor, nullptr, "SAO Auto — Settings", body.c_str(),
+                                  nullptr, nullptr);
 #endif
 }
 

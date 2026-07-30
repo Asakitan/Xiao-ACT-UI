@@ -100,6 +100,8 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/launcher_lifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/user_menu.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_config_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_config_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_json_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_owner.cpp

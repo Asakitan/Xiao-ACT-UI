@@ -329,6 +329,9 @@ int App::initSecurity() {
     cfg.enable_anti_dump = 1;
     cfg.enable_anti_screencap = 1;
     cfg.enable_obfuscation_runtime = 1;
+    cfg.enable_user_evasion = 1;
+    cfg.strict_user_evasion = 0;
+    cfg.anti_debug_poll_interval_seconds = 5;
 
     if (sao_security_init(&cfg) != SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;

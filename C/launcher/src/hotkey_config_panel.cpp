@@ -10,6 +10,11 @@
 
 #include "hotkey_manager.h"
 
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/dialog.h"
+#endif
+
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -20,6 +25,19 @@
 #endif
 
 namespace sao::launcher::hotkey {
+
+namespace {
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
+    void* raw = nullptr;
+    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK)
+        return nullptr;
+    return static_cast<sao_ui_compositor_handle_t>(raw);
+}
+#endif
+
+} // namespace
 
 std::string format_combo_utf8(uint32_t vk, uint32_t modifiers) {
     std::string out;
@@ -52,6 +70,10 @@ std::string format_combo_utf8(uint32_t vk, uint32_t modifiers) {
 }
 
 void open_config_panel() {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    sao_ui_compositor_handle_t compositor = borrow_platform_compositor();
+    if (compositor == nullptr)
+        return;
     auto bindings = snapshot();
     std::string body = "Current Hotkeys\n\n";
     for (const auto& b : bindings) {
@@ -60,12 +82,8 @@ void open_config_panel() {
     }
     body += "\nTo rebind, call sao_launcher_hotkey_rebind(id, vk, mods) from "
             "the settings API and restart.";
-#if defined(_WIN32)
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, body.c_str(), -1, nullptr, 0);
-    std::wstring w(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, body.c_str(), -1, w.data(), wlen);
-    MessageBoxW(nullptr, w.c_str(), L"SAO Auto — Hotkeys",
-                 MB_OK | MB_ICONINFORMATION);
+    (void)sao_ui_dialog_show_info(compositor, nullptr, "SAO Auto — Hotkeys", body.c_str(),
+                                  nullptr, nullptr);
 #endif
 }
 

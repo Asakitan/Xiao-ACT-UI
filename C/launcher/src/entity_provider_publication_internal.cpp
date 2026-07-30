@@ -365,7 +365,7 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          controls_ready && authority.save_settings,
          {false, false, false}},
     }};
-    const std::array<SaoUiMenuItem, 3> tool_rows{{
+    const std::array<SaoUiMenuItem, 4> tool_rows{{
         {"AI Editor (LLM)",
          "✦",
          SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR,
@@ -380,6 +380,11 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          "⚙",
          SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
          authority.process_selector,
+         {false, false, false}},
+        {"授权激活 (License Activation)",
+         "🔑",
+         SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION,
+         authority.license_activation,
          {false, false, false}},
     }};
     const std::array<SaoUiMenuItem, 2> skin_rows{{

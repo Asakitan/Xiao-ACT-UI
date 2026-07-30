@@ -274,15 +274,15 @@ TEST_CASE("Workshop panel freezes the white-gold theme and native spec",
     CHECK(snapshot.visible);
     CHECK(snapshot.items.size() == 2);
     CHECK(snapshot.last_spec.find("Plugin Workshop") != std::string::npos);
-    CHECK(snapshot.last_spec.find("white, warm-gold and cyan") != std::string::npos);
-    CHECK(snapshot.last_spec.find("shared fisheye backdrop") != std::string::npos);
+    CHECK(snapshot.last_spec.find("Catalog") != std::string::npos);
+    CHECK(snapshot.last_spec.find("Task Center") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.refresh") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.page.previous") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.page.next") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.plugin.detail") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.plugin.install") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.plugin.uninstall") != std::string::npos);
-    CHECK(snapshot.last_spec.find("Progress / Errors") != std::string::npos);
+    CHECK(snapshot.last_spec.find("completed") != std::string::npos);
 
     REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
 }

@@ -196,6 +196,9 @@ sao_status_t authorization_status(std::int32_t action, const State& state) noexc
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
         available = state.authority.plugin_runtime && state.authority.plugin_status;
         break;
+    case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
+        available = state.authority.license_activation;
+        break;
     case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
     case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
         available = state.authority.theme;
@@ -237,6 +240,8 @@ sao_status_t dispatch(std::int32_t action, State& state, const Operations& opera
         return run_owned_action(state, operations.open_plugin_manager, operations);
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
         return run_owned_action(state, operations.open_plugin_status, operations);
+    case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
+        return run_owned_action(state, operations.open_license_panel, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
     case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:

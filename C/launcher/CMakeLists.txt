@@ -75,10 +75,12 @@ set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)
 if (TARGET sao::ui AND TARGET sao::rt_io AND TARGET sao::sdk AND
     TARGET sao::server::freetier::workshop_client)
     list(APPEND SAO_LAUNCHER_HEADERS
+        src/license_panel_internal.h
         src/plugin_manager_panel_internal.h
         src/process_selector_panel_internal.h
         src/workshop_panel_internal.h)
     list(APPEND SAO_LAUNCHER_SOURCES
+        src/license_panel_internal.cpp
         src/plugin_manager_panel_internal.cpp
         src/process_selector_panel_internal.cpp
         src/workshop_panel_internal.cpp)
@@ -205,6 +207,13 @@ if (SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
         sao::server::freetier::workshop_client)
     target_compile_definitions(SaoAuto PRIVATE
         SAO_LAUNCHER_SHARED_PANEL_COMPOSITION=1)
+    if (TARGET sao::license::sdk AND TARGET sao::license::client)
+        target_link_libraries(SaoAuto PRIVATE sao::license::sdk sao::license::client)
+        target_compile_definitions(SaoAuto PRIVATE SAO_LAUNCHER_LICENSE_PANEL=1)
+    else()
+        message(STATUS
+            "launcher: license sdk/client unavailable; license activation panel will not register")
+    endif()
 else()
     message(STATUS
         "launcher: shared workshop/process/plugin panels unavailable; retaining fail-closed Entity actions")
@@ -266,6 +275,27 @@ _sao_link_meta(sao::shell    SAO_LINKED_SHELL    sao_launcher_shell_provider)
 _sao_link_meta(sao::license  SAO_LINKED_LICENSE  sao_launcher_license_provider)
 _sao_link_meta(sao::plugins  SAO_LINKED_PLUGINS  sao_launcher_plugins_provider)
 
+if (MSVC AND TARGET sao_plugins_python_host)
+    get_target_property(_sao_python_host_resolved
+        sao_plugins_python_host SAO_PYHOST_PYTHON_RESOLVED)
+    if (_sao_python_host_resolved MATCHES "-NOTFOUND$")
+        message(FATAL_ERROR
+            "launcher: Python host resolution metadata is missing")
+    endif()
+    if (_sao_python_host_resolved)
+        get_target_property(_sao_python_runtime_dll
+            sao_plugins_python_host SAO_PYHOST_RUNTIME_DLL)
+        if (NOT _sao_python_runtime_dll OR
+            _sao_python_runtime_dll MATCHES "-NOTFOUND$")
+            message(FATAL_ERROR
+                "launcher: resolved Python host did not publish its runtime DLL basename")
+        endif()
+        target_link_options(SaoAuto PRIVATE
+            "/DELAYLOAD:${_sao_python_runtime_dll}")
+        target_link_libraries(SaoAuto PRIVATE delayimp)
+    endif()
+endif()
+
 # The platform aggregate is not itself a lifecycle ABI provider.  The
 # launcher owns the minimal composition provider in init_pipeline.cpp and may
 # enable it only when every concrete runtime target it calls is available.
@@ -300,6 +330,24 @@ if (TARGET sao::security::anti_debug)
 else()
     message(STATUS
         "launcher: anti_debug target unavailable; retaining fail-closed security composition")
+endif()
+
+# anti-dump provider: PE header scrub + snapshot watch are wired into the
+# security composition init when the static target exists.
+if (TARGET sao::security::anti_dump)
+    target_link_libraries(SaoAuto PRIVATE sao::security::anti_dump)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_ANTI_DUMP_PROVIDER=1)
+endif()
+
+# The user-evasion library exposes passive ntdll/gadget diagnostics alongside
+# active primitives. Launcher composition consumes only the passive evidence
+# APIs and keeps findings advisory unless strict_user_evasion is enabled.
+if (TARGET sao::security::user_evasion)
+    target_link_libraries(SaoAuto PRIVATE sao::security::user_evasion)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_USER_EVASION_PROVIDER=1
+        SAO_SECURITY_USER_EVASION_BUILDING_DLL)
 endif()
 
 # Standard Win32 libs.  Keep this list tight — everything else should come

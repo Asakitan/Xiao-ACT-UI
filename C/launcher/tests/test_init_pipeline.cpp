@@ -171,8 +171,11 @@ struct CompositionRecorder {
     static sao_status_t securityInit(const sao_security_config* cfg, void* user) {
         auto* self = static_cast<CompositionRecorder*>(user);
         self->steps.emplace_back("security_init");
-        return cfg && cfg->enable_anti_debug && cfg->enable_anti_dump ? self->security_status
-                                                                      : SAO_STATUS_INVALID_ARGUMENT;
+        return cfg && cfg->enable_anti_debug && cfg->enable_anti_dump &&
+                       cfg->enable_user_evasion && !cfg->strict_user_evasion &&
+                       cfg->anti_debug_poll_interval_seconds == 5
+                   ? self->security_status
+                   : SAO_STATUS_INVALID_ARGUMENT;
     }
 
     static void securityShutdown(void* user) {

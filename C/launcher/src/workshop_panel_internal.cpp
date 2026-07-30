@@ -911,7 +911,7 @@ class Owner::Impl final {
             tasks_.push_back(std::move(task));
             ++queued_operations_;
             status_text_ = "Operation queued";
-            progress_text_ = "Waiting for the serialized workshop worker";
+            progress_text_ = "Waiting to start";
             progress_percent_ = 0;
             error_text_.clear();
             dirty_ = true;
@@ -1094,37 +1094,15 @@ class Owner::Impl final {
 
     std::string build_spec() const {
         json nodes = json::array();
-        nodes.push_back(text_node("◇ Plugin Workshop", "title", 32));
-        nodes.push_back(text_node(
-            "Compositor-native plugin marketplace · white, warm-gold and cyan SAO Workshop skin",
-            "muted", 30));
-
         const bool busy = worker_active_ || !tasks_.empty();
-        json status_children = json::array();
-        json badges = json::array();
-        badges.push_back(badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
-        badges.push_back(badge_node(busy ? "Worker busy" : "Worker idle", busy ? "warn" : "ok"));
-        badges.push_back(badge_node("Page " + std::to_string(current_page_), "accent"));
-        badges.push_back(badge_node(std::to_string(total_) + " plugins", "gold"));
-        status_children.push_back(row_node(std::move(badges)));
-        status_children.push_back(
-            text_node(status_text_, last_status_ == SAO_STATUS_OK ? "value" : "bad", 30));
-        status_children.push_back(
-            text_node("The shared fisheye backdrop is owned by launcher composition; use "
-                      "on_visibility_changed to coordinate it.",
-                      "muted", 36));
-        nodes.push_back(card_node("Workshop Status", std::move(status_children), "gold"));
-
-        json progress_children = json::array();
-        progress_children.push_back(json{{"type", "bar"},
-                                         {"pct", progress_percent_},
-                                         {"caption", progress_text_},
-                                         {"height", 24}});
-        if (!error_text_.empty())
-            progress_children.push_back(text_node(error_text_, "bad", 42));
-        nodes.push_back(card_node("Progress / Errors", std::move(progress_children),
-                                  error_text_.empty() ? "cyan" : "bad"));
-
+        json app_bar = json::array();
+        app_bar.push_back(text_node("◇ Plugin Workshop", "title", 32));
+        json status_badges = json::array();
+        status_badges.push_back(
+            badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
+        status_badges.push_back(badge_node("Page " + std::to_string(current_page_), "accent"));
+        status_badges.push_back(badge_node(std::to_string(total_) + " plugins", "gold"));
+        app_bar.push_back(row_node(std::move(status_badges)));
         json navigation = json::array();
         navigation.push_back(button_node("workshop.refresh", "Refresh", "workshop.refresh",
                                          json::object(), "primary", busy));
@@ -1135,65 +1113,90 @@ class Owner::Impl final {
                         busy || !next_page_available(current_page_, page_size_, total_)));
         navigation.push_back(button_node("workshop.close", "Close", "workshop.close",
                                          json::object(), "ghost", false));
-        nodes.push_back(card_node("Catalog Navigation",
-                                  json::array({row_node(std::move(navigation))}), "cyan"));
+        app_bar.push_back(row_node(std::move(navigation)));
+        nodes.push_back(card_node("Workshop", std::move(app_bar), "gold"));
 
+        json catalog = json::array();
+        catalog.push_back(text_node("Catalog", "title", 28));
         if (items_.empty()) {
-            nodes.push_back(card_node(
-                "Catalog",
-                json::array({text_node(busy ? "Loading plugins..." : "No plugins on this page.",
-                                       "muted", 38)}),
-                "gold"));
+            catalog.push_back(text_node(busy ? "Loading plugins..." : "No plugins on this page.",
+                                        "muted", 38));
         } else {
             for (std::size_t index = 0; index < items_.size(); ++index) {
                 const PluginSummary& item = items_[index];
-                json children = json::array();
-                children.push_back(text_node(item.name + "  v" + item.version, "title", 28));
-                children.push_back(text_node(item.id, "mono", 22));
-                children.push_back(
-                    text_node("By " + (item.author.empty() ? std::string("unknown") : item.author) +
-                                  " · " + (item.tag.empty() ? std::string("general") : item.tag),
-                              "muted", 24));
-                json item_badges = json::array();
-                item_badges.push_back(badge_node("Rating " + format_rating(item.rating), "gold"));
-                item_badges.push_back(
-                    badge_node(std::to_string(item.downloads) + " downloads", "accent"));
-                children.push_back(row_node(std::move(item_badges)));
+                json row = json::array();
+                row.push_back(text_node(item.name + " · v" + item.version, "value", 24));
+                row.push_back(text_node(item.author.empty() ? item.id : item.author, "muted", 22));
+                row.push_back(badge_node(format_rating(item.rating), "gold"));
+                row.push_back(badge_node(std::to_string(item.downloads) + " downloads", "accent"));
                 const json payload{{"id", item.id}};
-                json actions = json::array();
-                actions.push_back(button_node("detail." + std::to_string(index), "Detail",
-                                              "workshop.plugin.detail", payload, "default", busy));
-                actions.push_back(button_node("install." + std::to_string(index),
-                                              "Download & Install", "workshop.plugin.install",
-                                              payload, "primary", busy));
-                actions.push_back(button_node("uninstall." + std::to_string(index), "Uninstall",
-                                              "workshop.plugin.uninstall", payload, "danger",
-                                              busy));
-                children.push_back(row_node(std::move(actions)));
-                nodes.push_back(
-                    card_node(item.name, std::move(children), index % 2 == 0 ? "gold" : "cyan"));
+                row.push_back(button_node("detail." + std::to_string(index), "View",
+                                          "workshop.plugin.detail", payload, "default", busy));
+                row.push_back(button_node("install." + std::to_string(index), "Install",
+                                          "workshop.plugin.install", payload, "primary", busy));
+                row.push_back(button_node("uninstall." + std::to_string(index), "Remove",
+                                          "workshop.plugin.uninstall", payload, "danger", busy));
+                catalog.push_back(row_node(std::move(row)));
             }
         }
 
+        json detail_children = json::array();
+        detail_children.push_back(text_node("Plugin Detail", "title", 28));
         if (detail_.has_value()) {
             const PluginDetail& detail = *detail_;
-            json children = json::array();
-            children.push_back(
+            detail_children.push_back(
                 text_node(detail.summary.name + "  v" + detail.summary.version, "title", 30));
-            children.push_back(text_node(detail.description.empty() ? "No description supplied."
-                                                                    : detail.description,
-                                         "value", 72));
-            children.push_back(text_node("Package: " + format_bytes(detail.size_bytes) +
-                                             " · signature " + detail.signature_algorithm,
-                                         "muted", 28));
-            children.push_back(
+            detail_children.push_back(text_node(
+                detail.description.empty() ? "No description supplied." : detail.description,
+                "value", 72));
+            detail_children.push_back(text_node("Package: " + format_bytes(detail.size_bytes) +
+                                                    " · " + detail.signature_algorithm,
+                                                "muted", 28));
+            detail_children.push_back(
                 text_node("Minimum client: " + std::to_string(detail.min_client_version_major) +
                               "." + std::to_string(detail.min_client_version_minor) + "." +
                               std::to_string(detail.min_client_version_patch),
                           "muted", 24));
-            children.push_back(text_node("SHA-256 " + detail.sha256_hex, "mono", 30));
-            nodes.push_back(card_node("Plugin Detail", std::move(children), "cyan"));
+            detail_children.push_back(text_node("SHA-256 " + detail.sha256_hex, "mono", 30));
+            const json payload{{"id", detail.summary.id}};
+            json detail_actions = json::array();
+            detail_actions.push_back(button_node("detail.install", "Install",
+                                                 "workshop.plugin.install", payload, "primary",
+                                                 busy));
+            detail_actions.push_back(button_node("detail.remove", "Remove",
+                                                 "workshop.plugin.uninstall", payload, "danger",
+                                                 busy));
+            detail_children.push_back(row_node(std::move(detail_actions)));
+        } else {
+            detail_children.push_back(
+                text_node("Select a plugin to review its package and compatibility details.",
+                          "muted", 52));
         }
+        nodes.push_back(row_node(json::array({card_node("Catalog", std::move(catalog), "gold"),
+                                              card_node("Detail", std::move(detail_children),
+                                                        "cyan")})));
+
+        json task_center = json::array();
+        task_center.push_back(text_node("Task Center", "title", 28));
+        json task_badges = json::array();
+        task_badges.push_back(badge_node(busy ? "In progress" : "Ready", busy ? "warn" : "ok"));
+        task_badges.push_back(
+            badge_node(std::to_string(completed_operations_) + " completed", "accent"));
+        const std::uint64_t remaining = queued_operations_ > completed_operations_
+                                            ? queued_operations_ - completed_operations_
+                                            : 0;
+        task_badges.push_back(badge_node(std::to_string(remaining) + " pending", "gold"));
+        task_center.push_back(row_node(std::move(task_badges)));
+        task_center.push_back(
+            text_node(status_text_, last_status_ == SAO_STATUS_OK ? "value" : "bad", 30));
+        task_center.push_back(json{{"type", "bar"},
+                                   {"pct", progress_percent_},
+                                   {"caption", progress_text_},
+                                   {"height", 24}});
+        if (!error_text_.empty())
+            task_center.push_back(text_node(error_text_, "bad", 42));
+        nodes.push_back(card_node("Task Center", std::move(task_center),
+                                  error_text_.empty() ? "cyan" : "bad"));
 
         std::string spec = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
         if (spec.size() <= kMaximumPanelSpecBytes)
@@ -1206,7 +1209,7 @@ class Owner::Impl final {
                  {text_node("Plugin Workshop", "title", 32),
                   card_node("Spec Limit",
                             json::array({text_node(
-                                "Workshop content exceeded the native panel budget.", "bad", 44)}),
+                                "Workshop content is too large to display.", "bad", 44)}),
                             "bad")})}}
             .dump();
     }

@@ -61,6 +61,7 @@ struct Operations {
 struct Snapshot {
     bool panel_created{};
     bool visible{};
+    bool loading{};
     FilterMode filter{FilterMode::all};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text;
@@ -88,6 +89,7 @@ class Owner final {
 
     sao_status_t open() noexcept;
     sao_status_t close() noexcept;
+    sao_status_t service_ui() noexcept;
     // Owner-thread, retryable panel retirement. Any failure preserves the
     // registered panel and callback ownership for a later retry.
     sao_status_t take_offline() noexcept;
@@ -110,6 +112,7 @@ class Owner final {
     void handle_panel_event(std::int32_t event_kind) noexcept;
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
+    sao_status_t enqueue_refresh() noexcept;
 
     static void panel_action_callback(const char* action_id_utf8,
                                       const std::uint8_t* payload_json_utf8,

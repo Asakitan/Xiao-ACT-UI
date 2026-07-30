@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <optional>
@@ -91,6 +92,17 @@ std::vector<std::uint32_t> visible_pids(const Snapshot& snapshot) {
     return pids;
 }
 
+bool service_until_refresh_complete(Owner& owner, Snapshot& snapshot, int attempts = 1000) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (owner.service_ui() != SAO_STATUS_OK || owner.snapshot(snapshot) != SAO_STATUS_OK)
+            return false;
+        if (!snapshot.loading)
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
 } // namespace
 
 TEST_CASE("process selector default attach requires the borrowed proxy",
@@ -130,7 +142,7 @@ TEST_CASE("process selector sorts, excludes and filters deterministic snapshots"
         Owner owner(compositor.get(), std::move(operations));
         REQUIRE(owner.refresh() == SAO_STATUS_OK);
         Snapshot snapshot{};
-        REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+        REQUIRE(service_until_refresh_complete(owner, snapshot));
         REQUIRE(enumerate_calls == 1);
         REQUIRE(snapshot.all_processes.size() == 4);
         CHECK(snapshot.all_processes[0].pid == 10);
@@ -186,6 +198,8 @@ TEST_CASE("process selector rejects PID reuse before injected attach",
     {
         Owner owner(compositor.get(), std::move(operations));
         REQUIRE(owner.open() == SAO_STATUS_OK);
+        Snapshot snapshot{};
+        REQUIRE(service_until_refresh_complete(owner, snapshot));
         REQUIRE(enumerate_calls == 1);
 
         current[0].start_time_100ns = 2000;
@@ -194,7 +208,6 @@ TEST_CASE("process selector rejects PID reuse before injected attach",
         CHECK(query_calls == 1);
         CHECK(attach_calls == 0);
 
-        Snapshot snapshot{};
         REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
         CHECK(snapshot.last_status == SAO_STATUS_ERR_PROCESS_GONE);
         CHECK(snapshot.status_text.find("identity changed") != std::string::npos);
@@ -231,6 +244,8 @@ TEST_CASE("process selector reuses one headless panel and emits identity payload
     {
         Owner owner(compositor.get(), std::move(operations));
         REQUIRE(owner.open() == SAO_STATUS_OK);
+        Snapshot snapshot{};
+        REQUIRE(service_until_refresh_complete(owner, snapshot));
         REQUIRE(enumerate_calls == 1);
         REQUIRE(compositor.layer_count() == 1);
 
@@ -251,7 +266,6 @@ TEST_CASE("process selector reuses one headless panel and emits identity payload
         CHECK(theme.find("fisheye") == std::string::npos);
         CHECK(Json::parse(theme)["colors"]["APP_ACCENT"] == "#25d7f2");
 
-        Snapshot snapshot{};
         REQUIRE(sao_ui_panel_hide(first_panel) == SAO_STATUS_OK);
         REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
         CHECK_FALSE(snapshot.visible);
@@ -313,12 +327,13 @@ TEST_CASE("process selector renders empty and attach failure states",
         Owner owner(compositor.get(), std::move(operations));
         REQUIRE(owner.open() == SAO_STATUS_OK);
         Snapshot snapshot{};
-        REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
+        REQUIRE(service_until_refresh_complete(owner, snapshot));
         CHECK(snapshot.visible_processes.empty());
         CHECK(snapshot.rendered_spec_json.find("No queryable processes") != std::string::npos);
 
         current = {process(55, 5500, R"(D:\Games\Denied\DeniedGame.exe)")};
         REQUIRE(owner.refresh() == SAO_STATUS_OK);
+        REQUIRE(service_until_refresh_complete(owner, snapshot));
         CHECK(owner.attach({55, 5500}) == SAO_STATUS_ERR_ACCESS_DENIED);
         REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
         CHECK(snapshot.last_status == SAO_STATUS_ERR_ACCESS_DENIED);
@@ -393,13 +408,14 @@ TEST_CASE("process selector take offline is retryable and reversible",
     Owner owner(compositor.get(), std::move(operations));
     owner_ptr = &owner;
     REQUIRE(owner.open() == SAO_STATUS_OK);
+    Snapshot snapshot{};
+    REQUIRE(service_until_refresh_complete(owner, snapshot));
     REQUIRE(nested_offline_status.has_value());
-    CHECK(*nested_offline_status == SAO_UI_PANEL_STATUS_ERR_BUSY);
+    CHECK(*nested_offline_status == SAO_STATUS_ERR_ACCESS_DENIED);
     CHECK(compositor.layer_count() == 1);
 
     REQUIRE(owner.take_offline() == SAO_STATUS_OK);
     CHECK(compositor.layer_count() == 0);
-    Snapshot snapshot{};
     REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
     CHECK_FALSE(snapshot.panel_created);
     CHECK_FALSE(snapshot.visible);
@@ -407,6 +423,7 @@ TEST_CASE("process selector take offline is retryable and reversible",
     CHECK(owner.take_offline() == SAO_STATUS_OK);
 
     REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until_refresh_complete(owner, snapshot));
     CHECK(enumerate_calls == 2);
     CHECK(compositor.layer_count() == 1);
     REQUIRE(owner.take_offline() == SAO_STATUS_OK);
