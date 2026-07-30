@@ -54,7 +54,7 @@ sao_status_t process_status_from_os_error(DWORD os_error) {
 sao_status_t fail_process(sao_status_t status, DWORD os_error, const char* message) {
     SetLastError(os_error);
     sao_core_set_last_os_error_internal(os_error);
-    sao_core_error_set(status, "core.process", message, __FILE__, __LINE__);
+    sao_core_error_set(status, "core.process", message, "platform/core/src/process.cpp", __LINE__);
     return status;
 }
 
