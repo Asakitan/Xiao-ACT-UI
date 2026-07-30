@@ -5,6 +5,7 @@
 #include "kernel_map_commands.h"
 #include "kernel_map_panel_provider.h"
 #include "kernel_map_tools.h"
+#include "mcp_management_panel_provider.h"
 #include "native_runtime_internal.h"
 #include "sao/ai_editor/kernel_map_bridge.h"
 #include "sha256_helper.h"
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cwctype>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -120,6 +122,54 @@ std::string environment_value(std::string_view name) {
     }
     value.resize(written);
     return wide_to_utf8(value);
+}
+
+std::optional<std::filesystem::path> current_executable_path() {
+    std::wstring buffer(32768u, L'\0');
+    const DWORD written = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (written == 0u || written >= buffer.size()) {
+        return std::nullopt;
+    }
+    buffer.resize(written);
+    return std::filesystem::path(buffer);
+}
+
+bool equal_filename(std::wstring left, std::wstring right) {
+    std::transform(left.begin(), left.end(), left.begin(),
+                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
+    std::transform(right.begin(), right.end(), right.begin(),
+                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
+    return left == right;
+}
+
+bool is_production_ai_editor_process() {
+    const auto executable = current_executable_path();
+    return executable.has_value() &&
+           equal_filename(executable->filename().native(), L"SaoAiEditor.exe");
+}
+
+std::string resolve_panel_assets(std::string_view system_root,
+                                 std::string_view panel_directory) {
+    std::vector<std::filesystem::path> candidates;
+    if (!system_root.empty()) {
+        candidates.emplace_back(std::filesystem::path(utf8_to_wide(system_root)) /
+                                L"assets" / L"ai_editor" /
+                                utf8_to_wide(panel_directory));
+    }
+    if (const auto executable = current_executable_path(); executable.has_value()) {
+        candidates.emplace_back(executable->parent_path() / L"assets" /
+                                L"ai_editor" /
+                                utf8_to_wide(panel_directory));
+    }
+    std::error_code error;
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_directory(candidate, error) && !error) {
+            return wide_to_utf8(candidate.native());
+        }
+        error.clear();
+    }
+    return {};
 }
 
 std::string mode_of(const Json& params) {
@@ -871,10 +921,11 @@ int32_t NativeRuntime::initialize() {
     // sao.event / mcp.notification without having to poll the MCP APIs.
     sao_ai_editor_mcp_client_set_notification_forwarder(
         mcp_client_.get(), this, &NativeRuntime::mcp_notification_trampoline);
+    builtin_mcp_registration_status_ = register_builtin_mcp_server();
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
-    // kernel_map wiring: surface the four kernelMap.* tool descriptors on
-    // tools/list and register the sao.kernelMap.* command handlers.  Both
+    // kernel_map wiring: surface the four native kernelMap.* tool descriptors
+    // on tools/list and register the sao.kernelMap.* command handlers.  Both
     // registrations are idempotent (see kernel_map_tools.cpp /
     // kernel_map_commands.cpp) so re-initialising the runtime does not
     // duplicate entries.  The Bridge is a process-wide singleton; sharing
@@ -893,8 +944,77 @@ int32_t NativeRuntime::initialize() {
     kernel_map_panel_ = std::make_unique<KernelMapPanelProvider>();
     (void)kernel_map_panel_->register_with_runtime(
         webview_panels_,
-        options_.system_root + "/assets/ai_editor/kernel_map_panel");
+        resolve_panel_assets(options_.system_root, "kernel_map_panel"));
+    mcp_management_panel_ = std::make_unique<McpManagementPanelProvider>();
+    mcp_management_panel_->install_snapshot_provider(
+        [this] { return mcp_management_snapshot(); });
+    mcp_management_panel_->install_kernel_map_navigator([this] {
+        WebviewPanelState state;
+        const int32_t reveal_status = webview_panels_.reveal(
+            std::string{kKernelMapPanelId}, 1, false, state);
+        if (reveal_status == SAO_AI_EDITOR_OK) {
+            emit("vscode.window.webviewPanel.revealed", panel_state_to_json(state));
+            return true;
+        }
+        return false;
+    });
+    (void)mcp_management_panel_->register_with_runtime(
+        webview_panels_,
+        resolve_panel_assets(options_.system_root, "mcp_management_panel"));
     return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::register_builtin_mcp_server() {
+    builtin_mcp_server_path_.clear();
+    if (mcp_client_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (!is_production_ai_editor_process()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    const auto executable = current_executable_path();
+    if (!executable.has_value()) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    const std::filesystem::path server_path =
+        executable->parent_path() / L"SaoKernelMapMcpServer.exe";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(server_path, error) || error) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    builtin_mcp_server_path_ = wide_to_utf8(server_path.native());
+    const Json config{{"name", "kernel_map"},
+                      {"transport", "stdio"},
+                      {"command", builtin_mcp_server_path_},
+                      {"cwd", wide_to_utf8(server_path.parent_path().native())},
+                      {"startupMs", 15000u}};
+    const std::string serialized = dump_json(config);
+    return sao_ai_editor_mcp_client_register(
+        mcp_client_.get(), serialized.data(),
+        static_cast<std::uint32_t>(serialized.size()));
+}
+
+Json NativeRuntime::mcp_management_snapshot() {
+    Json servers;
+    Json tools;
+    const int32_t servers_status =
+        dispatch_mcp("mcp.list_servers", Json::object(), servers);
+    const int32_t tools_status =
+        dispatch_mcp("mcp.list_tools", Json::object(), tools);
+    const Json server_items = servers.is_object()
+        ? servers.value("items", Json::array())
+        : Json::array();
+    const Json tool_items = tools.is_object()
+        ? tools.value("items", Json::array())
+        : Json::array();
+    return Json{{"registration",
+                 {{"name", "kernel_map"},
+                  {"status", builtin_mcp_registration_status_},
+                  {"path", builtin_mcp_server_path_}}},
+                {"servers_status", servers_status},
+                {"tools_status", tools_status},
+                {"servers", server_items},
+                {"tools", tool_items}};
 }
 
 void SAO_AI_EDITOR_CALL NativeRuntime::mcp_notification_trampoline(
@@ -4458,6 +4578,44 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
             return status;
         }
         const Json payload = params.value("message", Json());
+        NativePanelProvider* native_provider = nullptr;
+        if (kernel_map_panel_ != nullptr &&
+            panel_id == kernel_map_panel_->provider_panel_id()) {
+            native_provider = kernel_map_panel_.get();
+        } else if (mcp_management_panel_ != nullptr &&
+                   panel_id == mcp_management_panel_->provider_panel_id()) {
+            native_provider = mcp_management_panel_.get();
+        }
+        if (native_provider != nullptr) {
+            Json provider_reply;
+            const int32_t provider_status =
+                native_provider->handle_message(payload, provider_reply);
+            if (provider_status != SAO_AI_EDITOR_OK) {
+                result = Json{{"accepted", false},
+                              {"panelId", panel_id},
+                              {"status", provider_status}};
+                return provider_status;
+            }
+            Json page_result;
+            const int32_t page_status = dispatch_webview_message_to_page(
+                Json{{"panelId", panel_id},
+                     {"messageSeq", static_cast<int64_t>(state.message_seq)},
+                     {"message", provider_reply}},
+                page_result);
+            if (page_status != SAO_AI_EDITOR_OK) {
+                result = std::move(page_result);
+                return page_status;
+            }
+            emit("vscode.window.webviewPanel.postMessage",
+                 Json{{"panelId", panel_id},
+                      {"messageSeq", static_cast<int64_t>(state.message_seq)},
+                      {"message", provider_reply}});
+            result = Json{{"panelId", panel_id},
+                          {"messageSeq", static_cast<int64_t>(state.message_seq)},
+                          {"accepted", true},
+                          {"nativeProvider", true}};
+            return SAO_AI_EDITOR_OK;
+        }
         Json bridge_result;
         const int32_t bridge_status = dispatch_webview_message_to_extension(
             params, bridge_result);
@@ -5840,6 +5998,41 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
     }
     if (method == "mcp.call_tool" || method == "mcp.read_resource" ||
         method == "mcp.get_prompt") {
+        if (method == "mcp.call_tool") {
+            uint32_t required = 0;
+            const int32_t query = sao_ai_editor_mcp_client_list_tools(
+                raw, nullptr, 0, &required);
+            Json tools;
+            const int32_t list_status = collect_mcp_output(
+                query, required,
+                [raw](char* output, uint32_t capacity, uint32_t* out_length) {
+                    return sao_ai_editor_mcp_client_list_tools(
+                        raw, output, capacity, out_length);
+                },
+                tools);
+            if (list_status != SAO_AI_EDITOR_OK) {
+                return list_status;
+            }
+            const std::string server = params.value("server", std::string{});
+            const std::string name = params.value("name", std::string{});
+            bool requires_confirm = false;
+            if (tools.is_array()) {
+                for (const auto& tool : tools) {
+                    if (tool.value("server", std::string{}) == server &&
+                        tool.value("name", std::string{}) == name) {
+                        requires_confirm =
+                            tool.value("requires_confirm", false);
+                        break;
+                    }
+                }
+            }
+            if (requires_confirm && !params.value("confirmed", false)) {
+                result = Json{{"confirmationRequired", true},
+                              {"server", server},
+                              {"name", name}};
+                return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+            }
+        }
         const std::string request = dump_json(params);
         auto invoker = method == "mcp.call_tool"
             ? &sao_ai_editor_mcp_client_call_tool

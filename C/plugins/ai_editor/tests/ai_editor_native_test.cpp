@@ -6708,7 +6708,67 @@ TEST_CASE("SaoAiEditor.exe --extension-host serves NativeRuntime JSON-RPC "
     REQUIRE(list_response["result"]["total"] == 0);
     REQUIRE(list_response["result"]["nodeAlive"] == false);
 
-    // 2) A representative tools.call round-trip proves the shared
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 2},
+                    {"method", "mcp.list_servers"},
+                    {"params", Json::object()}});
+    const Json mcp_servers = read_frame();
+    REQUIRE(mcp_servers["id"] == 2);
+    REQUIRE(mcp_servers.contains("result"));
+    REQUIRE(mcp_servers["result"]["total"] >= 1);
+    bool found_kernel_map = false;
+    for (const auto& server : mcp_servers["result"]["items"]) {
+        found_kernel_map |= server.value("name", std::string{}) == "kernel_map";
+    }
+    REQUIRE(found_kernel_map);
+
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 3},
+                    {"method", "mcp.list_tools"},
+                    {"params", Json::object()}});
+    const Json mcp_tools = read_frame();
+    REQUIRE(mcp_tools["id"] == 3);
+    REQUIRE(mcp_tools.contains("result"));
+    std::unordered_set<std::string> platform_tools;
+    for (const auto& tool : mcp_tools["result"]["items"]) {
+        if (tool.value("server", std::string{}) == "kernel_map") {
+            platform_tools.insert(tool.value("name", std::string{}));
+        }
+    }
+    for (const std::string_view name : {"helperStatus", "engineSelect", "memoryRead",
+                                        "driverList", "hidSend", "vtStatus"}) {
+        CHECK(platform_tools.contains(std::string(name)));
+    }
+
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 4},
+                    {"method", "mcp.call_tool"},
+                    {"params",
+                     {{"server", "kernel_map"},
+                      {"name", "engineSelect"},
+                      {"arguments", {{"engine", "readonly"}}}}}});
+    const Json confirmation = read_frame();
+    REQUIRE(confirmation["id"] == 4);
+    REQUIRE(confirmation.contains("error"));
+    CHECK(confirmation["error"]["data"]["status"] ==
+          SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED);
+
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 5},
+                    {"method", "mcp.call_tool"},
+                    {"params",
+                     {{"server", "kernel_map"},
+                      {"name", "vtStatus"},
+                      {"arguments", Json::object()}}}});
+    const Json vt_status = read_frame();
+    REQUIRE(vt_status["id"] == 5);
+    REQUIRE(vt_status.contains("result"));
+    REQUIRE(vt_status["result"]["content"].is_array());
+    CHECK(vt_status["result"]["content"][0]["text"]
+              .get<std::string>()
+              .find("VT_ABSENT") != std::string::npos);
+
+    // 6) A representative tools.call round-trip proves the shared
     //    registry is reachable — write a fixture file first, then read
     //    it through the extension host stdio bridge.
     {
@@ -6716,25 +6776,25 @@ TEST_CASE("SaoAiEditor.exe --extension-host serves NativeRuntime JSON-RPC "
         fixture_file << "hello via extension host\n";
     }
     send_frame(Json{{"jsonrpc", "2.0"},
-                    {"id", 2},
+                    {"id", 6},
                     {"method", "tools.call"},
                     {"params",
                      {{"mode", "agent"},
                       {"name", "readFile"},
                       {"arguments", {{"path", "hello.txt"}}}}}});
     const Json call_response = read_frame();
-    REQUIRE(call_response["id"] == 2);
+    REQUIRE(call_response["id"] == 6);
     REQUIRE(call_response.contains("result"));
     REQUIRE(call_response["result"]["content"].get<std::string>().find(
                 "hello via extension host") != std::string::npos);
 
-    // 3) host.shutdown asks the process to exit cleanly.
+    // 7) host.shutdown asks the process to exit cleanly.
     send_frame(Json{{"jsonrpc", "2.0"},
-                    {"id", 3},
+                    {"id", 7},
                     {"method", "host.shutdown"},
                     {"params", Json::object()}});
     const Json shutdown_response = read_frame();
-    REQUIRE(shutdown_response["id"] == 3);
+    REQUIRE(shutdown_response["id"] == 7);
     REQUIRE(shutdown_response.contains("result"));
 
     sao_ai_editor_mcp_decoder_destroy(decoder);

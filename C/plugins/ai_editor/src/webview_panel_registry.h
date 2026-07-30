@@ -22,6 +22,18 @@
 
 namespace sao::ai_editor::native {
 
+class WebviewPanelRegistry;
+
+class NativePanelProvider {
+public:
+    virtual ~NativePanelProvider() = default;
+    virtual int32_t register_with_runtime(WebviewPanelRegistry& registry,
+                                          const std::string& assets_root) = 0;
+    virtual int32_t unregister_from_runtime(WebviewPanelRegistry& registry) = 0;
+    virtual int32_t handle_message(const Json& message, Json& out_reply) = 0;
+    virtual std::string_view provider_panel_id() const noexcept = 0;
+};
+
 enum class WebviewPanelOwner : uint8_t {
     extension_host,
     native_runtime,

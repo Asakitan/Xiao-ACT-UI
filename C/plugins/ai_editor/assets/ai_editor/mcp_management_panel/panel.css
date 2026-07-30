@@ -1,0 +1,93 @@
+:root {
+  color-scheme: dark;
+  font: 12px "Segoe UI", sans-serif;
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+body {
+  margin: 0;
+  padding: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #3c3c3c;
+  padding-bottom: 10px;
+}
+
+h1, h2, h3, p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 17px;
+}
+
+h2 {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+h3 {
+  font-size: 12px;
+  color: #9cdcfe;
+  margin-bottom: 6px;
+}
+
+header p, article p, dd {
+  color: #a7a7a7;
+}
+
+section {
+  margin-top: 14px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+article {
+  border: 1px solid #3c3c3c;
+  background: #252526;
+  padding: 9px;
+  border-radius: 4px;
+}
+
+article p + p {
+  margin-top: 4px;
+}
+
+button {
+  border: 1px solid #4a4a4a;
+  background: #0e639c;
+  color: white;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1177bb;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) 1fr;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+}
+
+dt {
+  font-family: Consolas, monospace;
+  color: #dcdcaa;
+}
+
+dd {
+  margin: 0;
+}

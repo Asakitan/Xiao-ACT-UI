@@ -22,6 +22,7 @@
 #include "tool_result_cache.h"
 #include "tool_result_filter.h"
 #include "kernel_map_panel_provider.h"
+#include "mcp_management_panel_provider.h"
 #include "webview_panel_registry.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
@@ -105,6 +106,8 @@ private:
     int32_t dispatch_mcp(std::string_view method,
                          const Json& params,
                          Json& result);
+    int32_t register_builtin_mcp_server();
+    Json mcp_management_snapshot();
     // Aggregate MCP tools filtered by `mcp_server_filter` (JSON array of names;
     // if empty/absent -> all registered servers) and emit them as OpenAI-shape
     // `function` tools with `mcp__<server>__<name>` naming.  Returns an empty
@@ -243,6 +246,9 @@ private:
     // singleton, constructed in initialize().  See
     // kernel_map_panel_provider.h.
     std::unique_ptr<KernelMapPanelProvider> kernel_map_panel_;
+    std::unique_ptr<McpManagementPanelProvider> mcp_management_panel_;
+    int32_t builtin_mcp_registration_status_ = SAO_AI_EDITOR_ERR_NOT_FOUND;
+    std::string builtin_mcp_server_path_;
     mutable std::mutex webview_bridge_mutex_;
     WebviewPostMessageHandler webview_post_message_handler_;
     uint32_t maximum_event_queue_;

@@ -110,7 +110,7 @@ private:
     bool available_ = false;
 };
 
-class SAO_AI_EDITOR_API KernelMapPanelProvider final {
+class SAO_AI_EDITOR_API KernelMapPanelProvider final : public NativePanelProvider {
 public:
     // Delegate signature used to push messages back to the webview.
     // The runtime hook injects a lambda that runs the same
@@ -126,7 +126,7 @@ public:
     using FilePicker = std::function<std::string()>;
 
     KernelMapPanelProvider();
-    ~KernelMapPanelProvider();
+    ~KernelMapPanelProvider() override;
 
     KernelMapPanelProvider(const KernelMapPanelProvider&) = delete;
     KernelMapPanelProvider& operator=(const KernelMapPanelProvider&) = delete;
@@ -137,11 +137,11 @@ public:
     // in tests — the provider falls back to a minimal built-in HTML
     // stub that still surfaces the "bridge unavailable" state.
     int32_t register_with_runtime(WebviewPanelRegistry& registry,
-                                  const std::string& assets_root);
+                                  const std::string& assets_root) override;
 
     // Idempotent teardown counterpart.  Marks the panel disposed but
     // keeps the registry entry for post-mortem inspection.
-    int32_t unregister_from_runtime(WebviewPanelRegistry& registry);
+    int32_t unregister_from_runtime(WebviewPanelRegistry& registry) override;
 
     // Test / production seams — inject before register_with_runtime()
     // if you need a mock bridge or file picker.  Both take ownership of
@@ -155,7 +155,11 @@ public:
     // itself is an error / not-implemented — the caller distinguishes
     // via `out_reply.status`).  Returns SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
     // on malformed input.  Never throws.
-    int32_t handle_message(const Json& message, Json& out_reply);
+    int32_t handle_message(const Json& message, Json& out_reply) override;
+
+    std::string_view provider_panel_id() const noexcept override {
+        return panel_id();
+    }
 
     // Fixed identifiers — exposed as helpers so tests / runtime hooks
     // don't have to reach for the constants directly.

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>MCP Management</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>MCP Management</h1>
+      <p data-role="summary">Loading registry...</p>
+    </div>
+    <button type="button" data-role="refresh">Refresh</button>
+  </header>
+
+  <section>
+    <h2>Servers</h2>
+    <div class="grid" data-role="servers"></div>
+  </section>
+
+  <section>
+    <h2>Tools</h2>
+    <div class="grid" data-role="tools"></div>
+  </section>
+
+  <section>
+    <h2>Platform tools</h2>
+    <dl>
+      <dt>helperStatus</dt><dd>Helper liveness, loaded engines, and driver readiness.</dd>
+      <dt>engineSelect</dt><dd>Switch the active engine after confirmation.</dd>
+      <dt>memoryRead</dt><dd>Read a PID and bounded virtual-address range without confirmation.</dd>
+      <dt>driverList</dt><dd>List driver assets, state, and availability.</dd>
+      <dt>hidSend</dt><dd>Send one mouse or keyboard event after confirmation.</dd>
+      <dt>vtStatus</dt><dd>Returns VT_ABSENT until driver_vt is installed.</dd>
+    </dl>
+    <button type="button" data-role="open-kernel-map">Open Kernel Map panel</button>
+  </section>
+
+  <script src="panel.js"></script>
+</body>
+</html>

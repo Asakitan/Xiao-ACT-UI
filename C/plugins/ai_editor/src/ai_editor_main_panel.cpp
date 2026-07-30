@@ -362,8 +362,9 @@ json button_node(std::string id, std::string label, std::string action,
     return node;
 }
 
-json input_node(std::string id, std::string value, std::string action, bool disabled) {
-    if (value.size() > kUiInputPreviewBytes) {
+json input_node(std::string id, std::string value, std::string action, bool disabled,
+                bool multiline = false) {
+    if (!multiline && value.size() > kUiInputPreviewBytes) {
         size_t begin = value.size() - kUiInputPreviewBytes;
         while (begin < value.size() &&
                (static_cast<unsigned char>(value[begin]) & 0xc0U) == 0x80U) {
@@ -374,9 +375,13 @@ json input_node(std::string id, std::string value, std::string action, bool disa
     json node{{"type", "input"},
               {"id", std::move(id)},
               {"value", std::move(value)},
-              {"input_type", "text"},
+              {"input_type", multiline ? "multiline" : "text"},
               {"action", std::move(action)},
-              {"height", 42}};
+              {"height", multiline ? 128 : 42}};
+    if (multiline) {
+        node["multiline"] = true;
+        node["accepts_newlines"] = true;
+    }
     if (disabled)
         node["disabled"] = true;
     return node;
@@ -2047,125 +2052,68 @@ json choice_card(std::string title, std::string action, const std::vector<Choice
     return card_node(prefix, std::move(children), "cyan");
 }
 
+json choice_row(std::string title, std::string action, const std::vector<ChoiceItem>& choices,
+                std::string_view selected, std::string prefix, bool disabled) {
+    json children = json::array();
+    children.push_back(text_node(std::move(title), "muted", 22));
+    const size_t visible = std::min(choices.size(), kMaximumChoiceButtons);
+    for (size_t index = 0; index < visible; ++index) {
+        const auto& item = choices[index];
+        children.push_back(button_node(prefix + "." + std::to_string(index), item.label, action,
+                                       {{"value", item.id}},
+                                       item.id == selected ? "primary" : "ghost", disabled));
+    }
+    return row_node(std::move(children));
+}
+
 std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_bound) {
     json nodes = json::array();
-    nodes.push_back(text_node("AI Editor", "title", 30));
     const bool history_actions_disabled =
         !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
+    const bool selectors_disabled = run_is_active(state.run_phase);
 
-    json header = json::array();
-    json badges = json::array();
-    badges.push_back(badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
-                                state.backend_connected ? "ok" : "warn"));
-    badges.push_back(badge_node("Run: " + state.run_status, run_phase_style(state.run_phase)));
-    badges.push_back(badge_node(
+    json app_bar = json::array();
+    app_bar.push_back(text_node("AI Editor", "title", 30));
+    json app_badges = json::array();
+    app_badges.push_back(
+        badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
+                   state.backend_connected ? "ok" : "warn"));
+    app_badges.push_back(
+        badge_node("Run: " + state.run_status, run_phase_style(state.run_phase)));
+    app_badges.push_back(badge_node(
         state.conversation_id.empty() ? "Unsaved conversation" : "Conversation persisted",
         state.conversation_id.empty() ? "muted" : "accent"));
-    badges.push_back(badge_node("Approval: " + approval_label(state.selected_approval),
-                                state.selected_approval == "default" ? "muted" : "warn"));
-    header.push_back(row_node(std::move(badges)));
-    header.push_back(text_node(
+    app_bar.push_back(row_node(std::move(app_badges)));
+    app_bar.push_back(text_node(state.conversation_title, "value", 24));
+    app_bar.push_back(text_node(
         state.backend_status.empty()
             ? (launcher_bound ? "Waiting for asynchronous runtime initialization..."
                               : "Offline / 离线: backend not attached; local UI remains usable.")
             : state.backend_status,
-        state.backend_connected ? "muted" : "warn", 36));
-    header.push_back(text_node("Conversation: " + state.conversation_title, "value", 26));
-    header.push_back(text_node(
-        state.conversation_id.empty()
-            ? "ID: created lazily on first Send"
-            : "ID: " + compact_text(state.conversation_id, 1000U),
-        "mono", 22));
-    nodes.push_back(card_node("Chat Status", std::move(header),
-                              state.backend_connected ? "ok" : "warn"));
+        state.backend_connected ? "muted" : "warn", 30));
+    json app_actions = json::array();
+    app_actions.push_back(button_node(
+        "chat.new", "New Chat", "chat.new", json::object(), "primary",
+        !launcher_bound || state.run_phase == RunPhase::Running ||
+            state.run_phase == RunPhase::Cancelling || state.history_task_pending));
+    app_actions.push_back(button_node("history.refresh", "Refresh History", "history.refresh",
+                                      json::object(), "default", history_actions_disabled));
+    app_actions.push_back(button_node("settings.open", "Settings", "settings.open"));
+    app_actions.push_back(button_node("gpu.hunt", "GPU Hunt", "gpu.hunt"));
+    app_actions.push_back(button_node("diagnostics.refresh", "Diagnostics",
+                                      "diagnostics.refresh", json::object(), "ghost",
+                                      !launcher_bound));
+    app_bar.push_back(row_node(std::move(app_actions)));
+    json app_bar_node = card_node("App Bar", std::move(app_bar), "gold");
+    app_bar_node["role"] = "app_bar";
+    nodes.push_back(std::move(app_bar_node));
 
-    json quick = json::array();
-    json quick_actions = json::array();
-    quick_actions.push_back(button_node("chat.new", "New Chat", "chat.new", json::object(),
-                                        "primary",
-                                        !launcher_bound ||
-                                            state.run_phase == RunPhase::Running ||
-                                            state.run_phase == RunPhase::Cancelling ||
-                                            state.history_task_pending));
-    quick_actions.push_back(button_node("history.refresh", "Refresh History", "history.refresh",
-                                        json::object(), "default", history_actions_disabled));
-    quick_actions.push_back(
-        button_node("settings.open", "Settings", "settings.open"));
-    quick_actions.push_back(button_node("gpu.hunt", "GPU Hunt", "gpu.hunt"));
-    quick_actions.push_back(button_node("diagnostics.refresh", "Diagnostics",
-                                        "diagnostics.refresh", json::object(), "default",
-                                        !launcher_bound));
-    quick.push_back(row_node(std::move(quick_actions)));
-    nodes.push_back(card_node("Quick Actions", std::move(quick), "gold"));
-
-    const bool selectors_disabled = run_is_active(state.run_phase);
-    nodes.push_back(choice_card("Provider: " +
-                                    choice_label(state.providers, state.selected_provider,
-                                                 "Auto (Settings)"),
-                                "select.provider", state.providers, state.selected_provider,
-                                "provider", selectors_disabled));
-    nodes.push_back(choice_card("Model: " +
-                                    choice_label(state.models, state.selected_model,
-                                                 "Auto (Settings)"),
-                                "select.model", state.models, state.selected_model, "model",
-                                selectors_disabled));
-    nodes.push_back(choice_card("Agent: " +
-                                    choice_label(state.agents, state.selected_agent, "None"),
-                                "select.agent", state.agents, state.selected_agent, "agent",
-                                selectors_disabled));
-
-    json mode = json::array();
-    json mode_buttons = json::array();
-    for (const std::string_view value : {"ask", "plan", "agent"}) {
-        mode_buttons.push_back(button_node("mode." + std::string(value), std::string(value),
-                                           "select.mode", {{"value", value}},
-                                           state.selected_mode == value ? "primary" : "default",
-                                           selectors_disabled));
-    }
-    mode.push_back(row_node(std::move(mode_buttons)));
-    nodes.push_back(card_node("Mode: " + state.selected_mode, std::move(mode), "cyan"));
-
-    json approval = json::array();
-    json approval_buttons = json::array();
-    for (const std::string_view value : {"default", "bypass", "autopilot"}) {
-        approval_buttons.push_back(button_node(
-            "approval." + std::string(value),
-            value == "default" ? "Default" : value == "bypass" ? "Bypass" : "Autopilot",
-            "select.approval", {{"value", value}},
-            state.selected_approval == value ? "primary" : "default", selectors_disabled));
-    }
-    approval.push_back(row_node(std::move(approval_buttons)));
-    approval.push_back(
-        text_node(approval_description(state.selected_approval), "muted", 34));
-    nodes.push_back(card_node("Approval: " + approval_label(state.selected_approval),
-                              std::move(approval),
-                              state.selected_approval == "default" ? "cyan" : "warn"));
-
-    nodes.push_back(choice_card("Workflow: " +
-                                    choice_label(state.workflows, state.selected_workflow, "None"),
-                                "select.workflow", state.workflows, state.selected_workflow,
-                                "workflow", selectors_disabled));
-    json context = json::array();
-    json context_buttons = json::array();
-    context_buttons.push_back(button_node(
-        "context.conversation", "Conversation", "select.context", {{"value", "conversation"}},
-        state.selected_context == "conversation" ? "primary" : "default", selectors_disabled));
-    context_buttons.push_back(button_node(
-        "context.current", "Current Turn", "select.context", {{"value", "current_turn"}},
-        state.selected_context == "current_turn" ? "primary" : "default", selectors_disabled));
-    context.push_back(row_node(std::move(context_buttons)));
-    context.push_back(text_node(
-        "Conversation sends the stored transcript; Current Turn sends only the new user message. "
-        "Agent system instructions are injected transiently and are not persisted.",
-        "muted", 40));
-    nodes.push_back(card_node("Context: " + state.selected_context, std::move(context), "cyan"));
-
-    json conversation = json::array();
+    json transcript = json::array();
+    transcript.push_back(text_node("Transcript", "title", 26));
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
-        conversation.push_back(text_node("No messages yet. Click the composer field or Edit "
-                                         "Composer, enter a prompt, then Send.",
-            "muted", 42));
+        transcript.push_back(text_node("No messages yet. Write a prompt in the composer below.",
+                                       "muted", 42));
     } else {
         size_t begin = 0;
         if (state.conversation_messages.size() > kMaximumVisibleMessages)
@@ -2177,14 +2125,14 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             json message_nodes = json::array();
             append_text_chunks(message_nodes, message_content(message),
                                role == "assistant" ? "value" : "mono", 90);
-            conversation.push_back(card_node(role, std::move(message_nodes),
-                                             role == "assistant" ? "cyan" : "gold"));
+            transcript.push_back(card_node(role, std::move(message_nodes),
+                                           role == "assistant" ? "cyan" : "gold"));
         }
         if (!state.pending_user_text.empty()) {
             json pending = json::array();
             append_text_chunks(pending, state.pending_user_text, "mono", 90);
             pending.push_back(badge_node("Pending backend append", "warn"));
-            conversation.push_back(card_node("user", std::move(pending), "gold"));
+            transcript.push_back(card_node("user", std::move(pending), "gold"));
         }
         if (!state.streamed_assistant_text.empty()) {
             json assistant = json::array();
@@ -2194,80 +2142,143 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                     ? "Live event-stream preview"
                     : "Terminal preview; canonical history reload is reconciled once",
                 "accent"));
-            conversation.push_back(card_node("assistant", std::move(assistant), "cyan"));
+            transcript.push_back(card_node("assistant", std::move(assistant), "cyan"));
         }
     }
-    nodes.push_back(card_node("Conversation", std::move(conversation), "cyan"));
+    json transcript_panel = card_node("Transcript", std::move(transcript), "cyan");
+    transcript_panel["role"] = "transcript";
+    transcript_panel["primary"] = true;
+    transcript_panel["min_height"] = 360;
 
-    json run = json::array();
-    json run_badges = json::array();
-    run_badges.push_back(badge_node("Status: " + state.run_status,
-                                    run_phase_style(state.run_phase)));
-    run_badges.push_back(badge_node(
+    json inspector = json::array();
+    inspector.push_back(text_node("Inspector", "title", 26));
+    json inspector_badges = json::array();
+    inspector_badges.push_back(badge_node("Status: " + state.run_status,
+                                          run_phase_style(state.run_phase)));
+    inspector_badges.push_back(badge_node("Approval: " + approval_label(state.selected_approval),
+                                          state.selected_approval == "default" ? "muted"
+                                                                               : "warn"));
+    inspector_badges.push_back(badge_node(
         state.active_run_id.empty()
             ? "No active run"
             : "Run ID: " + compact_text(state.active_run_id, 1000U),
         state.active_run_id.empty() ? "muted" : "accent"));
-    run.push_back(row_node(std::move(run_badges)));
-    run.push_back(text_node(
-        state.event_drain_unavailable
-            ? "events.drain is unavailable; run.status remains the reconciliation fallback."
-            : "events.drain streams current-run deltas, thinking, refusal, tool progress and "
-              "metrics; run.status remains the reconciliation fallback.",
-        "muted", 46));
-    if (!state.thinking_status.empty())
-        run.push_back(text_node("Thinking: " + state.thinking_status, "accent", 34));
-    if (!state.refusal_status.empty())
-        run.push_back(text_node("Refusal: " + state.refusal_status, "warn", 34));
-    if (!state.tool_status.empty())
-        run.push_back(text_node("Tools: " + state.tool_status, "mono", 40));
-    if (!state.usage_status.empty())
-        run.push_back(text_node("Usage: " + state.usage_status, "value", 32));
-    if (!state.run_error.empty())
-        run.push_back(text_node("Error: " + state.run_error, "bad", 42));
-    nodes.push_back(card_node("Run / Thinking / Tools / Usage", std::move(run),
-                              state.run_phase == RunPhase::Failed ? "bad" : "cyan"));
+    inspector.push_back(row_node(std::move(inspector_badges)));
 
-    json composer = json::array();
-    json shortcut_actions = json::array();
-    shortcut_actions.push_back(button_node("prompt.explain", "Explain", "composer.shortcut",
-                                           {{"value", "explain"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.fix", "Fix", "composer.shortcut",
-                                           {{"value", "fix"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.tests", "Tests", "composer.shortcut",
-                                           {{"value", "tests"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.review", "Review", "composer.shortcut",
-                                           {{"value", "review"}}, "ghost",
-                                           selectors_disabled));
-    composer.push_back(row_node(std::move(shortcut_actions)));
-    composer.push_back(input_node("chat.composer", state.composer_text, "composer.edit",
-                                  selectors_disabled));
-    composer.push_back(text_node(
-        state.composer_text.empty()
-            ? "Click the input to open the native text dialog. Test/adapter clients may dispatch "
-              "composer.changed with {\"text\":\"...\"}."
-            : std::to_string(state.composer_text.size()) + " UTF-8 bytes ready to send.",
-        state.composer_text.empty() ? "muted" : "accent", 34));
-    json composer_actions = json::array();
-    composer_actions.push_back(button_node("composer.edit.button", "Edit Composer",
-                                           "composer.edit", json::object(), "default",
-                                           selectors_disabled));
-    composer_actions.push_back(button_node(
-        "chat.send", "Send", "chat.send", json::object(), "primary",
-        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
-            state.history_task_pending));
-    composer_actions.push_back(button_node(
-        "chat.stop", "Stop", "chat.stop", json::object(), "danger",
-        !run_is_active(state.run_phase)));
-    composer_actions.push_back(button_node("composer.clear", "Clear", "composer.clear",
-                                           json::object(), "ghost", state.composer_text.empty()));
-    composer.push_back(row_node(std::move(composer_actions)));
-    nodes.push_back(card_node("Composer", std::move(composer), "gold"));
+    inspector.push_back(choice_row(
+        "Provider: " + choice_label(state.providers, state.selected_provider, "Auto (Settings)"),
+        "select.provider", state.providers, state.selected_provider, "provider",
+        selectors_disabled));
+    inspector.push_back(choice_row(
+        "Model: " + choice_label(state.models, state.selected_model, "Auto (Settings)"),
+        "select.model", state.models, state.selected_model, "model", selectors_disabled));
+    inspector.push_back(choice_row(
+        "Agent: " + choice_label(state.agents, state.selected_agent, "None"), "select.agent",
+        state.agents, state.selected_agent, "agent", selectors_disabled));
+    inspector.push_back(choice_row(
+        "Workflow: " + choice_label(state.workflows, state.selected_workflow, "None"),
+        "select.workflow", state.workflows, state.selected_workflow, "workflow",
+        selectors_disabled));
+
+    json mode_controls = json::array();
+    mode_controls.push_back(text_node("Mode", "muted", 22));
+    for (const std::string_view value : {"ask", "plan", "agent"}) {
+        mode_controls.push_back(button_node(
+            "mode." + std::string(value), std::string(value), "select.mode", {{"value", value}},
+            state.selected_mode == value ? "primary" : "ghost", selectors_disabled));
+    }
+    inspector.push_back(row_node(std::move(mode_controls)));
+
+    json approval_controls = json::array();
+    approval_controls.push_back(text_node("Approval", "muted", 22));
+    for (const std::string_view value : {"default", "bypass", "autopilot"}) {
+        approval_controls.push_back(button_node(
+            "approval." + std::string(value),
+            value == "default" ? "Default" : value == "bypass" ? "Bypass" : "Autopilot",
+            "select.approval", {{"value", value}},
+            state.selected_approval == value ? "primary" : "ghost", selectors_disabled));
+    }
+    inspector.push_back(row_node(std::move(approval_controls)));
+    inspector.push_back(text_node(approval_description(state.selected_approval), "muted", 30));
+
+    json context_controls = json::array();
+    context_controls.push_back(text_node("Context", "muted", 22));
+    context_controls.push_back(button_node(
+        "context.conversation", "Conversation", "select.context", {{"value", "conversation"}},
+        state.selected_context == "conversation" ? "primary" : "ghost", selectors_disabled));
+    context_controls.push_back(button_node(
+        "context.current", "Current Turn", "select.context", {{"value", "current_turn"}},
+        state.selected_context == "current_turn" ? "primary" : "ghost", selectors_disabled));
+    inspector.push_back(row_node(std::move(context_controls)));
+
+    json state_components = json::array();
+    state_components.push_back(row_node(json::array({
+        badge_node(state.thinking_status.empty() ? "Thinking: idle" : "Thinking: active",
+                   state.thinking_status.empty() ? "muted" : "accent"),
+        badge_node(state.tool_status.empty() ? "Tools: idle" : "Tools: active",
+                   state.tool_status.empty() ? "muted" : "accent"),
+        badge_node(state.usage_status.empty() ? "Usage: pending" : "Usage: ready",
+                   state.usage_status.empty() ? "muted" : "ok"),
+        badge_node(state.run_error.empty() ? "Error: none" : "Error: active",
+                   state.run_error.empty() ? "ok" : "bad"),
+    })));
+    if (!state.thinking_status.empty())
+        state_components.push_back(text_node("Thinking: " + state.thinking_status, "accent", 34));
+    if (!state.refusal_status.empty())
+        state_components.push_back(text_node("Refusal: " + state.refusal_status, "warn", 34));
+    if (!state.tool_status.empty())
+        state_components.push_back(text_node("Tools: " + state.tool_status, "mono", 40));
+    if (!state.usage_status.empty())
+        state_components.push_back(text_node("Usage: " + state.usage_status, "value", 32));
+    if (!state.run_error.empty())
+        state_components.push_back(text_node("Error: " + state.run_error, "bad", 42));
+    inspector.push_back(card_node("State Components", std::move(state_components),
+                                  state.run_phase == RunPhase::Failed ? "bad" : "cyan"));
+
+    json platform_help = json::array();
+    platform_help.push_back(text_node(
+        "helperStatus — helper liveness, loaded engines, active target, and driver readiness.",
+        "muted", 40));
+    platform_help.push_back(text_node(
+        "engineSelect — switch the active memory engine after confirmation.", "muted", 40));
+    platform_help.push_back(text_node(
+        "memoryRead — read a capped PID virtual-memory range without confirmation.", "muted",
+        40));
+    platform_help.push_back(text_node(
+        "driverList — inspect driver assets, readiness, engine availability, and VT presence.",
+        "muted", 40));
+    platform_help.push_back(text_node(
+        "hidSend — submit one mouse or keyboard event after confirmation.", "muted", 40));
+    platform_help.push_back(text_node(
+        "vtStatus — reports VT_ABSENT until driver_vt is installed.", "muted", 40));
+    json platform_actions = json::array();
+    platform_actions.push_back(button_node(
+        "platform.mcp_management.open", "MCP Management", "platform.mcp_management.open",
+        json::object(), "primary", !launcher_bound));
+    platform_actions.push_back(button_node(
+        "platform.kernel_map.open", "Kernel Map", "platform.kernel_map.open", json::object(),
+        "default", !launcher_bound));
+    platform_help.push_back(row_node(std::move(platform_actions)));
+    inspector.push_back(card_node("Platform Tools", std::move(platform_help), "accent"));
+
+    json diagnostics = json::array();
+    json diagnostic_actions = json::array();
+    diagnostic_actions.push_back(button_node("ai.ping", "Ping", "ai.ping", json::object(),
+                                             "default", !launcher_bound));
+    diagnostic_actions.push_back(button_node("ai.hello", "Hello", "ai.hello", json::object(),
+                                             "default", !launcher_bound));
+    diagnostic_actions.push_back(button_node("output.clear", "Clear Output", "output.clear"));
+    diagnostics.push_back(row_node(std::move(diagnostic_actions)));
+    const std::string output = state.output_text.empty()
+                                   ? "No diagnostic output yet."
+                                   : tail_text(state.output_text, kUiTextChunkBytes * 2U);
+    append_text_chunks(diagnostics, output, state.output_text.empty() ? "muted" : "mono", 100, 2);
+    inspector.push_back(card_node("Diagnostics", std::move(diagnostics), "warn"));
+    json inspector_panel = card_node("Inspector", std::move(inspector), "gold");
+    inspector_panel["role"] = "inspector";
 
     json history = json::array();
+    history.push_back(text_node("History", "title", 26));
     json history_actions = json::array();
     history_actions.push_back(button_node("history.search", "Search...", "history.search",
                                           json::object(), "primary", history_actions_disabled));
@@ -2314,11 +2325,11 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                     badge_node("Matches: " + std::to_string(entry.match_count), "ok"));
                 summary.push_back(row_node(std::move(matches)));
             } else {
-            summary.push_back(text_node(
-                std::to_string(entry.message_count) + " messages · " + entry.scope + " · " +
-                    (entry.model.empty() ? "auto model" : entry.model) + " · " +
-                    format_saved_at(entry.saved_at),
-                "muted", 30));
+                summary.push_back(text_node(
+                    std::to_string(entry.message_count) + " messages · " + entry.scope + " · " +
+                        (entry.model.empty() ? "auto model" : entry.model) + " · " +
+                        format_saved_at(entry.saved_at),
+                    "muted", 30));
             }
             json actions = json::array();
             actions.push_back(button_node("history.load." + std::to_string(index), "Load",
@@ -2335,21 +2346,56 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                         entry.id == state.conversation_id ? "ok" : "cyan"));
         }
     }
-    nodes.push_back(card_node("History", std::move(history), "cyan"));
+    json history_drawer = card_node("History Drawer", std::move(history), "cyan");
+    history_drawer["role"] = "drawer";
+    history_drawer["placement"] = "right";
+    history_drawer["collapsible"] = true;
 
-    json diagnostics = json::array();
-    json diagnostic_actions = json::array();
-    diagnostic_actions.push_back(button_node("ai.ping", "Ping", "ai.ping", json::object(),
-                                             "default", !launcher_bound));
-    diagnostic_actions.push_back(button_node("ai.hello", "Hello", "ai.hello", json::object(),
-                                             "default", !launcher_bound));
-    diagnostic_actions.push_back(button_node("output.clear", "Clear Output", "output.clear"));
-    diagnostics.push_back(row_node(std::move(diagnostic_actions)));
-    const std::string output = state.output_text.empty()
-                                   ? "No diagnostic output yet."
-                                   : tail_text(state.output_text, kUiTextChunkBytes * 2U);
-    append_text_chunks(diagnostics, output, state.output_text.empty() ? "muted" : "mono", 100, 2);
-    nodes.push_back(card_node("Diagnostics", std::move(diagnostics), "warn"));
+    json workspace = row_node(
+        json::array({std::move(transcript_panel), std::move(inspector_panel),
+                     std::move(history_drawer)}));
+    workspace["role"] = "workspace";
+    nodes.push_back(std::move(workspace));
+
+    json composer = json::array();
+    composer.push_back(text_node("Composer", "title", 24));
+    json shortcut_actions = json::array();
+    shortcut_actions.push_back(button_node("prompt.explain", "Explain", "composer.shortcut",
+                                           {{"value", "explain"}}, "ghost",
+                                           selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.fix", "Fix", "composer.shortcut",
+                                           {{"value", "fix"}}, "ghost",
+                                           selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.tests", "Tests", "composer.shortcut",
+                                           {{"value", "tests"}}, "ghost",
+                                           selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.review", "Review", "composer.shortcut",
+                                           {{"value", "review"}}, "ghost",
+                                           selectors_disabled));
+    composer.push_back(row_node(std::move(shortcut_actions)));
+    composer.push_back(input_node("chat.composer", state.composer_text, "composer.edit",
+                                  selectors_disabled, true));
+    composer.push_back(text_node(
+        state.composer_text.empty()
+            ? "Multiline composer ready. Enter submits through Send; line breaks are preserved."
+            : std::to_string(state.composer_text.size()) + " UTF-8 bytes ready to send.",
+        state.composer_text.empty() ? "muted" : "accent", 30));
+    json composer_actions = json::array();
+    composer_actions.push_back(button_node("composer.edit.button", "Edit", "composer.edit",
+                                           json::object(), "default", selectors_disabled));
+    composer_actions.push_back(button_node(
+        "chat.send", "Send", "chat.send", json::object(), "primary",
+        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
+            state.history_task_pending));
+    composer_actions.push_back(button_node("chat.stop", "Stop", "chat.stop", json::object(),
+                                           "danger", !run_is_active(state.run_phase)));
+    composer_actions.push_back(button_node("composer.clear", "Clear", "composer.clear",
+                                           json::object(), "ghost", state.composer_text.empty()));
+    composer.push_back(row_node(std::move(composer_actions)));
+    json composer_panel = card_node("Composer", std::move(composer), "gold");
+    composer_panel["role"] = "composer";
+    composer_panel["sticky"] = "bottom";
+    nodes.push_back(std::move(composer_panel));
 
     std::string serialized =
         json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
@@ -3257,6 +3303,22 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         show_settings_panel(*state);
     } else if (action == "gpu.hunt") {
         show_gpu_hunt_panel(*state);
+    } else if (action == "platform.mcp_management.open") {
+        RpcTask task;
+        task.kind = RpcTaskKind::Generic;
+        task.method = "vscode.window.revealWebviewPanel";
+        task.params = {{"panelId", "mcp-management-builtin"},
+                       {"viewColumn", 1},
+                       {"preserveFocus", false}};
+        (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
+    } else if (action == "platform.kernel_map.open") {
+        RpcTask task;
+        task.kind = RpcTaskKind::Generic;
+        task.method = "vscode.window.revealWebviewPanel";
+        task.params = {{"panelId", "kernel-map-builtin"},
+                       {"viewColumn", 1},
+                       {"preserveFocus", false}};
+        (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
     } else if (action == "diagnostics.refresh") {
         RpcTask task;
         task.kind = RpcTaskKind::Bootstrap;

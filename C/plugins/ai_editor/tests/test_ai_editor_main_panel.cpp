@@ -282,6 +282,10 @@ int32_t scripted_main_panel_request(const void* request_data, uint32_t request_l
         result["sourceId"] = params.value("sourceId", std::string{});
         result["duplicatedAt"] = 1'700'000'100'000LL;
         fixture.duplicated_conversation = result;
+    } else if (method == "vscode.window.revealWebviewPanel") {
+        result = {{"panelId", params.value("panelId", std::string{})},
+                  {"visible", true},
+                  {"viewColumn", params.value("viewColumn", 1)}};
     } else if (method == "ping" || method == "hello") {
         result = {{"ok", true}};
     } else {
@@ -1321,6 +1325,46 @@ TEST_CASE("ai_editor_main_panel unknown action is recorded as warning",
             std::string::npos);
     REQUIRE(sao_ai_editor_main_panel_try_destroy(panel) == SAO_AI_EDITOR_OK);
     sao_ui_compositor_destroy(compositor);
+}
+
+TEST_CASE("ai_editor_main_panel documents platform tools and navigates panels",
+          "[ai_editor][main_panel][platform_tools][focused]") {
+    ScopedMainPanelRpc rpc(MainPanelRpcMode::CompleteRun);
+    sao_ui_compositor_handle_t compositor = make_headless_compositor();
+    REQUIRE(compositor != nullptr);
+    const auto launcher =
+        reinterpret_cast<sao_ai_editor_launcher_t>(static_cast<uintptr_t>(0x1));
+    sao_ai_editor_main_panel_t panel = nullptr;
+    REQUIRE(sao_ai_editor_main_panel_create(compositor, launcher, &panel) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(sao_ai_editor_main_panel_show(panel) == SAO_AI_EDITOR_OK);
+    REQUIRE(pump_until_request(panel, "conversation.list"));
+
+    const test_json snapshot = snapshot_main_panel(panel);
+    const std::string rendered = snapshot["spec"].dump();
+    for (const std::string_view tool : {"helperStatus", "engineSelect", "memoryRead",
+                                        "driverList", "hidSend", "vtStatus"}) {
+        CHECK(rendered.find(tool) != std::string::npos);
+    }
+    REQUIRE(find_action_node(snapshot["spec"], "platform.mcp_management.open") != nullptr);
+    REQUIRE(find_action_node(snapshot["spec"], "platform.kernel_map.open") != nullptr);
+
+    REQUIRE(sao_ai_editor_main_panel_dispatch_action_for_testing(
+                panel, "platform.mcp_management.open", nullptr, 0) == SAO_AI_EDITOR_OK);
+    REQUIRE(pump_until_request(panel, "vscode.window.revealWebviewPanel"));
+    auto reveal = latest_request("vscode.window.revealWebviewPanel");
+    REQUIRE(reveal.has_value());
+    CHECK((*reveal)["params"]["panelId"] == "mcp-management-builtin");
+
+    REQUIRE(sao_ai_editor_main_panel_dispatch_action_for_testing(
+                panel, "platform.kernel_map.open", nullptr, 0) == SAO_AI_EDITOR_OK);
+    REQUIRE(pump_until_request(panel, "vscode.window.revealWebviewPanel", 2));
+    reveal = latest_request("vscode.window.revealWebviewPanel");
+    REQUIRE(reveal.has_value());
+    CHECK((*reveal)["params"]["panelId"] == "kernel-map-builtin");
+
+    REQUIRE(destroy_main_panel_when_idle(panel) == SAO_AI_EDITOR_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
     TEST_CASE("ai_editor_main_panel async chat and history use canonical RPC flow",

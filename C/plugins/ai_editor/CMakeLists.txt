@@ -93,6 +93,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/kernel_map_commands.cpp
     src/kernel_map_panel_provider.cpp
     src/kernel_map_tools.cpp
+    src/mcp_management_panel_provider.cpp
     src/mcp_client.cpp
     src/mcp_codec.cpp
     src/mcp_server.cpp
@@ -177,6 +178,9 @@ target_link_libraries(sao_ai_editor PRIVATE
     shell32
     user32
 )
+if (TARGET SaoKernelMapMcpServer)
+    add_dependencies(sao_ai_editor SaoKernelMapMcpServer)
+endif()
 
 install(TARGETS sao_ai_editor sao_plugin_ai_editor
     RUNTIME DESTINATION "bin"
@@ -220,6 +224,15 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel
         PATTERN "*.js"
         PATTERN "*.css"
 )
+
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/mcp_management_panel/"
+        DESTINATION "bin/assets/ai_editor/mcp_management_panel"
+        COMPONENT ship
+        FILES_MATCHING
+        PATTERN "*.html"
+        PATTERN "*.js"
+        PATTERN "*.css"
+    )
 
 if (SAO_BUILD_TESTS)
     add_subdirectory(tests)

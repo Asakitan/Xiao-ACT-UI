@@ -201,6 +201,7 @@ catch_discover_tests(sao_plugin_ai_editor_settings_contract_tests
 add_executable(sao_plugin_ai_editor_kernel_map_panel_tests
     kernel_map_panel_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_panel_provider.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/mcp_management_panel_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/webview_panel_registry.cpp
 )
 target_compile_features(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE

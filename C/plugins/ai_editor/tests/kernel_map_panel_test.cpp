@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../src/kernel_map_panel_provider.h"
+#include "../src/mcp_management_panel_provider.h"
 #include "../src/native_utils.h"
 #include "../src/webview_panel_registry.h"
 
@@ -29,6 +30,9 @@ namespace {
 using Json = nlohmann::json;
 using sao::ai_editor::native::IKernelMapBridge;
 using sao::ai_editor::native::KernelMapPanelProvider;
+using sao::ai_editor::native::McpManagementPanelProvider;
+using sao::ai_editor::native::NativePanelProvider;
+using sao::ai_editor::native::WebviewPanelOwner;
 using sao::ai_editor::native::WebviewPanelRegistry;
 using sao::ai_editor::native::WebviewPanelState;
 
@@ -381,4 +385,66 @@ TEST_CASE("panel: load_driver_invokes_bridge_when_picker_present",
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("panel: MCP management implements the native provider contract",
+          "[plugins][ai_editor][mcp_management_panel]") {
+    McpManagementPanelProvider provider;
+    NativePanelProvider* contract = &provider;
+    REQUIRE(contract->provider_panel_id() == McpManagementPanelProvider::panel_id());
+
+    bool navigated = false;
+    int snapshots = 0;
+    provider.install_snapshot_provider([&] {
+        ++snapshots;
+        return Json{{"registration", {{"name", "kernel_map"}, {"status", 0}}},
+                    {"servers", Json::array({{{"name", "kernel_map"}}})},
+                    {"tools", Json::array({{{"server", "kernel_map"},
+                                             {"name", "helperStatus"},
+                                             {"requires_confirm", false}}})}};
+    });
+    provider.install_kernel_map_navigator([&] {
+        navigated = true;
+        return true;
+    });
+
+    const std::filesystem::path assets_root =
+        std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "assets" / "ai_editor" / "mcp_management_panel";
+    WebviewPanelRegistry registry;
+    REQUIRE(contract->register_with_runtime(registry, assets_root.string()) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(provider.is_registered());
+    REQUIRE(registry.total_created(WebviewPanelOwner::native_runtime) == 1);
+    const auto state = registry.snapshot(std::string(provider.panel_id()));
+    REQUIRE(state.has_value());
+    CHECK(state->owner == WebviewPanelOwner::native_runtime);
+    CHECK(state->view_type == std::string(provider.view_type()));
+    CHECK(state->html.find("helperStatus") != std::string::npos);
+    CHECK(state->html.find("Open Kernel Map panel") != std::string::npos);
+    CHECK(state->html.find("acquireVsCodeApi") != std::string::npos);
+
+    Json reply;
+    REQUIRE(contract->handle_message(
+                Json{{"cmd", "snapshot"}, {"requestId", "mcp-1"}}, reply) ==
+            SAO_AI_EDITOR_OK);
+    CHECK(reply["status"] == "ok");
+    CHECK(reply["requestId"] == "mcp-1");
+    CHECK(reply["payload"]["servers"].size() == 1);
+    CHECK(reply["payload"]["tools"][0]["name"] == "helperStatus");
+    CHECK(snapshots == 1);
+
+    REQUIRE(contract->handle_message(
+                Json{{"cmd", "open_kernel_map"}, {"requestId", "mcp-2"}}, reply) ==
+            SAO_AI_EDITOR_OK);
+    CHECK(reply["status"] == "ok");
+    CHECK(reply["payload"]["panelId"] == "kernel-map-builtin");
+    CHECK(reply["payload"]["opened"] == true);
+    CHECK(navigated);
+
+    REQUIRE(contract->unregister_from_runtime(registry) == SAO_AI_EDITOR_OK);
+    CHECK_FALSE(provider.is_registered());
+    const auto disposed = registry.snapshot(std::string(provider.panel_id()));
+    REQUIRE(disposed.has_value());
+    CHECK(disposed->disposed);
 }
