@@ -3,26 +3,23 @@
 // Port of act_platform/protect/native_loader.py. Reads encrypted blob:
 //   [12-byte nonce][16-byte tag][ciphertext...]
 // Decrypts via security::crypto AES-256-GCM with a 32-byte key derived from
-// hex string; writes decrypted bytes to a randomized temp file under
-// %LOCALAPPDATA%/SAO-Auto/.native_run/<random>.dll; LoadLibraryW loads it;
-// caller receives HMODULE handle; temp file removed after load.
+// hex string; the decrypted image is loaded entirely in memory via the
+// reflective loader (no temp file on disk, no PEB loader-list registration);
+// caller receives the loaded image base as the module handle.
 
 #include "sao_security/crypto/aes.h"
+#include "sao_security/loader/reflective_dll.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <shlobj.h>
 #endif
-
-namespace fs = std::filesystem;
 
 namespace sao::plugins::loader::native_loader {
 
@@ -45,32 +42,6 @@ bool parse_hex_key(const char* hex, uint8_t key32[32]) {
         key32[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
     return true;
-}
-
-fs::path temp_dir() {
-#if defined(_WIN32)
-    wchar_t* local = nullptr;
-    if (SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local) == S_OK &&
-        local != nullptr) {
-        fs::path p(local);
-        CoTaskMemFree(local);
-        return p / L"SAO-Auto" / L".native_run";
-    }
-#endif
-    return fs::temp_directory_path() / "sao_native_run";
-}
-
-std::string random_stem() {
-    // 8 hex chars using rand().
-    static const char kAlphabet[] = "0123456789abcdef";
-    char buf[9] = {};
-    unsigned int seed = static_cast<unsigned int>(
-        reinterpret_cast<uintptr_t>(&seed));
-    for (int i = 0; i < 8; ++i) {
-        seed = seed * 1664525u + 1013904223u;
-        buf[i] = kAlphabet[(seed >> (i * 3)) & 0xF];
-    }
-    return std::string(buf);
 }
 
 } // namespace
@@ -112,32 +83,34 @@ extern "C" int sao_plugins_native_loader_load_encrypted(
             &params, ct, ct_len_u32, plaintext.data(), ct_len_u32) != 0)
         return -5;
 
-    // Write to temp file.
-    std::error_code ec;
-    fs::path dir = temp_dir();
-    fs::create_directories(dir, ec);
-    fs::path out_path = dir / (random_stem() + ".dll");
-    {
-        std::ofstream out(out_path, std::ios::binary);
-        if (!out) return -6;
-        out.write(reinterpret_cast<const char*>(plaintext.data()),
-                   plaintext.size());
-    }
+    // Load the decrypted image entirely in memory (no disk, no PEB Ldr
+    // registration) via the reflective loader; the mapped base is the handle.
+    void* image_base = nullptr;
+    const int32_t load_rc = sao_security_loader_reflective_load(
+        plaintext.data(), static_cast<uint32_t>(plaintext.size()), &image_base);
+
     // Wipe plaintext buffer from memory before yielding control.
     volatile uint8_t* wp = plaintext.data();
     for (size_t i = 0; i < plaintext.size(); ++i) wp[i] = 0;
 
+    if (load_rc != 0 || image_base == nullptr) return -7;
+
 #if defined(_WIN32)
-    HMODULE h = LoadLibraryW(out_path.wstring().c_str());
-    // Best-effort delete after load; on Windows the file is locked for
-    // exclusive delete while mapped, so schedule remove-on-reboot as fallback.
-    fs::remove(out_path, ec);
-    if (h == nullptr) return -7;
-    *out_module_handle = h;
-    return 0;
-#else
-    return -8;
+    // Invoke DllMain(DLL_PROCESS_ATTACH) on the mapped image entry point.
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image_base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+        reinterpret_cast<const uint8_t*>(image_base) + dos->e_lfanew);
+    const uint32_t entry_rva = nt->OptionalHeader.AddressOfEntryPoint;
+    if (entry_rva != 0) {
+        using DllMainFn = BOOL(WINAPI*)(HINSTANCE, DWORD, LPVOID);
+        auto dll_main = reinterpret_cast<DllMainFn>(
+            reinterpret_cast<uint8_t*>(image_base) + entry_rva);
+        if (!dll_main(reinterpret_cast<HINSTANCE>(image_base), DLL_PROCESS_ATTACH, nullptr))
+            return -7;
+    }
 #endif
+    *out_module_handle = image_base;
+    return 0;
 }
 
 } // namespace sao::plugins::loader::native_loader

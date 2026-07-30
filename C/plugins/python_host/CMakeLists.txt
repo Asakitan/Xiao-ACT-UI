@@ -65,6 +65,7 @@ set(SAO_PYTHON_HEADERS_FETCH_SHA256
 
 find_package(Python3 3.11 COMPONENTS Development.Embed QUIET)
 set(_sao_python_resolved OFF)
+set(_sao_python_runtime_dll "")
 if (Python3_FOUND)
     message(STATUS "sao_plugins_python_host: Python3 embed found (${Python3_VERSION})")
     target_compile_definitions(sao_plugins_python_host PUBLIC
@@ -76,9 +77,8 @@ if (Python3_FOUND)
         $<$<CONFIG:Debug>:Py_NO_LINK_LIB>
     )
     target_link_libraries(sao_plugins_python_host PUBLIC Python3::Python)
-    install(IMPORTED_RUNTIME_ARTIFACTS Python3::Python
-        RUNTIME DESTINATION bin
-        COMPONENT ship)
+    set(_sao_python_runtime_dll
+        "python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.dll")
     set(_sao_python_resolved ON)
 endif()
 
@@ -159,6 +159,7 @@ if (NOT _sao_python_resolved AND SAO_PLUGINS_PYTHON_AUTO_FETCH)
             CACHE PATH "Staged Python embeddable runtime tree (dll + stdlib zip)" FORCE)
         message(STATUS
             "sao_plugins_python_host: fetched Python 3.11.8 (embed=${python3_embed_SOURCE_DIR}, headers=${_sao_python_include_dir}, import_lib=${_sao_python_import_lib})")
+        set(_sao_python_runtime_dll "python311.dll")
         set(_sao_python_resolved ON)
     else()
         message(WARNING
@@ -166,6 +167,16 @@ if (NOT _sao_python_resolved AND SAO_PLUGINS_PYTHON_AUTO_FETCH)
             "Python.h (${_sao_python_include_dir}) or python311.lib (${_sao_python_import_lib}); "
             "override SAO_PYTHON_HEADERS_FETCH_URL to a vendored archive that ships both.")
     endif()
+endif()
+
+set_property(TARGET sao_plugins_python_host PROPERTY
+    SAO_PYHOST_PYTHON_RESOLVED "${_sao_python_resolved}")
+
+if (_sao_python_resolved AND MSVC)
+    target_compile_definitions(sao_plugins_python_host PRIVATE
+        SAO_PYHOST_DYNAMIC_PY_DATA)
+    set_property(TARGET sao_plugins_python_host PROPERTY
+        SAO_PYHOST_RUNTIME_DLL "${_sao_python_runtime_dll}")
 endif()
 
 if (NOT _sao_python_resolved)

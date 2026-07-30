@@ -52,6 +52,17 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(SAO_HAS_PYTHON_EMBED) && defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+namespace sao::plugins::python_host::detail {
+
+python_data_exports& dynamic_python_data() noexcept {
+    static python_data_exports exports{};
+    return exports;
+}
+
+} // namespace sao::plugins::python_host::detail
+#endif
+
 namespace sao::plugins::python_host {
 
 struct py_host_s {
@@ -396,8 +407,12 @@ namespace fs = std::filesystem;
 
 struct python_layout {
     std::wstring home;
+    std::wstring runtime_dll;
     std::vector<std::wstring> module_search_paths;
 };
+
+HMODULE g_python_runtime_module = nullptr;
+std::wstring g_python_runtime_path;
 
 // wchar_t → utf-8 (小工具, 复用).
 std::string wchar_to_utf8(const wchar_t* w) {
@@ -729,6 +744,126 @@ bool is_python_zip_name(const fs::path& path) {
                        [](wchar_t ch) { return std::iswdigit(ch) != 0; });
 }
 
+bool canonical_module_path(HMODULE module, std::wstring& output) {
+    output.clear();
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length =
+        GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size())
+        return false;
+
+    std::error_code error;
+    const fs::path canonical =
+        fs::canonical(fs::path(std::wstring(buffer.data(), length)), error);
+    if (error)
+        return false;
+    output = canonical.native();
+    return true;
+}
+
+bool preload_python_runtime(const python_layout& layout) {
+    if (layout.runtime_dll.empty())
+        return false;
+
+    const std::wstring expected = normalized_path(layout.runtime_dll);
+    if (g_python_runtime_module != nullptr)
+        return normalized_path(g_python_runtime_path) == expected;
+
+    const std::wstring basename = fs::path(layout.runtime_dll).filename().native();
+    HMODULE existing = nullptr;
+    if (GetModuleHandleExW(0, basename.c_str(), &existing) != 0) {
+        std::wstring existing_path;
+        const bool matches = canonical_module_path(existing, existing_path) &&
+                             normalized_path(existing_path) == expected;
+        (void)FreeLibrary(existing);
+        if (!matches)
+            return false;
+    }
+
+    HMODULE loaded = LoadLibraryExW(
+        layout.runtime_dll.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (loaded == nullptr)
+        return false;
+
+    std::wstring loaded_path;
+    if (!canonical_module_path(loaded, loaded_path) ||
+        normalized_path(loaded_path) != expected) {
+        (void)FreeLibrary(loaded);
+        return false;
+    }
+
+    HMODULE by_name = nullptr;
+    if (GetModuleHandleExW(0, basename.c_str(), &by_name) == 0) {
+        (void)FreeLibrary(loaded);
+        return false;
+    }
+    std::wstring by_name_path;
+    const bool name_matches = canonical_module_path(by_name, by_name_path) &&
+                              normalized_path(by_name_path) == expected;
+    (void)FreeLibrary(by_name);
+    if (!name_matches) {
+        (void)FreeLibrary(loaded);
+        return false;
+    }
+
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+    detail::python_data_exports candidate{};
+    candidate.py_bool_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyBool_Type"));
+    candidate.py_capsule_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyCapsule_Type"));
+    candidate.py_float_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyFloat_Type"));
+    candidate.py_frozen_set_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyFrozenSet_Type"));
+    candidate.py_function_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyFunction_Type"));
+    candidate.py_module_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PyModule_Type"));
+    candidate.py_set_type =
+        reinterpret_cast<PyTypeObject*>(GetProcAddress(loaded, "PySet_Type"));
+    candidate.py_exc_import_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_ImportError"));
+    candidate.py_exc_not_implemented_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_NotImplementedError"));
+    candidate.py_exc_overflow_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_OverflowError"));
+    candidate.py_exc_permission_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_PermissionError"));
+    candidate.py_exc_runtime_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_RuntimeError"));
+    candidate.py_exc_type_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_TypeError"));
+    candidate.py_exc_value_error =
+        reinterpret_cast<PyObject**>(GetProcAddress(loaded, "PyExc_ValueError"));
+    candidate.py_false_struct =
+        reinterpret_cast<PyLongObject*>(GetProcAddress(loaded, "_Py_FalseStruct"));
+    candidate.py_none_struct =
+        reinterpret_cast<PyObject*>(GetProcAddress(loaded, "_Py_NoneStruct"));
+    candidate.py_true_struct =
+        reinterpret_cast<PyLongObject*>(GetProcAddress(loaded, "_Py_TrueStruct"));
+    if (candidate.py_bool_type == nullptr || candidate.py_capsule_type == nullptr ||
+        candidate.py_float_type == nullptr || candidate.py_frozen_set_type == nullptr ||
+        candidate.py_function_type == nullptr || candidate.py_module_type == nullptr ||
+        candidate.py_set_type == nullptr || candidate.py_exc_import_error == nullptr ||
+        candidate.py_exc_not_implemented_error == nullptr ||
+        candidate.py_exc_overflow_error == nullptr ||
+        candidate.py_exc_permission_error == nullptr ||
+        candidate.py_exc_runtime_error == nullptr || candidate.py_exc_type_error == nullptr ||
+        candidate.py_exc_value_error == nullptr || candidate.py_false_struct == nullptr ||
+        candidate.py_none_struct == nullptr || candidate.py_true_struct == nullptr) {
+        (void)FreeLibrary(loaded);
+        return false;
+    }
+    detail::dynamic_python_data() = candidate;
+#endif
+
+    g_python_runtime_module = loaded;
+    g_python_runtime_path = std::move(loaded_path);
+    return true;
+}
+
 bool discover_python_layout(const wchar_t* python_home, python_layout& layout) {
     layout = {};
     if (python_home == nullptr || python_home[0] == L'\0')
@@ -741,9 +876,11 @@ bool discover_python_layout(const wchar_t* python_home, python_layout& layout) {
 
         const std::wstring runtime_stem =
             L"python" + std::to_wstring(PY_MAJOR_VERSION) + std::to_wstring(PY_MINOR_VERSION);
-        if (!fs::is_regular_file(home / (runtime_stem + L".dll"), error)) {
+        const fs::path runtime_dll = fs::canonical(home / (runtime_stem + L".dll"), error);
+        if (error || !fs::is_regular_file(runtime_dll, error)) {
             return false;
         }
+        error.clear();
 
         std::vector<fs::path> zip_candidates;
         for (fs::directory_iterator it(home, error), end; !error && it != end;
@@ -772,6 +909,7 @@ bool discover_python_layout(const wchar_t* python_home, python_layout& layout) {
             return false;
 
         layout.home = home.native();
+        layout.runtime_dll = runtime_dll.native();
         for (const auto& zip : zip_candidates) {
             layout.module_search_paths.push_back(zip.native());
         }
@@ -852,14 +990,24 @@ sao_plugins_pyhost_init(const py_host_config* cfg, py_host_handle_t* out_host) {
         if (g_runtime_transition)
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
 
+        python_layout requested;
+        if (!discover_python_layout(cfg->python_home, requested)) {
+            return g_singleton != nullptr && g_singleton->initialized
+                       ? SAO_ERR_INVALID_ARGUMENT
+                       : SAO_ERR_OS_CALL_FAILED;
+        }
+
         if (g_singleton != nullptr && g_singleton->initialized) {
-            python_layout requested;
-            if (!discover_python_layout(cfg->python_home, requested) ||
-                normalized_path(requested.home) != normalized_path(g_singleton->python_home)) {
+            if (normalized_path(requested.home) != normalized_path(g_singleton->python_home)) {
                 return SAO_ERR_INVALID_ARGUMENT;
             }
+            if (!preload_python_runtime(requested))
+                return SAO_ERR_OS_CALL_FAILED;
             return publish_host_handle_locked(g_singleton, out_host);
         }
+
+        if (!preload_python_runtime(requested))
+            return SAO_ERR_OS_CALL_FAILED;
 
         const bool externally_initialized = (Py_IsInitialized() != 0);
         const bool want_register = cfg->register_sao_sdk;
