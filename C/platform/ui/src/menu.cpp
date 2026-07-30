@@ -37,6 +37,8 @@
 
 #include "sao/ui/menu.h"
 
+#include "sao/ui/subpixel.h"
+
 #include "menu_visual_internal.h"
 
 #include <algorithm>
@@ -74,8 +76,11 @@ constexpr int32_t kChildFadeInMs = 220;
 constexpr int32_t kChildFadeOutMs = 160;
 constexpr int32_t kChildSlideMs = 320;
 constexpr int32_t kChildSlideStaggerMs = 50;
-constexpr float kChildHoverLerp = 0.25F;
-constexpr float kChildHoverSnap = 0.01F;
+constexpr int32_t kRootHoverInMs = 140;
+constexpr int32_t kRootHoverOutMs = 110;
+constexpr int32_t kChildHoverInMs = 140;
+constexpr int32_t kChildHoverOutMs = 110;
+constexpr float kGeometrySnapEpsilon = 1.0F / 512.0F;
 
 // Default metrics — from menu.h banner + theme.h metrics table:
 //   button_size     = 54  (SAOCircleButton.SIZE)
@@ -146,6 +151,7 @@ struct sao_ui_menu_s {
     SaoUiMenuMode mode{SAO_UI_MENU_MODE_RING};
     SaoUiMenuLayout layout{};
     std::vector<MenuItem> items;
+    std::vector<float> root_hover_values;
     std::vector<ChildMenu> children;
 
     // Anchor + phase.
@@ -239,12 +245,27 @@ void merge_layout_overrides(SaoUiMenuLayout* dst, const SaoUiMenuLayout* src) {
 // The button centre lands at (center_x + r*cos(θ), center_y + r*sin(θ));
 // the returned bounding box wraps it symmetrically at button_size.
 
+int32_t aligned_boundary(float value) {
+    return sao_ui_subpixel_snap_or_floor(value, kGeometrySnapEpsilon);
+}
+
+SaoUiMenuButtonRect aligned_rect(float left, float top, float right, float bottom) {
+    const int32_t x0 = aligned_boundary(left);
+    const int32_t y0 = aligned_boundary(top);
+    const int32_t x1 = aligned_boundary(right);
+    const int32_t y1 = aligned_boundary(bottom);
+    return {x0, y0, std::max(1, x1 - x0), std::max(1, y1 - y0)};
+}
+
 SaoUiMenuButtonRect compute_ring_rect(const SaoUiMenuLayout& layout, int32_t button_index,
                                       int32_t button_count) {
     const int32_t size = layout.button_size > 0 ? layout.button_size : kDefaultButtonSize;
     if (button_count <= 0) {
-        return SaoUiMenuButtonRect{layout.center_x - size / 2, layout.center_y - size / 2, size,
-                                   size};
+        const float half = static_cast<float>(size) * 0.5F;
+        return aligned_rect(static_cast<float>(layout.center_x) - half,
+                            static_cast<float>(layout.center_y) - half,
+                            static_cast<float>(layout.center_x) + half,
+                            static_cast<float>(layout.center_y) + half);
     }
     const double step_rad = kTwoPi / static_cast<double>(button_count);
     // 12 o'clock is -π/2 in screen coordinates (Y grows downward).
@@ -253,10 +274,9 @@ SaoUiMenuButtonRect compute_ring_rect(const SaoUiMenuLayout& layout, int32_t but
                       static_cast<double>(layout.outer_radius) * std::cos(theta);
     const double cy = static_cast<double>(layout.center_y) +
                       static_cast<double>(layout.outer_radius) * std::sin(theta);
-    const int32_t half = size / 2;
-    const int32_t x = static_cast<int32_t>(std::lround(cx)) - half;
-    const int32_t y = static_cast<int32_t>(std::lround(cy)) - half;
-    return SaoUiMenuButtonRect{x, y, size, size};
+    const float half = static_cast<float>(size) * 0.5F;
+    return aligned_rect(static_cast<float>(cx) - half, static_cast<float>(cy) - half,
+                        static_cast<float>(cx) + half, static_cast<float>(cy) + half);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,9 +288,12 @@ SaoUiMenuButtonRect compute_vertical_rect(const SaoUiMenuLayout& layout, int32_t
     // Vertical-strip interaction follows the full fisheye slot rather than
     // the settled 54px circle. The 70px authority slot keeps the expanded
     // hover ring interactive at every edge.
-    const int32_t x = layout.center_x - slot / 2;
-    const int32_t y = layout.center_y + button_index * slot;
-    return SaoUiMenuButtonRect{x, y, slot, slot};
+    const float half = static_cast<float>(slot) * 0.5F;
+    const float top = static_cast<float>(layout.center_y) +
+                      static_cast<float>(button_index * slot);
+    return aligned_rect(static_cast<float>(layout.center_x) - half, top,
+                        static_cast<float>(layout.center_x) + half,
+                        top + static_cast<float>(slot));
 }
 
 // ---------------------------------------------------------------------------
@@ -285,15 +308,20 @@ SaoUiMenuButtonRect compute_cascade_rect(const SaoUiMenuLayout& layout, int32_t 
     const int32_t size = layout.button_size > 0 ? layout.button_size : kDefaultButtonSize;
     const int32_t slot = layout.slot_size > 0 ? layout.slot_size : kDefaultSlotSize;
     if (button_count <= 0) {
-        return SaoUiMenuButtonRect{layout.center_x - size / 2, layout.center_y, size, size};
+        const float half = static_cast<float>(size) * 0.5F;
+        return aligned_rect(static_cast<float>(layout.center_x) - half,
+                            static_cast<float>(layout.center_y),
+                            static_cast<float>(layout.center_x) + half,
+                            static_cast<float>(layout.center_y + size));
     }
     // Total strip width = (N-1) * slot + button_size.  Left edge
     // computed to centre the strip on layout.center_x.
-    const int32_t strip_w = (button_count - 1) * slot + size;
-    const int32_t left = layout.center_x - strip_w / 2;
-    const int32_t x = left + button_index * slot;
-    const int32_t y = layout.center_y;
-    return SaoUiMenuButtonRect{x, y, size, size};
+    const float strip_width = static_cast<float>((button_count - 1) * slot + size);
+    const float left = static_cast<float>(layout.center_x) - strip_width * 0.5F;
+    const float item_left = left + static_cast<float>(button_index * slot);
+    const float top = static_cast<float>(layout.center_y);
+    return aligned_rect(item_left, top, item_left + static_cast<float>(size),
+                        top + static_cast<float>(size));
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +431,10 @@ bool has_root_name(const std::vector<MenuItem>& items, const std::string& name) 
                        [&name](const MenuItem& item) { return item.name == name; });
 }
 
+bool item_disabled(const MenuItem& item) {
+    return !item.can_activate || item.state == SAO_UI_MENU_BTN_DISABLED;
+}
+
 int32_t find_activatable_root(const std::vector<MenuItem>& items, const std::string& name) {
     const auto found = std::find_if(items.begin(), items.end(), [&name](const MenuItem& item) {
         return item.name == name && item.can_activate;
@@ -452,6 +484,43 @@ void reset_child_rows_locked(ChildMenu* child_menu) {
         return;
     child_menu->visible_widths.assign(child_menu->items.size(), 0);
     child_menu->hover_values.assign(child_menu->items.size(), 0.0F);
+}
+
+float advance_hover_value(float current, float target, int32_t dt_ms, int32_t duration_ms) {
+    if (dt_ms <= 0 || current == target)
+        return current;
+    if (duration_ms <= 0)
+        return target;
+    const float step = std::clamp(static_cast<float>(dt_ms) /
+                                      static_cast<float>(duration_ms),
+                                  0.0F, 1.0F);
+    if (target > current)
+        return std::min(target, current + step);
+    return std::max(target, current - step);
+}
+
+void advance_root_hover_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
+    bool changed = false;
+    if (menu->root_hover_values.size() != menu->items.size()) {
+        menu->root_hover_values.resize(menu->items.size(), 0.0F);
+        changed = true;
+    }
+    for (size_t index = 0; index < menu->items.size(); ++index) {
+        const float target = static_cast<int32_t>(index) == menu->hover_idx &&
+                                     !item_disabled(menu->items[index])
+                                 ? 1.0F
+                                 : 0.0F;
+        const int32_t duration = target > menu->root_hover_values[index] ? kRootHoverInMs
+                                                                         : kRootHoverOutMs;
+        const float next =
+            advance_hover_value(menu->root_hover_values[index], target, dt_ms, duration);
+        if (next != menu->root_hover_values[index]) {
+            menu->root_hover_values[index] = next;
+            changed = true;
+        }
+    }
+    if (changed)
+        mark_visual_changed_locked(menu);
 }
 
 void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_name) {
@@ -534,12 +603,13 @@ void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
             child_menu->visible_widths[static_cast<size_t>(i)] = width;
             changed = true;
         }
-        const float target = menu->child_hover_idx == i ? 1.0F : 0.0F;
+        const float target = menu->child_hover_idx == i &&
+                                     !item_disabled(child_menu->items[static_cast<size_t>(i)])
+                                 ? 1.0F
+                                 : 0.0F;
         float& current = child_menu->hover_values[static_cast<size_t>(i)];
-        const float delta = target - current;
-        const float next = std::abs(delta) <= kChildHoverSnap
-                               ? target
-                               : current + delta * kChildHoverLerp;
+        const int32_t duration = target > current ? kChildHoverInMs : kChildHoverOutMs;
+        const float next = advance_hover_value(current, target, dt_ms, duration);
         if (next != current) {
             current = next;
             changed = true;
@@ -552,11 +622,14 @@ void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
 SaoUiMenuButtonRect compute_child_rect(const SaoUiMenuLayout& layout, const ChildMenu& child_menu,
                                        int32_t child_idx) {
     const int32_t slot = layout.slot_size > 0 ? layout.slot_size : kDefaultSlotSize;
-    const int32_t root_left = layout.center_x - slot / 2;
+    const int32_t root_left = aligned_boundary(static_cast<float>(layout.center_x) -
+                                               static_cast<float>(slot) * 0.5F);
     const int32_t stored_width = child_menu.visible_widths[child_idx];
     const int32_t visible_width = std::max(1, stored_width);
-    return {root_left + slot + kChildColumnGap + kChildListX,
-            layout.center_y + child_idx * kChildRowStride, visible_width, kChildRowHeight};
+    const float left = static_cast<float>(root_left + slot + kChildColumnGap + kChildListX);
+    const float top = static_cast<float>(layout.center_y + child_idx * kChildRowStride);
+    return aligned_rect(left, top, left + static_cast<float>(visible_width),
+                        top + static_cast<float>(kChildRowHeight));
 }
 
 int32_t child_hit_test_locked(const sao_ui_menu_s* menu, int32_t px, int32_t py,
@@ -572,6 +645,8 @@ int32_t child_hit_test_locked(const sao_ui_menu_s* menu, int32_t px, int32_t py,
         return -1;
     }
     for (int32_t i = 0; i < static_cast<int32_t>(child_menu->items.size()); ++i) {
+        if (item_disabled(child_menu->items[static_cast<size_t>(i)]))
+            continue;
         const auto rect = compute_child_rect(menu->layout, *child_menu, i);
         if (px >= rect.x && px < rect.x + rect.w && py >= rect.y && py < rect.y + rect.h) {
             *out_parent_idx = displayed_parent_idx;
@@ -628,6 +703,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
             item.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
             item.action_id = items[i].action_id;
             item.can_activate = items[i].can_activate;
+            item.state = item.can_activate ? SAO_UI_MENU_BTN_IDLE : SAO_UI_MENU_BTN_DISABLED;
             replacement.push_back(std::move(item));
         }
 
@@ -645,6 +721,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
                                               }),
                                handle->children.end());
         handle->items = std::move(replacement);
+        handle->root_hover_values.assign(handle->items.size(), 0.0F);
         handle->active_idx = next_active_idx;
         handle->hover_idx = -1;
         if (next_active_idx >= 0) {
@@ -686,6 +763,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_
             item.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
             item.action_id = items[i].action_id;
             item.can_activate = items[i].can_activate;
+            item.state = item.can_activate ? SAO_UI_MENU_BTN_IDLE : SAO_UI_MENU_BTN_DISABLED;
             replacement.items.push_back(std::move(item));
         }
 
@@ -831,6 +909,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_hit_test(sao_ui_menu_handle_t ha
         idx = cascade_hit_test(handle->layout, n, x, y);
         break;
     }
+    if (idx >= 0 && item_disabled(handle->items[static_cast<size_t>(idx)]))
+        idx = -1;
     *out_menu_idx = idx;
     return SAO_STATUS_OK;
 }
@@ -846,6 +926,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_hover(sao_ui_menu_handle_t h
         if (menu_idx < -1 || menu_idx >= n) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
+        if (menu_idx >= 0 && item_disabled(handle->items[static_cast<size_t>(menu_idx)]))
+            menu_idx = -1;
         if (handle->hover_idx == menu_idx)
             return SAO_STATUS_OK;
         if (handle->hover_idx >= 0 && handle->hover_idx < n) {
@@ -861,6 +943,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_hover(sao_ui_menu_handle_t h
                 it.state = SAO_UI_MENU_BTN_HOVER;
             }
         }
+        mark_visual_changed_locked(handle);
         pending = capture_event_locked(handle, SAO_UI_MENU_EV_HOVER_CHANGED, menu_idx, -1, 0);
     }
     dispatch_event_noexcept(pending);
@@ -879,7 +962,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
         auto& it = handle->items[menu_idx];
-        if (!it.can_activate)
+        if (item_disabled(it))
             return SAO_STATUS_OK;
         const bool toggle_off = handle->active_idx == menu_idx;
         if (toggle_off) {
@@ -1004,7 +1087,7 @@ sao_status_t sao::ui::menu_visual::activate_child(sao_ui_menu_handle_t handle,
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             const auto& child = child_menu->items[child_idx];
-            if (!child.can_activate)
+            if (item_disabled(child))
                 return SAO_STATUS_OK;
             *out_activated = true;
             *out_action_id = child.action_id;
@@ -1064,6 +1147,8 @@ sao::ui::menu_visual::set_child_hover(sao_ui_menu_handle_t handle, int32_t paren
     if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    if (item_disabled(child_menu->items[static_cast<size_t>(child_idx)]))
+        return SAO_STATUS_OK;
     if (handle->child_hover_idx != child_idx) {
         handle->child_hover_idx = child_idx;
         mark_visual_changed_locked(handle);
@@ -1095,6 +1180,16 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
             snapshot.phase = handle->phase;
             snapshot.fade_t = handle->child_fade_t;
             snapshot.revision = handle->visual_revision;
+            snapshot.roots.reserve(handle->items.size());
+            for (size_t i = 0; i < handle->items.size(); ++i) {
+                RootRowSnapshot row{};
+                row.can_activate = handle->items[i].can_activate;
+                row.state = handle->items[i].state;
+                row.hover_t = i < handle->root_hover_values.size()
+                                  ? handle->root_hover_values[i]
+                                  : 0.0F;
+                snapshot.roots.push_back(row);
+            }
             const auto* child_menu =
                 find_child_menu_locked(handle, handle->displayed_parent_name);
             if (child_menu != nullptr) {
@@ -1103,6 +1198,8 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
                     ChildRowSnapshot row{};
                     copy_fixed_utf8(&row.name_utf8, child_menu->items[i].name);
                     copy_fixed_utf8(&row.icon_utf8, child_menu->items[i].icon);
+                    row.can_activate = child_menu->items[i].can_activate;
+                    row.state = child_menu->items[i].state;
                     row.visible_width_px = child_menu->visible_widths[i];
                     row.hover_t = child_menu->hover_values[i];
                     snapshot.rows.push_back(row);
@@ -1310,6 +1407,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             static_cast<int64_t>(handle->phase_elapsed_ms) + static_cast<int64_t>(dt_ms);
         handle->phase_elapsed_ms = static_cast<int32_t>(
             std::min<int64_t>(next_elapsed, static_cast<int64_t>(INT32_MAX)));
+        advance_root_hover_locked(handle, dt_ms);
         switch (handle->phase) {
         case SAO_UI_MENU_PHASE_OPENING:
             if (handle->phase_elapsed_ms >= kMenuOpenMs) {
@@ -1331,6 +1429,8 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
                 }
                 handle->active_idx = -1;
                 handle->hover_idx = -1;
+                std::fill(handle->root_hover_values.begin(), handle->root_hover_values.end(),
+                          0.0F);
                 mark_visual_changed_locked(handle);
                 pending = capture_event_locked(handle, SAO_UI_MENU_EV_CLOSED, -1, -1, 0);
             }
@@ -1436,10 +1536,19 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_button_state(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     handle->items[button_index].state = state;
-    if (state == SAO_UI_MENU_BTN_HOVER)
+    if (state == SAO_UI_MENU_BTN_DISABLED) {
+        if (handle->hover_idx == button_index)
+            handle->hover_idx = -1;
+        if (handle->active_idx == button_index) {
+            handle->active_idx = -1;
+            begin_child_transition_locked(handle, "");
+        }
+    } else if (state == SAO_UI_MENU_BTN_HOVER) {
         handle->hover_idx = button_index;
+    }
     if (state == SAO_UI_MENU_BTN_ACTIVE)
         handle->active_idx = button_index;
+    mark_visual_changed_locked(handle);
     return SAO_STATUS_OK;
 }
 

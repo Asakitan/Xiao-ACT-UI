@@ -73,10 +73,18 @@ bool file_exists(const std::string& path) {
 
 }  // namespace
 
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_legacy_compat_enabled(void) {
+#if defined(SAO_UI_DISABLE_LEGACY_COMPAT)
+    return false;
+#else
+    return true;
+#endif
+}
+
 extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_legacy_webview_available(void) {
-    // Frozen surface — see docs/legacy_webview_manifest.md.
-    // Flip to true only when the surface is unfrozen and every entry
-    // in the manifest §1 has a native implementation.
+    // Frozen compatibility probe only. No new features are added here.
+    if (!sao_ui_legacy_compat_enabled())
+        return false;
     return false;
 }
 
@@ -84,6 +92,8 @@ extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_legacy_webview_probe(
     const char* python_side_path_utf8,
     char*       report_out,
     size_t      report_capacity) {
+    if (!sao_ui_legacy_compat_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (report_out == nullptr || report_capacity == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -162,6 +172,8 @@ extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_legacy_webview_probe(
 extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_legacy_webview_manifest_path(
     char*  path_out,
     size_t path_capacity) {
+    if (!sao_ui_legacy_compat_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (path_out == nullptr || path_capacity == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }

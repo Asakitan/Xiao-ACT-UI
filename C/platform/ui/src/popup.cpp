@@ -1,6 +1,7 @@
 // SAO Auto — generic compositor-backed popup menu.
 
 #include "sao/ui/popup.h"
+#include "sao/ui/d2d_effects.h"
 #include "sao/ui/d2d_widgets.h"
 
 #include <algorithm>
@@ -783,6 +784,13 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
             config.bgra_swizzle = true;
             sao_ui_layer_handle_t created = nullptr;
             status = sao_ui_layer_create(popup->compositor, &config, &created);
+            SaoUiLayerEffects effects{};
+            if (status == SAO_STATUS_OK) {
+                status = sao_ui_layer_effects_init(
+                    SAO_UI_LAYER_EFFECT_PRESET_POPUP, &effects);
+            }
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_layer_set_effects(created, &effects);
             if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(created, false);
             if (status == SAO_STATUS_OK) {
                 status = sao_ui_layer_set_input_callbacks(

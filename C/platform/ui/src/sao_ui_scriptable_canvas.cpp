@@ -27,6 +27,8 @@
 #include "sao/ui/sao_ui_scriptable_canvas.h"
 #include "sao/ui/widget_kit.h"
 
+#include "panel_theme_internal.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -949,8 +951,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
             float opacity{1.0F};
             float line_width{1.0F};
             int32_t font_size{12};
-            uint32_t stroke{0xffffffffU};
-            uint32_t fill{0xffffffffU};
+            uint32_t stroke{
+                sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)};
+            uint32_t fill{
+                sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)};
         };
 
         auto with_opacity = [](uint32_t argb, float opacity) {

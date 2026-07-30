@@ -1,4 +1,5 @@
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/d2d_effects.h"
 
 #include "sao/ui/compositor.h"
 #include "sao/ui/menu.h"
@@ -676,8 +677,21 @@ uint8_t scaled_alpha(double base, double opacity) {
         std::clamp(static_cast<int32_t>(base * opacity), 0, 255));
 }
 
+bool root_row_disabled(const sao::ui::menu_visual::RootRowSnapshot& row) {
+    return !row.can_activate || row.state == SAO_UI_MENU_BTN_DISABLED;
+}
+
+bool child_row_disabled(const sao::ui::menu_visual::ChildRowSnapshot& row) {
+    return !row.can_activate || row.state == SAO_UI_MENU_BTN_DISABLED;
+}
+
+int32_t adaptive_corner_radius(int32_t width, int32_t height) {
+    const int32_t maximum = std::max(0, std::min(width, height) / 2);
+    return std::clamp((height + 3) / 4, 2, std::max(2, maximum));
+}
+
 void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot,
-                        size_t first_visible_child_index) {
+                        size_t first_visible_child_index, int32_t pressed_child_index) {
     constexpr Color kChildBackground{248, 248, 248, 255};
     constexpr Color kChildHover{244, 238, 225, 255};
     constexpr Color kChildText{100, 99, 100, 255};
@@ -742,23 +756,36 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
         const int32_t row_width = std::clamp(row.visible_width_px, 0, kChildTargetWidth);
         if (row_width <= 1)
             continue;
+        const bool disabled = child_row_disabled(row);
+        const bool pressed = !disabled && static_cast<int32_t>(logical_index) == pressed_child_index;
         const float hover = std::clamp(row.hover_t, 0.0F, 1.0F);
-        const int32_t row_y = kChildOriginY + slot * kChildRowStride;
-        const int32_t radius = std::min({8, std::max(2, kChildRowHeight / 4),
-                                         std::max(2, row_width / 2)});
-        Color background = lerp_rgb(kChildBackground, kChildHover, hover,
-                                    scaled_alpha(218.0 + 18.0 * hover, opacity));
-        Color foreground = lerp_rgb(kChildText, kChildHoverText, hover,
-                                    scaled_alpha(255.0, opacity));
-        Color icon = lerp_rgb(kChildIcon, kChildHoverText, hover,
-                              scaled_alpha(245.0, opacity));
-        Color indicator = lerp_rgb(kChildBackground, kActiveBorder, hover,
-                                   scaled_alpha(235.0, opacity));
+        const int32_t row_y = kChildOriginY + slot * kChildRowStride + (pressed ? 1 : 0);
+        const int32_t radius = adaptive_corner_radius(row_width, kChildRowHeight);
+        Color background = disabled
+                               ? Color{230, 230, 230, scaled_alpha(185.0, opacity)}
+                           : pressed
+                               ? Color{233, 222, 198, scaled_alpha(248.0, opacity)}
+                               : lerp_rgb(kChildBackground, kChildHover, hover,
+                                          scaled_alpha(218.0 + 18.0 * hover, opacity));
+        Color foreground = disabled
+                               ? Color{148, 148, 148, scaled_alpha(210.0, opacity)}
+                               : lerp_rgb(kChildText, kChildHoverText, hover,
+                                          scaled_alpha(255.0, opacity));
+        Color icon = disabled
+                         ? Color{166, 166, 166, scaled_alpha(205.0, opacity)}
+                         : lerp_rgb(kChildIcon, kChildHoverText, hover,
+                                    scaled_alpha(245.0, opacity));
+        Color indicator = disabled
+                              ? Color{190, 190, 190, scaled_alpha(120.0, opacity)}
+                          : pressed
+                              ? Color{202, 142, 18, scaled_alpha(255.0, opacity)}
+                              : lerp_rgb(kChildBackground, kActiveBorder, hover,
+                                         scaled_alpha(235.0, opacity));
         fill_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius,
                           background, kChildBlendRounding);
         stroke_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius, 1,
                             Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b,
-                                  scaled_alpha(72.0 * hover, opacity)},
+                                  scaled_alpha(pressed ? 190.0 : 72.0 * hover, opacity)},
                             kChildBlendRounding);
         fill_rounded_rect(raster, kChildRowX, row_y, 2, kChildRowHeight, 2, indicator,
                           kChildBlendRounding);
@@ -806,7 +833,7 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                               kChildBlendRounding, true);
         }
 #endif
-        if (hover > 0.05F && row_width >= 18) {
+        if (!disabled && hover > 0.05F && row_width >= 18) {
             const Color caret = lerp_rgb(kChildBackground, kChildHoverText, hover,
                                          scaled_alpha(255.0, opacity));
             const int32_t caret_y = row_y + 15;
@@ -909,6 +936,30 @@ Raster load_authority_frame(int32_t resource_id, uint32_t width, uint32_t height
     std::memcpy(raster.pixels.data(), bytes, expected_bytes);
     return raster;
 }
+
+Raster blend_authority_menu(const sao::ui::menu_visual::Snapshot& snapshot,
+                            int32_t pressed_index) {
+    constexpr std::array<int32_t, 5> kHoverResources{
+        SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_0, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_1,
+        SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_2, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_3,
+        SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_4,
+    };
+    int32_t selected_index = pressed_index;
+    if (selected_index < 0) {
+        const size_t count = std::min(snapshot.roots.size(), kHoverResources.size());
+        for (size_t index = 0; index < count; ++index) {
+            if (snapshot.roots[index].state == SAO_UI_MENU_BTN_HOVER) {
+                selected_index = static_cast<int32_t>(index);
+                break;
+            }
+        }
+    }
+    const int32_t resource_id =
+        selected_index >= 0 && selected_index < static_cast<int32_t>(kHoverResources.size())
+            ? kHoverResources[static_cast<size_t>(selected_index)]
+            : SAO_UI_ENTITY_AUTHORITY_MENU_IDLE;
+    return load_authority_frame(resource_id, kMenuWidth, kMenuHeight);
+}
 #endif
 
 Raster rasterize_nervegear(SaoUiNerveGearState state) {
@@ -943,7 +994,8 @@ Raster rasterize_nervegear(SaoUiNerveGearState state) {
 #endif
 }
 
-Raster rasterize_generic_menu(int32_t hover_index, int32_t pressed_index,
+Raster rasterize_generic_menu(int32_t pressed_index,
+                              const sao::ui::menu_visual::Snapshot& snapshot,
                               const std::vector<OwnedRootItem>& roots,
                               size_t first_visible_root_index) {
     Raster raster = make_raster(kMenuWidth, kMenuHeight);
@@ -967,17 +1019,25 @@ Raster rasterize_generic_menu(int32_t hover_index, int32_t pressed_index,
     for (size_t slot = 0; slot < visible; ++slot) {
         const auto& root = roots[first_visible_root_index + slot];
         const int32_t physical_index = static_cast<int32_t>(slot);
-        const bool hover = physical_index == hover_index;
-        const bool pressed = physical_index == pressed_index;
-        const int32_t size = hover || pressed ? 70 : 54;
-        const int32_t center_y = kMenuPad + physical_index * kMenuSlot + kMenuSlot / 2;
+        const bool has_visual = slot < snapshot.roots.size();
+        const bool disabled = has_visual && root_row_disabled(snapshot.roots[slot]);
+        const float hover = has_visual ? std::clamp(snapshot.roots[slot].hover_t, 0.0F, 1.0F)
+                           : 0.0F;
+        const bool pressed = !disabled && physical_index == pressed_index;
+        const int32_t size = pressed ? 68 : 54 + static_cast<int32_t>(std::lround(16.0F * hover));
+        const int32_t center_y =
+            kMenuPad + physical_index * kMenuSlot + kMenuSlot / 2 + (pressed ? 2 : 0);
         fill_circle(raster, kMenuColumnCenter, center_y, size / 2,
-                    pressed ? Color{244, 235, 215, 235}
-                    : hover ? Color{237, 247, 250, 235}
-                            : Color{247, 248, 248, 220});
+                disabled ? Color{224, 226, 228, 185}
+                : pressed ? Color{232, 219, 191, 248}
+                      : lerp_rgb(Color{247, 248, 248, 255}, Color{237, 247, 250, 255},
+                         hover, static_cast<uint8_t>(220 + 15 * hover)));
         stroke_circle(raster, kMenuColumnCenter, center_y, size / 2, 2,
-                      root.action_id == SAO_UI_ENTITY_ACTION_OPEN_ABOUT ? Color{212, 156, 23, 245}
-                                                                        : Color{88, 152, 190, 225});
+                  disabled ? Color{150, 154, 158, 175}
+                  : pressed ? Color{212, 156, 23, 250}
+                  : root.action_id == SAO_UI_ENTITY_ACTION_OPEN_ABOUT
+                  ? Color{212, 156, 23, 245}
+                  : Color{88, 152, 190, 225});
 #if defined(_WIN32)
         if (!root.icon.empty()) {
             text_commands.push_back({kMenuColumnCenter - 10,
@@ -987,7 +1047,9 @@ Raster rasterize_generic_menu(int32_t hover_index, int32_t pressed_index,
                                      root.icon,
                                      sao::ui::entity_text::FontRole::Icon,
                                      15.0F,
-                                     {100, 99, 100, 255},
+                                     {static_cast<uint8_t>(disabled ? 148 : 100),
+                                      static_cast<uint8_t>(disabled ? 148 : 99),
+                                      static_cast<uint8_t>(disabled ? 148 : 100), 255},
                                      true});
         }
         if (!root.name.empty()) {
@@ -998,7 +1060,9 @@ Raster rasterize_generic_menu(int32_t hover_index, int32_t pressed_index,
                                      root.name,
                                      sao::ui::entity_text::FontRole::Label,
                                      11.0F,
-                                     {100, 99, 100, 255},
+                                     {static_cast<uint8_t>(disabled ? 148 : 100),
+                                      static_cast<uint8_t>(disabled ? 148 : 99),
+                                      static_cast<uint8_t>(disabled ? 148 : 100), 255},
                                      true});
         }
 #else
@@ -1026,33 +1090,22 @@ Raster rasterize_generic_menu(int32_t hover_index, int32_t pressed_index,
     return raster;
 }
 
-Raster rasterize_menu(int32_t hover_index, int32_t pressed_index,
+Raster rasterize_menu(int32_t pressed_index, int32_t pressed_child_index,
                       const sao::ui::menu_visual::Snapshot& snapshot,
                       size_t first_visible_child_index, const std::vector<OwnedRootItem>& roots,
                       size_t first_visible_root_index) {
 #if defined(_WIN32)
     Raster raster;
     if (is_default_root_view(roots, first_visible_root_index)) {
-        const int32_t selected_index = pressed_index >= 0 ? pressed_index : hover_index;
-        constexpr std::array<int32_t, 5> kHoverResources{
-            SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_0, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_1,
-            SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_2, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_3,
-            SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_4,
-        };
-        const int32_t resource_id =
-            selected_index >= 0 && selected_index < static_cast<int32_t>(kHoverResources.size())
-                ? kHoverResources[static_cast<size_t>(selected_index)]
-                : SAO_UI_ENTITY_AUTHORITY_MENU_IDLE;
-        raster = load_authority_frame(resource_id, kMenuWidth, kMenuHeight);
+        raster = blend_authority_menu(snapshot, pressed_index);
     } else {
-        raster =
-            rasterize_generic_menu(hover_index, pressed_index, roots, first_visible_root_index);
+        raster = rasterize_generic_menu(pressed_index, snapshot, roots, first_visible_root_index);
     }
 #else
     Raster raster =
-        rasterize_generic_menu(hover_index, pressed_index, roots, first_visible_root_index);
+        rasterize_generic_menu(pressed_index, snapshot, roots, first_visible_root_index);
 #endif
-    draw_child_overlay(raster, snapshot, first_visible_child_index);
+    draw_child_overlay(raster, snapshot, first_visible_child_index, pressed_child_index);
     return raster;
 }
 
@@ -1601,6 +1654,10 @@ sao_status_t build_menu_input_rects_locked(
     std::vector<SaoUiLayerInputRect> next_rects;
     next_rects.reserve(kRootItemCount + kChildPhysicalCapacity);
     for (int32_t index = 0; index < static_cast<int32_t>(visible_root_count(shell)); ++index) {
+        if (static_cast<size_t>(index) < snapshot.roots.size() &&
+            root_row_disabled(snapshot.roots[static_cast<size_t>(index)])) {
+            continue;
+        }
         next_rects.push_back(
             {kMenuPad, kMenuPad + index * kMenuSlot, kMenuSlot, kMenuSlot});
     }
@@ -1642,9 +1699,9 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
     std::vector<SaoUiLayerInputRect> next_menu_input_rects;
     try {
         next_nervegear_raster = rasterize_nervegear(state);
-        next_menu_raster = rasterize_menu(shell->menu_hover_index, shell->menu_pressed_index,
-                                          menu_snapshot, shell->first_visible_child_index,
-                                          shell->roots, shell->first_visible_root_index);
+        next_menu_raster = rasterize_menu(
+            shell->menu_pressed_index, shell->menu_pressed_child_index, menu_snapshot,
+            shell->first_visible_child_index, shell->roots, shell->first_visible_root_index);
         status = build_menu_input_rects_locked(shell, menu_snapshot, &next_menu_input_rects);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1888,7 +1945,8 @@ struct PendingEntityAction {
 
 bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
                                const sao::ui::menu_visual::Snapshot& snapshot,
-                               int32_t screen_x, int32_t screen_y, MenuHit* out_hit) {
+                               int32_t screen_x, int32_t screen_y, bool include_disabled,
+                               MenuHit* out_hit) {
     if (!shell->menu_visible || !is_child_phase(snapshot.phase) ||
         snapshot.displayed_parent_idx < 0 || snapshot.rows.empty()) {
         return false;
@@ -1910,6 +1968,8 @@ bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
     const size_t logical_index =
         shell->first_visible_child_index + static_cast<size_t>(slot);
     if (logical_index >= snapshot.rows.size())
+        return false;
+    if (!include_disabled && child_row_disabled(snapshot.rows[logical_index]))
         return false;
     const int32_t width =
         std::clamp(snapshot.rows[logical_index].visible_width_px, 0, kChildTargetWidth);
@@ -1990,7 +2050,8 @@ sao_status_t scroll_child_viewport_locked(sao_ui_entity_shell_s* shell, int32_t 
     if (status != SAO_STATUS_OK)
         return status;
     const size_t max_first = max_first_visible_child_index(snapshot.rows.size());
-    if (max_first == 0 || !child_viewport_hit_locked(shell, snapshot, screen_x, screen_y, nullptr))
+    if (max_first == 0 ||
+        !child_viewport_hit_locked(shell, snapshot, screen_x, screen_y, true, nullptr))
         return SAO_STATUS_OK;
 
     const int64_t notches = wheel_delta / kWheelDeltaPerNotch;
@@ -2075,7 +2136,7 @@ MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t 
     if (sao::ui::menu_visual::get_snapshot(shell->menu, &snapshot) != SAO_STATUS_OK)
         return {};
     MenuHit hit{};
-    if (child_viewport_hit_locked(shell, snapshot, screen_x, screen_y, &hit))
+    if (child_viewport_hit_locked(shell, snapshot, screen_x, screen_y, false, &hit))
         return hit;
 
     int32_t ignored_child = -1;
@@ -2241,6 +2302,12 @@ static sao_status_t create_entity_shell(
         layer.high_fps = true;
         layer.target_fps = 60;
         status = sao_ui_layer_create(shell->compositor, &layer, &shell->menu_layer);
+    }
+    if (status == SAO_STATUS_OK && sao_ui_compositor_host(shell->compositor) != nullptr) {
+        SaoUiLayerEffects effects{};
+        status = sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MENU, &effects);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_layer_set_effects(shell->menu_layer, &effects);
     }
     if (status == SAO_STATUS_OK) {
         status = sao_ui_layer_set_visible(shell->menu_layer, false);

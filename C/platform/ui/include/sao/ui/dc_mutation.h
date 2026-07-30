@@ -5,9 +5,10 @@
 //
 // Serialized, generation-aware display-context mutations for overlay
 // HWNDs. Calls with the same (hwnd, generation, operation) key are
-// coalesced while an earlier call is in flight. Legacy USER32 mutations run
-// on the HWND owner thread. Typed tagWND providers run directly on the
-// coordinator worker after the real USER32/DWM state is published.
+// admitted after a fixed 16 ms frame window and coalesced to the latest
+// payload before dispatch. Legacy USER32 mutations run on the HWND owner
+// thread. Typed tagWND providers run directly on the coordinator worker
+// after the real USER32/DWM state is published.
 //
 // ── Why serialization matters ────────────────────────────────
 //   Real on-screen bounds are always published through USER32 and DWM first.

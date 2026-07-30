@@ -1,3 +1,24 @@
+// SAO Auto — virtual-layer compositor implementation.
+//
+// UI surface capability matrix
+// Surface                         Z-order                 Input routing          Theme                 Raster/composition       Capture              Presentation
+// panel.cpp                       layer delegate          panel-local actions    theme consumer        panel-local raster       none                 none
+// panel_sdk.cpp                   panel class policy      runtime delegate       override owner        runtime delegate         none                 none
+// panel_layout.cpp                none                    hit geometry only      none                  layout only              none                 none
+// theme.cpp                       none                    none                   sole resolver         none                     none                 none
+// compositor.cpp                  host/layer authority    cross-layer authority none                  sole composition         composition only     none
+// overlay_host.cpp                OS apply only           Win32 event source     none                  none                     affinity policy only none
+// gpu_overlay_window.cpp          frozen delegate         frozen delegate        none                  layer producer           none                 none
+// adapter.cpp                     frozen delegate         frozen delegate        none                  diagnostics mirror only  none                 none
+// legacy_webview_stub.cpp         none                    none                   none                  none                     none                 none
+// sao_ui_scriptable_canvas.cpp    none                    local callback source  theme consumer        widget-local raster      none                 none
+// capture_sync.cpp                none                    none                   none                  calls compositor         sole capture owner   none
+// dcomp_bridge.cpp                none                    none                   none                  accepts composed BGRA    none                 sole presenter
+//
+// The former overlaps were the panel.cpp registry, scattered fallback
+// colours, compositor-owned capture wrapping, and adapter frame mirrors.
+// Registration now routes through panel_sdk, semantic lookup through theme,
+// capture through capture_sync, and compatibility mirrors are non-authoritative.
 // SAO Auto - compositor layer ownership and production presentation paths.
 //
 // The layer bookkeeping contract is defined by
@@ -21,11 +42,17 @@
 // documents.
 
 #include "sao/ui/compositor.h"
+#include "sao/ui/d2d_effects.h"
 #include "sao/ui/d3d11_device.h"
 #include "sao/ui/dcomp_bridge.h"
 #include "sao/ui/z_order.h"
 
+#include "d2d_effects_internal.h"
+
+#include "input_router_internal.h"
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -93,6 +120,11 @@ struct PendingFadeCall {
 
 struct sao_ui_layer_s;
 struct sao_ui_compositor_s;
+
+template <typename T>
+concept CompleteType = requires { sizeof(T); };
+
+static_assert(!CompleteType<sao::ui::input_router_detail::LayerInputState>);
 
 struct InputCallbackInvocation {
     enum class Kind { cursor, leave, button, scroll } kind{};
@@ -175,6 +207,7 @@ struct sao_ui_layer_s {
     std::unordered_map<uint64_t, size_t> input_callbacks_by_generation;
     bool        detached_payload_released{false};
     bool        input_proxy_enabled{false};
+    SaoUiLayerEffects effects{};
 
     // Back-pointer to the owning compositor -- used by
     // sao_ui_layer_destroy(layer) which does not receive the compositor.
@@ -210,14 +243,8 @@ struct sao_ui_compositor_s {
     bool                          presented_visible_content{false};
     uint32_t                      last_present_width{0};
     uint32_t                      last_present_height{0};
-    sao_ui_layer_s*               hovered_layer{nullptr};
-    sao_ui_layer_s*               captured_layer{nullptr};
-    int32_t                       captured_button{-1};
-    int32_t                       suppressed_button_up{-1};
-    int32_t                       last_pointer_x{0};
-    int32_t                       last_pointer_y{0};
+    sao::ui::input_router_detail::LayerInputState* input_state{nullptr};
     size_t                        input_dispatch_depth{0};
-    bool                          has_pointer{false};
     bool                          host_callbacks_bound{false};
     std::atomic_bool              present_in_progress{false};
     sao_ui_compositor_s*          registry_next{nullptr};
@@ -274,7 +301,6 @@ constexpr uint32_t kMouseWheel = 0x020A;
 constexpr uint32_t kCaptureChanged = 0x0215;
 constexpr uint32_t kMouseLeave = 0x02A3;
 constexpr uint32_t kCancelMode = 0x001F;
-constexpr float kWheelDelta = 120.0F;
 
 struct ActiveInputCallback {
     sao_ui_layer_s* layer{};
@@ -435,36 +461,75 @@ void captured_layer_coordinates_locked(const sao_ui_layer_s* layer, int32_t host
         *out_layer_y = static_cast<float>(static_cast<int64_t>(host_y) - layer->y);
 }
 
-void release_captured_layer_locked(sao_ui_compositor_s* compositor,
-                                   bool suppress_button_up) noexcept {
-    if (suppress_button_up && compositor->captured_button >= 0)
-        compositor->suppressed_button_up = compositor->captured_button;
-    compositor->captured_layer = nullptr;
-    compositor->captured_button = -1;
+bool capture_router_action_locked(
+    sao_ui_compositor_s* compositor,
+    const sao::ui::input_router_detail::LayerInputAction& action,
+    int32_t host_x, int32_t host_y,
+    InputCallbackInvocation* out) {
+    auto* layer = static_cast<sao_ui_layer_s*>(action.layer);
+    if (layer == nullptr || out == nullptr)
+        return false;
+    float layer_x = action.x;
+    float layer_y = action.y;
+    if (action.coordinates_are_host)
+        captured_layer_coordinates_locked(layer, host_x, host_y, &layer_x, &layer_y);
+    switch (action.kind) {
+    case sao::ui::input_router_detail::LayerInputActionKind::cursor:
+        return capture_input_callback_locked(
+            compositor, layer, InputCallbackInvocation::Kind::cursor, layer_x, layer_y, -1, 0,
+            out);
+    case sao::ui::input_router_detail::LayerInputActionKind::leave:
+        return capture_input_callback_locked(
+            compositor, layer, InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0, out);
+    case sao::ui::input_router_detail::LayerInputActionKind::button:
+        return capture_input_callback_locked(
+            compositor, layer, InputCallbackInvocation::Kind::button, layer_x, layer_y,
+            action.button, action.action, out);
+    case sao::ui::input_router_detail::LayerInputActionKind::scroll:
+        if (!capture_input_callback_locked(
+                compositor, layer, InputCallbackInvocation::Kind::scroll, layer_x, layer_y, -1, 0,
+                out)) {
+            return false;
+        }
+        out->scroll_dx = action.scroll_dx;
+        out->scroll_dy = action.scroll_dy;
+        return true;
+    }
+    return false;
 }
 
-void detach_invalid_input_layer_locked(sao_ui_compositor_s* compositor, sao_ui_layer_s* layer,
-                                       std::vector<InputCallbackInvocation>* invocations) {
-    if (layer == nullptr ||
-        (compositor->hovered_layer != layer && compositor->captured_layer != layer)) {
-        return;
+sao_status_t detach_invalid_input_layer_locked(
+    sao_ui_compositor_s* compositor, sao_ui_layer_s* layer,
+    std::vector<InputCallbackInvocation>* invocations) {
+    if (layer == nullptr || !sao::ui::input_router_detail::layer_input_references(
+                                compositor->input_state, layer)) {
+        return SAO_STATUS_OK;
     }
-    if (compositor->has_pointer &&
-        layer_accepts_input_at_locked(layer, compositor->last_pointer_x,
-                                      compositor->last_pointer_y, nullptr, nullptr)) {
-        return;
+    int32_t pointer_x = 0;
+    int32_t pointer_y = 0;
+    bool still_accepts = false;
+    if (sao::ui::input_router_detail::layer_input_last_pointer(
+            compositor->input_state, &pointer_x, &pointer_y)) {
+        still_accepts = layer_accepts_input_at_locked(
+            layer, pointer_x, pointer_y, nullptr, nullptr);
     }
-    if (compositor->hovered_layer == layer)
-        compositor->hovered_layer = nullptr;
-    if (compositor->captured_layer == layer)
-        release_captured_layer_locked(compositor, true);
-    InputCallbackInvocation leave{};
-    if (invocations != nullptr && capture_input_callback_locked(
-                                      compositor, layer,
-                                      InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
-                                      &leave)) {
-        invocations->push_back(leave);
+    std::array<sao::ui::input_router_detail::LayerInputAction, 1> actions{};
+    size_t action_count = 0;
+    const sao_status_t route_status = sao::ui::input_router_detail::invalidate_layer_input(
+        compositor->input_state, layer, still_accepts, actions.data(), actions.size(),
+        &action_count);
+    if (route_status != SAO_STATUS_OK)
+        return route_status;
+    if (invocations == nullptr)
+        return SAO_STATUS_OK;
+    for (size_t index = 0; index < action_count; ++index) {
+        InputCallbackInvocation invocation{};
+        if (capture_router_action_locked(compositor, actions[index], pointer_x, pointer_y,
+                                         &invocation)) {
+            invocations->push_back(invocation);
+        }
     }
+    return SAO_STATUS_OK;
 }
 
 template <typename Fn>
@@ -486,7 +551,10 @@ sao_status_t mutate_input_layer(sao_ui_layer_handle_t layer, Fn&& fn) noexcept {
             const sao_status_t status = std::forward<Fn>(fn)(compositor, layer);
             if (status != SAO_STATUS_OK)
                 return status;
-            detach_invalid_input_layer_locked(compositor, layer, &invocations);
+            const sao_status_t input_status =
+                detach_invalid_input_layer_locked(compositor, layer, &invocations);
+            if (input_status != SAO_STATUS_OK)
+                return input_status;
         }
         if (!invocations.empty() &&
             std::this_thread::get_id() != compositor->render_thread) {
@@ -1301,6 +1369,7 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
 
 bool compose_premultiplied_bgra_locked(
     const sao_ui_compositor_s* comp,
+    void* d3d11_device_ptr,
     std::vector<uint8_t>* out_pixels,
     uint32_t* out_width,
     uint32_t* out_height,
@@ -1317,6 +1386,20 @@ bool compose_premultiplied_bgra_locked(
             right, static_cast<int64_t>(layer->x) + layer->bgra_width);
         bottom = std::max(
             bottom, static_cast<int64_t>(layer->y) + layer->bgra_height);
+        if ((layer->effects.flags & SAO_UI_LAYER_EFFECT_SHADOW) != 0u) {
+            const int64_t margin = static_cast<int64_t>(
+                std::ceil(layer->effects.shadow_sigma * 3.0F));
+            right = std::max(
+                right, static_cast<int64_t>(layer->x) + layer->bgra_width +
+                           margin + std::max<int64_t>(
+                                        0, static_cast<int64_t>(std::ceil(
+                                               layer->effects.shadow_offset_x))));
+            bottom = std::max(
+                bottom, static_cast<int64_t>(layer->y) + layer->bgra_height +
+                            margin + std::max<int64_t>(
+                                         0, static_cast<int64_t>(std::ceil(
+                                                layer->effects.shadow_offset_y))));
+        }
     }
     if (right <= 0 || bottom <= 0) {
         out_pixels->clear();
@@ -1348,6 +1431,11 @@ bool compose_premultiplied_bgra_locked(
         }
         const uint8_t layer_alpha = static_cast<uint8_t>(
             std::clamp(layer->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
+        sao::ui::effects::apply_precompose(
+            *out_pixels, *out_width, *out_height, layer->bgra_pixels.data(),
+            layer->bgra_width, layer->bgra_height, layer->bgra_stride,
+            layer->x, layer->y, layer->alpha, layer->effects,
+            d3d11_device_ptr);
         for (uint32_t src_y = 0; src_y < layer->bgra_height; ++src_y) {
             const int64_t dst_y = static_cast<int64_t>(layer->y) + src_y;
             if (dst_y < 0 || dst_y >= *out_height) continue;
@@ -1414,6 +1502,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
             new (std::nothrow) sao_ui_compositor_s{});
         if (comp == nullptr)
             return SAO_STATUS_ERR_UNKNOWN;
+        std::unique_ptr<sao::ui::input_router_detail::LayerInputState,
+                        decltype(&sao::ui::input_router_detail::destroy_layer_input_state)>
+            input_state(sao::ui::input_router_detail::create_layer_input_state(),
+                        &sao::ui::input_router_detail::destroy_layer_input_state);
+        if (input_state == nullptr)
+            return SAO_STATUS_ERR_UNKNOWN;
+        comp->input_state = input_state.get();
         comp->host = host;
         if (config != nullptr) {
             comp->config = *config;
@@ -1475,6 +1570,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
 
         register_compositor(comp.get());
         *out_handle = comp.release();
+    input_state.release();
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1522,10 +1618,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
             if (host_hwnd != nullptr && ::GetCapture() == host_hwnd)
                 (void)::ReleaseCapture();
 #endif
-            sao_status_t status = sao_ui_overlay_host_set_input_region(handle->host, nullptr, 0);
-            if (status != SAO_STATUS_OK)
-                return status;
-            status = sao_ui_overlay_host_set_input_passthrough(handle->host, true);
+            const sao_status_t status =
+                sao::ui::input_router_detail::reset_host_input(handle->host);
             if (status != SAO_STATUS_OK)
                 return status;
         }
@@ -1539,9 +1633,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
             handle->host_callbacks_bound = false;
         }
         std::lock_guard<std::mutex> lock(handle->mtx);
-        handle->hovered_layer = nullptr;
-        release_captured_layer_locked(handle, false);
-        handle->suppressed_button_up = -1;
+        sao::ui::input_router_detail::reset_layer_input(handle->input_state);
         sao_ui_z_order_manager_destroy(handle->z_order);
         flush_pending_layer_destroys_locked(handle);
 #if defined(_WIN32)
@@ -1557,6 +1649,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    sao::ui::input_router_detail::destroy_layer_input_state(handle->input_state);
+    handle->input_state = nullptr;
     unregister_compositor(handle);
     delete handle;
     return SAO_STATUS_OK;
@@ -1660,6 +1754,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_create(
         layer->bgra_swizzle = config->bgra_swizzle;
         layer->high_fps = config->high_fps;
         layer->target_fps = config->target_fps;
+        layer->effects.struct_size = sizeof(SaoUiLayerEffects);
         layer->owner = compositor;
         layer->creation_seq = ++compositor->seq;
 
@@ -1694,14 +1789,14 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
             std::lock_guard<std::mutex> lk(comp->mtx);
             auto it = find_layer_it(comp, layer);
             if (it == comp->layers.end()) return;
-            if (comp->hovered_layer == layer || comp->captured_layer == layer) {
-                invoke_leave = capture_input_callback_locked(
-                    comp, layer, InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
-                    &leave);
-                comp->hovered_layer = nullptr;
+            std::array<sao::ui::input_router_detail::LayerInputAction, 1> actions{};
+            size_t action_count = 0;
+            if (sao::ui::input_router_detail::invalidate_layer_input(
+                    comp->input_state, layer, false, actions.data(), actions.size(),
+                    &action_count) == SAO_STATUS_OK &&
+                action_count != 0) {
+                invoke_leave = capture_router_action_locked(comp, actions[0], 0, 0, &leave);
             }
-            if (comp->captured_layer == layer)
-                release_captured_layer_locked(comp, true);
             comp->pending_layer_destroys.push_back(std::move(*it));
             comp->layers.erase(it);
         }
@@ -1729,6 +1824,39 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_z_order(
             std::stable_sort(comp->layers.begin(), comp->layers.end(),
                              LayerLess{});
             mark_layer_dirty(active);
+            return SAO_STATUS_OK;
+        });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_effects(
+    sao_ui_layer_handle_t layer, const SaoUiLayerEffects* effects) {
+    if (layer == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    SaoUiLayerEffects candidate{};
+    candidate.struct_size = sizeof(SaoUiLayerEffects);
+    if (effects != nullptr) {
+        candidate = *effects;
+        if (!sao::ui::effects::validate(candidate))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        candidate.struct_size = sizeof(SaoUiLayerEffects);
+    }
+    return with_active_layer_locked(
+        layer, [&candidate](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+            active->effects = candidate;
+            mark_layer_dirty(active);
+            return SAO_STATUS_OK;
+        });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_get_effects(
+    sao_ui_layer_handle_t layer, SaoUiLayerEffects* out_effects) {
+    if (layer == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_effects == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return with_active_layer_locked(
+        layer, [out_effects](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+            *out_effects = active->effects;
             return SAO_STATUS_OK;
         });
 }
@@ -2203,120 +2331,27 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
         }
 
         std::vector<InputCallbackInvocation> invocations;
-        invocations.reserve(2);
+        invocations.reserve(3);
         if (dispatch_status == SAO_STATUS_OK) {
             std::lock_guard lock(compositor->mtx);
-            if (message == kCaptureChanged || message == kCancelMode) {
-                sao_ui_layer_s* leave_target = compositor->captured_layer != nullptr
-                                                   ? compositor->captured_layer
-                                                   : compositor->hovered_layer;
-                InputCallbackInvocation leave{};
-                if (capture_input_callback_locked(
-                        compositor, leave_target, InputCallbackInvocation::Kind::leave, 0.0F,
-                        0.0F, -1, 0, &leave)) {
-                    invocations.push_back(leave);
-                }
-                release_captured_layer_locked(compositor, true);
-                compositor->hovered_layer = nullptr;
-                compositor->has_pointer = false;
-            } else if (message == kMouseLeave) {
-                if (compositor->captured_layer != nullptr)
-                    dispatch_status = SAO_STATUS_OK;
-                else {
-                    compositor->has_pointer = false;
-                    InputCallbackInvocation leave{};
-                    if (capture_input_callback_locked(
-                            compositor, compositor->hovered_layer,
-                            InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0, &leave)) {
-                        invocations.push_back(leave);
-                    }
-                    compositor->hovered_layer = nullptr;
-                }
-            } else {
-                compositor->last_pointer_x = host_x;
-                compositor->last_pointer_y = host_y;
-                compositor->has_pointer = true;
-                float layer_x = 0.0F;
-                float layer_y = 0.0F;
-                sao_ui_layer_s* hit_target =
-                    top_input_layer_locked(compositor, host_x, host_y, &layer_x, &layer_y);
-                if (message == kMouseMove) {
-                    if (compositor->captured_layer == nullptr &&
-                        compositor->hovered_layer != hit_target) {
-                        InputCallbackInvocation leave{};
-                        if (capture_input_callback_locked(
-                                compositor, compositor->hovered_layer,
-                                InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
-                                &leave)) {
-                            invocations.push_back(leave);
-                        }
-                        compositor->hovered_layer = hit_target;
-                    }
-                    sao_ui_layer_s* route_target = compositor->captured_layer != nullptr
-                                                       ? compositor->captured_layer
-                                                       : hit_target;
-                    if (route_target != hit_target)
-                        captured_layer_coordinates_locked(route_target, host_x, host_y, &layer_x,
-                                                          &layer_y);
-                    InputCallbackInvocation cursor{};
-                    if (capture_input_callback_locked(
-                            compositor, route_target, InputCallbackInvocation::Kind::cursor,
-                            layer_x, layer_y, -1, 0, &cursor)) {
-                        invocations.push_back(cursor);
-                    }
-                } else if (message == kMouseWheel) {
-                    InputCallbackInvocation scroll{};
-                    if (capture_input_callback_locked(
-                            compositor, hit_target, InputCallbackInvocation::Kind::scroll, layer_x,
-                            layer_y, -1, 0, &scroll)) {
-                        scroll.scroll_dx = 0.0F;
-                        scroll.scroll_dy = static_cast<float>(wheel_delta) / kWheelDelta;
-                        invocations.push_back(scroll);
-                    }
-                } else {
-                    const bool double_click = message == kLeftButtonDoubleClick ||
-                                              message == kRightButtonDoubleClick ||
-                                              message == kMiddleButtonDoubleClick;
-                    const bool released = message == kLeftButtonUp || message == kRightButtonUp ||
-                                          message == kMiddleButtonUp;
-                    if (double_click) {
-                        compositor->suppressed_button_up = button;
-                        release_captured_layer_locked(compositor, false);
-                    } else if (released && compositor->suppressed_button_up == button) {
-                        compositor->suppressed_button_up = -1;
-                        release_captured_layer_locked(compositor, false);
-                    } else {
-                        sao_ui_layer_s* route_target =
-                            released && compositor->captured_layer != nullptr
-                                ? compositor->captured_layer
-                                : hit_target;
-                        if (!released && route_target != nullptr) {
-                            compositor->captured_layer = route_target;
-                            compositor->captured_button = button;
-                        }
-                        if (route_target != hit_target)
-                            captured_layer_coordinates_locked(route_target, host_x, host_y,
-                                                              &layer_x, &layer_y);
-                        InputCallbackInvocation button_invocation{};
-                        if (capture_input_callback_locked(
-                                compositor, route_target, InputCallbackInvocation::Kind::button,
-                                layer_x, layer_y, button, released ? 0 : 1,
-                                &button_invocation)) {
-                            invocations.push_back(button_invocation);
-                        }
-                        if (released) {
-                            release_captured_layer_locked(compositor, false);
-                            if (compositor->hovered_layer != hit_target) {
-                                InputCallbackInvocation leave{};
-                                if (capture_input_callback_locked(
-                                        compositor, compositor->hovered_layer,
-                                        InputCallbackInvocation::Kind::leave, 0.0F, 0.0F, -1, 0,
-                                        &leave)) {
-                                    invocations.push_back(leave);
-                                }
-                                compositor->hovered_layer = hit_target;
-                            }
-                        }
+            float hit_x = 0.0F;
+            float hit_y = 0.0F;
+            sao_ui_layer_s* hit_target = nullptr;
+            if (sao::ui::input_router_detail::layer_event_uses_coordinates(message)) {
+                hit_target =
+                    top_input_layer_locked(compositor, host_x, host_y, &hit_x, &hit_y);
+            }
+            std::array<sao::ui::input_router_detail::LayerInputAction, 3> actions{};
+            size_t action_count = 0;
+            dispatch_status = sao::ui::input_router_detail::route_layer_input(
+                compositor->input_state, message, host_x, host_y, button, wheel_delta, hit_target,
+                hit_x, hit_y, actions.data(), actions.size(), &action_count);
+            if (dispatch_status == SAO_STATUS_OK) {
+                for (size_t index = 0; index < action_count; ++index) {
+                    InputCallbackInvocation invocation{};
+                    if (capture_router_action_locked(compositor, actions[index], host_x, host_y,
+                                                     &invocation)) {
+                        invocations.push_back(invocation);
                     }
                 }
             }
@@ -2377,6 +2412,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_current_input_position(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
     sao_ui_layer_handle_t layer) {
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     return mutate_input_layer(
         layer, [](sao_ui_compositor_s*, sao_ui_layer_s* active) {
             active->input_proxy_enabled = true;
@@ -2428,10 +2465,12 @@ sao_status_t compositor_present_impl(
     uint32_t height = 0;
     bool has_geometry_buffer = false;
     bool has_visible_alpha = false;
+    void* const d3d11_device_ptr =
+        sao_ui_d3d11_device_ptr(compositor->d3d11_device);
     {
         std::lock_guard<std::mutex> lk(compositor->mtx);
         has_geometry_buffer = compose_premultiplied_bgra_locked(
-            compositor, &composed_pixels, &width, &height,
+            compositor, d3d11_device_ptr, &composed_pixels, &width, &height,
             &has_visible_alpha);
         if (!has_visible_alpha) {
             if (!compositor->presented_visible_content) {
@@ -2584,7 +2623,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_tick(
     }
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_snapshot_bgra(
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
     sao_ui_compositor_handle_t compositor,
     uint8_t* out_bgra_pixels,
     size_t capacity,
@@ -2601,12 +2640,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_snapshot_bgra(
     *out_bytes = 0;
 
     try {
+        // This is the same composition function used by present. The caller
+        // in capture_sync owns the capture lease; this function only composes.
         std::vector<uint8_t> composed_pixels;
         bool has_visible_alpha = false;
         {
             std::lock_guard<std::mutex> lock(compositor->mtx);
             if (!compose_premultiplied_bgra_locked(
-                    compositor, &composed_pixels, out_width, out_height,
+                    compositor, nullptr, &composed_pixels, out_width, out_height,
                     &has_visible_alpha)) {
                 return SAO_STATUS_OK;
             }
@@ -2647,6 +2688,19 @@ sao_ui_compositor_require_owner_thread(sao_ui_compositor_handle_t compositor) {
                    : SAO_STATUS_ERR_ACCESS_DENIED;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" SAO_UI_API uint64_t SAO_UI_CALL
+sao_ui_compositor_test_input_writer_revision(sao_ui_compositor_handle_t compositor) {
+    if (compositor == nullptr)
+        return 0;
+    try {
+        std::lock_guard lock(compositor->mtx);
+        return sao::ui::input_router_detail::layer_input_writer_revision(
+            compositor->input_state);
+    } catch (...) {
+        return 0;
     }
 }
 
@@ -2710,7 +2764,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    return sao_ui_overlay_host_set_input_region(
+    return sao::ui::input_router_detail::apply_host_input_regions(
         compositor->host, rects.empty() ? nullptr : rects.data(), rects.size());
 }
 
@@ -2742,5 +2796,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_input_mode(
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    return sao_ui_overlay_host_set_input_passthrough(compositor->host, !interactive);
+    return sao::ui::input_router_detail::apply_host_input_passthrough(compositor->host,
+                                                                      !interactive);
 }

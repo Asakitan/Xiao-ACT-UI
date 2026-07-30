@@ -55,6 +55,7 @@ struct ButtonState {
     // Interaction state — driven by dispatch_event.
     bool pressed{false}; // mouse-down within bounds
     bool hovered{false}; // last cursor was inside
+    bool focused{false};
     mutable std::mutex mtx;
 };
 
@@ -65,6 +66,9 @@ struct IconButtonState {
     std::string tooltip;
     sao_ui_click_cb_t click_cb{nullptr};
     void* click_user_data{nullptr};
+    bool pressed{false};
+    bool hovered{false};
+    bool focused{false};
     mutable std::mutex mtx;
 };
 
@@ -84,6 +88,9 @@ struct DropdownButtonState {
     bool has_selection{};
     sao_ui_dropdown_pick_cb_t pick_cb{nullptr};
     void* pick_user_data{nullptr};
+    bool pressed{false};
+    bool hovered{false};
+    bool focused{false};
     mutable std::mutex mtx;
 };
 
@@ -93,6 +100,9 @@ struct CheckboxState {
     std::string label;
     sao_ui_toggle_cb_t toggle_cb{nullptr};
     void* toggle_user_data{nullptr};
+    bool pressed{false};
+    bool hovered{false};
+    bool focused{false};
     mutable std::mutex mtx;
 };
 
@@ -103,6 +113,9 @@ struct RadioState {
     std::string label;
     sao_ui_radio_pick_cb_t pick_cb{nullptr};
     void* pick_user_data{nullptr};
+    bool pressed{false};
+    bool hovered{false};
+    bool focused{false};
     mutable std::mutex mtx;
 };
 
@@ -111,6 +124,10 @@ struct SliderState {
     SaoUiSliderSpec spec{};
     sao_ui_slider_change_cb_t change_cb{nullptr};
     void* change_user_data{nullptr};
+    bool pressed{false};
+    bool hovered{false};
+    bool focused{false};
+    bool keyboard_nudge{false};
     mutable std::mutex mtx;
 };
 
@@ -381,8 +398,8 @@ sao_ui_widget_handle_t register_input_state(int32_t tag, const std::shared_ptr<S
                 }
             }
         } rollback{registry, handle};
-        const auto [known_it, known_inserted] = registry.known.emplace(
-            handle, std::make_pair(tag, generation));
+        const auto [known_it, known_inserted] =
+            registry.known.emplace(handle, std::make_pair(tag, generation));
         if (!known_inserted) {
             (void)known_it;
             throw std::bad_alloc();
@@ -612,12 +629,44 @@ uint32_t resolve_button_foreground(const SaoUiButtonSpec& spec) {
     if (spec.colors.fg_argb != 0)
         return spec.colors.fg_argb;
     return sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_APP_TEXT_2
-                                                             : SAO_UI_TOKEN_APP_TEXT);
+                                                            : SAO_UI_TOKEN_APP_TEXT);
+}
+
+uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
+    const float t = std::clamp(amount, 0.0F, 1.0F);
+    const auto channel = [t](uint32_t left, uint32_t right) {
+        return static_cast<uint32_t>(std::lround(
+            static_cast<float>(left) + (static_cast<float>(right) - static_cast<float>(left)) * t));
+    };
+    return (channel((from >> 24U) & 0xffU, (to >> 24U) & 0xffU) << 24U) |
+           (channel((from >> 16U) & 0xffU, (to >> 16U) & 0xffU) << 16U) |
+           (channel((from >> 8U) & 0xffU, (to >> 8U) & 0xffU) << 8U) |
+           channel(from & 0xffU, to & 0xffU);
+}
+
+uint32_t lighten_argb(uint32_t color, float amount) {
+    return (color & 0xff000000U) |
+           (blend_argb(color | 0xff000000U,
+                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE), amount) &
+            0x00ffffffU);
+}
+
+uint32_t darken_argb(uint32_t color, float amount) {
+    return (color & 0xff000000U) |
+           (blend_argb(color | 0xff000000U,
+                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK), amount) &
+            0x00ffffffU);
+}
+
+uint32_t scale_alpha(uint32_t color, float scale) {
+    const uint32_t alpha = static_cast<uint32_t>(
+        std::lround(static_cast<float>((color >> 24U) & 0xffU) * std::clamp(scale, 0.0F, 1.0F)));
+    return (color & 0x00ffffffU) | (alpha << 24U);
 }
 
 sao_status_t paint_button_box(sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
-                              int32_t width, int32_t height, uint32_t fill,
-                              uint32_t border, int32_t radius_px) {
+                              int32_t width, int32_t height, uint32_t fill, uint32_t border,
+                              int32_t radius_px) {
     const float radius = static_cast<float>(std::max(0, radius_px));
     sao_status_t status = sao::ui::detail::paint_rounded_rect(
         context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
@@ -628,6 +677,15 @@ sao_status_t paint_button_box(sao_ui_paint_ctx_handle_t context, int32_t x, int3
         context, static_cast<float>(x + 1), static_cast<float>(y + 1),
         static_cast<float>(width - 2), static_cast<float>(height - 2),
         std::max(0.0F, radius - 1.0F), fill);
+}
+
+sao_status_t paint_button_inner_border(sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+                                       int32_t width, int32_t height, uint32_t fill,
+                                       uint32_t border, int32_t radius_px) {
+    if (width <= 4 || height <= 4)
+        return SAO_STATUS_OK;
+    return paint_button_box(context, x + 2, y + 2, width - 4, height - 4, fill, border,
+                            std::max(0, radius_px - 2));
 }
 
 } // namespace
@@ -846,11 +904,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dropdown_button_set_entries(
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> guard(lease->mtx);
         lease->entries = std::move(candidate);
-        const auto selected = std::find_if(
-            lease->entries.begin(), lease->entries.end(), [&](const OwnedDropdownEntry& entry) {
-                return entry.item_id == lease->selected_item_id &&
-                       entry.item_id != SAO_UI_DROPDOWN_SEPARATOR;
-            });
+        const auto selected = std::find_if(lease->entries.begin(), lease->entries.end(),
+                                           [&](const OwnedDropdownEntry& entry) {
+                                               return entry.item_id == lease->selected_item_id &&
+                                                      entry.item_id != SAO_UI_DROPDOWN_SEPARATOR;
+                                           });
         if (lease->has_selection && selected == lease->entries.end())
             lease->has_selection = false;
         if (!lease->has_selection) {
@@ -1143,8 +1201,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_radio_set_selected(sao_ui_widget_hand
         const uint64_t transition = lease.transition_generation();
         for (const sao_ui_widget_handle_t member : deselected) {
             const CallbackHandleScope member_scope(member);
-            const sao_status_t status = dispatch_generic_event(
-                member, SAO_UI_EVT_VALUE_CHANGED, "{\"selected\":false}");
+            const sao_status_t status =
+                dispatch_generic_event(member, SAO_UI_EVT_VALUE_CHANGED, "{\"selected\":false}");
             if (status != SAO_STATUS_OK)
                 return status;
             if (!lease.transition_is_current(transition)) {
@@ -1350,6 +1408,102 @@ sao_ui_widget_input_get_generation(sao_ui_widget_handle_t handle, uint64_t* out_
     }
 }
 
+sao_status_t sao::ui::detail::widget_input_set_interaction_state(sao_ui_widget_handle_t handle,
+                                                                 int32_t state,
+                                                                 bool value) noexcept {
+    try {
+        const auto apply = [state, value](auto& widget, bool disabled) -> sao_status_t {
+            switch (state) {
+            case kWidgetInteractionHovered:
+                widget.hovered = !disabled && value;
+                if (!widget.hovered)
+                    widget.pressed = false;
+                return SAO_STATUS_OK;
+            case kWidgetInteractionPressed:
+                widget.pressed = !disabled && value;
+                return SAO_STATUS_OK;
+            case kWidgetInteractionFocused:
+                widget.focused = !disabled && value;
+                return SAO_STATUS_OK;
+            default:
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+        };
+        switch (known_input_tag(handle)) {
+        case kButtonTag: {
+            auto lease = acquire_input_lease<ButtonState>(handle, kButtonTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, lease->spec.disabled);
+        }
+        case kIconButtonTag: {
+            auto lease = acquire_input_lease<IconButtonState>(handle, kIconButtonTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, false);
+        }
+        case kDropdownButtonTag: {
+            auto lease = acquire_input_lease<DropdownButtonState>(handle, kDropdownButtonTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, false);
+        }
+        case kCheckboxTag: {
+            auto lease = acquire_input_lease<CheckboxState>(handle, kCheckboxTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, lease->spec.disabled);
+        }
+        case kRadioTag: {
+            auto lease = acquire_input_lease<RadioState>(handle, kRadioTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, lease->spec.disabled);
+        }
+        case kSliderTag: {
+            auto lease = acquire_input_lease<SliderState>(handle, kSliderTag);
+            if (!lease)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            return apply(*lease, lease->spec.disabled);
+        }
+        default:
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::widget_input_nudge_value(sao_ui_widget_handle_t handle,
+                                                       int32_t direction) noexcept {
+    if (direction != -1 && direction != 1)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        auto lease = acquire_input_lease<SliderState>(handle, kSliderTag);
+        if (!lease)
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        float next = 0.0F;
+        {
+            std::lock_guard<std::mutex> lock(lease->mtx);
+            if (lease->spec.disabled || !lease->keyboard_nudge)
+                return SAO_STATUS_ERR_ACCESS_DENIED;
+            const float step = lease->spec.step > 0.0F
+                                   ? lease->spec.step
+                                   : (lease->spec.max_value - lease->spec.min_value) * 0.01F;
+            next = lease->spec.value + step * static_cast<float>(direction);
+        }
+        return sao_ui_slider_set_value(handle, next);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Button helper API — hit test + event dispatch + preferred-size query.
 // Not part of widget_input.h (yet); exposed for the test binary to
@@ -1488,9 +1642,9 @@ sao_ui_widget_button_is_active(sao_ui_widget_handle_t handle, bool* out_active) 
     }
 }
 
-sao_status_t sao::ui::detail::widget_input_apply_props(
-    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
-    WidgetPropsSnapshot* out_snapshot) noexcept {
+sao_status_t sao::ui::detail::widget_input_apply_props(sao_ui_widget_handle_t handle, int32_t kind,
+                                                       const WidgetPropsJson& props,
+                                                       WidgetPropsSnapshot* out_snapshot) noexcept {
     if (out_snapshot == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_snapshot = {};
@@ -1646,7 +1800,7 @@ sao_status_t sao::ui::detail::widget_input_apply_props(
             break;
         }
         case kSliderTag: {
-            if (!widget_props_has_only(props, {"value"}))
+            if (!widget_props_has_only(props, {"value", "keyboard_nudge"}))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             auto lease = acquire_input_lease<SliderState>(handle, kSliderTag);
             if (!lease)
@@ -1654,8 +1808,15 @@ sao_status_t sao::ui::detail::widget_input_apply_props(
             {
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 snapshot->value = lease->spec.value;
+                snapshot->first = lease->keyboard_nudge;
             }
             const auto value = props.find("value");
+            const auto keyboard_nudge = props.find("keyboard_nudge");
+            bool replacement_keyboard_nudge = false;
+            if (keyboard_nudge != props.end() &&
+                !widget_props_bool(*keyboard_nudge, &replacement_keyboard_nudge)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
             if (value != props.end()) {
                 float replacement = 0.0F;
                 if (!widget_props_float(*value, &replacement))
@@ -1666,6 +1827,10 @@ sao_status_t sao::ui::detail::widget_input_apply_props(
                     lease->spec.value = snapshot->value;
                     return status;
                 }
+            }
+            if (keyboard_nudge != props.end()) {
+                std::lock_guard<std::mutex> lock(lease->mtx);
+                lease->keyboard_nudge = replacement_keyboard_nudge;
             }
             break;
         }
@@ -1679,9 +1844,9 @@ sao_status_t sao::ui::detail::widget_input_apply_props(
     }
 }
 
-sao_status_t sao::ui::detail::widget_input_restore_props(
-    sao_ui_widget_handle_t handle, int32_t kind,
-    const WidgetPropsSnapshot& snapshot) noexcept {
+sao_status_t
+sao::ui::detail::widget_input_restore_props(sao_ui_widget_handle_t handle, int32_t kind,
+                                            const WidgetPropsSnapshot& snapshot) noexcept {
     const auto previous = std::static_pointer_cast<InputPropsSnapshot>(snapshot);
     if (previous == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1730,6 +1895,7 @@ sao_status_t sao::ui::detail::widget_input_restore_props(
                 return SAO_STATUS_ERR_HANDLE_INVALID;
             std::lock_guard<std::mutex> lock(lease->mtx);
             lease->spec.value = previous->value;
+            lease->keyboard_nudge = previous->first;
             return SAO_STATUS_OK;
         }
         default:
@@ -1740,15 +1906,18 @@ sao_status_t sao::ui::detail::widget_input_restore_props(
     }
 }
 
-sao_status_t sao::ui::detail::widget_input_paint(
-    sao_ui_widget_handle_t handle, int32_t kind,
-    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
-    int32_t width, int32_t height) noexcept {
+sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, int32_t kind,
+                                                 sao_ui_paint_ctx_handle_t context, int32_t x,
+                                                 int32_t y, int32_t width,
+                                                 int32_t height) noexcept {
     try {
         switch (kind) {
         case kButtonTag: {
             SaoUiButtonSpec spec{};
             std::string text;
+            bool hovered = false;
+            bool pressed = false;
+            bool focused = false;
             auto lease = acquire_input_lease<ButtonState>(handle, kButtonTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1756,17 +1925,49 @@ sao_status_t sao::ui::detail::widget_input_paint(
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 text = lease->text;
+                hovered = lease->hovered;
+                pressed = lease->pressed;
+                focused = lease->focused;
             }
-            sao_status_t status = paint_button_box(context, x, y, width, height,
-                                                   resolve_button_fill(spec),
-                                                   resolve_button_border(spec), spec.radius_px);
+            uint32_t fill = resolve_button_fill(spec);
+            uint32_t border = resolve_button_border(spec);
+            uint32_t foreground = resolve_button_foreground(spec);
+            const uint32_t accent = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
+            if (!spec.disabled) {
+                if (pressed)
+                    fill = darken_argb(fill, 0.12F);
+                else if (hovered)
+                    fill = spec.colors.fill_hover_argb != 0 ? spec.colors.fill_hover_argb
+                                                            : lighten_argb(fill, 0.08F);
+                if (hovered)
+                    border = blend_argb(border, accent, 0.45F);
+            } else {
+                fill = scale_alpha(fill, 0.4F);
+                border = scale_alpha(border, 0.4F);
+                foreground = scale_alpha(foreground, 0.4F);
+            }
+            if (focused && !spec.disabled) {
+                const sao_status_t focus_status = sao::ui::detail::paint_rounded_rect(
+                    context, static_cast<float>(x - 1), static_cast<float>(y - 1),
+                    static_cast<float>(width + 2), static_cast<float>(height + 2),
+                    static_cast<float>(std::max(0, spec.radius_px) + 1), accent);
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+            }
+            sao_status_t status =
+                paint_button_box(context, x, y, width, height, fill, border, spec.radius_px);
             if (status != SAO_STATUS_OK)
                 return status;
+            if (pressed) {
+                status = paint_button_inner_border(context, x, y, width, height, fill, border,
+                                                   spec.radius_px);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
             return sao_ui_paint_ctx_draw_utf8(
                 context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
-                static_cast<float>(y + std::max(2, spec.pad_y_px)), text.c_str(),
-                static_cast<float>(std::clamp(height - 8, 5, 15)),
-                resolve_button_foreground(spec));
+                static_cast<float>(y + std::max(2, spec.pad_y_px) + (pressed ? 1 : 0)),
+                text.c_str(), static_cast<float>(std::clamp(height - 8, 5, 15)), foreground);
         }
         case kIconButtonTag: {
             SaoUiIconButtonSpec spec{};
@@ -1783,10 +1984,9 @@ sao_status_t sao::ui::detail::widget_input_paint(
             button.kind = spec.kind;
             button.radius_px = spec.radius_px;
             button.colors = spec.colors;
-            sao_status_t status = paint_button_box(context, x, y, width, height,
-                                                   resolve_button_fill(button),
-                                                   resolve_button_border(button),
-                                                   button.radius_px);
+            sao_status_t status =
+                paint_button_box(context, x, y, width, height, resolve_button_fill(button),
+                                 resolve_button_border(button), button.radius_px);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t pad = std::max(1, spec.pad_px);
@@ -1818,22 +2018,23 @@ sao_status_t sao::ui::detail::widget_input_paint(
             SaoUiButtonSpec button{};
             button.kind = spec.kind;
             button.colors = spec.button_colors;
-            sao_status_t status = paint_button_box(context, x, y, width, height,
-                                                   resolve_button_fill(button),
-                                                   resolve_button_border(button),
-                                                   sao::ui::detail::panel_theme_metric(
-                                                       SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
+            sao_status_t status = paint_button_box(
+                context, x, y, width, height, resolve_button_fill(button),
+                resolve_button_border(button),
+                sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
             if (status != SAO_STATUS_OK)
                 return status;
             text += " v";
-            return sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(x + 4), static_cast<float>(y + 3), text.c_str(),
-                static_cast<float>(std::clamp(height - 7, 5, 15)),
-                resolve_button_foreground(button));
+            return sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 4),
+                                              static_cast<float>(y + 3), text.c_str(),
+                                              static_cast<float>(std::clamp(height - 7, 5, 15)),
+                                              resolve_button_foreground(button));
         }
         case kCheckboxTag: {
             SaoUiCheckboxSpec spec{};
             std::string label;
+            bool hovered = false;
+            bool focused = false;
             auto lease = acquire_input_lease<CheckboxState>(handle, kCheckboxTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1841,37 +2042,69 @@ sao_status_t sao::ui::detail::widget_input_paint(
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 label = lease->label;
+                hovered = lease->hovered;
+                focused = lease->focused;
             }
-            const int32_t box = std::clamp(spec.box_size_px > 0 ? spec.box_size_px : height - 4,
-                                           4, std::max(4, height - 2));
+            const int32_t box = std::clamp(spec.box_size_px > 0 ? spec.box_size_px : height - 4, 4,
+                                           std::max(4, height - 2));
             const int32_t top = y + (height - box) / 2;
+            uint32_t box_fill = spec.box_argb == 0
+                                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
+                                    : spec.box_argb;
+            uint32_t box_border = spec.box_border_argb == 0
+                                      ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                                      : spec.box_border_argb;
+            uint32_t check = spec.check_argb == 0
+                                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                                 : spec.check_argb;
+            if (hovered && !spec.disabled)
+                box_border = blend_argb(box_border, check, 0.45F);
+            if (spec.disabled) {
+                box_fill = scale_alpha(box_fill, 0.4F);
+                box_border = scale_alpha(box_border, 0.4F);
+                check = scale_alpha(check, 0.4F);
+            }
+            if (focused && !spec.disabled) {
+                const sao_status_t focus_status = sao_ui_paint_ctx_fill_rect(
+                    context, static_cast<float>(x - 1), static_cast<float>(top - 1),
+                    static_cast<float>(box + 2), static_cast<float>(box + 2), check);
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+            }
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(box),
-                static_cast<float>(box),
-                spec.box_argb == 0
-                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
-                    : spec.box_argb);
+                static_cast<float>(box), box_border);
             if (status != SAO_STATUS_OK)
                 return status;
-            if (spec.checked) {
+            if (box > 2) {
                 status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(x + 3), static_cast<float>(top + 3),
-                    static_cast<float>(std::max(1, box - 6)),
-                    static_cast<float>(std::max(1, box - 6)),
-                    spec.check_argb == 0
-                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
-                        : spec.check_argb);
+                    context, static_cast<float>(x + 1), static_cast<float>(top + 1),
+                    static_cast<float>(box - 2), static_cast<float>(box - 2), box_fill);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
+            if (spec.checked) {
+                const float stroke = std::max(1.0F, static_cast<float>(box) * 0.12F);
+                status = sao_ui_paint_ctx_stroke_line(
+                    context, static_cast<float>(x) + box * 0.22F,
+                    static_cast<float>(top) + box * 0.52F, static_cast<float>(x) + box * 0.43F,
+                    static_cast<float>(top) + box * 0.72F, stroke, check);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                status = sao_ui_paint_ctx_stroke_line(
+                    context, static_cast<float>(x) + box * 0.43F,
+                    static_cast<float>(top) + box * 0.72F, static_cast<float>(x) + box * 0.80F,
+                    static_cast<float>(top) + box * 0.28F, stroke, check);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
             return sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(x + box + 4), static_cast<float>(y + 2),
-                label.c_str(), static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
+                context, static_cast<float>(x + box + 4), static_cast<float>(y + 2), label.c_str(),
+                static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
                 spec.disabled
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
-                    : (spec.fg_argb == 0
-                           ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
-                           : spec.fg_argb));
+                    : (spec.fg_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                                         : spec.fg_argb));
         }
         case kRadioTag: {
             SaoUiRadioSpec spec{};
@@ -1890,9 +2123,8 @@ sao_status_t sao::ui::detail::widget_input_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_ellipse(
                 context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(ring),
                 static_cast<float>(ring),
-                spec.ring_argb == 0
-                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
-                    : spec.ring_argb);
+                spec.ring_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                                    : spec.ring_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             if (spec.selected) {
@@ -1901,50 +2133,66 @@ sao_status_t sao::ui::detail::widget_input_paint(
                     context, static_cast<float>(x + inset), static_cast<float>(top + inset),
                     static_cast<float>(std::max(1, ring - inset * 2)),
                     static_cast<float>(std::max(1, ring - inset * 2)),
-                    spec.dot_argb == 0
-                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
-                        : spec.dot_argb);
+                    spec.dot_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                                       : spec.dot_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
             return sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(x + ring + 4), static_cast<float>(y + 2),
-                label.c_str(), static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
+                context, static_cast<float>(x + ring + 4), static_cast<float>(y + 2), label.c_str(),
+                static_cast<float>(spec.font_size_px > 0 ? spec.font_size_px : 12),
                 spec.disabled
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
-                    : (spec.fg_argb == 0
-                           ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
-                           : spec.fg_argb));
+                    : (spec.fg_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                                         : spec.fg_argb));
         }
         case kSliderTag: {
             SaoUiSliderSpec spec{};
+            bool hovered = false;
+            bool pressed = false;
+            bool focused = false;
             auto lease = acquire_input_lease<SliderState>(handle, kSliderTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
             {
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
+                hovered = lease->hovered;
+                pressed = lease->pressed;
+                focused = lease->focused;
             }
             const float ratio = std::clamp(
                 (spec.value - spec.min_value) / (spec.max_value - spec.min_value), 0.0F, 1.0F);
-            const uint32_t track =
-                spec.track_argb == 0
+            uint32_t track = spec.track_argb == 0
+                                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                                 : spec.track_argb;
+            uint32_t fill = spec.disabled
+                                ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                                : (spec.track_fill_argb == 0
+                                       ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                                       : spec.track_fill_argb);
+            uint32_t thumb = spec.disabled
+                                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                                 : (spec.thumb_argb == 0
+                                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                                        : spec.thumb_argb);
+            uint32_t thumb_border =
+                spec.thumb_border_argb == 0
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
-                    : spec.track_argb;
-            const uint32_t fill = spec.disabled
-                                      ? sao::ui::detail::panel_theme_color(
-                                            SAO_UI_TOKEN_APP_TEXT_2)
-                                      : (spec.track_fill_argb == 0
-                                             ? sao::ui::detail::panel_theme_color(
-                                                   SAO_UI_TOKEN_APP_ACCENT)
-                                             : spec.track_fill_argb);
-            const uint32_t thumb = spec.disabled
-                                       ? sao::ui::detail::panel_theme_color(
-                                             SAO_UI_TOKEN_APP_TEXT_2)
-                                       : (spec.thumb_argb == 0
-                                              ? sao::ui::detail::panel_theme_color(
-                                                    SAO_UI_TOKEN_APP_TEXT)
-                                              : spec.thumb_argb);
+                    : spec.thumb_border_argb;
+            if (!spec.disabled) {
+                if (pressed)
+                    thumb = darken_argb(thumb, 0.12F);
+                else if (hovered)
+                    thumb = lighten_argb(thumb, 0.08F);
+                if (focused)
+                    thumb_border = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
+            } else {
+                track = scale_alpha(track, 0.4F);
+                fill = scale_alpha(fill, 0.4F);
+                thumb = scale_alpha(thumb, 0.4F);
+                thumb_border = scale_alpha(thumb_border, 0.4F);
+            }
             if (spec.vertical) {
                 const int32_t thickness = std::max(1, spec.track_thickness_px);
                 const int32_t track_x = x + (width - thickness) / 2;
@@ -1959,11 +2207,21 @@ sao_status_t sao::ui::detail::widget_input_paint(
                     static_cast<float>(thickness), static_cast<float>(std::max(1, filled)), fill);
                 if (status != SAO_STATUS_OK)
                     return status;
-                const int32_t size = std::clamp(spec.thumb_size_px, 4, std::max(4, width));
+                const int32_t base_size = std::clamp(spec.thumb_size_px, 4, std::max(4, width));
+                const int32_t size = std::min(std::max(4, width), base_size + (hovered ? 2 : 0));
+                const float center_y = std::clamp(static_cast<float>(y + height - filled),
+                                                  static_cast<float>(y) + size * 0.5F,
+                                                  static_cast<float>(y + height) - size * 0.5F);
+                status = sao_ui_paint_ctx_fill_ellipse(
+                    context, static_cast<float>(x + (width - size) / 2), center_y - size * 0.5F,
+                    static_cast<float>(size), static_cast<float>(size), thumb_border);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                const int32_t inset = size > 4 ? 1 : 0;
                 return sao_ui_paint_ctx_fill_ellipse(
-                    context, static_cast<float>(x + (width - size) / 2),
-                    static_cast<float>(y + height - filled - size / 2),
-                    static_cast<float>(size), static_cast<float>(size), thumb);
+                    context, static_cast<float>(x + (width - size) / 2 + inset),
+                    center_y - size * 0.5F + inset, static_cast<float>(size - inset * 2),
+                    static_cast<float>(size - inset * 2), thumb);
             }
             const int32_t thickness = std::max(1, spec.track_thickness_px);
             const int32_t track_y = y + (height - thickness) / 2;
@@ -1978,11 +2236,21 @@ sao_status_t sao::ui::detail::widget_input_paint(
                 static_cast<float>(std::max(1, filled)), static_cast<float>(thickness), fill);
             if (status != SAO_STATUS_OK)
                 return status;
-            const int32_t size = std::clamp(spec.thumb_size_px, 4, std::max(4, height));
+            const int32_t base_size = std::clamp(spec.thumb_size_px, 4, std::max(4, height));
+            const int32_t size = std::min(std::max(4, height), base_size + (hovered ? 2 : 0));
+            const float center_x =
+                std::clamp(static_cast<float>(x + filled), static_cast<float>(x) + size * 0.5F,
+                           static_cast<float>(x + width) - size * 0.5F);
+            status = sao_ui_paint_ctx_fill_ellipse(
+                context, center_x - size * 0.5F, static_cast<float>(y + (height - size) / 2),
+                static_cast<float>(size), static_cast<float>(size), thumb_border);
+            if (status != SAO_STATUS_OK)
+                return status;
+            const int32_t inset = size > 4 ? 1 : 0;
             return sao_ui_paint_ctx_fill_ellipse(
-                context, static_cast<float>(x + filled - size / 2),
-                static_cast<float>(y + (height - size) / 2), static_cast<float>(size),
-                static_cast<float>(size), thumb);
+                context, center_x - size * 0.5F + inset,
+                static_cast<float>(y + (height - size) / 2 + inset),
+                static_cast<float>(size - inset * 2), static_cast<float>(size - inset * 2), thumb);
         }
         default:
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;

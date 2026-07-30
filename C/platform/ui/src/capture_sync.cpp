@@ -19,11 +19,16 @@
 // static instance is used, matching the Python module-level state.
 
 #include "sao/ui/capture_sync.h"
+#include "sao/ui/compositor.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
+    sao_ui_compositor_handle_t compositor, uint8_t* out_bgra_pixels, size_t capacity,
+    uint32_t* out_width, uint32_t* out_height, size_t* out_bytes);
 
 namespace {
 
@@ -117,4 +122,19 @@ extern "C" uint32_t SAO_UI_CALL sao_ui_capture_sync_depth(void) {
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mu);
     return s.depth;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_snapshot_bgra(
+    sao_ui_compositor_handle_t compositor, uint8_t* out_bgra_pixels, size_t capacity,
+    uint32_t* out_width, uint32_t* out_height, size_t* out_bytes) {
+    // Frame-source invariant: capture_sync owns the capture lease,
+    // compositor owns composition, and dcomp_bridge is never involved in a
+    // capture. Present and capture therefore consume one compositor result.
+    const sao_status_t begin_status = sao_ui_capture_sync_begin();
+    if (begin_status != SAO_STATUS_OK)
+        return begin_status;
+    const sao_status_t compose_status = sao_ui_compositor_compose_snapshot_(
+        compositor, out_bgra_pixels, capacity, out_width, out_height, out_bytes);
+    const sao_status_t end_status = sao_ui_capture_sync_end();
+    return compose_status != SAO_STATUS_OK ? compose_status : end_status;
 }

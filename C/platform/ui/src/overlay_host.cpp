@@ -55,6 +55,9 @@ struct sao_ui_overlay_host_s {
     bool input_passthrough = true;
     uint32_t input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
     bool capture_excluded = false;
+    bool protection_requested = false;
+    sao_ui_overlay_protection_provider_fn_t protection_provider = nullptr;
+    void* protection_provider_user_data = nullptr;
     std::vector<SaoOverlayHostInputRect> previous_input_rects;
 
     sao_ui_hit_test_fn_t hit_test_fn = nullptr;
@@ -546,6 +549,23 @@ void destroy_created_host(sao_ui_overlay_host_s* host) {
     delete host;
 }
 
+#if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
+SaoAntiScreencapAffinityPair capture_topology(sao_ui_overlay_host_s* host) {
+    SaoAntiScreencapAffinityPair pair{};
+    pair.primary_hwnd = host->hwnd;
+    pair.decoy_hwnd = host->control_hwnd;
+    pair.owner_hwnd = host->owner_hwnd;
+    return pair;
+}
+#endif
+
+sao_status_t invoke_protection_provider(sao_ui_overlay_host_s* host, bool enable) {
+    if (host->protection_provider == nullptr) return SAO_STATUS_OK;
+    return host->protection_provider(
+        host->hwnd, host->control_hwnd, host->owner_hwnd, enable,
+        host->protection_provider_user_data);
+}
+
 } // namespace
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
@@ -613,6 +633,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     host->client_rect = {x, y, width > 0 ? width : 1920, height > 0 ? height : 1080};
     host->desired_rect = host->client_rect;
     host->current_dpi = query_window_dpi(host->hwnd);
+    if (config != nullptr) {
+        host->protection_provider = config->protection_provider;
+        host->protection_provider_user_data = config->protection_provider_user_data;
+    }
     OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
     if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
         destroy_created_host(host);
@@ -633,6 +657,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
             return register_status;
         }
     }
+    if (config != nullptr && config->sao_screencap_protection) {
+        const sao_status_t protection_status =
+            sao_ui_overlay_host_set_capture_mode(host, true);
+        if (protection_status != SAO_STATUS_OK) {
+            if (host->dc_mutation != nullptr && host->hwnd != nullptr) {
+                (void)sao_ui_dc_mutation_coordinator_invalidate(
+                    host->dc_mutation, host->hwnd, 1.0);
+            }
+            destroy_created_host(host);
+            release_single_instance_lock();
+            return protection_status;
+        }
+    }
     *out_handle = host;
     return SAO_STATUS_OK;
 }
@@ -651,19 +688,9 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
         (void)::ReleaseCapture();
     }
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
-    SaoAntiScreencapAffinityPair pair{};
-    pair.primary_hwnd = handle->hwnd;
-    pair.decoy_hwnd = handle->control_hwnd;
-    uint32_t effective = SAO_ASC_MODE_INVALID;
-    const int32_t affinity_rc = sao_security_anti_screencap_overlay_host_set_capture_mode(
-        &pair, SAO_ASC_MODE_NORMAL, &effective);
-    if (affinity_rc != SAO_STATUS_OK)
+    if (sao_ui_overlay_host_set_capture_mode(handle, false) != SAO_STATUS_OK)
         return false;
     (void)sao_security_anti_screencap_bind_active_pair(nullptr);
-    {
-        std::lock_guard<std::mutex> lock(handle->state_mu);
-        handle->capture_excluded = false;
-    }
 #else
     // Without the security provider there is no authoritative affinity
     // owner.  Keep the state explicitly unprotected rather than claiming a
@@ -695,6 +722,11 @@ extern "C" void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle
 
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(sao_ui_overlay_host_handle_t handle) {
     return handle == nullptr ? nullptr : handle->control_hwnd;
+}
+
+extern "C" void* SAO_UI_CALL sao_ui_overlay_host_owner_hwnd(
+    sao_ui_overlay_host_handle_t handle) {
+    return handle == nullptr ? nullptr : handle->owner_hwnd;
 }
 
 extern "C" void* SAO_UI_CALL
@@ -879,14 +911,41 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
-    SaoAntiScreencapAffinityPair pair{};
-    pair.primary_hwnd = handle->hwnd;
-    pair.decoy_hwnd = handle->control_hwnd;
+    const SaoAntiScreencapAffinityPair pair = capture_topology(handle);
+    bool previous_requested = false;
+    {
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        previous_requested = handle->protection_requested;
+    }
     uint32_t effective = SAO_ASC_MODE_INVALID;
-    const int32_t rc = sao_security_anti_screencap_overlay_host_set_capture_mode(
-        &pair, exclude ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL, &effective);
-    if (rc != SAO_STATUS_OK) {
-        return rc;
+    if (exclude) {
+        const int32_t affinity_status =
+            sao_security_anti_screencap_overlay_host_set_capture_mode(
+                &pair, SAO_ASC_MODE_EXCLUDED, &effective);
+        if (affinity_status != SAO_STATUS_OK) return affinity_status;
+        const sao_status_t provider_status = previous_requested
+            ? SAO_STATUS_OK
+            : invoke_protection_provider(handle, true);
+        if (provider_status != SAO_STATUS_OK) {
+            uint32_t ignored = SAO_ASC_MODE_INVALID;
+            (void)sao_security_anti_screencap_overlay_host_set_capture_mode(
+                &pair,
+                previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
+                &ignored);
+            return provider_status;
+        }
+    } else {
+        const sao_status_t provider_status = previous_requested
+            ? invoke_protection_provider(handle, false)
+            : SAO_STATUS_OK;
+        if (provider_status != SAO_STATUS_OK) return provider_status;
+        const int32_t affinity_status =
+            sao_security_anti_screencap_overlay_host_set_capture_mode(
+                &pair, SAO_ASC_MODE_NORMAL, &effective);
+        if (affinity_status != SAO_STATUS_OK) {
+            if (previous_requested) (void)invoke_protection_provider(handle, true);
+            return affinity_status;
+        }
     }
     std::lock_guard<std::mutex> lock(handle->state_mu);
     // MONITORED is a compatibility fallback, not strict exclusion.  Do not
@@ -894,10 +953,12 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
     // actual exclusion mode.
     handle->capture_excluded =
         effective == SAO_ASC_MODE_STREAMING || effective == SAO_ASC_MODE_EXCLUDED;
+    handle->protection_requested = exclude;
     return SAO_STATUS_OK;
 #else
     std::lock_guard<std::mutex> lock(handle->state_mu);
     handle->capture_excluded = false;
+    handle->protection_requested = false;
     return SAO_STATUS_ERR_NOT_INITIALIZED;
 #endif
 }

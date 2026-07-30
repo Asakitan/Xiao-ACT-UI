@@ -385,6 +385,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_start_fade(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_input_enabled(
     sao_ui_layer_handle_t layer, bool enabled);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_input_policy(
+    sao_ui_layer_handle_t layer, bool click_through, bool input_enabled);
+
 // Override visual-alpha hit scanning with layer-local logical rectangles.
 // Passing NULL with count 0 clears the override and restores the layer's
 // rect_hit / BGRA-alpha behavior. Rectangles must fit inside layer bounds.
@@ -444,13 +447,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_post_input(
     sao_ui_compositor_post_input_fn_t fn,
     void* user_data);
 
-// Route this interactive layer's input via a per-layer input proxy
-// (Tk-toplevel-style invisible window with LWA_COLORKEY hit shape)
-// so the host stays click-through everywhere.  See
-// `overlay_compositor.py::_proxy_shield_activation` and its long
-// commentary on the WndProc-chain-of-death (never subclass twice —
-// one shot per proxy or the CallWindowProc stack overflow-crashes
-// the process).
+// Frozen Tk-toplevel input-proxy compatibility path. It is disabled unless
+// SAO_UI_LEGACY_TK_INPUT=1; native layers route input through input_router.cpp.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_enable_input_proxy(
     sao_ui_layer_handle_t layer);
 

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <mutex>
@@ -38,6 +39,8 @@ sao_ui_input_router_has_modal_barrier(sao_ui_input_router_deep_handle_t handle);
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_input_router_test_set_create_failure_point(int32_t point);
 extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_input_router_test_active_count();
+extern "C" SAO_UI_API uint64_t SAO_UI_CALL
+sao_ui_compositor_test_input_writer_revision(sao_ui_compositor_handle_t compositor);
 
 // Public API declared on the header banner but implemented in the
 // implementation-only surface — declare it here so the linker resolves the symbol.
@@ -115,6 +118,41 @@ struct ReentrantDrainHotkey {
     sao_status_t unregister_status{SAO_STATUS_ERR_UNKNOWN};
 };
 
+struct LayerRouteLog {
+    int cursor_calls{};
+};
+
+class LegacyInputGateOff {
+  public:
+    LegacyInputGateOff() {
+        const char* current = std::getenv("SAO_UI_LEGACY_TK_INPUT");
+        if (current != nullptr) {
+            had_previous_ = true;
+            previous_ = current;
+        }
+#if defined(_WIN32)
+        (void)_putenv_s("SAO_UI_LEGACY_TK_INPUT", "");
+#else
+        (void)unsetenv("SAO_UI_LEGACY_TK_INPUT");
+#endif
+    }
+
+    ~LegacyInputGateOff() {
+#if defined(_WIN32)
+        (void)_putenv_s("SAO_UI_LEGACY_TK_INPUT", had_previous_ ? previous_.c_str() : "");
+#else
+        if (had_previous_)
+            (void)setenv("SAO_UI_LEGACY_TK_INPUT", previous_.c_str(), 1);
+        else
+            (void)unsetenv("SAO_UI_LEGACY_TK_INPUT");
+#endif
+    }
+
+  private:
+    bool had_previous_{};
+    std::string previous_;
+};
+
 void SAO_UI_CALL hotkey_cb(const char* binding_id, const SaoUiInputEvent*, void* user_data) {
     auto* log = reinterpret_cast<HotkeyFireLog*>(user_data);
     log->hits.fetch_add(1);
@@ -187,6 +225,22 @@ void SAO_UI_CALL throwing_hover_cb(sao_ui_widget_handle_t, sao_ui_widget_handle_
     throw std::runtime_error("router callback failure");
 }
 
+void SAO_UI_CALL layer_cursor_cb(float, float, void* user_data) {
+    ++static_cast<LayerRouteLog*>(user_data)->cursor_calls;
+}
+
+SaoLayerConfig input_layer_config(const char* name, int32_t z_order) {
+    SaoLayerConfig config{};
+    config.struct_size = sizeof(config);
+    config.name_utf8 = name;
+    config.width = 16;
+    config.height = 16;
+    config.z_order = z_order;
+    config.click_through = false;
+    config.rect_hit = true;
+    return config;
+}
+
 sao_ui_widget_handle_t create_focus_button(const char* text) {
     SaoUiButtonSpec spec{};
     spec.text_utf8 = text;
@@ -211,6 +265,58 @@ sao_ui_widget_handle_t create_disabled_checkbox() {
 }
 
 } // namespace
+
+TEST_CASE("layer input router is the single state writer and honors z order",
+          "[ui][input_router][single_writer][z_order]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    SaoLayerConfig lower_config = input_layer_config("router.z.lower", 10);
+    SaoLayerConfig upper_config = input_layer_config("router.z.upper", 20);
+    sao_ui_layer_handle_t lower = nullptr;
+    sao_ui_layer_handle_t upper = nullptr;
+    REQUIRE(sao_ui_layer_create(compositor, &lower_config, &lower) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_layer_create(compositor, &upper_config, &upper) == SAO_STATUS_OK);
+    LayerRouteLog lower_log;
+    LayerRouteLog upper_log;
+    REQUIRE(sao_ui_layer_set_input_callbacks(lower, &layer_cursor_cb, nullptr, nullptr, nullptr,
+                                              &lower_log) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_layer_set_input_callbacks(upper, &layer_cursor_cb, nullptr, nullptr, nullptr,
+                                              &upper_log) == SAO_STATUS_OK);
+
+    const uint64_t before = sao_ui_compositor_test_input_writer_revision(compositor);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, 0x0200, 4, 5, -1, 0) == SAO_STATUS_OK);
+    CHECK(upper_log.cursor_calls == 1);
+    CHECK(lower_log.cursor_calls == 0);
+    const uint64_t after_upper = sao_ui_compositor_test_input_writer_revision(compositor);
+    CHECK(after_upper > before);
+
+    REQUIRE(sao_ui_layer_set_visible(upper, false) == SAO_STATUS_OK);
+    CHECK(sao_ui_compositor_test_input_writer_revision(compositor) > after_upper);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, 0x0200, 4, 5, -1, 0) == SAO_STATUS_OK);
+    CHECK(lower_log.cursor_calls == 1);
+
+    sao_ui_layer_destroy(upper);
+    sao_ui_layer_destroy(lower);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("legacy Tk input proxy gate defaults off",
+          "[ui][input_router][legacy][tk_mirror][gate]") {
+    LegacyInputGateOff gate;
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    SaoLayerConfig config = input_layer_config("router.legacy.off", 1);
+    sao_ui_layer_handle_t layer = nullptr;
+    REQUIRE(sao_ui_layer_create(compositor, &config, &layer) == SAO_STATUS_OK);
+    LayerRouteLog log;
+    REQUIRE(sao_ui_layer_set_input_callbacks(layer, &layer_cursor_cb, nullptr, nullptr, nullptr,
+                                              &log) == SAO_STATUS_OK);
+    CHECK(sao_ui_layer_enable_input_proxy(layer) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    REQUIRE(sao_ui_compositor_dispatch_mouse(compositor, 0x0200, 2, 3, -1, 0) == SAO_STATUS_OK);
+    CHECK(log.cursor_calls == 1);
+    sao_ui_layer_destroy(layer);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
 
 TEST_CASE("router_dispatch_mouse_to_focus_target", "[ui][input_router][runtime]") {
     sao_ui_input_router_deep_handle_t router = nullptr;

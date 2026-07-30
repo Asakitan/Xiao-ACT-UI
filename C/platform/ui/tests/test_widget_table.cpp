@@ -11,6 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "sao/core/status.h"
+#include "sao/ui/widget_kit.h"
 #include "sao/ui/widget_table.h"
 
 extern "C" {
@@ -46,6 +48,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_get_visible_range(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_hit_test(
     sao_ui_widget_handle_t handle, SaoUiPointF point, int32_t total_width_px,
     int32_t scroll_offset_px, size_t* out_row_view_index, int32_t* out_col_index);
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_table_get_last_paint_range(sao_ui_widget_handle_t handle, size_t* out_first_row,
+                                         size_t* out_last_row, size_t* out_row_count);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_sort_by_index(sao_ui_widget_handle_t handle,
                                                                       int32_t col_index,
@@ -71,6 +77,38 @@ struct RowClickSink {
     std::atomic<int64_t> last_row_id{-1};
     std::atomic<int> hits{0};
 };
+
+struct Pixel {
+    uint8_t b;
+    uint8_t g;
+    uint8_t r;
+    uint8_t a;
+};
+
+std::vector<Pixel> paint_table_snapshot(sao_ui_widget_handle_t widget, uint32_t width,
+                                        uint32_t height) {
+    SaoUiOffscreenRasterDesc desc{width, height, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint_at(widget, context, 0, 0, static_cast<int32_t>(width),
+                                   static_cast<int32_t>(height), 1.0F) == SAO_STATUS_OK);
+    size_t bytes = 0;
+    uint32_t actual_width = 0;
+    uint32_t actual_height = 0;
+    uint32_t stride = 0;
+    REQUIRE(sao_ui_offscreen_raster_snapshot(raster, nullptr, 0, &bytes, &actual_width,
+                                             &actual_height,
+                                             &stride) == SAO_STATUS_ERR_BUFFER_TOO_SMALL);
+    std::vector<Pixel> pixels(bytes / sizeof(Pixel));
+    REQUIRE(sao_ui_offscreen_raster_snapshot(raster, reinterpret_cast<uint8_t*>(pixels.data()),
+                                             bytes, &bytes, &actual_width, &actual_height,
+                                             &stride) == SAO_STATUS_OK);
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+    return pixels;
+}
 
 void SAO_UI_CALL row_click_cb(int64_t row_id, void* user_data) {
     if (user_data == nullptr)
@@ -154,6 +192,7 @@ sao_ui_widget_handle_t make_dps_table() {
     cols[0].flex_weight = 1.0f;
     cols[0].sortable = true;
     cols[0].filterable = true;
+    cols[0].resizable = true;
 
     cols[1].key_utf8 = "dps";
     cols[1].title_utf8 = "DPS";
@@ -236,6 +275,21 @@ void populate_dps_rows(sao_ui_widget_handle_t h) {
     REQUIRE(sao_ui_table_set_rows(h, rows, 4) == SAO_STATUS_OK);
 }
 
+void populate_empty_dps_rows(sao_ui_widget_handle_t h, size_t count) {
+    std::vector<SaoUiCellValue> cells(count * 3U);
+    std::vector<SaoUiTableRow> rows(count);
+    for (size_t row_index = 0; row_index < count; ++row_index) {
+        for (size_t column_index = 0; column_index < 3U; ++column_index) {
+            cells[row_index * 3U + column_index].kind = SAO_UI_CELL_STRING;
+            cells[row_index * 3U + column_index].v.s_utf8 = "";
+        }
+        rows[row_index].row_id = static_cast<int64_t>(row_index + 1U);
+        rows[row_index].cells = cells.data() + row_index * 3U;
+        rows[row_index].cell_count = 3U;
+    }
+    REQUIRE(sao_ui_table_set_rows(h, rows.data(), rows.size()) == SAO_STATUS_OK);
+}
+
 } // namespace
 
 TEST_CASE("table_create_and_set_rows_populates_view", "[ui][widget][table][runtime]") {
@@ -311,6 +365,124 @@ TEST_CASE("table_virtual_scroll_get_visible_range", "[ui][widget][table][runtime
     REQUIRE(first == 1);
     // Should reach the very last row (idx 3).
     REQUIRE(last == 3);
+    sao_ui_widget_table_family_destroy(h);
+}
+
+TEST_CASE("table pointer state exposes resize hint and drives header sort and row selection",
+          "[ui][widget][table][input][resize]") {
+    sao_ui_widget_handle_t h = make_dps_table();
+    populate_dps_rows(h);
+    size_t row_index = std::numeric_limits<size_t>::max();
+    int32_t column_index = -1;
+    bool resize_hint = false;
+
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 96.0F, 10.0F, 240, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    CHECK(column_index == 0);
+    CHECK(resize_hint);
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 95.0F, 10.0F, 240, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    CHECK_FALSE(resize_hint);
+
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 110.0F, 10.0F, 240, 0, true, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 110.0F, 10.0F, 240, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    int64_t first_row_id = 0;
+    REQUIRE(sao_ui_widget_table_get_row_id_at_view_index(h, 0, &first_row_id) == SAO_STATUS_OK);
+    CHECK(first_row_id == 2);
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 110.0F, 10.0F, 240, 0, true, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 110.0F, 10.0F, 240, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_table_get_row_id_at_view_index(h, 0, &first_row_id) == SAO_STATUS_OK);
+    CHECK(first_row_id == 3);
+
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 29.0F, 240, 0, true, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    CHECK(row_index == 0U);
+    CHECK(column_index == 0);
+    sao_ui_widget_table_family_destroy(h);
+}
+
+TEST_CASE("table paints header feedback row states and default zebra striping",
+          "[ui][widget][table][paint][state]") {
+    SaoUiTableColumn column{};
+    column.key_utf8 = "name";
+    column.title_utf8 = "";
+    column.type = SAO_UI_COL_TEXT;
+    column.min_width_px = 80;
+    column.sortable = true;
+    column.resizable = true;
+    SaoUiTableSpec spec{};
+    spec.columns = &column;
+    spec.column_count = 1;
+    spec.row_height_px = 20;
+    spec.header_height_px = 24;
+    spec.show_header = true;
+    spec.row_hover_highlight = true;
+    spec.body_bg_argb = 0xff101010U;
+    spec.header_bg_argb = 0xff202020U;
+    sao_ui_widget_handle_t h = nullptr;
+    REQUIRE(sao_ui_table_create(nullptr, &spec, &h) == SAO_STATUS_OK);
+    SaoUiTableRow rows[2]{};
+    rows[0].row_id = 1;
+    rows[1].row_id = 2;
+    REQUIRE(sao_ui_table_set_rows(h, rows, 2) == SAO_STATUS_OK);
+
+    auto base = paint_table_snapshot(h, 80, 64);
+    CHECK(base[34U * 80U + 40U].r == 0x10U);
+    CHECK(base[54U * 80U + 40U].r == 0x1aU);
+    size_t row_index = std::numeric_limits<size_t>::max();
+    int32_t column_index = -1;
+    bool resize_hint = false;
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 10.0F, 80, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    auto hovered_header = paint_table_snapshot(h, 80, 64);
+    CHECK((hovered_header[12U * 80U + 20U].r != base[12U * 80U + 20U].r ||
+           hovered_header[12U * 80U + 20U].g != base[12U * 80U + 20U].g ||
+           hovered_header[12U * 80U + 20U].b != base[12U * 80U + 20U].b));
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 10.0F, 80, 0, true, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    auto pressed_header = paint_table_snapshot(h, 80, 64);
+    CHECK((pressed_header[12U * 80U + 20U].r != hovered_header[12U * 80U + 20U].r ||
+           pressed_header[12U * 80U + 20U].g != hovered_header[12U * 80U + 20U].g ||
+           pressed_header[12U * 80U + 20U].b != hovered_header[12U * 80U + 20U].b));
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 10.0F, 80, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 30.0F, 80, 0, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    auto hovered_row = paint_table_snapshot(h, 80, 64);
+    CHECK((hovered_row[34U * 80U + 40U].r != base[34U * 80U + 40U].r ||
+           hovered_row[34U * 80U + 40U].g != base[34U * 80U + 40U].g ||
+           hovered_row[34U * 80U + 40U].b != base[34U * 80U + 40U].b));
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, 20.0F, 30.0F, 80, 0, true, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    auto selected_row = paint_table_snapshot(h, 80, 64);
+    CHECK((selected_row[34U * 80U].r != selected_row[34U * 80U + 3U].r ||
+           selected_row[34U * 80U].g != selected_row[34U * 80U + 3U].g ||
+           selected_row[34U * 80U].b != selected_row[34U * 80U + 3U].b));
+    sao_ui_widget_table_family_destroy(h);
+}
+
+TEST_CASE("table paint retains only visible rows plus two-row overscan",
+          "[ui][widget][table][scroll][paint]") {
+    sao_ui_widget_handle_t h = make_dps_table();
+    populate_empty_dps_rows(h, 10);
+    size_t row_index = std::numeric_limits<size_t>::max();
+    int32_t column_index = -1;
+    bool resize_hint = false;
+    REQUIRE(sao_ui_widget_table_update_pointer_state(h, -1.0F, -1.0F, 240, 60, false, &row_index,
+                                                     &column_index, &resize_hint) == SAO_STATUS_OK);
+    (void)paint_table_snapshot(h, 240, 64);
+    size_t first = 0;
+    size_t last = 0;
+    size_t count = 0;
+    REQUIRE(sao_ui_widget_table_get_last_paint_range(h, &first, &last, &count) == SAO_STATUS_OK);
+    CHECK(first == 1U);
+    CHECK(last == 6U);
+    CHECK(count == 6U);
     sao_ui_widget_table_family_destroy(h);
 }
 
@@ -409,8 +581,7 @@ TEST_CASE("table callback replacement waits for the old generation",
         std::atomic_bool replaced{false};
         std::atomic<sao_status_t> replacement_status{SAO_STATUS_ERR_UNKNOWN};
         std::thread replacement([&] {
-            replacement_status.store(
-                sao_ui_table_set_row_click_handler(table, nullptr, nullptr));
+            replacement_status.store(sao_ui_table_set_row_click_handler(table, nullptr, nullptr));
             replaced.store(true);
         });
         std::this_thread::sleep_for(50ms);
@@ -432,9 +603,8 @@ TEST_CASE("table callback replacement waits for the old generation",
         REQUIRE(sao_ui_table_set_cell_action_handler(table, blocking_cell_action_cb, &state) ==
                 SAO_STATUS_OK);
         std::atomic<sao_status_t> dispatch_status{SAO_STATUS_ERR_UNKNOWN};
-        std::thread dispatch([&] {
-            dispatch_status.store(sao_ui_widget_table_fire_cell_action(table, 0, 2));
-        });
+        std::thread dispatch(
+            [&] { dispatch_status.store(sao_ui_widget_table_fire_cell_action(table, 0, 2)); });
         {
             std::unique_lock lock(state.mutex);
             REQUIRE(state.cv.wait_for(lock, 1s, [&] { return state.entered; }));
@@ -443,8 +613,7 @@ TEST_CASE("table callback replacement waits for the old generation",
         std::atomic_bool replaced{false};
         std::atomic<sao_status_t> replacement_status{SAO_STATUS_ERR_UNKNOWN};
         std::thread replacement([&] {
-            replacement_status.store(
-                sao_ui_table_set_cell_action_handler(table, nullptr, nullptr));
+            replacement_status.store(sao_ui_table_set_cell_action_handler(table, nullptr, nullptr));
             replaced.store(true);
         });
         std::this_thread::sleep_for(50ms);
@@ -551,9 +720,8 @@ TEST_CASE("table destroy waits for every active callback generation",
         REQUIRE(sao_ui_table_set_cell_action_handler(table, blocking_cell_action_cb, &state) ==
                 SAO_STATUS_OK);
         std::atomic<sao_status_t> dispatch_status{SAO_STATUS_ERR_UNKNOWN};
-        std::thread dispatch([&] {
-            dispatch_status.store(sao_ui_widget_table_fire_cell_action(table, 0, 2));
-        });
+        std::thread dispatch(
+            [&] { dispatch_status.store(sao_ui_widget_table_fire_cell_action(table, 0, 2)); });
         {
             std::unique_lock lock(state.mutex);
             REQUIRE(state.cv.wait_for(lock, 1s, [&] { return state.entered; }));

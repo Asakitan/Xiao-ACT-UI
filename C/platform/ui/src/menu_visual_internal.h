@@ -16,7 +16,15 @@ inline constexpr size_t kIconCapacity = 32;
 struct ChildRowSnapshot {
     std::array<char, kNameCapacity> name_utf8{};
     std::array<char, kIconCapacity> icon_utf8{};
+    bool can_activate{};
+    SaoUiMenuBtnState state{SAO_UI_MENU_BTN_IDLE};
     int32_t visible_width_px{};
+    float hover_t{};
+};
+
+struct RootRowSnapshot {
+    bool can_activate{};
+    SaoUiMenuBtnState state{SAO_UI_MENU_BTN_IDLE};
     float hover_t{};
 };
 
@@ -51,6 +59,7 @@ struct Snapshot {
     float fade_t{1.0F};
     std::array<char, kNameCapacity> active_root_name_utf8{};
     std::array<char, kNameCapacity> displayed_parent_name_utf8{};
+    std::vector<RootRowSnapshot> roots;
     std::vector<ChildRowSnapshot> rows;
     uint64_t revision{};
 };

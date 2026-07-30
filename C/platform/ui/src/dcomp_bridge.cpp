@@ -4,6 +4,9 @@
 // DComp visual tree. Creation and render calls are bound to the creating
 // render thread. Teardown reverses the tree attachment before releasing the
 // swap chain, DComp objects, DXGI interfaces, immediate context, and device.
+// It never captures or composes a surface: capture_sync owns capture leases,
+// compositor owns the sole composed BGRA frame, and this bridge only uploads
+// that frame and presents it to DWM.
 
 #include "sao/ui/dcomp_bridge.h"
 

@@ -1,5 +1,7 @@
 #include "sao/ui/abi.h"
 #include "sao/ui/widget_kit.h"
+#include "sao/ui/widget_badge.h"
+#include "sao/ui/widget_filter_row.h"
 
 #include "panel_theme_internal.h"
 #include "widget_typed_internal.h"
@@ -345,7 +347,9 @@ bool valid_widget_kind(int32_t kind) {
            (kind >= SAO_UI_WIDGET_PANEL && kind <= SAO_UI_WIDGET_GRID) ||
            (kind >= SAO_UI_WIDGET_PROGRESS_BAR && kind <= SAO_UI_WIDGET_EMPTY_STATE) ||
            (kind >= SAO_UI_WIDGET_TIME_SERIES_CHART && kind <= SAO_UI_WIDGET_SPARKLINE) ||
-           kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS;
+           kind == SAO_UI_WIDGET_SCRIPTABLE_CANVAS ||
+           kind == SAO_UI_WIDGET_ANIMATED_BADGE ||
+           kind == SAO_UI_WIDGET_FILTER_ROW;
 }
 
 bool valid_widget_event_type(int32_t event_type) {
@@ -1087,6 +1091,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_size_hint(
         out_hint->flex_grow = 1.0F;
     } else if (kind >= SAO_UI_WIDGET_PROGRESS_BAR && kind <= SAO_UI_WIDGET_EMPTY_STATE) {
         set_size_hint(*out_hint, 48, 18, 160, 28);
+    } else if (kind == SAO_UI_WIDGET_ANIMATED_BADGE) {
+        set_size_hint(*out_hint, 16, 16, 48, 24);
+    } else if (kind == SAO_UI_WIDGET_FILTER_ROW) {
+        set_size_hint(*out_hint, 120, 32, 320, 40);
+        out_hint->flex_grow = 1.0F;
     } else if (kind >= SAO_UI_WIDGET_BUTTON && kind <= SAO_UI_WIDGET_SLIDER_EXT) {
         set_size_hint(*out_hint, 48, 24, 96, 32);
     } else {

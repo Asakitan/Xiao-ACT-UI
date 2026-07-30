@@ -49,6 +49,7 @@ using json = nlohmann::json;
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_apply_theme_override_(
     sao_ui_panel_handle_t panel, const uint8_t* override_json_utf8, size_t override_len);
+extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t panel);
 
 std::atomic<int32_t> g_panel_publish_failure_point{0};
 std::atomic_size_t g_geometry_worker_count{0};
@@ -339,7 +340,7 @@ class PanelRegistrationGuard {
             }
         }
         try {
-            sao_ui_panel_destroy(record_->runtime_panel);
+            sao_ui_panel_runtime_destroy_(record_->runtime_panel);
         } catch (...) {
         }
         record_->runtime_panel = nullptr;
@@ -353,7 +354,17 @@ class PanelRegistrationGuard {
 
 // ─── Global registry ────────────────────────────────────────────────
 struct Registry {
+    struct RuntimePanel {
+        sao_ui_panel_handle_t handle{};
+        sao_ui_compositor_handle_t compositor{};
+        std::string panel_id;
+    };
+
     std::mutex mu;
+    // Single process authority for every live panel handle, including the
+    // legacy SaoPanelConfig ABI. Descriptor records below are optional
+    // metadata layered on the same runtime handle.
+    std::vector<RuntimePanel> runtime_panels;
     // Keyed by the opaque panel handle we hand out.  We use a raw
     // pointer-as-integer scheme: the handle IS the record pointer,
     // so lookup is O(1) via reinterpret_cast (bounded by an alive-set
@@ -565,6 +576,116 @@ sao_status_t order_model(const std::vector<BodyRecord::Node>& model,
 }
 
 } // namespace
+
+extern "C" bool SAO_UI_CALL
+sao_ui_panel_runtime_is_registered_(sao_ui_panel_handle_t panel) {
+    if (panel == nullptr)
+        return false;
+    try {
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        return std::ranges::any_of(reg.runtime_panels, [panel](const Registry::RuntimePanel& item) {
+            return item.handle == panel;
+        });
+    } catch (...) {
+        return false;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_find_(
+    sao_ui_compositor_handle_t compositor, const char* panel_id_utf8,
+    sao_ui_panel_handle_t* out_panel) {
+    if (panel_id_utf8 == nullptr || out_panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_panel = nullptr;
+    try {
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        const auto found = std::ranges::find_if(
+            reg.runtime_panels, [&](const Registry::RuntimePanel& item) {
+                return item.compositor == compositor && item.panel_id == panel_id_utf8;
+            });
+        if (found == reg.runtime_panels.end())
+            return SAO_STATUS_ERR_NOT_FOUND;
+        *out_panel = found->handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_publish_(
+    sao_ui_panel_handle_t panel, sao_ui_compositor_handle_t compositor,
+    const char* panel_id_utf8, bool single_instance, sao_ui_panel_handle_t* out_panel) {
+    if (panel == nullptr || panel_id_utf8 == nullptr || panel_id_utf8[0] == '\0' ||
+        out_panel == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    *out_panel = nullptr;
+    try {
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        const auto found = std::ranges::find_if(
+            reg.runtime_panels, [&](const Registry::RuntimePanel& item) {
+                return item.compositor == compositor && item.panel_id == panel_id_utf8;
+            });
+        if (found != reg.runtime_panels.end()) {
+            if (!single_instance)
+                return SAO_STATUS_ERR_ALREADY_EXISTS;
+            *out_panel = found->handle;
+            return SAO_STATUS_OK;
+        }
+        reg.runtime_panels.push_back({panel, compositor, panel_id_utf8});
+        *out_panel = panel;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" bool SAO_UI_CALL sao_ui_panel_runtime_retire_(sao_ui_panel_handle_t panel) {
+    if (panel == nullptr)
+        return false;
+    try {
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        const auto found = std::ranges::find_if(
+            reg.runtime_panels,
+            [panel](const Registry::RuntimePanel& item) { return item.handle == panel; });
+        if (found == reg.runtime_panels.end())
+            return false;
+        reg.runtime_panels.erase(found);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_enumerate_(
+    sao_ui_compositor_handle_t compositor, sao_ui_panel_handle_t* out_panels,
+    size_t capacity, size_t* out_written) {
+    if (out_written == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_written = 0;
+    try {
+        auto& reg = registry();
+        std::lock_guard lock(reg.mu);
+        size_t total = 0;
+        for (const Registry::RuntimePanel& item : reg.runtime_panels) {
+            if (item.compositor != compositor)
+                continue;
+            if (out_panels != nullptr && total < capacity)
+                out_panels[total] = item.handle;
+            ++total;
+        }
+        *out_written = total;
+        return out_panels != nullptr && capacity < total
+                   ? SAO_STATUS_ERR_BUFFER_TOO_SMALL
+                   : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
 
 // ─── Registration ────────────────────────────────────────────────────
 
@@ -779,15 +900,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_unregister(sao_ui_panel_handle_
                 reg.retired.push_back(rec);
             }
             rec->geometry_persistence.defer_stop(
-                [rec] { sao_ui_panel_destroy(rec->runtime_panel); });
+                [rec] { sao_ui_panel_runtime_destroy_(rec->runtime_panel); });
             return SAO_STATUS_OK;
         }
         rec->geometry_persistence.stop();
-        sao_ui_panel_destroy(rec->runtime_panel);
+        sao_ui_panel_runtime_destroy_(rec->runtime_panel);
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+}
+
+extern "C" void SAO_UI_CALL sao_ui_panel_destroy_through_sdk_(
+    sao_ui_panel_handle_t panel) {
+    if (panel == nullptr)
+        return;
+    const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
+    if (unregister_status == SAO_STATUS_ERR_NOT_FOUND)
+        sao_ui_panel_runtime_destroy_(panel);
 }
 
 // ─── Body mutations (batched) ────────────────────────────────────────

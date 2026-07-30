@@ -25,8 +25,11 @@
 // The C++ port delegates the production path to an owned compositor
 // layer while retaining an explicitly reported record-only fixture
 // when tests pass a null compositor.
+// This file is frozen compatibility surface. No new rendering, input,
+// theme, capture, or lifecycle authority is added here.
 
 #include "sao/ui/adapter.h"
+#include "sao/ui/legacy_webview.h"
 #include "sao/ui/scheduler.h"
 
 #include <array>
@@ -151,6 +154,8 @@ struct OverlayWindow {
 struct BgraPresenter {
     sao_ui_layer_handle_t layer;
 
+    // Test/diagnostic mirror only. The compositor layer is the sole
+    // production frame source after a successful set_frame call.
     std::vector<uint8_t> frame;
     uint32_t frame_width = 0;
     uint32_t frame_height = 0;
@@ -627,6 +632,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_overlay_window_create(
     if (out_handle == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
+    if (!sao_ui_legacy_compat_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (config == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (config->width <= 0 || config->height <= 0) {
@@ -1152,6 +1159,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_bgra_presenter_create(
     if (out_handle == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
+    if (!sao_ui_legacy_compat_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     try {
         auto presenter = std::make_unique<BgraPresenter>();
         presenter->layer = layer;

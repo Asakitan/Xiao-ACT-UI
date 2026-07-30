@@ -31,7 +31,10 @@
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
+#include "input_router_internal.h"
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -57,6 +60,269 @@
 #include <windows.h>
 #include <windowsx.h>
 #endif
+
+namespace sao::ui::input_router_detail {
+
+namespace {
+
+constexpr uint32_t kMouseMove = 0x0200;
+constexpr uint32_t kLeftButtonDown = 0x0201;
+constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr uint32_t kLeftButtonDoubleClick = 0x0203;
+constexpr uint32_t kRightButtonDown = 0x0204;
+constexpr uint32_t kRightButtonUp = 0x0205;
+constexpr uint32_t kRightButtonDoubleClick = 0x0206;
+constexpr uint32_t kMiddleButtonDown = 0x0207;
+constexpr uint32_t kMiddleButtonUp = 0x0208;
+constexpr uint32_t kMiddleButtonDoubleClick = 0x0209;
+constexpr uint32_t kMouseWheel = 0x020A;
+constexpr uint32_t kCaptureChanged = 0x0215;
+constexpr uint32_t kMouseLeave = 0x02A3;
+constexpr uint32_t kCancelMode = 0x001F;
+constexpr float kWheelDelta = 120.0F;
+
+bool valid_layer_message(uint32_t message) noexcept {
+    return message == kMouseMove || message == kMouseLeave || message == kMouseWheel ||
+           message == kCaptureChanged || message == kCancelMode ||
+           message == kLeftButtonDown || message == kLeftButtonUp ||
+           message == kLeftButtonDoubleClick || message == kRightButtonDown ||
+           message == kRightButtonUp || message == kRightButtonDoubleClick ||
+           message == kMiddleButtonDown || message == kMiddleButtonUp ||
+           message == kMiddleButtonDoubleClick;
+}
+
+bool append_action(std::array<LayerInputAction, 3>* actions, size_t* count,
+                   const LayerInputAction& action) noexcept {
+    if (actions == nullptr || count == nullptr || *count >= actions->size())
+        return false;
+    (*actions)[(*count)++] = action;
+    return true;
+}
+
+uint64_t next_writer_revision(uint64_t current) noexcept {
+    ++current;
+    return current == 0 ? 1 : current;
+}
+
+} // namespace
+
+struct LayerInputState {
+    void* hovered_layer{};
+    void* captured_layer{};
+    int32_t captured_button{-1};
+    int32_t suppressed_button_up{-1};
+    int32_t last_pointer_x{};
+    int32_t last_pointer_y{};
+    bool has_pointer{};
+    uint64_t writer_revision{};
+};
+
+LayerInputState* create_layer_input_state() noexcept {
+    return new (std::nothrow) LayerInputState();
+}
+
+void destroy_layer_input_state(LayerInputState* state) noexcept {
+    delete state;
+}
+
+bool layer_event_uses_coordinates(uint32_t message) noexcept {
+    return message != kMouseLeave && message != kCaptureChanged && message != kCancelMode;
+}
+
+sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t host_x,
+                               int32_t host_y, int32_t button, int32_t wheel_delta,
+                               void* hit_layer, float hit_x, float hit_y,
+                               LayerInputAction* out_actions, size_t action_capacity,
+                               size_t* out_action_count) noexcept {
+    if (out_action_count == nullptr || state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_action_count = 0;
+    if (out_actions == nullptr && action_capacity != 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!valid_layer_message(message))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    LayerInputState next = *state;
+    std::array<LayerInputAction, 3> actions{};
+    size_t action_count = 0;
+
+    const auto emit_leave = [&](void* layer) {
+        return layer == nullptr ||
+               append_action(&actions, &action_count,
+                             {LayerInputActionKind::leave, layer});
+    };
+    const auto release_capture = [&](bool suppress_button_up) {
+        if (suppress_button_up && next.captured_button >= 0)
+            next.suppressed_button_up = next.captured_button;
+        next.captured_layer = nullptr;
+        next.captured_button = -1;
+    };
+
+    if (message == kCaptureChanged || message == kCancelMode) {
+        void* leave_target = next.captured_layer != nullptr ? next.captured_layer
+                                                            : next.hovered_layer;
+        if (!emit_leave(leave_target))
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        release_capture(true);
+        next.hovered_layer = nullptr;
+        next.has_pointer = false;
+    } else if (message == kMouseLeave) {
+        if (next.captured_layer == nullptr) {
+            next.has_pointer = false;
+            if (!emit_leave(next.hovered_layer))
+                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            next.hovered_layer = nullptr;
+        }
+    } else {
+        next.last_pointer_x = host_x;
+        next.last_pointer_y = host_y;
+        next.has_pointer = true;
+        if (message == kMouseMove) {
+            if (next.captured_layer == nullptr && next.hovered_layer != hit_layer) {
+                if (!emit_leave(next.hovered_layer))
+                    return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                next.hovered_layer = hit_layer;
+            }
+            void* route_target = next.captured_layer != nullptr ? next.captured_layer : hit_layer;
+            if (route_target != nullptr &&
+                !append_action(&actions, &action_count,
+                               {LayerInputActionKind::cursor, route_target, hit_x, hit_y, 0.0F,
+                                0.0F, -1, 0, route_target != hit_layer})) {
+                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            }
+        } else if (message == kMouseWheel) {
+            if (hit_layer != nullptr &&
+                !append_action(&actions, &action_count,
+                               {LayerInputActionKind::scroll, hit_layer, hit_x, hit_y, 0.0F,
+                                static_cast<float>(wheel_delta) / kWheelDelta})) {
+                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            }
+        } else {
+            const bool double_click = message == kLeftButtonDoubleClick ||
+                                      message == kRightButtonDoubleClick ||
+                                      message == kMiddleButtonDoubleClick;
+            const bool released = message == kLeftButtonUp || message == kRightButtonUp ||
+                                  message == kMiddleButtonUp;
+            if (double_click) {
+                next.suppressed_button_up = button;
+                release_capture(false);
+            } else if (released && next.suppressed_button_up == button) {
+                next.suppressed_button_up = -1;
+                release_capture(false);
+            } else {
+                void* route_target = released && next.captured_layer != nullptr
+                                         ? next.captured_layer
+                                         : hit_layer;
+                if (!released && route_target != nullptr) {
+                    next.captured_layer = route_target;
+                    next.captured_button = button;
+                }
+                if (route_target != nullptr &&
+                    !append_action(&actions, &action_count,
+                                   {LayerInputActionKind::button, route_target, hit_x, hit_y, 0.0F,
+                                    0.0F, button, released ? 0 : 1,
+                                    route_target != hit_layer})) {
+                    return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                }
+                if (released) {
+                    release_capture(false);
+                    if (next.hovered_layer != hit_layer) {
+                        if (!emit_leave(next.hovered_layer))
+                            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                        next.hovered_layer = hit_layer;
+                    }
+                }
+            }
+        }
+    }
+
+    if (action_count > action_capacity)
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    for (size_t index = 0; index < action_count; ++index)
+        out_actions[index] = actions[index];
+    next.writer_revision = next_writer_revision(state->writer_revision);
+    *state = next;
+    *out_action_count = action_count;
+    return SAO_STATUS_OK;
+}
+
+bool layer_input_references(const LayerInputState* state, const void* layer) noexcept {
+    return state != nullptr && layer != nullptr &&
+           (state->hovered_layer == layer || state->captured_layer == layer);
+}
+
+bool layer_input_last_pointer(const LayerInputState* state, int32_t* out_x,
+                              int32_t* out_y) noexcept {
+    if (state == nullptr || out_x == nullptr || out_y == nullptr || !state->has_pointer)
+        return false;
+    *out_x = state->last_pointer_x;
+    *out_y = state->last_pointer_y;
+    return true;
+}
+
+sao_status_t invalidate_layer_input(LayerInputState* state, void* layer,
+                                    bool still_accepts_at_pointer,
+                                    LayerInputAction* out_actions, size_t action_capacity,
+                                    size_t* out_action_count) noexcept {
+    if (state == nullptr || layer == nullptr || out_action_count == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_action_count = 0;
+    if (out_actions == nullptr && action_capacity != 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!layer_input_references(state, layer) || still_accepts_at_pointer)
+        return SAO_STATUS_OK;
+    if (action_capacity < 1)
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+
+    LayerInputState next = *state;
+    if (next.hovered_layer == layer)
+        next.hovered_layer = nullptr;
+    if (next.captured_layer == layer) {
+        if (next.captured_button >= 0)
+            next.suppressed_button_up = next.captured_button;
+        next.captured_layer = nullptr;
+        next.captured_button = -1;
+    }
+    out_actions[0] = {LayerInputActionKind::leave, layer};
+    *out_action_count = 1;
+    next.writer_revision = next_writer_revision(state->writer_revision);
+    *state = next;
+    return SAO_STATUS_OK;
+}
+
+void reset_layer_input(LayerInputState* state) noexcept {
+    if (state == nullptr)
+        return;
+    const uint64_t revision = next_writer_revision(state->writer_revision);
+    *state = {};
+    state->captured_button = -1;
+    state->suppressed_button_up = -1;
+    state->writer_revision = revision;
+}
+
+uint64_t layer_input_writer_revision(const LayerInputState* state) noexcept {
+    return state == nullptr ? 0 : state->writer_revision;
+}
+
+sao_status_t apply_host_input_regions(sao_ui_overlay_host_handle_t host,
+                                      const SaoOverlayHostInputRect* rects,
+                                      size_t rect_count) noexcept {
+    return sao_ui_overlay_host_set_input_region(host, rects, rect_count);
+}
+
+sao_status_t apply_host_input_passthrough(sao_ui_overlay_host_handle_t host,
+                                          bool passthrough) noexcept {
+    return sao_ui_overlay_host_set_input_passthrough(host, passthrough);
+}
+
+sao_status_t reset_host_input(sao_ui_overlay_host_handle_t host) noexcept {
+    const sao_status_t region_status = apply_host_input_regions(host, nullptr, 0);
+    if (region_status != SAO_STATUS_OK)
+        return region_status;
+    return apply_host_input_passthrough(host, true);
+}
+
+} // namespace sao::ui::input_router_detail
 
 namespace {
 
@@ -303,9 +569,8 @@ void retire_hotkey(const std::shared_ptr<HotkeyRecord>& record) {
     const size_t owned_callbacks = hotkey_callback_owned_count(record.get());
     std::unique_lock<std::mutex> lock(record->callback_mutex);
     record->active = false;
-    record->callback_idle.wait(lock, [&record, owned_callbacks] {
-        return record->active_callbacks <= owned_callbacks;
-    });
+    record->callback_idle.wait(
+        lock, [&record, owned_callbacks] { return record->active_callbacks <= owned_callbacks; });
 }
 
 void finalize_router(sao_ui_input_router_deep_handle_t handle) noexcept {
@@ -425,18 +690,17 @@ bool hotkey_dispatch_completed(const RouterLease& lease, uint64_t transition,
     std::lock_guard<std::mutex> guard(lease->mu);
     if (lease->transition_generation == transition)
         return true;
-    return std::ranges::none_of(lease->hotkeys, [binding](const auto& record) {
-        return record->handle == binding;
-    });
+    return std::ranges::none_of(
+        lease->hotkeys, [binding](const auto& record) { return record->handle == binding; });
 }
 
 bool input_handle_is_active(sao_ui_widget_handle_t handle, uint64_t expected_generation = 0) {
     if (handle == nullptr)
         return false;
-    uint64_t generation = 0;
-    if (sao_ui_widget_input_get_generation(handle, &generation) != SAO_STATUS_OK)
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    if (!sao::ui::detail::inspect_widget_handle(handle, &metadata))
         return false;
-    return expected_generation == 0 || expected_generation == generation;
+    return expected_generation == 0 || expected_generation == metadata.generation;
 }
 
 void recompute_modal_top_locked(sao_ui_input_router_deep_s* router) {
@@ -536,7 +800,11 @@ HotkeyMatch select_hotkey_locked(const sao_ui_input_router_deep_s* router,
     }
     if (best == nullptr)
         return {};
-    return {best, best->handle, best->callback, best->user_data, best->binding_id,
+    return {best,
+            best->handle,
+            best->callback,
+            best->user_data,
+            best->binding_id,
             best->prevent_default};
 }
 
@@ -681,8 +949,7 @@ sao_ui_input_router_deep_try_destroy(sao_ui_input_router_deep_handle_t handle) {
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_deep_rebind_compositor(
-    sao_ui_input_router_deep_handle_t handle,
-    sao_ui_compositor_handle_t expected_compositor,
+    sao_ui_input_router_deep_handle_t handle, sao_ui_compositor_handle_t expected_compositor,
     sao_ui_compositor_handle_t replacement_compositor) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -872,9 +1139,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
         }
 
         uint64_t target_generation = 0;
-        if (target != nullptr &&
-            sao_ui_widget_input_get_generation(target, &target_generation) != SAO_STATUS_OK) {
-            target = nullptr;
+        if (target != nullptr) {
+            sao::ui::detail::WidgetHandleMetadata metadata{};
+            if (!sao::ui::detail::inspect_widget_handle(target, &metadata)) {
+                target = nullptr;
+            } else {
+                target_generation = metadata.generation;
+            }
         }
 
         // Modal barrier semantics — if the event bears a panel target
@@ -931,16 +1202,73 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
         }
         const HotkeyMatch hotkey = select_hotkey_locked(lease.get(), *event);
         const uint64_t transition = lease->transition_generation;
+        int32_t nudge_direction = 0;
+        if (event->kind == SAO_UI_INPUT_KEY_DOWN && hotkey.binding == 0) {
+            if (event->virtual_key == 0x25U || event->virtual_key == 0x28U)
+                nudge_direction = -1;
+            else if (event->virtual_key == 0x26U || event->virtual_key == 0x27U)
+                nudge_direction = 1;
+        }
         if (out_consumed != nullptr) {
             *out_consumed = target != nullptr || hotkey.prevent_default;
         }
         guard.unlock();
+        const auto apply_state = [](sao_ui_widget_handle_t widget, auto setter,
+                                    bool value) -> sao_status_t {
+            if (widget == nullptr)
+                return SAO_STATUS_OK;
+            const sao_status_t status = setter(widget, value);
+            return status == SAO_STATUS_ERR_NOT_IMPLEMENTED ? SAO_STATUS_OK : status;
+        };
+        if (next_hover != previous_hover) {
+            sao_status_t state_status =
+                apply_state(previous_hover, sao_ui_widget_set_hovered, false);
+            if (state_status != SAO_STATUS_OK && state_status != SAO_STATUS_ERR_HANDLE_INVALID)
+                return state_status;
+            state_status = apply_state(next_hover, sao_ui_widget_set_hovered, true);
+            if (state_status != SAO_STATUS_OK)
+                return state_status == SAO_STATUS_ERR_HANDLE_INVALID ? SAO_UI_STATUS_ERR_BUSY
+                                                                     : state_status;
+        }
+        if (event->kind == SAO_UI_INPUT_MOUSE_DOWN) {
+            const sao_status_t state_status = apply_state(target, sao_ui_widget_set_pressed, true);
+            if (state_status != SAO_STATUS_OK)
+                return state_status == SAO_STATUS_ERR_HANDLE_INVALID ? SAO_UI_STATUS_ERR_BUSY
+                                                                     : state_status;
+        } else if (event->kind == SAO_UI_INPUT_MOUSE_UP ||
+                   event->kind == SAO_UI_INPUT_MOUSE_LEAVE) {
+            const sao_ui_widget_handle_t pressed_target =
+                target != nullptr ? target : previous_hover;
+            const sao_status_t state_status =
+                apply_state(pressed_target, sao_ui_widget_set_pressed, false);
+            if (state_status != SAO_STATUS_OK && state_status != SAO_STATUS_ERR_HANDLE_INVALID)
+                return state_status;
+        }
+        if (event->kind == SAO_UI_INPUT_FOCUS_GAIN || event->kind == SAO_UI_INPUT_FOCUS_LOSE) {
+            const sao_status_t state_status = apply_state(target, sao_ui_widget_set_focused,
+                                                          event->kind == SAO_UI_INPUT_FOCUS_GAIN);
+            if (state_status != SAO_STATUS_OK)
+                return state_status == SAO_STATUS_ERR_HANDLE_INVALID ? SAO_UI_STATUS_ERR_BUSY
+                                                                     : state_status;
+        }
         if (hover_callback != nullptr) {
             RouterCallbackScope callback_scope(handle);
             hover_callback(previous_hover, next_hover, hover_user_data);
             if (!lease.transition_is_current(transition) ||
                 (target != nullptr && !input_handle_is_active(target, target_generation))) {
                 return SAO_UI_STATUS_ERR_BUSY;
+            }
+        }
+        if (target != nullptr && nudge_direction != 0) {
+            const sao_status_t nudge_status = sao_ui_widget_nudge_value(target, nudge_direction);
+            if (nudge_status == SAO_STATUS_OK) {
+                if (out_consumed != nullptr)
+                    *out_consumed = true;
+                if (!input_handle_is_active(target, target_generation))
+                    return SAO_UI_STATUS_ERR_BUSY;
+            } else if (nudge_status != SAO_STATUS_ERR_NOT_IMPLEMENTED &&
+                       nudge_status != SAO_STATUS_ERR_ACCESS_DENIED) {
+                return nudge_status;
             }
         }
         if (hotkey.callback != nullptr) {
@@ -1032,22 +1360,32 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_focus_widget(
     if (widget == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
-        uint64_t widget_generation = 0;
-        if (sao_ui_widget_input_get_generation(widget, &widget_generation) != SAO_STATUS_OK)
+        sao::ui::detail::WidgetHandleMetadata metadata{};
+        if (!sao::ui::detail::inspect_widget_handle(widget, &metadata))
             return SAO_STATUS_ERR_HANDLE_INVALID;
+        const uint64_t widget_generation = metadata.generation;
         auto lease = acquire_router(handle);
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;
-        std::lock_guard<std::mutex> guard(lease->mu);
-        prune_retired_widgets_locked(lease.get());
-        FocusEntry entry{};
-        entry.widget = widget;
-        entry.widget_generation = widget_generation;
-        entry.registration_order = lease->next_focus_registration_order++;
-        if (!lease->focus_stack.empty())
-            entry.panel = lease->focus_stack.back().panel;
-        lease->focus_stack.push_back(entry);
-        bump_transition_locked(lease.get());
+        sao_ui_widget_handle_t previous = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(lease->mu);
+            prune_retired_widgets_locked(lease.get());
+            previous = lease->focus_stack.empty() ? nullptr : lease->focus_stack.back().widget;
+            FocusEntry entry{};
+            entry.widget = widget;
+            entry.widget_generation = widget_generation;
+            entry.registration_order = lease->next_focus_registration_order++;
+            if (!lease->focus_stack.empty())
+                entry.panel = lease->focus_stack.back().panel;
+            lease->focus_stack.push_back(entry);
+            bump_transition_locked(lease.get());
+        }
+        if (previous != nullptr && previous != widget)
+            (void)sao_ui_widget_set_focused(previous, false);
+        const sao_status_t focus_status = sao_ui_widget_set_focused(widget, true);
+        if (focus_status != SAO_STATUS_OK && focus_status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
+            return focus_status;
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1077,8 +1415,7 @@ sao_ui_input_router_focus_next(sao_ui_input_router_deep_handle_t handle, bool re
                 if (widget == nullptr)
                     continue;
                 bool focusable = false;
-                if (sao_ui_widget_input_is_focusable(widget, &focusable) == SAO_STATUS_OK &&
-                    focusable) {
+                if (sao_ui_widget_is_focusable(widget, &focusable) == SAO_STATUS_OK && focusable) {
                     focusable_indices.push_back(index);
                 }
             }
@@ -1123,6 +1460,7 @@ sao_ui_input_router_focus_next(sao_ui_input_router_deep_handle_t handle, bool re
         if (previous != nullptr && previous != next) {
             if (!input_handle_is_active(previous, previous_generation))
                 return SAO_UI_STATUS_ERR_BUSY;
+            (void)sao_ui_widget_set_focused(previous, false);
             RouterCallbackScope callback_scope(handle);
             const sao_status_t status =
                 sao_ui_widget_dispatch_event(previous, SAO_UI_EVT_FOCUS_LOST, nullptr, 0);
@@ -1135,6 +1473,9 @@ sao_ui_input_router_focus_next(sao_ui_input_router_deep_handle_t handle, bool re
             }
         }
         if (next != nullptr && previous != next) {
+            const sao_status_t focus_status = sao_ui_widget_set_focused(next, true);
+            if (focus_status != SAO_STATUS_OK && focus_status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
+                return focus_status;
             RouterCallbackScope callback_scope(handle);
             const sao_status_t status =
                 sao_ui_widget_dispatch_event(next, SAO_UI_EVT_FOCUS_GAINED, nullptr, 0);
@@ -1313,10 +1654,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_unregister_hotkey(
         {
             std::lock_guard<std::mutex> guard(lease->mu);
             auto& hotkeys = lease->hotkeys;
-            const auto found = std::find_if(hotkeys.begin(), hotkeys.end(),
-                                            [binding](const auto& record) {
-                                                return record->handle == binding;
-                                            });
+            const auto found =
+                std::find_if(hotkeys.begin(), hotkeys.end(),
+                             [binding](const auto& record) { return record->handle == binding; });
             if (found == hotkeys.end())
                 return SAO_STATUS_ERR_NOT_FOUND;
             removed = *found;
@@ -1459,11 +1799,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_capture_mouse(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        uint64_t widget_generation = 0;
-        if (sao_ui_widget_input_get_generation(captured_widget, &widget_generation) !=
-            SAO_STATUS_OK) {
+        sao::ui::detail::WidgetHandleMetadata metadata{};
+        if (!sao::ui::detail::inspect_widget_handle(captured_widget, &metadata)) {
             return SAO_STATUS_ERR_HANDLE_INVALID;
         }
+        const uint64_t widget_generation = metadata.generation;
         auto lease = acquire_router(handle);
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;

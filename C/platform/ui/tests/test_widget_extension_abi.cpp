@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "sao/ui/widget_data.h"
+#include "sao/ui/theme.h"
 #include "sao/ui/widget_chart.h"
+#include "sao/ui/widget_data.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 #include "sao/ui/widget_table.h"
 #include "sao/ui/widget_text.h"
-#include "sao/ui/theme.h"
 
 #include <algorithm>
 #include <array>
@@ -36,13 +36,12 @@ std::vector<Pixel> snapshot(sao_ui_offscreen_raster_handle_t raster) {
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t stride = 0;
-    REQUIRE(sao_ui_offscreen_raster_snapshot(
-                raster, nullptr, 0, &bytes, &width, &height, &stride) ==
-            SAO_STATUS_ERR_BUFFER_TOO_SMALL);
+    REQUIRE(sao_ui_offscreen_raster_snapshot(raster, nullptr, 0, &bytes, &width, &height,
+                                             &stride) == SAO_STATUS_ERR_BUFFER_TOO_SMALL);
     std::vector<Pixel> pixels(bytes / sizeof(Pixel));
-    REQUIRE(sao_ui_offscreen_raster_snapshot(
-                raster, reinterpret_cast<uint8_t*>(pixels.data()), bytes,
-                &bytes, &width, &height, &stride) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_offscreen_raster_snapshot(raster, reinterpret_cast<uint8_t*>(pixels.data()),
+                                             bytes, &bytes, &width, &height,
+                                             &stride) == SAO_STATUS_OK);
     REQUIRE(stride == width * sizeof(Pixel));
     return pixels;
 }
@@ -83,43 +82,35 @@ struct EventRecorder {
     std::vector<int> order;
 };
 
-void SAO_UI_CALL append_one(
-    int32_t, const uint8_t*, size_t, void* user_data) {
+void SAO_UI_CALL append_one(int32_t, const uint8_t*, size_t, void* user_data) {
     static_cast<EventRecorder*>(user_data)->order.push_back(1);
 }
 
-void SAO_UI_CALL append_two(
-    int32_t, const uint8_t*, size_t, void* user_data) {
+void SAO_UI_CALL append_two(int32_t, const uint8_t*, size_t, void* user_data) {
     static_cast<EventRecorder*>(user_data)->order.push_back(2);
 }
 
-void SAO_UI_CALL append_three(
-    int32_t, const uint8_t*, size_t, void* user_data) {
+void SAO_UI_CALL append_three(int32_t, const uint8_t*, size_t, void* user_data) {
     static_cast<EventRecorder*>(user_data)->order.push_back(3);
 }
 
-void SAO_UI_CALL remove_next(
-    int32_t, const uint8_t*, size_t, void* user_data) {
+void SAO_UI_CALL remove_next(int32_t, const uint8_t*, size_t, void* user_data) {
     auto* recorder = static_cast<EventRecorder*>(user_data);
     recorder->order.push_back(1);
-    CHECK(sao_ui_widget_remove_event_handler(
-              recorder->widget, recorder->token_to_remove) == SAO_STATUS_OK);
+    CHECK(sao_ui_widget_remove_event_handler(recorder->widget, recorder->token_to_remove) ==
+          SAO_STATUS_OK);
 }
 
-void SAO_UI_CALL dispatch_nested(
-    int32_t, const uint8_t*, size_t, void* user_data) {
+void SAO_UI_CALL dispatch_nested(int32_t, const uint8_t*, size_t, void* user_data) {
     auto* recorder = static_cast<EventRecorder*>(user_data);
     recorder->order.push_back(1);
-    CHECK(sao_ui_widget_dispatch_event(
-              recorder->widget, SAO_UI_EVT_VALUE_CHANGED, nullptr, 0) ==
+    CHECK(sao_ui_widget_dispatch_event(recorder->widget, SAO_UI_EVT_VALUE_CHANGED, nullptr, 0) ==
           SAO_STATUS_OK);
     recorder->order.push_back(3);
 }
 
-void SAO_UI_CALL count_event(
-    int32_t, const uint8_t*, size_t, void* user_data) {
-    static_cast<std::atomic<uint32_t>*>(user_data)->fetch_add(
-        1, std::memory_order_relaxed);
+void SAO_UI_CALL count_event(int32_t, const uint8_t*, size_t, void* user_data) {
+    static_cast<std::atomic<uint32_t>*>(user_data)->fetch_add(1, std::memory_order_relaxed);
 }
 
 struct BlockingEvent {
@@ -159,20 +150,20 @@ struct RendererProbe {
     uint32_t calls{};
 };
 
-sao_status_t SAO_UI_CALL render_red(
-    sao_ui_widget_handle_t widget, sao_ui_paint_ctx_handle_t context,
-    int32_t x, int32_t y, int32_t width, int32_t height, void* user_data) {
+sao_status_t SAO_UI_CALL render_red(sao_ui_widget_handle_t widget,
+                                    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
+                                    int32_t width, int32_t height, void* user_data) {
     auto* probe = static_cast<RendererProbe*>(user_data);
-    if (widget != probe->expected_widget) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (widget != probe->expected_widget)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     ++probe->calls;
-    return sao_ui_paint_ctx_fill_rect(
-        context, static_cast<float>(x), static_cast<float>(y),
-        static_cast<float>(width), static_cast<float>(height), 0xffff0000U);
+    return sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x), static_cast<float>(y),
+                                      static_cast<float>(width), static_cast<float>(height),
+                                      0xffff0000U);
 }
 
-sao_status_t SAO_UI_CALL throw_renderer(
-    sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t,
-    int32_t, int32_t, int32_t, int32_t, void*) {
+sao_status_t SAO_UI_CALL throw_renderer(sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t, int32_t,
+                                        int32_t, int32_t, int32_t, void*) {
     throw std::runtime_error("renderer callback failure");
 }
 
@@ -187,9 +178,8 @@ struct BlockingRenderer {
     uint32_t calls{};
 };
 
-sao_status_t SAO_UI_CALL block_renderer(
-    sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t,
-    int32_t, int32_t, int32_t, int32_t, void* user_data) {
+sao_status_t SAO_UI_CALL block_renderer(sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t, int32_t,
+                                        int32_t, int32_t, int32_t, void* user_data) {
     auto* renderer = static_cast<BlockingRenderer*>(user_data);
     std::unique_lock lock(renderer->mutex);
     ++renderer->calls;
@@ -210,9 +200,10 @@ struct SelfUnregisterRenderer {
     uint32_t calls{};
 };
 
-sao_status_t SAO_UI_CALL unregister_renderer_from_callback(
-    sao_ui_widget_handle_t, sao_ui_paint_ctx_handle_t,
-    int32_t, int32_t, int32_t, int32_t, void* user_data) {
+sao_status_t SAO_UI_CALL unregister_renderer_from_callback(sao_ui_widget_handle_t,
+                                                           sao_ui_paint_ctx_handle_t, int32_t,
+                                                           int32_t, int32_t, int32_t,
+                                                           void* user_data) {
     auto* renderer = static_cast<SelfUnregisterRenderer*>(user_data);
     ++renderer->calls;
     renderer->status = sao_ui_widget_unregister_renderer_provider(renderer->token);
@@ -229,7 +220,7 @@ struct ProviderGuard {
     }
 };
 
-}  // namespace
+} // namespace
 
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_text_family_destroy(sao_ui_widget_handle_t handle);
@@ -243,21 +234,21 @@ extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle);
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_widget_test_fail_next_renderer_kind_insertion();
-extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(
-    sao_ui_widget_handle_t handle, const char* color_key, uint32_t* out_color,
-    char* out_text, size_t out_text_capacity);
+extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(sao_ui_widget_handle_t handle,
+                                                                      const char* color_key,
+                                                                      uint32_t* out_color,
+                                                                      char* out_text,
+                                                                      size_t out_text_capacity);
 
 TEST_CASE("generic widget props reject invalid JSON transactionally and decode RGBA colors",
           "[ui][widget_extension][d2d][props][transaction][color]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
     constexpr char initial[] =
         R"({"text":"stable","fill":"#11223380","border":"#44556600","fg":"#778899"})";
-    REQUIRE(sao_ui_widget_apply_props(
-                widget, reinterpret_cast<const uint8_t*>(initial), sizeof(initial) - 1U) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(initial),
+                                      sizeof(initial) - 1U) == SAO_STATUS_OK);
 
     uint32_t color = 0;
     char text[32]{};
@@ -270,25 +261,22 @@ TEST_CASE("generic widget props reject invalid JSON transactionally and decode R
     CHECK(color == 0xff778899U);
 
     constexpr char malformed[] = R"({"text":"changed","fill":"#abcdef")";
-    CHECK(sao_ui_widget_apply_props(
-              widget, reinterpret_cast<const uint8_t*>(malformed), sizeof(malformed) - 1U) ==
-          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(malformed),
+                                    sizeof(malformed) - 1U) == SAO_STATUS_ERR_INVALID_ARGUMENT);
     REQUIRE(sao_ui_widget_test_props_state(widget, "fill", &color, text, sizeof(text)));
     CHECK(color == 0x80112233U);
     CHECK(std::string(text) == "stable");
 
     constexpr char non_object[] = R"([{"fill":"#ffffff"}])";
-    CHECK(sao_ui_widget_apply_props(
-              widget, reinterpret_cast<const uint8_t*>(non_object), sizeof(non_object) - 1U) ==
-          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(non_object),
+                                    sizeof(non_object) - 1U) == SAO_STATUS_ERR_INVALID_ARGUMENT);
     REQUIRE(sao_ui_widget_test_props_state(widget, "border", &color, text, sizeof(text)));
     CHECK(color == 0x00445566U);
     CHECK(std::string(text) == "stable");
 
     constexpr char invalid_field[] = R"({"text":"changed","active":"yes"})";
-    CHECK(sao_ui_widget_apply_props(
-              widget, reinterpret_cast<const uint8_t*>(invalid_field),
-              sizeof(invalid_field) - 1U) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(invalid_field),
+                                    sizeof(invalid_field) - 1U) == SAO_STATUS_ERR_INVALID_ARGUMENT);
     REQUIRE(sao_ui_widget_test_props_state(widget, "fg", &color, text, sizeof(text)));
     CHECK(color == 0xff778899U);
     CHECK(std::string(text) == "stable");
@@ -301,15 +289,12 @@ TEST_CASE("generic widget theme overrides survive props and theme swaps",
     SaoUiThemeId original_theme = SAO_UI_THEME_DARK;
     REQUIRE(sao_ui_theme_get_active_id(&original_theme) == SAO_STATUS_OK);
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ROUNDED_PANEL, nullptr, &widget) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ROUNDED_PANEL, nullptr, &widget) == SAO_STATUS_OK);
 
     constexpr char initial[] = R"({"fill":"#102030","radius":0})";
-    REQUIRE(sao_ui_widget_apply_props(
-                widget, reinterpret_cast<const uint8_t*>(initial), sizeof(initial) - 1U) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_set_theme_token(widget, "APP_CARD", 0xffd05020U) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(initial),
+                                      sizeof(initial) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_set_theme_token(widget, "APP_CARD", 0xffd05020U) == SAO_STATUS_OK);
     auto pixels = paint_snapshot(widget, 16, 16);
     CHECK(pixel_matches(pixels[8U * 16U + 8U], 0xffd05020U));
 
@@ -428,8 +413,96 @@ TEST_CASE("typed rounded widgets leave visual corners transparent",
     }
 }
 
+TEST_CASE("typed input interaction paint includes button offset vector check and slider growth",
+          "[ui][widget_extension][paint][typed][input][state]") {
+    SECTION("button hover border and pressed text offset") {
+        SaoUiButtonSpec spec{};
+        spec.text_utf8 = "Move";
+        spec.kind = SAO_UI_BTN_NORMAL;
+        spec.radius_px = 0;
+        spec.pad_x_px = 4;
+        spec.pad_y_px = 4;
+        spec.colors.fill_argb = 0xff080808U;
+        spec.colors.border_argb = 0xff101010U;
+        spec.colors.fg_argb = 0xffffffffU;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_button_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+
+        const auto first_bright_row = [](const std::vector<Pixel>& pixels, size_t width) {
+            for (size_t index = 0; index < pixels.size(); ++index) {
+                const Pixel& pixel = pixels[index];
+                if (pixel.r > 220U && pixel.g > 220U && pixel.b > 220U)
+                    return static_cast<int32_t>(index / width);
+            }
+            return int32_t{-1};
+        };
+        const auto base = paint_snapshot(widget, 64, 28);
+        const Pixel base_border = base[14U * 64U];
+        const int32_t base_text_row = first_bright_row(base, 64);
+        REQUIRE(base_text_row >= 0);
+
+        REQUIRE(sao_ui_widget_set_hovered(widget, true) == SAO_STATUS_OK);
+        const auto hovered = paint_snapshot(widget, 64, 28);
+        const Pixel hover_border = hovered[14U * 64U];
+        CHECK((base_border.r != hover_border.r || base_border.g != hover_border.g ||
+               base_border.b != hover_border.b));
+
+        REQUIRE(sao_ui_widget_set_pressed(widget, true) == SAO_STATUS_OK);
+        const auto pressed = paint_snapshot(widget, 64, 28);
+        CHECK(first_bright_row(pressed, 64) == base_text_row + 1);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("checked checkbox uses a sparse vector path") {
+        SaoUiCheckboxSpec spec{};
+        spec.label_utf8 = "";
+        spec.checked = true;
+        spec.box_size_px = 16;
+        spec.box_argb = 0xff000000U;
+        spec.box_border_argb = 0xff000000U;
+        spec.check_argb = 0xffffffffU;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_checkbox_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        const auto pixels = paint_snapshot(widget, 32, 20);
+        const size_t check_pixels =
+            static_cast<size_t>(std::count_if(pixels.begin(), pixels.end(), [](const Pixel& pixel) {
+                return pixel_matches(pixel, 0xffffffffU);
+            }));
+        CHECK(check_pixels > 5U);
+        CHECK(check_pixels < 80U);
+        sao_ui_widget_destroy(widget);
+    }
+
+    SECTION("slider hover grows the thumb by one pixel per side") {
+        SaoUiSliderSpec spec{};
+        spec.value = 0.5F;
+        spec.min_value = 0.0F;
+        spec.max_value = 1.0F;
+        spec.step = 0.1F;
+        spec.track_argb = 0xff101010U;
+        spec.track_fill_argb = 0xff101010U;
+        spec.thumb_argb = 0xffffffffU;
+        spec.thumb_border_argb = 0xffffffffU;
+        spec.track_thickness_px = 2;
+        spec.thumb_size_px = 8;
+        sao_ui_widget_handle_t widget = nullptr;
+        REQUIRE(sao_ui_slider_create(nullptr, &spec, &widget) == SAO_STATUS_OK);
+        const auto count_thumb_pixels = [](const std::vector<Pixel>& pixels) {
+            return static_cast<size_t>(
+                std::count_if(pixels.begin(), pixels.end(), [](const Pixel& pixel) {
+                    return pixel_matches(pixel, 0xffffffffU);
+                }));
+        };
+        const size_t base_count = count_thumb_pixels(paint_snapshot(widget, 64, 20));
+        REQUIRE(sao_ui_widget_set_hovered(widget, true) == SAO_STATUS_OK);
+        const size_t hover_count = count_thumb_pixels(paint_snapshot(widget, 64, 20));
+        CHECK(hover_count > base_count);
+        sao_ui_widget_destroy(widget);
+    }
+}
+
 TEST_CASE("unified widget ABI rejects cross-family and stale handles",
-        "[ui][widget_extension][abi][lifetime]") {
+          "[ui][widget_extension][abi][lifetime]") {
     SaoUiLabelSpec label_spec{};
     label_spec.text_utf8 = "label";
     sao_ui_widget_handle_t text = nullptr;
@@ -458,16 +531,14 @@ TEST_CASE("unified widget ABI rejects cross-family and stale handles",
 
     using FamilyDestroy = void(SAO_UI_CALL*)(sao_ui_widget_handle_t);
     const std::array<FamilyDestroy, 5> family_destroys{
-        sao_ui_widget_text_family_destroy,
-        sao_ui_widget_input_family_destroy,
-        sao_ui_widget_data_family_destroy,
-        sao_ui_widget_table_family_destroy,
+        sao_ui_widget_text_family_destroy, sao_ui_widget_input_family_destroy,
+        sao_ui_widget_data_family_destroy, sao_ui_widget_table_family_destroy,
         sao_ui_widget_chart_family_destroy};
-    const std::array<sao_ui_widget_handle_t, 5> handles{
-        text, input, data, table, chart};
+    const std::array<sao_ui_widget_handle_t, 5> handles{text, input, data, table, chart};
     for (size_t owner = 0; owner < handles.size(); ++owner) {
         for (size_t family = 0; family < family_destroys.size(); ++family) {
-            if (family != owner) family_destroys[family](handles[owner]);
+            if (family != owner)
+                family_destroys[family](handles[owner]);
         }
         int32_t kind = -1;
         CHECK(sao_ui_widget_get_kind(handles[owner], &kind) == SAO_STATUS_OK);
@@ -481,57 +552,48 @@ TEST_CASE("unified widget ABI rejects cross-family and stale handles",
     CHECK(sao_ui_sparkline_append(chart, 1.0) == SAO_STATUS_OK);
 
     for (const auto handle : handles) {
-      int32_t kind = -1;
-      REQUIRE(sao_ui_widget_get_kind(handle, &kind) == SAO_STATUS_OK);
-      sao_ui_widget_destroy(handle);
-      sao_ui_widget_destroy(handle);
-      CHECK(sao_ui_widget_get_kind(handle, &kind) ==
-          SAO_STATUS_ERR_HANDLE_INVALID);
+        int32_t kind = -1;
+        REQUIRE(sao_ui_widget_get_kind(handle, &kind) == SAO_STATUS_OK);
+        sao_ui_widget_destroy(handle);
+        sao_ui_widget_destroy(handle);
+        CHECK(sao_ui_widget_get_kind(handle, &kind) == SAO_STATUS_ERR_HANDLE_INVALID);
     }
 
-    CHECK(sao_ui_label_set_text(text, "stale") ==
-        SAO_STATUS_ERR_HANDLE_INVALID);
-    CHECK(sao_ui_button_set_text(input, "stale") ==
-        SAO_STATUS_ERR_HANDLE_INVALID);
-    CHECK(sao_ui_gauge_set_value(data, 1.0F) ==
-        SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_label_set_text(text, "stale") == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_button_set_text(input, "stale") == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_gauge_set_value(data, 1.0F) == SAO_STATUS_ERR_HANDLE_INVALID);
     CHECK(sao_ui_tree_view_get_visible_count(table, &visible_count) ==
-        SAO_STATUS_ERR_HANDLE_INVALID);
-    CHECK(sao_ui_sparkline_append(chart, 2.0) ==
-        SAO_STATUS_ERR_HANDLE_INVALID);
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_sparkline_append(chart, 2.0) == SAO_STATUS_ERR_HANDLE_INVALID);
 
     for (const auto handle : handles) {
-        for (const auto destroy : family_destroys) destroy(handle);
+        for (const auto destroy : family_destroys)
+            destroy(handle);
     }
 }
 
 TEST_CASE("generic widget event handlers retain registration order",
           "[ui][widget_extension][events]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(
-                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
     EventRecorder recorder{widget};
     uint64_t first = 0;
     uint64_t second = 0;
     uint64_t third = 0;
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_one, &recorder, &first) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_two, &recorder, &second) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_three, &recorder, &third) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_one, &recorder,
+                                            &first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_two, &recorder,
+                                            &second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_three, &recorder,
+                                            &third) == SAO_STATUS_OK);
     REQUIRE(first != 0);
     REQUIRE(first < second);
     REQUIRE(second < third);
 
     constexpr std::array<uint8_t, 2> payload{'{', '}'};
-    REQUIRE(sao_ui_widget_dispatch_event(
-                widget, SAO_UI_EVT_CLICK, payload.data(), payload.size()) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, payload.data(),
+                                         payload.size()) == SAO_STATUS_OK);
     CHECK(recorder.order == std::vector<int>{1, 2, 3});
 
     sao_ui_widget_destroy(widget);
@@ -540,29 +602,23 @@ TEST_CASE("generic widget event handlers retain registration order",
 TEST_CASE("generic widget removal during dispatch skips the removed handler",
           "[ui][widget_extension][events]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(
-                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
     EventRecorder recorder{widget};
     uint64_t first = 0;
     uint64_t second = 0;
     uint64_t third = 0;
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, remove_next, &recorder, &first) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_two, &recorder, &second) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_three, &recorder, &third) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, remove_next, &recorder,
+                                            &first) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_two, &recorder,
+                                            &second) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_three, &recorder,
+                                            &third) == SAO_STATUS_OK);
     recorder.token_to_remove = second;
 
-    REQUIRE(sao_ui_widget_dispatch_event(
-                widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
     CHECK(recorder.order == std::vector<int>{1, 3});
-    CHECK(sao_ui_widget_remove_event_handler(widget, second) ==
-          SAO_STATUS_ERR_SUBSCRIPTION_GONE);
+    CHECK(sao_ui_widget_remove_event_handler(widget, second) == SAO_STATUS_ERR_SUBSCRIPTION_GONE);
 
     sao_ui_widget_destroy(widget);
 }
@@ -570,30 +626,24 @@ TEST_CASE("generic widget removal during dispatch skips the removed handler",
 TEST_CASE("generic widget dispatch is reentrant and owner cleanup is explicit",
           "[ui][widget_extension][events]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(
-                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
     EventRecorder recorder{widget};
     uint64_t outer = 0;
     uint64_t nested = 0;
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, dispatch_nested, &recorder, &outer) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_VALUE_CHANGED, append_two, &recorder,
-                &nested) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, dispatch_nested, &recorder,
+                                            &outer) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_VALUE_CHANGED, append_two, &recorder,
+                                            &nested) == SAO_STATUS_OK);
 
-    REQUIRE(sao_ui_widget_dispatch_event(
-                widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
     CHECK(recorder.order == std::vector<int>{1, 2, 3});
 
     uint32_t removed = 0;
-    REQUIRE(sao_ui_widget_release_event_handlers(widget, &removed) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_release_event_handlers(widget, &removed) == SAO_STATUS_OK);
     CHECK(removed == 2);
     recorder.order.clear();
-    REQUIRE(sao_ui_widget_dispatch_event(
-                widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
     CHECK(recorder.order.empty());
 
     sao_ui_widget_destroy(widget);
@@ -604,8 +654,7 @@ TEST_CASE("generic widget registry supports concurrent registration and removal"
     constexpr size_t thread_count = 4;
     constexpr size_t handlers_per_thread = 24;
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(
-                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
     std::atomic<uint32_t> calls{0};
     std::atomic<bool> failed{false};
@@ -614,34 +663,33 @@ TEST_CASE("generic widget registry supports concurrent registration and removal"
     for (size_t thread_index = 0; thread_index < thread_count; ++thread_index) {
         workers.emplace_back([&, thread_index] {
             for (size_t index = 0; index < handlers_per_thread; ++index) {
-                if (sao_ui_widget_add_event_handler(
-                        widget, SAO_UI_EVT_CLICK, count_event, &calls,
-                        &tokens[thread_index][index]) != SAO_STATUS_OK) {
-                    failed.store(true, std::memory_order_relaxed);
-                }
-            }
-        });
-    }
-    for (auto& worker : workers) worker.join();
-    REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
-
-    REQUIRE(sao_ui_widget_dispatch_event(
-                widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
-    CHECK(calls.load(std::memory_order_relaxed) ==
-          thread_count * handlers_per_thread);
-
-    workers.clear();
-    for (size_t thread_index = 0; thread_index < thread_count; ++thread_index) {
-        workers.emplace_back([&, thread_index] {
-            for (const uint64_t token : tokens[thread_index]) {
-                if (sao_ui_widget_remove_event_handler(widget, token) !=
+                if (sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, count_event, &calls,
+                                                    &tokens[thread_index][index]) !=
                     SAO_STATUS_OK) {
                     failed.store(true, std::memory_order_relaxed);
                 }
             }
         });
     }
-    for (auto& worker : workers) worker.join();
+    for (auto& worker : workers)
+        worker.join();
+    REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
+
+    REQUIRE(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) == SAO_STATUS_OK);
+    CHECK(calls.load(std::memory_order_relaxed) == thread_count * handlers_per_thread);
+
+    workers.clear();
+    for (size_t thread_index = 0; thread_index < thread_count; ++thread_index) {
+        workers.emplace_back([&, thread_index] {
+            for (const uint64_t token : tokens[thread_index]) {
+                if (sao_ui_widget_remove_event_handler(widget, token) != SAO_STATUS_OK) {
+                    failed.store(true, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto& worker : workers)
+        worker.join();
     REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
     sao_ui_widget_destroy(widget);
 }
@@ -649,8 +697,7 @@ TEST_CASE("generic widget registry supports concurrent registration and removal"
 TEST_CASE("generic widget callback removal waits for the active generation",
           "[ui][widget_extension][events][rundown]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
     BlockingEvent event;
     uint64_t token = 0;
     REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, block_event, &event,
@@ -694,9 +741,10 @@ TEST_CASE("generic widget release and destroy wait for active callbacks",
         uint64_t token = 0;
         REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, block_event, &event,
                                                 &token) == SAO_STATUS_OK);
-        std::thread dispatch(
-            [&] { CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
-                       SAO_STATUS_OK); });
+        std::thread dispatch([&] {
+            CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
+                  SAO_STATUS_OK);
+        });
         {
             std::unique_lock lock(event.mutex);
             REQUIRE(event.cv.wait_for(lock, 1s, [&event] { return event.entered; }));
@@ -730,8 +778,7 @@ TEST_CASE("generic widget release and destroy wait for active callbacks",
 TEST_CASE("generic widget self removal and callback exceptions stay inside the C ABI",
           "[ui][widget_extension][events][rundown]") {
     sao_ui_widget_handle_t widget = nullptr;
-    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
     SelfRemoveEvent self{widget};
     REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, remove_self, &self,
                                             &self.token) == SAO_STATUS_OK);
@@ -749,64 +796,53 @@ TEST_CASE("generic widget self removal and callback exceptions stay inside the C
     sao_ui_widget_destroy(widget);
 }
 
-    TEST_CASE("generic legacy widget APIs reject a retired handle",
-            "[ui][widget_extension][abi][lifetime][stale]") {
-        sao_ui_widget_handle_t widget = nullptr;
-        REQUIRE(sao_ui_widget_create(
-                SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
+TEST_CASE("generic legacy widget APIs reject a retired handle",
+          "[ui][widget_extension][abi][lifetime][stale]") {
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
 
-        uint64_t token = 0;
-        REQUIRE(sao_ui_widget_add_event_handler(
-                widget, SAO_UI_EVT_CLICK, append_one, nullptr, &token) ==
-            SAO_STATUS_OK);
-        constexpr char props[] = "{\"active\":true}";
-        REQUIRE(sao_ui_widget_apply_props(
-                    widget, reinterpret_cast<const uint8_t*>(props), sizeof(props) - 1U) ==
-            SAO_STATUS_OK);
-        REQUIRE(sao_ui_widget_set_theme_token(widget, "fill", 0xffff0000U) ==
-            SAO_STATUS_OK);
-        REQUIRE(sao_ui_widget_clear_theme_token(widget, "fill") == SAO_STATUS_OK);
-        REQUIRE(sao_ui_widget_set_active(widget, true) == SAO_STATUS_OK);
-        bool hit = false;
-        REQUIRE(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) == SAO_STATUS_OK);
-        SaoUiWidgetSizeHint hint{};
-        REQUIRE(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) == SAO_STATUS_OK);
+    uint64_t token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(widget, SAO_UI_EVT_CLICK, append_one, nullptr,
+                                            &token) == SAO_STATUS_OK);
+    constexpr char props[] = "{\"active\":true}";
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(props),
+                                      sizeof(props) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_set_theme_token(widget, "fill", 0xffff0000U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_clear_theme_token(widget, "fill") == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_set_active(widget, true) == SAO_STATUS_OK);
+    bool hit = false;
+    REQUIRE(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) == SAO_STATUS_OK);
+    SaoUiWidgetSizeHint hint{};
+    REQUIRE(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) == SAO_STATUS_OK);
 
-        SaoUiOffscreenRasterDesc desc{8, 8, 0x00000000U};
-        sao_ui_offscreen_raster_handle_t raster = nullptr;
-        sao_ui_paint_ctx_handle_t context = nullptr;
-        REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
-        REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
-        REQUIRE(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) == SAO_STATUS_OK);
+    SaoUiOffscreenRasterDesc desc{8, 8, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) == SAO_STATUS_OK);
 
-        sao_ui_widget_destroy(widget);
-        int32_t kind = -1;
-        uint32_t removed = 0;
-        CHECK(sao_ui_widget_get_kind(widget, &kind) == SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_apply_props(widget, nullptr, 0) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_set_theme_token(widget, "fill", 0xff00ff00U) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_clear_theme_token(widget, "fill") ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_set_active(widget, false) == SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_release_event_handlers(widget, &removed) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
-        CHECK(sao_ui_widget_remove_event_handler(widget, token) ==
-            SAO_STATUS_ERR_HANDLE_INVALID);
+    sao_ui_widget_destroy(widget);
+    int32_t kind = -1;
+    uint32_t removed = 0;
+    CHECK(sao_ui_widget_get_kind(widget, &kind) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_apply_props(widget, nullptr, 0) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_set_theme_token(widget, "fill", 0xff00ff00U) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_clear_theme_token(widget, "fill") == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_set_active(widget, false) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_hit_test(widget, 1.0F, 1.0F, &hit) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_get_size_hint(widget, 100, 100, &hint) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_paint(widget, context, 0, 0, 8, 8) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_release_event_handlers(widget, &removed) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_widget_remove_event_handler(widget, token) == SAO_STATUS_ERR_HANDLE_INVALID);
 
-        sao_ui_paint_ctx_destroy(context);
-        sao_ui_offscreen_raster_destroy(raster);
-        sao_ui_widget_destroy(widget);
-    }
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+    sao_ui_widget_destroy(widget);
+}
 
 TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
           "[ui][widget_extension][paint][opacity]") {
@@ -814,29 +850,24 @@ TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
     gauge_spec.value = 25.0F;
     gauge_spec.max_value = 100.0F;
     sao_ui_widget_handle_t gauge = nullptr;
-    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) == SAO_STATUS_OK);
 
     RendererProbe probe{gauge};
     ProviderGuard provider;
-    REQUIRE(sao_ui_widget_register_renderer_provider(
-                SAO_UI_WIDGET_GAUGE, render_red, &probe, &provider.token) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, render_red, &probe,
+                                                     &provider.token) == SAO_STATUS_OK);
     uint64_t duplicate_token = 99;
-    CHECK(sao_ui_widget_register_renderer_provider(
-              SAO_UI_WIDGET_GAUGE, render_red, &probe, &duplicate_token) ==
+    CHECK(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, render_red, &probe,
+                                                   &duplicate_token) ==
           SAO_STATUS_ERR_ALREADY_EXISTS);
     CHECK(duplicate_token == 0);
 
     SaoUiOffscreenRasterDesc raster_desc{8, 8, 0x00000000U};
     sao_ui_offscreen_raster_handle_t raster = nullptr;
     sao_ui_paint_ctx_handle_t context = nullptr;
-    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_paint_at(
-                gauge, context, 1, 1, 6, 6, 0.25F) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint_at(gauge, context, 1, 1, 6, 6, 0.25F) == SAO_STATUS_OK);
 
     const auto pixels = snapshot(raster);
     const Pixel pixel = pixels[2U * 8U + 2U];
@@ -846,8 +877,7 @@ TEST_CASE("paint_at uses extended renderer provider and premultiplies opacity",
     CHECK(pixel.a == 64);
     CHECK(probe.calls == 1);
 
-    REQUIRE(sao_ui_widget_unregister_renderer_provider(provider.token) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_unregister_renderer_provider(provider.token) == SAO_STATUS_OK);
     provider.token = 0;
     float ratio = 0.0F;
     REQUIRE(sao_ui_gauge_get_ratio(gauge, &ratio) == SAO_STATUS_OK);
@@ -864,27 +894,20 @@ TEST_CASE("paint_at contains renderer exceptions and restores paint state",
     gauge_spec.value = 25.0F;
     gauge_spec.max_value = 100.0F;
     sao_ui_widget_handle_t gauge = nullptr;
-    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) == SAO_STATUS_OK);
 
     ProviderGuard provider;
-    REQUIRE(sao_ui_widget_register_renderer_provider(
-                SAO_UI_WIDGET_GAUGE, throw_renderer, nullptr,
-                &provider.token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, throw_renderer, nullptr,
+                                                     &provider.token) == SAO_STATUS_OK);
 
     SaoUiOffscreenRasterDesc raster_desc{8, 8, 0x00000000U};
     sao_ui_offscreen_raster_handle_t raster = nullptr;
     sao_ui_paint_ctx_handle_t context = nullptr;
-    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
 
-    CHECK(sao_ui_widget_paint_at(
-              gauge, context, 2, 2, 4, 4, 0.25F) ==
-          SAO_STATUS_ERR_UNKNOWN);
-    REQUIRE(sao_ui_paint_ctx_fill_rect(
-                context, 0.0F, 0.0F, 8.0F, 8.0F, 0xff00ff00U) ==
+    CHECK(sao_ui_widget_paint_at(gauge, context, 2, 2, 4, 4, 0.25F) == SAO_STATUS_ERR_UNKNOWN);
+    REQUIRE(sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, 8.0F, 8.0F, 0xff00ff00U) ==
             SAO_STATUS_OK);
 
     const auto pixels = snapshot(raster);
@@ -894,10 +917,8 @@ TEST_CASE("paint_at contains renderer exceptions and restores paint state",
         CHECK(pixel.r == 0);
         CHECK(pixel.a == 255);
     }
-    CHECK(sao_ui_paint_ctx_pop_opacity(context) ==
-          SAO_STATUS_ERR_INVALID_ARGUMENT);
-    CHECK(sao_ui_paint_ctx_pop_clip(context) ==
-          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_paint_ctx_pop_opacity(context) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_paint_ctx_pop_clip(context) == SAO_STATUS_ERR_INVALID_ARGUMENT);
 
     sao_ui_paint_ctx_destroy(context);
     sao_ui_offscreen_raster_destroy(raster);
@@ -913,9 +934,8 @@ TEST_CASE("renderer provider unregister waits for an active paint callback",
 
     BlockingRenderer renderer;
     ProviderGuard provider;
-    REQUIRE(sao_ui_widget_register_renderer_provider(
-                SAO_UI_WIDGET_GAUGE, block_renderer, &renderer, &provider.token) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, block_renderer, &renderer,
+                                                     &provider.token) == SAO_STATUS_OK);
     renderer.unregister_self = true;
     renderer.token = provider.token;
 
@@ -926,9 +946,8 @@ TEST_CASE("renderer provider unregister waits for an active paint callback",
     REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
 
     std::atomic<sao_status_t> paint_status{SAO_STATUS_ERR_UNKNOWN};
-    std::thread painter([&] {
-        paint_status.store(sao_ui_widget_paint_at(gauge, context, 0, 0, 8, 8, 1.0F));
-    });
+    std::thread painter(
+        [&] { paint_status.store(sao_ui_widget_paint_at(gauge, context, 0, 0, 8, 8, 1.0F)); });
     {
         std::unique_lock lock(renderer.mutex);
         REQUIRE(renderer.cv.wait_for(lock, 1s, [&renderer] { return renderer.entered; }));
@@ -974,9 +993,9 @@ TEST_CASE("renderer provider self unregister returns busy",
 
     SelfUnregisterRenderer renderer;
     ProviderGuard provider;
-    REQUIRE(sao_ui_widget_register_renderer_provider(
-                SAO_UI_WIDGET_GAUGE, unregister_renderer_from_callback, &renderer,
-                &provider.token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE,
+                                                     unregister_renderer_from_callback, &renderer,
+                                                     &provider.token) == SAO_STATUS_OK);
     renderer.token = provider.token;
 
     SaoUiOffscreenRasterDesc raster_desc{8, 8, 0x00000000U};
@@ -1009,15 +1028,13 @@ TEST_CASE("renderer provider registration rolls back the first map insertion",
     RendererProbe probe{gauge};
     REQUIRE(sao_ui_widget_test_fail_next_renderer_kind_insertion() == SAO_STATUS_OK);
     uint64_t failed_token = 99;
-    CHECK(sao_ui_widget_register_renderer_provider(
-              SAO_UI_WIDGET_GAUGE, render_red, &probe, &failed_token) ==
-          SAO_STATUS_ERR_UNKNOWN);
+    CHECK(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, render_red, &probe,
+                                                   &failed_token) == SAO_STATUS_ERR_UNKNOWN);
     CHECK(failed_token == 0);
 
     ProviderGuard provider;
-    REQUIRE(sao_ui_widget_register_renderer_provider(
-                SAO_UI_WIDGET_GAUGE, render_red, &probe, &provider.token) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_register_renderer_provider(SAO_UI_WIDGET_GAUGE, render_red, &probe,
+                                                     &provider.token) == SAO_STATUS_OK);
     REQUIRE(sao_ui_widget_unregister_renderer_provider(provider.token) == SAO_STATUS_OK);
     provider.token = 0;
     sao_ui_widget_destroy(gauge);
@@ -1029,18 +1046,14 @@ TEST_CASE("paint_at supplies a premultiplied default for extended widgets",
     gauge_spec.value = 50.0F;
     gauge_spec.max_value = 100.0F;
     sao_ui_widget_handle_t gauge = nullptr;
-    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_gauge_create(nullptr, &gauge_spec, &gauge) == SAO_STATUS_OK);
 
     SaoUiOffscreenRasterDesc raster_desc{8, 4, 0x00000000U};
     sao_ui_offscreen_raster_handle_t raster = nullptr;
     sao_ui_paint_ctx_handle_t context = nullptr;
-    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_widget_paint_at(
-                gauge, context, 0, 0, 8, 4, 0.5F) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_offscreen_raster_create(&raster_desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_paint_at(gauge, context, 0, 0, 8, 4, 0.5F) == SAO_STATUS_OK);
 
     const auto pixels = snapshot(raster);
     const Pixel background = pixels[1U * 8U + 6U];

@@ -32,9 +32,15 @@ add_library(sao_platform_ui SHARED
     # ── Legacy compat shims ───────────────────────
     src/gpu_overlay_window.cpp # gpu_overlay_window.py
     src/adapter.cpp            # overlay_adapter.py
+    src/legacy_webview_stub.cpp
 
     # ── Widgets / theme / panels ──────────────────
     src/d2d_widgets.cpp
+    src/d2d_effects.cpp
+    src/particle_system.cpp
+    src/hp_bar_widget.cpp
+    src/shader_pipeline.cpp    # per-layer shader-pass pipeline (14.5.93)
+    src/widget_text_render_win.cpp # DirectWrite true-font text backend (14.7.103)
     src/theme.cpp
     src/popup.cpp              # ui_gpu/popup.py
     src/panel.cpp
@@ -43,6 +49,7 @@ add_library(sao_platform_ui SHARED
     # ── SAO menu, NerveGear, and Entity root composition ─────
     src/menu.cpp               # gui_modules/sao_gui_menu_hud.py + menu_mixin.py
     src/nervegear.cpp          # gui_modules/sao_gui_nervegear_button.py + link_start.py
+    src/linkstart_intro.cpp
     src/entity_shell.cpp       # production Entity root composition
 
     # ── Popup navigation, animation, and panel layout ─────────
@@ -64,6 +71,12 @@ add_library(sao_platform_ui SHARED
     src/widget_data.cpp        # ProgressBar (flat/hp_ramp/hp_trail/segments)
     src/widget_chart.cpp       # TimeSeriesChart (ring buffer + axis)
     src/widget_table.cpp       # Table (columns/sort/filter/virtual scroll)
+
+    # ── Phase 14.6 cross-surface UX infrastructure ───────────────
+    src/widget_toast.cpp       # Toast notification overlay (stack/dismiss/fade)
+    src/focus_manager.cpp      # Keyboard focus ring + Tab traversal
+    src/widget_badge.cpp       # Animated badge widget (pulse via animator)
+    src/widget_filter_row.cpp  # Panel search-box + filter-chips row
 
     # ── Automation capabilities ───────────────────────────────
     src/auto_key.cpp           # game-agnostic SendInput / hold ledger
@@ -111,6 +124,7 @@ if (WIN32)
         PRIVATE
             d3d11
             dxgi
+            dxguid
             dcomp
             d2d1
             dwrite

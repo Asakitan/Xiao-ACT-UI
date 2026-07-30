@@ -2,8 +2,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -99,6 +101,27 @@ public:
     sao_ui_input_router_handle_t router{nullptr};
 };
 
+class LegacyInputGateOff {
+public:
+    LegacyInputGateOff() {
+        const char* current = std::getenv("SAO_UI_LEGACY_TK_INPUT");
+        if (current != nullptr) {
+            had_previous_ = true;
+            previous_ = current;
+        }
+        (void)_putenv_s("SAO_UI_LEGACY_TK_INPUT", "");
+    }
+
+    ~LegacyInputGateOff() {
+        (void)_putenv_s("SAO_UI_LEGACY_TK_INPUT",
+                        had_previous_ ? previous_.c_str() : "");
+    }
+
+private:
+    bool had_previous_{};
+    std::string previous_;
+};
+
 std::size_t attempt_count(const FakeWin32State& state, std::uintptr_t hook) {
     return static_cast<std::size_t>(
         std::count(state.unhook_attempts.begin(), state.unhook_attempts.end(), hook));
@@ -149,6 +172,25 @@ extern "C" void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
     sao_ui_overlay_host_handle_t, const SaoOverlayHostInputRect*, size_t) {
     return SAO_STATUS_OK;
+}
+
+TEST_CASE("legacy Tk input compatibility shims default off",
+        "[ui][input_hook][legacy][tk_mirror][gate]") {
+    LegacyInputGateOff gate;
+    Fixture fixture;
+    const SaoOverlayHostInputRect rect{0, 0, 8, 8};
+
+    CHECK(sao_ui_input_router_set_regions(fixture.router, &rect, 1) ==
+        SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(sao_ui_input_router_rebuild_region(fixture.router) ==
+        SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(sao_ui_input_router_shield_arm_once(
+          fixture.router, reinterpret_cast<void*>(2)) ==
+        SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK_FALSE(sao_ui_input_router_shield_armed(
+      fixture.router, reinterpret_cast<void*>(2)));
+    CHECK(sao_ui_input_router_set_layer_cursor(fixture.router, "legacy", 0) ==
+        SAO_STATUS_ERR_NOT_IMPLEMENTED);
 }
 
 TEST_CASE("input hook rollback retains a mouse handle when rollback fails",

@@ -488,3 +488,46 @@ TEST_CASE("theme_static_assert_size_correctness", "[ui][theme][host]") {
         REQUIRE(argb == expected);
     }
 }
+
+TEST_CASE("theme semantic tokens resolve through one canonical source",
+          "[ui][theme][single_source]") {
+    sao_ui_theme_handle_t handle = nullptr;
+    REQUIRE(sao_ui_theme_create(&handle) == SAO_STATUS_OK);
+
+    const SaoUiColorToken probes[] = {
+        SAO_UI_TOKEN_APP_BG,
+        SAO_UI_TOKEN_APP_ACCENT,
+        SAO_UI_TOKEN_OK_BLUE,
+        SAO_UI_TOKEN_CLOSE_RED,
+        SAO_UI_TOKEN_WHITE,
+        SAO_UI_TOKEN_BLACK,
+    };
+    for (const SaoUiThemeId theme_id :
+         {SAO_UI_THEME_DARK, SAO_UI_THEME_LIGHT, SAO_UI_THEME_GLASS}) {
+        REQUIRE(sao_ui_theme_set_active(handle, theme_id) == SAO_STATUS_OK);
+        const SaoUiColorTable* table = sao_ui_theme_static_colors(theme_id);
+        REQUIRE(table != nullptr);
+        for (const SaoUiColorToken token : probes) {
+            SaoColorRgba rgba{};
+            uint32_t handle_color = 0;
+            uint32_t panel_color = 0;
+            REQUIRE(sao_ui_theme_get_color_by_id(theme_id, token, &rgba) == SAO_STATUS_OK);
+            REQUIRE(sao_ui_theme_get_color(handle, token, &handle_color) == SAO_STATUS_OK);
+            REQUIRE(sao_ui_theme_get_panel_color(handle, "canonical-source", token,
+                                                 &panel_color) == SAO_STATUS_OK);
+            const uint32_t rgba_argb =
+                (static_cast<uint32_t>(rgba.a) << 24U) |
+                (static_cast<uint32_t>(rgba.r) << 16U) |
+                (static_cast<uint32_t>(rgba.g) << 8U) |
+                static_cast<uint32_t>(rgba.b);
+            INFO("theme=" << static_cast<int32_t>(theme_id)
+                          << " token=" << static_cast<int32_t>(token));
+            CHECK(sao_ui_theme_resolve_color(theme_id, token) == table->argb[token]);
+            CHECK(rgba_argb == table->argb[token]);
+            CHECK(handle_color == table->argb[token]);
+            CHECK(panel_color == table->argb[token]);
+        }
+    }
+
+    sao_ui_theme_destroy(handle);
+}

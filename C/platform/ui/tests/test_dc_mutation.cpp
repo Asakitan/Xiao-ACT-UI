@@ -585,6 +585,39 @@ TEST_CASE("dc mutation pending rect scrub coalesces to the latest typed payload"
     sao_ui_dc_mutation_coordinator_destroy(c);
 }
 
+TEST_CASE("dc mutation frame tick coalesces a rapid same-key burst",
+          "[ui][dc_mutation][rect_provider][frame_tick][coalesce][automation][win32]") {
+    PumpingWindow window;
+    REQUIRE(window.hwnd() != nullptr);
+    RectProviderProbe probe;
+    const SaoUiDcMutationProvider provider{&rect_provider_callback, &probe};
+    sao_ui_dc_mutation_coordinator_handle_t c = nullptr;
+    REQUIRE(sao_ui_dc_mutation_coordinator_create_ex(&provider, &c) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_dc_mutation_coordinator_register(c, window.hwnd(), nullptr) == SAO_STATUS_OK);
+
+    for (int32_t i = 0; i < 32; ++i) {
+        const SaoUiDcMutationRect rect{i, i + 1, i + 2, i + 3};
+        REQUIRE(sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
+                    c, window.hwnd(), &rect, static_cast<uint32_t>(i),
+                    1000u + static_cast<uint32_t>(i)) == SAO_STATUS_OK);
+    }
+    REQUIRE(sao_ui_dc_mut_test_drain(c, 2000));
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        REQUIRE(probe.calls.size() == 1);
+        CHECK(probe.calls[0].fake_rect.left == 31);
+        CHECK(probe.calls[0].fake_rect.top == 32);
+        CHECK(probe.calls[0].fake_rect.right == 33);
+        CHECK(probe.calls[0].fake_rect.bottom == 34);
+        CHECK(probe.calls[0].settle_ms == 31);
+        CHECK(probe.calls[0].timeout_ms == 1031);
+    }
+    CHECK(sao_ui_dc_mut_test_dispatch_count(c) == 1);
+    CHECK(sao_ui_dc_mut_test_failed_dispatch_count(c) == 0);
+
+    sao_ui_dc_mutation_coordinator_destroy(c);
+}
+
 TEST_CASE("dc mutation rect provider failures are one-shot and exceptions map to unknown",
           "[ui][dc_mutation][rect_provider][failure][automation][win32]") {
     struct Scenario {

@@ -71,6 +71,13 @@ extern "C" {
 
 typedef struct sao_ui_overlay_host_s* sao_ui_overlay_host_handle_t;
 
+typedef sao_status_t(SAO_UI_CALL* sao_ui_overlay_protection_provider_fn_t)(
+    void* render_hwnd,
+    void* control_hwnd,
+    void* owner_hwnd,
+    bool enable,
+    void* user_data);
+
 // Creation config — deliberately dense so callers can't accidentally
 // depend on defaults that differ between debug / release / test builds.
 // Mirrors OverlayHost.__init__ in Python (width/height/dc_mutations).
@@ -104,6 +111,16 @@ struct SaoOverlayHostConfig {
     // the physical rcWindow to a decoy rectangle as the ordered second step.
     // NULL → USER32/DWM geometry only.
     void* dc_mutation_coordinator;
+
+    // Exact runtime setting bridge.  When true, capture affinity and the
+    // optional process-boundary provider are applied before create returns.
+    bool sao_screencap_protection;
+
+    // Optional game-agnostic composition callback.  The launcher uses this
+    // to mirror the topology to its helper process; platform/ui never
+    // includes helper-only rt_io headers or plugin code.
+    sao_ui_overlay_protection_provider_fn_t protection_provider;
+    void* protection_provider_user_data;
 };
 
 // Creates the one real overlay host: registers a random class name,
@@ -138,6 +155,10 @@ SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle
 // Grab the hidden 1x1 hControl HWND.  Capture affinity is always set on
 // BOTH hRender and hControl, or on neither.
 SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(sao_ui_overlay_host_handle_t handle);
+
+// Grab the hidden owner HWND used for taskbar suppression and capture-affinity
+// topology.  Borrowed; lifetime is owned by the host.
+SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_owner_hwnd(sao_ui_overlay_host_handle_t handle);
 
 // Validate that the caller is the Win32 owner thread that created the host.
 // Host-bound compositors use this before attaching thread-affine D3D/DComp and

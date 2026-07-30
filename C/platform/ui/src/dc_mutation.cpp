@@ -172,6 +172,7 @@ constexpr size_t kMaxOperationBytes = 63;
 constexpr size_t kMaxMethodBytes = 63;
 constexpr size_t kMaxArgsBytes = 1024;
 constexpr auto kAsyncMutationTimeout = std::chrono::milliseconds(500);
+constexpr auto kMutationFrameTick = std::chrono::milliseconds(16);
 constexpr uint32_t kPhysicalExStyleTimeoutMs = 2000;
 
 std::optional<std::string_view> bounded_string(const char* value, size_t max_bytes) noexcept {
@@ -320,6 +321,8 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     std::unordered_map<MutationKey, Mutation, MutationKeyHash> pending;
     std::deque<MutationKey> queue;
     std::unordered_set<MutationKey, MutationKeyHash> queued;
+    std::unordered_map<MutationKey, std::chrono::steady_clock::time_point, MutationKeyHash>
+        ready_at;
     std::unordered_map<GenerationKey, uint32_t, GenerationKeyHash> inflight;
     std::unordered_map<uintptr_t, Token> tokens;
     std::unordered_map<uintptr_t, uint64_t> epochs;
@@ -365,6 +368,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             pending.clear();
             queue.clear();
             queued.clear();
+            ready_at.clear();
             cv.notify_all();
         }
         if (worker.joinable()) {
@@ -382,18 +386,27 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             std::optional<Mutation> task;
             {
                 std::unique_lock<std::mutex> lock(mu);
-                cv.wait(lock, [this] { return !queue.empty() || stop_requested; });
-                if (queue.empty()) {
-                    return;
-                }
-                key = queue.front();
-                queue.pop_front();
-                queued.erase(key);
-                auto it = pending.find(key);
-                if (it != pending.end()) {
-                    task = std::move(it->second);
-                    pending.erase(it);
-                    inflight[GenerationKey{key.hwnd, key.generation}] += 1u;
+                for (;;) {
+                    cv.wait(lock, [this] { return !queue.empty() || stop_requested; });
+                    if (queue.empty()) {
+                        return;
+                    }
+                    key = queue.front();
+                    const auto ready = ready_at.find(key);
+                    if (ready != ready_at.end() && std::chrono::steady_clock::now() < ready->second) {
+                        cv.wait_until(lock, ready->second);
+                        continue;
+                    }
+                    queue.pop_front();
+                    queued.erase(key);
+                    ready_at.erase(key);
+                    auto it = pending.find(key);
+                    if (it != pending.end()) {
+                        task = std::move(it->second);
+                        pending.erase(it);
+                        inflight[GenerationKey{key.hwnd, key.generation}] += 1u;
+                    }
+                    break;
                 }
             }
 
@@ -506,6 +519,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         pending[key] = std::move(task);
         if (queued.insert(key).second) {
             queue.push_back(key);
+            ready_at[key] = std::chrono::steady_clock::now() + kMutationFrameTick;
         }
         cv.notify_all();
         return SAO_STATUS_OK;
@@ -684,6 +698,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
                 if (k.hwnd == hwnd) {
                     pending.erase(k);
                     queued.erase(k);
+                    ready_at.erase(k);
                     continue;
                 }
                 keep.push_back(k);

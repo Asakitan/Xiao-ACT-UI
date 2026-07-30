@@ -19,6 +19,12 @@
 extern "C" {
 #endif
 
+// Single build capability gate for frozen UI compatibility shims.  The
+// current build keeps compatibility enabled; defining
+// SAO_UI_DISABLE_LEGACY_COMPAT disables new handle creation.  No new feature
+// implementation belongs behind this gate.
+SAO_UI_API bool SAO_UI_CALL sao_ui_legacy_compat_enabled(void);
+
 // Availability probe.  Always returns false for the frozen surface.
 // If a future release ever re-implements the native WebView bridge,
 // flip this to true and update the manifest.

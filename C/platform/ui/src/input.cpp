@@ -1,5 +1,7 @@
 #include "sao/ui/input.h"
 
+#include "input_router_internal.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -436,6 +438,8 @@ extern "C" void SAO_UI_CALL sao_ui_input_router_destroy(sao_ui_input_router_hand
 extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_regions(
     sao_ui_input_router_handle_t handle, const SaoOverlayHostInputRect* rects, size_t rect_count) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (rect_count != 0 && rects == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::vector<SaoOverlayHostInputRect> next;
     next.reserve(rect_count);
@@ -453,6 +457,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_regions(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_rebuild_region(
     sao_ui_input_router_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     std::vector<SaoOverlayHostInputRect> snapshot;
     sao_ui_overlay_host_handle_t host = nullptr;
     {
@@ -460,12 +466,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_rebuild_region(
         snapshot = handle->regions;
         host = handle->host;
     }
+#if defined(SAO_UI_INPUT_TESTING)
     return sao_ui_overlay_host_set_input_region(host, snapshot.data(), snapshot.size());
+#else
+    return sao::ui::input_router_detail::apply_host_input_regions(
+        host, snapshot.empty() ? nullptr : snapshot.data(), snapshot.size());
+#endif
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_shield_arm_once(
     sao_ui_input_router_handle_t handle, void* proxy_hwnd) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (proxy_hwnd == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if defined(_WIN32)
     if (!::IsWindow(reinterpret_cast<HWND>(proxy_hwnd))) return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -482,6 +495,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_shield_arm_once(
 extern "C" bool SAO_UI_CALL sao_ui_input_router_shield_armed(
     sao_ui_input_router_handle_t handle, void* proxy_hwnd) {
     if (handle == nullptr || proxy_hwnd == nullptr) return false;
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled()) return false;
     std::lock_guard<std::mutex> lock(handle->mu);
     return std::find(handle->shielded_windows.begin(), handle->shielded_windows.end(), proxy_hwnd) !=
            handle->shielded_windows.end();
@@ -557,6 +571,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_cursor(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_layer_cursor(
     sao_ui_input_router_handle_t handle, const char* layer_name_utf8, int32_t cursor_kind) {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!sao::ui::input_router_detail::legacy_tk_input_enabled())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (layer_name_utf8 == nullptr || layer_name_utf8[0] == '\0' || !valid_cursor(cursor_kind)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }

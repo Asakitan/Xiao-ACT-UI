@@ -96,6 +96,15 @@ constexpr uint32_t rgba_to_argb(SaoColorRgba c) {
             static_cast<uint32_t>(c.b);
 }
 
+constexpr SaoColorRgba argb_to_rgba(uint32_t argb) {
+    return SaoColorRgba{
+        static_cast<uint8_t>((argb >> 16U) & 0xffU),
+        static_cast<uint8_t>((argb >> 8U) & 0xffU),
+        static_cast<uint8_t>(argb & 0xffU),
+        static_cast<uint8_t>((argb >> 24U) & 0xffU),
+    };
+}
+
 // Build the ARGB tables at translation-unit scope so the existing
 // `sao_ui_theme_static_colors` / `sao_ui_theme_resolve_color`
 // interface returns the real values.  Constexpr — zero runtime cost.
@@ -125,6 +134,15 @@ constexpr SaoUiMetricTable kMetricTables[SAO_UI_THEME_COUNT] = {
     make_metric_table(sao::ui::kSaoThemeMetrics),
     make_metric_table(sao::ui::kSaoThemeMetrics),
     make_metric_table(sao::ui::kSaoThemeMetrics),
+};
+
+constexpr uint32_t kPanelSemanticColorTable[SAO_UI_THEME_COUNT]
+                                                [static_cast<size_t>(
+                                                    sao::ui::detail::PanelSemanticColorToken::
+                                                        Count)] = {
+    {0xff808080U},
+    {0xff808080U},
+    {0xff808080U},
 };
 
 // ── Token name table (parallel to SaoUiColorToken order) ──────────
@@ -222,8 +240,88 @@ void invoke_theme_callbacks(SaoUiThemeId theme_id) noexcept {
 
 namespace sao::ui::detail {
 
+std::array<std::atomic<int32_t>, SAO_UI_METRIC_TOKEN_COUNT>
+    g_panel_metric_test_overrides{};
+thread_local const PanelResolvedTheme* g_panel_paint_theme = nullptr;
+
 uint64_t process_theme_generation() noexcept {
     return g_active_theme_generation.load(std::memory_order_acquire);
+}
+
+int32_t resolve_panel_metric(SaoUiThemeId theme_id, SaoUiMetricToken metric) noexcept {
+    if (!is_valid_metric_token(metric))
+        return 0;
+    const int32_t test_override =
+        g_panel_metric_test_overrides[static_cast<size_t>(metric)].load(std::memory_order_acquire);
+    if (test_override > 0)
+        return test_override;
+    const SaoUiThemeId resolved_theme =
+        is_valid_theme_id(theme_id) ? theme_id : SAO_UI_THEME_DARK;
+    return kMetricTables[resolved_theme].values[metric];
+}
+
+PanelResolvedTheme resolve_theme(SaoUiThemeId theme_id, uint64_t generation) noexcept {
+    const SaoUiThemeId resolved_theme =
+        is_valid_theme_id(theme_id) ? theme_id : SAO_UI_THEME_DARK;
+    PanelResolvedTheme resolved{};
+    resolved.theme_id = resolved_theme;
+    resolved.generation = generation;
+    for (int32_t token = 0; token < SAO_UI_COLOR_TOKEN_COUNT; ++token) {
+        resolved.colors[static_cast<size_t>(token)] = kColorTables[resolved_theme].argb[token];
+    }
+    for (int32_t metric = 0; metric < SAO_UI_METRIC_TOKEN_COUNT; ++metric) {
+        resolved.metrics[static_cast<size_t>(metric)] = resolve_panel_metric(
+            resolved_theme, static_cast<SaoUiMetricToken>(metric));
+    }
+    return resolved;
+}
+
+PanelResolvedTheme resolve_process_theme() noexcept {
+    SaoUiThemeId theme_id = SAO_UI_THEME_DARK;
+    uint64_t before = 0;
+    uint64_t after = 0;
+    do {
+        before = process_theme_generation();
+        (void)sao_ui_theme_get_active_id(&theme_id);
+        after = process_theme_generation();
+    } while (before != after);
+    return resolve_theme(theme_id, after);
+}
+
+uint32_t panel_theme_color(SaoUiColorToken token) noexcept {
+    if (!is_valid_color_token(token))
+        return kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_BLACK];
+    if (g_panel_paint_theme != nullptr)
+        return g_panel_paint_theme->colors[static_cast<size_t>(token)];
+    const SaoUiThemeId theme_id =
+        static_cast<SaoUiThemeId>(g_active_theme_id.load(std::memory_order_acquire));
+    return kColorTables[is_valid_theme_id(theme_id) ? theme_id : SAO_UI_THEME_DARK].argb[token];
+}
+
+uint32_t panel_theme_color(PanelSemanticColorToken token) noexcept {
+    const int32_t token_index = static_cast<int32_t>(token);
+    if (token_index < 0 || token_index >= static_cast<int32_t>(PanelSemanticColorToken::Count))
+        return panel_theme_color(SAO_UI_TOKEN_BLACK);
+    SaoUiThemeId theme_id = SAO_UI_THEME_DARK;
+    if (g_panel_paint_theme != nullptr) {
+        theme_id = g_panel_paint_theme->theme_id;
+    } else {
+        theme_id = static_cast<SaoUiThemeId>(
+            g_active_theme_id.load(std::memory_order_acquire));
+    }
+    if (!is_valid_theme_id(theme_id))
+        theme_id = SAO_UI_THEME_DARK;
+    return kPanelSemanticColorTable[theme_id][static_cast<size_t>(token_index)];
+}
+
+int32_t panel_theme_metric(SaoUiMetricToken metric) noexcept {
+    if (!is_valid_metric_token(metric))
+        return 0;
+    if (g_panel_paint_theme != nullptr)
+        return g_panel_paint_theme->metrics[static_cast<size_t>(metric)];
+    const SaoUiThemeId theme_id =
+        static_cast<SaoUiThemeId>(g_active_theme_id.load(std::memory_order_acquire));
+    return resolve_panel_metric(theme_id, metric);
 }
 
 } // namespace sao::ui::detail
@@ -248,7 +346,7 @@ extern "C" const SaoUiMetricTable* SAO_UI_CALL sao_ui_theme_static_metrics(
 extern "C" uint32_t SAO_UI_CALL sao_ui_theme_resolve_color(
     SaoUiThemeId theme_id, SaoUiColorToken token) {
     if (!is_valid_theme_id(theme_id) || !is_valid_color_token(token)) {
-        return 0xff000000u;
+        return kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_BLACK];
     }
     return kColorTables[theme_id].argb[token];
 }
@@ -268,10 +366,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_color_by_id(
     SaoColorRgba* out_rgba) {
     if (out_rgba == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (!is_valid_theme_id(theme_id) || !is_valid_color_token(token)) {
-        *out_rgba = SaoColorRgba{0, 0, 0, 0xFF};
+        *out_rgba = argb_to_rgba(
+            kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_BLACK]);
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    *out_rgba = sao::ui::theme_colors_for(theme_id)[token];
+    *out_rgba = argb_to_rgba(kColorTables[theme_id].argb[token]);
     return SAO_STATUS_OK;
 }
 
@@ -284,9 +383,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_metric_by_id(
         *out_value = 0;
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    // Metrics are theme-agnostic, so we ignore theme_id past
-    // the range check (the enum-count-3 table is identical per row).
-    *out_value = sao::ui::kSaoThemeMetrics[metric];
+    *out_value = kMetricTables[theme_id].values[metric];
     return SAO_STATUS_OK;
 }
 

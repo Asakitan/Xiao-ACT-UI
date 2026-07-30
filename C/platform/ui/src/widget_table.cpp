@@ -26,10 +26,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <condition_variable>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -193,6 +194,17 @@ struct TableState {
     bool sorted{false};
     // Filter state.
     std::string filter_text;
+    bool zebra_stripes{true};
+    size_t hovered_row_index{std::numeric_limits<size_t>::max()};
+    int64_t selected_row_id{0};
+    int32_t hovered_header_column{-1};
+    int32_t pressed_header_column{-1};
+    int32_t scroll_offset_px{0};
+    bool resize_cursor_hint{false};
+    std::vector<int32_t> column_width_overrides;
+    size_t last_paint_first_row{0};
+    size_t last_paint_last_row{0};
+    size_t last_paint_row_count{0};
     // Callback wiring.
     CallbackSlot<sao_ui_table_row_click_cb_t> row_click;
     CallbackSlot<sao_ui_table_cell_action_cb_t> cell_action;
@@ -237,6 +249,14 @@ struct TablePropsSnapshot {
     std::string filter_text;
     bool sort_desc{};
     bool sorted{};
+    bool zebra_stripes{};
+    size_t hovered_row_index{std::numeric_limits<size_t>::max()};
+    int64_t selected_row_id{};
+    int32_t hovered_header_column{-1};
+    int32_t pressed_header_column{-1};
+    int32_t scroll_offset_px{};
+    bool resize_cursor_hint{};
+    std::vector<int32_t> column_width_overrides;
     std::vector<OwnedTreeNode> nodes;
     std::vector<VisibleTreeNode> visible;
     int64_t selected_node_id{};
@@ -406,8 +426,8 @@ std::vector<VisibleTreeNode> build_tree_visible(const std::vector<OwnedTreeNode>
 sao_status_t build_tree_candidate(const SaoUiTreeNode* nodes, size_t node_count,
                                   std::vector<OwnedTreeNode>* owned_out,
                                   std::vector<VisibleTreeNode>* visible_out) {
-    if (owned_out == nullptr || visible_out == nullptr ||
-        (nodes == nullptr && node_count != 0) || node_count > kMaxTreeNodes) {
+    if (owned_out == nullptr || visible_out == nullptr || (nodes == nullptr && node_count != 0) ||
+        node_count > kMaxTreeNodes) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -691,6 +711,134 @@ void rebuild_view_no_lock(TableState& s) {
     s.rows_view = build_view_no_lock(s, s.rows_all);
 }
 
+uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
+    const float t = std::clamp(amount, 0.0F, 1.0F);
+    const auto channel = [t](uint32_t left, uint32_t right) {
+        return static_cast<uint32_t>(std::lround(
+            static_cast<float>(left) + (static_cast<float>(right) - static_cast<float>(left)) * t));
+    };
+    return (channel((from >> 24U) & 0xffU, (to >> 24U) & 0xffU) << 24U) |
+           (channel((from >> 16U) & 0xffU, (to >> 16U) & 0xffU) << 16U) |
+           (channel((from >> 8U) & 0xffU, (to >> 8U) & 0xffU) << 8U) |
+           channel(from & 0xffU, to & 0xffU);
+}
+
+uint32_t zebra_color(uint32_t base) {
+    const float red = static_cast<float>((base >> 16U) & 0xffU);
+    const float green = static_cast<float>((base >> 8U) & 0xffU);
+    const float blue = static_cast<float>(base & 0xffU);
+    const float luminance = red * 0.2126F + green * 0.7152F + blue * 0.0722F;
+    return blend_argb(
+        base,
+        sao::ui::detail::panel_theme_color(
+            luminance < 128.0F ? SAO_UI_TOKEN_WHITE : SAO_UI_TOKEN_BLACK),
+        0.04F);
+}
+
+std::vector<int32_t> compute_column_widths(const std::vector<OwnedColumn>& columns,
+                                           const std::vector<int32_t>& overrides,
+                                           int32_t total_width_px) {
+    std::vector<int32_t> widths(columns.size(), 0);
+    int32_t used = 0;
+    float total_weight = 0.0F;
+    for (size_t index = 0; index < columns.size(); ++index) {
+        const OwnedColumn& column = columns[index];
+        if (column.hidden)
+            continue;
+        int32_t width = std::max(1, column.min_width_px);
+        if (index < overrides.size() && overrides[index] > 0)
+            width = std::max(width, overrides[index]);
+        if (column.max_width_px > 0)
+            width = std::min(width, column.max_width_px);
+        widths[index] = width;
+        used += width;
+        if ((index >= overrides.size() || overrides[index] <= 0) && column.flex_weight > 0.0F)
+            total_weight += column.flex_weight;
+    }
+    int32_t remainder = std::max(0, total_width_px - used);
+    if (remainder > 0 && total_weight > 0.0F) {
+        int32_t distributed = 0;
+        size_t last_flexible = columns.size();
+        for (size_t index = 0; index < columns.size(); ++index) {
+            const OwnedColumn& column = columns[index];
+            if (column.hidden || (index < overrides.size() && overrides[index] > 0) ||
+                column.flex_weight <= 0.0F) {
+                continue;
+            }
+            last_flexible = index;
+            int32_t extra = static_cast<int32_t>(
+                std::floor(static_cast<float>(remainder) * column.flex_weight / total_weight));
+            if (column.max_width_px > 0)
+                extra = std::min(extra, std::max(0, column.max_width_px - widths[index]));
+            widths[index] += extra;
+            distributed += extra;
+        }
+        if (last_flexible < widths.size()) {
+            int32_t extra = remainder - distributed;
+            if (columns[last_flexible].max_width_px > 0) {
+                extra = std::min(extra, std::max(0, columns[last_flexible].max_width_px -
+                                                        widths[last_flexible]));
+            }
+            widths[last_flexible] += extra;
+        }
+    }
+    return widths;
+}
+
+int32_t column_at_x(const std::vector<OwnedColumn>& columns, const std::vector<int32_t>& widths,
+                    float x, bool* out_resize_zone) {
+    if (out_resize_zone != nullptr)
+        *out_resize_zone = false;
+    int32_t cursor = 0;
+    for (size_t index = 0; index < columns.size(); ++index) {
+        if (columns[index].hidden)
+            continue;
+        const int32_t next = cursor + widths[index];
+        if (columns[index].resizable && std::fabs(x - static_cast<float>(next)) <= 4.0F) {
+            if (out_resize_zone != nullptr)
+                *out_resize_zone = true;
+            return static_cast<int32_t>(index);
+        }
+        if (x >= static_cast<float>(cursor) && x < static_cast<float>(next))
+            return static_cast<int32_t>(index);
+        cursor = next;
+    }
+    return -1;
+}
+
+void normalize_table_interaction_no_lock(TableState& state) {
+    if (state.hovered_row_index >= state.rows_view.size())
+        state.hovered_row_index = std::numeric_limits<size_t>::max();
+    if (state.selected_row_id != 0) {
+        const bool selected_exists =
+            std::any_of(state.rows_all.begin(), state.rows_all.end(),
+                        [&](const OwnedRow& row) { return row.row_id == state.selected_row_id; });
+        if (!selected_exists)
+            state.selected_row_id = 0;
+    }
+}
+
+struct RenderRange {
+    size_t first_visible{};
+    size_t last_visible_exclusive{};
+    size_t first_render{};
+    size_t last_render_exclusive{};
+};
+
+RenderRange table_render_range(size_t row_count, int32_t row_height, int32_t viewport_height,
+                               int32_t scroll_offset) {
+    RenderRange range{};
+    if (row_count == 0 || row_height <= 0 || viewport_height <= 0)
+        return range;
+    const int32_t offset = std::max(0, scroll_offset);
+    range.first_visible = std::min(static_cast<size_t>(offset / row_height), row_count);
+    range.last_visible_exclusive = std::min(
+        static_cast<size_t>((offset + viewport_height + row_height - 1) / row_height), row_count);
+    range.first_render = range.first_visible > 2 ? range.first_visible - 2 : 0;
+    range.last_render_exclusive = std::min(row_count, range.last_visible_exclusive + 2);
+    return range;
+}
+
 // Find an existing row by row_id.  Returns iterator (end() if missing).
 std::vector<OwnedRow>::iterator find_row_by_id_no_lock(TableState& s, int64_t row_id) {
     return std::find_if(s.rows_all.begin(), s.rows_all.end(),
@@ -743,6 +891,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_create(void* /*d3d_device_ptr*/
         if (state->spec.header_height_px <= 0) {
             state->spec.header_height_px = kDefaultHeaderHeight;
         }
+        state->zebra_stripes = true;
+        state->column_width_overrides.assign(state->columns.size(), 0);
         return publish_table_state(kTableTag, std::move(state), out_handle);
     });
 }
@@ -765,6 +915,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_rows(sao_ui_widget_handle_t
         auto next_view = build_view_no_lock(*state, next_rows);
         state->rows_all = std::move(next_rows);
         state->rows_view = std::move(next_view);
+        normalize_table_interaction_no_lock(*state);
         return SAO_STATUS_OK;
     });
 }
@@ -802,6 +953,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_upsert_row(sao_ui_widget_handle
         auto next_view = build_view_no_lock(*state, next_rows);
         state->rows_all = std::move(next_rows);
         state->rows_view = std::move(next_view);
+        normalize_table_interaction_no_lock(*state);
         return SAO_STATUS_OK;
     });
 }
@@ -818,6 +970,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_remove_row(sao_ui_widget_handle
             return SAO_STATUS_ERR_NOT_FOUND;
         s->rows_all.erase(it);
         rebuild_view_no_lock(*s);
+        normalize_table_interaction_no_lock(*s);
         return SAO_STATUS_OK;
     });
 }
@@ -830,6 +983,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_clear_rows(sao_ui_widget_handle
         std::lock_guard<std::mutex> lk(s->mtx);
         s->rows_all.clear();
         s->rows_view.clear();
+        s->hovered_row_index = std::numeric_limits<size_t>::max();
+        s->selected_row_id = 0;
         return SAO_STATUS_OK;
     });
 }
@@ -850,6 +1005,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_sort(sao_ui_widget_handle_t
         s->sort_desc = s->sort_key.empty() ? false : descending;
         s->sorted = !s->sort_key.empty();
         rebuild_view_no_lock(*s);
+        s->hovered_row_index = std::numeric_limits<size_t>::max();
         return SAO_STATUS_OK;
     });
 }
@@ -867,6 +1023,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_table_set_filter(sao_ui_widget_handle
         std::lock_guard<std::mutex> lk(s->mtx);
         s->filter_text = std::move(filter);
         rebuild_view_no_lock(*s);
+        s->hovered_row_index = std::numeric_limits<size_t>::max();
+        normalize_table_interaction_no_lock(*s);
         return SAO_STATUS_OK;
     });
 }
@@ -979,9 +1137,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_select_node(sao_ui_widget_h
             if (!tree->nodes[index].selectable)
                 return SAO_STATUS_ERR_ACCESS_DENIED;
             const bool visible =
-                std::any_of(tree->visible.begin(), tree->visible.end(), [index](const auto& item) {
-                    return item.node_index == index;
-                });
+                std::any_of(tree->visible.begin(), tree->visible.end(),
+                            [index](const auto& item) { return item.node_index == index; });
             if (!visible)
                 return SAO_STATUS_ERR_NOT_FOUND;
             tree->selected_node_id = node_id;
@@ -1155,47 +1312,110 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_hit_test(
                     *out_row_view_index = row_idx;
             }
         }
-        // Column selection: distribute total_width_px across columns by
-        // (max(min_width_px, flex_weight * remainder)).  Simple version:
-        // start with each column's min_width_px; give any leftover to
-        // flex_weight-proportional columns.
         if (s->columns.empty() || total_width_px <= 0)
             return SAO_STATUS_OK;
-        std::vector<int32_t> widths(s->columns.size(), 0);
-        int32_t used = 0;
-        float total_weight = 0.0f;
-        for (size_t i = 0; i < s->columns.size(); ++i) {
-            if (s->columns[i].hidden) {
-                widths[i] = 0;
-                continue;
-            }
-            widths[i] = std::max(int32_t{1}, s->columns[i].min_width_px);
-            used += widths[i];
-            total_weight += std::max(0.0f, s->columns[i].flex_weight);
+        const std::vector<int32_t> widths =
+            compute_column_widths(s->columns, s->column_width_overrides, total_width_px);
+        if (out_col_index)
+            *out_col_index = column_at_x(s->columns, widths, point.x, nullptr);
+        return SAO_STATUS_OK;
+    });
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_update_pointer_state(
+    sao_ui_widget_handle_t handle, float local_x, float local_y, int32_t total_width_px,
+    int32_t scroll_offset_px, bool pressed, size_t* out_row_view_index, int32_t* out_col_index,
+    bool* out_resize_cursor_hint) {
+    return table_abi_status([&]() -> sao_status_t {
+        auto state = as_table(handle);
+        if (state == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (total_width_px <= 0 || scroll_offset_px < 0 || !std::isfinite(local_x) ||
+            !std::isfinite(local_y))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::lock_guard<std::mutex> lock(state->mtx);
+        if (out_row_view_index)
+            *out_row_view_index = std::numeric_limits<size_t>::max();
+        if (out_col_index)
+            *out_col_index = -1;
+        if (out_resize_cursor_hint)
+            *out_resize_cursor_hint = false;
+        state->scroll_offset_px = scroll_offset_px;
+        if (local_x < 0.0F || local_y < 0.0F) {
+            state->hovered_row_index = std::numeric_limits<size_t>::max();
+            state->hovered_header_column = -1;
+            state->pressed_header_column = -1;
+            state->resize_cursor_hint = false;
+            return SAO_STATUS_OK;
         }
-        const int32_t remainder = std::max(int32_t{0}, total_width_px - used);
-        if (remainder > 0 && total_weight > 0.0f) {
-            for (size_t i = 0; i < s->columns.size(); ++i) {
-                if (s->columns[i].hidden)
-                    continue;
-                const float w = std::max(0.0f, s->columns[i].flex_weight);
-                widths[i] +=
-                    static_cast<int32_t>(static_cast<float>(remainder) * (w / total_weight));
+        const std::vector<int32_t> widths =
+            compute_column_widths(state->columns, state->column_width_overrides, total_width_px);
+        bool resize_zone = false;
+        const int32_t column = column_at_x(state->columns, widths, local_x, &resize_zone);
+        if (out_col_index)
+            *out_col_index = column;
+        const int32_t header_height =
+            state->spec.show_header ? std::max(1, state->spec.header_height_px) : 0;
+        if (header_height > 0 && local_y < static_cast<float>(header_height)) {
+            const int32_t previous_pressed = state->pressed_header_column;
+            state->hovered_row_index = std::numeric_limits<size_t>::max();
+            state->hovered_header_column = column;
+            state->resize_cursor_hint = resize_zone;
+            if (pressed) {
+                state->pressed_header_column = resize_zone ? -1 : column;
+            } else {
+                state->pressed_header_column = -1;
+                if (!resize_zone && column >= 0 && previous_pressed == column &&
+                    static_cast<size_t>(column) < state->columns.size() &&
+                    state->columns[static_cast<size_t>(column)].sortable) {
+                    const std::string& key = state->columns[static_cast<size_t>(column)].key;
+                    state->sort_desc =
+                        state->sorted && state->sort_key == key ? !state->sort_desc : false;
+                    state->sort_key = key;
+                    state->sorted = true;
+                    rebuild_view_no_lock(*state);
+                }
+            }
+            if (out_resize_cursor_hint)
+                *out_resize_cursor_hint = state->resize_cursor_hint;
+            return SAO_STATUS_OK;
+        }
+        state->hovered_header_column = -1;
+        state->pressed_header_column = -1;
+        state->resize_cursor_hint = false;
+        const int32_t row_height = std::max(1, state->spec.row_height_px);
+        const int32_t body_y = static_cast<int32_t>(local_y) - header_height + scroll_offset_px;
+        if (body_y >= 0) {
+            const size_t row_index = static_cast<size_t>(body_y / row_height);
+            if (row_index < state->rows_view.size()) {
+                state->hovered_row_index = state->spec.row_hover_highlight
+                                               ? row_index
+                                               : std::numeric_limits<size_t>::max();
+                if (pressed)
+                    state->selected_row_id = state->rows_all[state->rows_view[row_index]].row_id;
+                if (out_row_view_index)
+                    *out_row_view_index = row_index;
+            } else {
+                state->hovered_row_index = std::numeric_limits<size_t>::max();
             }
         }
-        // Locate x.
-        int32_t x_accum = 0;
-        for (size_t i = 0; i < widths.size(); ++i) {
-            if (s->columns[i].hidden)
-                continue;
-            const int32_t next = x_accum + widths[i];
-            if (point.x >= static_cast<float>(x_accum) && point.x < static_cast<float>(next)) {
-                if (out_col_index)
-                    *out_col_index = static_cast<int32_t>(i);
-                break;
-            }
-            x_accum = next;
-        }
+        return SAO_STATUS_OK;
+    });
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_table_get_last_paint_range(sao_ui_widget_handle_t handle, size_t* out_first_row,
+                                         size_t* out_last_row, size_t* out_row_count) {
+    return table_abi_status([&]() -> sao_status_t {
+        auto state = as_table(handle);
+        if (state == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (out_first_row == nullptr || out_last_row == nullptr || out_row_count == nullptr)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::lock_guard<std::mutex> lock(state->mtx);
+        *out_first_row = state->last_paint_first_row;
+        *out_last_row = state->last_paint_last_row;
+        *out_row_count = state->last_paint_row_count;
         return SAO_STATUS_OK;
     });
 }
@@ -1216,6 +1436,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_sort_by_index
         s->sort_desc = !ascending;
         s->sorted = true;
         rebuild_view_no_lock(*s);
+        s->hovered_row_index = std::numeric_limits<size_t>::max();
         return SAO_STATUS_OK;
     });
 }
@@ -1238,6 +1459,7 @@ sao_ui_widget_table_fire_row_click(sao_ui_widget_handle_t handle, size_t view_in
             if (view_index >= s->rows_view.size())
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             row_id = s->rows_all[s->rows_view[view_index]].row_id;
+            s->selected_row_id = row_id;
             callback = s->row_click.callback;
             user_data = s->row_click.user_data;
             if (callback != nullptr) {
@@ -1248,17 +1470,16 @@ sao_ui_widget_table_fire_row_click(sao_ui_widget_handle_t handle, size_t view_in
         if (callback == nullptr)
             return SAO_STATUS_OK;
 
-        TableCallbackLease<TableState, sao_ui_table_row_click_cb_t> lease(
-            s, &s->row_click, generation);
+        TableCallbackLease<TableState, sao_ui_table_row_click_cb_t> lease(s, &s->row_click,
+                                                                          generation);
         TableCallbackScope callback_scope(s.get());
         try {
             callback(row_id, user_data);
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
-        return callback_generation_is_current(s, s->row_click, generation)
-                   ? SAO_STATUS_OK
-                   : SAO_UI_STATUS_ERR_BUSY;
+        return callback_generation_is_current(s, s->row_click, generation) ? SAO_STATUS_OK
+                                                                           : SAO_UI_STATUS_ERR_BUSY;
     });
 }
 
@@ -1293,8 +1514,8 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_fire_cell_act
         if (callback == nullptr)
             return SAO_STATUS_OK;
 
-        TableCallbackLease<TableState, sao_ui_table_cell_action_cb_t> lease(
-            s, &s->cell_action, generation);
+        TableCallbackLease<TableState, sao_ui_table_cell_action_cb_t> lease(s, &s->cell_action,
+                                                                            generation);
         TableCallbackScope callback_scope(s.get());
         try {
             callback(row_id, column_key.c_str(), user_data);
@@ -1321,22 +1542,32 @@ sao_ui_widget_tree_get_selected_node(sao_ui_widget_handle_t handle, int64_t* out
     });
 }
 
-sao_status_t sao::ui::detail::widget_table_apply_props(
-    sao_ui_widget_handle_t handle, int32_t kind, const WidgetPropsJson& props,
-    WidgetPropsSnapshot* out_snapshot) noexcept {
+sao_status_t sao::ui::detail::widget_table_apply_props(sao_ui_widget_handle_t handle, int32_t kind,
+                                                       const WidgetPropsJson& props,
+                                                       WidgetPropsSnapshot* out_snapshot) noexcept {
     if (out_snapshot == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_snapshot = {};
     try {
         auto snapshot = std::make_shared<TablePropsSnapshot>();
         if (kind == kTableTag) {
-            if (!widget_props_has_only(props, {"rows", "sort_key", "sort_desc", "filter"}))
+            if (!widget_props_has_only(
+                    props, {"rows", "sort_key", "sort_desc", "filter", "zebra_stripes",
+                            "hovered_row_index", "selected_row_id", "header_hover_column",
+                            "header_pressed_column", "scroll_offset_px", "column_widths"}))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
             const auto rows_property = props.find("rows");
             const auto sort_key_property = props.find("sort_key");
             const auto sort_desc_property = props.find("sort_desc");
             const auto filter_property = props.find("filter");
+            const auto zebra_property = props.find("zebra_stripes");
+            const auto hovered_row_property = props.find("hovered_row_index");
+            const auto selected_row_property = props.find("selected_row_id");
+            const auto header_hover_property = props.find("header_hover_column");
+            const auto header_pressed_property = props.find("header_pressed_column");
+            const auto scroll_offset_property = props.find("scroll_offset_px");
+            const auto column_widths_property = props.find("column_widths");
 
             std::vector<std::vector<std::string>> string_storage;
             std::vector<std::vector<SaoUiCellValue>> cell_storage;
@@ -1351,16 +1582,16 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                 size_t total_cells = 0;
                 for (size_t row_index = 0; row_index < row_count; ++row_index) {
                     const auto& row_json = (*rows_property)[row_index];
-                    if (!widget_props_has_only(
-                            row_json, {"row_id", "cells", "highlight", "mem_priority_badge",
-                                       "zebra_alt", "dim", "row_bg_argb", "row_fg_argb"})) {
+                    if (!widget_props_has_only(row_json, {"row_id", "cells", "highlight",
+                                                          "mem_priority_badge", "zebra_alt", "dim",
+                                                          "row_bg_argb", "row_fg_argb"})) {
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
                     }
                     const auto row_id = row_json.find("row_id");
                     const auto cells = row_json.find("cells");
                     if (row_id == row_json.end() || cells == row_json.end() ||
-                        !widget_props_i64(*row_id, &rows[row_index].row_id) ||
-                        !cells->is_array() || cells->size() > kMaxTableColumns ||
+                        !widget_props_i64(*row_id, &rows[row_index].row_id) || !cells->is_array() ||
+                        cells->size() > kMaxTableColumns ||
                         cells->size() > kMaxTableCells - total_cells) {
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
                     }
@@ -1370,8 +1601,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                     for (size_t cell_index = 0; cell_index < cells->size(); ++cell_index) {
                         const auto& cell_json = (*cells)[cell_index];
                         if (!widget_props_has_only(
-                                cell_json, {"kind", "value", "max_hint", "fg_argb",
-                                            "bg_argb"})) {
+                                cell_json, {"kind", "value", "max_hint", "fg_argb", "bg_argb"})) {
                             return SAO_STATUS_ERR_INVALID_ARGUMENT;
                         }
                         const auto cell_kind = cell_json.find("kind");
@@ -1415,17 +1645,15 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                             return SAO_STATUS_ERR_INVALID_ARGUMENT;
                         }
                     }
-                    rows[row_index].cells = cell_storage[row_index].empty()
-                                                     ? nullptr
-                                                     : cell_storage[row_index].data();
+                    rows[row_index].cells =
+                        cell_storage[row_index].empty() ? nullptr : cell_storage[row_index].data();
                     rows[row_index].cell_count = cell_storage[row_index].size();
                     const auto parse_flag = [&](const char* key, bool* output) {
                         const auto property = row_json.find(key);
                         return property == row_json.end() || widget_props_bool(*property, output);
                     };
                     if (!parse_flag("highlight", &rows[row_index].highlight) ||
-                        !parse_flag("mem_priority_badge",
-                                    &rows[row_index].mem_priority_badge) ||
+                        !parse_flag("mem_priority_badge", &rows[row_index].mem_priority_badge) ||
                         !parse_flag("zebra_alt", &rows[row_index].zebra_alt) ||
                         !parse_flag("dim", &rows[row_index].dim)) {
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1465,6 +1693,54 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 filter = filter_property->get<std::string>();
             }
+            bool zebra_stripes = false;
+            if (zebra_property != props.end() &&
+                !widget_props_bool(*zebra_property, &zebra_stripes)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            int64_t hovered_row = -1;
+            if (hovered_row_property != props.end() &&
+                (!widget_props_i64(*hovered_row_property, &hovered_row) || hovered_row < -1)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            int64_t selected_row_id = 0;
+            if (selected_row_property != props.end() &&
+                !widget_props_i64(*selected_row_property, &selected_row_id)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            int32_t header_hover_column = -1;
+            if (header_hover_property != props.end() &&
+                (!widget_props_i32(*header_hover_property, &header_hover_column) ||
+                 header_hover_column < -1)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            int32_t header_pressed_column = -1;
+            if (header_pressed_property != props.end() &&
+                (!widget_props_i32(*header_pressed_property, &header_pressed_column) ||
+                 header_pressed_column < -1)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            int32_t scroll_offset_px = 0;
+            if (scroll_offset_property != props.end() &&
+                (!widget_props_i32(*scroll_offset_property, &scroll_offset_px) ||
+                 scroll_offset_px < 0)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            std::vector<int32_t> column_widths;
+            if (column_widths_property != props.end()) {
+                if (!column_widths_property->is_array() ||
+                    column_widths_property->size() > kMaxTableColumns) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                column_widths.resize(column_widths_property->size());
+                for (size_t index = 0; index < column_widths.size(); ++index) {
+                    if (!widget_props_i32((*column_widths_property)[index],
+                                          &column_widths[index]) ||
+                        column_widths[index] < 0) {
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
 
             auto state = as_table(handle);
             if (state == nullptr)
@@ -1477,6 +1753,24 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                 snapshot->sort_desc = state->sort_desc;
                 snapshot->sorted = state->sorted;
                 snapshot->filter_text = state->filter_text;
+                snapshot->zebra_stripes = state->zebra_stripes;
+                snapshot->hovered_row_index = state->hovered_row_index;
+                snapshot->selected_row_id = state->selected_row_id;
+                snapshot->hovered_header_column = state->hovered_header_column;
+                snapshot->pressed_header_column = state->pressed_header_column;
+                snapshot->scroll_offset_px = state->scroll_offset_px;
+                snapshot->resize_cursor_hint = state->resize_cursor_hint;
+                snapshot->column_width_overrides = state->column_width_overrides;
+                if (column_widths_property != props.end() &&
+                    column_widths.size() != state->columns.size()) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                if ((header_hover_property != props.end() && header_hover_column >= 0 &&
+                     static_cast<size_t>(header_hover_column) >= state->columns.size()) ||
+                    (header_pressed_property != props.end() && header_pressed_column >= 0 &&
+                     static_cast<size_t>(header_pressed_column) >= state->columns.size())) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
                 if (sort_key_property == props.end())
                     sort_key = state->sort_key;
                 if (sort_desc_property == props.end())
@@ -1493,6 +1787,41 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
             }
             if (status == SAO_STATUS_OK && filter_property != props.end())
                 status = sao_ui_table_set_filter(handle, filter.c_str());
+            if (status == SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(state->mtx);
+                if (hovered_row_property != props.end() && hovered_row >= 0 &&
+                    static_cast<size_t>(hovered_row) >= state->rows_view.size()) {
+                    status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                if (status == SAO_STATUS_OK && selected_row_property != props.end() &&
+                    selected_row_id != 0) {
+                    const bool found = std::any_of(state->rows_all.begin(), state->rows_all.end(),
+                                                   [selected_row_id](const OwnedRow& row) {
+                                                       return row.row_id == selected_row_id;
+                                                   });
+                    if (!found)
+                        status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+                if (status == SAO_STATUS_OK) {
+                    if (zebra_property != props.end())
+                        state->zebra_stripes = zebra_stripes;
+                    if (hovered_row_property != props.end()) {
+                        state->hovered_row_index = hovered_row < 0
+                                                       ? std::numeric_limits<size_t>::max()
+                                                       : static_cast<size_t>(hovered_row);
+                    }
+                    if (selected_row_property != props.end())
+                        state->selected_row_id = selected_row_id;
+                    if (header_hover_property != props.end())
+                        state->hovered_header_column = header_hover_column;
+                    if (header_pressed_property != props.end())
+                        state->pressed_header_column = header_pressed_column;
+                    if (scroll_offset_property != props.end())
+                        state->scroll_offset_px = scroll_offset_px;
+                    if (column_widths_property != props.end())
+                        state->column_width_overrides = column_widths;
+                }
+            }
             if (status != SAO_STATUS_OK) {
                 std::lock_guard<std::mutex> lock(state->mtx);
                 state->rows_all = snapshot->rows_all;
@@ -1501,6 +1830,14 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                 state->sort_desc = snapshot->sort_desc;
                 state->sorted = snapshot->sorted;
                 state->filter_text = snapshot->filter_text;
+                state->zebra_stripes = snapshot->zebra_stripes;
+                state->hovered_row_index = snapshot->hovered_row_index;
+                state->selected_row_id = snapshot->selected_row_id;
+                state->hovered_header_column = snapshot->hovered_header_column;
+                state->pressed_header_column = snapshot->pressed_header_column;
+                state->scroll_offset_px = snapshot->scroll_offset_px;
+                state->resize_cursor_hint = snapshot->resize_cursor_hint;
+                state->column_width_overrides = snapshot->column_width_overrides;
                 return status;
             }
         } else if (kind == kTreeTag) {
@@ -1519,9 +1856,9 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                 nodes.resize(nodes_property->size());
                 for (size_t index = 0; index < nodes.size(); ++index) {
                     const auto& item = (*nodes_property)[index];
-                    if (!widget_props_has_only(
-                            item, {"node_id", "parent_id", "label", "detail", "icon_slot",
-                                   "expanded", "selectable", "fg_argb", "bg_argb"})) {
+                    if (!widget_props_has_only(item, {"node_id", "parent_id", "label", "detail",
+                                                      "icon_slot", "expanded", "selectable",
+                                                      "fg_argb", "bg_argb"})) {
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
                     }
                     const auto node_id = item.find("node_id");
@@ -1549,8 +1886,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
                     const auto selectable = item.find("selectable");
                     const auto foreground = item.find("fg_argb");
                     const auto background = item.find("bg_argb");
-                    if ((icon != item.end() &&
-                         !widget_props_i32(*icon, &nodes[index].icon_slot)) ||
+                    if ((icon != item.end() && !widget_props_i32(*icon, &nodes[index].icon_slot)) ||
                         (expanded != item.end() &&
                          !widget_props_bool(*expanded, &nodes[index].expanded_default)) ||
                         (selectable != item.end() &&
@@ -1600,9 +1936,9 @@ sao_status_t sao::ui::detail::widget_table_apply_props(
     }
 }
 
-sao_status_t sao::ui::detail::widget_table_restore_props(
-    sao_ui_widget_handle_t handle, int32_t kind,
-    const WidgetPropsSnapshot& snapshot) noexcept {
+sao_status_t
+sao::ui::detail::widget_table_restore_props(sao_ui_widget_handle_t handle, int32_t kind,
+                                            const WidgetPropsSnapshot& snapshot) noexcept {
     const auto previous = std::static_pointer_cast<TablePropsSnapshot>(snapshot);
     if (previous == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1618,6 +1954,14 @@ sao_status_t sao::ui::detail::widget_table_restore_props(
             state->sort_desc = previous->sort_desc;
             state->sorted = previous->sorted;
             state->filter_text = previous->filter_text;
+            state->zebra_stripes = previous->zebra_stripes;
+            state->hovered_row_index = previous->hovered_row_index;
+            state->selected_row_id = previous->selected_row_id;
+            state->hovered_header_column = previous->hovered_header_column;
+            state->pressed_header_column = previous->pressed_header_column;
+            state->scroll_offset_px = previous->scroll_offset_px;
+            state->resize_cursor_hint = previous->resize_cursor_hint;
+            state->column_width_overrides = previous->column_width_overrides;
             return SAO_STATUS_OK;
         }
         if (kind == kTreeTag) {
@@ -1636,15 +1980,29 @@ sao_status_t sao::ui::detail::widget_table_restore_props(
     }
 }
 
-sao_status_t sao::ui::detail::widget_table_paint(
-    sao_ui_widget_handle_t handle, int32_t kind,
-    sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
-    int32_t width, int32_t height) noexcept {
+sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, int32_t kind,
+                                                 sao_ui_paint_ctx_handle_t context, int32_t x,
+                                                 int32_t y, int32_t width,
+                                                 int32_t height) noexcept {
     try {
         if (kind == kTableTag) {
             SaoUiTableSpec spec{};
             std::vector<OwnedColumn> columns;
-            std::vector<OwnedRow> rows;
+            struct PaintRow {
+                size_t view_index{};
+                OwnedRow row;
+            };
+            std::vector<PaintRow> rows;
+            std::vector<int32_t> column_width_overrides;
+            std::string sort_key;
+            bool sort_desc = false;
+            bool sorted = false;
+            bool zebra_stripes = true;
+            size_t hovered_row_index = std::numeric_limits<size_t>::max();
+            int64_t selected_row_id = 0;
+            int32_t hovered_header_column = -1;
+            int32_t pressed_header_column = -1;
+            int32_t scroll_offset_px = 0;
             auto state = as_table(handle);
             if (state == nullptr)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1652,81 +2010,159 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 std::lock_guard<std::mutex> lock(state->mtx);
                 spec = state->spec;
                 columns = state->columns;
-                rows.reserve(state->rows_view.size());
-                for (const size_t index : state->rows_view)
-                    rows.push_back(state->rows_all[index]);
+                column_width_overrides = state->column_width_overrides;
+                sort_key = state->sort_key;
+                sort_desc = state->sort_desc;
+                sorted = state->sorted;
+                zebra_stripes = state->zebra_stripes;
+                hovered_row_index = state->hovered_row_index;
+                selected_row_id = state->selected_row_id;
+                hovered_header_column = state->hovered_header_column;
+                pressed_header_column = state->pressed_header_column;
+                scroll_offset_px = state->scroll_offset_px;
+                const int32_t header_height =
+                    spec.show_header ? std::max(1, spec.header_height_px) : 0;
+                const int32_t row_height = std::max(1, spec.row_height_px);
+                const RenderRange range =
+                    table_render_range(state->rows_view.size(), row_height,
+                                       std::max(0, height - header_height), scroll_offset_px);
+                rows.reserve(range.last_render_exclusive - range.first_render);
+                for (size_t view_index = range.first_render;
+                     view_index < range.last_render_exclusive; ++view_index) {
+                    rows.push_back({view_index, state->rows_all[state->rows_view[view_index]]});
+                }
+                state->last_paint_row_count = rows.size();
+                state->last_paint_first_row = rows.empty() ? 0 : range.first_render;
+                state->last_paint_last_row = rows.empty() ? 0 : range.last_render_exclusive - 1;
             }
+            const uint32_t body_background =
+                spec.body_bg_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                                       : spec.body_bg_argb;
+            const uint32_t accent = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
+            const std::vector<int32_t> column_widths =
+                compute_column_widths(columns, column_width_overrides, width);
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height),
-                spec.body_bg_argb == 0
-                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
-                    : spec.body_bg_argb);
+                context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
+                static_cast<float>(height), body_background);
             if (status != SAO_STATUS_OK)
                 return status;
-            int32_t cursor_y = y;
+            int32_t body_y = y;
             if (spec.show_header) {
                 const int32_t header_height = std::max(1, spec.header_height_px);
-                status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(x), static_cast<float>(cursor_y),
-                    static_cast<float>(width), static_cast<float>(header_height),
+                const uint32_t header_background =
                     spec.header_bg_argb == 0
                         ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
-                        : spec.header_bg_argb);
-                if (status != SAO_STATUS_OK)
-                    return status;
-                const int32_t column_width = columns.empty()
-                                                 ? width
-                                                 : std::max(1, width /
-                                                                   static_cast<int32_t>(columns.size()));
+                        : spec.header_bg_argb;
+                int32_t column_x = x;
                 for (size_t index = 0; index < columns.size(); ++index) {
                     if (columns[index].hidden)
                         continue;
+                    const int32_t column_width = column_widths[index];
+                    uint32_t column_background = columns[index].header_bg_argb == 0
+                                                     ? header_background
+                                                     : columns[index].header_bg_argb;
+                    const bool sorted_column = sorted && columns[index].key == sort_key;
+                    if (sorted_column)
+                        column_background = blend_argb(column_background, accent, 0.10F);
+                    if (static_cast<int32_t>(index) == hovered_header_column)
+                        column_background = blend_argb(column_background, accent, 0.16F);
+                    if (static_cast<int32_t>(index) == pressed_header_column)
+                        column_background = blend_argb(column_background, accent, 0.28F);
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(column_x), static_cast<float>(y),
+                        static_cast<float>(column_width), static_cast<float>(header_height),
+                        column_background);
+                    if (status != SAO_STATUS_OK)
+                        return status;
                     status = sao_ui_paint_ctx_draw_utf8(
-                        context, static_cast<float>(x + static_cast<int32_t>(index) * column_width + 2),
-                        static_cast<float>(cursor_y + 2), columns[index].title.c_str(), 10.0F,
+                        context, static_cast<float>(column_x + 3),
+                        static_cast<float>(
+                            y + 2 + (static_cast<int32_t>(index) == pressed_header_column ? 1 : 0)),
+                        columns[index].title.c_str(), 10.0F,
                         columns[index].header_fg_argb == 0
                             ? (spec.header_fg_argb == 0
-                                   ? sao::ui::detail::panel_theme_color(
-                                         SAO_UI_TOKEN_APP_TEXT)
+                                   ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
                                    : spec.header_fg_argb)
                             : columns[index].header_fg_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
+                    if (sorted_column && column_width >= 12) {
+                        const float center_x = static_cast<float>(column_x + column_width - 7);
+                        const float center_y = static_cast<float>(y) + header_height * 0.5F;
+                        const float direction = sort_desc ? 1.0F : -1.0F;
+                        const uint32_t arrow_color =
+                            columns[index].header_fg_argb == 0
+                                ? (spec.header_fg_argb == 0
+                                       ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                                       : spec.header_fg_argb)
+                                : columns[index].header_fg_argb;
+                        status = sao_ui_paint_ctx_stroke_line(
+                            context, center_x - 3.0F, center_y - direction * 2.0F, center_x,
+                            center_y + direction * 2.0F, 1.0F, arrow_color);
+                        if (status != SAO_STATUS_OK)
+                            return status;
+                        status = sao_ui_paint_ctx_stroke_line(
+                            context, center_x, center_y + direction * 2.0F, center_x + 3.0F,
+                            center_y - direction * 2.0F, 1.0F, arrow_color);
+                        if (status != SAO_STATUS_OK)
+                            return status;
+                    }
+                    column_x += column_width;
                 }
-                cursor_y += header_height;
+                body_y += header_height;
             }
             const int32_t row_height = std::max(1, spec.row_height_px);
-            const size_t visible_rows = std::min(
-                rows.size(), static_cast<size_t>(std::max(0, height - (cursor_y - y)) / row_height));
-            const int32_t column_width = columns.empty()
-                                             ? width
-                                             : std::max(1, width /
-                                                               static_cast<int32_t>(columns.size()));
-            for (size_t row_index = 0; row_index < visible_rows; ++row_index) {
-                const OwnedRow& row = rows[row_index];
+            for (const PaintRow& paint_row : rows) {
+                const size_t row_index = paint_row.view_index;
+                const OwnedRow& row = paint_row.row;
+                const int32_t row_y =
+                    body_y + static_cast<int32_t>(row_index) * row_height - scroll_offset_px;
+                const bool selected = selected_row_id != 0 && row.row_id == selected_row_id;
+                const bool hovered = spec.row_hover_highlight && row_index == hovered_row_index;
+                const bool alternate = zebra_stripes && (((row_index % 2U) != 0U) || row.zebra_alt);
                 uint32_t row_background = row.row_bg_override_argb;
                 if (row_background == 0) {
-                    if (row.highlight)
-                        row_background =
-                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
-                    else if (spec.zebra_stripes && (row_index % 2U) != 0U)
-                        row_background =
-                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD);
+                    if (selected)
+                        row_background = blend_argb(body_background, accent, 0.22F);
+                    else if (hovered)
+                        row_background = blend_argb(body_background, accent, 0.12F);
+                    else if (row.highlight)
+                        row_background = blend_argb(body_background, accent, 0.18F);
+                    else if (alternate)
+                        row_background = zebra_color(body_background);
                     else
-                        row_background =
-                            spec.body_bg_argb == 0
-                                ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
-                                : spec.body_bg_argb;
+                        row_background = body_background;
                 }
                 status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(x), static_cast<float>(cursor_y),
+                    context, static_cast<float>(x), static_cast<float>(row_y),
                     static_cast<float>(width), static_cast<float>(row_height), row_background);
                 if (status != SAO_STATUS_OK)
                     return status;
+                if (selected) {
+                    status = sao_ui_paint_ctx_fill_rect(context, static_cast<float>(x),
+                                                        static_cast<float>(row_y), 2.0F,
+                                                        static_cast<float>(row_height), accent);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                }
+                int32_t cell_x = x;
                 for (size_t cell_index = 0;
                      cell_index < row.cells.size() && cell_index < columns.size(); ++cell_index) {
+                    if (columns[cell_index].hidden)
+                        continue;
                     const OwnedCell& cell = row.cells[cell_index];
+                    const int32_t cell_width = column_widths[cell_index];
+                    uint32_t cell_background = cell.bg_argb;
+                    if (cell_background == 0 && alternate)
+                        cell_background = columns[cell_index].cell_bg_alt_argb;
+                    if (cell_background != 0) {
+                        status = sao_ui_paint_ctx_fill_rect(
+                            context, static_cast<float>(cell_x), static_cast<float>(row_y),
+                            static_cast<float>(cell_width), static_cast<float>(row_height),
+                            cell_background);
+                        if (status != SAO_STATUS_OK)
+                            return status;
+                    }
                     std::string text;
                     switch (cell.kind) {
                     case SAO_UI_CELL_STRING:
@@ -1745,24 +2181,29 @@ sao_status_t sao::ui::detail::widget_table_paint(
                         break;
                     }
                     const uint32_t foreground =
-                        row.dim
-                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
-                            : (cell.fg_argb != 0
-                                   ? cell.fg_argb
-                                   : (row.row_fg_override_argb != 0
-                                          ? row.row_fg_override_argb
-                                          : (columns[cell_index].cell_fg_argb == 0
-                                                 ? sao::ui::detail::panel_theme_color(
-                                                       SAO_UI_TOKEN_APP_TEXT)
-                                                 : columns[cell_index].cell_fg_argb)));
-                    status = sao_ui_paint_ctx_draw_utf8(
-                        context,
-                        static_cast<float>(x + static_cast<int32_t>(cell_index) * column_width + 2),
-                        static_cast<float>(cursor_y + 2), text.c_str(), 10.0F, foreground);
+                        row.dim ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
+                                : (cell.fg_argb != 0
+                                       ? cell.fg_argb
+                                       : (row.row_fg_override_argb != 0
+                                              ? row.row_fg_override_argb
+                                              : (columns[cell_index].cell_fg_argb == 0
+                                                     ? sao::ui::detail::panel_theme_color(
+                                                           SAO_UI_TOKEN_APP_TEXT)
+                                                     : columns[cell_index].cell_fg_argb)));
+                    status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(cell_x + 3),
+                                                        static_cast<float>(row_y + 2), text.c_str(),
+                                                        10.0F, foreground);
+                    if (status != SAO_STATUS_OK)
+                        return status;
+                    cell_x += cell_width;
+                }
+                if (spec.grid_line_argb != 0) {
+                    status = sao_ui_paint_ctx_fill_rect(
+                        context, static_cast<float>(x), static_cast<float>(row_y + row_height - 1),
+                        static_cast<float>(width), 1.0F, spec.grid_line_argb);
                     if (status != SAO_STATUS_OK)
                         return status;
                 }
-                cursor_y += row_height;
             }
             return SAO_STATUS_OK;
         }
@@ -1782,11 +2223,10 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 selected = state->selected_node_id;
             }
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height),
-                spec.body_bg_argb == 0
-                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
-                    : spec.body_bg_argb);
+                context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
+                static_cast<float>(height),
+                spec.body_bg_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG)
+                                       : spec.body_bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t row_height = std::max(1, spec.row_height_px);
@@ -1807,15 +2247,15 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 }
                 const int32_t indent = item.depth * std::max(1, spec.indent_px);
                 const int32_t caret = std::max(3, spec.caret_width_px);
-                const bool has_children = std::any_of(
-                    nodes.begin(), nodes.end(), [&](const OwnedTreeNode& candidate) {
+                const bool has_children =
+                    std::any_of(nodes.begin(), nodes.end(), [&](const OwnedTreeNode& candidate) {
                         return candidate.parent_id == node.node_id;
                     });
                 if (has_children) {
                     status = sao_ui_paint_ctx_fill_rect(
                         context, static_cast<float>(x + indent + 2),
-                        static_cast<float>(row_y + row_height / 2 - 1),
-                        static_cast<float>(caret), 2.0F,
+                        static_cast<float>(row_y + row_height / 2 - 1), static_cast<float>(caret),
+                        2.0F,
                         spec.caret_argb == 0
                             ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
                             : spec.caret_argb);
@@ -1825,9 +2265,8 @@ sao_status_t sao::ui::detail::widget_table_paint(
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(x + indent + caret + 5),
                     static_cast<float>(row_y + 2), node.label.c_str(), 10.0F,
-                    node.fg_argb == 0
-                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
-                        : node.fg_argb);
+                    node.fg_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
+                                      : node.fg_argb);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
@@ -1856,8 +2295,7 @@ sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle) {
             {
                 std::lock_guard<std::mutex> lock(table->mtx);
                 table->callbacks_retired = true;
-                table->row_click.generation =
-                    next_callback_generation(table->row_click.generation);
+                table->row_click.generation = next_callback_generation(table->row_click.generation);
                 table->cell_action.generation =
                     next_callback_generation(table->cell_action.generation);
                 table->row_click.callback = nullptr;
@@ -1895,8 +2333,7 @@ sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle) {
             if (callback_owns_table_state(tree.get()))
                 return;
             std::unique_lock<std::mutex> lock(tree->mtx);
-            tree->callback_cv.wait(lock,
-                                   [&] { return callback_slot_is_idle(tree->select); });
+            tree->callback_cv.wait(lock, [&] { return callback_slot_is_idle(tree->select); });
             tree->select.in_flight.clear();
             return;
         }

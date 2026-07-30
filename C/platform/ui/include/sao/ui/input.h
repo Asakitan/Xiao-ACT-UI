@@ -1,16 +1,20 @@
 // SAO Auto — input routing (click-through + hotkey + focus shield).
 //
-// Python authoritative source:
+// Frozen Python/Tk compatibility references:
 //   `render/overlay_host.py` — WM_MOUSEACTIVATE / MA_NOACTIVATE
 //   `render/overlay_compositor.py::_proxy_shield_activation` (line 350-397)
 //   `sao_gui_hotkey.py`      — global hotkey listener
 //   memory `input proxy逐像素+防焦点偷` (per-pixel input proxy)
 //
+// The manual-region, proxy-shield, and named-layer cursor APIs are frozen
+// compatibility paths. They are disabled unless SAO_UI_LEGACY_TK_INPUT=1;
+// native compositor input is routed through input_router.cpp.
+//
 // The overlay host installs a WH_MOUSE_LL / WH_KEYBOARD_LL pair.  This
 // module owns the state machine that decides "does this click land on
 // the overlay or fall through to the game?".
 //
-// ── Focus shield contract (mandatory) ──────────────────────────
+// ── Frozen focus-shield compatibility contract ─────────────────
 //   WS_EX_NOACTIVATE alone is NOT enough for a Tk toplevel — Tk's
 //   own message handling still promotes to foreground on click.
 //   The fix: answer WM_MOUSEACTIVATE with MA_NOACTIVATE at the
@@ -57,23 +61,19 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_create(
 SAO_UI_API void SAO_UI_CALL sao_ui_input_router_destroy(
     sao_ui_input_router_handle_t handle);
 
-// Rebuild the click-through region from the current union of layers +
-// widgets that accept input.  Called every frame after present.
-// Consumes the compositor's layer set + input-proxy shapes and passes
-// through SetWindowRgn (never NULL).
+// Frozen manual-region compatibility path. Disabled unless
+// SAO_UI_LEGACY_TK_INPUT=1.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_rebuild_region(
     sao_ui_input_router_handle_t handle);
 
-// Replace the current interactive rectangles in host-client coordinates.
-// Call rebuild_region() after a layout/frame boundary to apply the temporal
-// union through the overlay host.  Passing an empty list intentionally makes
-// the complete render host click-through.
+// Frozen manual-region compatibility path. Disabled unless
+// SAO_UI_LEGACY_TK_INPUT=1.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_set_regions(
     sao_ui_input_router_handle_t handle,
     const SaoOverlayHostInputRect* rects,
     size_t rect_count);
 
-// ── Focus shield ─────────────────────────────────────────────
+// ── Frozen focus-shield compatibility ────────────────────────
 
 // Arm the focus shield on the given proxy HWND.  Must be called
 // EXACTLY ONCE per HWND; a second call returns SAO_STATUS_ERR_ALREADY_
@@ -152,8 +152,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_set_cursor(
     sao_ui_input_router_handle_t handle,
     int32_t cursor_kind);
 
-// Per-layer cursor override — when this layer is topmost-hovered,
-// use this cursor.  0 → clear.
+// Frozen named-layer cursor compatibility path. Disabled unless
+// SAO_UI_LEGACY_TK_INPUT=1. 0 clears the compatibility override.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_set_layer_cursor(
     sao_ui_input_router_handle_t handle,
     const char* layer_name_utf8,

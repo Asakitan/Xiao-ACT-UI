@@ -577,7 +577,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_overlay_window_set_click_through(
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> lock(lease->state_mutex);
-        const sao_status_t status = sao_ui_layer_set_input_enabled(lease->layer, !click_through);
+        const sao_status_t status =
+            sao_ui_layer_set_input_policy(lease->layer, click_through, !click_through);
         if (status == SAO_STATUS_OK)
             lease->state.click_through = click_through;
         return status;

@@ -14,9 +14,14 @@
 // the machine IDLE -> EXPANDING and captures the spec.
 
 #include "sao/ui/dialog.h"
+#include "sao/ui/d2d_effects.h"
+
+#include "panel_theme_internal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,21 +45,19 @@ const char* canonical_label(SaoUiDialogButton kind) {
     }
 }
 
-// Default palette matches sao_theme/colors.py:
-//   OK_BLUE  = #428ce6
-//   CLOSE_RED = #d13d4f
 uint32_t canonical_color(SaoUiDialogButton kind) {
     switch (kind) {
     case SAO_UI_DIALOG_BTN_OK:
     case SAO_UI_DIALOG_BTN_YES:
-        return 0xFF428CE6u;
+        return sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_OK_BLUE);
     case SAO_UI_DIALOG_BTN_CANCEL:
     case SAO_UI_DIALOG_BTN_NO:
     case SAO_UI_DIALOG_BTN_DISMISS:
-        return 0xFFD13D4Fu;
+        return sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_CLOSE_RED);
     case SAO_UI_DIALOG_BTN_CUSTOM:
     default:
-        return 0xFF808080u;
+        return sao::ui::detail::panel_theme_color(
+            sao::ui::detail::PanelSemanticColorToken::DialogNeutral);
     }
 }
 
@@ -106,6 +109,8 @@ constexpr int32_t kDefaultMessageRevealMs = 350;
 constexpr int32_t kDefaultShrinkMs = 350;
 constexpr int32_t kDefaultMirrorZ = 2000;
 
+std::atomic_uint64_t g_dialog_effect_sequence{};
+
 }  // namespace
 
 // ── Handle ────────────────────────────────────────────────────────
@@ -115,6 +120,7 @@ struct sao_ui_dialog_s {
     // Configured at create.  Never mutated after.
     sao_ui_compositor_handle_t compositor = nullptr;
     sao_ui_theme_handle_t      theme      = nullptr;
+    sao_ui_layer_handle_t      modal_effect_layer = nullptr;
 
     // Show-time state (all guarded by mu).
     bool                            has_spec        = false;
@@ -227,6 +233,53 @@ FireSnapshot take_pending_fire(sao_ui_dialog_s* d) {
     return snap;
 }
 
+sao_status_t show_modal_effect_layer_locked(sao_ui_dialog_s* dialog) {
+    if (dialog->compositor == nullptr)
+        return SAO_STATUS_OK;
+    const int32_t z_order = dialog->mirror_z == std::numeric_limits<int32_t>::min()
+                                ? dialog->mirror_z
+                                : dialog->mirror_z - 1;
+    if (dialog->modal_effect_layer != nullptr) {
+        sao_status_t status =
+            sao_ui_layer_set_z_order(dialog->modal_effect_layer, z_order);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_layer_set_visible(dialog->modal_effect_layer, true);
+        return status;
+    }
+
+    const std::string layer_name =
+        "dialog.modal." +
+        std::to_string(g_dialog_effect_sequence.fetch_add(1u, std::memory_order_relaxed) + 1u);
+    SaoLayerConfig config{};
+    config.struct_size = sizeof(SaoLayerConfig);
+    config.name_utf8 = layer_name.c_str();
+    config.width = 1;
+    config.height = 1;
+    config.z_order = z_order;
+    config.click_through = true;
+    config.bgra_swizzle = true;
+    sao_ui_layer_handle_t layer = nullptr;
+    sao_status_t status = sao_ui_layer_create(dialog->compositor, &config, &layer);
+    SaoUiLayerEffects effects{};
+    if (status == SAO_STATUS_OK) {
+        status = sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MODAL, &effects);
+        effects.flags &= ~SAO_UI_LAYER_EFFECT_SHADOW;
+    }
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_set_effects(layer, &effects);
+    const uint8_t transparent_pixel[4]{};
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_update_bgra(layer, transparent_pixel, 1u, 1u, 4u);
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_set_visible(layer, true);
+    if (status != SAO_STATUS_OK) {
+        sao_ui_layer_destroy(layer);
+        return status;
+    }
+    dialog->modal_effect_layer = layer;
+    return SAO_STATUS_OK;
+}
+
 }  // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────
@@ -252,8 +305,11 @@ extern "C" void SAO_UI_CALL sao_ui_dialog_destroy(
     // downstream get released.
     FireSnapshot snap;
     bool fire = false;
+    sao_ui_layer_handle_t modal_effect_layer = nullptr;
     {
         std::lock_guard<std::mutex> lk(handle->mu);
+        modal_effect_layer = handle->modal_effect_layer;
+        handle->modal_effect_layer = nullptr;
         if (handle->callback != nullptr) {
             snap.cb = handle->callback;
             snap.user_data = handle->user_data;
@@ -267,6 +323,7 @@ extern "C" void SAO_UI_CALL sao_ui_dialog_destroy(
         snap.cb(snap.pressed, /*input_text_utf8=*/nullptr,
                 /*input_text_len=*/0, snap.user_data);
     }
+    sao_ui_layer_destroy(modal_effect_layer);
     delete handle;
 }
 
@@ -308,6 +365,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_show(
     handle->pending_pressed = SAO_UI_DIALOG_BTN_DISMISS;
     handle->pending_dismiss = true;
     handle->have_pending_fire = false;
+    const sao_status_t effect_status = show_modal_effect_layer_locked(handle);
+    if (effect_status != SAO_STATUS_OK) {
+        handle->has_spec = false;
+        handle->state = SAO_UI_DIALOG_STATE_IDLE;
+        handle->buttons.clear();
+        handle->focused_index = -1;
+        handle->callback = nullptr;
+        handle->user_data = nullptr;
+        return effect_status;
+    }
     return SAO_STATUS_OK;
 }
 
@@ -392,6 +459,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
     if (dt_ms < 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     FireSnapshot snap;
     bool should_fire = false;
+    sao_ui_layer_handle_t layer_to_destroy = nullptr;
     {
         std::lock_guard<std::mutex> lk(handle->mu);
         if (handle->state == SAO_UI_DIALOG_STATE_IDLE) {
@@ -426,6 +494,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
                     handle->has_spec = false;
                     handle->buttons.clear();
                     handle->focused_index = -1;
+                    layer_to_destroy = handle->modal_effect_layer;
+                    handle->modal_effect_layer = nullptr;
                 }
                 break;
             }
@@ -441,6 +511,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
         size_t text_len = snap.has_input ? snap.input_text.size() : 0;
         snap.cb(snap.pressed, text, text_len, snap.user_data);
     }
+    sao_ui_layer_destroy(layer_to_destroy);
     return SAO_STATUS_OK;
 }
 

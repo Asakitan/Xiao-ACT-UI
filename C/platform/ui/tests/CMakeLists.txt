@@ -47,7 +47,10 @@ target_compile_features(sao_platform_ui_tests PRIVATE cxx_std_20)
 include(CTest)
 include(Catch)
 catch_discover_tests(sao_platform_ui_tests
-    PROPERTIES SKIP_RETURN_CODE 4)
+    PROPERTIES
+        SKIP_RETURN_CODE 4
+        ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+)
 
 # ── theme slice — G3.1 flat-token theme tests ──────────────────
 # Isolated target so it stays green even if the shared overlay/comp
@@ -220,6 +223,25 @@ target_compile_features(sao_platform_ui_widget_tests PRIVATE cxx_std_20)
 
 catch_discover_tests(sao_platform_ui_widget_tests)
 
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_visual_primitives.cpp")
+    add_executable(sao_platform_ui_visual_primitives_tests
+        test_visual_primitives.cpp
+    )
+
+    target_link_libraries(sao_platform_ui_visual_primitives_tests PRIVATE
+        sao::ui
+        Catch2::Catch2WithMain
+    )
+
+    target_compile_definitions(sao_platform_ui_visual_primitives_tests PRIVATE SAO_UI_USING_DLL)
+    target_compile_features(sao_platform_ui_visual_primitives_tests PRIVATE cxx_std_20)
+
+    catch_discover_tests(sao_platform_ui_visual_primitives_tests
+        TEST_PREFIX "ui.visual."
+        PROPERTIES LABELS "ui;widget;linkstart;particle;hp;effects"
+    )
+endif()
+
 # ── Automation capability tests ───────────────────────────────────
 # auto_key (SendInput hold ledger) + alerts (SAPI TTS + banner
 # queue + winmm sound) + input_arbitration (per-VK policy + plugin
@@ -283,7 +305,9 @@ endif()
 target_compile_definitions(sao_platform_ui_overlay_capture_mutation_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_overlay_capture_mutation_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_overlay_capture_mutation_tests)
+catch_discover_tests(sao_platform_ui_overlay_capture_mutation_tests
+    PROPERTIES ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+)
 
 # ── DXGI duplication + GPU capture + overlay host tests ────────────
 # dxgi_dup dirty/move/cursor/staging + gpu_capture BGRA readback +
@@ -340,7 +364,9 @@ endif()
 target_compile_definitions(sao_platform_ui_overlay_host_chain_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_overlay_host_chain_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_overlay_host_chain_tests)
+catch_discover_tests(sao_platform_ui_overlay_host_chain_tests
+    PROPERTIES ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+)
 
 add_executable(sao_platform_ui_entity_shell_tests
     test_entity_shell.cpp
@@ -722,3 +748,26 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ui_gap.cpp"
             LABELS "ui;gap_closure")
     endforeach()
 endif()
+
+# ── Phase 14.6 cross-surface UX tests ───────────────────────────────
+# Toast stacking/dismiss, focus traversal order, badge animation,
+# filter matching.  Pure state + widget-handle logic — no Windows-only
+# surface, no D3D11, no compositor.  Isolated target so Windows-only
+# regressions on the shared overlay/compositor suite don't red these.
+add_executable(sao_platform_ui_cross_surface_ux_tests
+    test_cross_surface_ux.cpp
+)
+
+target_link_libraries(sao_platform_ui_cross_surface_ux_tests PRIVATE
+    sao::ui
+    nlohmann_json::nlohmann_json
+    Catch2::Catch2WithMain
+)
+
+target_compile_definitions(sao_platform_ui_cross_surface_ux_tests PRIVATE SAO_UI_USING_DLL)
+target_compile_features(sao_platform_ui_cross_surface_ux_tests PRIVATE cxx_std_20)
+
+catch_discover_tests(sao_platform_ui_cross_surface_ux_tests
+    TEST_PREFIX "ui.cross_surface_ux."
+    PROPERTIES LABELS "ui;cross_surface_ux;toast;focus;badge;filter;panel;popup;dialog"
+)

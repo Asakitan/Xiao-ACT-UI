@@ -95,6 +95,39 @@ struct RectScrubLog {
     std::vector<RectScrubObservation> observations;
 };
 
+struct ProtectionLog {
+    uint32_t enable_calls = 0u;
+    uint32_t disable_calls = 0u;
+    void* render = nullptr;
+    void* control = nullptr;
+    void* owner = nullptr;
+    DWORD render_affinity_at_enable = 0u;
+    DWORD control_affinity_at_enable = 0u;
+    DWORD owner_affinity_at_enable = 0u;
+};
+
+sao_status_t SAO_UI_CALL record_protection(
+    void* render, void* control, void* owner, bool enable, void* user_data) {
+    auto* log = static_cast<ProtectionLog*>(user_data);
+    log->render = render;
+    log->control = control;
+    log->owner = owner;
+    if (enable) {
+        ++log->enable_calls;
+        if (::GetWindowDisplayAffinity(static_cast<HWND>(render),
+                                       &log->render_affinity_at_enable) == FALSE ||
+            ::GetWindowDisplayAffinity(static_cast<HWND>(control),
+                                       &log->control_affinity_at_enable) == FALSE ||
+            ::GetWindowDisplayAffinity(static_cast<HWND>(owner),
+                                       &log->owner_affinity_at_enable) == FALSE) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+    } else {
+        ++log->disable_calls;
+    }
+    return SAO_STATUS_OK;
+}
+
 sao_status_t SAO_UI_CALL record_rect_scrub(void* user_data, void* hwnd,
                                            const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms,
                                            uint32_t timeout_ms) {
@@ -349,6 +382,56 @@ TEST_CASE("overlay host accepts a coordinator without a rect provider as USER32 
 
     REQUIRE(sao_ui_overlay_host_destroy(host));
     sao_ui_dc_mutation_coordinator_destroy(coordinator);
+}
+
+TEST_CASE("overlay host applies screencap protection during creation",
+          "[ui][overlay_host][production][screencap]") {
+    ProtectionLog log;
+    SaoOverlayHostConfig config = test_config();
+    config.sao_screencap_protection = true;
+    config.protection_provider = &record_protection;
+    config.protection_provider_user_data = &log;
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&config, &host) == SAO_STATUS_OK);
+    REQUIRE(host != nullptr);
+    HWND render = static_cast<HWND>(sao_ui_overlay_host_hwnd(host));
+    HWND control = static_cast<HWND>(sao_ui_overlay_host_control_hwnd(host));
+    HWND owner = static_cast<HWND>(sao_ui_overlay_host_owner_hwnd(host));
+    REQUIRE(render != nullptr);
+    REQUIRE(control != nullptr);
+    REQUIRE(owner != nullptr);
+    CHECK(log.enable_calls == 1u);
+    CHECK(log.disable_calls == 0u);
+    CHECK(log.render == render);
+    CHECK(log.control == control);
+    CHECK(log.owner == owner);
+    CHECK(log.render_affinity_at_enable != WDA_NONE);
+    CHECK(log.control_affinity_at_enable != WDA_NONE);
+    CHECK(log.owner_affinity_at_enable != WDA_NONE);
+    CHECK(sao_ui_overlay_host_capture_excluded(host));
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+    CHECK(log.disable_calls == 1u);
+}
+
+TEST_CASE("overlay host leaves creation unprotected when setting is off",
+          "[ui][overlay_host][production][screencap]") {
+    ProtectionLog log;
+    SaoOverlayHostConfig config = test_config();
+    config.sao_screencap_protection = false;
+    config.protection_provider = &record_protection;
+    config.protection_provider_user_data = &log;
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&config, &host) == SAO_STATUS_OK);
+    DWORD affinity = 0xFFFFFFFFu;
+    REQUIRE(::GetWindowDisplayAffinity(
+                static_cast<HWND>(sao_ui_overlay_host_hwnd(host)),
+                &affinity) != FALSE);
+    CHECK(affinity == WDA_NONE);
+    CHECK(log.enable_calls == 0u);
+    CHECK(log.disable_calls == 0u);
+    CHECK_FALSE(sao_ui_overlay_host_capture_excluded(host));
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+    CHECK(log.disable_calls == 0u);
 }
 
 #else

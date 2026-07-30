@@ -29,6 +29,21 @@
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_apply_theme_override_(
     sao_ui_panel_handle_t panel, const uint8_t* override_json_utf8, size_t override_len);
+extern "C" bool SAO_UI_CALL
+sao_ui_panel_runtime_is_registered_(sao_ui_panel_handle_t panel);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_find_(
+    sao_ui_compositor_handle_t compositor, const char* panel_id_utf8,
+    sao_ui_panel_handle_t* out_panel);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_publish_(
+    sao_ui_panel_handle_t panel, sao_ui_compositor_handle_t compositor,
+    const char* panel_id_utf8, bool single_instance, sao_ui_panel_handle_t* out_panel);
+extern "C" bool SAO_UI_CALL sao_ui_panel_runtime_retire_(sao_ui_panel_handle_t panel);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_enumerate_(
+    sao_ui_compositor_handle_t compositor, sao_ui_panel_handle_t* out_panels,
+    size_t capacity, size_t* out_written);
+extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t panel);
+extern "C" void SAO_UI_CALL sao_ui_panel_destroy_through_sdk_(
+    sao_ui_panel_handle_t panel);
 
 namespace {
 
@@ -233,19 +248,29 @@ struct sao_ui_panel_s {
 
 namespace {
 
-std::mutex& panels_mutex() {
+std::mutex& panel_storage_mutex() {
     static std::mutex mutex;
     return mutex;
-}
-
-std::vector<sao_ui_panel_s*>& panels() {
-    static std::vector<sao_ui_panel_s*> values;
-    return values;
 }
 
 std::vector<std::unique_ptr<sao_ui_panel_s>>& panel_storage() {
     static std::vector<std::unique_ptr<sao_ui_panel_s>> values;
     return values;
+}
+
+void erase_panel_storage(sao_ui_panel_s* panel) {
+    std::unique_ptr<sao_ui_panel_s> removed;
+    {
+        std::lock_guard lock(panel_storage_mutex());
+        const auto found = std::ranges::find_if(
+            panel_storage(), [panel](const std::unique_ptr<sao_ui_panel_s>& candidate) {
+                return candidate.get() == panel;
+            });
+        if (found != panel_storage().end()) {
+            removed = std::move(*found);
+            panel_storage().erase(found);
+        }
+    }
 }
 
 enum class CallbackKind : size_t { Action = 0, Event = 1, Render = 2 };
@@ -273,10 +298,6 @@ bool callback_is_active(sao_ui_panel_s* panel, CallbackKind kind, uint64_t gener
             return true;
     }
     return false;
-}
-
-bool panel_is_live_locked(sao_ui_panel_s* panel) {
-    return std::ranges::find(panels(), panel) != panels().end();
 }
 
 bool claim_finalization(sao_ui_panel_s* panel) {
@@ -337,8 +358,7 @@ class PanelOperation {
         if (panel_ == nullptr)
             return;
         try {
-            std::lock_guard registry_lock(panels_mutex());
-            if (!panel_is_live_locked(panel_))
+            if (!sao_ui_panel_runtime_is_registered_(panel_))
                 return;
             std::lock_guard lifecycle_lock(panel_->lifecycle_mutex);
             if (!panel_->accepting_operations)
@@ -1219,16 +1239,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
         (config->max_height > 0 && config->max_height < config->min_height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
-        std::unique_lock<std::mutex> registry_lock(panels_mutex());
-        for (sao_ui_panel_s* existing : panels()) {
-            if (existing->compositor == compositor && existing->id == config->panel_id_utf8) {
-                if (config->single_instance) {
-                    *out_handle = existing;
-                    return SAO_STATUS_OK;
-                }
-                return SAO_STATUS_ERR_ALREADY_EXISTS;
+        sao_ui_panel_handle_t existing = nullptr;
+        const sao_status_t find_status =
+            sao_ui_panel_runtime_find_(compositor, config->panel_id_utf8, &existing);
+        if (find_status == SAO_STATUS_OK) {
+            if (config->single_instance) {
+                *out_handle = existing;
+                return SAO_STATUS_OK;
             }
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
         }
+        if (find_status != SAO_STATUS_ERR_NOT_FOUND)
+            return find_status;
+
         auto panel = std::make_unique<sao_ui_panel_s>();
         panel->compositor = compositor;
         panel->id = config->panel_id_utf8;
@@ -1254,9 +1277,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
                                             &panel->content);
         if (status != SAO_STATUS_OK)
             return status;
-
-        panels().reserve(panels().size() + 1U);
-        panel_storage().reserve(panel_storage().size() + 1U);
 
         if (compositor != nullptr) {
             const std::string layer_name = "panel." + panel->id;
@@ -1286,9 +1306,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
         if (status != SAO_STATUS_OK)
             return status;
         sao_ui_panel_s* const raw = panel.get();
-        panels().push_back(raw);
-        panel_storage().push_back(std::move(panel));
-        registry_lock.unlock();
+        {
+            std::lock_guard storage_lock(panel_storage_mutex());
+            panel_storage().reserve(panel_storage().size() + 1U);
+            panel_storage().push_back(std::move(panel));
+        }
+        sao_ui_panel_handle_t published = nullptr;
+        status = sao_ui_panel_runtime_publish_(raw, compositor, config->panel_id_utf8,
+                                               config->single_instance, &published);
+        if (status != SAO_STATUS_OK || published != raw) {
+            erase_panel_storage(raw);
+            if (status == SAO_STATUS_OK)
+                *out_handle = published;
+            return status;
+        }
 
         const int32_t create_theme_switch =
             g_create_theme_switch.exchange(-1, std::memory_order_acq_rel);
@@ -1299,20 +1330,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
         if (status == SAO_STATUS_OK)
             status = upload_panel(raw);
         if (status != SAO_STATUS_OK) {
-            std::unique_ptr<sao_ui_panel_s> removed;
-            {
-                std::lock_guard rollback_lock(panels_mutex());
-                std::erase(panels(), raw);
-                auto found = std::ranges::find_if(
-                    panel_storage(), [raw](const std::unique_ptr<sao_ui_panel_s>& candidate) {
-                        return candidate.get() == raw;
-                    });
-                if (found != panel_storage().end()) {
-                    removed = std::move(*found);
-                    panel_storage().erase(found);
-                }
-            }
-            removed.reset();
+            sao_ui_panel_runtime_destroy_(raw);
+            erase_panel_storage(raw);
             return status;
         }
         *out_handle = raw;
@@ -1323,15 +1342,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
 }
 
 extern "C" void SAO_UI_CALL sao_ui_panel_destroy(sao_ui_panel_handle_t panel) {
+    sao_ui_panel_destroy_through_sdk_(panel);
+}
+
+extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t panel) {
     if (panel == nullptr)
         return;
     try {
         {
-            std::lock_guard registry_lock(panels_mutex());
-            auto found = std::ranges::find(panels(), panel);
-            if (found == panels().end())
+            if (!sao_ui_panel_runtime_retire_(panel))
                 return;
-            panels().erase(found);
             std::lock_guard lifecycle_lock(panel->lifecycle_mutex);
             panel->accepting_operations = false;
             panel->destroy_requested = true;
@@ -2009,46 +2029,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_get_state(sao_ui_panel_handle_t
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_find_by_id(sao_ui_compositor_handle_t compositor,
                                                             const char* panel_id_utf8,
                                                             sao_ui_panel_handle_t* out_handle) {
-    if (out_handle == nullptr || panel_id_utf8 == nullptr)
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    try {
-        std::lock_guard<std::mutex> registry_lock(panels_mutex());
-        for (sao_ui_panel_s* panel : panels()) {
-            if (panel->compositor == compositor && panel->id == panel_id_utf8) {
-                *out_handle = panel;
-                return SAO_STATUS_OK;
-            }
-        }
-        *out_handle = nullptr;
-        return SAO_STATUS_ERR_NOT_FOUND;
-    } catch (...) {
-        *out_handle = nullptr;
-        return SAO_STATUS_ERR_UNKNOWN;
-    }
+    return sao_ui_panel_runtime_find_(compositor, panel_id_utf8, out_handle);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_enumerate(sao_ui_compositor_handle_t compositor,
                                                            sao_ui_panel_handle_t* out_handles,
                                                            size_t capacity, size_t* out_written) {
-    if (out_written == nullptr)
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    try {
-        std::lock_guard<std::mutex> registry_lock(panels_mutex());
-        size_t total = 0;
-        for (sao_ui_panel_s* panel : panels()) {
-            if (panel->compositor != compositor)
-                continue;
-            if (out_handles != nullptr && total < capacity)
-                out_handles[total] = panel;
-            ++total;
-        }
-        *out_written = total;
-        return out_handles != nullptr && capacity < total ? SAO_STATUS_ERR_BUFFER_TOO_SMALL
-                                                          : SAO_STATUS_OK;
-    } catch (...) {
-        *out_written = 0;
-        return SAO_STATUS_ERR_UNKNOWN;
-    }
+    return sao_ui_panel_runtime_enumerate_(compositor, out_handles, capacity, out_written);
 }
 
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
