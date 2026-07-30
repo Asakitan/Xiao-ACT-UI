@@ -97,6 +97,9 @@ function(sao_audit_pe binary_path)
     sao_audit_dumpbin(/imports SAO_AUDIT_IMPORTS)
     sao_audit_dumpbin(/exports SAO_AUDIT_EXPORTS)
 
+    get_filename_component(_sao_binary_extension "${binary_path}" EXT)
+    string(TOLOWER "${_sao_binary_extension}" _sao_binary_extension)
+
     if (SAO_AUDIT_EXPECT_HARDENING STREQUAL "ON")
         foreach (_sao_required IN ITEMS
                 "Dynamic base"
@@ -111,7 +114,8 @@ function(sao_audit_pe binary_path)
             endif()
         endforeach()
 
-        if (SAO_AUDIT_EXPECT_CET STREQUAL "ON")
+        if (SAO_AUDIT_EXPECT_CET STREQUAL "ON" AND
+            NOT _sao_binary_extension STREQUAL ".sys")
             string(REGEX MATCH "[Cc][Ee][Tt][^\r\n]*[Cc]ompat"
                 _sao_cet_match "${SAO_AUDIT_HEADERS}")
             if (NOT _sao_cet_match)

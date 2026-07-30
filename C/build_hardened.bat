@@ -6,8 +6,14 @@
 :: integration tests, then builds tools. Optionally post-signs every PE via
 :: sign_cli.
 ::
-:: Usage:
-::   build_hardened.bat [--clean] [--pack] [--sign-thumbprint=<sha1>]
+::   build_hardened.bat [--clean] [--pack] [--sign-thumbprint=<sha1>] [--crypter]
+::
+:: --crypter: opt-in. After the normal build + audit, extract the flat stub
+:: blob (sao_shell_stub_bin) and run sao_shell_crypter_cli over SaoAuto.exe and
+:: the sao_platform_*.dll set, writing wrapped copies alongside the originals,
+:: then continues to sign/pack. Default off so normal hardened builds are
+:: unaffected. The crypter step is a no-op when the host/stub targets are not
+:: built (e.g. a sliver tree without the shell subsystem).
 
 setlocal enabledelayedexpansion
 
@@ -21,6 +27,7 @@ if not defined VCPKG_ROOT (
 
 set "DO_PACK=0"
 set "SIGN_THUMB="
+set "DO_CRYPTER=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -35,6 +42,11 @@ if /I "%~1"=="--pack" (
     shift
     goto :parse_args
 )
+if /I "%~1"=="--crypter" (
+    set "DO_CRYPTER=1"
+    shift
+    goto :parse_args
+)
 set "ARG=%~1"
 if /I "!ARG:~0,18!"=="--sign-thumbprint=" (
     set "SIGN_THUMB=!ARG:~18!"
@@ -45,8 +57,17 @@ echo ERROR: unknown argument: %~1
 exit /b 1
 :args_done
 
+if defined SAO_NATIVE_LOADER_PAYLOAD_TARGETS if not defined SAO_CRYPTER_KEY (
+    echo ERROR: SAO_CRYPTER_KEY is required when SAO_NATIVE_LOADER_PAYLOAD_TARGETS is set.
+    exit /b 1
+)
+
 echo [1/5] Configuring windows-hardened preset...
-cmake --preset windows-hardened
+if defined SAO_NATIVE_LOADER_PAYLOAD_TARGETS (
+    cmake --preset windows-hardened "-DSAO_NATIVE_LOADER_PAYLOAD_TARGETS=!SAO_NATIVE_LOADER_PAYLOAD_TARGETS!"
+) else (
+    cmake --preset windows-hardened "-DSAO_NATIVE_LOADER_PAYLOAD_TARGETS="
+)
 if errorlevel 1 goto :fail
 
 echo [2/5] Building windows-hardened preset...
@@ -64,6 +85,44 @@ if errorlevel 1 (
 )
 
 echo [5/5] Post-processing...
+
+if "%DO_CRYPTER%"=="1" (
+    echo   [crypter] Building flat stub blob ^(sao_shell_stub_bin^)...
+    cmake --build --preset windows-hardened --target sao_shell_stub_bin --parallel
+    if errorlevel 1 (
+        echo ERROR: sao_shell_stub_bin target failed.
+        goto :fail
+    )
+    set "STUB_BIN=build\windows-hardened\bin\Release\stub.bin"
+    if not exist "!STUB_BIN!" (
+        echo ERROR: stub.bin not produced at !STUB_BIN!
+        goto :fail
+    )
+    if not exist build\windows-hardened\bin\tools\sao_shell_crypter_cli.exe (
+        echo ERROR: sao_shell_crypter_cli.exe not built -- crypter step requires SAO_BUILD_TOOLS=ON.
+        goto :fail
+    )
+    echo   [crypter] Wrapping SaoAuto.exe with stub !STUB_BIN! ...
+    build\windows-hardened\bin\tools\sao_shell_crypter_cli.exe ^
+        --in build\windows-hardened\bin\SaoAuto.exe ^
+        --out build\windows-hardened\bin\SaoAuto.wrapped.exe ^
+        --stub "!STUB_BIN!"
+    if errorlevel 1 (
+        echo ERROR: sao_shell_crypter_cli failed for SaoAuto.exe
+        goto :fail
+    )
+    for %%D in (build\windows-hardened\bin\sao_platform_*.dll) do (
+        echo   [crypter] Wrapping %%~nxD ...
+        build\windows-hardened\bin\tools\sao_shell_crypter_cli.exe ^
+            --in "%%D" ^
+            --out "build\windows-hardened\bin\%%~nD.wrapped.dll" ^
+            --stub "!STUB_BIN!"
+        if errorlevel 1 (
+            echo ERROR: sao_shell_crypter_cli failed for %%D
+            goto :fail
+        )
+    )
+)
 
 if defined SIGN_THUMB (
     if exist build\windows-hardened\bin\tools\sao_sign.exe (

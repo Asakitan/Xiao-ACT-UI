@@ -112,6 +112,13 @@ endif()
 # changing the public ABI.
 option(SAO_HARDENED_BUILD   "Hardened release: LTO/CFG/CET/ASLR/DEP"                   OFF)
 
+set(SAO_HARDENED_OBFUSCATION_SEED "1469598103934665603" CACHE STRING
+    "Non-zero deterministic seed used for hardened post-link SAOOBF1 artifacts")
+set(SAO_NATIVE_LOADER_PAYLOAD_TARGETS "$ENV{SAO_NATIVE_LOADER_PAYLOAD_TARGETS}"
+    CACHE STRING
+    "Semicolon-separated DLL targets consumed through native_loader_encrypted")
+mark_as_advanced(SAO_HARDENED_OBFUSCATION_SEED)
+
 # ---------------------------------------------------------------------------
 # Global compile posture
 # ---------------------------------------------------------------------------
@@ -181,7 +188,7 @@ if (MSVC)
             "$<$<COMPILE_LANGUAGE:CXX>:/Zi>"
         )
         add_link_options(/DEBUG:FULL /PDBALTPATH:%_PDB%)
-        add_compile_definitions(SAO_HARDENED=1)
+        add_compile_definitions(SAO_HARDENED=1 WINRT_NO_SOURCE_LOCATION=1)
     endif()
 
     # /std:c++20 already set by CMAKE_CXX_STANDARD, but reinforce here so
@@ -376,7 +383,7 @@ endif()
 # The canonical raw drivers are external operator assets, not source-tree
 # build inputs. General source builds remain valid when the configured store
 # is absent; when it exists, component installation requires the exact R1/R3
-# pair and fails if either canonical file is missing.
+# pair.
 set(SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY
     "${CMAKE_SOURCE_DIR}/../../driver store" CACHE PATH
     "Optional external canonical R1/R3 driver store used by ship staging")
@@ -448,6 +455,86 @@ if (TARGET SaoAuto)
         VERBATIM
     )
 
+    set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_release_ship_stage)
+    if (SAO_HARDENED_BUILD)
+        if (NOT TARGET obfuscate_cli)
+            message(FATAL_ERROR
+                "SAO_HARDENED_BUILD requires tools/obfuscate_cli")
+        endif()
+        if (NOT SAO_HARDENED_OBFUSCATION_SEED MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR
+                "SAO_HARDENED_OBFUSCATION_SEED must be a non-zero decimal uint64")
+        endif()
+
+        set(_SAO_HARDENED_POST_LINK_COMMANDS "")
+        set(_SAO_HARDENED_POST_LINK_DEPENDENCIES obfuscate_cli)
+        foreach (_sao_post_link_target IN LISTS _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)
+            if (NOT TARGET ${_sao_post_link_target})
+                continue()
+            endif()
+            get_target_property(_sao_post_link_type ${_sao_post_link_target} TYPE)
+            if (NOT _sao_post_link_type STREQUAL "EXECUTABLE" AND
+                NOT _sao_post_link_type STREQUAL "SHARED_LIBRARY" AND
+                NOT _sao_post_link_type STREQUAL "MODULE_LIBRARY")
+                continue()
+            endif()
+            list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES
+                ${_sao_post_link_target})
+            list(APPEND _SAO_HARDENED_POST_LINK_COMMANDS
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DSAO_POST_LINK_MODE=obfuscate"
+                    "-DSAO_POST_LINK_CONFIG=$<CONFIG>"
+                    "-DSAO_POST_LINK_TOOL=$<TARGET_FILE:obfuscate_cli>"
+                    "-DSAO_POST_LINK_INPUT=$<TARGET_FILE:${_sao_post_link_target}>"
+                    "-DSAO_POST_LINK_OUTPUT=$<TARGET_FILE:${_sao_post_link_target}>.saoobf"
+                    "-DSAO_POST_LINK_SEED=${SAO_HARDENED_OBFUSCATION_SEED}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardened_post_link.cmake")
+        endforeach()
+
+        if (SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
+            if (NOT TARGET crypter_cli)
+                message(FATAL_ERROR
+                    "SAO_NATIVE_LOADER_PAYLOAD_TARGETS requires tools/crypter_cli")
+            endif()
+            list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES crypter_cli)
+            foreach (_sao_native_payload_target IN LISTS SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
+                if (NOT TARGET ${_sao_native_payload_target})
+                    message(FATAL_ERROR
+                        "Unknown native-loader payload target: ${_sao_native_payload_target}")
+                endif()
+                get_target_property(_sao_native_payload_type
+                    ${_sao_native_payload_target} TYPE)
+                if (NOT _sao_native_payload_type STREQUAL "SHARED_LIBRARY" AND
+                    NOT _sao_native_payload_type STREQUAL "MODULE_LIBRARY")
+                    message(FATAL_ERROR
+                        "Native-loader payload target '${_sao_native_payload_target}' "
+                        "must produce a DLL")
+                endif()
+                list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES
+                    ${_sao_native_payload_target})
+                list(APPEND _SAO_HARDENED_POST_LINK_COMMANDS
+                    COMMAND "${CMAKE_COMMAND}"
+                        "-DSAO_POST_LINK_MODE=crypter"
+                        "-DSAO_POST_LINK_CONFIG=$<CONFIG>"
+                        "-DSAO_POST_LINK_TOOL=$<TARGET_FILE:crypter_cli>"
+                        "-DSAO_POST_LINK_INPUT=$<TARGET_FILE:${_sao_native_payload_target}>"
+                        "-DSAO_POST_LINK_OUTPUT=$<TARGET_FILE:${_sao_native_payload_target}>.bin.enc"
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardened_post_link.cmake")
+            endforeach()
+        else()
+            message(STATUS
+                "hardened post-link: no fixed native-loader payload targets are registered")
+        endif()
+
+        list(REMOVE_DUPLICATES _SAO_HARDENED_POST_LINK_DEPENDENCIES)
+        add_custom_target(sao_hardened_post_link ALL
+            ${_SAO_HARDENED_POST_LINK_COMMANDS}
+            DEPENDS ${_SAO_HARDENED_POST_LINK_DEPENDENCIES}
+            COMMENT "Generating hardened post-link protection artifacts"
+            VERBATIM)
+        list(APPEND _SAO_RELEASE_AUDIT_DEPENDENCIES sao_hardened_post_link)
+    endif()
+
     get_filename_component(_sao_linker_directory "${CMAKE_LINKER}" DIRECTORY)
     find_program(SAO_DUMPBIN_EXECUTABLE NAMES dumpbin.exe dumpbin
         HINTS "${_sao_linker_directory}")
@@ -461,7 +548,7 @@ if (TARGET SaoAuto)
                 "-DSAO_AUDIT_EXPECT_CET=$<IF:$<BOOL:${SAO_MSVC_SUPPORTS_CETCOMPAT}>,ON,OFF>"
                 "-DSAO_AUDIT_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/audit_release_artifact.cmake"
-        DEPENDS sao_release_ship_stage
+        DEPENDS ${_SAO_RELEASE_AUDIT_DEPENDENCIES}
         COMMENT "Auditing release PE hardening and ship-stage contents"
         VERBATIM
     )
