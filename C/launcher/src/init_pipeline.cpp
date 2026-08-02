@@ -55,8 +55,11 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <string>
 #include <thread>
 #include <windows.h>
+
+#include <bcrypt.h>
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
 #undef SAO_STATUS_OK
@@ -233,6 +236,8 @@ constexpr uint64_t kRtIoMandatoryLiveStepMask =
 constexpr uint32_t kRtIoObservationUnknown = 0u;
 constexpr uint32_t kRtIoObservationTrue = 2u;
 constexpr uint32_t kRtIoFailureStageNone = 0u;
+constexpr size_t kRtIoOperatorJsonCapacity =
+    2u * SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY * 6u + 8192u;
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
@@ -347,6 +352,49 @@ const char* rtIoOperatorFailureName(uint32_t failure) noexcept {
 
 const char* jsonBool(uint32_t value) noexcept {
     return value != 0u ? "true" : "false";
+}
+
+void appendJsonEscaped(std::string& json, const char* text, size_t text_capacity) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    json.push_back('"');
+    if (text != nullptr) {
+        for (size_t index = 0u; index < text_capacity && text[index] != '\0'; ++index) {
+            const unsigned char value = static_cast<unsigned char>(text[index]);
+            switch (value) {
+            case '"':
+                json.append("\\\"");
+                break;
+            case '\\':
+                json.append("\\\\");
+                break;
+            case '\b':
+                json.append("\\b");
+                break;
+            case '\f':
+                json.append("\\f");
+                break;
+            case '\n':
+                json.append("\\n");
+                break;
+            case '\r':
+                json.append("\\r");
+                break;
+            case '\t':
+                json.append("\\t");
+                break;
+            default:
+                if (value < 0x20u) {
+                    json.append("\\u00");
+                    json.push_back(kHex[value >> 4u]);
+                    json.push_back(kHex[value & 0x0fu]);
+                } else {
+                    json.push_back(static_cast<char>(value));
+                }
+                break;
+            }
+        }
+    }
+    json.push_back('"');
 }
 
 struct HeadlessCleanupState {
@@ -1172,8 +1220,9 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         report->struct_size != sizeof(*report)) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
-    const int written = std::snprintf(
-        out_utf8, out_capacity,
+    std::array<char, 2048u> generic_json{};
+    const int generic_written = std::snprintf(
+        generic_json.data(), generic_json.size(),
         "{\"stage\":\"%s\",\"status\":%d,\"operation_status\":%d,"
         "\"success\":%s,\"complete\":%s,"
         "\"preflight_only\":%s,\"input_checks\":%s,"
@@ -1203,7 +1252,7 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         "\"last_failure_code\":%d,\"last_failure_stage\":%u,"
         "\"r3_uc_patch_failure_reason\":%u,"
         "\"hid_fallback_reason\":%u,"
-        "\"failure_classification\":\"%s\"}",
+        "\"failure_classification\":\"%s\"",
         rtIoOperatorStageName(report->stage), report->status,
         report->operation_status, jsonBool(report->success),
         jsonBool(report->complete), jsonBool(report->preflight_only),
@@ -1238,20 +1287,142 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         report->last_failure_stage, report->r3_uc_patch_failure_reason,
         report->hid_fallback_reason,
         rtIoOperatorFailureName(report->failure_classification));
-    if (written < 0) {
+    if (generic_written < 0 ||
+        static_cast<size_t>(generic_written) >= generic_json.size()) {
         out_utf8[0] = '\0';
         return SAO_STATUS_INTERNAL;
     }
-    const size_t required = static_cast<size_t>(written);
-    if (required >= out_capacity) {
-        out_utf8[0] = '\0';
+    try {
+        std::string json(generic_json.data(), static_cast<size_t>(generic_written));
+        json.reserve(kRtIoOperatorJsonCapacity);
+        const auto append_unsigned = [&json](uint64_t value) {
+            json.append(std::to_string(value));
+        };
+        const auto append_signed = [&json](int64_t value) {
+            json.append(std::to_string(value));
+        };
+
+        json.append(",\"strict_policy\":");
+        append_unsigned(report->strict_policy);
+        json.append(",\"strict_stage\":");
+        append_unsigned(report->strict_stage);
+        json.append(",\"strict_transaction_state\":");
+        append_unsigned(report->strict_transaction_state);
+        json.append(",\"strict_transaction_outcome\":");
+        append_unsigned(report->strict_transaction_outcome);
+        json.append(",\"strict_transaction_id\":");
+        append_unsigned(report->strict_transaction_id);
+        json.append(",\"strict_chain_generation\":");
+        append_unsigned(report->strict_chain_generation);
+        json.append(",\"strict_required_mask\":");
+        append_unsigned(report->strict_required_mask);
+        json.append(",\"strict_prepared_mask\":");
+        append_unsigned(report->strict_prepared_mask);
+        json.append(",\"strict_committed_mask\":");
+        append_unsigned(report->strict_committed_mask);
+        json.append(",\"strict_unknown_mask\":");
+        append_unsigned(report->strict_unknown_mask);
+        json.append(",\"strict_rollback_attempted_mask\":");
+        append_unsigned(report->strict_rollback_attempted_mask);
+        json.append(",\"strict_rollback_complete_mask\":");
+        append_unsigned(report->strict_rollback_complete_mask);
+        json.append(",\"strict_category_required_mask\":");
+        append_unsigned(report->strict_category_required_mask);
+        json.append(",\"strict_category_prepared_mask\":");
+        append_unsigned(report->strict_category_prepared_mask);
+        json.append(",\"strict_category_committed_mask\":");
+        append_unsigned(report->strict_category_committed_mask);
+        json.append(",\"strict_category_unknown_mask\":");
+        append_unsigned(report->strict_category_unknown_mask);
+        json.append(",\"strict_category_rollback_attempted_mask\":");
+        append_unsigned(report->strict_category_rollback_attempted_mask);
+        json.append(",\"strict_category_rollback_complete_mask\":");
+        append_unsigned(report->strict_category_rollback_complete_mask);
+        json.append(",\"strict_category_count\":");
+        append_unsigned(report->strict_category_count);
+        json.append(",\"strict_categories\":[");
+        for (uint32_t index = 0u; index < SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT; ++index) {
+            if (index != 0u)
+                json.push_back(',');
+            const auto& category = report->strict_categories[index];
+            json.append("{\"category\":");
+            append_unsigned(category.category);
+            json.append(",\"outcome\":");
+            append_unsigned(category.outcome);
+            json.append(",\"prepare_status\":");
+            append_signed(category.prepare_status);
+            json.append(",\"apply_status\":");
+            append_signed(category.apply_status);
+            json.append(",\"commit_status\":");
+            append_signed(category.commit_status);
+            json.append(",\"rollback_status\":");
+            append_signed(category.rollback_status);
+            json.push_back('}');
+        }
+        json.append("],\"strict_vt_vendor\":");
+        append_unsigned(report->strict_vt_vendor);
+        json.append(",\"strict_vt_root_active\":");
+        json.append(jsonBool(report->strict_vt_root_active));
+        json.append(",\"strict_vt_control_status\":");
+        append_signed(report->strict_vt_control_status);
+        json.append(",\"strict_vt_session_id\":");
+        append_unsigned(report->strict_vt_session_id);
+        json.append(",\"strict_vt_owner_generation\":");
+        append_unsigned(report->strict_vt_owner_generation);
+        json.append(",\"strict_vt_requested_engine\":");
+        append_signed(report->strict_vt_requested_engine);
+        json.append(",\"strict_vt_runtime_engine\":");
+        append_signed(report->strict_vt_runtime_engine);
+        json.append(",\"strict_vt_load_path\":");
+        append_signed(report->strict_vt_load_path);
+        json.append(",\"strict_vt_stage\":");
+        append_signed(report->strict_vt_stage);
+        json.append(",\"strict_vt_capture_status\":");
+        append_signed(report->strict_vt_capture_status);
+        json.append(",\"strict_vt_validation_status\":");
+        append_signed(report->strict_vt_validation_status);
+        json.append(",\"strict_vt_cleanup_status\":");
+        append_signed(report->strict_vt_cleanup_status);
+        json.append(",\"strict_vt_recovery_status\":");
+        append_signed(report->strict_vt_recovery_status);
+        json.append(",\"strict_vt_terminal_reason\":");
+        append_signed(report->strict_vt_terminal_reason);
+        json.append(",\"strict_final_residue_gate\":");
+        append_unsigned(report->strict_final_residue_gate);
+        json.append(",\"strict_response_flags\":");
+        append_unsigned(report->strict_response_flags);
+        json.append(",\"strict_helper_system\":");
+        json.append(jsonBool(report->strict_helper_system));
+        json.append(",\"strict_helper_identity_authenticated\":");
+        json.append(jsonBool(report->strict_helper_identity_authenticated));
+        json.append(",\"strict_helper_session_id\":");
+        append_unsigned(report->strict_helper_session_id);
+        json.append(",\"strict_helper_actual_image\":");
+        appendJsonEscaped(json, report->strict_helper_actual_image,
+                          sizeof(report->strict_helper_actual_image));
+        json.append(",\"strict_helper_parent_image\":");
+        appendJsonEscaped(json, report->strict_helper_parent_image,
+                          sizeof(report->strict_helper_parent_image));
+        json.append(",\"strict_success\":");
+        json.append(jsonBool(report->strict_success));
+        json.push_back('}');
+
+        const size_t required = json.size();
+        if (required >= out_capacity) {
+            out_utf8[0] = '\0';
+            if (out_bytes_written != nullptr)
+                *out_bytes_written = required + 1u;
+            return SAO_STATUS_INVALID_ARGUMENT;
+        }
+        std::memcpy(out_utf8, json.data(), required);
+        out_utf8[required] = '\0';
         if (out_bytes_written != nullptr)
-            *out_bytes_written = required + 1u;
-        return SAO_STATUS_INVALID_ARGUMENT;
+            *out_bytes_written = required;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        out_utf8[0] = '\0';
+        return SAO_STATUS_INTERNAL;
     }
-    if (out_bytes_written != nullptr)
-        *out_bytes_written = required;
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t sao_launcher_rt_io_operator_run(
@@ -1268,12 +1439,12 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_run(
     }
 
     auto emit = [&](const sao_launcher_rt_io_operator_report_t& report) {
-        char json[2048]{};
+        std::array<char, kRtIoOperatorJsonCapacity> json{};
         size_t written = 0u;
         const sao_status_t status = sao_launcher_rt_io_operator_format_json(
-            &report, json, sizeof(json), &written);
+            &report, json.data(), json.size(), &written);
         if (status == SAO_STATUS_OK && written != 0u)
-            output(json, output_user_data);
+            output(json.data(), output_user_data);
         return status;
     };
     auto prepare_not_submitted = [&](uint32_t stage) {
@@ -1763,6 +1934,8 @@ sao_status_t sao_platform_rt_io_operator_cleanup(
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 struct sao_platform_ctx {
     sao_rt_io_proxy_handle_t rt_io_proxy;
+    uint64_t rt_io_strict_transaction_id = 0u;
+    uint64_t rt_io_strict_chain_generation = 0u;
     sao_rt_io_window_rect_controller_t window_rect_controller;
     SaoRtIoWindowToken window_rect_token;
     bool window_rect_registered;
@@ -2054,7 +2227,9 @@ sao_status_t trace_platform_bringup_failure(const char* stage,
                            stage != nullptr ? stage : "unknown", failure_status);
     write_platform_bringup_diagnostic(line, length);
 
-    if (stage == nullptr || std::strcmp(stage, "rt_io_proxy_open_v2") != 0)
+    if (stage == nullptr ||
+        (std::strcmp(stage, "rt_io_proxy_open_v2") != 0 &&
+         std::strcmp(stage, "rt_io_proxy_open_v3") != 0))
         return failure_status;
 
     SaoRtIoHelperLaunchDiagnostics diagnostics{};
@@ -2705,6 +2880,192 @@ void rt_io_operator_copy_state(
     report->hid_fallback_reason = state.hid.fallback_reason;
 }
 
+static_assert(SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT ==
+              SAO_RT_IO_STRICT_CHAIN_CATEGORY_COUNT);
+
+uint32_t rt_io_operator_strict_residue_gate(uint32_t strict_gate) noexcept {
+    switch (strict_gate) {
+    case SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN:
+        return SAO_RT_IO_OPERATOR_RESIDUE_GATE_CLEAN;
+    case SAO_RT_IO_STRICT_CHAIN_RESIDUE_UNKNOWN:
+        return SAO_RT_IO_OPERATOR_RESIDUE_GATE_UNKNOWN;
+    default:
+        return SAO_RT_IO_OPERATOR_RESIDUE_GATE_DIRTY;
+    }
+}
+
+uint32_t rt_io_operator_bit_count(uint32_t mask) noexcept {
+    uint32_t count = 0u;
+    while (mask != 0u) {
+        count += mask & 1u;
+        mask >>= 1u;
+    }
+    return count;
+}
+
+void rt_io_operator_copy_strict_response(
+    const SaoRtIoProxyStrictChainRespV1& response,
+    sao_launcher_rt_io_operator_report_t* report) noexcept {
+    if (report == nullptr)
+        return;
+
+    const auto& state = response.wire.snapshot.state;
+    const auto& projection = response.wire.snapshot.vt_projection;
+    report->strict_policy = state.policy;
+    report->strict_stage = state.stage;
+    report->strict_transaction_state = state.transaction_state;
+    report->strict_transaction_outcome = state.transaction_outcome;
+    report->strict_transaction_id = state.transaction_id;
+    report->strict_chain_generation = state.chain_generation;
+    report->strict_required_mask = state.required_mask;
+    report->strict_prepared_mask = state.prepared_mask;
+    report->strict_committed_mask = state.committed_mask;
+    report->strict_unknown_mask = state.unknown_mask;
+    report->strict_rollback_attempted_mask = state.rollback_attempted_mask;
+    report->strict_rollback_complete_mask = state.rollback_complete_mask;
+    report->strict_category_required_mask = state.category_required_mask;
+    report->strict_category_prepared_mask = state.category_prepared_mask;
+    report->strict_category_committed_mask = state.category_committed_mask;
+    report->strict_category_unknown_mask = state.category_unknown_mask;
+    report->strict_category_rollback_attempted_mask = state.category_rollback_attempted_mask;
+    report->strict_category_rollback_complete_mask = state.category_rollback_complete_mask;
+    report->strict_category_count = state.category_count;
+    for (uint32_t index = 0u; index < SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT; ++index) {
+        const auto& source = state.categories[index];
+        auto& destination = report->strict_categories[index];
+        destination.category = source.category;
+        destination.outcome = source.outcome;
+        destination.prepare_status = source.prepare_status;
+        destination.apply_status = source.apply_status;
+        destination.commit_status = source.commit_status;
+        destination.rollback_status = source.rollback_status;
+    }
+
+    report->strict_vt_vendor = state.vendor;
+    report->strict_vt_root_active =
+        sao_rt_io_vt_stage_projects_loaded(projection.stage) != 0 ? 1u : 0u;
+    report->strict_vt_control_status = projection.operation_status;
+    report->strict_vt_session_id = projection.session_id;
+    report->strict_vt_owner_generation = projection.owner_generation;
+    report->strict_vt_requested_engine = projection.requested_engine;
+    report->strict_vt_runtime_engine = projection.runtime_engine;
+    report->strict_vt_load_path = projection.load_path;
+    report->strict_vt_stage = projection.stage;
+    report->strict_vt_capture_status = projection.capture_status;
+    report->strict_vt_validation_status = projection.validation_status;
+    report->strict_vt_cleanup_status = projection.cleanup_status;
+    report->strict_vt_recovery_status = projection.recovery_status;
+    report->strict_vt_terminal_reason = projection.terminal_reason;
+    report->strict_final_residue_gate = state.residue_gate;
+    report->strict_response_flags = response.wire.response_flags;
+    report->strict_helper_system = response.identity.helper_system != 0u ? 1u : 0u;
+    report->strict_helper_identity_authenticated =
+        response.identity.identity_authenticated != 0u ? 1u : 0u;
+    report->strict_helper_session_id = response.identity.helper_session_known != 0u
+        ? response.identity.helper_session_id
+        : 0u;
+    std::memcpy(report->strict_helper_actual_image,
+                response.identity.helper_actual_image_utf8,
+                sizeof(report->strict_helper_actual_image));
+    report->strict_helper_actual_image[sizeof(report->strict_helper_actual_image) - 1u] = '\0';
+    std::memcpy(report->strict_helper_parent_image,
+                response.identity.helper_parent_image_utf8,
+                sizeof(report->strict_helper_parent_image));
+    report->strict_helper_parent_image[sizeof(report->strict_helper_parent_image) - 1u] = '\0';
+
+    report->state_observed = 1u;
+    report->residue_gate = rt_io_operator_strict_residue_gate(state.residue_gate);
+    report->unknown_count = rt_io_operator_bit_count(state.unknown_mask) +
+        rt_io_operator_bit_count(state.category_unknown_mask);
+    report->residue_count = state.residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN
+        ? 0u
+        : (report->unknown_count != 0u ? report->unknown_count : 1u);
+    report->last_failure_code = state.failure_code;
+    report->last_failure_stage = state.failure_stage;
+    report->selected_engine = projection.runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR
+        ? SAO_RT_IO_ENGINE_HYPERVISOR
+        : 0u;
+}
+
+bool rt_io_operator_strict_success(
+    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    const bool chain_complete =
+        report.strict_required_mask == SAO_RT_IO_STRICT_CHAIN_STAGE_ALL &&
+        report.strict_prepared_mask == report.strict_required_mask &&
+        report.strict_committed_mask == report.strict_required_mask &&
+        report.strict_unknown_mask == 0u &&
+        report.strict_rollback_attempted_mask == 0u &&
+        report.strict_rollback_complete_mask == 0u;
+    const bool categories_complete =
+        report.strict_category_required_mask == SAO_RT_IO_STRICT_CHAIN_CATEGORY_ALL &&
+        report.strict_category_prepared_mask == report.strict_category_required_mask &&
+        report.strict_category_committed_mask == report.strict_category_required_mask &&
+        report.strict_category_unknown_mask == 0u &&
+        report.strict_category_rollback_attempted_mask == 0u &&
+        report.strict_category_rollback_complete_mask == 0u &&
+        report.strict_category_count == SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT;
+    return report.strict_policy == SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY &&
+        report.strict_vt_runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR &&
+        report.strict_stage == SAO_RT_IO_STRICT_CHAIN_STAGE_VT_ACTIVE &&
+        report.strict_transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_ACTIVE &&
+        report.strict_transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_COMMITTED &&
+        report.strict_vt_stage == SAO_RT_IO_VT_STAGE_ACTIVE &&
+        report.strict_vt_root_active != 0u &&
+        report.strict_helper_system != 0u &&
+        report.strict_helper_identity_authenticated != 0u &&
+        report.strict_final_residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
+        chain_complete && categories_complete;
+}
+
+bool rt_io_operator_strict_recovery_required(
+    const SaoRtIoProxyStrictChainRespV1& response) noexcept {
+    const auto& state = response.wire.snapshot.state;
+    return state.transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_RECOVERY_REQUIRED ||
+        state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_RECOVERY_REQUIRED ||
+        (response.wire.response_flags &
+         (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
+          SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) != 0u;
+}
+
+bool rt_io_operator_strict_terminal_clean(
+    const SaoRtIoProxyStrictChainRespV1& response) noexcept {
+    const auto& state = response.wire.snapshot.state;
+    const uint32_t flags = response.wire.response_flags;
+    return state.transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_TERMINAL &&
+        state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_ROLLED_BACK &&
+        state.stage == SAO_RT_IO_STRICT_CHAIN_STAGE_TERMINAL &&
+        state.residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
+        state.unknown_mask == 0u && state.category_unknown_mask == 0u &&
+        (flags & SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_TERMINAL_CLEAN) != 0u &&
+        (flags & (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
+                  SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) == 0u;
+}
+
+void rt_io_operator_cache_strict_chain(sao_platform_ctx* ctx,
+                                       const SaoRtIoProxyStrictChainRespV1& response) noexcept {
+    if (ctx == nullptr)
+        return;
+    const auto& state = response.wire.snapshot.state;
+    if (state.transaction_id != 0u && state.chain_generation != 0u) {
+        ctx->rt_io_strict_transaction_id = state.transaction_id;
+        ctx->rt_io_strict_chain_generation = state.chain_generation;
+    }
+}
+
+extern "C++" {
+
+template <typename Request>
+void rt_io_operator_initialize_strict_request(Request* request,
+                                              const char magic[4]) noexcept {
+    *request = Request{};
+    std::memcpy(request->header.magic, magic, sizeof(request->header.magic));
+    request->header.version = SAO_RT_IO_STRICT_CHAIN_BODY_VERSION;
+    request->header.header_size = sizeof(SaoRtIoVersionedPayloadHeader);
+    request->header.struct_size = sizeof(*request);
+}
+
+} // extern "C++"
+
 bool rt_io_operator_call_complete(
     const sao_launcher_rt_io_operator_report_t& report) noexcept {
     return report.call_authenticated != 0u &&
@@ -2844,45 +3205,35 @@ sao_status_t sao_platform_rt_io_operator_init(
     if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
         !rtIoOperatorOptionsValid(options) || out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->rt_io_strict_transaction_id == 0u)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
 
-    SaoRtIoInitV2Resp response{};
+    SaoRtIoStrictChainInitV1Req request{};
+    rt_io_operator_initialize_strict_request(
+        &request, SAO_RT_IO_STRICT_CHAIN_INIT_V1_REQUEST_MAGIC);
+    request.policy = SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY;
+    request.transaction_id = ctx->rt_io_strict_transaction_id;
+    request.expected_chain_generation = 0u;
+    request.required_stage_mask = SAO_RT_IO_STRICT_CHAIN_STAGE_ALL;
+    request.required_category_mask = SAO_RT_IO_STRICT_CHAIN_CATEGORY_ALL;
+
+    SaoRtIoProxyStrictChainRespV1 response{};
     SaoRtIoCallResult call{};
-    const sao_status_t status = sao_rt_io_proxy_init_v2(
-        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    const sao_status_t status = sao_rt_io_proxy_strict_init(
+        ctx->rt_io_proxy, &request, options->timeout_ms, &response, &call);
     out_report->status = status;
-    out_report->operation_status = response.operation_status;
+    out_report->operation_status = response.wire.operation_status;
     rt_io_operator_copy_call(call, out_report);
-    rt_io_operator_copy_state(response.production, out_report);
-    out_report->selected_engine = response.selected_engine;
-    // The init-stage wire response only names this field `backend`; mirror
-    // it into `runtime_tier` too so a consumer reading either report field
-    // sees the same selected tier regardless of which stage last ran (the
-    // status stage below does the same mirroring from its own `runtime_tier`
-    // wire field).  Keep both report fields — removing either is an ABI break.
-    out_report->backend = response.backend;
-    out_report->runtime_tier = response.backend;
-    out_report->driver_strategy = response.driver_strategy;
-    out_report->loaded = response.loaded != 0u ? 1u : 0u;
-    out_report->probe_passed = response.probe_passed != 0u ? 1u : 0u;
-    out_report->last_failure_code = response.last_failure_code;
-    out_report->last_failure_stage = response.last_failure_stage;
+    rt_io_operator_copy_strict_response(response, out_report);
+    rt_io_operator_cache_strict_chain(ctx, response);
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->loaded = out_report->strict_vt_root_active;
+    out_report->strict_success = rt_io_operator_strict_success(*out_report) ? 1u : 0u;
+    out_report->probe_passed = out_report->strict_success;
     const bool complete = status == SAO_STATUS_OK &&
-        response.operation_status == SAO_STATUS_OK &&
+        response.wire.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&
-        response.selected_engine == SAO_RT_IO_ENGINE_PHYSRW &&
-        response.backend == SAO_RT_IO_TIER_E &&
-        response.driver_strategy == SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW &&
-        response.loaded != 0u && response.probe_passed != 0u &&
-        response.response_committed != 0u &&
-        rt_io_operator_state_has_no_unknown_or_restore(
-            response.production, *out_report) &&
-        response.production.r1_state != 0u &&
-        response.production.r3_state != 0u &&
-        response.production.r1_probe_ready != 0u &&
-        response.production.r3_probe_ready != 0u &&
-        response.production.cached_write_state == 2u &&
-        response.last_failure_code == SAO_STATUS_OK &&
-        response.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+        out_report->strict_success != 0u;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
     out_report->failure_classification = complete
@@ -2967,75 +3318,31 @@ sao_status_t sao_platform_rt_io_operator_status(
         !rtIoOperatorOptionsValid(options) || out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 
-    SaoRtIoStatusV2Resp response{};
+    SaoRtIoStrictChainStatusV1Req request{};
+    rt_io_operator_initialize_strict_request(
+        &request, SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
+    if (ctx->rt_io_strict_transaction_id != 0u &&
+        ctx->rt_io_strict_chain_generation != 0u) {
+        request.transaction_id = ctx->rt_io_strict_transaction_id;
+        request.chain_generation = ctx->rt_io_strict_chain_generation;
+    }
+
+    SaoRtIoProxyStrictChainRespV1 response{};
     SaoRtIoCallResult call{};
-    const sao_status_t status = sao_rt_io_proxy_status_v2(
-        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    const sao_status_t status = sao_rt_io_proxy_strict_status(
+        ctx->rt_io_proxy, &request, options->timeout_ms, &response, &call);
     out_report->status = status;
-    out_report->operation_status = response.operation_status;
+    out_report->operation_status = response.wire.operation_status;
     rt_io_operator_copy_call(call, out_report);
-    rt_io_operator_copy_state(response.production, out_report);
-    out_report->selected_engine = response.runtime_engine;
-    // Mirrors the init-stage assignment above: the status-stage wire
-    // response only names this field `runtime_tier`, so both report fields
-    // are set from it here for the same reason.
-    out_report->runtime_tier = response.runtime_tier;
-    out_report->backend = response.runtime_tier;
-    out_report->driver_strategy = response.driver_strategy;
-    out_report->backend_ready = response.backend_ready != 0u ? 1u : 0u;
-    out_report->attempted_step_mask =
-        response.last_live_validation.attempted_mask;
-    out_report->passed_step_mask = response.last_live_validation.passed_mask;
-    out_report->unknown_step_mask = response.last_live_validation.unknown_mask;
-    out_report->partial_step_mask = response.last_live_validation.partial_mask;
-    const uint64_t requested_mask = out_report->requested_step_mask;
-    const bool live_consistent =
-        response.last_live_validation.operation_status == SAO_STATUS_OK &&
-        response.last_live_validation.options ==
-            rt_io_operator_live_options(*options) &&
-        response.last_live_validation.terminal_step == UINT32_MAX &&
-        response.last_live_validation.attempted_mask == requested_mask &&
-        response.last_live_validation.passed_mask == requested_mask &&
-        response.last_live_validation.unknown_mask == 0u &&
-        response.last_live_validation.partial_mask == 0u &&
-        response.last_live_validation.final_state.last_failure_code ==
-            response.production.last_failure_code &&
-        response.last_live_validation.final_state.last_failure_stage ==
-            response.production.last_failure_stage &&
-        response.last_live_validation.final_state.hid.selected_backend ==
-            response.production.hid.selected_backend &&
-        response.last_live_validation.final_state.cached_write_state ==
-            response.production.cached_write_state &&
-        response.last_live_validation.final_state.r1_state ==
-            response.production.r1_state &&
-        response.last_live_validation.final_state.reserved_resource_state_2 == 0u &&
-        response.production.reserved_resource_state_2 == 0u &&
-        response.last_live_validation.final_state.r3_state ==
-            response.production.r3_state &&
-        response.last_live_validation.final_state.active_r3_maps ==
-            response.production.active_r3_maps &&
-        response.last_live_validation.final_state.r3_operations_inflight ==
-            response.production.r3_operations_inflight &&
-        rt_io_operator_restore_mask(
-            response.last_live_validation.final_state) ==
-            rt_io_operator_restore_mask(response.production) &&
-        rt_io_operator_admission_mask(
-            response.last_live_validation.final_state) ==
-            rt_io_operator_admission_mask(response.production) &&
-        rt_io_operator_capability_mask(
-            response.last_live_validation.final_state) ==
-            rt_io_operator_capability_mask(response.production);
+    rt_io_operator_copy_strict_response(response, out_report);
+    rt_io_operator_cache_strict_chain(ctx, response);
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->backend_ready = out_report->strict_vt_root_active;
+    out_report->strict_success = rt_io_operator_strict_success(*out_report) ? 1u : 0u;
     const bool complete = status == SAO_STATUS_OK &&
-        response.operation_status == SAO_STATUS_OK &&
+        response.wire.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&
-        response.runtime_engine == SAO_RT_IO_ENGINE_PHYSRW &&
-        response.runtime_tier == SAO_RT_IO_TIER_E &&
-        response.driver_strategy == SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW &&
-        response.backend_ready != 0u && live_consistent &&
-        rt_io_operator_state_has_no_unknown_or_restore(
-            response.production, *out_report) &&
-        response.production.last_failure_code == SAO_STATUS_OK &&
-        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+        out_report->strict_success != 0u;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
     out_report->failure_classification = complete
@@ -3072,41 +3379,73 @@ sao_status_t sao_platform_rt_io_operator_cleanup(
         return status;
     }
 
-    SaoRtIoShutdownRespV1 response{};
-    SaoRtIoCallResult call{};
-    status = sao_rt_io_proxy_call(
-        ctx->rt_io_proxy, SAO_RT_IO_CMD_SHUTDOWN, nullptr, 0u,
-        options->timeout_ms, reinterpret_cast<uint8_t*>(&response),
-        sizeof(response), &call);
+    SaoRtIoStrictChainStatusV1Req status_request{};
+    rt_io_operator_initialize_strict_request(
+        &status_request, SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
+    if (ctx->rt_io_strict_transaction_id != 0u &&
+        ctx->rt_io_strict_chain_generation != 0u) {
+        status_request.transaction_id = ctx->rt_io_strict_transaction_id;
+        status_request.chain_generation = ctx->rt_io_strict_chain_generation;
+    }
+
+    SaoRtIoProxyStrictChainRespV1 status_response{};
+    SaoRtIoCallResult status_call{};
+    status = sao_rt_io_proxy_strict_status(
+        ctx->rt_io_proxy, &status_request, options->timeout_ms,
+        &status_response, &status_call);
     out_report->status = status;
-    out_report->operation_status = response.cleanup_status;
-    rt_io_operator_copy_call(call, out_report);
-    rt_io_operator_copy_state(response.production, out_report);
-    out_report->cleanup_acknowledged = response.acknowledged != 0u ? 1u : 0u;
-    out_report->cleanup_clean = response.clean_shutdown != 0u ? 1u : 0u;
-    out_report->cleanup_keep_running = response.keep_running != 0u ? 1u : 0u;
-    out_report->provider_retained = response.retained_for_retry != 0u ||
-            response.production.retain_for_recovery != 0u
-        ? 1u
-        : 0u;
-    const bool response_header_valid =
-        std::memcmp(response.header.magic,
-                    SAO_RT_IO_SHUTDOWN_EXTENSION_MAGIC, 4u) == 0 &&
-        response.header.version == SAO_RT_IO_SHUTDOWN_EXTENSION_VERSION &&
-        response.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
-        response.header.struct_size == sizeof(response) &&
-        response.header.reserved == 0u;
+    out_report->operation_status = status_response.wire.operation_status;
+    rt_io_operator_copy_call(status_call, out_report);
+    rt_io_operator_copy_strict_response(status_response, out_report);
+    rt_io_operator_cache_strict_chain(ctx, status_response);
+    const auto& status_state = status_response.wire.snapshot.state;
+    const bool status_complete = status == SAO_STATUS_OK &&
+        status_response.wire.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) &&
+        status_state.transaction_id != 0u && status_state.chain_generation != 0u;
+    if (!status_complete) {
+        out_report->failure_classification =
+            status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                    : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
+    }
+
+    SaoRtIoStrictChainRecoverV1Req recover_request{};
+    rt_io_operator_initialize_strict_request(
+        &recover_request, SAO_RT_IO_STRICT_CHAIN_RECOVER_V1_REQUEST_MAGIC);
+    recover_request.transaction_id = status_state.transaction_id;
+    recover_request.chain_generation = status_state.chain_generation;
+
+    SaoRtIoProxyStrictChainRespV1 recover_response{};
+    SaoRtIoCallResult recover_call{};
+    status = sao_rt_io_proxy_strict_recover(
+        ctx->rt_io_proxy, &recover_request, options->timeout_ms,
+        &recover_response, &recover_call);
+    out_report->status = status;
+    out_report->operation_status = recover_response.wire.operation_status;
+    rt_io_operator_copy_call(recover_call, out_report);
+    rt_io_operator_copy_strict_response(recover_response, out_report);
+    rt_io_operator_cache_strict_chain(ctx, recover_response);
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->cleanup_acknowledged = rt_io_operator_call_complete(*out_report) ? 1u : 0u;
+    const bool recovery_required = rt_io_operator_strict_recovery_required(recover_response);
+    const bool terminal_clean = rt_io_operator_strict_terminal_clean(recover_response);
+    out_report->cleanup_clean = terminal_clean ? 1u : 0u;
+    out_report->cleanup_keep_running = recovery_required ? 1u : 0u;
+    out_report->provider_retained = recovery_required ? 1u : 0u;
+    out_report->strict_success = 0u;
+    if (recovery_required) {
+        out_report->restore_mask |= SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED;
+        out_report->complete = 0u;
+        out_report->success = 0u;
+        out_report->failure_classification =
+            SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
+    }
+
     const bool complete = status == SAO_STATUS_OK &&
-        response.cleanup_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) && response_header_valid &&
-        response.acknowledged != 0u && response.retained_for_retry == 0u &&
-        response.clean_shutdown != 0u && response.keep_running == 0u &&
-        rt_io_operator_state_clean(response.production, *out_report) &&
-        response.production.wiper_joined != 0u &&
-        response.production.engine_cleanup_confirmed != 0u &&
-        response.production.etw_restore_confirmed != 0u &&
-        response.production.last_failure_code == SAO_STATUS_OK &&
-        response.production.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
+        recover_response.wire.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && terminal_clean;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
     out_report->failure_classification = complete
@@ -3114,15 +3453,12 @@ sao_status_t sao_platform_rt_io_operator_cleanup(
         : (status != SAO_STATUS_OK
                ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
                : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE);
-    if (complete) {
-        sao_rt_io_proxy_handle_t proxy = ctx->rt_io_proxy;
-        ctx->rt_io_proxy = nullptr;
-        ctx->rt_io_operator_shutdown = true;
-        ctx->rt_io_cleanup_report = *out_report;
-        sao_rt_io_proxy_destroy(proxy);
-        return SAO_STATUS_OK;
-    }
-    return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
+    if (!complete)
+        return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
+
+    ctx->rt_io_operator_shutdown = true;
+    ctx->rt_io_cleanup_report = *out_report;
+    return SAO_STATUS_OK;
 }
 
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
@@ -3223,29 +3559,57 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_and_fail("ui_theme_set_active_id", status);
     }
 
-    SaoRtIoProxyConfigV2 rt_io_cfg{};
+    SaoRtIoProxyConfigV3 rt_io_cfg{};
     rt_io_cfg.struct_size = sizeof(rt_io_cfg);
-    rt_io_cfg.abi_version = SAO_RT_IO_PROXY_CONFIG_ABI_VERSION;
-    rt_io_cfg.ready_policy = SAO_RT_IO_PROXY_READY_POLICY_STRICT_PRODUCTION;
-    rt_io_cfg.legacy_config.session_name_utf8 = "launcher";
-    rt_io_cfg.legacy_config.strict_bootstrap = 1;
-    rt_io_cfg.legacy_config.driver_strategy = cfg->rt_io_operator != 0
+    rt_io_cfg.abi_version = SAO_RT_IO_PROXY_CONFIG_V3_ABI_VERSION;
+    rt_io_cfg.v2_config.struct_size = sizeof(rt_io_cfg.v2_config);
+    rt_io_cfg.v2_config.abi_version = SAO_RT_IO_PROXY_CONFIG_ABI_VERSION;
+    rt_io_cfg.v2_config.ready_policy = SAO_RT_IO_PROXY_READY_POLICY_STRICT_PRODUCTION;
+    rt_io_cfg.v2_config.legacy_config.session_name_utf8 = "launcher";
+    rt_io_cfg.v2_config.legacy_config.strict_bootstrap = 1;
+    rt_io_cfg.v2_config.legacy_config.driver_strategy = cfg->rt_io_operator != 0
         ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
         : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
+    rt_io_cfg.bootstrap_mode = cfg->rt_io_operator != 0
+        ? SAO_RT_IO_PROXY_BOOTSTRAP_MODE_SCM_STRICT
+        : SAO_RT_IO_PROXY_BOOTSTRAP_MODE_LEGACY_CHILD;
+    if (cfg->rt_io_operator != 0) {
+        const NTSTATUS nonce_status = BCryptGenRandom(
+            nullptr, rt_io_cfg.session_nonce,
+            static_cast<ULONG>(sizeof(rt_io_cfg.session_nonce)),
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        const NTSTATUS transaction_status = BCryptGenRandom(
+            nullptr, reinterpret_cast<PUCHAR>(&rt_io_cfg.transaction_id),
+            static_cast<ULONG>(sizeof(rt_io_cfg.transaction_id)),
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        if (nonce_status != 0 || transaction_status != 0) {
+            return rollback_and_fail("rt_io_proxy_open_v3_rng", SAO_STATUS_INTERNAL);
+        }
+        bool nonce_nonzero = false;
+        for (const uint8_t value : rt_io_cfg.session_nonce)
+            nonce_nonzero = nonce_nonzero || value != 0u;
+        if (!nonce_nonzero)
+            rt_io_cfg.session_nonce[0] = 1u;
+        rt_io_cfg.transaction_id |= 1ull;
+        ctx->rt_io_strict_transaction_id = rt_io_cfg.transaction_id;
+        ctx->rt_io_strict_chain_generation = 0u;
+        rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
+    } else {
 #if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
-    rt_io_cfg.legacy_config.dev_license_bypass =
-        cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
+        rt_io_cfg.v2_config.legacy_config.dev_license_bypass =
+            cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
 #else
-    rt_io_cfg.legacy_config.dev_license_bypass = 0u;
+        rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
 #endif
+    }
     // Operator mode hides the F12 status page by default (stealth posture);
     // rt_io_force_status_page is an explicit opt-in override so the page
     // stays reachable when the operator deliberately wants it.
-    rt_io_cfg.legacy_config.disable_status_page =
+    rt_io_cfg.v2_config.legacy_config.disable_status_page =
         (cfg->rt_io_operator != 0 && cfg->rt_io_force_status_page == 0) ? 1u : 0u;
-    status = sao_rt_io_proxy_open_v2(&rt_io_cfg, &ctx->rt_io_proxy);
+    status = sao_rt_io_proxy_open_v3(&rt_io_cfg, &ctx->rt_io_proxy);
     if (status != SAO_STATUS_OK) {
-        return rollback_and_fail("rt_io_proxy_open_v2", status);
+        return rollback_and_fail("rt_io_proxy_open_v3", status);
     }
 
     status =

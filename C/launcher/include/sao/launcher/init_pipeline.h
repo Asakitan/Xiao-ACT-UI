@@ -46,7 +46,7 @@ typedef struct sao_platform_config {
     const char* log_level;      // "trace" .. "critical"; NULL == "info"
     int32_t safe_mode;          // non-zero disables non-essential threads
     int32_t streaming_entitled; // verified paid tier or dev bypass
-    int32_t rt_io_operator;     // non-zero selects typed PHYSRW proxy strategy
+    int32_t rt_io_operator;     // non-zero selects the strict HYPERVISOR chain
     int32_t rt_io_dev_license_bypass; // explicit actual-Debug --no-license propagation
     int32_t rt_io_force_status_page; // non-zero keeps the helper F12 status page
                                       // enabled even when rt_io_operator would
@@ -221,6 +221,18 @@ typedef struct sao_launcher_rt_io_operator_options {
     uint32_t reserved;
 } sao_launcher_rt_io_operator_options_t;
 
+#define SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT 5u
+#define SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY 1024u
+
+typedef struct sao_launcher_rt_io_operator_strict_category_report {
+    uint32_t category;
+    uint32_t outcome;
+    sao_status_t prepare_status;
+    sao_status_t apply_status;
+    sao_status_t commit_status;
+    sao_status_t rollback_status;
+} sao_launcher_rt_io_operator_strict_category_report_t;
+
 typedef struct sao_launcher_rt_io_operator_report {
     uint32_t struct_size;
     uint32_t stage;
@@ -277,6 +289,49 @@ typedef struct sao_launcher_rt_io_operator_report {
     uint32_t last_failure_stage;
     uint32_t r3_uc_patch_failure_reason;
     uint32_t hid_fallback_reason;
+    uint32_t strict_policy;
+    uint32_t strict_stage;
+    uint32_t strict_transaction_state;
+    uint32_t strict_transaction_outcome;
+    uint64_t strict_transaction_id;
+    uint64_t strict_chain_generation;
+    uint32_t strict_required_mask;
+    uint32_t strict_prepared_mask;
+    uint32_t strict_committed_mask;
+    uint32_t strict_unknown_mask;
+    uint32_t strict_rollback_attempted_mask;
+    uint32_t strict_rollback_complete_mask;
+    uint32_t strict_category_required_mask;
+    uint32_t strict_category_prepared_mask;
+    uint32_t strict_category_committed_mask;
+    uint32_t strict_category_unknown_mask;
+    uint32_t strict_category_rollback_attempted_mask;
+    uint32_t strict_category_rollback_complete_mask;
+    uint32_t strict_category_count;
+    sao_launcher_rt_io_operator_strict_category_report_t
+        strict_categories[SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT];
+    uint32_t strict_vt_vendor;
+    uint32_t strict_vt_root_active;
+    sao_status_t strict_vt_control_status;
+    uint64_t strict_vt_session_id;
+    uint64_t strict_vt_owner_generation;
+    int32_t strict_vt_requested_engine;
+    int32_t strict_vt_runtime_engine;
+    int32_t strict_vt_load_path;
+    int32_t strict_vt_stage;
+    sao_status_t strict_vt_capture_status;
+    sao_status_t strict_vt_validation_status;
+    sao_status_t strict_vt_cleanup_status;
+    sao_status_t strict_vt_recovery_status;
+    int32_t strict_vt_terminal_reason;
+    uint32_t strict_final_residue_gate;
+    uint32_t strict_response_flags;
+    uint32_t strict_helper_system;
+    uint32_t strict_helper_identity_authenticated;
+    uint32_t strict_helper_session_id;
+    char strict_helper_actual_image[SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY];
+    char strict_helper_parent_image[SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY];
+    uint32_t strict_success;
 } sao_launcher_rt_io_operator_report_t;
 
 typedef void (*sao_launcher_rt_io_operator_output_fn)(const char* line_utf8,
