@@ -172,6 +172,8 @@ add_executable(SaoAuto WIN32
     ${SAO_LAUNCHER_SOURCES}
     ${SAO_LAUNCHER_RESOURCES}
 )
+target_compile_definitions(SaoAuto PRIVATE
+    "$<$<CONFIG:Debug>:SAO_LAUNCHER_ACTUAL_DEBUG=1>")
 
 # The output filename is deliberately fixed to SaoAuto.exe — the packaging
 # tools (tools/pack_cli) expect this exact name when building the release
@@ -453,6 +455,10 @@ endif()
 # tests and moves into tests/integration/.
 if (SAO_BUILD_TESTS)
     add_subdirectory(tests)
+    if (TARGET sao_launcher_tests)
+        target_compile_definitions(sao_launcher_tests PRIVATE
+            "$<$<CONFIG:Debug>:SAO_LAUNCHER_ACTUAL_DEBUG=1>")
+    endif()
 endif()
 
 install(TARGETS SaoAuto

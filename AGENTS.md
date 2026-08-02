@@ -203,7 +203,7 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 
 **例外**：
 - 已发布的 C ABI 导出符号（如 `sao_shell_crypter_wave8_*`、`sao_security_anti_debug_wave8_*`）保留 wave 标签作为二进制 ABI 版本标识，避免破坏 DLL 二进制兼容。
-- 历史 changelog 行项中 "Wave N" 字样作为历史记录保留（PLAN.md/STATUS.md/CHANGELOG.md 历史表格）。
+- 历史 changelog 行项中 "Wave N" 字样作为历史记录保留（STATUS.md/CHANGELOG.md 历史表格）。
 
 **新代码违反 = broken change**。CI 的 `sao_assert_no_wave_impl_libraries` 函数已禁止 `wave*` 命名的临时 impl 库；新 target/文件/符号同样不得以 wave 开头。
 

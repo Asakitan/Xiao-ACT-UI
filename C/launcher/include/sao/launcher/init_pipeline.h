@@ -47,7 +47,7 @@ typedef struct sao_platform_config {
     int32_t safe_mode;          // non-zero disables non-essential threads
     int32_t streaming_entitled; // verified paid tier or dev bypass
     int32_t rt_io_operator;     // non-zero selects typed PHYSRW proxy strategy
-    int32_t rt_io_dev_license_bypass; // explicit non-hardened --no-license propagation
+    int32_t rt_io_dev_license_bypass; // explicit actual-Debug --no-license propagation
     int32_t rt_io_force_status_page; // non-zero keeps the helper F12 status page
                                       // enabled even when rt_io_operator would
                                       // otherwise disable it

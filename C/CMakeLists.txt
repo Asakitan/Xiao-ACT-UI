@@ -233,6 +233,10 @@ option(SAO_BUILD_LEGACY_CORE "Build legacy sao_core compat target (required by s
 # builds when find_package fails.  Must run BEFORE subsystems are added.
 if (SAO_BUILD_TESTS)
     enable_testing()
+    # Repo overlay of Catch2 extras must shadow any vcpkg/FetchContent copy so
+    # `include(Catch)` picks up the patched CatchAddTests.cmake (multi-value
+    # LABELS survive test discovery).
+    list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/catch2_extras_overlay")
     include(FetchContent)
     FetchContent_Declare(
         Catch2
@@ -380,42 +384,30 @@ if (TARGET SaoRtIoHelper)
     endif()
 endif()
 
-# The canonical raw drivers are external operator assets, not source-tree
-# build inputs. General source builds remain valid when the configured store
-# is absent; when it exists, component installation requires the exact R1/R3
-# pair.
-set(SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY
-    "${CMAKE_SOURCE_DIR}/../../driver store" CACHE PATH
-    "Optional external canonical R1/R3 driver store used by ship staging")
-cmake_path(ABSOLUTE_PATH SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY
-    BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    NORMALIZE
-    OUTPUT_VARIABLE _sao_rt_io_driver_store_source_directory)
-if (EXISTS "${_sao_rt_io_driver_store_source_directory}")
-    # Fail at configure time, not at `cmake --install` time: a directory that
-    # exists but is missing one canonical file would otherwise pass
-    # configuration and only fail deep into ship staging.
-    set(_sao_rt_io_missing_ship_drivers "")
-    foreach (_sao_rt_io_ship_driver IN ITEMS R1.sys R3.sys)
-        if (NOT EXISTS "${_sao_rt_io_driver_store_source_directory}/${_sao_rt_io_ship_driver}")
-            list(APPEND _sao_rt_io_missing_ship_drivers "${_sao_rt_io_ship_driver}")
-        endif()
-    endforeach()
-    if (_sao_rt_io_missing_ship_drivers)
+# R1/R3/R5 ship only as repository-authoritative SAO2 blobs. The helper
+# resolves them under a runtime root's assets/drivers directory and creates
+# per-machine SAO3 sidecars on first use. R5.sys.sao2 owns SIVX64.sys at
+# runtime; no second raw or encrypted asset is installed for that role.
+if (TARGET SaoRtIoHelper)
+    if (NOT DEFINED SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES OR
+        NOT "${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_BASENAMES}" STREQUAL
+            "R1.sys.sao2;R3.sys.sao2;R5.sys.sao2")
         message(FATAL_ERROR
-            "SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY "
-            "'${_sao_rt_io_driver_store_source_directory}' exists but is "
-            "missing: ${_sao_rt_io_missing_ship_drivers}. Ship staging "
-            "requires the exact R1/R3 pair — restore the missing file(s) or "
-            "point SAO_RT_IO_DRIVER_STORE_SOURCE_DIRECTORY elsewhere for a "
-            "driver-less build.")
+            "Validated repository RT I/O bundle metadata is unavailable or incomplete.")
     endif()
-    foreach (_sao_rt_io_ship_driver IN ITEMS R1.sys R3.sys)
-        install(FILES
-            "${_sao_rt_io_driver_store_source_directory}/${_sao_rt_io_ship_driver}"
-            DESTINATION "bin/driver store"
-            COMPONENT ship)
-    endforeach()
+    install(FILES ${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES}
+        DESTINATION "bin/runtime/assets/drivers"
+        COMPONENT ship)
+
+    if (NOT DEFINED SAO_RT_IO_VT_SHIP_SOURCE_FILE OR
+        "${SAO_RT_IO_VT_SHIP_SOURCE_FILE}" STREQUAL "")
+        message(FATAL_ERROR
+            "The validated VT-Splitview ship artifact was not configured.")
+    endif()
+    install(FILES "${SAO_RT_IO_VT_SHIP_SOURCE_FILE}"
+        DESTINATION "bin/driver store"
+        RENAME "VT-Splitview.sys"
+        COMPONENT ship)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -557,6 +549,43 @@ endif()
 include(CTest)
 if (SAO_BUILD_TESTS)
     enable_testing()
+    if (TARGET SaoRtIoHelper)
+        set(_sao_rt_io_package_test_script
+            "${CMAKE_SOURCE_DIR}/platform/rt_io/cmake/verify_driver_asset_package.cmake")
+        if (NOT EXISTS "${_sao_rt_io_package_test_script}")
+            message(FATAL_ERROR
+                "RT I/O package verifier is missing: ${_sao_rt_io_package_test_script}")
+        endif()
+        set(_sao_rt_io_package_test_root
+            "${CMAKE_BINARY_DIR}/driver_asset_package_test/$<CONFIG>")
+        add_test(NAME sao_rt_io_driver_asset_install
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSAO_RT_IO_PACKAGE_MODE=install"
+                "-DSAO_RT_IO_PACKAGE_ROOT=${_sao_rt_io_package_test_root}"
+                "-DSAO_RT_IO_PACKAGE_BUILD_DIRECTORY=${CMAKE_BINARY_DIR}"
+                "-DSAO_RT_IO_PACKAGE_CONFIG=$<CONFIG>"
+                -P "${_sao_rt_io_package_test_script}")
+        set_tests_properties(sao_rt_io_driver_asset_install PROPERTIES
+            FIXTURES_SETUP sao_rt_io_driver_asset_package
+            LABELS "rt_io;install;package")
+
+        add_test(NAME sao_rt_io_driver_asset_package
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSAO_RT_IO_PACKAGE_MODE=audit"
+                "-DSAO_RT_IO_PACKAGE_ROOT=${_sao_rt_io_package_test_root}"
+                "-DSAO_RT_IO_EXPECTED_R1_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R1_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R1_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R1_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_R3_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R3_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R3_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R3_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_R5_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R5_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R5_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R5_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_VT_SHA256=$<IF:$<CONFIG:Debug>,${SAO_RT_IO_PIN_VT_DEBUG_SHA256},${SAO_RT_IO_PIN_VT_RELEASE_SHA256}>"
+                "-DSAO_RT_IO_EXPECTED_VT_SIZE=$<IF:$<CONFIG:Debug>,${SAO_RT_IO_PIN_VT_DEBUG_SIZE},${SAO_RT_IO_PIN_VT_RELEASE_SIZE}>"
+                -P "${_sao_rt_io_package_test_script}")
+        set_tests_properties(sao_rt_io_driver_asset_package PROPERTIES
+            FIXTURES_REQUIRED sao_rt_io_driver_asset_package
+            LABELS "rt_io;install;package")
+    endif()
     add_subdirectory(tests)
 endif()
 

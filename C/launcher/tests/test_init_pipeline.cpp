@@ -1013,7 +1013,13 @@ TEST_CASE("launcher platform config propagates only explicit RT I/O dev license 
     state.no_license = true;
     REQUIRE(sao::launcher::buildPlatformConfig(state, config, log_level, sizeof(log_level)));
     REQUIRE(config.rt_io_operator == 1);
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
     REQUIRE(config.rt_io_dev_license_bypass == 1);
+    REQUIRE(config.streaming_entitled == 1);
+#else
+    REQUIRE(config.rt_io_dev_license_bypass == 0);
+    REQUIRE(config.streaming_entitled == 0);
+#endif
 #else
     SUCCEED("core log provider is absent; platform config fails closed");
 #endif

@@ -123,13 +123,12 @@ bool parseCommandLineFromArgv(int argc,
             continue;
         }
         if (wcsEqualsCI(a, L"--no-license")) {
-#if SAO_LAUNCHER_HARDENED
-            // Refuse in hardened builds.
-            exit_code_out = SAO_EXIT_BAD_ARGS;
-            return false;
-#else
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
             state.no_license = true;
             continue;
+#else
+            exit_code_out = SAO_EXIT_BAD_ARGS;
+            return false;
 #endif
         }
         if (wcsStartsWithCI(a, L"--config=")) {
@@ -164,7 +163,7 @@ void printHelp() noexcept {
     static const wchar_t* help =
         L"SaoAuto.exe [options]\r\n\r\n"
         L"  --safe-mode           Skip plugin discovery, load core UI only\r\n"
-        L"  --no-license          Bypass license verification (dev only)\r\n"
+        L"  --no-license          Bypass license verification (Debug only)\r\n"
         L"  --smoke               Enable console-attached full-stack smoke mode;\r\n"
         L"                        skip GUI message loop, print READY on stdout\r\n"
         L"  --exit-after-init     With --smoke, return after platform init is ready\r\n"

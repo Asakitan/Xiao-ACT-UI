@@ -172,8 +172,14 @@ int App::run() {
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
 
-    // 5. License verification.  Bypassed only in dev builds with --no-license.
-    if (!state_.no_license && provider_configuration.license.enabled) {
+    // 5. License verification. The bypass exists only in the actual Debug
+    // configuration, even if AppState is populated outside the CLI parser.
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+    const bool no_license_bypass = state_.no_license;
+#else
+    const bool no_license_bypass = false;
+#endif
+    if (!no_license_bypass && provider_configuration.license.enabled) {
         rc = verifyLicense();
         if (rc != SAO_EXIT_OK) {
             return fail(rc, L"license_verify", "license_verify");

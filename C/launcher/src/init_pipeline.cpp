@@ -149,6 +149,15 @@ inline RecordOutcomeFn g_record_outcome = nullptr;
 
 namespace sao::launcher {
 
+static bool actualDebugNoLicenseRequested(const AppState& state) noexcept {
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+    return state.no_license;
+#else
+    (void)state;
+    return false;
+#endif
+}
+
 bool isPaidLicenseTier(const char* tier) noexcept {
     return tier != nullptr && (_stricmp(tier, "paid") == 0 || _stricmp(tier, "pro") == 0 ||
                                _stricmp(tier, "team") == 0);
@@ -197,9 +206,10 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
     config.config_path = state.config_path[0] ? state.config_path : nullptr;
     config.log_level = log_level_storage;
     config.safe_mode = state.safe_mode ? 1 : 0;
-    config.streaming_entitled = state.no_license || state.streaming_entitled ? 1 : 0;
+    const bool no_license_bypass = actualDebugNoLicenseRequested(state);
+    config.streaming_entitled = no_license_bypass || state.streaming_entitled ? 1 : 0;
     config.rt_io_operator = state.rt_io_operator ? 1 : 0;
-    config.rt_io_dev_license_bypass = state.no_license ? 1 : 0;
+    config.rt_io_dev_license_bypass = no_license_bypass ? 1 : 0;
     config.rt_io_force_status_page = state.rt_io_force_status_page ? 1 : 0;
     return true;
 }
@@ -584,7 +594,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
 
     // Step 5 — license verify.  The provider is optional until explicitly
     // enabled; once enabled, provider absence and invalid licenses are fatal.
-    if (!state.no_license && provider_configuration.license.enabled) {
+    if (!sao::launcher::actualDebugNoLicenseRequested(state) &&
+        provider_configuration.license.enabled) {
         sao_license_result r{};
         sao_status_t s = sao_license_verify(&r);
         state.license_active = s != SAO_STATUS_NOT_IMPLEMENTED;
@@ -3221,8 +3232,12 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     rt_io_cfg.legacy_config.driver_strategy = cfg->rt_io_operator != 0
         ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
         : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
     rt_io_cfg.legacy_config.dev_license_bypass =
         cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
+#else
+    rt_io_cfg.legacy_config.dev_license_bypass = 0u;
+#endif
     // Operator mode hides the F12 status page by default (stealth posture);
     // rt_io_force_status_page is an explicit opt-in override so the page
     // stays reachable when the operator deliberately wants it.

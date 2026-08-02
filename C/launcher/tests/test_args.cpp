@@ -81,6 +81,28 @@ TEST_CASE("log-level is normalized and invalid values fail closed",
     REQUIRE(code == SAO_EXIT_BAD_ARGS);
 }
 
+TEST_CASE("no-license follows the actual Debug configuration",
+          "[launcher][args][license]") {
+    AppState state{};
+    bool exit_flag = false;
+    int code = -1;
+    const wchar_t* args[] = {L"SaoAuto.exe", L"--no-license"};
+
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+    REQUIRE(parseCommandLineFromArgv(
+        2, const_cast<wchar_t* const*>(args), state, exit_flag, code));
+    CHECK(state.no_license);
+    CHECK_FALSE(exit_flag);
+    CHECK(code == SAO_EXIT_OK);
+#else
+    REQUIRE_FALSE(parseCommandLineFromArgv(
+        2, const_cast<wchar_t* const*>(args), state, exit_flag, code));
+    CHECK_FALSE(state.no_license);
+    CHECK_FALSE(exit_flag);
+    CHECK(code == SAO_EXIT_BAD_ARGS);
+#endif
+}
+
 TEST_CASE("unknown args are rejected", "[launcher][args]") {
     AppState s{};
     bool exit_flag = false;
