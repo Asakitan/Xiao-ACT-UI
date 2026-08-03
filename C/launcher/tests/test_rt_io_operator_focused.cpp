@@ -358,8 +358,8 @@ TEST_CASE("RT I/O operator JSON is deterministic and sanitized",
     report.backend = 5u;
     report.selected_backend = 1u;
     report.failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_NONE;
-    char first[2048]{};
-    char second[2048]{};
+    char first[6144]{};
+    char second[6144]{};
     size_t first_size = 0u;
     size_t second_size = 0u;
 

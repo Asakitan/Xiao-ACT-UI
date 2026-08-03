@@ -1373,7 +1373,7 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         append_signed(report->strict_vt_requested_engine);
         json.append(",\"strict_vt_runtime_engine\":");
         append_signed(report->strict_vt_runtime_engine);
-        json.append(",\"strict_vt_load_path\":");
+        json.append(",\"strict_vt_load_route\":");
         append_signed(report->strict_vt_load_path);
         json.append(",\"strict_vt_stage\":");
         append_signed(report->strict_vt_stage);

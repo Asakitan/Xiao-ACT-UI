@@ -219,11 +219,14 @@ int App::run() {
     // subsystem is up".  ``--smoke --exit-after-init`` uses this as the
     // observable checkpoint: emit READY on stdout and stop before we
     // bring the UI online (no GUI, no message loop, no window handle
-    // leaks under a subprocess).  Regular launches keep going.
+    // leaks under a subprocess).  Regular launches keep going.  In strict
+    // rt-io operator mode the only readiness signal is the gated
+    // RT_IO_READY emitted after the strict chain succeeds; the generic
+    // platform checkpoint must not claim readiness first.
     if (state_.smoke_mode && state_.exit_after_init) {
-        smokePrint(state_, "READY");
-        smoke_ready_printed_ = true;
         if (!state_.rt_io_operator) {
+            smokePrint(state_, "READY");
+            smoke_ready_printed_ = true;
             shutdown();
             return finish(SAO_EXIT_OK, nullptr);
         }
@@ -239,8 +242,9 @@ int App::run() {
     // UI bring-up step too.  When only
     // ``--smoke`` is set (no ``--exit-after-init``) we still print READY
     // before falling through to the message loop so
-    // interactive smoke inspection works.
-    if (state_.smoke_mode && !smoke_ready_printed_) {
+    // interactive smoke inspection works.  Strict operator mode reports
+    // readiness exclusively through the gated RT_IO_READY.
+    if (state_.smoke_mode && !smoke_ready_printed_ && !state_.rt_io_operator) {
         smokePrint(state_, "READY");
         smoke_ready_printed_ = true;
     }
