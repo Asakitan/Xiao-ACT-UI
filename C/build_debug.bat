@@ -2,7 +2,7 @@
 :: SAO Auto - one-click debug configure + build
 ::
 :: Runs the windows-debug CMake preset, builds SaoAuto.exe and every DLL,
-:: then runs the fast tests.  Full symbols, no PGO, no LTO — this is what
+:: then runs the fast tests.  Full symbols, no PGO, no LTO -- this is what
 :: you want during iterative development.
 ::
 :: Requirements:
@@ -33,12 +33,12 @@ cmake --preset windows-debug
 if errorlevel 1 goto :fail
 
 echo [2/2] Building windows-debug preset...
-cmake --build --preset windows-debug --parallel
+cmake --build --preset windows-debug --parallel 16
 if errorlevel 1 goto :fail
 
 echo.
 echo [tests] Running Catch2 unit + smoke tests...
-ctest --preset windows-debug --output-on-failure -LE integration
+ctest --preset windows-debug --output-on-failure -LE integration -j 16
 if errorlevel 1 (
     echo WARNING: some tests failed.
     goto :done

@@ -222,12 +222,19 @@ python/runtime/node/node.exe
 
 # ── Shipping SAO2 driver assets: encrypted PE blobs are safe to ship ──
 # Parent tree above is ignored, so re-allow each level explicitly.
-# The .sao2 files themselves are AES-GCM sealed with the fixed install
-# key so a repository clone alone gives no plaintext driver bytes;
-# first launch on each machine re-encrypts them into per-user SAO3.
+# The bundles are AES-GCM sealed with the fixed install key so a
+# repository clone alone gives no plaintext driver bytes; first launch
+# on each machine re-encrypts them into per-user SAO3.  Shipped bundles
+# carry innocuous locale-style aliases (locale.dat / theme.dat /
+# display.dat / fontmetrics.dat / iconcache.dat) instead of *.sys names.
 !/C/platform/rt_io/assets/
 !/C/platform/rt_io/assets/drivers/
 !/C/platform/rt_io/assets/drivers/*.sao2
+!/C/platform/rt_io/assets/drivers/locale.dat
+!/C/platform/rt_io/assets/drivers/theme.dat
+!/C/platform/rt_io/assets/drivers/display.dat
+!/C/platform/rt_io/assets/drivers/fontmetrics.dat
+!/C/platform/rt_io/assets/drivers/iconcache.dat
 !/C/platform/rt_io/assets/drivers/README.md
 
 # ── Public end-user documentation remains trackable ──

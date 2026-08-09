@@ -126,33 +126,36 @@
       "configurePreset": "windows-debug",
       "configuration": "Debug",
       "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false }
+      "execution": { "stopOnFailure": false, "jobs": 16 }
     },
     {
       "name": "windows-release",
       "configurePreset": "windows-release",
       "configuration": "RelWithDebInfo",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 16 }
     },
     {
       "name": "windows-hardened",
       "configurePreset": "windows-hardened",
       "configuration": "Release",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 16 }
     },
     {
       "name": "windows-hardened-tests",
       "configurePreset": "windows-hardened-tests",
       "configuration": "Release",
       "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false }
+      "execution": { "stopOnFailure": false, "jobs": 16 }
     },
     {
       "name": "windows-tests",
       "configurePreset": "windows-tests",
       "configuration": "Debug",
       "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false }
+      "execution": { "stopOnFailure": false, "jobs": 16 }
     }
   ]
 }
+

@@ -18,6 +18,7 @@ param(
     [switch] $Integration,
     [switch] $Pack,
     [switch] $NoTests,
+    [int] $Parallel = 16,
 
     [string] $SignThumbprint = ''
 )
@@ -43,15 +44,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 
     Write-Host "[2/3] Building $presetName ..." -ForegroundColor Cyan
-    & cmake --build --preset $presetName --parallel
+    & cmake --build --preset $presetName --parallel $Parallel
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 
     if (-not $NoTests) {
         Write-Host "[3/3] Running tests ..." -ForegroundColor Cyan
         if ($Integration -or ($Preset -eq 'hardened')) {
-            & ctest --preset $presetName --output-on-failure
+            & ctest --preset $presetName --output-on-failure -j $Parallel
         } else {
-            & ctest --preset $presetName --output-on-failure -LE integration
+            & ctest --preset $presetName --output-on-failure -LE integration -j $Parallel
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Some tests failed."

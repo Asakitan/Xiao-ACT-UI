@@ -384,29 +384,23 @@ if (TARGET SaoRtIoHelper)
     endif()
 endif()
 
-# R1/R3/R5 ship only as repository-authoritative SAO2 blobs. The helper
-# resolves them under a runtime root's assets/drivers directory and creates
-# per-machine SAO3 sidecars on first use. R5.sys.sao2 owns SIVX64.sys at
-# runtime; no second raw or encrypted asset is installed for that role.
+# All four roles ship as repository-authoritative SAO2 bundles. The helper
+# resolves aliases under a runtime root's assets/drivers directory and creates
+# per-machine SAO3 sidecars on first use. The metadata cache owns the five
+# repository files: fixed R1/R3/R5 aliases plus Debug/Release VT aliases.
 if (TARGET SaoRtIoHelper)
+    set(_sao_rt_io_expected_bundle_basenames
+        "${SAO_RT_IO_BUNDLE_R1_BASENAME};${SAO_RT_IO_BUNDLE_R3_BASENAME};${SAO_RT_IO_BUNDLE_R5_BASENAME};${SAO_RT_IO_BUNDLE_VT_DEBUG_BASENAME};${SAO_RT_IO_BUNDLE_VT_RELEASE_BASENAME}")
     if (NOT DEFINED SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES OR
+        NOT DEFINED SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_BASENAMES OR
+        "${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES}" STREQUAL "" OR
         NOT "${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_BASENAMES}" STREQUAL
-            "R1.sys.sao2;R3.sys.sao2;R5.sys.sao2")
+            "${_sao_rt_io_expected_bundle_basenames}")
         message(FATAL_ERROR
             "Validated repository RT I/O bundle metadata is unavailable or incomplete.")
     endif()
     install(FILES ${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES}
         DESTINATION "bin/runtime/assets/drivers"
-        COMPONENT ship)
-
-    if (NOT DEFINED SAO_RT_IO_VT_SHIP_SOURCE_FILE OR
-        "${SAO_RT_IO_VT_SHIP_SOURCE_FILE}" STREQUAL "")
-        message(FATAL_ERROR
-            "The validated VT-Splitview ship artifact was not configured.")
-    endif()
-    install(FILES "${SAO_RT_IO_VT_SHIP_SOURCE_FILE}"
-        DESTINATION "bin/driver store"
-        RENAME "VT-Splitview.sys"
         COMPONENT ship)
 endif()
 
@@ -579,8 +573,10 @@ if (SAO_BUILD_TESTS)
                 "-DSAO_RT_IO_EXPECTED_R3_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R3_SIZE}"
                 "-DSAO_RT_IO_EXPECTED_R5_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R5_SHA256}"
                 "-DSAO_RT_IO_EXPECTED_R5_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R5_SIZE}"
-                "-DSAO_RT_IO_EXPECTED_VT_SHA256=$<IF:$<CONFIG:Debug>,${SAO_RT_IO_PIN_VT_DEBUG_SHA256},${SAO_RT_IO_PIN_VT_RELEASE_SHA256}>"
-                "-DSAO_RT_IO_EXPECTED_VT_SIZE=$<IF:$<CONFIG:Debug>,${SAO_RT_IO_PIN_VT_DEBUG_SIZE},${SAO_RT_IO_PIN_VT_RELEASE_SIZE}>"
+                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_DEBUG_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_DEBUG_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_RELEASE_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_RELEASE_SIZE}"
                 -P "${_sao_rt_io_package_test_script}")
         set_tests_properties(sao_rt_io_driver_asset_package PROPERTIES
             FIXTURES_REQUIRED sao_rt_io_driver_asset_package
