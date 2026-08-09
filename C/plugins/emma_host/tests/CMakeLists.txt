@@ -42,6 +42,8 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     endif()
     add_test(NAME plugins_emma_loader_adapter
         COMMAND test_plugins_emma_loader_adapter)
+    set_tests_properties(plugins_emma_loader_adapter
+        PROPERTIES LABELS "plugins;emma;adapter;lifecycle")
 
     add_executable(test_plugins_emma_context_stdlib
         test_emma_context_stdlib.cpp)

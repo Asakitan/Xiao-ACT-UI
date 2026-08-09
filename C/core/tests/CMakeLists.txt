@@ -21,10 +21,8 @@ endif()
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_core_tests
-    TEST_PREFIX "legacy_core."
-    PROPERTIES LABELS "core;behavior"
-)
+add_test(NAME legacy_core COMMAND sao_core_tests)
+set_tests_properties(legacy_core PROPERTIES LABELS "core;behavior")
 
 if(TARGET sao::core AND
    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launcher_core_link_smoke.cpp")

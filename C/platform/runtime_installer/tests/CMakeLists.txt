@@ -24,6 +24,6 @@ target_compile_definitions(sao_runtime_installer_tests PRIVATE
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_runtime_installer_tests
-    TEST_PREFIX "runtime_installer."
-    PROPERTIES LABELS "platform;runtime_installer")
+add_test(NAME runtime_installer COMMAND sao_runtime_installer_tests)
+set_tests_properties(runtime_installer PROPERTIES
+    LABELS "platform;runtime_installer")

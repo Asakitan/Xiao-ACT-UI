@@ -120,6 +120,8 @@ target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
 
 include(CTest)
 include(Catch)
+# Per-case discovery: this binary is a long monolith (~20s); splitting into
+# per-case entries lets CTest spread the cases across parallel workers.
 catch_discover_tests(sao_plugin_ai_editor_tests
     TEST_PREFIX "plugins_ai_editor."
     PROPERTIES LABELS "plugins;ai_editor"
@@ -128,10 +130,12 @@ catch_discover_tests(sao_plugin_ai_editor_production_child_tests
     TEST_PREFIX "plugins_ai_editor.production_child."
     PROPERTIES LABELS "plugins;ai_editor;integration;production_child"
 )
+# Per-case discovery retained: GPU Hunt cases are not safe to run inside a
+# single shared process (case 18 segfaults when run after the others), so
+# each case keeps its own process.
 catch_discover_tests(sao_plugin_ai_editor_gpu_hunt_tests
     TEST_PREFIX "plugins_ai_editor.gpu_hunt."
-    PROPERTIES LABELS "plugins;ai_editor;gpu_hunt"
-)
+    PROPERTIES LABELS "plugins;ai_editor;gpu_hunt")
 
 add_executable(sao_plugin_ai_editor_kernel_map_tests
     kernel_map_bridge_test.cpp
@@ -162,10 +166,9 @@ target_link_libraries(sao_plugin_ai_editor_kernel_map_tests PRIVATE
     bcrypt
     crypt32
 )
-catch_discover_tests(sao_plugin_ai_editor_kernel_map_tests
-    TEST_PREFIX "plugins_ai_editor.kernel_map."
-    PROPERTIES LABELS "plugins;ai_editor;kernel_map"
-)
+add_test(NAME plugins_ai_editor.kernel_map COMMAND sao_plugin_ai_editor_kernel_map_tests)
+set_tests_properties(plugins_ai_editor.kernel_map PROPERTIES
+    LABELS "plugins;ai_editor;kernel_map")
 
 add_executable(sao_plugin_ai_editor_settings_contract_tests
     test_ai_editor_settings_contract.cpp
@@ -188,10 +191,9 @@ target_link_libraries(sao_plugin_ai_editor_settings_contract_tests PRIVATE
     bcrypt
     crypt32
 )
-catch_discover_tests(sao_plugin_ai_editor_settings_contract_tests
-    TEST_PREFIX "plugins_ai_editor.settings."
-    PROPERTIES LABELS "plugins;ai_editor;settings;contract"
-)
+add_test(NAME plugins_ai_editor.settings COMMAND sao_plugin_ai_editor_settings_contract_tests)
+set_tests_properties(plugins_ai_editor.settings PROPERTIES
+    LABELS "plugins;ai_editor;settings;contract")
 
 # Kernel Map Bridge operator dashboard — message-dispatch contract.
 # Compiles kernel_map_panel_provider.cpp + webview_panel_registry.cpp
@@ -228,7 +230,6 @@ target_link_libraries(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
     nlohmann_json::nlohmann_json
     user32
 )
-catch_discover_tests(sao_plugin_ai_editor_kernel_map_panel_tests
-    TEST_PREFIX "plugins_ai_editor.kernel_map_panel."
-    PROPERTIES LABELS "plugins;ai_editor;kernel_map;panel"
-)
+add_test(NAME plugins_ai_editor.kernel_map_panel COMMAND sao_plugin_ai_editor_kernel_map_panel_tests)
+set_tests_properties(plugins_ai_editor.kernel_map_panel PROPERTIES
+    LABELS "plugins;ai_editor;kernel_map;panel")

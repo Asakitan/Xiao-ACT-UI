@@ -31,7 +31,7 @@ target_compile_features(sao_platform_core_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_core_tests)
+add_test(NAME sao_platform_core_tests COMMAND sao_platform_core_tests)
 
 # ── platform/core RPM/WPM coverage ───────────────────────────────────
 # Self-attach tests that exercise process open, read, batch, module +
@@ -48,7 +48,7 @@ target_link_libraries(sao_platform_core_process_read_tests PRIVATE
 
 target_compile_features(sao_platform_core_process_read_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_core_process_read_tests)
+add_test(NAME sao_platform_core_process_read_tests COMMAND sao_platform_core_process_read_tests)
 
 # ── engine type detection + IL2CPP probe ─────────────────────────────
 # Two isolated targets so a compile break in one side (e.g. il2cpp
@@ -61,7 +61,7 @@ target_link_libraries(sao_platform_core_engine_detector_tests PRIVATE
     Catch2::Catch2WithMain
 )
 target_compile_features(sao_platform_core_engine_detector_tests PRIVATE cxx_std_20)
-catch_discover_tests(sao_platform_core_engine_detector_tests)
+add_test(NAME sao_platform_core_engine_detector_tests COMMAND sao_platform_core_engine_detector_tests)
 
 add_executable(sao_platform_core_il2cpp_probe_tests
     test_il2cpp_probe.cpp
@@ -73,8 +73,9 @@ target_link_libraries(sao_platform_core_il2cpp_probe_tests PRIVATE
 target_compile_features(sao_platform_core_il2cpp_probe_tests PRIVATE cxx_std_20)
 # One case SKIPs when the test host somehow ships GameAssembly.dll; the
 # other two run against synthetic memory.  Catch2 SKIP() exits 4.
-catch_discover_tests(sao_platform_core_il2cpp_probe_tests
-    PROPERTIES SKIP_RETURN_CODE 4)
+add_test(NAME sao_platform_core_il2cpp_probe_tests COMMAND sao_platform_core_il2cpp_probe_tests)
+set_tests_properties(sao_platform_core_il2cpp_probe_tests PROPERTIES
+    SKIP_RETURN_CODE 4)
 
 # ── settings fixture parity (10 pinned fixtures) ─────────────────────
 #
@@ -97,8 +98,10 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_settings_fixture_parity.cpp")
         PRIVATE cxx_std_20)
     target_compile_definitions(sao_platform_core_settings_fixture_parity_tests
         PRIVATE SAO_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/docs/fixtures/settings")
-    catch_discover_tests(sao_platform_core_settings_fixture_parity_tests
-        PROPERTIES LABELS "settings;fixture_parity")
+    add_test(NAME sao_platform_core_settings_fixture_parity_tests
+             COMMAND sao_platform_core_settings_fixture_parity_tests)
+    set_tests_properties(sao_platform_core_settings_fixture_parity_tests PROPERTIES
+        LABELS "settings;fixture_parity")
 endif()
 
 # ── gap closure tests for platform/core ──────────────────────────────
@@ -115,5 +118,6 @@ target_link_libraries(sao_platform_core_gap_tests PRIVATE
     Catch2::Catch2WithMain
 )
 target_compile_features(sao_platform_core_gap_tests PRIVATE cxx_std_20)
-catch_discover_tests(sao_platform_core_gap_tests
-    PROPERTIES LABELS "core;gap_closure")
+add_test(NAME sao_platform_core_gap_tests COMMAND sao_platform_core_gap_tests)
+set_tests_properties(sao_platform_core_gap_tests PROPERTIES
+    LABELS "core;gap_closure")

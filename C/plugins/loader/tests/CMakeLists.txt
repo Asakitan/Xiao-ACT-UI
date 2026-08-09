@@ -40,6 +40,6 @@ target_compile_definitions(test_plugins_loader PRIVATE
 add_dependencies(test_plugins_loader sao_loader_native_fixture)
 
 include(Catch)
-catch_discover_tests(test_plugins_loader
-	TEST_PREFIX "plugins_loader."
-	PROPERTIES LABELS "plugins;loader")
+add_test(NAME plugins_loader COMMAND test_plugins_loader)
+set_tests_properties(plugins_loader PROPERTIES
+    LABELS "plugins;loader")

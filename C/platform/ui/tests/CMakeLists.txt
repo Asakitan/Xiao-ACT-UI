@@ -46,11 +46,12 @@ target_compile_features(sao_platform_ui_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_ui_tests
-    PROPERTIES
-        SKIP_RETURN_CODE 4
-        ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
-)
+add_test(NAME sao_platform_ui_tests COMMAND sao_platform_ui_tests)
+set_tests_properties(sao_platform_ui_tests PROPERTIES
+    SKIP_RETURN_CODE 4
+    ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+    RESOURCE_LOCK "sao_ui_gpu_resources"
+    PROCESSORS 2)
 
 # ── theme slice — G3.1 flat-token theme tests ──────────────────
 # Isolated target so it stays green even if the shared overlay/comp
@@ -67,7 +68,7 @@ target_link_libraries(sao_platform_ui_theme_tests PRIVATE
 target_compile_definitions(sao_platform_ui_theme_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_theme_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_theme_tests)
+add_test(NAME sao_platform_ui_theme_tests COMMAND sao_platform_ui_theme_tests)
 
 # ── menu/nervegear slice — G3.2 SAO menu + G3.3 NerveGear tests ────────
 # Pure state-machine + geometry — no Windows-only surface, no compositor,
@@ -86,7 +87,7 @@ target_link_libraries(sao_platform_ui_menu_nervegear_tests PRIVATE
 target_compile_definitions(sao_platform_ui_menu_nervegear_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_menu_nervegear_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_menu_nervegear_tests)
+add_test(NAME sao_platform_ui_menu_nervegear_tests COMMAND sao_platform_ui_menu_nervegear_tests)
 
 # ── popup/animator/layout slice — G3.4 popup nav + G3.7 animator + G3.9 layout ──
 # Pure logic / math / tree walks — no Windows-only surface, no D3D11,
@@ -106,7 +107,7 @@ target_link_libraries(sao_platform_ui_popup_animator_tests PRIVATE
 target_compile_definitions(sao_platform_ui_popup_animator_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_popup_animator_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_popup_animator_tests)
+add_test(NAME sao_platform_ui_popup_animator_tests COMMAND sao_platform_ui_popup_animator_tests)
 
 # ── process-read slice — G1.5 scheduler 60fps + render_worker thread pool ──
 # Pure timing / thread-pool state — no Windows-only D3D11/DXGI/DComp.
@@ -131,7 +132,7 @@ if (WIN32)
     )
 endif()
 
-catch_discover_tests(sao_platform_ui_widget_slice_tests)
+add_test(NAME sao_platform_ui_widget_slice_tests COMMAND sao_platform_ui_widget_slice_tests)
 
 # ── Dialog state machine + fisheye lens tests ──────────────────────
 # Pure state machine + math — no Windows-only surface, no compositor,
@@ -152,7 +153,7 @@ target_link_libraries(sao_platform_ui_dialog_fisheye_tests PRIVATE
 target_compile_definitions(sao_platform_ui_dialog_fisheye_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_dialog_fisheye_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_dialog_fisheye_tests)
+add_test(NAME sao_platform_ui_dialog_fisheye_tests COMMAND sao_platform_ui_dialog_fisheye_tests)
 
 # ── Shared procedural/live fisheye backdrop service ───────────────
 add_executable(sao_platform_ui_fisheye_backdrop_tests
@@ -167,10 +168,10 @@ target_link_libraries(sao_platform_ui_fisheye_backdrop_tests PRIVATE
 target_compile_definitions(sao_platform_ui_fisheye_backdrop_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_fisheye_backdrop_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_fisheye_backdrop_tests
-    TEST_PREFIX "ui.fisheye_backdrop."
-    PROPERTIES LABELS "ui;fisheye_backdrop;compositor;dxgi"
-)
+add_test(NAME ui.fisheye_backdrop COMMAND sao_platform_ui_fisheye_backdrop_tests)
+set_tests_properties(ui.fisheye_backdrop PROPERTIES
+    LABELS "ui;fisheye_backdrop;compositor;dxgi"
+    RESOURCE_LOCK "sao_ui_gpu_resources")
 
 # ── Panel SDK + input router + scriptable canvas tests ─────────────
 # Pure registry / matcher / op-append logic — no Windows-only
@@ -192,7 +193,7 @@ target_link_libraries(sao_platform_ui_panel_input_canvas_tests PRIVATE
 target_compile_definitions(sao_platform_ui_panel_input_canvas_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_panel_input_canvas_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_panel_input_canvas_tests)
+add_test(NAME sao_platform_ui_panel_input_canvas_tests COMMAND sao_platform_ui_panel_input_canvas_tests)
 
 # ── Widget kit + time-label tests ──────────────────────────────────
 # Pure state-machine + geometry — no Windows-only surface, no
@@ -221,7 +222,7 @@ target_link_libraries(sao_platform_ui_widget_tests PRIVATE
 target_compile_definitions(sao_platform_ui_widget_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_widget_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_widget_tests)
+add_test(NAME sao_platform_ui_widget_tests COMMAND sao_platform_ui_widget_tests)
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_visual_primitives.cpp")
     add_executable(sao_platform_ui_visual_primitives_tests
@@ -236,10 +237,9 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_visual_primitives.cpp")
     target_compile_definitions(sao_platform_ui_visual_primitives_tests PRIVATE SAO_UI_USING_DLL)
     target_compile_features(sao_platform_ui_visual_primitives_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_visual_primitives_tests
-        TEST_PREFIX "ui.visual."
-        PROPERTIES LABELS "ui;widget;linkstart;particle;hp;effects"
-    )
+    add_test(NAME ui.visual COMMAND sao_platform_ui_visual_primitives_tests)
+    set_tests_properties(ui.visual PROPERTIES
+        LABELS "ui;widget;linkstart;particle;hp;effects")
 endif()
 
 # ── Automation capability tests ───────────────────────────────────
@@ -273,7 +273,7 @@ endif()
 target_compile_definitions(sao_platform_ui_capability_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_capability_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_capability_tests)
+add_test(NAME sao_platform_ui_capability_tests COMMAND sao_platform_ui_capability_tests)
 
 # ── Overlay capture + subpixel + mutation + adapter tests ──────────
 # render_capture_sync + overlay_subpixel + dc_mutation_coordinator +
@@ -305,12 +305,11 @@ endif()
 target_compile_definitions(sao_platform_ui_overlay_capture_mutation_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_overlay_capture_mutation_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_overlay_capture_mutation_tests
-    PROPERTIES ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
-)
-
-# ── DXGI duplication + GPU capture + overlay host tests ────────────
-# dxgi_dup dirty/move/cursor/staging + gpu_capture BGRA readback +
+add_test(NAME sao_platform_ui_overlay_capture_mutation_tests
+         COMMAND sao_platform_ui_overlay_capture_mutation_tests)
+set_tests_properties(sao_platform_ui_overlay_capture_mutation_tests PROPERTIES
+    ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+    RESOURCE_LOCK "sao_ui_gpu_resources")
 # overlay_host WM_ handler completion (SIZE/MOVE/ACTIVATE/WPOS/DPI/
 # DISPLAY).  Windows-only surface — no external D3D11 fixtures required
 # because gpu_capture tests boot their own device with WARP fallback,
@@ -341,7 +340,11 @@ endif()
 target_compile_definitions(sao_platform_ui_dxgi_gpu_overlay_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_dxgi_gpu_overlay_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_dxgi_gpu_overlay_tests)
+add_test(NAME sao_platform_ui_dxgi_gpu_overlay_tests
+         COMMAND sao_platform_ui_dxgi_gpu_overlay_tests)
+set_tests_properties(sao_platform_ui_dxgi_gpu_overlay_tests PROPERTIES
+    RESOURCE_LOCK "sao_ui_gpu_resources"
+    PROCESSORS 2)
 
 # ── Overlay host production chain ──────────────────────────────────
 # One real render HWND plus owner/control helpers, SetWindowRgn temporal
@@ -364,9 +367,10 @@ endif()
 target_compile_definitions(sao_platform_ui_overlay_host_chain_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_overlay_host_chain_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_overlay_host_chain_tests
-    PROPERTIES ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
-)
+add_test(NAME ui.overlay_host_chain COMMAND sao_platform_ui_overlay_host_chain_tests)
+set_tests_properties(ui.overlay_host_chain PROPERTIES
+    ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
+    RESOURCE_LOCK "sao_ui_gpu_resources")
 
 add_executable(sao_platform_ui_entity_shell_tests
     test_entity_shell.cpp
@@ -386,10 +390,10 @@ target_compile_definitions(sao_platform_ui_entity_shell_tests PRIVATE
     SAO_UI_TESTING)
 target_compile_features(sao_platform_ui_entity_shell_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_entity_shell_tests
-    TEST_PREFIX "ui.entity_shell."
-    PROPERTIES LABELS "ui;entity_shell;production_slice"
-)
+add_test(NAME ui.entity_shell COMMAND sao_platform_ui_entity_shell_tests)
+set_tests_properties(ui.entity_shell PROPERTIES
+    LABELS "ui;entity_shell;production_slice"
+    RESOURCE_LOCK "sao_ui_gpu_resources")
 
 add_executable(sao_platform_ui_entity_roots_focused_tests
     test_entity_roots_focused.cpp
@@ -407,10 +411,9 @@ endif()
 target_compile_definitions(sao_platform_ui_entity_roots_focused_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_entity_roots_focused_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_entity_roots_focused_tests
-    TEST_PREFIX "ui.entity_roots.focused."
-    PROPERTIES LABELS "ui;entity_shell;entity_roots;dynamic_roots"
-)
+add_test(NAME ui.entity_roots.focused COMMAND sao_platform_ui_entity_roots_focused_tests)
+set_tests_properties(ui.entity_roots.focused PROPERTIES
+    LABELS "ui;entity_shell;entity_roots;dynamic_roots")
 
 if (WIN32)
     add_executable(sao_platform_ui_entity_parity_tests
@@ -431,10 +434,9 @@ if (WIN32)
     )
     target_compile_features(sao_platform_ui_entity_parity_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_entity_parity_tests
-        TEST_PREFIX "ui.entity_parity."
-        PROPERTIES LABELS "ui;entity;parity;python_authority"
-    )
+    add_test(NAME ui.entity_parity COMMAND sao_platform_ui_entity_parity_tests)
+    set_tests_properties(ui.entity_parity PROPERTIES
+        LABELS "ui;entity;parity;python_authority")
 
     add_executable(sao_platform_ui_entity_menu_hud_tests
         test_entity_menu_hud.cpp
@@ -454,10 +456,9 @@ if (WIN32)
     )
     target_compile_features(sao_platform_ui_entity_menu_hud_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_entity_menu_hud_tests
-        TEST_PREFIX "ui.entity_menu_hud."
-        PROPERTIES LABELS "ui;entity;menu_hud;resource_integrity;production_composition"
-    )
+    add_test(NAME ui.entity_menu_hud COMMAND sao_platform_ui_entity_menu_hud_tests)
+    set_tests_properties(ui.entity_menu_hud PROPERTIES
+        LABELS "ui;entity;menu_hud;resource_integrity;production_composition")
 endif()
 
 # Overlay-region transaction tests compile the host directly so failure
@@ -486,10 +487,10 @@ if (WIN32)
     )
     target_compile_features(sao_platform_ui_overlay_region_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_overlay_region_tests
-        TEST_PREFIX "ui.overlay_region."
-        PROPERTIES LABELS "ui;overlay_host;region;transaction"
-    )
+    add_test(NAME ui.overlay_region COMMAND sao_platform_ui_overlay_region_tests)
+    set_tests_properties(ui.overlay_region PROPERTIES
+        LABELS "ui;overlay_host;region;transaction"
+        RESOURCE_LOCK "sao_ui_gpu_resources")
 endif()
 
 # Low-level hook lifetime tests compile input.cpp directly so the private
@@ -518,10 +519,9 @@ target_compile_definitions(sao_platform_ui_input_hook_lifecycle_tests PRIVATE
 )
 target_compile_features(sao_platform_ui_input_hook_lifecycle_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_input_hook_lifecycle_tests
-    TEST_PREFIX "ui.input_hook_lifecycle."
-    PROPERTIES LABELS "ui;input_hook;lifecycle"
-)
+add_test(NAME ui.input_hook_lifecycle COMMAND sao_platform_ui_input_hook_lifecycle_tests)
+set_tests_properties(ui.input_hook_lifecycle PROPERTIES
+    LABELS "ui;input_hook;lifecycle")
 
 # Production state completion: focused API snapshots and composed primitive
 # chains for z-order, alerts, input routing, overlay host, GPU overlay,
@@ -544,10 +544,10 @@ endif()
 target_compile_definitions(sao_platform_ui_production_state_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_production_state_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_production_state_tests
-    TEST_PREFIX "ui.production_state."
-    PROPERTIES LABELS "ui;production_state"
-)
+add_test(NAME ui.production_state COMMAND sao_platform_ui_production_state_tests)
+set_tests_properties(ui.production_state PROPERTIES
+    LABELS "ui;production_state"
+    RESOURCE_LOCK "sao_ui_gpu_resources")
 
 # ── Overlay and UI-spec fixture parity ─────────────────────────────
 # Byte-for-byte parity of the state transitions frozen at
@@ -582,7 +582,8 @@ if (_sao_ui_fixture_parity_sources)
     target_compile_definitions(sao_platform_ui_fixture_parity_tests PRIVATE SAO_UI_USING_DLL)
     target_compile_features(sao_platform_ui_fixture_parity_tests PRIVATE cxx_std_20)
 
-    catch_discover_tests(sao_platform_ui_fixture_parity_tests)
+    add_test(NAME sao_platform_ui_fixture_parity_tests
+             COMMAND sao_platform_ui_fixture_parity_tests)
 endif()
 unset(_sao_ui_fixture_parity_sources)
 
@@ -613,10 +614,10 @@ unset(_sao_ui_fixture_parity_sources)
         SAO_UI_TEST_FIXTURE_DIR="${_sao_ui_parity_fixture_dir}"
     )
     target_compile_features(sao_platform_ui_parity_menu_dialog_tests PRIVATE cxx_std_20)
-    catch_discover_tests(sao_platform_ui_parity_menu_dialog_tests
-        TEST_PREFIX "ui.parity.menu_dialog."
-        PROPERTIES LABELS "ui_parity"
-    )
+    add_test(NAME ui.parity.menu_dialog COMMAND sao_platform_ui_parity_menu_dialog_tests)
+    set_tests_properties(ui.parity.menu_dialog PROPERTIES
+        LABELS "ui_parity"
+        RESOURCE_LOCK "sao_ui_gpu_resources")
 
     add_executable(sao_platform_ui_parity_combat_tests
         test_ui_parity_combat.cpp
@@ -637,10 +638,8 @@ unset(_sao_ui_fixture_parity_sources)
         SAO_UI_TEST_FIXTURE_DIR="${_sao_ui_parity_fixture_dir}"
     )
     target_compile_features(sao_platform_ui_parity_combat_tests PRIVATE cxx_std_20)
-    catch_discover_tests(sao_platform_ui_parity_combat_tests
-        TEST_PREFIX "ui.parity.combat."
-        PROPERTIES LABELS "ui_parity"
-    )
+    add_test(NAME ui.parity.combat COMMAND sao_platform_ui_parity_combat_tests)
+    set_tests_properties(ui.parity.combat PROPERTIES LABELS "ui_parity")
 
     add_executable(sao_platform_ui_parity_effects_tests
         test_ui_parity_effects.cpp
@@ -657,10 +656,8 @@ unset(_sao_ui_fixture_parity_sources)
         SAO_UI_TEST_FIXTURE_DIR="${_sao_ui_parity_fixture_dir}"
     )
     target_compile_features(sao_platform_ui_parity_effects_tests PRIVATE cxx_std_20)
-    catch_discover_tests(sao_platform_ui_parity_effects_tests
-        TEST_PREFIX "ui.parity.effects."
-        PROPERTIES LABELS "ui_parity"
-    )
+    add_test(NAME ui.parity.effects COMMAND sao_platform_ui_parity_effects_tests)
+    set_tests_properties(ui.parity.effects PROPERTIES LABELS "ui_parity")
 
     unset(_sao_ui_parity_fixture_dir)
 
@@ -767,7 +764,6 @@ target_link_libraries(sao_platform_ui_cross_surface_ux_tests PRIVATE
 target_compile_definitions(sao_platform_ui_cross_surface_ux_tests PRIVATE SAO_UI_USING_DLL)
 target_compile_features(sao_platform_ui_cross_surface_ux_tests PRIVATE cxx_std_20)
 
-catch_discover_tests(sao_platform_ui_cross_surface_ux_tests
-    TEST_PREFIX "ui.cross_surface_ux."
-    PROPERTIES LABELS "ui;cross_surface_ux;toast;focus;badge;filter;panel;popup;dialog"
-)
+add_test(NAME ui.cross_surface_ux COMMAND sao_platform_ui_cross_surface_ux_tests)
+set_tests_properties(ui.cross_surface_ux PROPERTIES
+    LABELS "ui;cross_surface_ux;toast;focus;badge;filter;panel;popup;dialog")

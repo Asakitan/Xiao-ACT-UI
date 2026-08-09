@@ -34,4 +34,4 @@ target_compile_features(sao_platform_sdk_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_sdk_tests)
+add_test(NAME sao_platform_sdk_tests COMMAND sao_platform_sdk_tests)

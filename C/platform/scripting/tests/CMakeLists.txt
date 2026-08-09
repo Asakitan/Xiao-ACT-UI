@@ -15,6 +15,5 @@ target_compile_features(sao_platform_scripting_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_scripting_tests
-    PROPERTIES LABELS scripting
-)
+add_test(NAME sao_platform_scripting_tests COMMAND sao_platform_scripting_tests)
+set_tests_properties(sao_platform_scripting_tests PROPERTIES LABELS scripting)

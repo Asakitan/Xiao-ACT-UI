@@ -253,12 +253,23 @@ if (TARGET sao::server::freetier::telemetry_client)
 endif()
 
 include(Catch)
+# Launcher cases split into two slices:
+# 1) cases touching the session-global dual-run/single-instance mutex run as
+#    ONE serialized entry (single process, cases execute sequentially, lock
+#    held once).  Per-case discovery here chained ~16 resource-lock handoffs
+#    and each handoff paid ctest scheduler latency under -j24, stranding the
+#    slice at the very end of the run even though every case is ~40ms.
+# 2) the remaining cases run per-case, unlocked, and parallelize freely.
+add_test(NAME launcher.mutex_slice
+         COMMAND sao_launcher_tests "[dual_run],[cutover],[cutover_diff],[single_instance]")
+set_tests_properties(launcher.mutex_slice PROPERTIES
+    LABELS "launcher"
+    RESOURCE_LOCK "sao_launcher_process_resources")
 catch_discover_tests(sao_launcher_tests
     TEST_PREFIX "launcher."
-    PROPERTIES
-        LABELS "launcher"
-        RESOURCE_LOCK "sao_launcher_process_resources"
-)
+    TEST_SPEC "~[dual_run]~[cutover]~[cutover_diff]~[single_instance]"
+    PROPERTIES LABELS "launcher"
+               PROCESSORS 2)
 
 if (TARGET sao_launcher_plugins_provider)
     add_executable(sao_launcher_provider_tests
@@ -309,9 +320,10 @@ if (TARGET sao_launcher_plugins_provider)
         target_compile_definitions(sao_launcher_provider_tests PRIVATE
             SAO_LAUNCHER_PROVIDER_HAS_CSHARP=1)
     endif()
-    catch_discover_tests(sao_launcher_provider_tests
-        TEST_PREFIX "launcher.provider."
-        PROPERTIES LABELS "launcher;plugins;focused")
+    add_test(NAME launcher.provider COMMAND sao_launcher_provider_tests)
+    set_tests_properties(launcher.provider PROPERTIES
+        LABELS "launcher;plugins;focused"
+        RESOURCE_LOCK "sao_launcher_process_resources")
 endif()
 
 if (TARGET sao_launcher_plugins_provider AND
@@ -362,9 +374,8 @@ if (TARGET sao_launcher_plugins_provider AND
         sao::ui
         sao::sdk)
 
-    catch_discover_tests(sao_launcher_csharp_entity_tests
-        TEST_PREFIX "launcher.csharp_entity."
-        PROPERTIES
-            LABELS "launcher;plugins;csharp;entity;v2;headless"
-            RESOURCE_LOCK "sao_launcher_process_resources")
+    add_test(NAME launcher.csharp_entity COMMAND sao_launcher_csharp_entity_tests)
+    set_tests_properties(launcher.csharp_entity PROPERTIES
+        LABELS "launcher;plugins;csharp;entity;v2;headless"
+        RESOURCE_LOCK "sao_launcher_process_resources")
 endif()

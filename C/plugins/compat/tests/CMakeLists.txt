@@ -88,6 +88,6 @@ if (MSVC)
     target_compile_options(test_plugins_compat_shims_focused PRIVATE /GR)
 endif()
 include(Catch)
-catch_discover_tests(test_plugins_compat_shims_focused
-    TEST_PREFIX "plugins_compat_shims."
-    PROPERTIES LABELS "plugins;compat;focused")
+add_test(NAME plugins_compat_shims COMMAND test_plugins_compat_shims_focused)
+set_tests_properties(plugins_compat_shims PROPERTIES
+    LABELS "plugins;compat;focused")

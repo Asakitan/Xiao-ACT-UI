@@ -22,7 +22,7 @@ target_compile_features(sao_platform_engine_tests PRIVATE cxx_std_20)
 
 include(CTest)
 include(Catch)
-catch_discover_tests(sao_platform_engine_tests)
+add_test(NAME sao_platform_engine_tests COMMAND sao_platform_engine_tests)
 
 # ── event_bus fixture parity (8 pinned scenarios) ────────────────────
 #
@@ -50,8 +50,10 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_event_bus_fixture_parity.cpp")
             SAO_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/docs/fixtures/event_bus")
     target_compile_features(sao_platform_engine_event_bus_fixture_parity_tests
         PRIVATE cxx_std_20)
-    catch_discover_tests(sao_platform_engine_event_bus_fixture_parity_tests
-        PROPERTIES LABELS "event_bus;fixture_parity")
+    add_test(NAME sao_platform_engine_event_bus_fixture_parity_tests
+             COMMAND sao_platform_engine_event_bus_fixture_parity_tests)
+    set_tests_properties(sao_platform_engine_event_bus_fixture_parity_tests PROPERTIES
+        LABELS "event_bus;fixture_parity")
 endif()
 
 # ── gap closure tests for platform/engine ────────────────────────────
@@ -71,5 +73,6 @@ target_compile_definitions(sao_platform_engine_gap_tests PRIVATE
     SAO_ENGINE_USING_DLL
     SAO_ENGINE_MODULE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_compile_features(sao_platform_engine_gap_tests PRIVATE cxx_std_20)
-catch_discover_tests(sao_platform_engine_gap_tests
-    PROPERTIES LABELS "engine;gap_closure")
+add_test(NAME sao_platform_engine_gap_tests COMMAND sao_platform_engine_gap_tests)
+set_tests_properties(sao_platform_engine_gap_tests PROPERTIES
+    LABELS "engine;gap_closure")
