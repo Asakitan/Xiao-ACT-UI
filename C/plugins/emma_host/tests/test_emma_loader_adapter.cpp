@@ -1519,15 +1519,20 @@ fn on_load(ctx)
 end
 fn on_enable()
     ctx.register_ui_panel("slow_started", {title: "Slow Started"}, nil, nil)
-    let index = 0
-    while index < 2000000
-        index = index + 1
+    while not ctx.get_setting("release_enable", false)
+        let index = 0
+        while index < 1000
+            index = index + 1
+        end
     end
 end
 )EMMA");
     const auto concurrent_manifest = make_manifest(concurrent_tree, "emma.adapter.concurrent");
     plugin_handle_t concurrent_plugin = add_plugin(concurrent_manifest);
     REQUIRE(sao_plugins_lifecycle_load(concurrent_plugin) == SAO_OK);
+    plugin_context_t* concurrent_context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(concurrent_plugin, &concurrent_context) == SAO_OK);
+    set_context_json(concurrent_context, "release_enable", "false");
 
     temp_tree quick_tree(L"quick");
     write_text(quick_tree.root / L"nested" / L"plugin.emma", R"EMMA(
@@ -1545,6 +1550,17 @@ end
     std::atomic_int concurrent_status{SAO_ERR_OS_CALL_FAILED};
     std::jthread concurrent_call(
         [&] { concurrent_status.store(sao_plugins_lifecycle_enable(concurrent_plugin)); });
+    // Unwind guard: constructed after the jthread so it destructs FIRST
+    // and releases the Emma busy loop before the jthread join runs on any
+    // assertion-failure unwind (the Emma script ignores stop tokens).
+    struct release_on_exit {
+        plugin_context_t* ctx;
+        ~release_on_exit() {
+            if (ctx != nullptr) {
+                (void)sao_plugins_ctx_set_setting(ctx, "release_enable", "true");
+            }
+        }
+    } concurrent_release_guard{concurrent_context};
     const auto state_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!has_panel("emma.adapter.concurrent", "slow_started") &&
            std::chrono::steady_clock::now() < state_deadline) {
@@ -1555,8 +1571,12 @@ end
     CHECK(sao_plugins_lifecycle_unload(concurrent_plugin) == SAO_PLUGINS_ERR_BUSY);
     REQUIRE(sao_plugins_lifecycle_enable(quick_plugin) == SAO_OK);
     CHECK(sao_plugins_lifecycle_state(concurrent_plugin) == lifecycle_state::enabling);
+    set_context_json(concurrent_context, "release_enable", "true");
     concurrent_call.join();
     CHECK(concurrent_status.load() == SAO_OK);
+    // Normal path released the gate explicitly; disarm the unwind guard so
+    // its destructor cannot touch the context after unload/remove below.
+    concurrent_release_guard.ctx = nullptr;
     REQUIRE(sao_plugins_lifecycle_unload(quick_plugin) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_unload(concurrent_plugin) == SAO_OK);
     remove_plugin(quick_plugin);

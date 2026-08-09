@@ -1390,7 +1390,8 @@ TEST_CASE("launcher_init_failure_shutdown_retries_owned_platform_context",
 extern "C" void sao_launcher_debug_build_single_instance_mutex_name(
     wchar_t* out, std::size_t out_cap) noexcept;
 
-TEST_CASE("launcher_single_instance_second_run_fails", "[launcher][init_pipeline]") {
+TEST_CASE("launcher_single_instance_second_run_fails",
+          "[launcher][init_pipeline][single_instance]") {
     DualRunChildGuard dual_run_child_guard;
     // Acquire the mutex directly (mirroring what a first launcher
     // instance would do), then run the pipeline.  It must return

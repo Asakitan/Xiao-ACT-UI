@@ -169,6 +169,11 @@ public:
     }
 
     ~LocalServer() {
+        {
+            std::lock_guard<std::mutex> lock(slow_mutex_);
+            slow_released_ = true;
+        }
+        slow_event_.notify_all();
         listener_.reset();
         if (worker_.joinable()) worker_.join();
     }
@@ -182,7 +187,13 @@ private:
         if (!client) return;
         request_ = receive_http_request(client.get());
         if (mode_ == Mode::SlowHttp) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+            {
+                std::unique_lock<std::mutex> lock(slow_mutex_);
+                if (slow_event_.wait_for(lock, std::chrono::milliseconds(3000),
+                                         [this] { return slow_released_; })) {
+                    return;
+                }
+            }
             (void)send_all(client.get(),
                            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             return;
@@ -241,6 +252,9 @@ private:
     Mode mode_;
     uint16_t port_ = 0;
     std::thread worker_;
+    std::mutex slow_mutex_;
+    std::condition_variable slow_event_;
+    bool slow_released_ = false;
     std::string request_;
 };
 

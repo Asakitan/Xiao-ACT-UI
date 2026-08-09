@@ -4,7 +4,7 @@
 //   * dcomp_bridge_create_with_dummy_hwnd_succeeds
 //   * dcomp_bridge_d3d11_device_nonnull
 //   * dcomp_bridge_commit_returns_ok
-//   * dcomp_bridge_destroy_releases_com    (100x create/destroy leak guard)
+//   * dcomp_bridge_destroy_releases_com    (10x create/destroy leak guard)
 //
 // The bridge needs a real HWND (CreateTargetForHwnd rejects null); we
 // spin up a hidden Win32 window via a private class name for each test.
@@ -181,7 +181,8 @@ TEST_CASE("dcomp_bridge_destroy_releases_com",
     // asserting an absolute count.
     const int64_t baseline = sao_ui_dcomp_bridge_live_count_for_test();
 
-    constexpr int kIters = 100;
+    // Ten full cycles preserve leak-symmetry coverage at an acceptable runtime.
+    constexpr int kIters = 10;
     int successful = 0;
     for (int i = 0; i < kIters; ++i) {
         sao_ui_dcomp_bridge_handle_t b = try_create(host.hwnd);

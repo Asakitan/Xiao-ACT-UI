@@ -1238,6 +1238,7 @@ def on_unload():
 
     TempTree slow(L"slow");
     const fs::path slow_started = slow.root / L"started";
+    const fs::path slow_release = slow.root / L"release";
     const fs::path slow_finished = slow.root / L"finished";
     write_text(slow.root / L"plugin.py", "from pathlib import Path\n"
                                          "import time\n"
@@ -1247,7 +1248,12 @@ def on_unload():
                                          "    Path(" +
                                              json(path_utf8(slow_started)).dump() +
                                              ").write_text('started', encoding='utf-8')\n"
-                                             "    time.sleep(3.0)\n"
+                                             "    release = Path(" +
+                                             json(path_utf8(slow_release)).dump() +
+                                             ")\n"
+                                             "    deadline = time.monotonic() + 10.0\n"
+                                             "    while not release.exists() and time.monotonic() < deadline:\n"
+                                             "        time.sleep(0.01)\n"
                                              "    Path(" +
                                              json(path_utf8(slow_finished)).dump() +
                                              ").write_text('finished', encoding='utf-8')\n");
@@ -1284,6 +1290,7 @@ def on_unload():
     CHECK(quick_elapsed < std::chrono::seconds(2));
     CHECK(fs::exists(quick_finished));
     CHECK_FALSE(fs::exists(slow_finished));
+    write_text(slow_release, "release");
     slow_hook.join();
     CHECK(slow_status.load() == SAO_OK);
     CHECK(fs::exists(slow_finished));

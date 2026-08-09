@@ -358,6 +358,7 @@ TEST_CASE("AI Editor hidden NativeWindow remains a UI smoke fixture",
     REQUIRE(snapshot.has_clear_button);
     REQUIRE(snapshot.has_status_bar);
 
+    REQUIRE(PostMessageW(snapshot.window, WM_CLOSE, 0, 0));
     REQUIRE(WaitForSingleObject(process.value, 5000) == WAIT_OBJECT_0);
     DWORD exit_code = 1;
     REQUIRE(GetExitCodeProcess(process.value, &exit_code));
