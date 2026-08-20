@@ -104,6 +104,9 @@ struct ProtectionLog {
     DWORD render_affinity_at_enable = 0u;
     DWORD control_affinity_at_enable = 0u;
     DWORD owner_affinity_at_enable = 0u;
+    sao_ui_overlay_host_handle_t reentry_host = nullptr;
+    bool reenter_on_enable = false;
+    sao_status_t reentry_status = SAO_STATUS_ERR_UNKNOWN;
 };
 
 sao_status_t SAO_UI_CALL record_protection(
@@ -121,6 +124,11 @@ sao_status_t SAO_UI_CALL record_protection(
             ::GetWindowDisplayAffinity(static_cast<HWND>(owner),
                                        &log->owner_affinity_at_enable) == FALSE) {
             return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        if (log->reenter_on_enable && log->reentry_host != nullptr) {
+            log->reenter_on_enable = false;
+            log->reentry_status =
+                sao_ui_overlay_host_set_capture_mode(log->reentry_host, true);
         }
     } else {
         ++log->disable_calls;
@@ -432,6 +440,21 @@ TEST_CASE("overlay host leaves creation unprotected when setting is off",
     CHECK_FALSE(sao_ui_overlay_host_capture_excluded(host));
     REQUIRE(sao_ui_overlay_host_destroy(host));
     CHECK(log.disable_calls == 0u);
+}
+
+TEST_CASE("overlay capture provider same-thread reentry returns BUSY",
+          "[ui][overlay_host][production][screencap][provider][reentry]") {
+    ProtectionLog log;
+    SaoOverlayHostConfig config = test_config();
+    config.protection_provider = &record_protection;
+    config.protection_provider_user_data = &log;
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&config, &host) == SAO_STATUS_OK);
+    log.reentry_host = host;
+    log.reenter_on_enable = true;
+    REQUIRE(sao_ui_overlay_host_set_capture_mode(host, true) == SAO_STATUS_OK);
+    CHECK(log.reentry_status == static_cast<sao_status_t>(-102));
+    REQUIRE(sao_ui_overlay_host_destroy(host));
 }
 
 #else

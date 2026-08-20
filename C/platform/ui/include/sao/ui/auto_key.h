@@ -56,6 +56,15 @@ enum sao_ui_auto_key_policy_e : int32_t {
     SAO_UI_AUTO_KEY_POLICY_BLOCKED      = 3,
 };
 
+// Modifier bits use the same ABI as the input-router hotkey masks.
+enum sao_ui_auto_key_modifier_e : uint32_t {
+    SAO_UI_AUTO_KEY_MOD_CTRL  = 1u << 0,
+    SAO_UI_AUTO_KEY_MOD_ALT   = 1u << 1,
+    SAO_UI_AUTO_KEY_MOD_SHIFT = 1u << 2,
+    SAO_UI_AUTO_KEY_MOD_WIN   = 1u << 3,
+};
+#define SAO_UI_AUTO_KEY_MODIFIER_MASK 0x0Fu
+
 // Mouse button selector for auto-key mouse click.
 enum sao_ui_auto_key_mouse_button_e : int32_t {
     SAO_UI_AUTO_KEY_MOUSE_LEFT   = 0,

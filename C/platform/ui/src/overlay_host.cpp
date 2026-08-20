@@ -280,11 +280,19 @@ sao_status_t apply_passthrough_unlocked(sao_ui_overlay_host_s* host, bool passth
     return SAO_STATUS_OK;
 }
 
-bool append_rect(HRGN destination, const SaoOverlayHostInputRect& rect) {
+bool input_rect_has_valid_bounds(const SaoOverlayHostInputRect& rect) noexcept {
     const int64_t right = static_cast<int64_t>(rect.x) + rect.width;
     const int64_t bottom = static_cast<int64_t>(rect.y) + rect.height;
-    if (rect.width <= 0 || rect.height <= 0 || right > INT32_MAX || bottom > INT32_MAX)
+    return rect.x != INT32_MIN && rect.y != INT32_MIN && rect.width > 0 && rect.height > 0 &&
+           right > INT32_MIN && bottom > INT32_MIN && right <= INT32_MAX &&
+           bottom <= INT32_MAX;
+}
+
+bool append_rect(HRGN destination, const SaoOverlayHostInputRect& rect) {
+    if (!input_rect_has_valid_bounds(rect))
         return false;
+    const int64_t right = static_cast<int64_t>(rect.x) + rect.width;
+    const int64_t bottom = static_cast<int64_t>(rect.y) + rect.height;
     HRGN item = ::CreateRectRgn(rect.x, rect.y, static_cast<int>(right), static_cast<int>(bottom));
     if (item == nullptr)
         return false;
@@ -599,11 +607,18 @@ SaoAntiScreencapAffinityPair capture_topology(sao_ui_overlay_host_s* host) {
 }
 #endif
 
-sao_status_t invoke_protection_provider(sao_ui_overlay_host_s* host, bool enable) {
-    if (host->protection_provider == nullptr) return SAO_STATUS_OK;
-    return host->protection_provider(
-        host->hwnd, host->control_hwnd, host->owner_hwnd, enable,
-        host->protection_provider_user_data);
+thread_local sao_ui_overlay_host_s* active_capture_transaction = nullptr;
+
+sao_status_t invoke_protection_provider(sao_ui_overlay_host_s* host, bool enable) noexcept {
+    if (host->protection_provider == nullptr)
+        return SAO_STATUS_OK;
+    try {
+        return host->protection_provider(
+            host->hwnd, host->control_hwnd, host->owner_hwnd, enable,
+            host->protection_provider_user_data);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 } // namespace
@@ -946,7 +961,19 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
     if (handle == nullptr || handle->hwnd == nullptr || handle->control_hwnd == nullptr) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
+    if (active_capture_transaction == handle)
+        return static_cast<sao_status_t>(-102);
     std::lock_guard<std::mutex> transaction_lock(handle->capture_mode_mu);
+    struct CaptureTransactionScope {
+        sao_ui_overlay_host_s* previous{};
+        explicit CaptureTransactionScope(sao_ui_overlay_host_s* current) noexcept
+            : previous(active_capture_transaction) {
+            active_capture_transaction = current;
+        }
+        ~CaptureTransactionScope() {
+            active_capture_transaction = previous;
+        }
+    } transaction_scope(handle);
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
     const SaoAntiScreencapAffinityPair pair = capture_topology(handle);
     bool previous_requested = false;
@@ -1239,6 +1266,10 @@ void set_win32_api_for_testing(const Win32Api* api) noexcept {
 
 void reset_win32_api_for_testing() noexcept {
     win32_api_override().store(nullptr, std::memory_order_release);
+}
+
+bool input_rect_has_valid_bounds_for_testing(const SaoOverlayHostInputRect& rect) noexcept {
+    return input_rect_has_valid_bounds(rect);
 }
 
 } // namespace sao::ui::overlay_host_detail

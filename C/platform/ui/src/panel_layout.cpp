@@ -623,20 +623,26 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
 }
 // ─── arrange recursion ─────────────────────────────────────────────
 
+static int32_t clamp_signed_i32(int64_t value) {
+    return static_cast<int32_t>(std::clamp(
+        value, static_cast<int64_t>(std::numeric_limits<int32_t>::min()),
+        static_cast<int64_t>(std::numeric_limits<int32_t>::max())));
+}
+
 static SaoUiRect make_nonnegative_rect(int64_t x, int64_t y, int64_t width, int64_t height) {
-    return {clamp_nonnegative_i32(x), clamp_nonnegative_i32(y),
+    return {clamp_signed_i32(x), clamp_signed_i32(y),
             clamp_nonnegative_i32(width), clamp_nonnegative_i32(height)};
 }
 
 static SaoUiRect make_rect_within(const SaoUiRect& bounds,
                                   int64_t x, int64_t y,
                                   int64_t width, int64_t height) {
-    const int64_t bounds_x = nonnegative_i64(bounds.x_px);
-    const int64_t bounds_y = nonnegative_i64(bounds.y_px);
+    const int64_t bounds_x = bounds.x_px;
+    const int64_t bounds_y = bounds.y_px;
     const int64_t bounds_w = nonnegative_i64(bounds.width_px);
     const int64_t bounds_h = nonnegative_i64(bounds.height_px);
-    const int64_t bounds_right = saturating_add_nonnegative(bounds_x, bounds_w);
-    const int64_t bounds_bottom = saturating_add_nonnegative(bounds_y, bounds_h);
+    const int64_t bounds_right = saturating_add_i64(bounds_x, bounds_w);
+    const int64_t bounds_bottom = saturating_add_i64(bounds_y, bounds_h);
     const int64_t clamped_x = std::min(std::max(x, bounds_x), bounds_right);
     const int64_t clamped_y = std::min(std::max(y, bounds_y), bounds_bottom);
     const int64_t clamped_width = std::min(
@@ -1085,7 +1091,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_container(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_widget(
     sao_ui_layout_node_handle_t parent, sao_ui_widget_handle_t widget,
     const SaoUiLayoutSpec* spec, sao_ui_layout_node_handle_t* out_leaf) {
-    if (parent == nullptr || spec == nullptr || out_leaf == nullptr) {
+    if (parent == nullptr || widget == nullptr || spec == nullptr || out_leaf == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_leaf = nullptr;
@@ -1142,10 +1148,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_set_mode_config(
             break;
         case SAO_UI_LAYOUT_GRID: {
             const SaoUiGridMode* grid = static_cast<const SaoUiGridMode*>(mode_config);
+            constexpr size_t kMaxTrackCount = 1U << 16U;
             if ((grid->row_count != 0U && grid->rows == nullptr) ||
                 (grid->col_count != 0U && grid->cols == nullptr) ||
-                grid->row_count > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-                grid->col_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+                grid->row_count > kMaxTrackCount || grid->col_count > kMaxTrackCount) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             std::vector<SaoUiTrackSize> rows;

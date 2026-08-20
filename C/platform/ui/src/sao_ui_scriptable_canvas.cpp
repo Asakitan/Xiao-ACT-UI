@@ -101,7 +101,9 @@ struct BitmapRecord {
 // ─── Op storage with owned aux buffers ──────────────────────────────
 //
 // SaoUiCanvasOp.aux is documented as non-owning; the runtime keeps
-// pointers valid only until end_draw returns.  We honour that by
+// input bytes before submit_ops() or a shortcut returns.  Snapshot
+// pointers are backed by snapshot_aux_arena until the next snapshot
+// or destroy.  We honour that by
 // copying aux content (polygon verts, text strings) into per-op
 // owned buffers so the op stream remains valid across begin/end
 // pairs while retain_ops_between_frames == true.
@@ -129,6 +131,31 @@ void rewire_owned_op(OwnedOp& owned) noexcept {
 void rewire_owned_ops(std::vector<OwnedOp>& ops) noexcept {
     for (auto& owned : ops)
         rewire_owned_op(owned);
+}
+void copy_snapshot_op(const OwnedOp& source, std::vector<uint8_t>& arena,
+                       SaoUiCanvasOp* output) {
+    if (output == nullptr)
+        return;
+    *output = source.op;
+    const void* source_aux = nullptr;
+    size_t source_len = 0;
+    if (source.op.op == SAO_UI_CANVAS_OP_POLYGON && !source.poly_verts.empty()) {
+        source_aux = source.poly_verts.data();
+        source_len = source.poly_verts.size() * sizeof(int32_t);
+    } else if (source.op.op == SAO_UI_CANVAS_OP_TEXT && !source.text_utf8.empty()) {
+        source_aux = source.text_utf8.data();
+        source_len = source.text_utf8.size();
+    }
+    if (source_aux == nullptr || source_len == 0) {
+        output->aux = nullptr;
+        output->aux_len = 0;
+        return;
+    }
+    const size_t offset = arena.size();
+    arena.resize(offset + source_len);
+    std::memcpy(arena.data() + offset, source_aux, source_len);
+    output->aux = arena.data() + offset;
+    output->aux_len = source_len;
 }
 
 void append_owned_op(std::vector<OwnedOp>& ops, OwnedOp owned) {
@@ -188,6 +215,7 @@ struct sao_ui_script_canvas_s {
     // resets the pending buffer but keeps the committed one).
     std::vector<OwnedOp> pending_ops;
     std::vector<OwnedOp> committed_ops;
+    std::vector<uint8_t> snapshot_aux_arena;
     size_t pending_aux_bytes = 0;
     size_t committed_aux_bytes = 0;
     bool draw_open = false;
@@ -198,7 +226,8 @@ struct sao_ui_script_canvas_s {
     std::unordered_map<int32_t, BitmapRecord> bitmaps;
     int32_t next_bitmap_id = 1;
 
-    // Pointer input callback.
+    // Pointer callback metadata for the upper host router; this canvas
+    // never hit-tests or dispatches it from draw/snapshot paths.
     sao_ui_script_canvas_pointer_cb_t pointer_cb = nullptr;
     void* pointer_ud = nullptr;
 
@@ -411,6 +440,7 @@ extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(sao_ui_script_canvas_ha
         std::lock_guard lock(canvas->mu);
         canvas->pending_ops.clear();
         canvas->committed_ops.clear();
+        canvas->snapshot_aux_arena.clear();
         canvas->pending_aux_bytes = 0;
         canvas->committed_aux_bytes = 0;
         canvas->bitmaps.clear();
@@ -849,14 +879,25 @@ sao_ui_script_canvas_snapshot_ops(sao_ui_script_canvas_handle_t canvas, SaoUiCan
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> guard(canvas->mu);
         const auto& source = canvas->draw_open ? canvas->pending_ops : canvas->committed_ops;
+        canvas->snapshot_aux_arena.clear();
+        size_t snapshot_aux_bytes = 0;
+        for (const auto& owned : source) {
+            size_t aux_bytes = 0;
+            if (owned.op.op == SAO_UI_CANVAS_OP_POLYGON)
+                aux_bytes = owned.poly_verts.size() * sizeof(int32_t);
+            else if (owned.op.op == SAO_UI_CANVAS_OP_TEXT)
+                aux_bytes = owned.text_utf8.size();
+            if (!checked_add_canvas_bytes(aux_bytes, kMaxCanvasAuxBytes, &snapshot_aux_bytes))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        canvas->snapshot_aux_arena.reserve(snapshot_aux_bytes);
         if (out_written != nullptr)
             *out_written = source.size();
         if (out_ops == nullptr)
             return SAO_STATUS_OK;
         const size_t to_copy = std::min(capacity, source.size());
-        for (size_t i = 0; i < to_copy; ++i) {
-            out_ops[i] = source[i].op;
-        }
+        for (size_t i = 0; i < to_copy; ++i)
+            copy_snapshot_op(source[i], canvas->snapshot_aux_arena, &out_ops[i]);
         if (source.size() > capacity) {
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
         }

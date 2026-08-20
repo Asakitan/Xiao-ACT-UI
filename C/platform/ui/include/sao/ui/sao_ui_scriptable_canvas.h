@@ -16,8 +16,9 @@
 // Design contract (memory [脚本插件canvas UI三坑]):
 //   * Lua tables must not be exposed as lists — the C ops are declared
 //     via `SaoUiCanvasOp` structs so bindings never guess table shape.
-//   * A single "draggable" layer must own input for scriptable canvases
-//     — the input_router routes to the top canvas at the hit point.
+//   * `draggable_owns_pointer` and the pointer callback are metadata for the
+//     upper host input router; this canvas does not perform top-most hit-test
+//     selection or automatically dispatch pointer events.
 //   * lupa on lua54: OK to expose object methods; hoist to local before
 //     tight loops in the calling script.  On lua55: bindings must NOT
 //     rely on attribute caching (see the same memory note).
@@ -113,7 +114,7 @@ struct SaoUiCanvasOp {
     // Op-specific extras — polygon verts point at 2*count int32s; text
     // points at a UTF-8 c-string; bitmap uses bitmap id in i[4].  None
     // of these are owned by the runtime — bindings must keep the memory
-    // alive until sao_ui_script_canvas_end_draw() returns.
+    // alive until submit_ops() or the corresponding shortcut returns.
     const void* aux;                        // polygon verts / text ptr etc.
     size_t      aux_len;
 };
@@ -123,9 +124,8 @@ struct SaoUiScriptCanvasSpec {
     int32_t  width_px;
     int32_t  height_px;
     uint32_t bg_argb;                       // 0 → transparent
-    // Input model (memory [脚本插件canvas UI三坑]):
-    //   * a single canvas at any given screen point owns pointer input;
-    //     the router picks the top-most `draggable_owns_pointer` canvas.
+    // Pointer ownership metadata for the upper host input router.  The
+    // canvas does not perform top-most hit-testing or automatic dispatch.
     bool     draggable_owns_pointer;
     // Anti-alias globally (per-op override via SET_BLEND is separate).
     bool     antialias;
@@ -270,9 +270,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_script_canvas_clear_clip(
 
 // ─── Pointer / input events (bindings register callbacks) ────────────
 //
-// The canvas is normally routed input through input_router.h; scripts
-// that just want "on click / on hover" without wiring the router can
-// register directly here.  Coordinates are canvas-local pixels.
+// The host input router may use this callback and its user data when it
+// chooses to dispatch an event.  The canvas only stores the callback
+// metadata; it does not hit-test or invoke it from draw/snapshot paths.
+// Coordinates are canvas-local pixels.
 
 typedef void (SAO_UI_CALL* sao_ui_script_canvas_pointer_cb_t)(
     int32_t event_kind,                     // sao_ui_input_event_kind_e
@@ -293,6 +294,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_script_canvas_invalidate(
 // Introspection — used by unit tests + the Python-side dual renderer
 // (act_platform/ui_spec.py) so a single ops list can be diffed against
 // the Web and Direct2D renderers.
+// The aux pointers returned in SaoUiCanvasOp remain valid until the next
+// snapshot call for this canvas or until sao_ui_script_canvas_destroy.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_script_canvas_snapshot_ops(
     sao_ui_script_canvas_handle_t canvas,
     SaoUiCanvasOp* out_ops,

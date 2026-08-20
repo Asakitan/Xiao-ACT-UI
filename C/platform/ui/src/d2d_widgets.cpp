@@ -836,7 +836,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
 
     if (widget.kind == SAO_UI_WIDGET_CHECKBOX) {
-        const float box = std::clamp(bounds.height - 4.0F, 6.0F, std::min(18.0F, bounds.width));
+        const float max_box = std::max(1.0F, std::min(18.0F, bounds.width));
+        const float box = std::min(max_box, std::max(1.0F, bounds.height - 4.0F));
         const Rect box_bounds{bounds.x, bounds.y + (bounds.height - box) * 0.5F, box, box};
         fill_rounded_rect(context, box_bounds, std::min(widget.radius, box * 0.25F), border);
         const Rect inner{box_bounds.x + 1.0F, box_bounds.y + 1.0F, box_bounds.width - 2.0F,
@@ -862,7 +863,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
 
     if (widget.kind == SAO_UI_WIDGET_RADIO) {
-        const float ring = std::clamp(bounds.height - 4.0F, 6.0F, std::min(18.0F, bounds.width));
+        const float max_ring = std::max(1.0F, std::min(18.0F, bounds.width));
+        const float ring = std::min(max_ring, std::max(1.0F, bounds.height - 4.0F));
         const Rect ring_bounds{bounds.x, bounds.y + (bounds.height - ring) * 0.5F, ring, ring};
         fill_ellipse(context, ring_bounds, border);
         const Rect inner{ring_bounds.x + 1.0F, ring_bounds.y + 1.0F, ring_bounds.width - 2.0F,
@@ -1358,7 +1360,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint(sao_ui_widget_handle_t h
                                                         sao_ui_paint_ctx_handle_t context, float x,
                                                         float y, float width, float height) {
     if (handle == nullptr || context == nullptr || context->raster == nullptr ||
-        !valid_rect(width, height))
+        !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+        !std::isfinite(height) || !valid_rect(width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         sao::ui::detail::WidgetHandleMetadata metadata{};
@@ -1839,7 +1842,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create_offscreen(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_handle_t context,
                                                                float x, float y, float width,
                                                                float height, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || !valid_rect(width, height))
+    if (context == nullptr || context->raster == nullptr ||
+        !finite_float_rect(x, y, width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::scoped_lock lock(context->raster->mutex);
     fill_rect(*context, {x, y, width, height}, argb);
@@ -1849,8 +1853,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_
 sao_status_t sao::ui::detail::paint_rounded_rect(sao_ui_paint_ctx_handle_t context, float x,
                                                  float y, float width, float height, float radius,
                                                  uint32_t argb) noexcept {
-    if (context == nullptr || context->raster == nullptr || !valid_rect(width, height) ||
-        !std::isfinite(radius) || radius < 0.0F) {
+    if (context == nullptr || context->raster == nullptr ||
+        !finite_float_rect(x, y, width, height) || !std::isfinite(radius) || radius < 0.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -1885,7 +1889,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_stroke_line(sao_ui_paint_ct
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_ellipse(sao_ui_paint_ctx_handle_t context,
                                                                   float x, float y, float width,
                                                                   float height, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || !valid_rect(width, height))
+    if (context == nullptr || context->raster == nullptr ||
+        !finite_float_rect(x, y, width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::scoped_lock lock(context->raster->mutex);
     fill_ellipse(*context, {x, y, width, height}, argb);

@@ -312,38 +312,85 @@ TEST_CASE("canvas_snapshot_aux_survives_pending_vector_relocation",
     const auto canvas = make_canvas();
     REQUIRE(sao_ui_script_canvas_begin_draw(canvas) == SAO_STATUS_OK);
 
-    const int32_t polygon[] = {1, 2, 30, 4, 5, 60};
-    REQUIRE(sao_ui_script_canvas_draw_polygon(canvas, polygon, 3) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_script_canvas_draw_text(canvas, 7, 8, "stable-text", 0, 12) == SAO_STATUS_OK);
-    for (int index = 0; index < 200; ++index) {
-        REQUIRE(sao_ui_script_canvas_draw_line(canvas, index, 0, index, 10) == SAO_STATUS_OK);
-    }
+    int32_t submitted_polygon[] = {1, 2, 3, 4, 5, 6};
+    char submitted_text[] = "submit-copy";
+    SaoUiCanvasOp submitted[2]{};
+    submitted[0].op = SAO_UI_CANVAS_OP_POLYGON;
+    submitted[0].i[0] = 3;
+    submitted[0].aux = submitted_polygon;
+    submitted[0].aux_len = sizeof(submitted_polygon);
+    submitted[1].op = SAO_UI_CANVAS_OP_TEXT;
+    submitted[1].aux = submitted_text;
+    submitted[1].aux_len = sizeof(submitted_text) - 1U;
+    REQUIRE(sao_ui_script_canvas_submit_ops(canvas, submitted, 2) == SAO_STATUS_OK);
+    std::fill(std::begin(submitted_polygon), std::end(submitted_polygon), 0);
+    std::fill(std::begin(submitted_text), std::end(submitted_text) - 1, 'x');
 
-    std::vector<SaoUiCanvasOp> snapshot(202);
+    int32_t shortcut_polygon[] = {7, 8, 9, 10, 11, 12};
+    char shortcut_text[] = "shortcut-copy";
+    REQUIRE(sao_ui_script_canvas_draw_polygon(canvas, shortcut_polygon, 3) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_draw_text(canvas, 7, 8, shortcut_text, 0, 12) == SAO_STATUS_OK);
+    std::fill(std::begin(shortcut_polygon), std::end(shortcut_polygon), 0);
+    std::fill(std::begin(shortcut_text), std::end(shortcut_text) - 1, 'y');
+    for (int index = 0; index < 200; ++index)
+        REQUIRE(sao_ui_script_canvas_draw_line(canvas, index, 0, index, 10) == SAO_STATUS_OK);
+
+    std::vector<SaoUiCanvasOp> first_snapshot(204);
     size_t written = 0;
-    REQUIRE(sao_ui_script_canvas_snapshot_ops(canvas, snapshot.data(), snapshot.size(), &written) ==
-            SAO_STATUS_OK);
-    REQUIRE(written == snapshot.size());
-    REQUIRE(snapshot[0].op == SAO_UI_CANVAS_OP_POLYGON);
-    REQUIRE(snapshot[0].aux != nullptr);
-    REQUIRE(snapshot[0].aux_len == sizeof(polygon));
-    CHECK(std::memcmp(snapshot[0].aux, polygon, sizeof(polygon)) == 0);
-    REQUIRE(snapshot[1].op == SAO_UI_CANVAS_OP_TEXT);
-    REQUIRE(snapshot[1].aux != nullptr);
-    const std::string expected_text = "stable-text";
-    REQUIRE(snapshot[1].aux_len == expected_text.size());
-    CHECK(std::memcmp(snapshot[1].aux, expected_text.data(), expected_text.size()) == 0);
+    REQUIRE(sao_ui_script_canvas_snapshot_ops(canvas, first_snapshot.data(), first_snapshot.size(),
+                                              &written) == SAO_STATUS_OK);
+    REQUIRE(written == first_snapshot.size());
+    REQUIRE(first_snapshot[0].op == SAO_UI_CANVAS_OP_POLYGON);
+    REQUIRE(first_snapshot[1].op == SAO_UI_CANVAS_OP_TEXT);
+    REQUIRE(first_snapshot[2].op == SAO_UI_CANVAS_OP_POLYGON);
+    REQUIRE(first_snapshot[3].op == SAO_UI_CANVAS_OP_TEXT);
+    const int32_t expected_submitted_polygon[] = {1, 2, 3, 4, 5, 6};
+    const char expected_submitted_text[] = "submit-copy";
+    const int32_t expected_shortcut_polygon[] = {7, 8, 9, 10, 11, 12};
+    const char expected_shortcut_text[] = "shortcut-copy";
+    const void* first_submitted_polygon_aux = first_snapshot[0].aux;
+    const void* first_submitted_text_aux = first_snapshot[1].aux;
+    const void* first_shortcut_polygon_aux = first_snapshot[2].aux;
+    const void* first_shortcut_text_aux = first_snapshot[3].aux;
+    CHECK(std::memcmp(first_submitted_polygon_aux, expected_submitted_polygon,
+                      sizeof(expected_submitted_polygon)) == 0);
+    CHECK(std::memcmp(first_submitted_text_aux, expected_submitted_text,
+                      sizeof(expected_submitted_text) - 1U) == 0);
+    CHECK(std::memcmp(first_shortcut_polygon_aux, expected_shortcut_polygon,
+                      sizeof(expected_shortcut_polygon)) == 0);
+    CHECK(std::memcmp(first_shortcut_text_aux, expected_shortcut_text,
+                      sizeof(expected_shortcut_text) - 1U) == 0);
 
     REQUIRE(sao_ui_script_canvas_end_draw(canvas) == SAO_STATUS_OK);
-    std::fill(snapshot.begin(), snapshot.end(), SaoUiCanvasOp{});
-    REQUIRE(sao_ui_script_canvas_snapshot_ops(canvas, snapshot.data(), snapshot.size(), &written) ==
+    const int32_t mutation_polygon[] = {101, 102, 103, 104, 105, 106};
+    REQUIRE(sao_ui_script_canvas_begin_draw(canvas) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_draw_polygon(canvas, mutation_polygon, 3) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_draw_text(canvas, 9, 10, "mutation-text", 0, 12) ==
             SAO_STATUS_OK);
-    CHECK(std::memcmp(snapshot[0].aux, polygon, sizeof(polygon)) == 0);
-    CHECK(std::memcmp(snapshot[1].aux, expected_text.data(), expected_text.size()) == 0);
+    const size_t count_before = sao_ui_script_canvas_pending_op_count(canvas);
+    int32_t invalid_polygon_aux = 7;
+    SaoUiCanvasOp invalid_batch[2]{};
+    invalid_batch[0].op = SAO_UI_CANVAS_OP_LINE;
+    invalid_batch[1].op = SAO_UI_CANVAS_OP_POLYGON;
+    invalid_batch[1].i[0] = 2;
+    invalid_batch[1].aux = &invalid_polygon_aux;
+    invalid_batch[1].aux_len = sizeof(invalid_polygon_aux);
+    REQUIRE(sao_ui_script_canvas_submit_ops(canvas, invalid_batch, 2) ==
+            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_script_canvas_pending_op_count(canvas) == count_before);
+    REQUIRE(sao_ui_script_canvas_draw_line(canvas, 0, 0, 1, 1) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_script_canvas_end_draw(canvas) == SAO_STATUS_OK);
 
+    CHECK(std::memcmp(first_submitted_polygon_aux, expected_submitted_polygon,
+                      sizeof(expected_submitted_polygon)) == 0);
+    CHECK(std::memcmp(first_submitted_text_aux, expected_submitted_text,
+                      sizeof(expected_submitted_text) - 1U) == 0);
+    CHECK(std::memcmp(first_shortcut_polygon_aux, expected_shortcut_polygon,
+                      sizeof(expected_shortcut_polygon)) == 0);
+    CHECK(std::memcmp(first_shortcut_text_aux, expected_shortcut_text,
+                      sizeof(expected_shortcut_text) - 1U) == 0);
     sao_ui_script_canvas_destroy(canvas);
 }
-
 TEST_CASE("canvas_submit_ops_rebinds_all_aux_and_is_transactional",
           "[ui][scriptable_canvas][runtime][hardening][snapshot][transaction]") {
     const auto canvas = make_canvas();

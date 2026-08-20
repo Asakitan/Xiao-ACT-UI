@@ -84,6 +84,7 @@ struct BodyRecord {
     std::vector<Node> model;
     std::vector<std::pair<sao_ui_layout_node_handle_t, uint64_t>> actual_to_model;
     uint64_t next_node_id{2};
+    bool spec_backed{};
     std::vector<int> mutation_log; // records mutation kinds in order
     uint64_t mutation_count_total = 0;
 };
@@ -945,6 +946,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_body(sao_ui_panel_body_h
         if (mutation_count == 0)
             return SAO_STATUS_OK;
         BodyRecord& current = *owner->body;
+        if (current.spec_backed)
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
         std::vector<BodyRecord::Node> staged = current.model;
         uint64_t next_id = current.next_node_id;
         std::vector<uint64_t> created_by_mutation(mutation_count, 0);
@@ -1509,6 +1512,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_body_set_spec(sao_ui_panel_body
         owner->body->model.clear();
         owner->body->actual_to_model.clear();
         owner->body->next_node_id = 2;
+        owner->body->spec_backed = true;
         initialize_body_model(*owner->body);
         owner->body->mutation_log.push_back(SAO_UI_BODY_UPDATE_SPEC);
         owner->body->mutation_count_total += 1;

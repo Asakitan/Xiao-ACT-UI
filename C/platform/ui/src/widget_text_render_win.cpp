@@ -19,6 +19,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -78,9 +79,10 @@ bool utf8_to_utf16(const char* text, std::wstring* output) noexcept {
         MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
     if (length <= 0)
         return false;
-    std::wstring converted(static_cast<size_t>(length - 1), L'\0');
+    std::wstring converted(static_cast<size_t>(length), L'\0');
     if (MultiByteToWideChar(CP_UTF8, 0, text, -1, converted.data(), length) != length)
         return false;
+    converted.resize(static_cast<size_t>(length - 1));
     *output = std::move(converted);
     return true;
 }
@@ -91,7 +93,8 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
                         float size_px, uint32_t argb, std::vector<uint8_t>* out_pixels,
                         uint32_t* out_w, uint32_t* out_h) noexcept {
     if (out_pixels == nullptr || out_w == nullptr || out_h == nullptr || text.empty() ||
-        size_px <= 0.0F)
+        !std::isfinite(size_px) || size_px <= 0.0F ||
+        text.size() > std::numeric_limits<UINT32>::max())
         return false;
     try {
         ComPtr<IDWriteTextFormat> format;
@@ -111,11 +114,16 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
             return false;
 
         DWRITE_TEXT_METRICS metrics{};
-        if (FAILED(layout->GetMetrics(&metrics)))
+        if (FAILED(layout->GetMetrics(&metrics)) || !std::isfinite(metrics.width) ||
+            !std::isfinite(metrics.height) || metrics.width < 0.0F || metrics.height < 0.0F)
             return false;
-        const uint32_t width = std::max(1U, static_cast<uint32_t>(std::ceil(metrics.width)));
-        const uint32_t height =
-            std::max(1U, static_cast<uint32_t>(std::ceil(metrics.height)));
+        const double width_value = std::ceil(static_cast<double>(metrics.width));
+        const double height_value = std::ceil(static_cast<double>(metrics.height));
+        if (!std::isfinite(width_value) || !std::isfinite(height_value) ||
+            width_value > 4096.0 || height_value > 4096.0)
+            return false;
+        const uint32_t width = std::max(1U, static_cast<uint32_t>(width_value));
+        const uint32_t height = std::max(1U, static_cast<uint32_t>(height_value));
         if (width > 4096U || height > 4096U)
             return false;
 
@@ -169,7 +177,7 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
 bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
                       const char* text_utf8, float size_px, uint32_t argb) noexcept {
     if (context.raster == nullptr || text_utf8 == nullptr || *text_utf8 == '\0' ||
-        !std::isfinite(size_px) || size_px <= 0.0F)
+        !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(size_px) || size_px <= 0.0F)
         return false;
     DwriteBackend& backend = DwriteBackend::instance();
     if (!backend.ready())

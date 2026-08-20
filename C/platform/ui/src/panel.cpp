@@ -189,6 +189,172 @@ sao_status_t parse_theme_overrides(const uint8_t* bytes, size_t length,
     }
 }
 
+std::optional<SaoUiColorToken> semantic_accent_token(std::string_view value) noexcept {
+    if (value == "cyan" || value == "accent" || value == "info")
+        return SAO_UI_TOKEN_APP_ACCENT;
+    if (value == "gold" || value == "warn")
+        return SAO_UI_TOKEN_APP_GOLD;
+    if (value == "ok" || value == "good" || value == "heal")
+        return SAO_UI_TOKEN_APP_GREEN;
+    if (value == "bad" || value == "danger" || value == "error")
+        return SAO_UI_TOKEN_APP_RED;
+    return std::nullopt;
+}
+
+bool parse_container_accent(const json& value, const sao::ui::detail::PanelResolvedTheme& theme,
+                            uint32_t* out_color, SaoUiColorToken* out_token,
+                            bool* out_explicit) {
+    if (out_color == nullptr || out_token == nullptr || out_explicit == nullptr ||
+        !value.is_string())
+        return false;
+    std::string text = value.get<std::string>();
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    if (const auto token = semantic_accent_token(text); token.has_value()) {
+        *out_token = *token;
+        *out_color = theme.colors[static_cast<size_t>(*token)];
+        *out_explicit = false;
+        return true;
+    }
+    if (!parse_argb(value, out_color))
+        return false;
+    *out_token = SAO_UI_TOKEN_APP_ACCENT;
+    *out_explicit = true;
+    return true;
+}
+
+bool parse_nonnegative_int(const json& node, const char* key, int32_t* out_value) {
+    const auto property = node.find(key);
+    if (property == node.end())
+        return true;
+    if (!property->is_number_integer())
+        return false;
+    const int64_t value = property->get<int64_t>();
+    if (value < 0 || value > std::numeric_limits<int32_t>::max())
+        return false;
+    *out_value = static_cast<int32_t>(value);
+    return true;
+}
+
+bool apply_container_layout_metadata(const json& node, SaoUiLayoutSpec* spec) {
+    if (!node.is_object() || spec == nullptr)
+        return false;
+    const auto set_size = [&node](const char* primary, const char* alias, int32_t* target) {
+        const auto property = node.find(primary);
+        const auto fallback = property == node.end() ? node.find(alias) : property;
+        if (fallback == node.end())
+            return true;
+        if (!fallback->is_number_integer())
+            return false;
+        const int64_t value = fallback->get<int64_t>();
+        if (value < 0 || value > std::numeric_limits<int32_t>::max())
+            return false;
+        *target = static_cast<int32_t>(value);
+        return true;
+    };
+    if (!set_size("width", "fixed_width", &spec->fixed_width_px) ||
+        !set_size("height", "fixed_height", &spec->fixed_height_px) ||
+        !parse_nonnegative_int(node, "min_width", &spec->min_width_px) ||
+        !parse_nonnegative_int(node, "min_height", &spec->min_height_px) ||
+        !parse_nonnegative_int(node, "max_width", &spec->max_width_px) ||
+        !parse_nonnegative_int(node, "max_height", &spec->max_height_px) ||
+        !parse_nonnegative_int(node, "gap", &spec->gap_px))
+        return false;
+    const auto weight = node.find("weight");
+    if (weight != node.end()) {
+        if (!weight->is_number())
+            return false;
+        const double value = weight->get<double>();
+        if (!std::isfinite(value) || value < 0.0 ||
+            value > static_cast<double>(std::numeric_limits<float>::max()))
+            return false;
+        spec->weight = static_cast<float>(value);
+    }
+    const auto padding = node.find("padding");
+    if (padding != node.end()) {
+        if (padding->is_number_integer()) {
+            const int64_t value = padding->get<int64_t>();
+            if (value < 0 || value > std::numeric_limits<int32_t>::max())
+                return false;
+            spec->pad_top_px = spec->pad_right_px = spec->pad_bottom_px =
+                spec->pad_left_px = static_cast<int32_t>(value);
+        } else if (padding->is_object()) {
+            if (!parse_nonnegative_int(*padding, "top", &spec->pad_top_px) ||
+                !parse_nonnegative_int(*padding, "right", &spec->pad_right_px) ||
+                !parse_nonnegative_int(*padding, "bottom", &spec->pad_bottom_px) ||
+                !parse_nonnegative_int(*padding, "left", &spec->pad_left_px))
+                return false;
+        } else {
+            return false;
+        }
+    }
+    return !((spec->max_width_px > 0 && spec->max_width_px < spec->min_width_px) ||
+             (spec->max_height_px > 0 && spec->max_height_px < spec->min_height_px) ||
+             (spec->fixed_width_px > 0 && spec->fixed_width_px < spec->min_width_px) ||
+             (spec->fixed_height_px > 0 && spec->fixed_height_px < spec->min_height_px));
+}
+
+struct ContainerLayoutMetadata {
+    SaoUiLayoutSpec explicit_spec{};
+    bool fixed_width{};
+    bool fixed_height{};
+    bool min_width{};
+    bool min_height{};
+    bool max_width{};
+    bool max_height{};
+    bool weight{};
+    bool gap{};
+    bool pad_top{};
+    bool pad_right{};
+    bool pad_bottom{};
+    bool pad_left{};
+};
+
+ContainerLayoutMetadata capture_container_layout_metadata(
+    const json& node, const SaoUiLayoutSpec& spec) {
+    ContainerLayoutMetadata metadata{};
+    metadata.explicit_spec = spec;
+    metadata.fixed_width = node.contains("width") ||
+                           (!node.contains("width") && node.contains("fixed_width"));
+    metadata.fixed_height = node.contains("height") ||
+                            (!node.contains("height") && node.contains("fixed_height"));
+    metadata.min_width = node.contains("min_width");
+    metadata.min_height = node.contains("min_height");
+    metadata.max_width = node.contains("max_width");
+    metadata.max_height = node.contains("max_height");
+    metadata.weight = node.contains("weight");
+    metadata.gap = node.contains("gap");
+    const auto padding = node.find("padding");
+    if (padding != node.end()) {
+        if (padding->is_number_integer()) {
+            metadata.pad_top = metadata.pad_right = metadata.pad_bottom = metadata.pad_left = true;
+        } else if (padding->is_object()) {
+            metadata.pad_top = padding->contains("top");
+            metadata.pad_right = padding->contains("right");
+            metadata.pad_bottom = padding->contains("bottom");
+            metadata.pad_left = padding->contains("left");
+        }
+    }
+    return metadata;
+}
+
+void apply_explicit_container_layout_metadata(const ContainerLayoutMetadata& metadata,
+                                              SaoUiLayoutSpec* spec) noexcept {
+    if (metadata.fixed_width) spec->fixed_width_px = metadata.explicit_spec.fixed_width_px;
+    if (metadata.fixed_height) spec->fixed_height_px = metadata.explicit_spec.fixed_height_px;
+    if (metadata.min_width) spec->min_width_px = metadata.explicit_spec.min_width_px;
+    if (metadata.min_height) spec->min_height_px = metadata.explicit_spec.min_height_px;
+    if (metadata.max_width) spec->max_width_px = metadata.explicit_spec.max_width_px;
+    if (metadata.max_height) spec->max_height_px = metadata.explicit_spec.max_height_px;
+    if (metadata.weight) spec->weight = metadata.explicit_spec.weight;
+    if (metadata.gap) spec->gap_px = metadata.explicit_spec.gap_px;
+    if (metadata.pad_top) spec->pad_top_px = metadata.explicit_spec.pad_top_px;
+    if (metadata.pad_right) spec->pad_right_px = metadata.explicit_spec.pad_right_px;
+    if (metadata.pad_bottom) spec->pad_bottom_px = metadata.explicit_spec.pad_bottom_px;
+    if (metadata.pad_left) spec->pad_left_px = metadata.explicit_spec.pad_left_px;
+}
+
 struct OwnedWidget {
     sao_ui_widget_handle_t handle{};
     sao_ui_layout_node_handle_t node{};
@@ -210,6 +376,7 @@ struct PanelContent {
     struct ThemeLayoutNode {
         sao_ui_layout_node_handle_t node{};
         SaoUiLayoutSpec spec{};
+        ContainerLayoutMetadata explicit_metadata{};
         std::string semantic_type;
         bool has_title{};
     };
@@ -217,9 +384,13 @@ struct PanelContent {
     struct ContainerVisual {
         sao_ui_layout_node_handle_t node{};
         int32_t kind{};
+        std::string semantic_type;
+        std::string parent_type;
         std::string title;
         uint32_t accent{};
+        SaoUiColorToken accent_token{SAO_UI_TOKEN_APP_ACCENT};
         bool accent_is_explicit{};
+        bool has_title{};
     };
 
     sao_ui_layout_tree_handle_t tree{};
@@ -666,6 +837,29 @@ void restore_node_ids(const json& source_nodes, json& normalized_nodes) {
     }
 }
 
+bool merge_widget_spec_by_id(json& nodes, std::string_view widget_id, const json& patch) {
+    if (nodes.is_array()) {
+        for (auto& node : nodes) {
+            if (merge_widget_spec_by_id(node, widget_id, patch))
+                return true;
+        }
+        return false;
+    }
+    if (!nodes.is_object())
+        return false;
+    if (nodes.value("id", std::string()) == widget_id) {
+        for (auto property = patch.begin(); property != patch.end(); ++property)
+            nodes[property.key()] = property.value();
+        if (patch.contains("label") && patch["label"].is_string())
+            nodes["text"] = patch["label"];
+        if (patch.contains("pct") && patch["pct"].is_number())
+            nodes["value"] = patch["pct"];
+        return true;
+    }
+    const auto children = nodes.find("children");
+    return children != nodes.end() && merge_widget_spec_by_id(*children, widget_id, patch);
+}
+
 json source_nodes_for(const json& input) {
     if (input.is_array())
         return input;
@@ -791,7 +985,7 @@ SaoUiLayoutSpec container_spec_for_theme(
 sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t parent,
                           const json & nodes,
                           const sao::ui::detail::PanelResolvedTheme & theme,
-                          std::string_view parent_type = {}) {
+                          std::string_view parent_type = {}, int32_t depth = 0) {
     if (not nodes.is_array())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     for (const auto node : nodes) {
@@ -803,26 +997,31 @@ sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t pa
             if (container_title.empty())
                 container_title = node.value("label", std::string());
             const bool has_title = !container_title.empty();
-            const SaoUiLayoutSpec spec =
-                container_spec_for_theme(type, has_title, theme);
+            SaoUiLayoutSpec spec = container_spec_for_theme(type, has_title, theme);
+            if (!apply_container_layout_metadata(node, &spec))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
             sao_ui_layout_node_handle_t child = nullptr;
-            const int32_t mode = type == "row" ? SAO_UI_LAYOUT_HORIZONTAL : SAO_UI_LAYOUT_VERTICAL;
+            const std::string layout = node.value("layout", std::string());
+            const int32_t mode = type == "row" || layout == "horizontal"
+                                     ? SAO_UI_LAYOUT_HORIZONTAL
+                                     : SAO_UI_LAYOUT_VERTICAL;
             sao_status_t status = sao_ui_layout_node_add_container(parent, mode, & spec, & child);
             if (status != SAO_STATUS_OK)
                 return status;
-            content.theme_layout_nodes.push_back({child, spec, type, has_title});
+            content.theme_layout_nodes.push_back(
+                {child, spec, capture_container_layout_metadata(node, spec), type, has_title});
             uint32_t accent = theme.colors[SAO_UI_TOKEN_APP_ACCENT];
+            SaoUiColorToken accent_token = SAO_UI_TOKEN_APP_ACCENT;
             bool accent_is_explicit = false;
             const auto accent_property = node.find("accent");
-            if (accent_property != node.end()) {
-                if (!accent_property->is_string() || !parse_argb(*accent_property, &accent))
-                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                accent_is_explicit = true;
-            }
+            if (accent_property != node.end() &&
+                !parse_container_accent(*accent_property, theme, &accent, &accent_token,
+                                         &accent_is_explicit))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
             content.containers.push_back(
-                {child, node.value("kind", 0), std::move(container_title), accent,
-                 accent_is_explicit});
-            status = append_nodes(content, child, node["children"], theme, type);
+                {child, node.value("kind", 0), type, std::string(parent_type),
+                 std::move(container_title), accent, accent_token, accent_is_explicit, has_title});
+            status = append_nodes(content, child, node["children"], theme, type, depth + 1);
             if (status != SAO_STATUS_OK)
                 return status;
             continue;
@@ -1161,51 +1360,64 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const Sa
         if (status == SAO_STATUS_OK) {
             for (size_t index = 0; index < content->containers.size(); ++index) {
                 const auto visual = content->containers[index];
-                SaoUiRect rect{};
-                if (sao_ui_layout_node_get_rect(visual.node, & rect) != SAO_STATUS_OK)
+                if (visual.semantic_type == "row")
                     continue;
+                SaoUiRect rect{};
+                if (sao_ui_layout_node_get_rect(visual.node, &rect) != SAO_STATUS_OK)
+                    continue;
+                const float x = static_cast<float>(rect.x_px);
                 const float y = static_cast<float>(rect.y_px) - scroll;
-                const float radius = static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]);
-                status = sao_ui_paint_ctx_fill_rounded_rect(
-                    context, static_cast<float>(rect.x_px), y, static_cast<float>(rect.width_px),
-                    static_cast<float>(rect.height_px), radius, theme.colors[SAO_UI_TOKEN_APP_CARD]);
+                const float width = static_cast<float>(rect.width_px);
+                const float height = static_cast<float>(rect.height_px);
+                if (!(width > 0.0F && height > 0.0F))
+                    continue;
+                const bool panel_role = visual.semantic_type == "panel";
+                const bool section_role = visual.semantic_type == "section";
+                const bool group_role = visual.semantic_type == "group";
+                const uint32_t fill = panel_role
+                                          ? theme.colors[SAO_UI_TOKEN_APP_BG]
+                                          : theme.colors[SAO_UI_TOKEN_APP_CARD];
+                const uint32_t border = panel_role || section_role || group_role
+                                            ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
+                                            : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM];
+                const float radius = static_cast<float>(
+                    panel_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]
+                                : section_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]
+                                                : theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_SMALL]);
+                status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, height,
+                                                            radius, fill);
                 if (status != SAO_STATUS_OK)
                     break;
-                status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(rect.x_px), y, 3.0F,
-                    static_cast<float>(rect.height_px), visual.accent);
+                const float rail_width = section_role ? 3.0F : group_role ? 2.0F : 0.0F;
+                if (rail_width > 0.0F) {
+                    status = sao_ui_paint_ctx_fill_rect(context, x, y, rail_width, height,
+                                                        visual.accent);
+                    if (status != SAO_STATUS_OK)
+                        break;
+                }
+                status = sao_ui_paint_ctx_stroke_line(context, x, y, x + width, y, 1.0F, border);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(context, x, y + height - 1.0F,
+                                                           x + width, y + height - 1.0F, 1.0F,
+                                                           border);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(context, x, y, x,
+                                                           y + height, 1.0F, border);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(context, x + width - 1.0F, y,
+                                                           x + width - 1.0F, y + height, 1.0F,
+                                                           border);
                 if (status != SAO_STATUS_OK)
                     break;
-                status = sao_ui_paint_ctx_stroke_line(
-                    context, static_cast<float>(rect.x_px), y,
-                    static_cast<float>(rect.x_px + rect.width_px), y, 1.0F,
-                    theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(
-                        context, static_cast<float>(rect.x_px),
-                        y + static_cast<float>(rect.height_px - 1),
-                        static_cast<float>(rect.x_px + rect.width_px),
-                        y + static_cast<float>(rect.height_px - 1), 1.0F,
-                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(
-                        context, static_cast<float>(rect.x_px), y,
-                        static_cast<float>(rect.x_px),
-                        y + static_cast<float>(rect.height_px), 1.0F,
-                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(
-                        context, static_cast<float>(rect.x_px + rect.width_px - 1), y,
-                        static_cast<float>(rect.x_px + rect.width_px - 1),
-                        y + static_cast<float>(rect.height_px), 1.0F,
-                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-                if (status != SAO_STATUS_OK)
-                    break;
-                if (not visual.title.empty()) {
+                if (!visual.title.empty()) {
+                    const uint32_t title_color = section_role
+                                                      ? theme.colors[SAO_UI_TOKEN_APP_GOLD]
+                                                      : theme.colors[SAO_UI_TOKEN_APP_TEXT];
                     status = sao_ui_paint_ctx_draw_utf8(
-                        context, static_cast<float>(rect.x_px + theme.metrics[SAO_UI_METRIC_PADDING_S]),
+                        context, x + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) +
+                                     rail_width,
                         y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
-                        visual.title.c_str(), 11.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+                        visual.title.c_str(), 11.0F, title_color);
                     if (status != SAO_STATUS_OK)
                         break;
                 }
@@ -1366,7 +1578,7 @@ sao_status_t prepare_panel_theme_layout(
         std::lock_guard lock(content->mutex);
         for (auto& visual : content->containers) {
             if (!visual.accent_is_explicit)
-                visual.accent = theme.colors[SAO_UI_TOKEN_APP_ACCENT];
+                visual.accent = theme.colors[static_cast<size_t>(visual.accent_token)];
         }
         if (content->layout_theme.metrics == theme.metrics) {
             content->layout_theme = theme;
@@ -1385,6 +1597,8 @@ sao_status_t prepare_panel_theme_layout(
     for (auto& layout_node : content->theme_layout_nodes) {
         layout_node.spec = container_spec_for_theme(layout_node.semantic_type,
                                                     layout_node.has_title, theme);
+        apply_explicit_container_layout_metadata(layout_node.explicit_metadata,
+                                                 &layout_node.spec);
         const sao_status_t status =
             sao_ui_layout_node_set_spec(layout_node.node, &layout_node.spec);
         if (status != SAO_STATUS_OK)
@@ -1884,6 +2098,12 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
         bool scrollbar_pressed = false;
         int32_t drag_start_y = 0;
         int32_t drag_start_offset = 0;
+        if (resizable && !close_armed) {
+            edges |= nearest_resize_axis_edge(ix, state.width, 1, 2);
+            edges |= nearest_resize_axis_edge(iy, state.height, 4, 8);
+            if (edges != 0)
+                mode = 2;
+        }
         if (mode == 0 && !close_armed && content != nullptr) {
             std::lock_guard lock(content->mutex);
             const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
@@ -1917,12 +2137,6 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
                     page_changed = content->scroll_offset_px != previous_offset;
                 }
             }
-        }
-        if (!handled_scrollbar && resizable && !close_armed) {
-            edges |= nearest_resize_axis_edge(ix, state.width, 1, 2);
-            edges |= nearest_resize_axis_edge(iy, state.height, 4, 8);
-            if (edges != 0)
-                mode = 2;
         }
         if (mode == 0 && movable && iy < top && !close_armed && !handled_scrollbar)
             mode = 1;
@@ -2272,9 +2486,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
         if (!patch.is_object())
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         std::shared_ptr<PanelContent> content;
+        std::string previous_spec;
+        std::string candidate_spec;
         {
             std::scoped_lock lock(panel->mutex);
             content = panel->content;
+            previous_spec = panel->spec_json;
+        }
+        if (content == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        json candidate_document;
+        bool spec_updated = false;
+        if (!previous_spec.empty()) {
+            try {
+                candidate_document = json::parse(previous_spec);
+                spec_updated = merge_widget_spec_by_id(candidate_document, widget_id_utf8, patch);
+                if (spec_updated)
+                    candidate_spec = candidate_document.dump();
+            } catch (...) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
         }
         OwnedWidget* widget = nullptr;
         json previous_props;
@@ -2324,6 +2555,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             (void)sao_ui_layout_node_invalidate(widget->node);
         }
         const sao_status_t status = upload_panel(panel);
+        if (status == SAO_STATUS_OK && spec_updated) {
+            std::scoped_lock lock(panel->mutex);
+            panel->spec_json = candidate_spec;
+        }
         if (status != SAO_STATUS_OK) {
             std::scoped_lock lock(content->mutex);
             widget->props = std::move(previous_props);

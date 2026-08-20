@@ -431,3 +431,21 @@ TEST_CASE("paint context and raster primitives reject unbounded work",
     sao_ui_paint_ctx_destroy(context);
     sao_ui_offscreen_raster_destroy(raster);
 }
+
+
+TEST_CASE("native_widget_paint_rejects_non_finite_coordinates", "[ui][raster][finite]") {
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_CHECKBOX, nullptr, &widget) == SAO_STATUS_OK);
+    SaoUiOffscreenRasterDesc desc{16, 16, 0};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+    CHECK(sao_ui_widget_paint(widget, context, std::numeric_limits<float>::quiet_NaN(), 0, 8, 8) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_paint_ctx_fill_rect(context, std::numeric_limits<float>::infinity(), 0, 8, 8, 0xffffffffU) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    sao_ui_paint_ctx_destroy(context);
+    sao_ui_offscreen_raster_destroy(raster);
+    sao_ui_widget_destroy(widget);
+}

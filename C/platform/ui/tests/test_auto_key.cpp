@@ -173,3 +173,16 @@ TEST_CASE("auto_key_send_text_utf16",
     SUCCEED("non-Windows: auto_key send_text is not implemented");
 #endif
 }
+
+
+TEST_CASE("auto_key_rejects_unknown_modifier_bits", "[ui][auto_key][abi]") {
+#if defined(_WIN32)
+    bool allowed = false;
+    CHECK(sao_ui_auto_key_send_key(0x87, 1u << 31U, 0) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_auto_key_arbitrate(SAO_UI_AUTO_KEY_POLICY_SHARED, 0x87, &allowed) ==
+          SAO_STATUS_OK);
+#else
+    SUCCEED("non-Windows: modifier validation is capability-gated");
+#endif
+}

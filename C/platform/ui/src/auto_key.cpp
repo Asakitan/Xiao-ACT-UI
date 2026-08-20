@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <limits>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -197,6 +198,7 @@ constexpr uint32_t kBitCtrl  = 1u << 0;
 constexpr uint32_t kBitAlt   = 1u << 1;
 constexpr uint32_t kBitShift = 1u << 2;
 constexpr uint32_t kBitWin   = 1u << 3;
+constexpr uint32_t kModifierMask = kBitCtrl | kBitAlt | kBitShift | kBitWin;
 
 #if defined(_WIN32)
 bool send_input_key_batch(const std::vector<uint32_t>& vks,
@@ -224,7 +226,8 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_auto_key_send_key(
     uint32_t modifiers_mask,
     uint32_t hold_ms) {
 #if defined(_WIN32)
-    if (virtual_key == 0 || virtual_key > 0xFF) {
+    try {
+    if (virtual_key == 0 || virtual_key > 0xFF || (modifiers_mask & ~kModifierMask) != 0U) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     // Build the down batch: modifiers first, then main VK.
@@ -264,6 +267,9 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_auto_key_send_key(
     if (modifiers_mask & kBitCtrl)  pending.push_back(kModCtrl);
     hold_worker().schedule_combo(pending, hold_ms);
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 #else
     (void)virtual_key; (void)modifiers_mask; (void)hold_ms;
     // CAPABILITY GATE: requires SendInput (Windows user32.dll).
@@ -278,7 +284,10 @@ sao_ui_auto_key_send_key_combo(
     size_t          count,
     uint32_t        hold_ms) {
 #if defined(_WIN32)
-    if (count == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+    if (count == 0 || count > static_cast<size_t>(std::numeric_limits<UINT>::max()) ||
+        count > std::numeric_limits<size_t>::max() / sizeof(INPUT))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (vk_array == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     for (size_t i = 0; i < count; ++i) {
         if (vk_array[i] == 0 || vk_array[i] > 0xFF) {
@@ -303,6 +312,9 @@ sao_ui_auto_key_send_key_combo(
     }
     hold_worker().schedule_combo(down_vks, hold_ms);
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 #else
     (void)vk_array; (void)count; (void)hold_ms;
     // CAPABILITY GATE: SendInput combo (Windows user32.dll).
@@ -316,12 +328,16 @@ sao_ui_auto_key_send_text(
     const uint16_t* text_utf16,
     size_t          count) {
 #if defined(_WIN32)
+    try {
     if (text_utf16 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     size_t n = count;
     if (n == 0) {
         while (text_utf16[n] != 0) ++n;
     }
     if (n == 0) return SAO_STATUS_OK;
+    if (n > static_cast<size_t>(std::numeric_limits<UINT>::max()) / 2U ||
+        n > std::numeric_limits<size_t>::max() / (2U * sizeof(INPUT)))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     // Each code unit emits two INPUTs — down+up — as
     // KEYEVENTF_UNICODE.
     std::vector<INPUT> inputs(n * 2);
@@ -345,6 +361,9 @@ sao_ui_auto_key_send_text(
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 #else
     (void)text_utf16; (void)count;
     // CAPABILITY GATE: SendInput KEYEVENTF_UNICODE (Windows user32.dll).
@@ -359,6 +378,7 @@ sao_ui_auto_key_send_mouse_click(
     int32_t y_screen_px,
     int32_t button) {
 #if defined(_WIN32)
+    try {
     DWORD down_flag = 0;
     DWORD up_flag   = 0;
     DWORD mouse_data = 0;
@@ -432,6 +452,9 @@ sao_ui_auto_key_send_mouse_click(
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 #else
     (void)x_screen_px; (void)y_screen_px; (void)button;
     // CAPABILITY GATE: SendInput MOUSEEVENTF_* + GetSystemMetrics

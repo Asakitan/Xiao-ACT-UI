@@ -29,6 +29,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/ui/compositor.h"
+#include "sao/ui/panel_layout.h"
 #include "sao/ui/panel_sdk.h"
 #include "sao/ui/theme.h"
 #include "sao/ui/widget_chart.h"
@@ -1677,8 +1678,8 @@ TEST_CASE("panel_register struct_size guard rejects over-size",
 }
 
 
-TEST_CASE("container accents refresh inherited colors but preserve explicit colors",
-          "[ui][panel][theme][containers][accent]") {
+TEST_CASE("container metadata and semantic accents preserve geometry across themes",
+          "[ui][panel][theme][containers][accent][layout]") {
     struct ThemeReset {
         ~ThemeReset() {
             (void)sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
@@ -1690,14 +1691,17 @@ TEST_CASE("container accents refresh inherited colors but preserve explicit colo
     SaoPanelConfig config{};
     config.panel_id_utf8 = "panel_container_accent_theme_refresh";
     config.default_width = 180;
-    config.default_height = 120;
+    config.default_height = 200;
     config.min_width = 1;
     config.min_height = 1;
     config.show_titlebar = false;
     sao_ui_panel_handle_t panel = nullptr;
     REQUIRE(sao_ui_panel_create(compositor, &config, &panel) == SAO_STATUS_OK);
     const char spec[] = R"({"version":1,"title":"","nodes":[
-        {"type":"section","children":[{"type":"spacer","size":24}]},
+        {"type":"section","accent":"cyan","children":[{"type":"spacer","size":24}]},
+        {"type":"section","accent":"gold","children":[{"type":"spacer","size":24}]},
+        {"type":"section","accent":"ok","children":[{"type":"spacer","size":24}]},
+        {"type":"section","accent":"danger","children":[{"type":"spacer","size":24}]},
         {"type":"section","accent":"#123456","children":[{"type":"spacer","size":24}]}
     ]})";
     REQUIRE(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec),
@@ -1712,34 +1716,99 @@ TEST_CASE("container accents refresh inherited colors but preserve explicit colo
     const int32_t section_gap =
         sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_GAP_S);
     const int32_t strip_x = body_padding + 1;
-    const int32_t first_strip_y = body_padding + 2;
-    const int32_t second_strip_y =
-        body_padding + section_padding * 2 + 24 + section_gap + 2;
-    const uint32_t dark_accent =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_ACCENT);
-    const uint32_t light_accent =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_LIGHT, SAO_UI_TOKEN_APP_ACCENT);
+    const auto section_strip_y = [=](int32_t index) {
+        return body_padding + index * (section_padding * 2 + 24 + section_gap) + 2;
+    };
+    const std::array<SaoUiColorToken, 5> accent_tokens{
+        SAO_UI_TOKEN_APP_ACCENT, SAO_UI_TOKEN_APP_GOLD, SAO_UI_TOKEN_APP_GREEN,
+        SAO_UI_TOKEN_APP_RED, SAO_UI_TOKEN_APP_ACCENT};
     const auto dark = compositor_snapshot(compositor);
     for (int32_t x = strip_x; x <= strip_x + 1; ++x) {
-        CHECK(snapshot_argb_at(dark, state.width, static_cast<uint32_t>(x),
-                               static_cast<uint32_t>(first_strip_y)) == dark_accent);
-        CHECK(snapshot_argb_at(dark, state.width, static_cast<uint32_t>(x),
-                               static_cast<uint32_t>(second_strip_y)) == 0xff123456U);
+        for (size_t index = 0; index < accent_tokens.size(); ++index) {
+            const uint32_t expected = index == accent_tokens.size() - 1U
+                                          ? 0xff123456U
+                                          : sao_ui_theme_resolve_color(
+                                                SAO_UI_THEME_DARK, accent_tokens[index]);
+            CHECK(snapshot_argb_at(dark, state.width, static_cast<uint32_t>(x),
+                                   static_cast<uint32_t>(section_strip_y(index))) == expected);
+        }
     }
 
     REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
     const auto light = compositor_snapshot(compositor);
     for (int32_t x = strip_x; x <= strip_x + 1; ++x) {
-        CHECK(snapshot_argb_at(light, state.width, static_cast<uint32_t>(x),
-                               static_cast<uint32_t>(first_strip_y)) == light_accent);
-        CHECK(snapshot_argb_at(light, state.width, static_cast<uint32_t>(x),
-                               static_cast<uint32_t>(second_strip_y)) == 0xff123456U);
+        for (size_t index = 0; index < accent_tokens.size(); ++index) {
+            const uint32_t expected = index == accent_tokens.size() - 1U
+                                          ? 0xff123456U
+                                          : sao_ui_theme_resolve_color(
+                                                SAO_UI_THEME_LIGHT, accent_tokens[index]);
+            CHECK(snapshot_argb_at(light, state.width, static_cast<uint32_t>(x),
+                                   static_cast<uint32_t>(section_strip_y(index))) == expected);
+        }
     }
     CHECK(light != dark);
 
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_compositor_handle_t metadata_compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &metadata_compositor) == SAO_STATUS_OK);
+    SaoPanelConfig metadata_config{};
+    metadata_config.panel_id_utf8 = "panel_container_metadata_theme_stability";
+    metadata_config.default_width = 200;
+    metadata_config.default_height = 100;
+    metadata_config.min_width = 1;
+    metadata_config.min_height = 1;
+    metadata_config.show_titlebar = false;
+    sao_ui_panel_handle_t metadata_panel = nullptr;
+    REQUIRE(sao_ui_panel_create(metadata_compositor, &metadata_config, &metadata_panel) ==
+            SAO_STATUS_OK);
+    const char metadata_spec[] = R"({"version":1,"title":"","nodes":[
+        {"type":"section","width":160,"height":240,"min_width":160,
+         "max_width":160,"min_height":240,"max_height":240,"weight":0.75,"gap":11,
+         "padding":{"top":5,"right":6,"bottom":7,"left":8},
+         "children":[{"type":"spacer","size":24},{"type":"spacer","size":24},
+                     {"type":"spacer","size":24},{"type":"spacer","size":24}]}
+    ]})";
+    REQUIRE(sao_ui_panel_set_spec(metadata_panel,
+                                  reinterpret_cast<const uint8_t*>(metadata_spec),
+                                  sizeof(metadata_spec) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_set_visible(metadata_panel, true) == SAO_STATUS_OK);
+    sao_ui_layout_tree_handle_t metadata_tree = nullptr;
+    sao_ui_layout_node_handle_t metadata_root = nullptr;
+    REQUIRE(sao_ui_panel_get_layout_tree(metadata_panel, &metadata_tree, &metadata_root) ==
+            SAO_STATUS_OK);
+    SaoUiHitResult metadata_hit{};
+    REQUIRE(sao_ui_layout_hit_test(metadata_root, 20, 20, &metadata_hit) == SAO_STATUS_OK);
+    REQUIRE(metadata_hit.node != nullptr);
+    sao_ui_layout_node_handle_t metadata_path[4]{};
+    size_t metadata_path_written = 0;
+    REQUIRE(sao_ui_layout_get_hit_path(metadata_hit.node, metadata_path, 4,
+                                       &metadata_path_written) == SAO_STATUS_OK);
+    REQUIRE(metadata_path_written >= 2);
+    SaoUiRect section_before{};
+    REQUIRE(sao_ui_layout_node_get_rect(metadata_path[1], &section_before) == SAO_STATUS_OK);
+    CHECK(section_before.width_px == 160);
+    CHECK(section_before.height_px == 240);
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+    SaoUiHitResult metadata_hit_after{};
+    REQUIRE(sao_ui_layout_hit_test(metadata_root, 20, 20, &metadata_hit_after) == SAO_STATUS_OK);
+    REQUIRE(metadata_hit_after.node != nullptr);
+    sao_ui_layout_node_handle_t metadata_path_after[4]{};
+    size_t metadata_path_after_written = 0;
+    REQUIRE(sao_ui_layout_get_hit_path(metadata_hit_after.node, metadata_path_after, 4,
+                                       &metadata_path_after_written) == SAO_STATUS_OK);
+    REQUIRE(metadata_path_after_written >= 2);
+    SaoUiRect section_after{};
+    REQUIRE(sao_ui_layout_node_get_rect(metadata_path_after[1], &section_after) == SAO_STATUS_OK);
+    CHECK(section_after.x_px == section_before.x_px);
+    CHECK(section_after.y_px == section_before.y_px);
+    CHECK(section_after.width_px == section_before.width_px);
+    CHECK(section_after.height_px == section_before.height_px);
+    sao_ui_panel_destroy(metadata_panel);
+    REQUIRE(sao_ui_compositor_try_destroy(metadata_compositor) == SAO_STATUS_OK);
     sao_ui_panel_destroy(panel);
     REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
+
 
 TEST_CASE("panel test pointer helpers reject invalid handles",
           "[ui][panel][helpers][lifetime]") {
@@ -1817,7 +1886,7 @@ TEST_CASE("panel spec synchronizes disabled widgets and rejects malformed accent
                                 sizeof(bad_accent_type) - 1U) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
     const char bad_accent_value[] =
-        R"({"version":1,"title":"","nodes":[{"type":"section","accent":"bad","children":[]}]})";
+        R"({"version":1,"title":"","nodes":[{"type":"section","accent":"#bad","children":[]}]})";
     CHECK(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(bad_accent_value),
                                 sizeof(bad_accent_value) - 1U) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);

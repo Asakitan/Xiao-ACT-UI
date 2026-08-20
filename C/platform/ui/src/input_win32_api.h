@@ -64,6 +64,7 @@ struct Win32Api {
 #if defined(SAO_UI_OVERLAY_HOST_TESTING)
 void set_win32_api_for_testing(const Win32Api* api) noexcept;
 void reset_win32_api_for_testing() noexcept;
+bool input_rect_has_valid_bounds_for_testing(const SaoOverlayHostInputRect& rect) noexcept;
 #endif
 
 }  // namespace sao::ui::overlay_host_detail
