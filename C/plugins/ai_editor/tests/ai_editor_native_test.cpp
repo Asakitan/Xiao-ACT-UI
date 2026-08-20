@@ -46,12 +46,22 @@ class TemporaryDirectory final {
 public:
     TemporaryDirectory() {
         wchar_t root[MAX_PATH]{};
-        REQUIRE(GetTempPathW(MAX_PATH, root) > 0);
-        path_ = std::filesystem::path(root) /
-                (L"sao-ai-editor-native-" +
-                 std::to_wstring(GetCurrentProcessId()) + L"-" +
-                 std::to_wstring(GetTickCount64()));
-        REQUIRE(std::filesystem::create_directories(path_));
+        const DWORD root_size = GetTempPathW(MAX_PATH, root);
+        REQUIRE(root_size > 0);
+        REQUIRE(root_size < MAX_PATH);
+        bool created = false;
+        for (int attempt = 0; attempt < 16 && !created; ++attempt) {
+            wchar_t candidate[MAX_PATH]{};
+            if (GetTempFileNameW(root, L"sao", 0, candidate) == 0)
+                continue;
+            if (DeleteFileW(candidate) == FALSE)
+                continue;
+            if (CreateDirectoryW(candidate, nullptr) != FALSE) {
+                path_ = candidate;
+                created = true;
+            }
+        }
+        REQUIRE(created);
     }
 
     ~TemporaryDirectory() {
@@ -1317,6 +1327,97 @@ TEST_CASE("AI Editor secret vault survives runtime restart",
     }
     REQUIRE(found_persisted);
     sao_ai_editor_runtime_destroy(second);
+}
+
+TEST_CASE("AI Editor runtime create and dispatch classify malformed JSON as invalid arguments",
+          "[plugins][ai_editor][native][lifecycle][json]") {
+    TemporaryDirectory temporary;
+    const auto workspace = temporary.path() / L"workspace";
+    const auto system = temporary.path() / L"system";
+    REQUIRE(std::filesystem::create_directories(workspace));
+    REQUIRE(std::filesystem::create_directories(system));
+    const std::string workspace_utf8 = utf8_path(workspace);
+    const std::string system_utf8 = utf8_path(system);
+
+    const auto create_with = [&](const std::string& plugin_json) {
+        SaoAiEditorRuntimeConfig config{};
+        config.struct_size = sizeof(config);
+        config.workspace_root_utf8 = workspace_utf8.c_str();
+        config.system_root_utf8 = system_utf8.c_str();
+        config.plugin_roots_json_utf8 = plugin_json.c_str();
+        sao_ai_editor_runtime_t runtime = nullptr;
+        const int32_t status =
+            sao_ai_editor_runtime_create(&config, &runtime);
+        if (status == SAO_AI_EDITOR_OK) {
+            sao_ai_editor_runtime_destroy(runtime);
+        }
+        return status;
+    };
+
+    REQUIRE(create_with("{") == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(create_with("{}") == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const std::string invalid_utf8{static_cast<char>(0xC3),
+                                   static_cast<char>(0x28)};
+    REQUIRE(create_with(invalid_utf8) == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    RuntimeFixture fixture;
+    const std::string malformed = "{";
+    uint32_t out_len = 0;
+    REQUIRE(sao_ai_editor_runtime_dispatch(
+                fixture.get(), malformed.data(),
+                static_cast<uint32_t>(malformed.size()), nullptr, 0, &out_len) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ai_editor_runtime_dispatch(
+                fixture.get(), invalid_utf8.data(),
+                static_cast<uint32_t>(invalid_utf8.size()), nullptr, 0,
+                &out_len) == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor NativeRuntime retires public handles without reuse",
+          "[plugins][ai_editor][native][lifecycle][handles]") {
+    RuntimeFixture fixture;
+    const auto retired = fixture.release();
+    sao_ai_editor_runtime_destroy(retired);
+
+    uint32_t out_len = 99;
+    REQUIRE(sao_ai_editor_runtime_dispatch(retired, nullptr, 0, nullptr, 0,
+                                           &out_len) ==
+            SAO_AI_EDITOR_ERR_HANDLE_INVALID);
+    REQUIRE(sao_ai_editor_runtime_next_event(retired, nullptr, 0, &out_len) ==
+            SAO_AI_EDITOR_ERR_HANDLE_INVALID);
+    REQUIRE(sao_ai_editor_runtime_cancel(retired, "late-entry") ==
+            SAO_AI_EDITOR_ERR_HANDLE_INVALID);
+
+    sao_ai_editor_runtime_destroy(retired);
+
+    RuntimeFixture replacement;
+    REQUIRE(replacement.get() != retired);
+    REQUIRE(dispatch(replacement.get(), "providers.list").contains("result"));
+    REQUIRE(sao_ai_editor_runtime_dispatch(retired, nullptr, 0, nullptr, 0,
+                                           &out_len) ==
+            SAO_AI_EDITOR_ERR_HANDLE_INVALID);
+}
+
+TEST_CASE("AI Editor NativeRuntime rejects late entries during retirement",
+          "[plugins][ai_editor][native][lifecycle][handles]") {
+    RuntimeFixture fixture;
+    const auto runtime = fixture.release();
+    std::thread destroyer([&] { sao_ai_editor_runtime_destroy(runtime); });
+
+    int32_t status = SAO_AI_EDITOR_OK;
+    const ULONGLONG deadline = GetTickCount64() + 2'000;
+    do {
+        status = sao_ai_editor_runtime_cancel(runtime, "late-entry");
+        if (status == SAO_AI_EDITOR_ERR_HANDLE_INVALID) {
+            break;
+        }
+        Sleep(1);
+    } while (GetTickCount64() < deadline);
+
+    const bool rejected = status == SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+    destroyer.join();
+    CHECK(rejected);
+    sao_ai_editor_runtime_destroy(runtime);
 }
 
 TEST_CASE("AI Editor chat preserves synchronous response semantics",
@@ -9627,6 +9728,15 @@ TEST_CASE("AI Editor conversation.import rejects a tampered sha256 payload",
     REQUIRE(rejected["error"]["data"]["status"] ==
             SAO_AI_EDITOR_ERR_PROTOCOL);
 
+        Json malformed_digest = exported;
+        malformed_digest["sha256"] = 7;
+        const Json malformed_rejected = dispatch(
+        runtime, "conversation.import",
+        {{"payload", malformed_digest}, {"scope", "workspace"}, {"overwrite", true}});
+        REQUIRE(malformed_rejected.contains("error"));
+        REQUIRE(malformed_rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
     // Legacy (pre-checksum) payload must still be importable so pre-R4
     // consumers keep working after the checksum lands.
     Json legacy = exported;
@@ -11269,6 +11379,66 @@ exports.activate = (context) => {
     REQUIRE(healthy["result"] == "healthy-command");
     REQUIRE(dispatch(runtime, "extensions.deactivate", {{"extensionId", extension_id}})
                 .contains("result"));
+}
+
+TEST_CASE("ExtensionHost quarantines timed-out activation before rebind",
+          "[plugins][ai_editor][native][extensions][node][lifecycle]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"timeout-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    {
+        std::ofstream source(extension / L"extension.js");
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+exports.activate = () => new Promise((resolve) => {
+    setTimeout(() => resolve({ ready: true }), 500);
+});
+)JS";
+    }
+
+    REQUIRE(dispatch(
+                fixture.get(), "extensions.configure_host",
+                {{"nodeExecutable", node},
+                 {"entryScript", shim},
+                 {"workingDirectory", utf8_path(extension)},
+                 {"startupMs", 5000U}})
+                .contains("result"));
+    const Json manifest{{"name", "timeout"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.timeout";
+    REQUIRE(dispatch(fixture.get(), "extensions.register",
+                     {{"manifest", manifest},
+                      {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+
+    const Json timed_out = dispatch(
+        fixture.get(), "extensions.activate",
+        {{"extensionId", extension_id}, {"timeoutMs", 25U}});
+    REQUIRE(timed_out["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_TIMEOUT);
+
+    const Json listed = dispatch(fixture.get(), "extensions.list")["result"];
+    REQUIRE(listed["nodeAlive"] == false);
+    REQUIRE(listed["items"].size() == 1);
+    REQUIRE(listed["items"][0]["activated"] == false);
+    REQUIRE(listed["items"][0]["operation"] == "idle");
+
+    const Json rebound = dispatch(
+        fixture.get(), "extensions.register",
+        {{"manifest", Json{{"name", "timeout"},
+                             {"publisher", "sao-test"},
+                             {"version", "2.0.0"},
+                             {"main", "extension.js"}}},
+         {"extensionPath", utf8_path(extension)}});
+    REQUIRE(rebound.contains("result"));
+    REQUIRE(rebound["result"]["generation"] == 2);
 }
 
 TEST_CASE("ExtensionHost deactivation settles unique subscriptions in reverse order",

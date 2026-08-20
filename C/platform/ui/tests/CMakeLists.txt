@@ -51,7 +51,8 @@ set_tests_properties(sao_platform_ui_tests PROPERTIES
     SKIP_RETURN_CODE 4
     ENVIRONMENT "SAO_UI_LEGACY_TK_INPUT=1"
     RESOURCE_LOCK "sao_ui_gpu_resources"
-    PROCESSORS 2)
+    PROCESSORS 2
+    TIMEOUT 15)
 
 # ── theme slice — G3.1 flat-token theme tests ──────────────────
 # Isolated target so it stays green even if the shared overlay/comp
@@ -108,6 +109,7 @@ target_compile_definitions(sao_platform_ui_popup_animator_tests PRIVATE SAO_UI_U
 target_compile_features(sao_platform_ui_popup_animator_tests PRIVATE cxx_std_20)
 
 add_test(NAME sao_platform_ui_popup_animator_tests COMMAND sao_platform_ui_popup_animator_tests)
+set_tests_properties(sao_platform_ui_popup_animator_tests PROPERTIES TIMEOUT 15)
 
 # ── process-read slice — G1.5 scheduler 60fps + render_worker thread pool ──
 # Pure timing / thread-pool state — no Windows-only D3D11/DXGI/DComp.
@@ -194,6 +196,7 @@ target_compile_definitions(sao_platform_ui_panel_input_canvas_tests PRIVATE SAO_
 target_compile_features(sao_platform_ui_panel_input_canvas_tests PRIVATE cxx_std_20)
 
 add_test(NAME sao_platform_ui_panel_input_canvas_tests COMMAND sao_platform_ui_panel_input_canvas_tests)
+set_tests_properties(sao_platform_ui_panel_input_canvas_tests PROPERTIES TIMEOUT 15)
 
 # ── Widget kit + time-label tests ──────────────────────────────────
 # Pure state-machine + geometry — no Windows-only surface, no
@@ -728,9 +731,9 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ui_gap.cpp"
         gpu_capture_ensure_session_handle_invalid
         input_install_ll_hooks_handle_invalid
         input_uninstall_ll_hooks_handle_invalid
-        legacy_wgl_make_current_stays_not_implemented
-        legacy_wgl_release_current_stays_not_implemented
-        legacy_wgl_swap_buffers_stays_not_implemented
+        legacy_wgl_make_current_null_handle_is_invalid
+        legacy_wgl_release_current_null_handle_is_invalid
+        legacy_wgl_swap_buffers_null_handle_is_invalid
         legacy_dcomp_gl_interop_stays_not_implemented
         send_input_ledger_records_press_release
         shell_notify_ledger_counts_all_ops
@@ -742,7 +745,8 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ui_gap.cpp"
         add_test(NAME "ui_gap.${_case}"
                  COMMAND test_ui_gap "${_case}")
         set_tests_properties("ui_gap.${_case}" PROPERTIES
-            LABELS "ui;gap_closure")
+            LABELS "ui;gap_closure"
+            TIMEOUT 15)
     endforeach()
 endif()
 

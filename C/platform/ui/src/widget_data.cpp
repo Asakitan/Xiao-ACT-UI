@@ -1193,7 +1193,11 @@ sao_status_t sao::ui::detail::widget_data_paint(sao_ui_widget_handle_t handle, i
                 spec.radius_px > 0 ? spec.radius_px
                                    : std::min(height / 2, sao::ui::detail::panel_theme_metric(
                                                               SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
-            sao_status_t status = paint_rounded_box(
+            const int32_t tooltip_radius = sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM);
+            sao_status_t status = sao::ui::detail::paint_elevation_shadow(context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height), static_cast<float>(tooltip_radius), 2, sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK));
+            if (status != SAO_STATUS_OK)
+                return status;
+            status = paint_rounded_box(
                 context, x, y, width, height,
                 spec.fill_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
                                     : spec.fill_argb,

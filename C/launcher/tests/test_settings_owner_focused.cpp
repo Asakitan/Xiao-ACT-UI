@@ -336,8 +336,8 @@ struct SettingsPanelFixture {
 
 } // namespace
 
-TEST_CASE("native settings panel save failure leaves toggle rolled back",
-          "[launcher][settings][panel][rollback][focused]") {
+TEST_CASE("native settings panel retains a failed draft until cancel",
+          "[launcher][settings][panel][draft][rollback][focused]") {
     SettingsPanelFixture fixture;
     REQUIRE(fixture.owner->set_value_and_save("streaming_mode", false) == SAO_STATUS_OK);
     Settings::open_config_panel();
@@ -350,11 +350,23 @@ TEST_CASE("native settings panel save failure leaves toggle rolled back",
     blocker << "not-a-directory";
     blocker.close();
 
-    CHECK(Settings::dispatch_action_for_testing(Settings::kSettingsActionToggle,
-                                                R"({"key":"streaming_mode"})") != SAO_STATUS_OK);
-    bool value = true;
+    REQUIRE(Settings::dispatch_action_for_testing(Settings::kSettingsActionToggle,
+                                                  R"({"key":"streaming_mode"})") ==
+            SAO_STATUS_OK);
+    bool value = false;
+    REQUIRE(fixture.owner->get_truthy("streaming_mode", true, value) == SAO_STATUS_OK);
+    CHECK(value);
+    CHECK(fixture.owner->dirty());
+
+    CHECK(Settings::dispatch_action_for_testing("settings.apply", "{}") != SAO_STATUS_OK);
+    REQUIRE(fixture.owner->get_truthy("streaming_mode", false, value) == SAO_STATUS_OK);
+    CHECK(value);
+    CHECK(fixture.owner->dirty());
+
+    REQUIRE(Settings::dispatch_action_for_testing("settings.cancel", "{}") == SAO_STATUS_OK);
     REQUIRE(fixture.owner->get_truthy("streaming_mode", true, value) == SAO_STATUS_OK);
     CHECK_FALSE(value);
+    CHECK_FALSE(fixture.owner->dirty());
 }
 TEST_CASE("hotkey manager performs conflict, OS failure, and save rollback transactionally",
           "[launcher][hotkey][transaction][focused]") {

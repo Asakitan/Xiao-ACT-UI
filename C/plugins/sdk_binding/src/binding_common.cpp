@@ -13,9 +13,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -121,8 +123,10 @@ struct plugin_binding_s {
         loading,
         ready,
         unloading,
+        cleanup_pending,
         dead,
     } lifecycle = lifecycle_state::loading;
+    bool provider_unload_pending = false;
     uint64_t host_generation = 0;
     size_t active_calls = 0;
     uint64_t callback_sequence = 0;
@@ -153,10 +157,12 @@ struct plugin_binding_s {
         void* provider_user_data = nullptr;
         language_host_kind language = language_host_kind::python;
         uint64_t sequence = 0;
-        bool claimed = false;
+        enum class release_state : uint8_t { reserved, active, releasing, released } state =
+            release_state::active;
     };
-    std::vector<std::shared_ptr<callback_record>> callbacks;
+    std::vector<callback_record> callbacks;
 
+    std::recursive_mutex callback_gate;
     std::mutex mu;
 };
 
@@ -176,9 +182,6 @@ uint64_t g_next_host_generation = 1;
 
 std::mutex g_bindings_mutex;
 std::vector<plugin_binding_s*> g_bindings;
-
-std::mutex g_callbacks_mutex;
-std::vector<std::shared_ptr<plugin_binding_s::callback_record>> g_unscoped_callbacks;
 
 thread_local plugin_binding_s* g_current_binding = nullptr;
 
@@ -223,6 +226,104 @@ class current_binding_scope {
 
   private:
     plugin_binding_s* previous_ = nullptr;
+};
+
+class callback_reservation_scope;
+thread_local callback_reservation_scope* g_current_callback_reservation = nullptr;
+
+class callback_reservation_scope {
+  public:
+    explicit callback_reservation_scope(plugin_binding_s* binding) noexcept
+        : binding_(binding), gate_(binding->callback_gate) {
+        try {
+            std::lock_guard lock(binding_->mu);
+            if (binding_->lifecycle != plugin_binding_s::lifecycle_state::loading &&
+                binding_->lifecycle != plugin_binding_s::lifecycle_state::ready) {
+                return;
+            }
+            const auto reusable = std::find_if(
+                binding_->callbacks.begin(), binding_->callbacks.end(), [](const auto& callback) {
+                    return callback.state ==
+                           plugin_binding_s::callback_record::release_state::released;
+                });
+            if (reusable != binding_->callbacks.end()) {
+                *reusable = {};
+                slot_ = std::addressof(*reusable);
+            } else {
+                if (binding_->callbacks.size() >= SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP)
+                    return;
+                binding_->callbacks.emplace_back();
+                slot_ = std::addressof(binding_->callbacks.back());
+            }
+            slot_->sequence = ++binding_->callback_sequence;
+            slot_->state = plugin_binding_s::callback_record::release_state::reserved;
+            previous_ = g_current_callback_reservation;
+            g_current_callback_reservation = this;
+        } catch (...) {
+            slot_ = nullptr;
+        }
+    }
+
+    ~callback_reservation_scope() {
+        if (slot_ == nullptr)
+            return;
+        g_current_callback_reservation = previous_;
+        if (consumed_)
+            return;
+        try {
+            std::lock_guard lock(binding_->mu);
+            if (slot_->state == plugin_binding_s::callback_record::release_state::reserved) {
+                const uint64_t sequence = slot_->sequence;
+                *slot_ = {};
+                slot_->sequence = sequence;
+                slot_->state = plugin_binding_s::callback_record::release_state::released;
+            }
+        } catch (...) {
+        }
+    }
+
+    callback_reservation_scope(const callback_reservation_scope&) = delete;
+    callback_reservation_scope& operator=(const callback_reservation_scope&) = delete;
+
+    explicit operator bool() const noexcept {
+        return slot_ != nullptr;
+    }
+
+    plugin_binding_s* binding() const noexcept {
+        return binding_;
+    }
+
+    bool consumed() const noexcept {
+        return consumed_;
+    }
+
+    plugin_binding_s::callback_record* record() const noexcept {
+        return consumed_ ? slot_ : nullptr;
+    }
+
+    int32_t consume(plugin_binding_s::callback_record callback) noexcept {
+        if (slot_ == nullptr || consumed_)
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        try {
+            std::lock_guard lock(binding_->mu);
+            if (slot_->state != plugin_binding_s::callback_record::release_state::reserved)
+                return loader::SAO_PLUGINS_ERR_BUSY;
+            callback.sequence = slot_->sequence;
+            callback.state = plugin_binding_s::callback_record::release_state::active;
+            *slot_ = std::move(callback);
+            consumed_ = true;
+            return SAO_OK;
+        } catch (...) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+    }
+
+  private:
+    plugin_binding_s* binding_ = nullptr;
+    std::unique_lock<std::recursive_mutex> gate_;
+    plugin_binding_s::callback_record* slot_ = nullptr;
+    callback_reservation_scope* previous_ = nullptr;
+    bool consumed_ = false;
 };
 
 class host_call_lease {
@@ -461,143 +562,103 @@ int32_t copy_to_caller(std::string_view value, char* output, size_t capacity,
     return SAO_OK;
 }
 
-std::shared_ptr<plugin_binding_s::callback_record>
-make_legacy_callback(void* user_data, release_callback_fn release_fn) {
-    auto callback = std::make_shared<plugin_binding_s::callback_record>();
-    callback->callback_user_data = user_data;
-    callback->legacy_release = release_fn;
+plugin_binding_s::callback_record make_legacy_callback(
+    void* user_data, release_callback_fn release_fn) noexcept {
+    plugin_binding_s::callback_record callback{};
+    callback.callback_user_data = user_data;
+    callback.legacy_release = release_fn;
     return callback;
 }
 
-std::shared_ptr<plugin_binding_s::callback_record>
-make_provider_callback(plugin_binding_s* binding, void* callback_user_data) {
-    auto callback = std::make_shared<plugin_binding_s::callback_record>();
-    callback->callback_user_data = callback_user_data;
-    callback->provider_release = binding->host.release_callback;
-    callback->provider_user_data = binding->host.user_data;
-    callback->language = binding->host_kind;
+plugin_binding_s::callback_record make_provider_callback(
+    plugin_binding_s* binding, void* callback_user_data) noexcept {
+    plugin_binding_s::callback_record callback{};
+    callback.callback_user_data = callback_user_data;
+    callback.provider_release = binding->host.release_callback;
+    callback.provider_user_data = binding->host.user_data;
+    callback.language = binding->host_kind;
     return callback;
 }
 
 struct release_call {
-    std::shared_ptr<plugin_binding_s::callback_record> callback;
+    plugin_binding_s::callback_record* callback = nullptr;
 };
 
 int32_t SAO_PLUGINS_CALL call_release(void* opaque) {
     auto* call = static_cast<release_call*>(opaque);
     if (call->callback->provider_release != nullptr) {
         call->callback->provider_release(call->callback->callback_user_data,
-                                         call->callback->provider_user_data);
+                                          call->callback->provider_user_data);
     } else {
         call->callback->legacy_release(call->callback->callback_user_data);
     }
     return SAO_OK;
 }
 
-int32_t release_callback_record(
-    const std::shared_ptr<plugin_binding_s::callback_record>& callback) noexcept {
+int32_t release_callback_record(plugin_binding_s::callback_record* callback) noexcept {
     release_call call{callback};
     return sao_plugins_binding_barrier(&call_release, &call, nullptr);
 }
 
-int32_t release_callbacks(
-    const std::vector<std::shared_ptr<plugin_binding_s::callback_record>>& callbacks) noexcept {
-    int32_t first_error = SAO_OK;
-    for (auto iterator = callbacks.rbegin(); iterator != callbacks.rend(); ++iterator) {
-        const int32_t status = release_callback_record(*iterator);
-        if (first_error == SAO_OK && status != SAO_OK)
-            first_error = status;
-    }
-    return first_error;
-}
+void record_callback_release_status(plugin_binding_s* binding, int32_t status) noexcept;
 
-void record_callback_release_status(plugin_binding_s* binding, int32_t status) noexcept {
-    if (binding == nullptr || status == SAO_OK)
-        return;
+int32_t release_binding_callback(plugin_binding_s* binding,
+                                  plugin_binding_s::callback_record* callback) noexcept {
+    const int32_t status = release_callback_record(callback);
     try {
         std::lock_guard lock(binding->mu);
-        if (binding->callback_release_status == SAO_OK) {
-            binding->callback_release_status = status;
-        }
+        callback->state = status == SAO_OK
+                              ? plugin_binding_s::callback_record::release_state::released
+                              : plugin_binding_s::callback_record::release_state::active;
     } catch (...) {
+        record_callback_release_status(binding, SAO_ERR_OS_CALL_FAILED);
+        return SAO_ERR_OS_CALL_FAILED;
     }
+    if (status != SAO_OK)
+        record_callback_release_status(binding, status);
+    return status;
 }
 
-std::vector<std::shared_ptr<plugin_binding_s::callback_record>>
-claim_all_callbacks(plugin_binding_s* binding) {
-    std::vector<std::shared_ptr<plugin_binding_s::callback_record>> claimed;
-    std::lock_guard lock(binding->mu);
-    claimed.swap(binding->callbacks);
-    for (const auto& callback : claimed) {
-        callback->claimed = true;
-    }
-    return claimed;
-}
-
-std::shared_ptr<plugin_binding_s::callback_record>
-claim_callback(language_host_kind language, void* user_data, binding_call_lease& lease) noexcept {
-    if (user_data == nullptr)
-        return {};
-    try {
-        std::lock_guard registry_lock(g_bindings_mutex);
-        plugin_binding_s* owner = nullptr;
-        std::shared_ptr<plugin_binding_s::callback_record> candidate;
-        bool ambiguous = false;
-        const auto inspect = [&](plugin_binding_s* binding) {
-            if (ambiguous || binding->host_kind != language)
-                return;
-            std::lock_guard binding_lock(binding->mu);
-            if (binding->lifecycle != plugin_binding_s::lifecycle_state::ready &&
-                binding->lifecycle != plugin_binding_s::lifecycle_state::loading) {
-                return;
-            }
-            for (const auto& callback : binding->callbacks) {
-                if (callback->claimed || callback->callback_user_data != user_data) {
-                    continue;
-                }
-                if (candidate != nullptr) {
-                    candidate.reset();
-                    owner = nullptr;
-                    ambiguous = true;
-                    return;
-                }
-                candidate = callback;
-                owner = binding;
-            }
-        };
-        if (g_current_binding != nullptr)
-            inspect(g_current_binding);
-        if (candidate == nullptr && !ambiguous) {
-            for (auto* binding : g_bindings) {
-                if (binding == g_current_binding)
-                    continue;
-                inspect(binding);
-                if (ambiguous)
-                    return {};
-            }
-        }
-        if (candidate == nullptr || owner == nullptr)
-            return {};
+int32_t release_binding_callbacks(plugin_binding_s* binding) noexcept {
+    int32_t first_error = SAO_OK;
+    size_t attempts = 0;
+    while (attempts < SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP) {
+        plugin_binding_s::callback_record* callback = nullptr;
         {
-            std::lock_guard owner_lock(owner->mu);
-            if (candidate->claimed ||
-                (owner->lifecycle != plugin_binding_s::lifecycle_state::ready &&
-                 owner->lifecycle != plugin_binding_s::lifecycle_state::loading)) {
-                return {};
-            }
-            candidate->claimed = true;
-            const auto found =
-                std::find(owner->callbacks.begin(), owner->callbacks.end(), candidate);
-            if (found == owner->callbacks.end())
-                return {};
-            owner->callbacks.erase(found);
-            ++owner->active_calls;
-            lease.adopt_locked(owner);
+            std::lock_guard lock(binding->mu);
+            const auto found = std::find_if(
+                binding->callbacks.rbegin(), binding->callbacks.rend(), [](const auto& candidate) {
+                    return candidate.state ==
+                           plugin_binding_s::callback_record::release_state::active;
+                });
+            if (found == binding->callbacks.rend())
+                break;
+            callback = std::addressof(*found);
+            callback->state = plugin_binding_s::callback_record::release_state::releasing;
         }
-        return candidate;
-    } catch (...) {
-        return {};
+        ++attempts;
+        const int32_t status = release_binding_callback(binding, callback);
+        if (status != SAO_OK) {
+            first_error = status;
+            break;
+        }
     }
+    if (attempts == SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP) {
+        try {
+            std::lock_guard lock(binding->mu);
+            const bool active = std::any_of(
+                binding->callbacks.begin(), binding->callbacks.end(), [](const auto& callback) {
+                    return callback.state ==
+                           plugin_binding_s::callback_record::release_state::active;
+                });
+            if (active && first_error == SAO_OK)
+                first_error = loader::SAO_PLUGINS_ERR_BUSY;
+        } catch (...) {
+            if (first_error == SAO_OK)
+                first_error = SAO_ERR_OS_CALL_FAILED;
+        }
+    }
+    return first_error;
 }
 
 uint64_t callback_watermark(plugin_binding_s* binding) noexcept {
@@ -609,72 +670,106 @@ uint64_t callback_watermark(plugin_binding_s* binding) noexcept {
     }
 }
 
-bool callback_tracked_after(plugin_binding_s* binding, void* user_data,
-                            uint64_t watermark) noexcept {
+enum class tracked_callback_state : uint8_t { none, active, inactive, ambiguous };
+
+tracked_callback_state callback_tracked_after(plugin_binding_s* binding, void* user_data,
+                                               uint64_t watermark) noexcept {
     try {
         std::lock_guard lock(binding->mu);
-        return std::any_of(binding->callbacks.begin(), binding->callbacks.end(),
-                           [user_data, watermark](const auto& callback) {
-                               return callback->sequence > watermark &&
-                                      callback->callback_user_data == user_data &&
-                                      !callback->claimed;
-                           });
+        tracked_callback_state result = tracked_callback_state::none;
+        for (const auto& callback : binding->callbacks) {
+            if (callback.sequence <= watermark || callback.callback_user_data != user_data)
+                continue;
+            if (result != tracked_callback_state::none)
+                return tracked_callback_state::ambiguous;
+            result = callback.state == plugin_binding_s::callback_record::release_state::active
+                         ? tracked_callback_state::active
+                         : tracked_callback_state::inactive;
+        }
+        return result;
     } catch (...) {
-        return false;
+        return tracked_callback_state::ambiguous;
     }
-}
-
-std::shared_ptr<plugin_binding_s::callback_record>
-claim_callback_tracked_after(plugin_binding_s* binding, void* user_data,
-                             uint64_t watermark) noexcept {
-    if (binding == nullptr || user_data == nullptr)
-        return {};
-    try {
-        std::lock_guard lock(binding->mu);
-        const auto found = std::find_if(binding->callbacks.begin(), binding->callbacks.end(),
-                                        [user_data, watermark](const auto& callback) {
-                                            return callback->sequence > watermark &&
-                                                   callback->callback_user_data == user_data &&
-                                                   !callback->claimed;
-                                        });
-        if (found == binding->callbacks.end())
-            return {};
-        auto callback = *found;
-        callback->claimed = true;
-        binding->callbacks.erase(found);
-        return callback;
-    } catch (...) {
-        return {};
-    }
-}
-
-int32_t rollback_wrapped_callback(
-    plugin_binding_s* binding, void* user_data, uint64_t watermark,
-    const std::shared_ptr<plugin_binding_s::callback_record>& fallback) noexcept {
-    auto callback = claim_callback_tracked_after(binding, user_data, watermark);
-    if (callback == nullptr)
-        callback = fallback;
-    if (callback == nullptr)
-        return SAO_OK;
-    callback->callback_user_data = user_data;
-    const int32_t status = release_callback_record(callback);
-    record_callback_release_status(binding, status);
-    return status;
 }
 
 int32_t append_callback(plugin_binding_s* binding,
-                        const std::shared_ptr<plugin_binding_s::callback_record>& callback) {
+                        plugin_binding_s::callback_record callback,
+                        plugin_binding_s::callback_record** out_record = nullptr) noexcept {
+    if (out_record != nullptr)
+        *out_record = nullptr;
     try {
-        std::lock_guard lock(binding->mu);
-        if (binding->lifecycle != plugin_binding_s::lifecycle_state::loading &&
-            binding->lifecycle != plugin_binding_s::lifecycle_state::ready) {
-            return loader::SAO_PLUGINS_ERR_BUSY;
+        std::lock_guard gate(binding->callback_gate);
+        if (g_current_callback_reservation != nullptr &&
+            g_current_callback_reservation->binding() == binding &&
+            not g_current_callback_reservation->consumed()) {
+            const int32_t status =
+                g_current_callback_reservation->consume(std::move(callback));
+            if (status == SAO_OK && out_record != nullptr)
+                *out_record = g_current_callback_reservation->record();
+            return status;
         }
-        callback->sequence = ++binding->callback_sequence;
-        binding->callbacks.push_back(callback);
+        std::lock_guard lock(binding->mu);
+        if (binding->lifecycle != plugin_binding_s::lifecycle_state::loading and
+            binding->lifecycle != plugin_binding_s::lifecycle_state::ready)
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        callback.sequence = ++binding->callback_sequence;
+        callback.state = plugin_binding_s::callback_record::release_state::active;
+        const auto reusable = std::find_if(
+            binding->callbacks.begin(), binding->callbacks.end(), [](const auto& candidate) {
+                return candidate.state ==
+                       plugin_binding_s::callback_record::release_state::released;
+            });
+        if (reusable != binding->callbacks.end()) {
+            *reusable = std::move(callback);
+            if (out_record != nullptr)
+                *out_record = std::addressof(*reusable);
+        } else {
+            if (binding->callbacks.size() >= SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP)
+                return loader::SAO_PLUGINS_ERR_BUSY;
+            binding->callbacks.push_back(std::move(callback));
+            if (out_record != nullptr)
+                *out_record = std::addressof(binding->callbacks.back());
+        }
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+void set_last_error_best_effort(plugin_binding_s* binding, const char* message) noexcept {
+    if (binding == nullptr)
+        return;
+    try {
+        std::lock_guard lock(binding->mu);
+        if (message == nullptr)
+            binding->last_error.clear();
+        else
+            binding->last_error = message;
+    } catch (...) {
+    }
+}
+
+void restore_lifecycle_and_set_error(
+    plugin_binding_s* binding, plugin_binding_s::lifecycle_state state,
+    const char* message) noexcept {
+    if (binding == nullptr)
+        return;
+    try {
+        std::lock_guard lock(binding->mu);
+        binding->lifecycle = state;
+    } catch (...) {
+    }
+    set_last_error_best_effort(binding, message);
+}
+
+void record_callback_release_status(plugin_binding_s* binding, int32_t status) noexcept {
+    if (binding == nullptr or status == SAO_OK)
+        return;
+    try {
+        std::lock_guard lock(binding->mu);
+        if (binding->callback_release_status == SAO_OK)
+            binding->callback_release_status = status;
+    } catch (...) {
     }
 }
 
@@ -831,54 +926,106 @@ extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_binding_free_error(
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_track_callback(void* user_data, release_callback_fn release_fn) {
-    if (user_data == nullptr || release_fn == nullptr) {
+    if (user_data == nullptr or release_fn == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    }
+    if (g_current_binding == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    return append_callback(g_current_binding, make_legacy_callback(user_data, release_fn));
+}
+
+struct scoped_callback_match {
+    plugin_binding_s* binding = nullptr;
+    plugin_binding_s::callback_record* callback = nullptr;
+    bool found = false;
+};
+
+scoped_callback_match begin_scoped_callback(language_host_kind language, void* user_data,
+                                             binding_call_lease& lease) noexcept {
+    scoped_callback_match match{};
     try {
-        auto callback = make_legacy_callback(user_data, release_fn);
-        if (g_current_binding != nullptr) {
-            return append_callback(g_current_binding, callback);
+        std::lock_guard registry_lock(g_bindings_mutex);
+        size_t matches = 0;
+        for (auto* binding : g_bindings) {
+            if (binding->host_kind != language)
+                continue;
+            std::lock_guard binding_lock(binding->mu);
+            const bool usable = binding->lifecycle == plugin_binding_s::lifecycle_state::ready or
+                                binding->lifecycle == plugin_binding_s::lifecycle_state::loading or
+                                binding->lifecycle ==
+                                    plugin_binding_s::lifecycle_state::cleanup_pending or
+                                (binding == g_current_binding and
+                                 binding->lifecycle == plugin_binding_s::lifecycle_state::unloading);
+            if (not usable)
+                continue;
+            for (auto& callback : binding->callbacks) {
+                if (callback.callback_user_data != user_data or
+                    callback.state == plugin_binding_s::callback_record::release_state::released or
+                    callback.state == plugin_binding_s::callback_record::release_state::reserved)
+                    continue;
+                ++matches;
+                if (matches > 1) {
+                    match.binding = nullptr;
+                    match.callback = nullptr;
+                    match.found = true;
+                    continue;
+                }
+                match.binding = binding;
+                match.callback = &callback;
+                match.found = true;
+            }
         }
-        std::lock_guard lock(g_callbacks_mutex);
-        g_unscoped_callbacks.push_back(std::move(callback));
-        return SAO_OK;
+        if (matches != 1 or match.binding == nullptr or match.callback == nullptr)
+            return match;
+        std::lock_guard binding_lock(match.binding->mu);
+        if (match.callback->state != plugin_binding_s::callback_record::release_state::active) {
+            match.callback = nullptr;
+            return match;
+        }
+        match.callback->state = plugin_binding_s::callback_record::release_state::releasing;
+        ++match.binding->active_calls;
+        lease.adopt_locked(match.binding);
+        return match;
     } catch (...) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return {};
     }
 }
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_binding_release_all_callbacks(void) {
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_binding_release_all_callbacks(void) {
     try {
         if (g_current_binding != nullptr) {
-            const int32_t status = release_callbacks(claim_all_callbacks(g_current_binding));
+            const int32_t status = release_binding_callbacks(g_current_binding);
             record_callback_release_status(g_current_binding, status);
-            return;
         }
-        std::vector<std::shared_ptr<plugin_binding_s::callback_record>> callbacks;
-        {
-            std::lock_guard lock(g_callbacks_mutex);
-            callbacks.swap(g_unscoped_callbacks);
-            for (const auto& callback : callbacks) {
-                callback->claimed = true;
-            }
-        }
-        (void)release_callbacks(callbacks);
     } catch (...) {
     }
 }
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_binding_release_callback(language_host_kind language, void* callback_user_data) {
-    if (!valid_language(language) || callback_user_data == nullptr)
+    if (not valid_language(language) or callback_user_data == nullptr)
         return;
     try {
         binding_call_lease lease;
-        auto callback = claim_callback(language, callback_user_data, lease);
-        if (callback == nullptr)
+        const auto match = begin_scoped_callback(language, callback_user_data, lease);
+        if (match.found) {
+            if (match.callback != nullptr) {
+                current_binding_scope scope(match.binding);
+                const int32_t status = release_callback_record(match.callback);
+                try {
+                    std::lock_guard lock(match.binding->mu);
+                    match.callback->state =
+                        status == SAO_OK
+                            ? plugin_binding_s::callback_record::release_state::released
+                            : plugin_binding_s::callback_record::release_state::active;
+                } catch (...) {
+                    record_callback_release_status(match.binding, SAO_ERR_OS_CALL_FAILED);
+                }
+                if (status != SAO_OK)
+                    record_callback_release_status(match.binding, status);
+            }
             return;
-        current_binding_scope scope(lease.get());
-        const int32_t status = release_callback_record(callback);
-        record_callback_release_status(lease.get(), status);
+        }
     } catch (...) {
     }
 }
@@ -1101,20 +1248,23 @@ sao_plugins_binding_plugin_load(language_host_kind language, void* plugin_ctx, v
     if (out_plugin == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     *out_plugin = nullptr;
-    if (!valid_language(language) || plugin_ctx == nullptr || runtime == nullptr) {
+    if (not valid_language(language) or plugin_ctx == nullptr or runtime == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    }
 
     try {
         host_call_lease host_lease;
         int32_t status = host_lease.acquire(language);
-        if (status != SAO_OK || !host_available(host_lease.adapter())) {
+        if (status != SAO_OK or not host_available(host_lease.adapter()))
             return unsupported();
-        }
 
         auto binding = std::unique_ptr<plugin_binding_s>(new (std::nothrow) plugin_binding_s{});
-        if (!binding)
+        if (not binding)
             return SAO_ERR_OS_CALL_FAILED;
+        try {
+            binding->callbacks.reserve(SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP);
+        } catch (...) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
         binding->ctx = plugin_ctx;
         binding->lang_state = runtime;
         binding->host_kind = language;
@@ -1140,30 +1290,36 @@ sao_plugins_binding_plugin_load(language_host_kind language, void* plugin_ctx, v
             status = sao_plugins_binding_barrier(&call_load, &call, &error);
         }
         sao_plugins_binding_free_error(error);
-        if (status != SAO_OK || provider_plugin == nullptr) {
-            if (provider_plugin != nullptr) {
-                unload_call rollback{binding->host, provider_plugin};
+        if (status != SAO_OK or provider_plugin == nullptr) {
+            int32_t cleanup_status = SAO_OK;
+            {
                 current_binding_scope scope(binding.get());
-                const int32_t rollback_status =
-                    sao_plugins_binding_barrier(&call_unload, &rollback, nullptr);
-                if (rollback_status != SAO_OK) {
-                    binding->provider_plugin = provider_plugin;
-                    {
-                        std::lock_guard lock(binding->mu);
-                        binding->lifecycle = plugin_binding_s::lifecycle_state::unloading;
-                    }
-                    binding.release();
-                    registration.dismiss();
-                    return rollback_status;
+                cleanup_status = release_binding_callbacks(binding.get());
+                if (cleanup_status == SAO_OK && provider_plugin != nullptr) {
+                    unload_call rollback{binding->host, provider_plugin};
+                    char* rollback_error = nullptr;
+                    cleanup_status = sao_plugins_binding_barrier(&call_unload, &rollback,
+                                                                  &rollback_error);
+                    sao_plugins_binding_free_error(rollback_error);
+                    if (cleanup_status == SAO_OK)
+                        provider_plugin = nullptr;
                 }
             }
-            // A successful provider unload has already torn down the language
-            // runtime. Drop stale ownership records without calling into it.
-            (void)claim_all_callbacks(binding.get());
+            if (cleanup_status != SAO_OK) {
+                binding->provider_plugin = provider_plugin;
+                binding->provider_unload_pending = provider_plugin != nullptr;
+                restore_lifecycle_and_set_error(
+                    binding.get(), plugin_binding_s::lifecycle_state::cleanup_pending,
+                    "language host load rollback cleanup failed");
+                *out_plugin = binding.release();
+                registration.dismiss();
+                return cleanup_status;
+            }
             return status == SAO_OK ? SAO_ERR_NOT_INITIALIZED : status;
         }
 
         binding->provider_plugin = provider_plugin;
+        binding->provider_unload_pending = true;
         {
             std::lock_guard lock(binding->mu);
             binding->lifecycle = plugin_binding_s::lifecycle_state::ready;
@@ -1181,54 +1337,65 @@ sao_plugins_binding_plugin_unload(plugin_binding_handle_t plugin) {
     if (plugin == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     try {
+        bool retry = false;
         {
             std::lock_guard registry_lock(g_bindings_mutex);
-            if (std::find(g_bindings.begin(), g_bindings.end(), plugin) == g_bindings.end()) {
+            if (std::find(g_bindings.begin(), g_bindings.end(), plugin) == g_bindings.end())
                 return SAO_ERR_HANDLE_INVALID;
-            }
             std::lock_guard binding_lock(plugin->mu);
-            if (plugin->lifecycle != plugin_binding_s::lifecycle_state::ready) {
+            if (plugin->lifecycle == plugin_binding_s::lifecycle_state::ready) {
+                if (plugin->active_calls != 0)
+                    return loader::SAO_PLUGINS_ERR_BUSY;
+                plugin->lifecycle = plugin_binding_s::lifecycle_state::unloading;
+            } else if (plugin->lifecycle == plugin_binding_s::lifecycle_state::cleanup_pending) {
+                if (plugin->active_calls != 0)
+                    return loader::SAO_PLUGINS_ERR_BUSY;
+                retry = true;
+                plugin->lifecycle = plugin_binding_s::lifecycle_state::unloading;
+            } else {
                 return plugin->lifecycle == plugin_binding_s::lifecycle_state::unloading
                            ? loader::SAO_PLUGINS_ERR_BUSY
                            : SAO_ERR_HANDLE_INVALID;
             }
-            if (plugin->active_calls != 0) {
-                return loader::SAO_PLUGINS_ERR_BUSY;
-            }
-            plugin->lifecycle = plugin_binding_s::lifecycle_state::unloading;
+            plugin->callback_release_status = SAO_OK;
         }
 
         host_call_lease host_lease;
         int32_t status = host_lease.acquire(plugin->host_kind, plugin->host_generation);
         if (status != SAO_OK) {
-            std::lock_guard lock(plugin->mu);
-            plugin->lifecycle = plugin_binding_s::lifecycle_state::ready;
+            restore_lifecycle_and_set_error(
+                plugin, retry ? plugin_binding_s::lifecycle_state::cleanup_pending
+                              : plugin_binding_s::lifecycle_state::ready,
+                "language host unload unavailable");
             return status;
         }
 
-        unload_call call{plugin->host, plugin->provider_plugin};
-        char* error = nullptr;
         {
             current_binding_scope scope(plugin);
-            status = sao_plugins_binding_barrier(&call_unload, &call, &error);
-        }
-        if (status != SAO_OK) {
-            std::lock_guard lock(plugin->mu);
-            plugin->last_error = error != nullptr ? error : "language host unload failed";
-            plugin->lifecycle = plugin_binding_s::lifecycle_state::ready;
-            sao_plugins_binding_free_error(error);
-            return status;
-        }
-        sao_plugins_binding_free_error(error);
-
-        auto remaining_callbacks = claim_all_callbacks(plugin);
-        int32_t release_status = remaining_callbacks.empty() ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
-        {
-            std::lock_guard lock(plugin->mu);
-            if (release_status == SAO_OK && plugin->callback_release_status != SAO_OK) {
-                release_status = plugin->callback_release_status;
+            status = release_binding_callbacks(plugin);
+            if (status != SAO_OK) {
+                restore_lifecycle_and_set_error(
+                    plugin, plugin_binding_s::lifecycle_state::cleanup_pending,
+                    "language host callback release failed");
+                return status;
+            }
+            if (plugin->provider_plugin != nullptr) {
+                unload_call call{plugin->host, plugin->provider_plugin};
+                char* error = nullptr;
+                status = sao_plugins_binding_barrier(&call_unload, &call, &error);
+                if (status != SAO_OK) {
+                    restore_lifecycle_and_set_error(
+                        plugin, plugin_binding_s::lifecycle_state::cleanup_pending,
+                        error != nullptr ? error : "language host unload failed");
+                    sao_plugins_binding_free_error(error);
+                    return status;
+                }
+                sao_plugins_binding_free_error(error);
+                plugin->provider_plugin = nullptr;
+                plugin->provider_unload_pending = false;
             }
         }
+
         unregister_binding(plugin);
         {
             std::lock_guard lock(plugin->mu);
@@ -1236,8 +1403,11 @@ sao_plugins_binding_plugin_unload(plugin_binding_handle_t plugin) {
         }
         release_host_binding(plugin->host_kind, plugin->host_generation);
         delete plugin;
-        return release_status;
+        return SAO_OK;
     } catch (...) {
+        restore_lifecycle_and_set_error(
+            plugin, plugin_binding_s::lifecycle_state::cleanup_pending,
+            "language host unload failed");
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
@@ -1269,18 +1439,14 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_plugin_i
             current_binding_scope scope(plugin);
             status = sao_plugins_binding_barrier(&call_invoke, &call, &barrier_error);
         }
-        {
-            std::lock_guard lock(plugin->mu);
-            if (provider_error[0] != '\0')
-                plugin->last_error = provider_error.data();
-            else if (barrier_error != nullptr)
-                plugin->last_error = barrier_error;
-            else if (status == SAO_OK || status == SAO_ERR_BUFFER_TOO_SMALL) {
-                plugin->last_error.clear();
-            } else {
-                plugin->last_error = "language host invoke failed";
-            }
-        }
+        if (provider_error[0] != '\0')
+            set_last_error_best_effort(plugin, provider_error.data());
+        else if (barrier_error != nullptr)
+            set_last_error_best_effort(plugin, barrier_error);
+        else if (status == SAO_OK || status == SAO_ERR_BUFFER_TOO_SMALL)
+            set_last_error_best_effort(plugin, nullptr);
+        else
+            set_last_error_best_effort(plugin, "language host invoke failed");
         sao_plugins_binding_free_error(barrier_error);
         return status;
     } catch (...) {
@@ -1306,87 +1472,131 @@ sao_plugins_binding_plugin_last_error(plugin_binding_handle_t plugin, char* out_
     }
 }
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_dispatch_provider(
-    language_host_kind language, language_binding_operation operation,
-    language_binding_request* request) {
-    if (request == nullptr || !valid_language(language)) {
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_binding_dispatch_provider(language_host_kind language,
+                                      language_binding_operation operation,
+                                      language_binding_request* request) {
+    if (request == nullptr or not valid_language(language))
         return SAO_ERR_INVALID_ARGUMENT;
-    }
     try {
-        if (operation == language_binding_operation::callback_wrap &&
-            request->out_callback != nullptr && request->out_user_data != nullptr) {
+        if (operation == language_binding_operation::callback_wrap and
+            request->out_callback != nullptr and request->out_user_data != nullptr) {
             *request->out_callback = nullptr;
             *request->out_user_data = nullptr;
         }
         host_call_lease host_lease;
         int32_t status = host_lease.acquire(language);
-        if (status != SAO_OK || !host_available(host_lease.adapter()) ||
-            host_lease.adapter().dispatch == nullptr) {
+        if (status != SAO_OK or not host_available(host_lease.adapter()) or
+            host_lease.adapter().dispatch == nullptr)
             return unsupported();
-        }
 
         binding_call_lease binding_lease;
-        std::shared_ptr<plugin_binding_s::callback_record> callback;
         uint64_t watermark = 0;
         if (operation == language_binding_operation::callback_wrap) {
-            if (request->runtime == nullptr || request->out_callback == nullptr ||
-                request->out_user_data == nullptr) {
+            if (request->runtime == nullptr or request->out_callback == nullptr or
+                request->out_user_data == nullptr)
                 return SAO_ERR_INVALID_ARGUMENT;
-            }
             status = acquire_callback_owner(language, request->runtime, binding_lease);
             if (status != SAO_OK)
                 return status;
-            if (adapter_has_release_callback(host_lease.adapter())) {
-                callback = make_provider_callback(binding_lease.get(), nullptr);
-            }
             watermark = callback_watermark(binding_lease.get());
         }
 
         dispatch_call call{host_lease.adapter(), operation, request};
+        if (operation != language_binding_operation::callback_wrap) {
+            current_binding_scope scope(nullptr);
+            return sao_plugins_binding_barrier(&call_dispatch, &call, nullptr);
+        }
+
+        callback_reservation_scope reservation(binding_lease.get());
+        if (not reservation)
+            return loader::SAO_PLUGINS_ERR_BUSY;
         {
             current_binding_scope scope(binding_lease.get());
             status = sao_plugins_binding_barrier(&call_dispatch, &call, nullptr);
         }
-        if (operation != language_binding_operation::callback_wrap) {
-            return status;
-        }
-        if (status != SAO_OK) {
-            if (*request->out_user_data != nullptr) {
-                current_binding_scope scope(binding_lease.get());
-                (void)rollback_wrapped_callback(binding_lease.get(), *request->out_user_data,
-                                                watermark, callback);
+        if (status != SAO_OK or *request->out_callback == nullptr or
+            *request->out_user_data == nullptr) {
+            int32_t cleanup_status = SAO_OK;
+            void* callback_user_data = *request->out_user_data;
+            if (callback_user_data != nullptr) {
+                const tracked_callback_state tracked = callback_tracked_after(
+                    binding_lease.get(), callback_user_data, watermark);
+                if (tracked == tracked_callback_state::active) {
+                    sao_plugins_binding_release_callback(language, callback_user_data);
+                    const tracked_callback_state after_release = callback_tracked_after(
+                        binding_lease.get(), callback_user_data, watermark);
+                    if (after_release == tracked_callback_state::active) {
+                        std::lock_guard lock(binding_lease.get()->mu);
+                        cleanup_status = binding_lease.get()->callback_release_status != SAO_OK
+                                             ? binding_lease.get()->callback_release_status
+                                             : SAO_ERR_OS_CALL_FAILED;
+                    } else if (after_release == tracked_callback_state::ambiguous) {
+                        cleanup_status = loader::SAO_PLUGINS_ERR_BUSY;
+                    }
+                } else if (tracked == tracked_callback_state::ambiguous) {
+                    cleanup_status = loader::SAO_PLUGINS_ERR_BUSY;
+                } else if (tracked == tracked_callback_state::none &&
+                           binding_lease.get()->host.release_callback != nullptr) {
+                    auto callback = make_provider_callback(binding_lease.get(), callback_user_data);
+                    plugin_binding_s::callback_record* record = nullptr;
+                    const int32_t retain_status =
+                        reservation.consumed()
+                            ? append_callback(binding_lease.get(), std::move(callback), &record)
+                            : reservation.consume(std::move(callback));
+                    if (record == nullptr && reservation.consumed())
+                        record = reservation.record();
+                    if (retain_status != SAO_OK || record == nullptr) {
+                        cleanup_status = retain_status != SAO_OK
+                                             ? retain_status
+                                             : SAO_ERR_OS_CALL_FAILED;
+                    } else {
+                        cleanup_status = release_binding_callback(binding_lease.get(), record);
+                    }
+                } else if (tracked == tracked_callback_state::none) {
+                    // A v1 provider without a release callback keeps ownership
+                    // on failure; preserve the handles so its caller can unwind.
+                    return status != SAO_OK ? status : SAO_ERR_NOT_INITIALIZED;
+                }
             }
             *request->out_callback = nullptr;
             *request->out_user_data = nullptr;
-            return status;
+            if (cleanup_status != SAO_OK)
+                return cleanup_status;
+            return status != SAO_OK ? status : SAO_ERR_NOT_INITIALIZED;
         }
-        if (*request->out_callback == nullptr || *request->out_user_data == nullptr) {
-            if (*request->out_user_data != nullptr) {
-                current_binding_scope scope(binding_lease.get());
-                (void)rollback_wrapped_callback(binding_lease.get(), *request->out_user_data,
-                                                watermark, callback);
-            }
-            *request->out_callback = nullptr;
-            *request->out_user_data = nullptr;
-            return SAO_ERR_NOT_INITIALIZED;
-        }
-        if (callback_tracked_after(binding_lease.get(), *request->out_user_data, watermark)) {
+
+        const tracked_callback_state tracked = callback_tracked_after(
+            binding_lease.get(), *request->out_user_data, watermark);
+        if (tracked == tracked_callback_state::active)
             return SAO_OK;
+        if (tracked == tracked_callback_state::inactive) {
+            *request->out_callback = nullptr;
+            *request->out_user_data = nullptr;
+            return SAO_ERR_HANDLE_INVALID;
         }
-        if (callback == nullptr) {
+        if (tracked == tracked_callback_state::ambiguous) {
+            *request->out_callback = nullptr;
+            *request->out_user_data = nullptr;
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        if (binding_lease.get()->host.release_callback == nullptr) {
             *request->out_callback = nullptr;
             *request->out_user_data = nullptr;
             return unsupported();
         }
-        callback->callback_user_data = *request->out_user_data;
-        status = append_callback(binding_lease.get(), callback);
+        auto callback = make_provider_callback(binding_lease.get(), *request->out_user_data);
+        status = reservation.consumed()
+                     ? append_callback(binding_lease.get(), std::move(callback))
+                     : reservation.consume(std::move(callback));
         if (status != SAO_OK) {
-            current_binding_scope scope(binding_lease.get());
-            (void)release_callback_record(callback);
+            auto rejected = make_provider_callback(binding_lease.get(), *request->out_user_data);
+            const int32_t release_status = release_callback_record(&rejected);
             *request->out_callback = nullptr;
             *request->out_user_data = nullptr;
+            return release_status == SAO_OK ? status : release_status;
         }
-        return status;
+        return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

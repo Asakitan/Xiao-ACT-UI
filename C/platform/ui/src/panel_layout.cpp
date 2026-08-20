@@ -623,14 +623,8 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
 }
 // ─── arrange recursion ─────────────────────────────────────────────
 
-static int32_t clamp_signed_i32(int64_t value) {
-    return static_cast<int32_t>(std::clamp(
-        value, static_cast<int64_t>(std::numeric_limits<int32_t>::min()),
-        static_cast<int64_t>(std::numeric_limits<int32_t>::max())));
-}
-
 static SaoUiRect make_nonnegative_rect(int64_t x, int64_t y, int64_t width, int64_t height) {
-    return {clamp_signed_i32(x), clamp_signed_i32(y),
+    return {clamp_nonnegative_i32(x), clamp_nonnegative_i32(y),
             clamp_nonnegative_i32(width), clamp_nonnegative_i32(height)};
 }
 

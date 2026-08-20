@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -75,6 +76,10 @@ extern "C" void sao_launcher_init_pipeline_test_set_runtime_installer_hook(
                                                    uint64_t bytes_total,
                                                    void* user_data),
                                void* progress_user_data));
+
+extern "C" sao_status_t sao_launcher_init_pipeline_test_bind_plugins_preserves_registry(
+    sao_plugins_registry* previous, sao_plugins_registry* candidate,
+    sao_status_t authority_sync_status, sao_plugins_registry** current_out);
 
 namespace {
 
@@ -520,6 +525,92 @@ TEST_CASE("launcher_init_pipeline_run_no_deps_returns_ok", "[launcher][init_pipe
     REQUIRE(exit_code == SAO_EXIT_OK);
     // BaseDir must be populated once resolveWorkingDir completes.
     REQUIRE(SaoLauncherBaseDir[0] != L'\0');
+}
+
+TEST_CASE("launcher failed init restores process globals for same-process retry",
+          "[launcher][init_pipeline][rollback][same_process]") {
+    DualRunChildGuard dual_run_child_guard;
+    CompositionRecorder composition;
+    composition.platform_bringup_status = SAO_STATUS_INTERNAL;
+    CompositionHookGuard composition_guard(composition);
+    TeardownRecorder teardown_recorder;
+    sao_launcher_init_hooks_t hooks{};
+    hooks.poll_should_exit = &TeardownRecorder::pollExitImmediately;
+    hooks.on_teardown_step = &TeardownRecorder::onStep;
+    hooks.user_data = &teardown_recorder;
+
+    wchar_t argv0[] = L"SaoAutoTests.exe";
+    wchar_t* argv[] = {argv0};
+
+    std::array<wchar_t, 32768> previous_environment{};
+    SetLastError(ERROR_SUCCESS);
+    const DWORD previous_length = GetEnvironmentVariableW(
+        L"SAO_BASE_DIR", previous_environment.data(),
+        static_cast<DWORD>(previous_environment.size()));
+    const DWORD previous_error = GetLastError();
+    const bool previous_environment_exists =
+        previous_length != 0u || previous_error != ERROR_ENVVAR_NOT_FOUND;
+    std::array<wchar_t, 260> previous_base_dir{};
+    std::memcpy(previous_base_dir.data(), SaoLauncherBaseDir,
+                sizeof(previous_base_dir));
+
+    const auto restore_fixture = [&] {
+        if (previous_environment_exists) {
+            REQUIRE(SetEnvironmentVariableW(L"SAO_BASE_DIR", previous_environment.data()));
+        } else {
+            REQUIRE(SetEnvironmentVariableW(L"SAO_BASE_DIR", nullptr));
+        }
+        std::memcpy(SaoLauncherBaseDir, previous_base_dir.data(),
+                    sizeof(previous_base_dir));
+    };
+
+    REQUIRE(SetEnvironmentVariableW(L"SAO_BASE_DIR", L"previous-base-dir"));
+    lstrcpynW(SaoLauncherBaseDir, L"previous-launcher-base-dir", 260);
+
+    int exit_code = -1;
+    REQUIRE(sao_launcher_init_pipeline_run(1, argv, &hooks, &exit_code) == SAO_STATUS_INTERNAL);
+    REQUIRE(exit_code == sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL);
+
+    wchar_t observed_environment[260]{};
+    REQUIRE(GetEnvironmentVariableW(L"SAO_BASE_DIR", observed_environment,
+                                    static_cast<DWORD>(std::size(observed_environment))) > 0u);
+    CHECK(std::wstring(observed_environment) == L"previous-base-dir");
+    CHECK(std::wstring(SaoLauncherBaseDir) == L"previous-launcher-base-dir");
+
+    REQUIRE(SetEnvironmentVariableW(L"SAO_BASE_DIR", nullptr));
+    SaoLauncherBaseDir[0] = L'\0';
+    exit_code = -1;
+    REQUIRE(sao_launcher_init_pipeline_run(1, argv, &hooks, &exit_code) == SAO_STATUS_INTERNAL);
+    REQUIRE(exit_code == sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL);
+    SetLastError(ERROR_SUCCESS);
+    CHECK(GetEnvironmentVariableW(L"SAO_BASE_DIR", observed_environment,
+                                  static_cast<DWORD>(std::size(observed_environment))) == 0u);
+    CHECK(GetLastError() == ERROR_ENVVAR_NOT_FOUND);
+    CHECK(SaoLauncherBaseDir[0] == L'\0');
+
+    composition.platform_bringup_status = SAO_STATUS_OK;
+    exit_code = -1;
+    REQUIRE(sao_launcher_init_pipeline_run(1, argv, &hooks, &exit_code) == SAO_STATUS_OK);
+    CHECK(exit_code == SAO_EXIT_OK);
+    CHECK(SaoLauncherBaseDir[0] != L'\0');
+
+    restore_fixture();
+}
+
+TEST_CASE("launcher plugin bind restores prior registry when authority sync fails",
+          "[launcher][init_pipeline][plugins][authority][rollback]") {
+    auto* previous = reinterpret_cast<sao_plugins_registry*>(static_cast<uintptr_t>(0x1111u));
+    auto* candidate = reinterpret_cast<sao_plugins_registry*>(static_cast<uintptr_t>(0x2222u));
+    sao_plugins_registry* observed = nullptr;
+
+    CHECK(sao_launcher_init_pipeline_test_bind_plugins_preserves_registry(
+              previous, candidate, SAO_STATUS_INTERNAL, &observed) == SAO_STATUS_INTERNAL);
+    CHECK(observed == previous);
+
+    observed = nullptr;
+    CHECK(sao_launcher_init_pipeline_test_bind_plugins_preserves_registry(
+              previous, candidate, SAO_STATUS_OK, &observed) == SAO_STATUS_OK);
+    CHECK(observed == candidate);
 }
 
 TEST_CASE("launcher streaming mode release failure compensates applied state",

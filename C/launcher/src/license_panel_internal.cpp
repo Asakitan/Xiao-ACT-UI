@@ -39,6 +39,8 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <ctime>
+#include <cstdio>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -196,7 +198,21 @@ std::string tier_name(sao_license_tier_t tier) {
 std::string format_expiry(std::uint64_t expiry_ms) {
     if (expiry_ms == 0U)
         return "perpetual";
-    return std::to_string(expiry_ms / 1000U) + " (UTC s)";
+    const std::time_t seconds = static_cast<std::time_t>(expiry_ms / 1000U);
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &seconds);
+#else
+    gmtime_r(&seconds, &utc);
+#endif
+    const auto now_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000U;
+    const std::uint64_t remaining_days = expiry_ms > now_ms
+        ? (expiry_ms - now_ms + 86'400'000U - 1U) / 86'400'000U : 0U;
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d UTC (%llu days remaining)",
+                  utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
+                  static_cast<unsigned long long>(remaining_days));
+    return buffer;
 }
 
 json text_node(std::string text, std::string_view style = "value", int height = 24) {
@@ -452,14 +468,54 @@ struct Owner::State {
     std::atomic<bool> activation_cancel_requested{false};
     std::condition_variable activation_cv;
     std::thread activation_thread;
+    std::thread status_thread;
+    std::atomic<bool> status_running{false};
+    std::atomic<bool> status_cancel_requested{false};
+    std::condition_variable status_cv;
 };
 
 std::mutex Owner::deferred_mutex_;
-std::vector<std::unique_ptr<Owner::State>> Owner::deferred_cleanup_;
+std::vector<std::unique_ptr<Owner::State>>* Owner::deferred_cleanup_ =
+    new std::vector<std::unique_ptr<Owner::State>>();
 
-void Owner::defer_state(std::unique_ptr<State> state) noexcept { if (state == nullptr) return; state->owner = nullptr; { std::lock_guard lock(state->mutex); state->accepting = false; state->retiring = false; } std::lock_guard lock(deferred_mutex_); deferred_cleanup_.push_back(std::move(state)); }
+void Owner::defer_state(std::unique_ptr<State> state) noexcept {
+    if (state == nullptr)
+        return;
+    state->owner = nullptr;
+    {
+        std::lock_guard lock(state->mutex);
+        state->accepting = false;
+        state->retiring = false;
+    }
+    std::lock_guard lock(deferred_mutex_);
+    deferred_cleanup_->push_back(std::move(state));
+}
 
-void Owner::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<State>> pending; { std::lock_guard lock(deferred_mutex_); pending.swap(deferred_cleanup_); } std::vector<std::unique_ptr<State>> retry; for (auto& state : pending) { auto owner = std::unique_ptr<Owner>(new (std::nothrow) Owner(std::move(state), AdoptStateTag{})); if (owner == nullptr) { retry.push_back(std::move(state)); continue; } const sao_status_t status = owner->take_offline(); state = std::move(owner->state_); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex_); for (auto& state : retry) deferred_cleanup_.push_back(std::move(state)); } }
+void Owner::drain_deferred_cleanup() noexcept {
+    std::vector<std::unique_ptr<State>> pending;
+    {
+        std::lock_guard lock(deferred_mutex_);
+        pending.swap(*deferred_cleanup_);
+    }
+    std::vector<std::unique_ptr<State>> retry;
+    for (auto& state : pending) {
+        auto owner =
+            std::unique_ptr<Owner>(new (std::nothrow) Owner(std::move(state), AdoptStateTag{}));
+        if (owner == nullptr) {
+            retry.push_back(std::move(state));
+            continue;
+        }
+        const sao_status_t status = owner->take_offline();
+        state = std::move(owner->state_);
+        if (status != SAO_STATUS_OK)
+            retry.push_back(std::move(state));
+    }
+    if (!retry.empty()) {
+        std::lock_guard lock(deferred_mutex_);
+        for (auto& state : retry)
+            deferred_cleanup_->push_back(std::move(state));
+    }
+}
 
 struct Owner::OperationGuard {
     explicit OperationGuard(Owner& value) noexcept
@@ -488,12 +544,6 @@ Owner::Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept : state_(std:
 Owner::~Owner() noexcept {
     if (!state_)
         return;
-    if (state_->activation_thread.joinable()) {
-        state_->activation_cancel_requested.store(true);
-        if (state_->operations.cancel_activation)
-            state_->operations.cancel_activation();
-        state_->activation_thread.join();
-    }
     if (take_offline() == SAO_STATUS_OK)
         return;
     auto state = std::move(state_);
@@ -753,6 +803,88 @@ sao_status_t Owner::publish() noexcept {
     }
 }
 
+template <typename StateT>
+void start_status_refresh(StateT& state) noexcept {
+    if (state.status_running.exchange(true))
+        return;
+    state.status_cancel_requested.store(false);
+    if (state.status_thread.joinable())
+        state.status_thread.join();
+    try {
+        state.status_thread = std::thread([&state] {
+            std::string tier;
+            std::uint64_t expiry_ms = 0U;
+            sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+            try {
+                Operations::GetStatus get_status;
+                Operations::GetHwid get_hwid;
+                Operations::RefreshLicense refresh_license;
+                {
+                    std::lock_guard lock(state.mutex);
+                    get_status = state.operations.get_status;
+                    get_hwid = state.operations.get_hwid;
+                    refresh_license = state.operations.refresh_license;
+                }
+                if (!state.status_cancel_requested.load())
+                    status = refresh_license();
+                std::string hwid;
+                if (status == SAO_STATUS_OK && !state.status_cancel_requested.load())
+                    status = get_hwid(hwid);
+                if (status == SAO_STATUS_OK && !state.status_cancel_requested.load())
+                    status = get_status(tier, expiry_ms);
+                std::lock_guard lock(state.mutex);
+                if (!state.status_cancel_requested.load()) {
+                    state.last_status = status;
+                    if (status == SAO_STATUS_OK && valid_text(tier, 64U, true)) {
+                        state.hwid_hex_ = std::move(hwid);
+                        state.tier = std::move(tier);
+                        state.expiry_ms = expiry_ms;
+                        state.activated = true;
+                        state.status_text = "Status refreshed.";
+                        state.error_text.clear();
+                    } else {
+                        state.status_text = "Showing last known status";
+                        state.error_text = license_status_description(static_cast<std::int32_t>(status));
+                    }
+                    state.busy = false;
+                    state.publish_pending = true;
+                } else {
+                    state.busy = false;
+                    state.last_status = SAO_STATUS_ERR_CANCELLED;
+                    state.publish_pending = true;
+                }
+                state.status_running.store(false);
+            } catch (...) {
+                std::lock_guard lock(state.mutex);
+                if (!state.status_cancel_requested.load()) {
+                    state.last_status = SAO_STATUS_ERR_UNKNOWN;
+                    state.status_text = "Showing last known status";
+                    state.error_text = "License status refresh failed";
+                    state.busy = false;
+                    state.publish_pending = true;
+                } else {
+                    state.busy = false;
+                    state.last_status = SAO_STATUS_ERR_CANCELLED;
+                    state.publish_pending = true;
+                }
+                state.status_running.store(false);
+            }
+            state.status_cv.notify_all();
+        });
+    } catch (...) {
+        {
+            std::lock_guard lock(state.mutex);
+            state.status_running.store(false);
+            state.busy = false;
+            state.last_status = SAO_STATUS_ERR_OS_CALL_FAILED;
+            state.status_text = "Showing last known status";
+            state.error_text = "License status refresh failed";
+            state.publish_pending = true;
+        }
+        state.status_cv.notify_all();
+    }
+}
+
 sao_status_t Owner::open() noexcept {
     OperationGuard operation(*this);
     if (operation.status != SAO_STATUS_OK)
@@ -800,6 +932,22 @@ sao_status_t Owner::open() noexcept {
         if (state_->panel == panel)
             state_->visible = true;
     }
+    bool needs_status = false;
+    {
+        std::lock_guard lock(state_->mutex);
+        needs_status = !state_->activated && !state_->status_running.load();
+        if (needs_status) {
+            state_->busy = true;
+            state_->status_text = "Loading license status...";
+            state_->error_text.clear();
+            state_->publish_pending = true;
+        }
+    }
+    if (needs_status) {
+        start_status_refresh(*state_);
+        if (publish_status == SAO_STATUS_OK)
+            return publish();
+    }
     return publish_status;
 }
 
@@ -842,11 +990,22 @@ sao_status_t Owner::service_ui() noexcept {
 }
 
 sao_status_t Owner::take_offline() noexcept {
+    if (!state_)
+        return SAO_STATUS_OK;
     const sao_status_t owner_status = require_owner_thread();
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
-    if (!state_)
-        return SAO_STATUS_OK;
+    state_->status_cancel_requested.store(true);
+
+    if (state_->status_running.load()) {
+        std::unique_lock lock(state_->mutex);
+        if (!state_->status_cv.wait_for(lock, std::chrono::milliseconds(250), [this] {
+                return !state_->status_running.load();
+            }))
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+    }
+    if (state_->status_thread.joinable())
+        state_->status_thread.join();
 
     if (state_->activation_running.load()) {
         state_->activation_cancel_requested.store(true);
@@ -858,9 +1017,9 @@ sao_status_t Owner::take_offline() noexcept {
             }))
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         lock.unlock();
-        if (state_->activation_thread.joinable())
-            state_->activation_thread.join();
     }
+    if (state_->activation_thread.joinable())
+        state_->activation_thread.join();
     sao_ui_panel_handle_t panel = nullptr;
     bool had_action_handler = false;
     bool had_event_handler = false;
@@ -1018,54 +1177,24 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
         }
 
         if (action_id == kRefreshAction) {
-            Operations::RefreshLicense refresh_license;
-            Operations::GetHwid get_hwid;
-            Operations::GetStatus get_status;
             {
                 std::lock_guard lock(state_->mutex);
-                refresh_license = state_->operations.refresh_license;
-                get_hwid = state_->operations.get_hwid;
-                get_status = state_->operations.get_status;
-            }
-            std::string hwid_hex;
-            std::string tier;
-            std::uint64_t expiry_ms = 0U;
-            sao_status_t status = refresh_license();
-            if (status == SAO_STATUS_OK)
-                status = get_hwid(hwid_hex);
-            if (status == SAO_STATUS_OK && !valid_text(hwid_hex, 128U, true))
-                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
-            if (status == SAO_STATUS_OK)
-                status = get_status(tier, expiry_ms);
-            if (status == SAO_STATUS_OK && !valid_text(tier, 64U, true))
-                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
-            {
-                std::lock_guard lock(state_->mutex);
-                state_->last_status = status;
-                if (status == SAO_STATUS_OK) {
-                    state_->hwid_hex_ = std::move(hwid_hex);
-                    state_->tier = std::move(tier);
-                    state_->expiry_ms = expiry_ms;
-                    state_->activated = true;
-                    state_->status_text = "Status refreshed.";
-                    state_->error_text.clear();
-                } else {
-                    state_->error_text =
-                        "Refresh failed: " +
-                        license_status_description(static_cast<std::int32_t>(status));
-                    state_->status_text.clear();
-                }
+                if (state_->status_running.load() || state_->activation_running.load())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+                state_->busy = true;
+                state_->status_text = "Refreshing license status...";
+                state_->error_text.clear();
                 state_->publish_pending = true;
             }
-            const sao_status_t publish_status = publish();
-            return publish_status == SAO_STATUS_OK ? status : publish_status;
+            start_status_refresh(*state_);
+            return publish();
         }
 
         if (action_id == kActivateAction || action_id == kSkipAction) {
             std::string key;
             {
                 std::lock_guard lock(state_->mutex);
-                if (state_->activation_running.load())
+                if (state_->activation_running.load() || state_->status_running.load())
                     return SAO_UI_PANEL_STATUS_ERR_BUSY;
                 key = state_->license_key;
             }
@@ -1120,7 +1249,7 @@ sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept
 sao_status_t Owner::run_activation(std::string key) noexcept {
     {
         std::lock_guard lock(state_->mutex);
-        if (state_->activation_running.load())
+        if (state_->activation_running.load() || state_->status_running.load())
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
     }
     try {
@@ -1136,7 +1265,7 @@ sao_status_t Owner::run_activation(std::string key) noexcept {
             state_->publish_pending = true;
         }
         state_->activation_thread =
-            std::thread(&Owner::activation_thread_main, this, std::move(key));
+            std::thread(&Owner::activation_thread_main, state_.get(), std::move(key));
         return SAO_STATUS_OK;
     } catch (...) {
         std::lock_guard lock(state_->mutex);
@@ -1149,18 +1278,22 @@ sao_status_t Owner::run_activation(std::string key) noexcept {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 }
-void Owner::activation_thread_main(Owner* owner, std::string key) noexcept {
-    if (owner == nullptr || owner->state_ == nullptr)
+void Owner::activation_thread_main(State* state_ptr, std::string key) noexcept {
+    if (state_ptr == nullptr)
         return;
-    State& state = *owner->state_;
+    State& state = *state_ptr;
     sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
     std::string tier;
     std::uint64_t expiry_ms = 0U;
     bool activated = false;
     try {
         status = state.operations.activate(key);
+        if (state.activation_cancel_requested.load() && status == SAO_STATUS_OK)
+            status = SAO_STATUS_ERR_CANCELLED;
         if (status == SAO_STATUS_OK)
             status = state.operations.refresh_license();
+        if (state.activation_cancel_requested.load() && status == SAO_STATUS_OK)
+            status = SAO_STATUS_ERR_CANCELLED;
         if (status == SAO_STATUS_OK) {
             status = state.operations.get_status(tier, expiry_ms);
             if (status == SAO_STATUS_OK && valid_text(tier, 64U, true))

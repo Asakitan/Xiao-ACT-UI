@@ -36,4 +36,6 @@ target_compile_features(sao_platform_sdk_tests PRIVATE cxx_std_20)
 include(CTest)
 include(Catch)
 add_test(NAME sao_platform_sdk_tests COMMAND sao_platform_sdk_tests)
-set_tests_properties(sao_platform_sdk_tests PROPERTIES TIMEOUT 15)
+set_tests_properties(sao_platform_sdk_tests PROPERTIES
+    PROCESSORS 2
+    TIMEOUT 15)

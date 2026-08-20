@@ -60,6 +60,18 @@ void setCrashDumpDirectory(const wchar_t* dir) noexcept {
     lstrcpynW(g_crash_dir, dir, MAX_PATH);
 }
 
+bool getCrashDumpDirectory(wchar_t* out_dir, size_t capacity) noexcept {
+    if (out_dir == nullptr || capacity == 0)
+        return false;
+    const size_t required = std::wcslen(g_crash_dir) + 1u;
+    if (required > capacity) {
+        out_dir[0] = L'\0';
+        return false;
+    }
+    std::wmemcpy(out_dir, g_crash_dir, required);
+    return true;
+}
+
 bool writeMinidump(const wchar_t* path, EXCEPTION_POINTERS* ep) noexcept {
     HANDLE hFile = CreateFileW(path,
                                GENERIC_WRITE,

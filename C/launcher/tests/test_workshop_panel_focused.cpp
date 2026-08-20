@@ -260,6 +260,8 @@ TEST_CASE("Workshop panel freezes the white-gold theme and native spec",
 
     BoundCompositor compositor;
     TempDirectory base;
+    REQUIRE(std::filesystem::create_directories(
+        base.root / "plugins" / "com.example.alpha"));
     FakeBackend backend;
     Owner owner(compositor.get(), base.root, backend.operations());
     REQUIRE(owner.open() == SAO_STATUS_OK);
@@ -299,7 +301,8 @@ TEST_CASE("Workshop worker serializes queued disk and network operations",
     REQUIRE(owner.dispatch_action_for_testing("workshop.plugin.install",
                                               R"({"id":"com.example.alpha"})") == SAO_STATUS_OK);
     REQUIRE(owner.dispatch_action_for_testing("workshop.plugin.uninstall",
-                                              R"({"id":"com.example.alpha"})") == SAO_STATUS_OK);
+                              R"({"confirmed":true,"id":"com.example.alpha"})") ==
+            SAO_STATUS_OK);
     CHECK(owner.dispatch_action_for_testing("workshop.plugin.install", R"({"id":"../escape"})") ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
 

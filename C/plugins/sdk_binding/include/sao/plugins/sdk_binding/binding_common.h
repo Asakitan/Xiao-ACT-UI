@@ -220,6 +220,11 @@ struct language_host_adapter_vtable {
 inline constexpr size_t SAO_LANGUAGE_HOST_ADAPTER_V1_SIZE =
     offsetof(language_host_adapter_vtable, release_callback);
 
+// Hard maximum concurrent callback ownership count for each binding. Storage
+// is reserved before provider load; callbacks are never migrated to a
+// process-global fallback owner.
+inline constexpr size_t SAO_SDK_BINDING_MAX_CALLBACK_OWNERSHIP = 64;
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_register_language_host(const language_host_adapter_vtable* adapter);
 
@@ -253,11 +258,16 @@ extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_binding_free_error(
 // free / EmmaCallable release)。
 using release_callback_fn = void(SAO_PLUGINS_CALL*)(void* user_data);
 
-// 登记一份 wrapped callback (linked list, 每插件独立)。
+// Register one wrapped callback for the current binding call scope. Ownership
+// transfers only when registration returns SAO_OK. A call without a current
+// binding, BUSY, or any other failure leaves callback_user_data owned by the
+// caller/provider. Release callbacks must report failure by throwing before
+// consuming ownership; a failed release is retried while the runtime remains
+// alive.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_track_callback(void* user_data, release_callback_fn release_fn);
 
-// Claims and releases one provider-owned callback exactly once. Unknown,
+// Looks up and releases one provider-owned callback exactly once. Unknown,
 // ambiguous, or already-released callback handles are ignored.
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_binding_release_callback(language_host_kind language, void* callback_user_data);

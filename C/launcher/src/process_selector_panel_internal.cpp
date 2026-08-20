@@ -141,6 +141,27 @@ std::string bounded_text(std::string value, std::size_t maximum) {
     return value;
 }
 
+enum class SnapshotState : std::uint8_t { loading, fresh, stale, failed, empty };
+
+SnapshotState snapshot_state(const Snapshot& snapshot) {
+    if (snapshot.loading)
+        return SnapshotState::loading;
+    if (snapshot.last_status != SAO_STATUS_OK)
+        return snapshot.all_processes.empty() ? SnapshotState::failed : SnapshotState::stale;
+    return snapshot.all_processes.empty() ? SnapshotState::empty : SnapshotState::fresh;
+}
+
+std::string_view snapshot_state_label(SnapshotState state) {
+    switch (state) {
+    case SnapshotState::loading: return "loading";
+    case SnapshotState::fresh: return "fresh";
+    case SnapshotState::stale: return "stale";
+    case SnapshotState::failed: return "failed";
+    case SnapshotState::empty: return "empty";
+    }
+    return "failed";
+}
+
 std::string status_description(sao_status_t status, std::string_view prefix) {
     std::string description(prefix);
     if (!description.empty())
@@ -237,6 +258,8 @@ Json section_node(std::string title, Json children) {
                 {"children", std::move(children)}};
 }
 std::string build_panel_spec(const Snapshot& snapshot) {
+    const SnapshotState state = snapshot_state(snapshot);
+    const bool attach_allowed = state == SnapshotState::fresh;
     Json nodes = Json::array();
     Json filters = Json::array();
     Json actions = Json::array();
@@ -250,8 +273,8 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                                   snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
     filters.push_back(row_node(std::move(actions)));
     Json badges = Json::array();
-    badges.push_back(Json{{"type", "badge"}, {"text", snapshot.loading ? "Scanning" : "Ready"},
-                          {"style", snapshot.loading ? "warn" : "ok"}, {"height", 22}});
+    badges.push_back(Json{{"type", "badge"}, {"text", std::string(snapshot_state_label(state))},
+                          {"style", state == SnapshotState::fresh ? "ok" : state == SnapshotState::stale ? "warn" : state == SnapshotState::failed ? "bad" : "accent"}, {"height", 22}});
     badges.push_back(Json{{"type", "badge"},
                           {"text", std::to_string(snapshot.visible_processes.size()) + " shown"},
                           {"style", "accent"}, {"height", 22}});
@@ -270,6 +293,12 @@ std::string build_panel_spec(const Snapshot& snapshot) {
             "Attached / 已附加",
             Json::array({card_node(process.base_name_utf8, std::move(details))})));
     }
+    if (state == SnapshotState::loading && !snapshot.visible_processes.empty())
+        nodes.push_back(section_node("Status / 状态", Json::array({text_node("Refreshing, showing last results", "warn", 28)})));
+    else if (state == SnapshotState::stale)
+        nodes.push_back(section_node("Status / 状态", Json::array({text_node("Stale — last successful scan", "warn", 28)})));
+    else if (state == SnapshotState::empty)
+        nodes.push_back(section_node("Status / 状态", Json::array({text_node("No successful scan results yet", "muted", 28)})));
     if (!snapshot.status_text.empty()) {
         const std::string_view style = snapshot.last_status == SAO_STATUS_OK ? "muted" : "bad";
         Json status = Json::array();
@@ -283,7 +312,7 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     }
     if (snapshot.visible_processes.empty()) {
         Json empty = Json::array();
-        empty.push_back(text_node(snapshot.loading
+        empty.push_back(text_node(state == SnapshotState::loading
                                       ? "Scanning running processes..."
                                       : snapshot.filter == FilterMode::likely_game
                                             ? "No likely game processes matched. Switch to Show all or refresh."
@@ -304,7 +333,7 @@ std::string build_panel_spec(const Snapshot& snapshot) {
             details.push_back(button_node(
                 "process.attach." + std::to_string(process.pid), "Select / Attach", kAttachAction,
                 {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "primary",
-                snapshot.loading));
+                !attach_allowed));
             cards.push_back(card_node(process.base_name_utf8, std::move(details)));
         }
         nodes.push_back(section_node("Process List / 进程列表", std::move(cards)));

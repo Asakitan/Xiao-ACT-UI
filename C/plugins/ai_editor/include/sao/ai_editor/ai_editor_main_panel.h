@@ -67,7 +67,7 @@ sao_ai_editor_main_panel_hide(sao_ai_editor_main_panel_t panel);
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel);
 
-// Retire the panel.  Unregisters the action handler, destroys the
+// Retire the panel.  Unregisters the action and event handlers, destroys the
 // compositor layer, and releases the internal state.  Returns BUSY if a
 // pending action_handler callback, queued/in-flight RPC, or active run still
 // exists; caller must retry. Compositor owner preflight occurs before the
@@ -77,21 +77,17 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel);
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_main_panel_try_destroy(sao_ai_editor_main_panel_t panel);
 
-// Test seam — synthetically dispatch an action_id as if the user
-// clicked the corresponding widget.  Only compiled when
-// SAO_AI_EDITOR_TESTING is defined; returns SAO_AI_EDITOR_ERR_HANDLE_INVALID
-// otherwise.  Payload UTF-8 JSON may be NULL/0-length.
+#if defined(SAO_AI_EDITOR_TESTING)
+// Test seam — synthetically dispatch an action_id as if the user clicked
+// the corresponding widget. Payload UTF-8 JSON may be NULL/0-length.
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_dispatch_action_for_testing(
     sao_ai_editor_main_panel_t panel, const char* action_id_utf8, const uint8_t* payload_json_utf8,
     size_t payload_len);
 
-// Test seam — read the current output text (accumulated backend
-// responses).  Copies UTF-8 into caller buffer; returns required length
-// via out_len even on short buffers.
+// Test seam — read the current output text (accumulated backend responses).
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_output_for_testing(
     sao_ai_editor_main_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len);
 
-#if defined(SAO_AI_EDITOR_TESTING)
 int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_json_for_testing(
     sao_ai_editor_main_panel_t panel, char* buffer_utf8, size_t buffer_cap, size_t* out_len);
 

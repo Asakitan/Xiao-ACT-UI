@@ -13,10 +13,10 @@
 
 TEST_CASE("ui ABI and interop layouts are exact", "[ui][abi][interop]") {
     REQUIRE(SAO_UI_ABI_VERSION_MAJOR == 1u);
-    // Minor 8 adds a leading uint32_t struct_size guard to SaoPanelDescriptor,
-    // SaoCompositorConfig, and SaoLayerConfig. Existing exports unchanged.
-    REQUIRE(SAO_UI_ABI_VERSION_MINOR == 8u);
-    REQUIRE(SAO_UI_ABI_VERSION == 0x00010008u);
+    // Minor 9 expands the append-only public theme tables to 92 colors and
+    // 26 metrics; minor 8 added struct_size guards to the panel/compositor ABI.
+    REQUIRE(SAO_UI_ABI_VERSION_MINOR == 9u);
+    REQUIRE(SAO_UI_ABI_VERSION == 0x00010009u);
     REQUIRE(sao_ui_abi_version() == SAO_UI_ABI_VERSION);
 
     REQUIRE(SAO_UI_SOPF_MMF_MAGIC == 0x46504F53u);

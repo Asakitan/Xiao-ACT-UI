@@ -240,6 +240,74 @@ constexpr uint32_t kRtIoObservationTrue = 2u;
 constexpr uint32_t kRtIoFailureStageNone = 0u;
 constexpr size_t kRtIoOperatorJsonCapacity =
     2u * SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY * 6u + 8192u;
+constexpr DWORD kEnvironmentValueCapacity = 32768u;
+
+class EnvironmentVariableRollback {
+  public:
+    explicit EnvironmentVariableRollback(const wchar_t* name) noexcept : name_(name) {
+        if (name_ == nullptr || !*name_)
+            return;
+
+        SetLastError(ERROR_SUCCESS);
+        const DWORD length = GetEnvironmentVariableW(
+            name_, previous_value_.data(), static_cast<DWORD>(previous_value_.size()));
+        if (length == 0u) {
+            const DWORD error = GetLastError();
+            previous_exists_ = error != ERROR_ENVVAR_NOT_FOUND;
+            valid_ = error == ERROR_SUCCESS || error == ERROR_ENVVAR_NOT_FOUND;
+            return;
+        }
+        if (length >= previous_value_.size())
+            return;
+        previous_exists_ = true;
+        valid_ = true;
+    }
+
+    ~EnvironmentVariableRollback() {
+        if (!committed_)
+            (void)restore();
+    }
+
+    bool valid() const noexcept {
+        return valid_;
+    }
+
+    bool set(const wchar_t* value) noexcept {
+        return valid_ && value != nullptr &&
+               SetEnvironmentVariableW(name_, value) != FALSE;
+    }
+
+    void commit() noexcept {
+        committed_ = true;
+    }
+
+    bool restore() noexcept {
+        if (!valid_)
+            return false;
+        return SetEnvironmentVariableW(name_, previous_exists_ ? previous_value_.data() : nullptr) !=
+               FALSE;
+    }
+
+  private:
+    const wchar_t* name_ = nullptr;
+    std::array<wchar_t, kEnvironmentValueCapacity> previous_value_{};
+    bool previous_exists_ = false;
+    bool valid_ = false;
+    bool committed_ = false;
+};
+
+using PluginAuthoritySyncFn = sao_status_t (*)(void* user_data);
+
+sao_status_t bindPluginsWithAuthority(
+    sao_plugins_registry*& current, sao_plugins_registry* candidate,
+    PluginAuthoritySyncFn sync, void* user_data) noexcept {
+    sao_plugins_registry* previous = current;
+    current = candidate;
+    const sao_status_t status = sync != nullptr ? sync(user_data) : SAO_STATUS_OK;
+    if (status != SAO_STATUS_OK)
+        current = previous;
+    return status;
+}
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
@@ -400,6 +468,12 @@ void appendJsonEscaped(std::string& json, const char* text, size_t text_capacity
 }
 
 struct HeadlessCleanupState {
+    HeadlessCleanupState() : base_dir_environment(L"SAO_BASE_DIR") {
+        std::memcpy(previous_base_dir, SaoLauncherBaseDir, sizeof(previous_base_dir));
+        (void)sao::launcher::getCrashDumpDirectory(previous_crash_dir,
+                                                   std::size(previous_crash_dir));
+    }
+
     ~HeadlessCleanupState() {
         if (dual_run_driver_acquired && dual_run_driver_mutex != nullptr) {
             sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex);
@@ -425,7 +499,24 @@ struct HeadlessCleanupState {
     bool platform_up = false;
     bool plugins_discovered = false;
     bool ui_online = false;
+    EnvironmentVariableRollback base_dir_environment;
+    wchar_t previous_base_dir[260] = {0};
+    wchar_t previous_crash_dir[260] = L".";
+    bool launcher_globals_published = false;
 };
+
+bool restoreHeadlessProcessGlobals(HeadlessCleanupState& cleanup) noexcept {
+    const bool environment_restored = cleanup.base_dir_environment.restore();
+    if (environment_restored)
+        cleanup.base_dir_environment.commit();
+    if (cleanup.launcher_globals_published) {
+        std::memcpy(SaoLauncherBaseDir, cleanup.previous_base_dir,
+                    sizeof(cleanup.previous_base_dir));
+        sao::launcher::setCrashDumpDirectory(cleanup.previous_crash_dir);
+        cleanup.launcher_globals_published = false;
+    }
+    return environment_restored;
+}
 
 std::mutex g_pending_cleanup_mutex;
 std::unique_ptr<HeadlessCleanupState> g_pending_cleanup;
@@ -940,6 +1031,7 @@ sao_status_t retryPendingCleanup() noexcept {
         cleanup.dual_run_driver_mutex = nullptr;
         cleanup.dual_run_driver_acquired = false;
     }
+    restoreHeadlessProcessGlobals(cleanup);
     g_pending_cleanup.reset();
     return SAO_STATUS_OK;
 }
@@ -1125,6 +1217,7 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
                          cleanup->shell_verified, cleanup->security_initialized,
                          cleanup->platform_up, cleanup->plugins_discovered, cleanup->ui_online,
                          handed_off_to_python, handed_off_exit_code);
+    cleanup->launcher_globals_published = cleanup->base_dir_resolved;
     const int rollout_result = rc;
 
     // CPP_PREFERRED_PYTHON_FALLBACK — if any CPP step failed AFTER step-zero
@@ -1189,6 +1282,14 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     if (!teardown_complete && (rc == SAO_EXIT_OK || handed_off_to_python)) {
         rc = SAO_EXIT_PLATFORM_INIT_FAIL;
         handed_off_to_python = false;
+    }
+    if (rc != SAO_EXIT_OK || handed_off_to_python) {
+        if (!restoreHeadlessProcessGlobals(*cleanup)) {
+            rc = SAO_EXIT_PLATFORM_INIT_FAIL;
+            handed_off_to_python = false;
+        }
+    } else {
+        cleanup->base_dir_environment.commit();
     }
     if (exit_code_out)
         *exit_code_out = rc;
@@ -1804,9 +1905,28 @@ sao_status_t sao_launcher_init_pipeline_test_apply_nervgear_mode_transaction(
                                         user_data);
 }
 
+sao_status_t sao_launcher_init_pipeline_test_bind_plugins_preserves_registry(
+    sao_plugins_registry* previous, sao_plugins_registry* candidate,
+    sao_status_t authority_sync_status, sao_plugins_registry** current_out) {
+    auto sync = [](void* user_data) -> sao_status_t {
+        return *static_cast<const sao_status_t*>(user_data);
+    };
+    sao_plugins_registry* current = previous;
+    const sao_status_t status = bindPluginsWithAuthority(
+        current, candidate, sync, &authority_sync_status);
+    if (current_out != nullptr)
+        *current_out = current;
+    return status;
+}
+
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
     if (!g_composition_test_hooks.platform_bringup) {
         return SAO_STATUS_NOT_IMPLEMENTED;
+    }
+    EnvironmentVariableRollback base_dir_environment(L"SAO_BASE_DIR");
+    if (cfg != nullptr && cfg->base_dir != nullptr &&
+        (!base_dir_environment.valid() || !base_dir_environment.set(cfg->base_dir))) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     return g_composition_test_hooks.platform_bringup(cfg, ctx_out,
                                                      g_composition_test_hooks.user_data);
@@ -2366,51 +2486,18 @@ sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask
                                           &result);
 }
 
-sao_status_t set_helper_window_protection(
-    sao_platform_ctx* ctx, void* hwnd, bool enable) {
-    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || hwnd == nullptr) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-    const uint64_t value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
-    uint8_t payload[9]{};
-    for (uint32_t index = 0u; index < 8u; ++index) {
-        payload[index] = static_cast<uint8_t>((value >> (index * 8u)) & 0xFFu);
-    }
-    payload[8] = enable ? 1u : 0u;
-    uint8_t response[1]{};
-    SaoRtIoCallResult call{};
-    const sao_status_t status = sao_rt_io_proxy_call(
-        ctx->rt_io_proxy, SAO_RT_IO_CMD_SET_WINDOW_PROT,
-        payload, sizeof(payload), 5000u, response, sizeof(response), &call);
-    if (status != SAO_STATUS_OK) return status;
-    if (call.outcome != SAO_RT_IO_OUTCOME_COMMITTED || call.authenticated == 0u ||
-        call.transport_complete == 0u || call.request_id_matched == 0u ||
-        call.payload_bytes != sizeof(response) || response[0] == 0u) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
-    return SAO_STATUS_OK;
-}
-
 sao_status_t SAO_UI_CALL apply_overlay_protection_provider(
     void* render_hwnd, void* control_hwnd, void* owner_hwnd,
     bool enable, void* user_data) {
-    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
-    void* windows[3]{render_hwnd, control_hwnd, owner_hwnd};
-    size_t completed = 0u;
-    for (; completed < 3u; ++completed) {
-        if (windows[completed] == nullptr) continue;
-        const sao_status_t status = set_helper_window_protection(
-            ctx, windows[completed], enable);
-        if (status == SAO_STATUS_OK) continue;
-        while (completed > 0u) {
-            --completed;
-            if (windows[completed] != nullptr) {
-                (void)set_helper_window_protection(
-                    ctx, windows[completed], !enable);
-            }
-        }
-        return status;
-    }
+    (void)render_hwnd;
+    (void)control_hwnd;
+    (void)owner_hwnd;
+    (void)enable;
+    (void)user_data;
+    // WdiSvcHost is deliberately not an affinity authority.  The local
+    // anti-screencap facade owns these SaoAuto HWNDs; a foreign helper
+    // request would create a second WDA owner and could make the UI roll
+    // back a successful local transition when the helper rejects it.
     return SAO_STATUS_OK;
 }
 
@@ -3513,7 +3600,10 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return SAO_STATUS_INVALID_ARGUMENT;
     *ctx_out = nullptr;
 
-    (void)SetEnvironmentVariableW(L"SAO_BASE_DIR", cfg->base_dir);
+    EnvironmentVariableRollback base_dir_environment(L"SAO_BASE_DIR");
+    if (!base_dir_environment.valid() || !base_dir_environment.set(cfg->base_dir))
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+
     auto* ctx = new (std::nothrow) sao_platform_ctx{};
     if (!ctx)
         return SAO_STATUS_INTERNAL;
@@ -3671,7 +3761,6 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("rt_io_proxy_open_v3", status);
     }
-
     status =
         sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
     if (status != SAO_STATUS_OK) {
@@ -3784,6 +3873,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     ctx->restore_theme_on_rollback = false;
     ctx->settings_save_enabled = true;
     *ctx_out = ctx;
+    base_dir_environment.commit();
     return SAO_STATUS_OK;
 }
 
@@ -3900,10 +3990,15 @@ sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
 sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_registry* registry) {
     if (ctx == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
-    ctx->plugins_registry = registry;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    return sync_plugin_runtime_authority(ctx);
+    return bindPluginsWithAuthority(
+        ctx->plugins_registry, registry,
+        [](void* user_data) -> sao_status_t {
+            return sync_plugin_runtime_authority(static_cast<sao_platform_ctx*>(user_data));
+        },
+        ctx);
 #else
+    ctx->plugins_registry = registry;
     return SAO_STATUS_OK;
 #endif
 }

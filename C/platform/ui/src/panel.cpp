@@ -986,6 +986,7 @@ sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t pa
                           const json & nodes,
                           const sao::ui::detail::PanelResolvedTheme & theme,
                           std::string_view parent_type = {}, int32_t depth = 0) {
+    const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
     if (not nodes.is_array())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     for (const auto node : nodes) {
@@ -2263,6 +2264,181 @@ void SAO_UI_CALL active_theme_changed(SaoUiThemeId, void* user_data) {
 
 } // namespace
 
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_input_hit_test_(sao_ui_panel_handle_t panel, int32_t x, int32_t y,
+                             sao_ui_widget_handle_t* out_widget) {
+    if (panel == nullptr || out_widget == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_widget = nullptr;
+    PanelOperation operation(panel);
+    if (!operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        return widget_at(panel, x, y, out_widget);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_input_activate_widget_(sao_ui_widget_handle_t widget) {
+    if (widget == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::unique_lock storage_lock(panel_storage_mutex());
+        for (const auto& stored_panel : panel_storage()) {
+            sao_ui_panel_s* const panel = stored_panel.get();
+            std::shared_ptr<PanelContent> content;
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                content = panel->content;
+            }
+            if (content == nullptr)
+                continue;
+            {
+                std::lock_guard content_lock(content->mutex);
+                if (!content->by_handle.contains(widget))
+                    continue;
+            }
+
+            PanelOperation operation(panel);
+            if (!operation) {
+                storage_lock.unlock();
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            }
+            storage_lock.unlock();
+
+            std::string action;
+            std::string args;
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                content = panel->content;
+            }
+            if (content == nullptr)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            {
+                std::lock_guard content_lock(content->mutex);
+                const auto found = content->by_handle.find(widget);
+                if (found == content->by_handle.end() || !found->second->enabled ||
+                    found->second->action.empty()) {
+                    return SAO_STATUS_ERR_NOT_FOUND;
+                }
+                action = found->second->action;
+                args = found->second->action_args;
+            }
+
+            PanelCallbackLease callback(panel, CallbackKind::Action);
+            if (!callback || callback.action() == nullptr)
+                return SAO_STATUS_OK;
+            try {
+                callback.action()(action.c_str(), reinterpret_cast<const uint8_t*>(args.data()),
+                                  args.size(), callback.user_data());
+            } catch (...) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+            return SAO_STATUS_OK;
+        }
+        return SAO_STATUS_ERR_NOT_FOUND;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" bool SAO_UI_CALL
+sao_ui_panel_input_widget_owner_(sao_ui_widget_handle_t widget,
+                                 sao_ui_panel_handle_t* out_panel) {
+    if (widget == nullptr || out_panel == nullptr)
+        return false;
+    *out_panel = nullptr;
+    try {
+        std::unique_lock storage_lock(panel_storage_mutex());
+        for (const auto& stored_panel : panel_storage()) {
+            sao_ui_panel_s* const panel = stored_panel.get();
+            std::shared_ptr<PanelContent> content;
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                content = panel->content;
+            }
+            if (content == nullptr)
+                continue;
+            {
+                std::lock_guard content_lock(content->mutex);
+                if (!content->by_handle.contains(widget))
+                    continue;
+            }
+
+            PanelOperation operation(panel);
+            if (!operation) {
+                storage_lock.unlock();
+                return false;
+            }
+            storage_lock.unlock();
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                content = panel->content;
+            }
+            if (content == nullptr)
+                return false;
+            std::lock_guard content_lock(content->mutex);
+            if (!content->by_handle.contains(widget))
+                return false;
+            *out_panel = panel;
+            return true;
+        }
+    } catch (...) {
+        return false;
+    }
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    return sao::ui::detail::inspect_widget_handle(widget, &metadata);
+}
+
+extern "C" bool SAO_UI_CALL
+sao_ui_panel_input_widget_is_visible_(sao_ui_widget_handle_t widget) {
+    if (widget == nullptr)
+        return false;
+    try {
+        std::unique_lock storage_lock(panel_storage_mutex());
+        for (const auto& stored_panel : panel_storage()) {
+            sao_ui_panel_s* const panel = stored_panel.get();
+            std::shared_ptr<PanelContent> content;
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                content = panel->content;
+            }
+            if (content == nullptr)
+                continue;
+            {
+                std::lock_guard content_lock(content->mutex);
+                if (!content->by_handle.contains(widget))
+                    continue;
+            }
+
+            PanelOperation operation(panel);
+            if (!operation) {
+                storage_lock.unlock();
+                return false;
+            }
+            storage_lock.unlock();
+
+            bool panel_visible = false;
+            {
+                std::lock_guard panel_lock(panel->mutex);
+                panel_visible = panel->state.visible;
+                content = panel->content;
+            }
+            if (!panel_visible || content == nullptr)
+                return false;
+            std::lock_guard content_lock(content->mutex);
+            const auto found = content->by_handle.find(widget);
+            return found != content->by_handle.end();
+        }
+    } catch (...) {
+        return false;
+    }
+    sao::ui::detail::WidgetHandleMetadata metadata{};
+    return sao::ui::detail::inspect_widget_handle(widget, &metadata);
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle_t compositor,
                                                         const SaoPanelConfig* config,
                                                         sao_ui_panel_handle_t* out_handle) {
@@ -2480,6 +2656,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
         return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
         std::lock_guard render_lock(panel->render_mutex);
+        const auto theme = resolve_panel_theme(panel);
+        const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
         const json patch = props_len == 0
                                ? json::object()
                                : json::parse(props_json_utf8, props_json_utf8 + props_len);
@@ -2606,6 +2784,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_replace_body_model(
         }
 
         auto theme = resolve_panel_theme(panel);
+        const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
         std::shared_ptr<PanelContent> replacement;
         std::vector<sao_ui_layout_node_handle_t> actual_nodes;
         sao_status_t status =
@@ -2978,9 +3157,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_apply_theme_override_(
             panel->theme_overrides = replacement;
         }
         const sao_status_t status = upload_panel(panel);
-        if (status != SAO_STATUS_OK) {
+        if (status == SAO_STATUS_OK)
+            return SAO_STATUS_OK;
+        {
             std::lock_guard lock(panel->mutex);
             panel->theme_overrides = previous;
+        }
+        const sao_status_t rollback_status = upload_panel(panel);
+        if (rollback_status != SAO_STATUS_OK) {
+            std::lock_guard lock(panel->mutex);
+            panel->theme_dirty = true;
+            return SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
         }
         return status;
     } catch (...) {

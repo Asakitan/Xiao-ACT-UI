@@ -3,6 +3,7 @@
 #include "sao/ui/popup.h"
 #include "sao/ui/d2d_effects.h"
 #include "sao/ui/d2d_widgets.h"
+#include "widget_paint_internal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -78,7 +79,6 @@ struct VisualLevel {
 struct PopupPalette {
     uint32_t shadow = 0;
     uint32_t surface = 0;
-    uint32_t surface_tint = 0;
     uint32_t cyan = 0;
     uint32_t cyan_soft = 0;
     uint32_t gold = 0;
@@ -149,7 +149,6 @@ PopupPalette make_popup_palette(SaoUiThemeId theme_id) noexcept {
     return {
         capped_alpha(color(SAO_UI_TOKEN_BLACK), 0x66U),
         capped_alpha(color(SAO_UI_TOKEN_APP_BG), 0xD2U),
-        capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0x35U),
         color(SAO_UI_TOKEN_CORNER_CYAN),
         capped_alpha(color(SAO_UI_TOKEN_ACCENT_CYAN_SOFT), 0xB0U),
         color(SAO_UI_TOKEN_CIRCLE_ACTIVE_BORDER),
@@ -157,7 +156,7 @@ PopupPalette make_popup_palette(SaoUiThemeId theme_id) noexcept {
         color(SAO_UI_TOKEN_APP_TEXT),
         capped_alpha(color(SAO_UI_TOKEN_APP_TEXT_2), 0xCCU),
         capped_alpha(color(SAO_UI_TOKEN_APP_TEXT_DIM), 0x88U),
-        capped_alpha(color(SAO_UI_TOKEN_APP_ACCENT), 0x5AU),
+        color(SAO_UI_TOKEN_SELECTION),
         capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0x30U),
         capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0x30U),
     };
@@ -251,6 +250,16 @@ class Painter {
         const sao_status_t pop = sao_ui_paint_ctx_pop_clip(context_);
         merge(draw);
         merge(pop);
+    }
+
+    void rounded(float x, float y, float width, float height, float radius, uint32_t color) {
+        merge(sao::ui::detail::paint_rounded_rect(context_, x, y, width, height, radius, color));
+    }
+    void rounded_stroke(float x, float y, float width, float height, float radius, float stroke, uint32_t color) {
+        merge(sao::ui::detail::paint_rounded_rect_stroke(context_, x, y, width, height, radius, stroke, color));
+    }
+    void shadow(float x, float y, float width, float height, float radius, int32_t elevation, uint32_t color) {
+        merge(sao::ui::detail::paint_elevation_shadow(context_, x, y, width, height, radius, elevation, color));
     }
 
     sao_status_t status() const noexcept { return status_; }
@@ -534,18 +543,10 @@ static float text_width(const std::string& text, float size) {
     return static_cast<float>(text.size() * static_cast<size_t>(scale * 6));
 }
 
-static void draw_level_border(
-    Painter* painter, const PopupPalette& palette,
-    float x, float y, float width, float height) {
-    painter->fill(x + kShadowOffset, y + kShadowOffset, width, height, palette.shadow);
-    painter->fill(x, y, width, height, palette.surface);
-    painter->fill(x + 1.0F, y + 1.0F, width - 2.0F, 3.0F, palette.surface_tint);
-    painter->fill(x, y, width, 1.0F, palette.cyan);
-    painter->fill(x, y, 1.0F, height, palette.cyan_soft);
-    painter->fill(x, y + height - 1.0F, width, 1.0F, palette.gold_soft);
-    painter->fill(x + width - 1.0F, y, 1.0F, height, palette.gold);
-    painter->fill(x + 5.0F, y + 4.0F, 20.0F, 1.0F, palette.cyan);
-    painter->fill(x + width - 25.0F, y + height - 5.0F, 20.0F, 1.0F, palette.gold);
+static void draw_level_border(Painter* painter, const PopupPalette& palette, float x, float y, float width, float height) {
+    painter->shadow(x, y, width, height, 8.0F, 2, palette.shadow);
+    painter->rounded(x, y, width, height, 8.0F, palette.surface);
+    painter->rounded_stroke(x, y, width, height, 8.0F, 1.0F, palette.cyan);
 }
 
 static void draw_separator(
@@ -705,18 +706,11 @@ static sao_status_t resolve_layer_origin(
         SaoOverlayHostState state{};
         const sao_status_t status = sao_ui_overlay_host_get_state(host, &state);
         if (status != SAO_STATUS_OK) return status;
-        // DPI-aware: subtract the host origin in desktop physical pixels
-        // first (both bounds and geometry come from the same desktop space),
-        // then scale the resulting host-local delta down to host logical
-        // pixels. When the host reports 96 DPI this reduces to a plain
-        // subtraction and cannot regress any caller on non-scaled monitors.
-        const uint32_t dpi = state.dpi == 0u ? 96u : state.dpi;
+        // Bounds and host geometry are both expressed in the compositor
+        // desktop coordinate space; keep the layer origin in that same
+        // space instead of mixing a DPI-scaled offset with unscaled size.
         x -= state.geometry.x;
         y -= state.geometry.y;
-        if (dpi != 96u) {
-            x = x * static_cast<int64_t>(96) / static_cast<int64_t>(dpi);
-            y = y * static_cast<int64_t>(96) / static_cast<int64_t>(dpi);
-        }
     }
     if (x < std::numeric_limits<int32_t>::min() ||
         x > std::numeric_limits<int32_t>::max() ||

@@ -644,20 +644,6 @@ uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
            channel(from & 0xffU, to & 0xffU);
 }
 
-uint32_t lighten_argb(uint32_t color, float amount) {
-    return (color & 0xff000000U) |
-           (blend_argb(color | 0xff000000U,
-                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE), amount) &
-            0x00ffffffU);
-}
-
-uint32_t darken_argb(uint32_t color, float amount) {
-    return (color & 0xff000000U) |
-           (blend_argb(color | 0xff000000U,
-                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK), amount) &
-            0x00ffffffU);
-}
-
 uint32_t scale_alpha(uint32_t color, float scale) {
     const uint32_t alpha = static_cast<uint32_t>(
         std::lround(static_cast<float>((color >> 24U) & 0xffU) * std::clamp(scale, 0.0F, 1.0F)));
@@ -1932,25 +1918,23 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
             uint32_t fill = resolve_button_fill(spec);
             uint32_t border = resolve_button_border(spec);
             uint32_t foreground = resolve_button_foreground(spec);
-            const uint32_t accent = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
-            if (!spec.disabled) {
-                if (pressed)
-                    fill = darken_argb(fill, 0.12F);
-                else if (hovered)
-                    fill = spec.colors.fill_hover_argb != 0 ? spec.colors.fill_hover_argb
-                                                            : lighten_argb(fill, 0.08F);
-                if (hovered)
-                    border = blend_argb(border, accent, 0.45F);
-            } else {
-                fill = scale_alpha(fill, 0.4F);
-                border = scale_alpha(border, 0.4F);
-                foreground = scale_alpha(foreground, 0.4F);
+            const auto visual_state = sao::ui::detail::resolve_control_visual_state(!spec.disabled, hovered, pressed, focused);
+            if (visual_state == sao::ui::detail::ControlVisualState::Disabled) {
+                fill = spec.colors.disabled_fill_argb != 0 ? spec.colors.disabled_fill_argb : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BG);
+                border = spec.colors.disabled_border_argb != 0 ? spec.colors.disabled_border_argb : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BORDER);
+                foreground = spec.colors.disabled_fg_argb != 0 ? spec.colors.disabled_fg_argb : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_FG);
+            } else if (visual_state == sao::ui::detail::ControlVisualState::Pressed) {
+                fill = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE);
+            } else if (visual_state == sao::ui::detail::ControlVisualState::Hover) {
+                fill = spec.colors.fill_hover_argb != 0 ? spec.colors.fill_hover_argb : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE);
+                border = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
             }
             if (focused && !spec.disabled) {
-                const sao_status_t focus_status = sao::ui::detail::paint_rounded_rect(
-                    context, static_cast<float>(x - 1), static_cast<float>(y - 1),
-                    static_cast<float>(width + 2), static_cast<float>(height + 2),
-                    static_cast<float>(std::max(0, spec.radius_px) + 1), accent);
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
+                    context, static_cast<float>(x), static_cast<float>(y),
+                    static_cast<float>(width), static_cast<float>(height),
+                    static_cast<float>(std::max(0, spec.radius_px)), false,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
                 if (focus_status != SAO_STATUS_OK)
                     return focus_status;
             }
@@ -2024,17 +2008,21 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
             if (status != SAO_STATUS_OK)
                 return status;
-            text += " v";
-            return sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 4),
-                                              static_cast<float>(y + 3), text.c_str(),
-                                              static_cast<float>(std::clamp(height - 7, 5, 15)),
-                                              resolve_button_foreground(button));
+            sao_status_t text_status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 4), static_cast<float>(y + 3), text.c_str(), static_cast<float>(std::clamp(height - 7, 5, 15)), resolve_button_foreground(button));
+            if (text_status != SAO_STATUS_OK)
+                return text_status;
+            const float chevron_x = static_cast<float>(x + width - 12);
+            const float chevron_y = static_cast<float>(y + height / 2);
+            status = sao_ui_paint_ctx_stroke_line(context, chevron_x - 3.0F, chevron_y - 1.5F, chevron_x, chevron_y + 1.5F, 1.5F, resolve_button_foreground(button));
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_paint_ctx_stroke_line(context, chevron_x, chevron_y + 1.5F, chevron_x + 3.0F, chevron_y - 1.5F, 1.5F, resolve_button_foreground(button));
+            return status;
         }
         case kCheckboxTag: {
             SaoUiCheckboxSpec spec{};
             std::string label;
-            bool hovered = false;
             bool focused = false;
+            bool hovered = false;
             auto lease = acquire_input_lease<CheckboxState>(handle, kCheckboxTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -2042,8 +2030,8 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 label = lease->label;
-                hovered = lease->hovered;
                 focused = lease->focused;
+                hovered = lease->hovered;
             }
             const int32_t box = std::clamp(spec.box_size_px > 0 ? spec.box_size_px : height - 4, 4,
                                            std::max(4, height - 2));
@@ -2109,6 +2097,7 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
         case kRadioTag: {
             SaoUiRadioSpec spec{};
             std::string label;
+            bool focused = false;
             auto lease = acquire_input_lease<RadioState>(handle, kRadioTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -2116,14 +2105,21 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 label = lease->label;
+                focused = lease->focused;
             }
             const int32_t ring = std::clamp(spec.ring_size_px > 0 ? spec.ring_size_px : height - 4,
                                             4, std::max(4, height - 2));
             const int32_t top = y + (height - ring) / 2;
+            if (focused && !spec.disabled) {
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(ring), static_cast<float>(ring), static_cast<float>(std::min(ring, 6)), true, sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+            }
+
             sao_status_t status = sao_ui_paint_ctx_fill_ellipse(
                 context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(ring),
                 static_cast<float>(ring),
-                spec.ring_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
+                spec.ring_argb == 0 ? sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_DISABLED_BORDER : SAO_UI_TOKEN_APP_BORDER)
                                     : spec.ring_argb);
             if (status != SAO_STATUS_OK)
                 return status;
@@ -2161,37 +2157,20 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 pressed = lease->pressed;
                 focused = lease->focused;
             }
-            const float ratio = std::clamp(
-                (spec.value - spec.min_value) / (spec.max_value - spec.min_value), 0.0F, 1.0F);
-            uint32_t track = spec.track_argb == 0
-                                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
-                                 : spec.track_argb;
-            uint32_t fill = spec.disabled
-                                ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
-                                : (spec.track_fill_argb == 0
-                                       ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
-                                       : spec.track_fill_argb);
-            uint32_t thumb = spec.disabled
-                                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2)
-                                 : (spec.thumb_argb == 0
-                                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
-                                        : spec.thumb_argb);
-            uint32_t thumb_border =
-                spec.thumb_border_argb == 0
-                    ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
-                    : spec.thumb_border_argb;
-            if (!spec.disabled) {
-                if (pressed)
-                    thumb = darken_argb(thumb, 0.12F);
-                else if (hovered)
-                    thumb = lighten_argb(thumb, 0.08F);
-                if (focused)
-                    thumb_border = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
-            } else {
-                track = scale_alpha(track, 0.4F);
-                fill = scale_alpha(fill, 0.4F);
-                thumb = scale_alpha(thumb, 0.4F);
-                thumb_border = scale_alpha(thumb_border, 0.4F);
+            const float ratio = std::clamp((spec.value - spec.min_value) / (spec.max_value - spec.min_value), 0.0F, 1.0F);
+            const auto visual_state = sao::ui::detail::resolve_control_visual_state(!spec.disabled, hovered, pressed, focused);
+            uint32_t track = spec.track_argb == 0 ? sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_DISABLED_BORDER : SAO_UI_TOKEN_APP_BORDER) : spec.track_argb;
+            uint32_t fill = spec.track_fill_argb == 0 ? sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_DISABLED_BG : SAO_UI_TOKEN_APP_ACCENT) : spec.track_fill_argb;
+            uint32_t thumb = spec.thumb_argb == 0 ? sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_DISABLED_FG : SAO_UI_TOKEN_APP_TEXT) : spec.thumb_argb;
+            uint32_t thumb_border = spec.thumb_border_argb == 0 ? sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_DISABLED_BORDER : SAO_UI_TOKEN_APP_BORDER) : spec.thumb_border_argb;
+            if (visual_state == sao::ui::detail::ControlVisualState::Pressed && spec.thumb_argb == 0)
+                thumb = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE);
+            else if (visual_state == sao::ui::detail::ControlVisualState::Hover && spec.thumb_argb == 0)
+                thumb = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE);
+            if (focused && !spec.disabled) {
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height), static_cast<float>(std::min(width, height) / 2), false, sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
             }
             if (spec.vertical) {
                 const int32_t thickness = std::max(1, spec.track_thickness_px);

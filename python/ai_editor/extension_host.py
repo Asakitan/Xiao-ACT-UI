@@ -4448,7 +4448,7 @@ class NodeExtensionHost:
 
     def request_command_result(
             self, command_id: str, args: Optional[List[Any]] = None,
-            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+            default: Any = None, timeout: float = 5.0) -> Dict[str, Any]:
         """Synchronously execute a Node-registered command and return its result."""
         started = time.perf_counter()
         ok = False

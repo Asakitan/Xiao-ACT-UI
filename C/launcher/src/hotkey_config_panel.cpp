@@ -95,6 +95,7 @@ struct CaptureResult {
     std::string id;
     bool cancelled{};
     bool system_error{};
+    bool timed_out{};
     std::string error_message;
     std::uint32_t vk{};
     std::uint32_t modifiers{};
@@ -201,6 +202,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                 baseline[static_cast<std::size_t>(vk)] = (key_state(vk, hooks) & 0x8000) != 0;
         }
         CaptureResult result{generation, std::move(id)};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!stop_token.stop_requested()) {
             for (int vk = kFirstVirtualKey; vk <= kLastVirtualKey; ++vk) {
                 if (std::find(kModifierKeys.begin(), kModifierKeys.end(), vk) != kModifierKeys.end())
@@ -216,6 +218,11 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                     result.vk = static_cast<std::uint32_t>(vk);
                     result.modifiers = modifiers(hooks);
                 }
+                publish_capture(std::move(result));
+                return;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                result.timed_out = true;
                 publish_capture(std::move(result));
                 return;
             }
@@ -264,7 +271,9 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             std::lock_guard lock(mutex);
             if (result.generation != capture_generation || panel == nullptr || retirement != RetirementState::online) return;
         }
-        if (result.system_error) {
+        if (result.timed_out) {
+            set_status(result.id, PanelStatus::cancelled, "Capture timed out");
+        } else if (result.system_error) {
             set_status(result.id, PanelStatus::system_error,
                        result.error_message.empty() ? "Capture completion failed"
                                                     : result.error_message);
@@ -298,6 +307,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             ++capture_generation;
             capture_running = false;
             pending_capture.reset();
+            capturing_binding_id.clear();
             if (capture_thread.joinable()) {
                 capture_thread.request_stop();
                 old = std::move(capture_thread);
@@ -308,6 +318,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
 
     sao_status_t start_capture(const std::string& id) noexcept {
         if (!query_binding(id).has_value()) return SAO_STATUS_ERR_NOT_FOUND;
+        std::string previous_id;
+        { std::lock_guard lock(mutex); previous_id = capturing_binding_id; }
         stop_capture();
         CaptureHooks hooks;
         std::uint64_t generation = 0;
@@ -317,6 +329,9 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             generation = ++capture_generation;
             hooks = capture_hooks;
             pending_capture.reset();
+            if (!previous_id.empty() && previous_id != id)
+                row_status[previous_id] = PanelStatus::ready;
+            capturing_binding_id = id;
             capture_running = true;
             row_status[id] = PanelStatus::capturing;
             status_message = "Press a key; Esc cancels";
@@ -328,6 +343,11 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                 self->capture_worker(generation, id, std::move(hooks), token);
             });
         } catch (...) {
+            {
+                std::lock_guard lock(mutex);
+                capture_running = false;
+                capturing_binding_id.clear();
+            }
             set_status(id, PanelStatus::system_error, "Capture worker could not start");
             return SAO_STATUS_ERR_UNKNOWN;
         }
@@ -387,17 +407,17 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     }
 
     sao_status_t close() noexcept {
-        stop_capture();
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK) return owner_status;
+        stop_capture();
         const auto target = panel_handle();
         return target == nullptr ? SAO_STATUS_OK : sao_ui_panel_hide(target);
     }
 
     sao_status_t take_offline() noexcept {
-        stop_capture();
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK) return owner_status;
+        stop_capture();
         sao_ui_panel_handle_t target = nullptr;
         {
             std::lock_guard lock(mutex);
@@ -484,7 +504,12 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         }
         if (target_body == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
         Json nodes = Json::array();
-        if (!message.empty()) nodes.push_back(card_node("Status", Json::array({text_node(message, "accent", 28)})));
+        if (!message.empty()) {
+            Json status_nodes = Json::array({text_node(message, "accent", 28)});
+            if (capture_running)
+                status_nodes.push_back(button_node("capture.cancel", "Cancel capture", "hotkey.capture.cancel", Json::object(), "ghost"));
+            nodes.push_back(card_node("Status", std::move(status_nodes)));
+        }
         Json rows = Json::array();
         for (const auto& binding : snapshot()) {
             const auto found = statuses.find(binding.id);
@@ -494,8 +519,9 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                 text_node(binding.id, "mono", 28),
                 text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 28),
                 Json{{"type", "badge"}, {"text", status_label(status)}, {"style", status_style(status)}, {"height", 22}},
-                button_node("capture." + binding.id, "Capture", kCaptureAction, Json(binding.id), "primary", status == PanelStatus::capturing),
-                button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost", status == PanelStatus::capturing),
+                button_node("capture." + binding.id, "Capture", kCaptureAction, Json(binding.id), "primary",
+                             capture_running && capturing_binding_id != binding.id),
+                button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost", capture_running),
             })));
         }
         nodes.push_back(card_node("Bindings", std::move(rows)));
@@ -506,6 +532,13 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     sao_status_t dispatch(std::string_view action, std::string_view payload_json) noexcept {
         const std::string id = payload_id(payload_json);
         if (id.empty()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (action == "hotkey.capture.cancel") {
+            std::string old_id;
+            { std::lock_guard lock(mutex); old_id = capturing_binding_id; }
+            stop_capture();
+            if (!old_id.empty()) set_status(old_id, PanelStatus::cancelled, "Capture cancelled");
+            return refresh_now();
+        }
         if (action == kCaptureAction) return start_capture(id);
         if (action == kResetAction) {
             stop_capture();
@@ -570,6 +603,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     std::jthread capture_thread;
     std::optional<CaptureResult> pending_capture;
     std::uint64_t capture_generation{};
+    std::string capturing_binding_id;
     void* owner_wake_window{};
     std::size_t callbacks_in_flight{};
     bool capture_running{};
@@ -670,11 +704,15 @@ void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_clean
 sao_ui_panel_handle_t Owner::panel_handle() const noexcept { return impl_ == nullptr ? nullptr : impl_->panel_handle(); }
 bool Owner::is_capturing() const noexcept { return impl_ != nullptr && impl_->is_capturing(); }
 
+sao_status_t open_config_panel_status() noexcept { return SAO_STATUS_ERR_NOT_INITIALIZED; }
 void open_config_panel() {}
 
+sao_status_t open_config_panel_status(Owner* owner) noexcept {
+    return owner == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : owner->open();
+}
+
 void open_config_panel(Owner* owner) {
-    if (owner != nullptr)
-        (void)owner->open();
+    (void)open_config_panel_status(owner);
 }
 
 void close_config_panel() {}

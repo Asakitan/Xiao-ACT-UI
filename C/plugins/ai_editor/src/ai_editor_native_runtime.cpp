@@ -33,6 +33,66 @@ constexpr uint32_t kDefaultEventDrainLimit = 32U;
 constexpr uint32_t kMaximumEventDrainLimit = 64U;
 constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
 
+bool valid_sha256_hex(std::string_view value) noexcept {
+    if (value.size() != 64U)
+        return false;
+    return std::ranges::all_of(value, [](char character) {
+        return (character >= '0' && character <= '9') ||
+               (character >= 'a' && character <= 'f') ||
+               (character >= 'A' && character <= 'F');
+    });
+}
+
+enum class RuntimeHandleState : uint8_t {
+    live,
+    retired,
+};
+
+std::mutex runtime_handle_registry_mutex;
+std::unordered_map<SaoAiEditorRuntime*, RuntimeHandleState>
+    runtime_handle_registry;
+
+bool publish_runtime_handle(SaoAiEditorRuntime* handle) {
+    if (handle == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(runtime_handle_registry_mutex);
+    return runtime_handle_registry.emplace(handle, RuntimeHandleState::live)
+        .second;
+}
+
+bool runtime_handle_is_live(SaoAiEditorRuntime* handle) noexcept {
+    if (handle == nullptr) {
+        return false;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(runtime_handle_registry_mutex);
+        const auto found = runtime_handle_registry.find(handle);
+        return found != runtime_handle_registry.end() &&
+               found->second == RuntimeHandleState::live;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool retire_runtime_handle(SaoAiEditorRuntime* handle) noexcept {
+    if (handle == nullptr) {
+        return false;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(runtime_handle_registry_mutex);
+        const auto found = runtime_handle_registry.find(handle);
+        if (found == runtime_handle_registry.end() ||
+            found->second == RuntimeHandleState::retired) {
+            return false;
+        }
+        found->second = RuntimeHandleState::retired;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 std::string pick_kernel_driver_file() {
     std::vector<wchar_t> path(32768u, L'\0');
     constexpr wchar_t filter[] =
@@ -861,14 +921,25 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 
 NativeRuntime::~NativeRuntime() {
     set_webview_post_message_handler({});
-    if (mcp_management_panel_ != nullptr) {
-        (void)mcp_management_panel_->unregister_from_runtime(webview_panels_);
-        mcp_management_panel_.reset();
-    }
-    if (kernel_map_panel_ != nullptr) {
-        (void)kernel_map_panel_->unregister_from_runtime(webview_panels_);
-        kernel_map_panel_.reset();
-    }
+    int32_t first_panel_error = SAO_AI_EDITOR_OK;
+    auto unregister_panel = [&](auto& panel) {
+        if (panel == nullptr) {
+            return;
+        }
+        const int32_t status = panel->unregister_from_runtime(webview_panels_);
+        if (status != SAO_AI_EDITOR_OK &&
+            status != SAO_AI_EDITOR_ERR_NOT_FOUND &&
+            first_panel_error == SAO_AI_EDITOR_OK) {
+            first_panel_error = status;
+        }
+        if (status == SAO_AI_EDITOR_OK ||
+            status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            panel.reset();
+        }
+    };
+    unregister_panel(mcp_management_panel_);
+    unregister_panel(kernel_map_panel_);
+    (void)first_panel_error;
 
     std::vector<std::shared_ptr<WorkflowExecution>> workflows;
     {
@@ -965,14 +1036,24 @@ int32_t NativeRuntime::initialize() {
         sao::ai_editor::kernel_map::shared_bridge_handle();
     auto cleanup_kernel_map = [&] {
         int32_t first_error = SAO_AI_EDITOR_OK;
-        if (mcp_management_panel_ != nullptr) {
-            (void)mcp_management_panel_->unregister_from_runtime(webview_panels_);
-            mcp_management_panel_.reset();
-        }
-        if (kernel_map_panel_ != nullptr) {
-            (void)kernel_map_panel_->unregister_from_runtime(webview_panels_);
-            kernel_map_panel_.reset();
-        }
+        auto unregister_panel = [&](auto& panel) {
+            if (panel == nullptr) {
+                return;
+            }
+            const int32_t status =
+                panel->unregister_from_runtime(webview_panels_);
+            if (status != SAO_AI_EDITOR_OK &&
+                status != SAO_AI_EDITOR_ERR_NOT_FOUND &&
+                first_error == SAO_AI_EDITOR_OK) {
+                first_error = status;
+            }
+            if (status == SAO_AI_EDITOR_OK ||
+                status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                panel.reset();
+            }
+        };
+        unregister_panel(mcp_management_panel_);
+        unregister_panel(kernel_map_panel_);
         if (extension_host_ != nullptr) {
             const int32_t status =
                 sao::ai_editor::kernel_map::unregister_kernel_map_commands(
@@ -1040,20 +1121,20 @@ int32_t NativeRuntime::initialize() {
         sao::ai_editor::kernel_map::register_kernel_map_tools(
             tools_, kernel_map_bridge);
     if (registration_status != SAO_AI_EDITOR_OK) {
-        const int32_t cleanup_status = cleanup_kernel_map();
-        return cleanup_status != SAO_AI_EDITOR_OK &&
-                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
-                   ? cleanup_status
+        const int32_t rollback_status = cleanup_kernel_map();
+        return rollback_status != SAO_AI_EDITOR_OK &&
+                       rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? rollback_status
                    : registration_status;
     }
     registration_status =
         sao::ai_editor::kernel_map::register_kernel_map_commands(
             *extension_host_, kernel_map_bridge);
     if (registration_status != SAO_AI_EDITOR_OK) {
-        const int32_t cleanup_status = cleanup_kernel_map();
-        return cleanup_status != SAO_AI_EDITOR_OK &&
-                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
-                   ? cleanup_status
+        const int32_t rollback_status = cleanup_kernel_map();
+        return rollback_status != SAO_AI_EDITOR_OK &&
+                       rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? rollback_status
                    : registration_status;
     }
     // Operator-facing kernel map dashboard.  Constructs the panel
@@ -1068,10 +1149,10 @@ int32_t NativeRuntime::initialize() {
         webview_panels_,
         resolve_panel_assets(options_.system_root, "kernel_map_panel"));
     if (registration_status != SAO_AI_EDITOR_OK) {
-        const int32_t cleanup_status = cleanup_kernel_map();
-        return cleanup_status != SAO_AI_EDITOR_OK &&
-                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
-                   ? cleanup_status
+        const int32_t rollback_status = cleanup_kernel_map();
+        return rollback_status != SAO_AI_EDITOR_OK &&
+                       rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? rollback_status
                    : registration_status;
     }
     mcp_management_panel_ = std::make_unique<McpManagementPanelProvider>();
@@ -1091,10 +1172,10 @@ int32_t NativeRuntime::initialize() {
         webview_panels_,
         resolve_panel_assets(options_.system_root, "mcp_management_panel"));
     if (registration_status != SAO_AI_EDITOR_OK) {
-        const int32_t cleanup_status = cleanup_kernel_map();
-        return cleanup_status != SAO_AI_EDITOR_OK &&
-                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
-                   ? cleanup_status
+        const int32_t rollback_status = cleanup_kernel_map();
+        return rollback_status != SAO_AI_EDITOR_OK &&
+                       rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? rollback_status
                    : registration_status;
     }
     return SAO_AI_EDITOR_OK;
@@ -1879,12 +1960,15 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // it against a recomputation over the payload with the field stripped.
         // Missing digest is permitted for backward compatibility with pre-
         // checksum exports (R4 shipped without it).
-        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+        if (payload.contains("sha256")) {
+            if (!payload["sha256"].is_string())
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string claimed =
                 payload["sha256"].get<std::string>();
+            if (!valid_sha256_hex(claimed))
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string recomputed = sha256_envelope_hex(payload);
-            if (claimed.empty() || recomputed.empty() ||
-                claimed != recomputed) {
+            if (recomputed.empty() || claimed != recomputed) {
                 result = Json{{"message", "envelope sha256 mismatch"},
                               {"expected", claimed},
                               {"actual", recomputed}};
@@ -2021,12 +2105,15 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // Missing digest is tolerated for backward compatibility with R6-era
         // exports; a mismatched digest short-circuits with a protocol error
         // so tampered payloads cannot poison the registry.
-        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+        if (payload.contains("sha256")) {
+            if (!payload["sha256"].is_string())
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string claimed =
                 payload["sha256"].get<std::string>();
+            if (!valid_sha256_hex(claimed))
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string recomputed = sha256_envelope_hex(payload);
-            if (claimed.empty() || recomputed.empty() ||
-                claimed != recomputed) {
+            if (recomputed.empty() || claimed != recomputed) {
                 result = Json{{"message", "envelope sha256 mismatch"},
                               {"expected", claimed},
                               {"actual", recomputed}};
@@ -3449,12 +3536,15 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         // Envelope integrity guard — see conversation.import for the invariant.
         // Older R13-era exports predate the checksum so a missing digest is
         // silently accepted; a present-but-wrong digest surfaces PROTOCOL.
-        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+        if (payload.contains("sha256")) {
+            if (!payload["sha256"].is_string())
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string claimed =
                 payload["sha256"].get<std::string>();
+            if (!valid_sha256_hex(claimed))
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             const std::string recomputed = sha256_envelope_hex(payload);
-            if (claimed.empty() || recomputed.empty() ||
-                claimed != recomputed) {
+            if (recomputed.empty() || claimed != recomputed) {
                 result = Json{{"message", "envelope sha256 mismatch"},
                               {"expected", claimed},
                               {"actual", recomputed}};
@@ -6556,7 +6646,8 @@ namespace sao::ai_editor::native {
 
 RuntimeLease::RuntimeLease(SaoAiEditorRuntime* handle) noexcept
     : handle_(handle) {
-    if (handle_ == nullptr) {
+    if (!runtime_handle_is_live(handle_)) {
+        handle_ = nullptr;
         return;
     }
     std::lock_guard<std::mutex> guard(handle_->lifetime_mutex);
@@ -6619,8 +6710,9 @@ int32_t parse_runtime_options(const SaoAiEditorRuntimeConfig& config,
         if (!valid_utf8(config.plugin_roots_json_utf8)) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        const Json plugins = Json::parse(config.plugin_roots_json_utf8);
-        if (!plugins.is_array()) {
+        const Json plugins = Json::parse(config.plugin_roots_json_utf8, nullptr,
+                                         false);
+        if (plugins.is_discarded() || !plugins.is_array()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         for (size_t index = 0; index < plugins.size(); ++index) {
@@ -6681,8 +6773,14 @@ sao_ai_editor_runtime_create(const SaoAiEditorRuntimeConfig* config,
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
+        SaoAiEditorRuntime* raw_handle = handle.get();
+        if (!sao::ai_editor::native::publish_runtime_handle(raw_handle)) {
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+        }
         *out_handle = handle.release();
         return SAO_AI_EDITOR_OK;
+    } catch (const sao::ai_editor::native::Json::exception&) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     } catch (...) {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
@@ -6714,7 +6812,10 @@ sao_ai_editor_runtime_dispatch(sao_ai_editor_runtime_t handle,
                 return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             }
             sao::ai_editor::native::Json request =
-                sao::ai_editor::native::Json::parse(input);
+                sao::ai_editor::native::Json::parse(input, nullptr, false);
+            if (request.is_discarded()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
             sao::ai_editor::native::Json response;
             const int32_t status =
                 runtime->dispatch(request, response);
@@ -6732,6 +6833,8 @@ sao_ai_editor_runtime_dispatch(sao_ai_editor_runtime_t handle,
             handle->pending_dispatch.clear();
         }
         return status;
+    } catch (const sao::ai_editor::native::Json::exception&) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     } catch (...) {
         return SAO_AI_EDITOR_ERR_PROTOCOL;
     }
@@ -6809,7 +6912,8 @@ sao_ai_editor_runtime_cancel(sao_ai_editor_runtime_t handle,
 extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL
 sao_ai_editor_runtime_destroy(sao_ai_editor_runtime_t handle) {
     try {
-        if (handle == nullptr) {
+        if (handle == nullptr ||
+            !sao::ai_editor::native::retire_runtime_handle(handle)) {
             return;
         }
         {
@@ -6818,8 +6922,8 @@ sao_ai_editor_runtime_destroy(sao_ai_editor_runtime_t handle) {
             handle->lifetime_ready.wait(lock, [handle] {
                 return handle->leases == 0;
             });
+            handle->implementation.reset();
         }
-        delete handle;
     } catch (...) {
     }
 }

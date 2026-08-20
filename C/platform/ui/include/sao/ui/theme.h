@@ -157,7 +157,26 @@ enum SaoUiColorToken : int32_t {
     SAO_UI_TOKEN_ELEM_DARK                  = 73,
     SAO_UI_TOKEN_ELEM_GENERIC               = 74,
 
-    SAO_UI_TOKEN_COUNT                      = 75,
+    // Semantic control states and feedback surfaces.
+    SAO_UI_TOKEN_DISABLED_FG                = 75,
+    SAO_UI_TOKEN_DISABLED_BG                = 76,
+    SAO_UI_TOKEN_DISABLED_BORDER            = 77,
+    SAO_UI_TOKEN_HOVER_SURFACE              = 78,
+    SAO_UI_TOKEN_FOCUS_RING                 = 79,
+    SAO_UI_TOKEN_PRESSED_SURFACE            = 80,
+    SAO_UI_TOKEN_PLACEHOLDER                = 81,
+    SAO_UI_TOKEN_SELECTION                  = 82,
+    SAO_UI_TOKEN_SCROLLBAR_TRACK            = 83,
+    SAO_UI_TOKEN_SCROLLBAR_THUMB            = 84,
+    SAO_UI_TOKEN_SCROLLBAR_HOVER            = 85,
+    SAO_UI_TOKEN_SCROLLBAR_PRESSED          = 86,
+    SAO_UI_TOKEN_TOOLTIP_SURFACE            = 87,
+    SAO_UI_TOKEN_LOADING                    = 88,
+    SAO_UI_TOKEN_SKELETON                   = 89,
+    SAO_UI_TOKEN_ERROR_SURFACE              = 90,
+    SAO_UI_TOKEN_ERROR_ICON                 = 91,
+
+    SAO_UI_TOKEN_COUNT                      = 92,
 };
 
 // Canonical count alias (matches G3.1 spec vocabulary).
@@ -188,7 +207,18 @@ enum SaoUiMetricToken : int32_t {
     SAO_UI_METRIC_MENU_SLOT                 = 12,  // SAOMenuBar._SLOT (70)
     SAO_UI_METRIC_HUD_MARGIN                = 13,  // HUD bracket inset
     SAO_UI_METRIC_HUD_PAD                   = 14,  // HUD sprite margin
-    SAO_UI_METRIC_COUNT                     = 15,
+    SAO_UI_METRIC_CONTROL_HEIGHT_SM         = 15,
+    SAO_UI_METRIC_CONTROL_HEIGHT_MD         = 16,
+    SAO_UI_METRIC_CONTROL_HEIGHT_LG         = 17,
+    SAO_UI_METRIC_ICON_SIZE                 = 18,
+    SAO_UI_METRIC_TOUCH_TARGET              = 19,
+    SAO_UI_METRIC_TABLE_ROW_HEIGHT          = 20,
+    SAO_UI_METRIC_HEADER_HEIGHT             = 21,
+    SAO_UI_METRIC_TOOLTIP_MAX_WIDTH         = 22,
+    SAO_UI_METRIC_SCROLLBAR_WIDTH           = 23,
+    SAO_UI_METRIC_SCROLLBAR_MIN_THUMB       = 24,
+    SAO_UI_METRIC_SCROLLBAR_HIT_AREA        = 25,
+    SAO_UI_METRIC_COUNT                     = 26,
 };
 
 // Canonical metric-count alias.
@@ -196,6 +226,15 @@ enum SaoUiMetricToken : int32_t {
 
 struct SaoUiMetricTable {
     int32_t values[SAO_UI_METRIC_COUNT];
+};
+
+struct SaoUiShadowPreset {
+    int32_t offset_x;
+    int32_t offset_y;
+    int32_t blur_radius;
+    int32_t spread;
+    uint8_t alpha;
+    uint8_t _pad[3];
 };
 
 // ── Compile-time table access ─────────────────────────────────────
@@ -238,7 +277,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_get_metric(
 
 // Per-panel theme override (mirrors theme_manager.register_panel_theme).
 // panel_key_utf8 is the plugin-side namespace (e.g. "metrics", "raid").
-// Returns SAO_STATUS_ERR_NOT_FOUND if no override registered.
+// Registration replaces the matching owner/panel/theme/token entry; lookup
+// falls back to the active static token when no override exists.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_register_panel_override(
     sao_ui_theme_handle_t handle,
     const char* panel_key_utf8,
@@ -264,8 +304,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_get_panel_color(
     SaoUiColorToken token,
     uint32_t* out_argb);
 
-// JSON load — optional runtime path for user themes.  Ignores unknown
-// keys; missing keys keep their static value.
+// JSON load — bounded transactional runtime path for user themes.  The
+// documented shape is {"theme_id":"dark|light|glass|0|1|2",
+// "colors":{"APP_BG":"#RRGGBB[AA]"}}.  `theme_id` is optional;
+// color names may also appear at the top level.  Unknown keys are ignored,
+// known colors must be valid, and a failed parse leaves the handle unchanged.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_theme_load_json(
     sao_ui_theme_handle_t handle,
     const uint8_t* json_utf8,
@@ -469,7 +512,24 @@ inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),         // #FFD95A (id 7)
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),         // #9B6BD6 (id 8)
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),         // #B0B8C4 (id 0)
-};
+
+    /* [75] DISABLED_FG         */ rgba(0x5E, 0x70, 0x78, 0xCC),
+    /* [76] DISABLED_BG         */ rgba(0x17, 0x20, 0x28),
+    /* [77] DISABLED_BORDER     */ rgba(0x31, 0x45, 0x4D),
+    /* [78] HOVER_SURFACE       */ rgba(0x18, 0x2A, 0x34),
+    /* [79] FOCUS_RING          */ rgba(0x68, 0xE4, 0xFF),
+    /* [80] PRESSED_SURFACE     */ rgba(0x0A, 0x16, 0x1E),
+    /* [81] PLACEHOLDER         */ rgba(0x7E, 0xB8, 0xC9, 0xB0),
+    /* [82] SELECTION           */ rgba(0x4D, 0xE8, 0xF4, 0x40),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0x1A, 0x3A, 0x4E, 0x90),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0x4D, 0xE8, 0xF4, 0xB8),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x72, 0xF2, 0xFA, 0xD0),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xB4, 0xFA, 0xFF, 0xF0),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0x11, 0x18, 0x20, 0xE8),
+    /* [88] LOADING             */ rgba(0x4D, 0xE8, 0xF4, 0x30),
+    /* [89] SKELETON            */ rgba(0x18, 0x2A, 0x34),
+    /* [90] ERROR_SURFACE       */ rgba(0xFF, 0x44, 0x44, 0x24),
+    /* [91] ERROR_ICON          */ rgba(0xFF, 0x44, 0x44),};
 
 // ── Light theme (SAOColors canonical CSS palette) ─────────────────
 // The Python SAOColors class is already a light-mode design; the
@@ -552,7 +612,24 @@ inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),
-};
+
+    /* [75] DISABLED_FG         */ rgba(0x9A, 0xA4, 0xAC),
+    /* [76] DISABLED_BG         */ rgba(0xF0, 0xF2, 0xF4),
+    /* [77] DISABLED_BORDER     */ rgba(0xD7, 0xDD, 0xE1),
+    /* [78] HOVER_SURFACE       */ rgba(0xED, 0xF7, 0xFA),
+    /* [79] FOCUS_RING          */ rgba(0x42, 0x8C, 0xE6),
+    /* [80] PRESSED_SURFACE     */ rgba(0xDB, 0xEA, 0xF8),
+    /* [81] PLACEHOLDER         */ rgba(0x9A, 0xA4, 0xAC),
+    /* [82] SELECTION           */ rgba(0x42, 0x8C, 0xE6, 0x30),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0xD7, 0xDD, 0xE1),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0x42, 0x8C, 0xE6, 0xB0),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x2F, 0x79, 0xD0),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0x1F, 0x5D, 0xA8),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0xFF, 0xFF, 0xFF, 0xE8),
+    /* [88] LOADING             */ rgba(0x42, 0x8C, 0xE6, 0x20),
+    /* [89] SKELETON            */ rgba(0xEE, 0xF1, 0xF4),
+    /* [90] ERROR_SURFACE       */ rgba(0xD1, 0x3D, 0x4F, 0x18),
+    /* [91] ERROR_ICON          */ rgba(0xD1, 0x3D, 0x4F),};
 
 // ── Glass theme (frosted-glass HUD — dark base + translucent tint) ─
 // Inherits the dark palette but overlays SURFACE_LIGHT at low alpha
@@ -634,7 +711,24 @@ inline constexpr SaoColorRgba kSaoThemeGlassColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),
-};
+
+    /* [75] DISABLED_FG         */ rgba(0x8C, 0x87, 0x8A, 0xCC),
+    /* [76] DISABLED_BG         */ rgba(0xF8, 0xF8, 0xF8, 0x18),
+    /* [77] DISABLED_BORDER     */ rgba(0xBC, 0xC4, 0xCA, 0x80),
+    /* [78] HOVER_SURFACE       */ rgba(0x68, 0xE4, 0xFF, 0x30),
+    /* [79] FOCUS_RING          */ rgba(0x68, 0xE4, 0xFF),
+    /* [80] PRESSED_SURFACE     */ rgba(0x68, 0xE4, 0xFF, 0x50),
+    /* [81] PLACEHOLDER         */ rgba(0x8C, 0x87, 0x8A, 0xB0),
+    /* [82] SELECTION           */ rgba(0x68, 0xE4, 0xFF, 0x40),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0xBC, 0xC4, 0xCA, 0x70),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0x68, 0xE4, 0xFF, 0xB0),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x9A, 0xF0, 0xFF, 0xD0),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xD4, 0xFC, 0xFF, 0xF0),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0x11, 0x18, 0x20, 0xE8),
+    /* [88] LOADING             */ rgba(0x68, 0xE4, 0xFF, 0x30),
+    /* [89] SKELETON            */ rgba(0xF8, 0xF8, 0xF8, 0x28),
+    /* [90] ERROR_SURFACE       */ rgba(0xEF, 0x68, 0x4E, 0x24),
+    /* [91] ERROR_ICON          */ rgba(0xEF, 0x68, 0x4E),};
 
 // ── Metrics (design-token integer values, dpi-scale-free) ──────────
 // Values pulled from Python `SAOCircleButton.SIZE/MAX_SIZE`, the
@@ -656,6 +750,24 @@ inline constexpr int32_t kSaoThemeMetrics[SAO_UI_METRIC_TOKEN_COUNT] = {
     /* [12] MENU_SLOT             */ 70,   // SAOMenuBar._SLOT
     /* [13] HUD_MARGIN            */ 18,   // HUD bracket inset
     /* [14] HUD_PAD               */  8,   // HUD sprite margin
+
+    /* [15] CONTROL_HEIGHT_SM     */ 24,
+    /* [16] CONTROL_HEIGHT_MD     */ 32,
+    /* [17] CONTROL_HEIGHT_LG     */ 40,
+    /* [18] ICON_SIZE             */ 16,
+    /* [19] TOUCH_TARGET          */ 24,
+    /* [20] TABLE_ROW_HEIGHT      */ 24,
+    /* [21] HEADER_HEIGHT         */ 32,
+    /* [22] TOOLTIP_MAX_WIDTH     */ 360,
+    /* [23] SCROLLBAR_WIDTH       */ 8,
+    /* [24] SCROLLBAR_MIN_THUMB   */ 18,
+    /* [25] SCROLLBAR_HIT_AREA    */ 16,};
+
+inline constexpr SaoUiShadowPreset kSaoThemeElevationPresets[4] = {
+    /* elevation_0 */ {0, 0, 0, 0, 0x00, {0, 0, 0}},
+    /* elevation_1 */ {0, 2, 3, 1, 0x30, {0, 0, 0}},
+    /* elevation_2 */ {0, 4, 6, 2, 0x48, {0, 0, 0}},
+    /* elevation_3 */ {0, 8, 12, 3, 0x68, {0, 0, 0}},
 };
 
 // ── Compile-time size correctness (G3.1 gate) ─────────────────────
@@ -669,11 +781,11 @@ static_assert(std::size(kSaoThemeMetrics)     == SAO_UI_METRIC_TOKEN_COUNT,
               "kSaoThemeMetrics size must match SAO_UI_METRIC_TOKEN_COUNT");
 // Sentinel guard so a future refactor that renumbers the enums also
 // updates the sentinel here (light + glass never grew independently).
-static_assert(SAO_UI_COLOR_TOKEN_COUNT == 75,
-              "Theme tables were built against 75 tokens; update them "
+static_assert(SAO_UI_COLOR_TOKEN_COUNT == 92,
+              "Theme tables were built against 92 tokens; update them "
               "before re-numbering SaoUiColorToken");
-static_assert(SAO_UI_METRIC_TOKEN_COUNT == 15,
-              "Theme metric table was built against 15 metrics; update "
+static_assert(SAO_UI_METRIC_TOKEN_COUNT == 26,
+              "Theme metric table was built against 26 metrics; update "
               "kSaoThemeMetrics before re-numbering SaoUiMetricToken");
 
 // Table dispatch — inline so this is a single load in optimized builds.

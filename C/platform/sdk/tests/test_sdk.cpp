@@ -387,22 +387,51 @@ TEST_CASE("SDK bind retries after an in-flight headless router lease",
 
     const auto widget = create_router_probe_widget();
     REQUIRE(sao_ui_input_router_set_focus_widget(old_router, widget) == SAO_STATUS_OK);
+    SaoPanelConfig probe_panel_config{};
+    probe_panel_config.panel_id_utf8 = "sdk.router.bind.retry.probe";
+    probe_panel_config.title_utf8 = "Probe";
+    probe_panel_config.default_width = 96;
+    probe_panel_config.default_height = 64;
+    probe_panel_config.show_titlebar = false;
+    probe_panel_config.rendering_mode = SAO_UI_PANEL_RENDER_NATIVE;
+    sao_ui_panel_handle_t probe_panel = nullptr;
+    REQUIRE(sao_ui_panel_create(static_cast<sao_ui_compositor_handle_t>(old_compositor),
+                                &probe_panel_config, &probe_panel) == SAO_STATUS_OK);
+    constexpr char probe_spec[] =
+        R"({"version":1,"title":"","nodes":[{"type":"button","id":"probe","label":"Probe","height":32}]})";
+    REQUIRE(sao_ui_panel_set_spec(probe_panel,
+                                  reinterpret_cast<const uint8_t*>(probe_spec),
+                                  sizeof(probe_spec) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_set_visible(probe_panel, true) == SAO_STATUS_OK);
     RouterLeaseProbe probe;
     REQUIRE(sao_ui_input_router_set_hover_change_handler(old_router, &hold_router_lease, &probe) ==
             SAO_STATUS_OK);
     SaoUiInputEvent move{};
     move.kind = SAO_UI_INPUT_MOUSE_MOVE;
-    move.screen_x_px = 1;
-    move.screen_y_px = 1;
+    move.screen_x_px = 20;
+    move.screen_y_px = 20;
     bool consumed = false;
     sao_status_t route_status = SAO_STATUS_ERR_UNKNOWN;
     std::thread route_thread([&] {
         route_status = sao_ui_input_router_route_event(old_router, &move, &consumed);
     });
+    bool callback_entered = false;
     {
         std::unique_lock lock(probe.mutex);
-        REQUIRE(probe.changed.wait_for(lock, std::chrono::seconds(5),
-                                       [&probe] { return probe.entered; }));
+        callback_entered = probe.changed.wait_for(lock, std::chrono::seconds(2),
+                                                  [&probe] { return probe.entered; });
+    }
+    if (!callback_entered) {
+        {
+            std::lock_guard lock(probe.mutex);
+            probe.release = true;
+        }
+        probe.changed.notify_all();
+        route_thread.join();
+        sao_ui_panel_destroy(probe_panel);
+        sao_ui_widget_destroy(widget);
+        (void)sao_sdk_test_reset_runtime();
+        REQUIRE(callback_entered);
     }
 
     sao_ui_compositor_handle_t replacement = nullptr;
@@ -425,6 +454,7 @@ TEST_CASE("SDK bind retries after an in-flight headless router lease",
     route_thread.join();
     CHECK(route_status == SAO_STATUS_OK);
     CHECK(consumed);
+    sao_ui_panel_destroy(probe_panel);
 
     REQUIRE(sao_sdk_platform_bind_ui_compositor(replacement) == SAO_SDK_OK);
     REQUIRE(sao_sdk_test_runtime_state(&retained_compositor, &retained_router, &owns_compositor,

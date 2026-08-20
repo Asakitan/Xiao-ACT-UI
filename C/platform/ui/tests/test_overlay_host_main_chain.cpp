@@ -355,6 +355,8 @@ TEST_CASE("overlay host production main chain", "[ui][overlay_host][production]"
     CHECK_FALSE(sao_ui_gpu_overlay_supported());
     CHECK(sao_ui_overlay_host_hglrc(host) == nullptr);
     CHECK(sao_ui_overlay_host_make_current(host) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(sao_ui_overlay_host_release_current(host) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(sao_ui_overlay_host_swap_buffers(host) == SAO_STATUS_ERR_NOT_IMPLEMENTED);
 
     sao_ui_input_router_destroy(input);
 

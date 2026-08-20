@@ -484,6 +484,14 @@ json button_node(std::string id, std::string label, std::string action,
     return node;
 }
 
+json input_node(std::string id, std::string value, std::string action, bool disabled = false) {
+    json node{{"type", "input"}, {"id", std::move(id)}, {"value", std::move(value)},
+              {"input_type", "text"}, {"action", std::move(action)}, {"height", 38}};
+    if (disabled)
+        node["disabled"] = true;
+    return node;
+}
+
 json row_node(json children, std::string_view align = "left") {
     return json{{"type", "row"}, {"align", align}, {"children", std::move(children)}};
 }
@@ -2091,8 +2099,12 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
                                     state.rpc_kind != RpcKind::None || state.save_pending ||
                                     followup_load_active(state) || !dependencies_met;
     if (field.kind == FieldKind::Boolean) {
-        actions.push_back(button_node("field." + token + ".toggle", "Toggle", "field.toggle",
-                                      {{"key", field.key}}, "primary", interaction_locked));
+        const json* current = effective_value(state, field);
+        const bool enabled = current != nullptr && current->is_boolean() && current->get<bool>();
+        actions.push_back(button_node("field." + token + ".toggle",
+                                      enabled ? "[✓] Enabled" : "[ ] Disabled",
+                                      "field.toggle", {{"key", field.key}},
+                                      enabled ? "primary" : "default", interaction_locked));
     } else if (field.kind == FieldKind::Enum && !field.options.empty()) {
         const json* current = effective_value(state, field);
         const size_t maximum_options = std::min<size_t>(field.options.size(), 10U);
@@ -2103,7 +2115,8 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
                 label.append(" / ").append(item.label_zh);
             const bool active = current != nullptr && *current == item.value;
             actions.push_back(button_node("field." + token + ".option." + std::to_string(index),
-                                          std::move(label), "field.select",
+                                          std::string(active ? "(●) " : "( ) ") + label,
+                                          "field.select",
                                           {{"key", field.key}, {"value", item.value}},
                                           active ? "primary" : "default", interaction_locked));
         }
@@ -2112,6 +2125,25 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
                                           "field.edit", {{"key", field.key}}, "default",
                                           interaction_locked));
         }
+    } else if ((field.kind == FieldKind::Integer || field.kind == FieldKind::Number) &&
+               !is_secret_field(field)) {
+        const json* current = effective_value(state, field);
+        const double value = current != nullptr && current->is_number() ? current->get<double>() : 0.0;
+        const double minimum = field.minimum.value_or(-std::numeric_limits<double>::max());
+        const double maximum = field.maximum.value_or(std::numeric_limits<double>::max());
+        const double step = field.kind == FieldKind::Integer ? 1.0 : 0.1;
+        std::ostringstream value_text;
+        value_text << "Value: " << value;
+        if (field.minimum.has_value() || field.maximum.has_value())
+            value_text << " · range " << minimum << "–" << maximum;
+        children.push_back(text_node(value_text.str(), "value", 30));
+        children.push_back(text_node("Use the spinner buttons; Edit remains available for precise values.", "muted", 30));
+        actions.push_back(button_node("field." + token + ".down", "−", "field.number.adjust",
+                                      {{"key", field.key}, {"delta", -step}}, "default", interaction_locked || value <= minimum));
+        actions.push_back(button_node("field." + token + ".up", "+", "field.number.adjust",
+                                      {{"key", field.key}, {"delta", step}}, "default", interaction_locked || value >= maximum));
+        actions.push_back(button_node("field." + token + ".edit", "Edit", "field.edit",
+                                      {{"key", field.key}}, "ghost", interaction_locked));
     } else {
         actions.push_back(button_node(
             "field." + token + ".edit",
@@ -2182,31 +2214,21 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     rail_nodes.push_back(card_node("Scope", std::move(scope_children), dirty ? "warn" : "cyan"));
 
     json search_children = json::array();
-    search_children.push_back(
-        text_node(state.search_query.empty()
-                      ? "Search label (中文/English), stable key, description and keywords."
-                      : "Query: " + state.search_query,
-                  state.search_query.empty() ? "muted" : "accent", 30));
+    search_children.push_back(input_node("settings.search", state.search_query, "search.open"));
     json search_actions = json::array();
     search_actions.push_back(button_node("search.open", "Search... / 搜索...", "search.open",
                                          json::object(), "primary"));
-    search_actions.push_back(button_node("search.clear", "Clear Search / 清除搜索", "search.clear",
+    search_actions.push_back(button_node("search.clear", "Clear", "search.clear",
                                          json::object(), "ghost", state.search_query.empty()));
     search_children.push_back(row_node(std::move(search_actions)));
-    search_children.push_back(text_node(
-        "Review filters / 审核过滤：快速定位修改、作用域覆盖和验证错误。", "muted", 28));
+    search_children.push_back(text_node("Search label, 中文/English, stable key, description and keywords.", "muted", 30));
     json review_actions = json::array();
     for (const std::string_view filter : {"all", "modified", "overrides", "errors"}) {
-        const std::string label =
-            filter == "all"          ? "All / 全部"
-            : filter == "modified"   ? "Modified / 已修改"
-            : filter == "overrides"  ? "Overrides / 覆盖"
-                                      : "Errors / 错误";
-        review_actions.push_back(button_node(
-            "review." + std::string(filter),
-            label + " (" + std::to_string(review_filter_count(state, filter)) + ")",
-            "filter.review", {{"value", filter}},
-            state.review_filter == filter ? "primary" : "default"));
+        const std::string label = filter == "all" ? "All" : filter == "modified" ? "Modified" : filter == "overrides" ? "Overrides" : "Errors";
+        review_actions.push_back(button_node("review." + std::string(filter),
+                                             label + " (" + std::to_string(review_filter_count(state, filter)) + ")",
+                                             "filter.review", {{"value", filter}},
+                                             state.review_filter == filter ? "primary" : "default"));
     }
     search_children.push_back(row_node(std::move(review_actions)));
     json advanced_actions = json::array();
@@ -2218,20 +2240,30 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
         state.show_advanced ? "primary" : "ghost"));
     advanced_actions.push_back(badge_node(
         std::to_string(static_cast<size_t>(std::ranges::count_if(
-            state.fields, [](const FieldMeta& field) { return field_is_advanced(field); }))) +
+            state.fields, [](const FieldMeta& item) { return field_is_advanced(item); }))) +
             " advanced fields / 高级字段",
         "muted"));
     search_children.push_back(row_node(std::move(advanced_actions)));
     rail_nodes.push_back(card_node("Search", std::move(search_children), "cyan"));
 
-    json nav_buttons = json::array();
-    for (const auto& page : kPages) {
-        nav_buttons.push_back(button_node(
-            "nav." + std::string(page.id), std::string(page.label), "nav.page", {{"page", page.id}},
-            state.search_query.empty() && state.active_page == page.id ? "primary" : "default"));
-    }
     json navigation = json::array();
-    append_button_rows(navigation, std::move(nav_buttons), 4);
+    for (const auto& page : kPages) {
+        size_t modified = 0;
+        size_t errors = 0;
+        for (const auto& field : state.fields) {
+            if (field.page != page.id)
+                continue;
+            modified += field_has_pending_change(state, field) ? 1U : 0U;
+            errors += state.validation_errors.contains(field.key) ? 1U : 0U;
+        }
+        const std::string icon = page.id.empty() ? "•" : std::string(1, page.id.front() >= 'a' && page.id.front() <= 'z' ? static_cast<char>(page.id.front() - ('a' - 'A')) : page.id.front());
+        std::string label = icon + "  " + std::string(page.label);
+        if (modified != 0 || errors != 0)
+            label += " · M" + std::to_string(modified) + "/E" + std::to_string(errors);
+        navigation.push_back(button_node("nav." + std::string(page.id), label, "nav.page",
+                                          {{"page", page.id}},
+                                          state.search_query.empty() && state.active_page == page.id ? "primary" : "default"));
+    }
     rail_nodes.push_back(card_node("Categories", std::move(navigation), "gold"));
 
     json content_nodes = json::array();
@@ -3812,6 +3844,27 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
             return;
         }
     }
+    if (action == "field.number.adjust") {
+        const auto delta = payload.find("delta");
+        if (delta == payload.end() || !delta->is_number()) {
+            std::lock_guard lock(state.mutex);
+            state.last_error = "Number spinner is missing a delta.";
+            return;
+        }
+        std::lock_guard lock(state.mutex);
+        const json* current = effective_value(state, *field_meta);
+        double value = current != nullptr && current->is_number() ? current->get<double>() : 0.0;
+        value += delta->get<double>();
+        if (field_meta->minimum.has_value())
+            value = std::max(value, *field_meta->minimum);
+        if (field_meta->maximum.has_value())
+            value = std::min(value, *field_meta->maximum);
+        if (field_meta->kind == FieldKind::Integer)
+            set_field_value(state, *field_meta, static_cast<int64_t>(std::llround(value)));
+        else
+            set_field_value(state, *field_meta, value);
+        return;
+    }
     if (action == "field.toggle") {
         std::lock_guard lock(state.mutex);
         const json* current = effective_value(state, *field_meta);
@@ -3922,6 +3975,7 @@ void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {
     if (!lease)
         return;
     bool hide_dialog = false;
+    bool close_panel = false;
     {
         std::lock_guard lock(state->mutex);
         if (event_kind == SAO_UI_PANEL_EVENT_SHOW) {
@@ -3929,12 +3983,23 @@ void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {
         } else if (event_kind == SAO_UI_PANEL_EVENT_HIDE ||
                    event_kind == SAO_UI_PANEL_EVENT_CLOSE) {
             state->visible = false;
+            close_panel = event_kind == SAO_UI_PANEL_EVENT_CLOSE;
             hide_dialog = true;
             if (state_dirty(*state)) {
                 state->hidden_with_dirty = true;
                 state->status_message = "Panel hidden with a dirty draft; changes are retained. / "
                                         "面板已隐藏，未保存草稿仍保留。";
             }
+        }
+    }
+    if (close_panel) {
+        const sao_status_t hide_status = sao_ui_panel_hide(state->panel);
+        if (hide_status != SAO_STATUS_OK) {
+            std::lock_guard error_lock(state->mutex);
+            state->visible = true;
+            state->last_error = "Failed to hide the settings panel on close (status " +
+                                std::to_string(map_ui_status(hide_status)) + ").";
+            return;
         }
     }
     if (hide_dialog) {
@@ -4148,6 +4213,7 @@ extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_panel_snapshot_json
                         {"inherited", state.inherited},
                         {"sources", state.sources},
                         {"scope", state.selected_scope},
+                        {"visible", state.visible},
                         {"pluginId", state.selected_plugin_id},
                         {"reviewFilter", state.review_filter},
                         {"showAdvanced", state.show_advanced},

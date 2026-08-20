@@ -80,6 +80,8 @@ const char* operation_name(ExtensionOperation operation) noexcept {
     switch (operation) {
         case ExtensionOperation::activating:
             return "activating";
+        case ExtensionOperation::quarantined:
+            return "quarantined";
         case ExtensionOperation::deactivating:
             return "deactivating";
         case ExtensionOperation::unregistering:
@@ -97,6 +99,12 @@ bool has_inflight_operation_locked(
         [](const auto& entry) {
             return entry.second.operation != ExtensionOperation::idle;
         });
+}
+
+bool activation_outcome_unknown(int32_t status) noexcept {
+    return status == SAO_AI_EDITOR_ERR_TIMEOUT ||
+           status == SAO_AI_EDITOR_ERR_IPC_CLOSED ||
+           status == SAO_AI_EDITOR_ERR_PROTOCOL;
 }
 
 }  // namespace
@@ -442,6 +450,32 @@ int32_t ExtensionHost::activate(std::string_view extension_id,
     const int32_t status = node->request(
         "host.activate", params, timeout_ms == 0 ? 15000 : timeout_ms, result);
     if (status != SAO_AI_EDITOR_OK) {
+        if (activation_outcome_unknown(status)) {
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                const auto found = extensions_.find(id);
+                if (found != extensions_.end() &&
+                    found->second.operation == ExtensionOperation::activating &&
+                    found->second.operation_generation == operation_generation) {
+                    found->second.operation = ExtensionOperation::quarantined;
+                }
+            }
+            node->shutdown();
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                const auto found = extensions_.find(id);
+                if (found != extensions_.end() &&
+                    found->second.operation == ExtensionOperation::quarantined &&
+                    found->second.operation_generation == operation_generation) {
+                    found->second.activated = false;
+                    found->second.activation_result = Json::object();
+                    found->second.operation = ExtensionOperation::idle;
+                }
+                if (node_runtime_ == node) {
+                    node_runtime_.reset();
+                }
+            }
+        }
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
         if (found != extensions_.end() &&

@@ -1,6 +1,7 @@
 #include "workshop_panel_internal.h"
 
 #include "sao/server/freetier/workshop_client/workshop_client.h"
+#include "sao/ui/dialog.h"
 #include "sao_core/sao_status.h"
 
 #include <nlohmann/json.hpp>
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -340,6 +342,19 @@ std::string format_rating(std::uint32_t rating) {
     return std::to_string(rating / 100U) + "." + std::to_string((rating / 10U) % 10U) + " / 5";
 }
 
+std::string updated_ago(std::uint64_t updated_ms) {
+    if (updated_ms == 0U)
+        return "Updated recently";
+    const std::uint64_t now_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000U;
+    const std::uint64_t seconds = now_ms > updated_ms ? (now_ms - updated_ms) / 1000U : 0U;
+    if (seconds < 60U) return "Updated " + std::to_string(seconds) + " sec ago";
+    const std::uint64_t minutes = seconds / 60U;
+    if (minutes < 60U) return "Updated " + std::to_string(minutes) + " min ago";
+    const std::uint64_t hours = minutes / 60U;
+    if (hours < 24U) return "Updated " + std::to_string(hours) + " hr ago";
+    return "Updated " + std::to_string(hours / 24U) + " days ago";
+}
+
 std::string format_bytes(std::uint64_t size) {
     constexpr std::uint64_t kib = 1024;
     constexpr std::uint64_t mib = kib * 1024;
@@ -511,7 +526,38 @@ SaoPanelDescriptor panel_descriptor() noexcept {
     return descriptor;
 }
 
+struct WorkshopRemoveDialogLease {
+    std::mutex mutex;
+    Owner* owner{};
+};
+
+struct WorkshopRemoveDialogContext {
+    std::shared_ptr<WorkshopRemoveDialogLease> lease;
+    std::string id;
+};
+
+void SAO_UI_CALL workshop_remove_dialog_callback(SaoUiDialogButton pressed, const char*,
+                                                  std::size_t, void* user_data) noexcept {
+    try {
+        std::unique_ptr<WorkshopRemoveDialogContext> context(
+            static_cast<WorkshopRemoveDialogContext*>(user_data));
+        if (context == nullptr || pressed != SAO_UI_DIALOG_BTN_YES ||
+            context->lease == nullptr) {
+            return;
+        }
+        std::lock_guard lock(context->lease->mutex);
+        if (context->lease->owner == nullptr)
+            return;
+        const std::string payload = json{{"id", context->id}, {"confirmed", true}}.dump();
+        (void)context->lease->owner->dispatch_action_for_testing(
+            "workshop.plugin.uninstall", payload);
+    } catch (...) {
+    }
+}
+
 class Owner::Impl final {
+    friend class Owner;
+
   public:
     static std::mutex deferred_mutex_;
     static std::vector<std::unique_ptr<Impl>> deferred_cleanup_;
@@ -545,7 +591,8 @@ class Owner::Impl final {
          Operations operations)
         : compositor_(compositor), base_dir_(std::move(base_dir)),
           plugins_dir_(base_dir_ / "plugins"), cache_dir_(base_dir_ / "cache" / "workshop"),
-          operations_(std::move(operations)) {
+          operations_(std::move(operations)),
+          dialog_lease_(std::make_shared<WorkshopRemoveDialogLease>()) {
         try {
             base_dir_ = base_dir_.lexically_normal();
             plugins_dir_ = base_dir_ / "plugins";
@@ -566,7 +613,50 @@ class Owner::Impl final {
     }
 
     ~Impl() {
+        invalidate_dialog_owner();
         stop_and_join();
+    }
+
+    void set_dialog_owner(Owner* owner) noexcept {
+        std::shared_ptr<WorkshopRemoveDialogLease> lease;
+        {
+            std::lock_guard lock(mutex_);
+            lease = dialog_lease_;
+        }
+        if (lease != nullptr) {
+            std::lock_guard lock(lease->mutex);
+            lease->owner = owner;
+        }
+    }
+
+    void invalidate_dialog_owner() noexcept {
+        std::shared_ptr<WorkshopRemoveDialogLease> lease;
+        {
+            std::lock_guard lock(mutex_);
+            lease = dialog_lease_;
+        }
+        if (lease != nullptr) {
+            std::lock_guard lock(lease->mutex);
+            lease->owner = nullptr;
+        }
+    }
+
+    void activate_dialog_owner(Owner* owner) {
+        std::shared_ptr<WorkshopRemoveDialogLease> lease;
+        {
+            std::lock_guard lock(mutex_);
+            lease = dialog_lease_;
+        }
+        if (lease != nullptr) {
+            std::lock_guard lease_lock(lease->mutex);
+            if (lease->owner != nullptr)
+                return;
+        }
+        auto replacement = std::make_shared<WorkshopRemoveDialogLease>();
+        replacement->owner = owner;
+        std::lock_guard lock(mutex_);
+        if (dialog_lease_ == lease)
+            dialog_lease_ = std::move(replacement);
     }
 
     bool shutdown_noexcept() noexcept {
@@ -599,6 +689,7 @@ class Owner::Impl final {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        activate_dialog_owner(owner_);
         {
             std::lock_guard lock(mutex_);
             if (startup_status_ != SAO_STATUS_OK)
@@ -689,6 +780,7 @@ class Owner::Impl final {
         const sao_status_t claim_status = claim_retirement();
         if (claim_status != SAO_STATUS_OK)
             return claim_status;
+        invalidate_dialog_owner();
         stop_and_join();
         const sao_status_t status = retire_panel_claimed();
         release_retirement_claim(status);
@@ -754,6 +846,27 @@ class Owner::Impl final {
             return enqueue_task(Task{TaskKind::Detail, 0, 0, std::move(id)});
         if (action == "workshop.plugin.install")
             return enqueue_task(Task{TaskKind::Install, 0, 0, std::move(id)});
+        if (action == "workshop.plugin.uninstall" && payload.find("\"confirmed\":true") == std::string_view::npos) {
+            auto* context = new (std::nothrow) WorkshopRemoveDialogContext{};
+            if (context == nullptr)
+                return SAO_STATUS_ERR_UNKNOWN;
+            {
+                std::lock_guard lock(mutex_);
+                context->lease = dialog_lease_;
+            }
+            if (context->lease == nullptr) {
+                delete context;
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+            }
+            context->id = id;
+            const std::string message = "Remove " + id + "?";
+            const sao_status_t dialog_status = sao_ui_dialog_show_ask(
+                compositor_, nullptr, "Remove plugin", message.c_str(),
+                &workshop_remove_dialog_callback, context);
+            if (dialog_status != SAO_STATUS_OK)
+                delete context;
+            return dialog_status;
+        }
         if (action == "workshop.plugin.uninstall")
             return enqueue_task(Task{TaskKind::Uninstall, 0, 0, std::move(id)});
         return SAO_STATUS_ERR_NOT_FOUND;
@@ -1199,7 +1312,8 @@ class Owner::Impl final {
         json controls = json::array();
         json status_badges = json::array();
         status_badges.push_back(badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
-        status_badges.push_back(badge_node("Page " + std::to_string(current_page_), "accent"));
+        const std::uint32_t page_count = page_size_ == 0U ? 0U : (total_ + page_size_ - 1U) / page_size_;
+        status_badges.push_back(badge_node("Page " + std::to_string(current_page_) + " of " + std::to_string(page_count), "accent"));
         status_badges.push_back(badge_node(std::to_string(total_) + " plugins", "gold"));
         controls.push_back(row_node(std::move(status_badges)));
         json navigation = json::array();
@@ -1228,6 +1342,10 @@ class Owner::Impl final {
                 metadata.push_back(badge_node("v" + item.version, "accent"));
                 metadata.push_back(badge_node(item.tag.empty() ? "untagged" : item.tag, "muted"));
                 metadata.push_back(badge_node(item.author.empty() ? item.id : item.author, "muted"));
+                std::error_code installed_error;
+                const bool installed = std::filesystem::is_directory(plugins_dir_ / item.id, installed_error) && !installed_error;
+                metadata.push_back(badge_node(installed ? "Installed" : "Not installed", installed ? "ok" : "muted"));
+                metadata.push_back(badge_node(updated_ago(item.updated_ms), "muted"));
                 details.push_back(row_node(std::move(metadata)));
                 json metrics = json::array();
                 metrics.push_back(badge_node(format_rating(item.rating), "gold"));
@@ -1237,10 +1355,12 @@ class Owner::Impl final {
                 json actions = json::array();
                 actions.push_back(button_node("detail." + std::to_string(index), "View",
                                               "workshop.plugin.detail", payload, "default", busy));
-                actions.push_back(button_node("install." + std::to_string(index), "Install",
-                                              "workshop.plugin.install", payload, "primary", busy));
-                actions.push_back(button_node("uninstall." + std::to_string(index), "Remove",
-                                              "workshop.plugin.uninstall", payload, "danger", busy));
+                if (!installed)
+                    actions.push_back(button_node("install." + std::to_string(index), "Install",
+                                                  "workshop.plugin.install", payload, "primary", busy));
+                if (installed)
+                    actions.push_back(button_node("uninstall." + std::to_string(index), "Remove",
+                                                  "workshop.plugin.uninstall", payload, "danger", busy));
                 details.push_back(row_node(std::move(actions)));
                 catalog.push_back(card_node(item.name + " · v" + item.version, std::move(details)));
             }
@@ -1265,10 +1385,14 @@ class Owner::Impl final {
             detail_children.push_back(text_node("SHA-256 " + detail.sha256_hex, "mono", 30));
             const json payload{{"id", detail.summary.id}};
             json detail_actions = json::array();
-            detail_actions.push_back(button_node("detail.install", "Install", "workshop.plugin.install",
-                                                 payload, "primary", busy));
-            detail_actions.push_back(button_node("detail.remove", "Remove", "workshop.plugin.uninstall",
-                                                 payload, "danger", busy));
+            std::error_code detail_installed_error;
+            const bool detail_installed = std::filesystem::is_directory(plugins_dir_ / detail.summary.id, detail_installed_error) && !detail_installed_error;
+            if (!detail_installed)
+                detail_actions.push_back(button_node("detail.install", "Install", "workshop.plugin.install",
+                                                     payload, "primary", busy));
+            if (detail_installed)
+                detail_actions.push_back(button_node("detail.remove", "Remove", "workshop.plugin.uninstall",
+                                                     payload, "danger", busy));
             detail_children.push_back(row_node(std::move(detail_actions)));
             nodes.push_back(section_node("Detail", json::array({card_node(detail.summary.name,
                                                                             std::move(detail_children))} )));
@@ -1552,12 +1676,25 @@ class Owner::Impl final {
     bool callback_accepting_{};
     bool dirty_{true};
     std::size_t callbacks_in_flight_{};
+    Owner* owner_{};
+    std::shared_ptr<WorkshopRemoveDialogLease> dialog_lease_;
 };
 
 std::mutex Owner::Impl::deferred_mutex_;
 std::vector<std::unique_ptr<Owner::Impl>> Owner::Impl::deferred_cleanup_;
 
-void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept { if (state != nullptr) { std::lock_guard lock(deferred_mutex_); deferred_cleanup_.push_back(std::move(state)); } }
+void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept {
+    if (state == nullptr)
+        return;
+    state->owner_ = nullptr;
+    state->invalidate_dialog_owner();
+    {
+        std::lock_guard lock(state->mutex_);
+        state->accepting_ = false;
+    }
+    std::lock_guard lock(deferred_mutex_);
+    deferred_cleanup_.push_back(std::move(state));
+}
 void Owner::Impl::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<Impl>> pending; { std::lock_guard lock(deferred_mutex_); pending.swap(deferred_cleanup_); } std::vector<std::unique_ptr<Impl>> retry; for (auto& state : pending) { const sao_status_t status = state->try_take_offline(); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex_); for (auto& state : retry) deferred_cleanup_.push_back(std::move(state)); } }
 
 void Owner::drain_deferred_cleanup_for_owner() noexcept { Impl::drain_deferred_cleanup(); }
@@ -1569,12 +1706,17 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_d
 
 Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_dir,
              Operations operations)
-    : impl_(std::make_unique<Impl>(compositor, std::move(base_dir), std::move(operations))) {}
+    : impl_(std::make_unique<Impl>(compositor, std::move(base_dir), std::move(operations))) {
+    if (impl_ != nullptr)
+        impl_->owner_ = this;
+}
 
 Owner::~Owner() {
     if (impl_ == nullptr)
         return;
     auto state = std::move(impl_);
+    state->owner_ = nullptr;
+    state->invalidate_dialog_owner();
     if (!state->shutdown_noexcept())
         Impl::defer_cleanup(std::move(state));
 }

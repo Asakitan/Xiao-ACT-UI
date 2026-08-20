@@ -24,6 +24,7 @@
 
 #include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
+#include "sao/ui/panel.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
@@ -50,8 +51,41 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_input_router_match_hotkey(
 
 namespace {
 
-inline sao_ui_panel_handle_t fake_panel(uintptr_t n) {
-    return reinterpret_cast<sao_ui_panel_handle_t>(0x2000u + n * 8u);
+sao_ui_panel_handle_t create_visible_panel(const char* id) {
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = id;
+    config.title_utf8 = id;
+    config.default_width = 160;
+    config.default_height = 120;
+    config.show_titlebar = false;
+    config.rendering_mode = SAO_UI_PANEL_RENDER_NATIVE;
+    config.flat_mode = SAO_UI_PANEL_FLAT_INHERIT;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(nullptr, &config, &panel) == SAO_STATUS_OK);
+    REQUIRE(panel != nullptr);
+    REQUIRE(sao_ui_panel_set_visible(panel, true) == SAO_STATUS_OK);
+    return panel;
+}
+
+sao_ui_panel_handle_t create_visible_button_panel(sao_ui_compositor_handle_t compositor,
+                                                   const char* id, int32_t x) {
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = id;
+    config.title_utf8 = id;
+    config.default_x = x;
+    config.default_width = 160;
+    config.default_height = 120;
+    config.show_titlebar = false;
+    config.rendering_mode = SAO_UI_PANEL_RENDER_NATIVE;
+    config.flat_mode = SAO_UI_PANEL_FLAT_INHERIT;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(compositor, &config, &panel) == SAO_STATUS_OK);
+    constexpr char spec[] =
+        R"({"version":1,"title":"","nodes":[{"type":"button","id":"target","label":"Target","action":"target","height":32}]})";
+    REQUIRE(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec),
+                                  sizeof(spec) - 1U) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_set_visible(panel, true) == SAO_STATUS_OK);
+    return panel;
 }
 
 SaoUiInputEvent key_down_event(uint32_t vk, uint32_t modifiers) {
@@ -353,10 +387,19 @@ TEST_CASE("router_push_pop_focus_maintains_stack", "[ui][input_router][runtime]"
 
     const auto first = create_focus_button("first");
     const auto second = create_focus_button("second");
+    FocusEventLog second_focus_log;
+    uint64_t second_gain = 0;
+    uint64_t second_loss = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(second, SAO_UI_EVT_FOCUS_GAINED, focus_event_cb,
+                                            &second_focus_log, &second_gain) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(second, SAO_UI_EVT_FOCUS_LOST, focus_event_cb,
+                                            &second_focus_log, &second_loss) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_set_focus_widget(router, first) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_focus_depth(router) == 1);
     REQUIRE(sao_ui_input_router_set_focus_widget(router, second) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_focus_depth(router) == 2);
+    REQUIRE(second_focus_log.gained == 1);
+    REQUIRE(second_focus_log.lost == 0);
 
     sao_ui_widget_handle_t top_widget = nullptr;
     sao_ui_panel_handle_t top_panel = nullptr;
@@ -365,14 +408,25 @@ TEST_CASE("router_push_pop_focus_maintains_stack", "[ui][input_router][runtime]"
 
     // Push modal barrier — depth grows and barrier flag flips.
     REQUIRE(sao_ui_input_router_has_modal_barrier(router) == false);
-    REQUIRE(sao_ui_input_router_push_modal(router, fake_panel(9)) == SAO_STATUS_OK);
+    const auto modal_panel = create_visible_panel("router.stack.modal");
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
+    REQUIRE(second_focus_log.gained == 1);
+    REQUIRE(second_focus_log.lost == 1);
     REQUIRE(sao_ui_input_router_focus_depth(router) == 3);
     REQUIRE(sao_ui_input_router_has_modal_barrier(router) == true);
     REQUIRE(sao_ui_input_router_pop_modal(router) == SAO_STATUS_OK);
+    REQUIRE(second_focus_log.gained == 2);
+    REQUIRE(second_focus_log.lost == 1);
     REQUIRE(sao_ui_input_router_focus_depth(router) == 2);
     REQUIRE(sao_ui_input_router_has_modal_barrier(router) == false);
 
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_set_visible(modal_panel, false) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_has_modal_barrier(router) == false);
+    REQUIRE(sao_ui_input_router_focus_depth(router) == 2);
+
     sao_ui_input_router_deep_destroy(router);
+    sao_ui_panel_destroy(modal_panel);
     sao_ui_widget_destroy(second);
     sao_ui_widget_destroy(first);
 }
@@ -694,6 +748,7 @@ TEST_CASE("router_modal_barrier_blocks_others", "[ui][input_router][runtime]") {
     // Outer focus target.
     const auto outer_widget = create_focus_button("outer");
     REQUIRE(sao_ui_input_router_set_focus_widget(router, outer_widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_capture_mouse(router, outer_widget) == SAO_STATUS_OK);
 
     // Sanity — event routes to outer.
     auto ev = mouse_move_event(50, 50);
@@ -704,7 +759,10 @@ TEST_CASE("router_modal_barrier_blocks_others", "[ui][input_router][runtime]") {
     // Push modal barrier.  Now the focus stack top is the modal
     // entry (widget == nullptr) — an event to the outer widget must
     // be blocked.
-    REQUIRE(sao_ui_input_router_push_modal(router, fake_panel(9)) == SAO_STATUS_OK);
+    const auto modal_panel = create_visible_panel("router.barrier.modal");
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_capture_mouse(router, outer_widget) ==
+            SAO_STATUS_ERR_ACCESS_DENIED);
     consumed = false;
     REQUIRE(sao_ui_input_router_route_event(router, &ev, &consumed) == SAO_STATUS_OK);
     // The modal barrier consumes without dispatching downstream.
@@ -713,6 +771,13 @@ TEST_CASE("router_modal_barrier_blocks_others", "[ui][input_router][runtime]") {
     // If we set focus on a widget above the modal, the event routes.
     const auto modal_widget = create_focus_button("modal");
     REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_capture_mouse(router, modal_widget) == SAO_STATUS_OK);
+    auto activate = key_down_event(0x0dU, 0);
+    consumed = false;
+    REQUIRE(sao_ui_input_router_route_event(router, &activate, &consumed) == SAO_STATUS_OK);
+    REQUIRE(consumed);
+    REQUIRE(sao_ui_input_router_last_route_target(router) == modal_widget);
+    REQUIRE(sao_ui_input_router_release_mouse(router) == SAO_STATUS_OK);
     consumed = false;
     REQUIRE(sao_ui_input_router_route_event(router, &ev, &consumed) == SAO_STATUS_OK);
     REQUIRE(consumed == true);
@@ -721,8 +786,51 @@ TEST_CASE("router_modal_barrier_blocks_others", "[ui][input_router][runtime]") {
     REQUIRE(sao_ui_input_router_has_modal_barrier(router) == false);
 
     sao_ui_input_router_deep_destroy(router);
+    sao_ui_panel_destroy(modal_panel);
     sao_ui_widget_destroy(modal_widget);
     sao_ui_widget_destroy(outer_widget);
+}
+
+TEST_CASE("modal ownership rejects widgets attached to another panel",
+          "[ui][input_router][modal][ownership]") {
+    SaoCompositorConfig compositor_config{};
+    compositor_config.struct_size = sizeof(compositor_config);
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) ==
+            SAO_STATUS_OK);
+    const auto outer_panel =
+        create_visible_button_panel(compositor, "router.owned.outer", 0);
+    const auto modal_panel =
+        create_visible_button_panel(compositor, "router.owned.modal", 200);
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(compositor, &router) == SAO_STATUS_OK);
+
+    bool consumed = false;
+    auto move = mouse_move_event(20, 20);
+    REQUIRE(sao_ui_input_router_route_event(router, &move, &consumed) == SAO_STATUS_OK);
+    const auto outer_widget = sao_ui_input_router_last_route_target(router);
+    REQUIRE(outer_widget != nullptr);
+    move = mouse_move_event(220, 20);
+    REQUIRE(sao_ui_input_router_route_event(router, &move, &consumed) == SAO_STATUS_OK);
+    const auto modal_widget = sao_ui_input_router_last_route_target(router);
+    REQUIRE(modal_widget != nullptr);
+    REQUIRE(modal_widget != outer_widget);
+
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, outer_widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, outer_widget) ==
+            SAO_STATUS_ERR_ACCESS_DENIED);
+    REQUIRE(sao_ui_input_router_capture_mouse(router, outer_widget) ==
+            SAO_STATUS_ERR_ACCESS_DENIED);
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_capture_mouse(router, modal_widget) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_release_mouse(router) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_pop_modal(router) == SAO_STATUS_OK);
+
+    sao_ui_input_router_deep_destroy(router);
+    sao_ui_panel_destroy(modal_panel);
+    sao_ui_panel_destroy(outer_panel);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
 }
 
 TEST_CASE("portable_focus_next_wraps_both_directions_and_skips_disabled",
@@ -791,7 +899,8 @@ TEST_CASE("portable_focus_next_stays_above_modal_barrier", "[ui][input_router][p
     const auto modal_second = create_focus_button("modal-second");
 
     REQUIRE(sao_ui_input_router_set_focus_widget(router, outer) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_input_router_push_modal(router, fake_panel(42)) == SAO_STATUS_OK);
+    const auto modal_panel = create_visible_panel("router.next.modal");
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_first) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_disabled) == SAO_STATUS_OK);
     REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_second) == SAO_STATUS_OK);
@@ -810,6 +919,7 @@ TEST_CASE("portable_focus_next_stays_above_modal_barrier", "[ui][input_router][p
     REQUIRE(focused == outer);
 
     sao_ui_input_router_deep_destroy(router);
+    sao_ui_panel_destroy(modal_panel);
     sao_ui_widget_destroy(modal_second);
     sao_ui_widget_destroy(modal_disabled);
     sao_ui_widget_destroy(modal_first);
@@ -901,6 +1011,75 @@ TEST_CASE("portable_nested_focus_transition_returns_busy_and_stops_dispatch",
     sao_ui_widget_destroy(nested);
     sao_ui_widget_destroy(second);
     sao_ui_widget_destroy(first);
+}
+
+TEST_CASE("set focus stops before gain after reentrant focus loss",
+          "[ui][input_router][hardening][reentrant]") {
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(nullptr, &router) == SAO_STATUS_OK);
+    const auto first = create_focus_button("first");
+    const auto requested = create_focus_button("requested");
+    const auto nested = create_focus_button("nested");
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, first) == SAO_STATUS_OK);
+
+    FocusMutation mutation{router, nested};
+    FocusEventLog requested_log;
+    uint64_t loss_token = 0;
+    uint64_t gain_token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(first, SAO_UI_EVT_FOCUS_LOST, nested_focus_cb,
+                                            &mutation, &loss_token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_add_event_handler(requested, SAO_UI_EVT_FOCUS_GAINED,
+                                            focus_event_cb, &requested_log,
+                                            &gain_token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, requested) ==
+            SAO_UI_STATUS_ERR_BUSY);
+    REQUIRE(mutation.status == SAO_STATUS_OK);
+    REQUIRE(requested_log.gained == 0);
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(router, &focused, nullptr) == SAO_STATUS_OK);
+    REQUIRE(focused == nested);
+
+    sao_ui_input_router_deep_destroy(router);
+    sao_ui_widget_destroy(nested);
+    sao_ui_widget_destroy(requested);
+    sao_ui_widget_destroy(first);
+}
+
+TEST_CASE("modal pop stops restoration after reentrant focus loss",
+          "[ui][input_router][modal][hardening][reentrant]") {
+    sao_ui_input_router_deep_handle_t router = nullptr;
+    REQUIRE(sao_ui_input_router_deep_create(nullptr, &router) == SAO_STATUS_OK);
+    const auto outer = create_focus_button("outer");
+    const auto modal_widget = create_focus_button("modal");
+    const auto nested = create_focus_button("nested");
+    FocusEventLog outer_log;
+    uint64_t outer_gain_token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(outer, SAO_UI_EVT_FOCUS_GAINED,
+                                            focus_event_cb, &outer_log,
+                                            &outer_gain_token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, outer) == SAO_STATUS_OK);
+    REQUIRE(outer_log.gained == 1);
+    const auto modal_panel = create_visible_panel("router.pop.reentrant.modal");
+    REQUIRE(sao_ui_input_router_push_modal(router, modal_panel) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_set_focus_widget(router, modal_widget) == SAO_STATUS_OK);
+
+    FocusMutation mutation{router, nested};
+    uint64_t modal_loss_token = 0;
+    REQUIRE(sao_ui_widget_add_event_handler(modal_widget, SAO_UI_EVT_FOCUS_LOST,
+                                            nested_focus_cb, &mutation,
+                                            &modal_loss_token) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_input_router_pop_modal(router) == SAO_UI_STATUS_ERR_BUSY);
+    REQUIRE(mutation.status == SAO_STATUS_OK);
+    REQUIRE(outer_log.gained == 1);
+    sao_ui_widget_handle_t focused = nullptr;
+    REQUIRE(sao_ui_input_router_get_focus(router, &focused, nullptr) == SAO_STATUS_OK);
+    REQUIRE(focused == nested);
+
+    sao_ui_input_router_deep_destroy(router);
+    sao_ui_panel_destroy(modal_panel);
+    sao_ui_widget_destroy(nested);
+    sao_ui_widget_destroy(modal_widget);
+    sao_ui_widget_destroy(outer);
 }
 
 TEST_CASE("portable_peer_destroy_during_focus_transition_returns_busy",

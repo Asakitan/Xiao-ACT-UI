@@ -30,7 +30,6 @@ using sao::ui::gap::classification_matrix;
 using sao::ui::gap::matrix_totals;
 using sao::ui::gap::GapClass;
 using sao::ui::gap::status_is_capability_gate;
-using sao::ui::gap::status_is_legacy_skeleton;
 using sao::ui::gap::taxonomy_codes_are_distinct;
 using sao::ui::gap::SendInputLedger;
 using sao::ui::gap::ShellNotifyLedger;
@@ -249,28 +248,22 @@ TEST_CASE("input_uninstall_ll_hooks_handle_invalid",
 // Section 2 — Class C (legacy skeleton) return-code assertions.
 // =====================================================================
 
-TEST_CASE("legacy_wgl_make_current_stays_not_implemented",
+TEST_CASE("legacy_wgl_make_current_null_handle_is_invalid",
           "[ui][gap_closure][class_c][overlay_host]") {
-    // Passing null yields NOT_IMPLEMENTED because the entry point is a
-    // hardcoded legacy stub — the null check is not even reached.  This
-    // is the class-C invariant: the return code does not flip to
-    // CAPABILITY_MISSING because the header documents the legacy gate
-    // and existing tests pin the exact code.
     sao_status_t rc = sao_ui_overlay_host_make_current(nullptr);
-    CHECK(status_is_legacy_skeleton(rc));
-    CHECK(rc == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(rc == SAO_STATUS_ERR_HANDLE_INVALID);
 }
 
-TEST_CASE("legacy_wgl_release_current_stays_not_implemented",
+TEST_CASE("legacy_wgl_release_current_null_handle_is_invalid",
           "[ui][gap_closure][class_c][overlay_host]") {
     sao_status_t rc = sao_ui_overlay_host_release_current(nullptr);
-    CHECK(rc == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(rc == SAO_STATUS_ERR_HANDLE_INVALID);
 }
 
-TEST_CASE("legacy_wgl_swap_buffers_stays_not_implemented",
+TEST_CASE("legacy_wgl_swap_buffers_null_handle_is_invalid",
           "[ui][gap_closure][class_c][overlay_host]") {
     sao_status_t rc = sao_ui_overlay_host_swap_buffers(nullptr);
-    CHECK(rc == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(rc == SAO_STATUS_ERR_HANDLE_INVALID);
 }
 
 TEST_CASE("legacy_dcomp_gl_interop_stays_not_implemented",

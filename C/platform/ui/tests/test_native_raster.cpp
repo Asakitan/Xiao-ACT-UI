@@ -165,6 +165,16 @@ TEST_CASE("generic scrollbar paints proportional horizontal and vertical thumbs"
 
 TEST_CASE("generic widget interaction visuals and disabled hit gate are deterministic",
           "[ui][raster][widget][state]") {
+    SaoUiThemeId original_theme = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active_id(&original_theme) == SAO_STATUS_OK);
+    struct ThemeReset {
+        SaoUiThemeId original;
+        ~ThemeReset() {
+            (void)sao_ui_theme_set_active_id(original);
+        }
+    } reset{original_theme};
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+
     sao_ui_widget_handle_t widget = nullptr;
     REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, &widget) == SAO_STATUS_OK);
     constexpr char props[] =
@@ -176,19 +186,23 @@ TEST_CASE("generic widget interaction visuals and disabled hit gate are determin
     CHECK(pixels[6U * 20U + 10U].r == 0x20U);
     REQUIRE(sao_ui_widget_set_hovered(widget, true) == SAO_STATUS_OK);
     pixels = paint_widget_snapshot(widget, 20, 12, 2, 2, 16, 8);
-    CHECK(pixels[6U * 20U + 10U].r == 0x32U);
+    const uint32_t hover =
+        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_HOVER_SURFACE);
+    CHECK(pixels[6U * 20U + 10U].r == static_cast<uint8_t>((hover >> 16U) & 0xffU));
 
     REQUIRE(sao_ui_widget_set_pressed(widget, true) == SAO_STATUS_OK);
     pixels = paint_widget_snapshot(widget, 20, 12, 2, 2, 16, 8);
-    CHECK(pixels[6U * 20U + 10U].r == 0x1cU);
+    const uint32_t pressed =
+        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_PRESSED_SURFACE);
+    CHECK(pixels[6U * 20U + 10U].r == static_cast<uint8_t>((pressed >> 16U) & 0xffU));
     CHECK(pixels[6U * 20U + 4U].r != pixels[6U * 20U + 10U].r);
 
     REQUIRE(sao_ui_widget_set_pressed(widget, false) == SAO_STATUS_OK);
     REQUIRE(sao_ui_widget_set_hovered(widget, false) == SAO_STATUS_OK);
     REQUIRE(sao_ui_widget_set_focused(widget, true) == SAO_STATUS_OK);
     pixels = paint_widget_snapshot(widget, 20, 12, 2, 2, 16, 8);
-    CHECK(pixels[6U * 20U + 1U].r == 0xffU);
-    CHECK(pixels[6U * 20U + 1U].b == 0xffU);
+    CHECK(pixels[6U * 20U].r == 0xffU);
+    CHECK(pixels[6U * 20U].b == 0xffU);
 
     REQUIRE(sao_ui_widget_set_enabled(widget, false) == SAO_STATUS_OK);
     pixels = paint_widget_snapshot(widget, 20, 12, 2, 2, 16, 8);

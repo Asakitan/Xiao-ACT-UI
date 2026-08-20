@@ -69,6 +69,9 @@
 extern "C" {
 #endif
 
+// Handles remain as process-lifetime tombstones after successful destroy.
+// Every API validates the lifecycle state before reading host storage; stale
+// calls return the documented invalid/false/null result.
 typedef struct sao_ui_overlay_host_s* sao_ui_overlay_host_handle_t;
 
 typedef sao_status_t(SAO_UI_CALL* sao_ui_overlay_protection_provider_fn_t)(
@@ -136,15 +139,23 @@ struct SaoOverlayHostConfig {
 // — the early creation messages of owner/hControl otherwise land in
 // the interactive path when self.hwnd==0 (short-circuit-false).  This
 // is documented at length in the Python WndProc (line 507-560).
+// On a capture-protection setup failure, out_handle remains null after a
+// clean rollback. If global capture ownership cannot be detached safely,
+// the failure status is returned with a non-null cleanup-only handle that
+// the owner thread must pass to destroy until it succeeds.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     const SaoOverlayHostConfig* config, sao_ui_overlay_host_handle_t* out_handle);
 
 // Two-phase destroy (mirrors Python `destroy()`).  Phase 1 drains the
 // dc-mutation coordinator; failure → return false (retry expected).
 // Phase 2 releases WGL context (under a wgl-serialize lock), releases
-// HDC, destroys hRender / hControl / owner in order.  Never partial-
-// clears handles — a partial teardown must be retryable.
-// Returns false if teardown failed and caller should retry.
+// HDC, destroys hRender / hControl / owner in order. HWNDs already removed
+// externally are treated as clean and their tombstone fields are cleared.
+// Returns false if teardown failed and caller should retry.  Destroy retires
+// the handle before waiting for active API leases and callback entries; a
+// second destroy of a retired handle is benign and returns true. Active hosts
+// must be destroyed on the thread that created them; cross-thread or
+// same-thread callback-reentrant destroy attempts return false immediately.
 SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_handle_t handle);
 
 // Grab the raw HWND for interop with D3D swapchains, DirectComposition,
@@ -256,8 +267,9 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
 SAO_UI_API bool SAO_UI_CALL
 sao_ui_overlay_host_capture_excluded(sao_ui_overlay_host_handle_t handle);
 
-// Legacy WGL operations.  See the WGL accessor contract above: all three
-// return SAO_STATUS_ERR_NOT_IMPLEMENTED in the D3D/DComp production path.
+// Legacy WGL operations. Valid active handles return
+// SAO_STATUS_ERR_NOT_IMPLEMENTED in the D3D/DComp production path; null or
+// retired handles return SAO_STATUS_ERR_HANDLE_INVALID.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_make_current(sao_ui_overlay_host_handle_t handle);
 

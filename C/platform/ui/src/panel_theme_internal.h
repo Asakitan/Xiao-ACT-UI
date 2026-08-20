@@ -8,6 +8,22 @@
 
 namespace sao::ui::detail {
 
+enum class ControlVisualState : int32_t {
+    Normal,
+    Hover,
+    Pressed,
+    Disabled,
+    Focused,
+};
+
+inline ControlVisualState resolve_control_visual_state(bool enabled, bool hovered, bool pressed, bool focused) noexcept {
+    if (!enabled) return ControlVisualState::Disabled;
+    if (pressed) return ControlVisualState::Pressed;
+    if (hovered) return ControlVisualState::Hover;
+    if (focused) return ControlVisualState::Focused;
+    return ControlVisualState::Normal;
+}
+
 struct PanelResolvedTheme {
     SaoUiThemeId theme_id{SAO_UI_THEME_DARK};
     uint64_t generation{};

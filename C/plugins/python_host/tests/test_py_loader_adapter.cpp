@@ -368,6 +368,8 @@ SaoSdkUiTable bridge_test_ui_table() {
     SaoSdkUiTable table{};
     table.register_panel = bridge_test_register_panel;
     table.unregister_ui_panel = bridge_test_unregister_panel;
+    table.abi_version = SAO_SDK_UI_TABLE_ABI_VERSION;
+    table.struct_size = sizeof(table);
     return table;
 }
 

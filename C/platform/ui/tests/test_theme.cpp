@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,6 +28,10 @@ struct RgbaProbe {
     uint8_t r, g, b, a;
     const char* label;
 };
+
+void SAO_UI_CALL throwing_theme_listener(SaoUiThemeId, void*) {
+    throw std::runtime_error("theme listener fixture");
+}
 
 }  // namespace
 
@@ -463,9 +468,9 @@ TEST_CASE("theme_token_name_returns_nonempty", "[ui][theme][host]") {
 
 TEST_CASE("theme_static_assert_size_correctness", "[ui][theme][host]") {
     // Compile-time invariants — mirror the static_assert in theme.h.
-    REQUIRE(sao_ui_theme_get_color_token_count() == 75);
+    REQUIRE(sao_ui_theme_get_color_token_count() == 92);
     REQUIRE(sao_ui_theme_get_color_token_count() == SAO_UI_COLOR_TOKEN_COUNT);
-    REQUIRE(sao_ui_theme_get_metric_token_count() == 15);
+    REQUIRE(sao_ui_theme_get_metric_token_count() == 26);
     REQUIRE(sao_ui_theme_get_metric_token_count() == SAO_UI_METRIC_TOKEN_COUNT);
 
     // Runtime check that the constexpr tables are visible to callers
@@ -487,6 +492,54 @@ TEST_CASE("theme_static_assert_size_correctness", "[ui][theme][host]") {
         INFO("token index=" << i);
         REQUIRE(argb == expected);
     }
+}
+
+TEST_CASE("theme_load_json_is_bounded_and_transactional",
+          "[ui][theme][json][transaction]") {
+    sao_ui_theme_handle_t handle = nullptr;
+    REQUIRE(sao_ui_theme_create(&handle) == SAO_STATUS_OK);
+
+    const char valid_json[] =
+        R"({"theme_id":"light","colors":{"APP_BG":"#112233","FOCUS_RING":4278255360}})";
+    REQUIRE(sao_ui_theme_load_json(
+                handle, reinterpret_cast<const uint8_t*>(valid_json), std::strlen(valid_json)) ==
+            SAO_STATUS_OK);
+
+    SaoUiThemeId active = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active(handle, &active) == SAO_STATUS_OK);
+    REQUIRE(active == SAO_UI_THEME_LIGHT);
+    uint32_t color = 0;
+    REQUIRE(sao_ui_theme_get_color(handle, SAO_UI_TOKEN_APP_BG, &color) == SAO_STATUS_OK);
+    REQUIRE(color == 0xff112233U);
+
+    const char invalid_json[] = R"({"colors":{"APP_BG":"not-a-color"}})";
+    REQUIRE(sao_ui_theme_load_json(
+                handle, reinterpret_cast<const uint8_t*>(invalid_json), std::strlen(invalid_json)) ==
+            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_theme_get_active(handle, &active) == SAO_STATUS_OK);
+    REQUIRE(active == SAO_UI_THEME_LIGHT);
+    REQUIRE(sao_ui_theme_get_color(handle, SAO_UI_TOKEN_APP_BG, &color) == SAO_STATUS_OK);
+    REQUIRE(color == 0xff112233U);
+
+    sao_ui_theme_destroy(handle);
+}
+
+TEST_CASE("theme_load_json_contains_throwing_handle_listener",
+          "[ui][theme][json][listener]") {
+    sao_ui_theme_handle_t handle = nullptr;
+    REQUIRE(sao_ui_theme_create(&handle) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_theme_add_listener(handle, &throwing_theme_listener, nullptr) ==
+            SAO_STATUS_OK);
+    const char json[] = R"({"theme_id":"light"})";
+    REQUIRE(sao_ui_theme_load_json(
+            handle, reinterpret_cast<const uint8_t*>(json), std::strlen(json)) ==
+            SAO_STATUS_OK);
+    SaoUiThemeId active = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active(handle, &active) == SAO_STATUS_OK);
+    CHECK(active == SAO_UI_THEME_LIGHT);
+    REQUIRE(sao_ui_theme_remove_listener(handle, &throwing_theme_listener, nullptr) ==
+            SAO_STATUS_OK);
+    sao_ui_theme_destroy(handle);
 }
 
 TEST_CASE("theme semantic tokens resolve through one canonical source",

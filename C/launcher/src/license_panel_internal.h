@@ -123,12 +123,12 @@ class Owner final {
                                                   void* user_data) noexcept;
     static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
                                                  void* user_data) noexcept;
-    static void activation_thread_main(Owner* owner, std::string key) noexcept;
+    static void activation_thread_main(State* state, std::string key) noexcept;
 
     static void defer_state(std::unique_ptr<State> state) noexcept;
     static void drain_deferred_cleanup() noexcept;
     static std::mutex deferred_mutex_;
-    static std::vector<std::unique_ptr<State>> deferred_cleanup_;
+    static std::vector<std::unique_ptr<State>>* deferred_cleanup_;
 
     std::unique_ptr<State> state_;
 };

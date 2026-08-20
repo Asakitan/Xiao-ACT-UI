@@ -21,6 +21,7 @@
 #include <new>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
@@ -34,6 +35,7 @@ constexpr int32_t kDefaultFontSize = 13;
 constexpr int32_t kDefaultPadX = 10;
 constexpr int32_t kDefaultPadY = 6;
 constexpr int32_t kDefaultRadius = 8;
+constexpr size_t kMaxFilterChips = 4096;
 
 uint32_t resolve_or(uint32_t override_value, SaoUiColorToken token) {
     return override_value != 0 ? override_value
@@ -44,6 +46,8 @@ struct OwnedChip {
     std::string label;
     int32_t chip_id{-1};
     bool selected{false};
+
+    bool operator==(const OwnedChip&) const = default;
 };
 
 struct FilterRowState {
@@ -55,9 +59,48 @@ struct FilterRowState {
     mutable std::mutex mtx;
 };
 
+
+bool build_owned_chips(const SaoUiFilterChipSpec* chips, size_t count,
+                       std::vector<OwnedChip>* out) {
+    if (out == nullptr || (chips == nullptr && count != 0) || count > kMaxFilterChips)
+        return false;
+    std::unordered_set<int32_t> ids;
+    out->clear();
+    out->reserve(count);
+    for (size_t index = 0; index < count; ++index) {
+        if (chips[index].label_utf8 == nullptr ||
+            !ids.insert(chips[index].chip_id).second)
+            return false;
+        out->push_back({chips[index].label_utf8, chips[index].chip_id, chips[index].selected});
+    }
+    return true;
+}
+
+bool same_spec(const SaoUiFilterRowSpec& left, const SaoUiFilterRowSpec& right) {
+    return left.search_box_width_px == right.search_box_width_px &&
+           left.chip_height_px == right.chip_height_px &&
+           left.chip_gap_px == right.chip_gap_px && left.font_size_px == right.font_size_px &&
+           left.pad_x_px == right.pad_x_px && left.pad_y_px == right.pad_y_px &&
+           left.radius_px == right.radius_px && left.bg_argb == right.bg_argb &&
+           left.fg_argb == right.fg_argb && left.border_argb == right.border_argb &&
+           left.chip_bg_argb == right.chip_bg_argb &&
+           left.chip_selected_argb == right.chip_selected_argb &&
+           left.chip_fg_argb == right.chip_fg_argb &&
+           left.chip_selected_fg_argb == right.chip_selected_fg_argb &&
+           left.theme_override == right.theme_override;
+}
+
+sao_status_t emit_value_changed(sao_ui_widget_handle_t handle, const nlohmann::json& payload) {
+    const std::string bytes = payload.dump();
+    return sao_ui_widget_dispatch_event(handle, SAO_UI_EVT_VALUE_CHANGED,
+                                        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
+}
+
 struct FilterRowPropsSnapshot {
+    SaoUiFilterRowSpec spec{};
+    std::string placeholder;
     std::string query;
-    std::vector<std::pair<int32_t, bool>> chip_selection;
+    std::vector<OwnedChip> chips;
 };
 
 }  // namespace
@@ -89,7 +132,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_create(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         auto state = std::make_shared<FilterRowState>();
+        if (spec->theme_override < 0 || spec->theme_override > SAO_UI_THEME_COUNT)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::vector<OwnedChip> owned_chips;
+        if (!build_owned_chips(spec->chips, spec->chip_count, &owned_chips))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         state->spec = *spec;
+        state->spec.chips = nullptr;
+        state->spec.chip_count = 0;
         state->spec.search_box_width_px =
             spec->search_box_width_px > 0 ? spec->search_box_width_px : kDefaultSearchWidth;
         state->spec.chip_height_px =
@@ -102,14 +152,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_create(
         state->spec.pad_y_px = spec->pad_y_px > 0 ? spec->pad_y_px : kDefaultPadY;
         state->spec.radius_px = spec->radius_px > 0 ? spec->radius_px : kDefaultRadius;
         state->placeholder = spec->placeholder_utf8 ? spec->placeholder_utf8 : "";
-        for (size_t i = 0; i < spec->chip_count; ++i) {
-            const auto& chip = spec->chips[i];
-            OwnedChip owned;
-            owned.label = chip.label_utf8 ? chip.label_utf8 : "";
-            owned.chip_id = chip.chip_id;
-            owned.selected = chip.selected;
-            state->chips.push_back(std::move(owned));
-        }
+        state->chips = std::move(owned_chips);
         return publish_filter_row_state(std::move(state), out_handle);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -121,9 +164,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_set_query(
     auto state = as_filter_row(handle);
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    std::lock_guard<std::mutex> lock(state->mtx);
-    state->query = text_utf8 ? text_utf8 : "";
-    return SAO_STATUS_OK;
+    const std::string next = text_utf8 ? text_utf8 : "";
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        changed = state->query != next;
+        state->query = next;
+    }
+    return changed ? emit_value_changed(handle, nlohmann::json{{"query", next}})
+                   : SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_get_query(
@@ -147,14 +196,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_toggle_chip(
     auto state = as_filter_row(handle);
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    std::lock_guard<std::mutex> lock(state->mtx);
-    for (auto& chip : state->chips) {
-        if (chip.chip_id == chip_id) {
-            chip.selected = !chip.selected;
-            return SAO_STATUS_OK;
+    bool selected = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        for (auto& chip : state->chips) {
+            if (chip.chip_id == chip_id) {
+                chip.selected = !chip.selected;
+                selected = chip.selected;
+                goto changed;
+            }
         }
+        return SAO_STATUS_ERR_NOT_FOUND;
     }
-    return SAO_STATUS_ERR_NOT_FOUND;
+changed:
+    return emit_value_changed(handle, nlohmann::json{{"chip_id", chip_id}, {"selected", selected}});
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_set_chip_selected(
@@ -162,14 +217,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_set_chip_selected(
     auto state = as_filter_row(handle);
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    std::lock_guard<std::mutex> lock(state->mtx);
-    for (auto& chip : state->chips) {
-        if (chip.chip_id == chip_id) {
-            chip.selected = selected;
-            return SAO_STATUS_OK;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mtx);
+        for (auto& chip : state->chips) {
+            if (chip.chip_id == chip_id) {
+                changed = chip.selected != selected;
+                chip.selected = selected;
+                goto changed;
+            }
         }
+        return SAO_STATUS_ERR_NOT_FOUND;
     }
-    return SAO_STATUS_ERR_NOT_FOUND;
+changed:
+    return changed ? emit_value_changed(handle, nlohmann::json{{"chip_id", chip_id}, {"selected", selected}})
+                   : SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_is_chip_selected(
@@ -225,7 +287,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_matches_chips(
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
-    if (selected_ids == nullptr || selected_count == 0) {
+    if ((selected_ids == nullptr && selected_count != 0) || selected_count == 0) {
+        if (selected_ids == nullptr && selected_count != 0)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         *out_match = true;  // no chip filter active
         return SAO_STATUS_OK;
     }
@@ -243,133 +307,114 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_matches_chips(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_apply_props(
     sao_ui_widget_handle_t handle, const uint8_t* props_json_utf8, size_t props_len) {
-    if (handle == nullptr || (props_json_utf8 == nullptr && props_len != 0))
+    if (handle == nullptr || (props_json_utf8 == nullptr && props_len != 0) || props_len == 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
-        nlohmann::json props = nlohmann::json::parse(
+        const nlohmann::json props = nlohmann::json::parse(
             props_json_utf8, props_json_utf8 + props_len, nullptr, false);
-        if (!props.is_object())
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        if (!sao::ui::detail::widget_props_has_only(props,
-                {"query", "chips", "placeholder", "search_width", "chip_height",
-                 "chip_gap", "font_size", "pad_x", "pad_y", "radius", "bg", "fg",
-                 "border", "chip_bg", "chip_selected", "chip_fg", "chip_selected_fg",
-                 "theme"}))
+        if (!props.is_object() || !sao::ui::detail::widget_props_has_only(
+                props, {"query", "chips", "placeholder", "search_width", "chip_height",
+                        "chip_gap", "font_size", "pad_x", "pad_y", "radius", "bg", "fg",
+                        "border", "chip_bg", "chip_selected", "chip_fg", "chip_selected_fg",
+                        "theme"}))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         auto state = as_filter_row(handle);
         if (state == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
-        std::lock_guard<std::mutex> lock(state->mtx);
-        const auto query_it = props.find("query");
-        if (query_it != props.end()) {
-            if (!query_it->is_string())
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->query = query_it->get<std::string>();
+
+        SaoUiFilterRowSpec next_spec{};
+        std::string next_placeholder;
+        std::string next_query;
+        std::vector<OwnedChip> next_chips;
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            next_spec = state->spec;
+            next_placeholder = state->placeholder;
+            next_query = state->query;
+            next_chips = state->chips;
         }
-        const auto placeholder_it = props.find("placeholder");
-        if (placeholder_it != props.end()) {
-            if (!placeholder_it->is_string())
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->placeholder = placeholder_it->get<std::string>();
+        next_spec.chips = nullptr;
+        next_spec.chip_count = 0;
+
+        if (const auto it = props.find("query"); it != props.end()) {
+            if (!it->is_string()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            next_query = it->get<std::string>();
         }
-        const auto chips_it = props.find("chips");
-        if (chips_it != props.end()) {
-            if (!chips_it->is_array())
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            for (const auto& item : *chips_it) {
-                if (!item.is_object())
+        if (const auto it = props.find("placeholder"); it != props.end()) {
+            if (!it->is_string()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            next_placeholder = it->get<std::string>();
+        }
+        if (const auto it = props.find("chips"); it != props.end()) {
+            if (!it->is_array()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            std::unordered_set<int32_t> seen;
+            for (const auto& item : *it) {
+                if (!item.is_object() || !sao::ui::detail::widget_props_has_only(item, {"id", "selected"}))
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 const auto id_it = item.find("id");
-                const auto sel_it = item.find("selected");
-                if (id_it == item.end() || !id_it->is_number_integer())
+                const auto selected_it = item.find("selected");
+                int32_t id = 0;
+                if (id_it == item.end() || !sao::ui::detail::widget_props_i32(*id_it, &id) ||
+                    selected_it == item.end() || !selected_it->is_boolean() ||
+                    !seen.insert(id).second)
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                if (sel_it == item.end() || !sel_it->is_boolean())
-                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                const int32_t chip_id = id_it->get<int32_t>();
-                const bool selected = sel_it->get<bool>();
-                for (auto& chip : state->chips) {
-                    if (chip.chip_id == chip_id) {
-                        chip.selected = selected;
-                        break;
-                    }
-                }
+                for (auto& chip : next_chips)
+                    if (chip.chip_id == id)
+                        chip.selected = selected_it->get<bool>();
             }
         }
-        const auto sw_it = props.find("search_width");
-        if (sw_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*sw_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.search_box_width_px = v > 0 ? v : kDefaultSearchWidth;
-        }
-        const auto ch_it = props.find("chip_height");
-        if (ch_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*ch_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.chip_height_px = v > 0 ? v : kDefaultChipHeight;
-        }
-        const auto cg_it = props.find("chip_gap");
-        if (cg_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*cg_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.chip_gap_px = v > 0 ? v : kDefaultChipGap;
-        }
-        const auto fs_it = props.find("font_size");
-        if (fs_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*fs_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.font_size_px = v > 0 ? v : kDefaultFontSize;
-        }
-        const auto px_it = props.find("pad_x");
-        if (px_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*px_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pad_x_px = v > 0 ? v : kDefaultPadX;
-        }
-        const auto py_it = props.find("pad_y");
-        if (py_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*py_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pad_y_px = v > 0 ? v : kDefaultPadY;
-        }
-        const auto r_it = props.find("radius");
-        if (r_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*r_it, &v) || v < 0)
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.radius_px = v > 0 ? v : kDefaultRadius;
-        }
-        const auto resolve_color = [&](const char* key, uint32_t* target) -> bool {
+        auto parse_nonnegative = [&](const char* key, int32_t* target, int32_t fallback) {
             const auto it = props.find(key);
             if (it == props.end()) return true;
-            uint32_t v = 0;
-            if (!sao::ui::detail::widget_props_argb(*it, &v))
+            int32_t value = 0;
+            if (!sao::ui::detail::widget_props_i32(*it, &value) || value < 0)
                 return false;
-            *target = v;
+            *target = value > 0 ? value : fallback;
             return true;
         };
-        if (!resolve_color("bg", &state->spec.bg_argb) ||
-            !resolve_color("fg", &state->spec.fg_argb) ||
-            !resolve_color("border", &state->spec.border_argb) ||
-            !resolve_color("chip_bg", &state->spec.chip_bg_argb) ||
-            !resolve_color("chip_selected", &state->spec.chip_selected_argb) ||
-            !resolve_color("chip_fg", &state->spec.chip_fg_argb) ||
-            !resolve_color("chip_selected_fg", &state->spec.chip_selected_fg_argb))
+        if (!parse_nonnegative("search_width", &next_spec.search_box_width_px, kDefaultSearchWidth) ||
+            !parse_nonnegative("chip_height", &next_spec.chip_height_px, kDefaultChipHeight) ||
+            !parse_nonnegative("chip_gap", &next_spec.chip_gap_px, kDefaultChipGap) ||
+            !parse_nonnegative("font_size", &next_spec.font_size_px, kDefaultFontSize) ||
+            !parse_nonnegative("pad_x", &next_spec.pad_x_px, kDefaultPadX) ||
+            !parse_nonnegative("pad_y", &next_spec.pad_y_px, kDefaultPadY) ||
+            !parse_nonnegative("radius", &next_spec.radius_px, kDefaultRadius))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        const auto theme_it = props.find("theme");
-        if (theme_it != props.end()) {
-            int32_t v = 0;
-            if (!sao::ui::detail::widget_props_i32(*theme_it, &v) ||
-                v < 0 || v >= SAO_UI_THEME_COUNT)
+        auto parse_color = [&](const char* key, uint32_t* target) {
+            const auto it = props.find(key);
+            if (it == props.end()) return true;
+            uint32_t value = 0;
+            if (!sao::ui::detail::widget_props_argb(*it, &value)) return false;
+            *target = value;
+            return true;
+        };
+        if (!parse_color("bg", &next_spec.bg_argb) || !parse_color("fg", &next_spec.fg_argb) ||
+            !parse_color("border", &next_spec.border_argb) ||
+            !parse_color("chip_bg", &next_spec.chip_bg_argb) ||
+            !parse_color("chip_selected", &next_spec.chip_selected_argb) ||
+            !parse_color("chip_fg", &next_spec.chip_fg_argb) ||
+            !parse_color("chip_selected_fg", &next_spec.chip_selected_fg_argb))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (const auto it = props.find("theme"); it != props.end()) {
+            int32_t value = 0;
+            if (!sao::ui::detail::widget_props_i32(*it, &value) || value < 0 ||
+                value > SAO_UI_THEME_COUNT)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.theme_override = static_cast<SaoUiThemeId>(v);
+            next_spec.theme_override = static_cast<SaoUiThemeId>(value);
         }
-        return SAO_STATUS_OK;
+
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(state->mtx);
+            changed = !same_spec(state->spec, next_spec) || state->placeholder != next_placeholder ||
+                      state->query != next_query || state->chips != next_chips;
+            state->spec = next_spec;
+            state->spec.chips = nullptr;
+            state->spec.chip_count = 0;
+            state->placeholder = std::move(next_placeholder);
+            state->query = std::move(next_query);
+            state->chips = std::move(next_chips);
+        }
+        return changed ? emit_value_changed(handle, props) : SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -405,22 +450,25 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_filter_row_state_json(
 // ── Typed-family hooks (called from widget_data.cpp dispatch) ─────
 namespace sao::ui::detail {
 
-sao_status_t widget_filter_row_apply_props(sao_ui_widget_handle_t handle,
-                                           const WidgetPropsJson& props,
-                                           WidgetPropsSnapshot* out_snapshot) noexcept {
+sao_status_t widget_filter_row_apply_props(
+    sao_ui_widget_handle_t handle, const WidgetPropsJson& props,
+    WidgetPropsSnapshot* out_snapshot) noexcept {
     if (out_snapshot == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_snapshot = {};
     try {
-        auto snapshot = std::make_shared<FilterRowPropsSnapshot>();
         auto state = as_filter_row(handle);
         if (state == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
+        auto snapshot = std::make_shared<FilterRowPropsSnapshot>();
         {
             std::lock_guard<std::mutex> lock(state->mtx);
+            snapshot->spec = state->spec;
+            snapshot->spec.chips = nullptr;
+            snapshot->spec.chip_count = 0;
+            snapshot->placeholder = state->placeholder;
             snapshot->query = state->query;
-            for (const auto& chip : state->chips)
-                snapshot->chip_selection.emplace_back(chip.chip_id, chip.selected);
+            snapshot->chips = state->chips;
         }
         const std::string bytes = props.dump();
         const sao_status_t status = sao_ui_filter_row_apply_props(
@@ -434,8 +482,8 @@ sao_status_t widget_filter_row_apply_props(sao_ui_widget_handle_t handle,
     }
 }
 
-sao_status_t widget_filter_row_restore_props(sao_ui_widget_handle_t handle,
-                                             const WidgetPropsSnapshot& snapshot) noexcept {
+sao_status_t widget_filter_row_restore_props(
+    sao_ui_widget_handle_t handle, const WidgetPropsSnapshot& snapshot) noexcept {
     const auto previous = std::static_pointer_cast<FilterRowPropsSnapshot>(snapshot);
     if (previous == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -443,15 +491,12 @@ sao_status_t widget_filter_row_restore_props(sao_ui_widget_handle_t handle,
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
+    state->spec = previous->spec;
+    state->spec.chips = nullptr;
+    state->spec.chip_count = 0;
+    state->placeholder = previous->placeholder;
     state->query = previous->query;
-    for (const auto& [id, selected] : previous->chip_selection) {
-        for (auto& chip : state->chips) {
-            if (chip.chip_id == id) {
-                chip.selected = selected;
-                break;
-            }
-        }
-    }
+    state->chips = previous->chips;
     return SAO_STATUS_OK;
 }
 
@@ -504,7 +549,7 @@ sao_status_t widget_filter_row_paint(sao_ui_widget_handle_t handle,
         } else if (!placeholder.empty()) {
             status = sao_ui_paint_ctx_draw_utf8(context, xf + pad_x, text_y, placeholder.c_str(),
                                                 font_size,
-                                                resolve_or(0, SAO_UI_TOKEN_APP_TEXT_DIM));
+                                                resolve_or(0, SAO_UI_TOKEN_PLACEHOLDER));
         } else {
             status = SAO_STATUS_OK;
         }

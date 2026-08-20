@@ -136,19 +136,20 @@ TEST_CASE("License Refresh invokes the backend and preserves exact errors",
     };
     Panel::Owner owner(compositor.get(), std::move(operations));
     REQUIRE(owner.open() == SAO_STATUS_OK);
+        Panel::Snapshot snapshot{};
+        REQUIRE(service_until_idle(owner, snapshot));
+        refresh_calls.store(0);
 
-    CHECK(owner.dispatch_action(Panel::kRefreshAction) ==
-          static_cast<sao_status_t>(SAO_LICENSE_ERR_NETWORK));
+        REQUIRE(owner.dispatch_action(Panel::kRefreshAction) == SAO_STATUS_OK);
+        REQUIRE(service_until_idle(owner, snapshot));
     CHECK(refresh_calls.load() == 1);
-    Panel::Snapshot snapshot{};
-    REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
     CHECK(snapshot.last_status == static_cast<sao_status_t>(SAO_LICENSE_ERR_NETWORK));
     CHECK(snapshot.error_text.find("Network error") != std::string::npos);
 
     refresh_status.store(SAO_STATUS_OK);
     REQUIRE(owner.dispatch_action(Panel::kRefreshAction) == SAO_STATUS_OK);
+        REQUIRE(service_until_idle(owner, snapshot));
     CHECK(refresh_calls.load() == 2);
-    REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
     CHECK(snapshot.activated);
     CHECK(snapshot.tier == "pro");
     CHECK(snapshot.error_text.empty());
@@ -204,11 +205,13 @@ TEST_CASE("License activation worker keeps teardown retryable and publishes comp
     };
     Panel::Owner owner(compositor.get(), std::move(operations));
     REQUIRE(owner.open() == SAO_STATUS_OK);
+    Panel::Snapshot snapshot{};
+    REQUIRE(service_until_idle(owner, snapshot));
+    refresh_calls.store(0);
     REQUIRE(owner.dispatch_action(Panel::kKeyInputAction,
                                   R"({"value":"KEY-123"})") == SAO_STATUS_OK);
     REQUIRE(owner.dispatch_action(Panel::kActivateAction) == SAO_STATUS_OK);
 
-    Panel::Snapshot snapshot{};
     REQUIRE(owner.snapshot(snapshot) == SAO_STATUS_OK);
     CHECK(snapshot.busy);
     CHECK(owner.dispatch_action(Panel::kActivateAction) == SAO_UI_PANEL_STATUS_ERR_BUSY);
@@ -219,9 +222,9 @@ TEST_CASE("License activation worker keeps teardown retryable and publishes comp
     CHECK(snapshot.last_status == SAO_STATUS_ERR_CANCELLED);
     CHECK(key_matches.load());
     CHECK(snapshot.activated);
-    CHECK(snapshot.status_text == "Activation successful.");
+    CHECK(snapshot.status_text.empty());
     CHECK(snapshot.rendered_spec_json.find("Activating...") == std::string::npos);
-    CHECK(refresh_calls.load() == 1);
+    CHECK(refresh_calls.load() == 0);
 
     REQUIRE(owner.take_offline() == SAO_STATUS_OK);
 }

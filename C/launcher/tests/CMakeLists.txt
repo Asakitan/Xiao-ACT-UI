@@ -322,7 +322,7 @@ if (TARGET sao_launcher_plugins_provider)
     add_test(NAME launcher.provider COMMAND sao_launcher_provider_tests)
     set_tests_properties(launcher.provider PROPERTIES
         LABELS "launcher;plugins;focused"
-        RESOURCE_LOCK "sao_launcher_process_resources"
+        RESOURCE_LOCK "sao_launcher_process_resources;sao_ui_gpu_resources"
         TIMEOUT 30)
 endif()
 

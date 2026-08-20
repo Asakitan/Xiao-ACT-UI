@@ -88,12 +88,14 @@ int App::run() {
     if (rc != SAO_EXIT_OK) {
         return rc;
     }
+    smokePrint(state_, "STAGE_ARGS");
 
     LauncherLifecycleDecision lifecycle;
     if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) !=
         SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
+    smokePrint(state_, "STAGE_LIFECYCLE");
     const auto finish = [&](int exit_code, const char* hint) {
         completeLauncherLifecycle(lifecycle, exit_code, hint);
         return exit_code;
@@ -148,6 +150,7 @@ int App::run() {
             return finish(handoff_exit, "python_handoff");
         }
     }
+    smokePrint(state_, "STAGE_DUAL_RUN");
 
     // 2. Crash handler.  Everything after this point produces a minidump on
     //    unhandled SEH.
@@ -163,6 +166,7 @@ int App::run() {
         shutdown();
         return finish(rc, "single_instance");
     }
+    smokePrint(state_, "STAGE_SINGLE_INSTANCE");
 
     // 4. Resolve BASE_DIR + all derived paths (crash/, logs/, plugins/, ...).
     rc = resolveWorkingDir();
@@ -176,6 +180,7 @@ int App::run() {
         return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"provider_config", "provider_config");
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
+    smokePrint(state_, "STAGE_PROVIDER_CONFIG");
 
     // 5. License verification. The bypass exists only in the actual Debug
     // configuration, even if AppState is populated outside the CLI parser.
@@ -205,12 +210,14 @@ int App::run() {
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"security_init", "security_init");
     }
+    smokePrint(state_, "STAGE_SECURITY");
 
     // 8. Platform bring-up.  From here on, subsystems are alive.
     rc = bringUpPlatform();
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"platform_bringup", "platform_bringup");
     }
+    smokePrint(state_, "STAGE_PLATFORM");
 
     // 9. Plugin discovery.  In safe mode we skip this entirely.
     if (!state_.safe_mode && provider_configuration.plugins.enabled) {
@@ -219,6 +226,7 @@ int App::run() {
             return fail(rc, L"plugins_discover", "plugins_discover");
         }
     }
+    smokePrint(state_, "STAGE_PLUGINS");
 
     // Platform-ready smoke checkpoint — the pipeline just reached "every
     // subsystem is up".  ``--smoke --exit-after-init`` uses this as the
@@ -232,7 +240,9 @@ int App::run() {
         if (!state_.rt_io_operator) {
             smokePrint(state_, "READY");
             smoke_ready_printed_ = true;
+            smokePrint(state_, "STAGE_SHUTDOWN_BEGIN");
             shutdown();
+            smokePrint(state_, "STAGE_SHUTDOWN_END");
             return finish(SAO_EXIT_OK, nullptr);
         }
     }

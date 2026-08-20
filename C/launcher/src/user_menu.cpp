@@ -16,9 +16,13 @@
 #include <cstddef>
 #include <cwchar>
 #include <iterator>
+#include <string>
+#include <cstdio>
 #include <windowsx.h>
 
 namespace sao::launcher {
+namespace settings { sao_status_t open_config_panel_status() noexcept; }
+namespace hotkey { sao_status_t open_config_panel_status(Owner* owner) noexcept; }
 namespace {
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
@@ -64,6 +68,29 @@ const wchar_t* opaque_window_class_name() noexcept {
     return w.buf;
 }
 
+sao_status_t g_settings_menu_status = SAO_STATUS_OK;
+sao_status_t g_hotkey_menu_status = SAO_STATUS_OK;
+std::wstring menu_status_suffix(sao_status_t status) {
+    if (status == SAO_STATUS_OK) return {};
+    std::wstring result = L" [";
+    const char* text = sao_status_str(status);
+    while (text != nullptr && *text != '\0') result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*text++)));
+    result += L" " + std::to_wstring(status) + L"]";
+    return result;
+}
+void show_menu_open_failure(HWND owner, const char* panel, sao_status_t status) noexcept {
+    char buffer[256]{};
+    std::snprintf(buffer, sizeof(buffer), "launcher menu open %s failed: %s (%d)\n", panel, sao_status_str(status), status);
+    OutputDebugStringA(buffer);
+    std::string message = std::string(panel) + ": " + sao_status_str(status) + " (" + std::to_string(status) + ")";
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (sao_ui_compositor_handle_t compositor = borrow_platform_compositor()) {
+        (void)sao_ui_dialog_show_error(compositor, nullptr, "SAO Auto", message.c_str(), nullptr, nullptr);
+        return;
+    }
+#endif
+    MessageBoxA(owner, message.c_str(), "SAO Auto", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+}
 constexpr wchar_t kDocsIndexSuffix[] = L"\\docs\\html\\index.html";
 constexpr wchar_t kMenuTitle[] = L"SAO Auto";
 constexpr UINT kNotificationIconId = 1;
@@ -210,6 +237,8 @@ bool UserMenu::create(const wchar_t* base_dir) noexcept {
 }
 
 void UserMenu::destroy() noexcept {
+    g_settings_menu_status = SAO_STATUS_OK;
+    g_hotkey_menu_status = SAO_STATUS_OK;
     hotkey_owner_ = nullptr;
     if (notification_icon_added_) {
         (void)Shell_NotifyIconW(NIM_DELETE, &notification_icon_);
@@ -277,7 +306,8 @@ LRESULT UserMenu::handleMessage(HWND window,
     if (message == kNotificationMessage) {
         const UINT event = notificationEvent(l_param);
         if (event == WM_LBUTTONDBLCLK) {
-            sao::launcher::settings::open_config_panel();
+            g_settings_menu_status = sao::launcher::settings::open_config_panel_status();
+            if (g_settings_menu_status != SAO_STATUS_OK) show_menu_open_failure(window_, "Settings", g_settings_menu_status);
             return 0;
         }
         if (event == WM_LBUTTONUP || event == WM_RBUTTONUP || event == WM_CONTEXTMENU ||
@@ -336,9 +366,11 @@ bool UserMenu::addNotificationIcon() noexcept {
 
 void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     PopupMenu menu;
+    const std::wstring settings_label = L"设置" + menu_status_suffix(g_settings_menu_status);
+    const std::wstring hotkey_label = L"快捷键" + menu_status_suffix(g_hotkey_menu_status);
     if (!menu.get() ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenSettingsCommand, L"设置") ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenHotkeysCommand, L"快捷键") ||
+        !AppendMenuW(menu.get(), MF_STRING, kOpenSettingsCommand, settings_label.c_str()) ||
+        !AppendMenuW(menu.get(), MF_STRING, kOpenHotkeysCommand, hotkey_label.c_str()) ||
         !AppendMenuW(menu.get(), MF_STRING, kOpenUserGuideCommand, L"关于 / 用户指南") ||
         !AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr) ||
         !AppendMenuW(menu.get(), MF_STRING, kExitCommand, L"退出")) {
@@ -359,9 +391,11 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     (void)PostMessageW(window_, WM_NULL, 0, 0);
 
     if (command == kOpenSettingsCommand) {
-        sao::launcher::settings::open_config_panel();
+        g_settings_menu_status = sao::launcher::settings::open_config_panel_status();
+        if (g_settings_menu_status != SAO_STATUS_OK) show_menu_open_failure(window_, "Settings", g_settings_menu_status);
     } else if (command == kOpenHotkeysCommand) {
-        sao::launcher::hotkey::open_config_panel(hotkey_owner_);
+        g_hotkey_menu_status = sao::launcher::hotkey::open_config_panel_status(hotkey_owner_);
+        if (g_hotkey_menu_status != SAO_STATUS_OK) show_menu_open_failure(window_, "Hotkeys", g_hotkey_menu_status);
     } else if (command == kOpenUserGuideCommand) {
         openUserGuide();
     } else if (command == kExitCommand) {

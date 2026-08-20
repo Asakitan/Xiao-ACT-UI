@@ -21,6 +21,7 @@ class NativeRuntime;
 enum class ExtensionOperation : uint8_t {
     idle,
     activating,
+    quarantined,
     deactivating,
     unregistering,
 };

@@ -413,6 +413,10 @@ uint32_t darken_argb(uint32_t color, float amount) {
             0x00ffffffU);
 }
 
+static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y,
+                                      float width, float height, float radius, bool rounded,
+                                      uint32_t argb) noexcept;
+
 bool contains(Rect rect, float x, float y) {
     return valid_rect(rect.width, rect.height) && x >= rect.x && y >= rect.y &&
            x < rect.x + rect.width && y < rect.y + rect.height;
@@ -451,7 +455,7 @@ ScrollbarGeometry scrollbar_geometry(float bounds_x, float bounds_y, float bound
         geometry.track_hit = {bounds.x, bounds.y + arrow_extent, bounds.width,
                               std::max(0.0F, bounds.height - arrow_extent * 2.0F)};
     }
-    const float track_thickness = std::clamp(cross * 0.32F, 2.0F, std::max(2.0F, cross));
+    const float track_thickness = std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
         geometry.track = {geometry.track_hit.x, bounds.y + (bounds.height - track_thickness) * 0.5F,
                           geometry.track_hit.width, track_thickness};
@@ -464,12 +468,12 @@ ScrollbarGeometry scrollbar_geometry(float bounds_x, float bounds_y, float bound
                                  : std::clamp(page_size / content_size, 0.0F, 1.0F);
     const float track_major =
         geometry.horizontal ? geometry.track_hit.width : geometry.track_hit.height;
-    const float minimum_thumb = std::min(track_major, std::max(8.0F, cross * 0.75F));
+    const float minimum_thumb = std::min(track_major, std::max(static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)), cross * 0.75F));
     const float thumb_major =
         std::clamp(track_major * geometry.page_fraction, minimum_thumb, track_major);
     geometry.travel = std::max(0.0F, track_major - thumb_major);
     const float offset = geometry.travel * std::clamp(value, 0.0F, 1.0F);
-    const float thumb_cross = std::max(2.0F, cross - 2.0F);
+    const float thumb_cross = std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
         geometry.thumb = {geometry.track_hit.x + offset,
                           bounds.y + (bounds.height - thumb_cross) * 0.5F, thumb_major,
@@ -568,12 +572,12 @@ WideScrollbarGeometry scrollbar_geometry_wide(float bounds_x, float bounds_y, fl
     geometry.page_fraction = std::clamp(page / content, 0.0L, 1.0L);
     const long double track_major =
         geometry.horizontal ? geometry.track_hit.width : geometry.track_hit.height;
-    const long double minimum_thumb = std::min(track_major, std::max(8.0L, cross * 0.75L));
+    const long double minimum_thumb = std::min(track_major, std::max(static_cast<long double>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)), cross * 0.75L));
     const long double thumb_major =
         std::clamp(track_major * geometry.page_fraction, minimum_thumb, track_major);
     geometry.travel = std::max(0.0L, track_major - thumb_major);
     const long double offset = geometry.travel * std::clamp(position, 0.0L, 1.0L);
-    const long double thumb_cross = std::max(2.0L, cross - 2.0L);
+    const long double thumb_cross = std::min(cross, std::max(2.0L, static_cast<long double>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
         geometry.thumb = {geometry.track_hit.x + offset,
                           y + (height - thumb_cross) * 0.5L, thumb_major, thumb_cross};
@@ -674,15 +678,6 @@ void paint_chevron(sao_ui_paint_ctx_s& context, Rect bounds, bool horizontal, bo
     }
 }
 
-void paint_focus_ring(sao_ui_paint_ctx_s& context, Rect bounds, float radius, bool rounded,
-                      uint32_t color) {
-    const Rect outer{bounds.x - 1.0F, bounds.y - 1.0F, bounds.width + 2.0F, bounds.height + 2.0F};
-    if (rounded)
-        fill_rounded_rect(context, outer, radius + 1.0F, color);
-    else
-        fill_rect(context, outer, color);
-}
-
 void draw_text(sao_ui_paint_ctx_s& context, float x, float y, const char* text, float size,
                uint32_t argb) {
     if (text == nullptr || size <= 0.0F)
@@ -772,6 +767,18 @@ std::string_view semantic_color_key(std::string_view key) noexcept {
         return "fg";
     if (key == "APP_ACCENT")
         return "accent";
+    if (key == "FOCUS_RING")
+        return "focus";
+    if (key == "HOVER_SURFACE")
+        return "hover";
+    if (key == "PRESSED_SURFACE")
+        return "pressed";
+    if (key == "DISABLED_FG")
+        return "disabled_fg";
+    if (key == "DISABLED_BG")
+        return "disabled_bg";
+    if (key == "DISABLED_BORDER")
+        return "disabled_border";
     return key;
 }
 
@@ -795,34 +802,46 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     uint32_t foreground = widget_color(
         widget, "fg", style_color(style, "fg", sao::ui::detail::panel_theme_color(
                                                    widget.enabled ? foreground_token
-                                                                  : SAO_UI_TOKEN_APP_TEXT_2)));
+                                                                  : SAO_UI_TOKEN_DISABLED_FG)));
     const bool hovered = widget.enabled && widget.hovered;
     const bool pressed = widget.enabled && widget.pressed;
     const bool focused = widget.enabled && widget.focused;
-    if (pressed)
-        fill = darken_argb(fill, 0.12F);
-    else if (hovered)
-        fill = lighten_argb(fill, 0.08F);
-    if (hovered && (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
-                    widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON)) {
-        border = blend_argb(border, accent, 0.45F);
+    const auto visual_state = sao::ui::detail::resolve_control_visual_state(widget.enabled, hovered, pressed, focused);
+    if (visual_state == sao::ui::detail::ControlVisualState::Disabled) {
+        fill = widget_color(widget, "disabled_bg", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BG));
+        border = widget_color(widget, "disabled_border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BORDER));
+        foreground = widget_color(widget, "disabled_fg", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_FG));
+    } else if (visual_state == sao::ui::detail::ControlVisualState::Pressed) {
+        fill = widget_color(widget, "pressed", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE));
+    } else if (visual_state == sao::ui::detail::ControlVisualState::Hover) {
+        fill = widget_color(widget, "hover", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE));
     }
-    const bool rounded = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
-                         widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL ||
-                         widget.kind == SAO_UI_WIDGET_STATUS_BADGE;
+    const bool rounded = widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL ||
+                         widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+                         widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
+                         widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
+                         widget.kind == SAO_UI_WIDGET_TOOLTIP ||
+                         widget.kind == SAO_UI_WIDGET_ICON;
     if (focused) {
-        paint_focus_ring(context, bounds, widget.radius, rounded,
-                         widget_color(widget, "focus", accent));
+        (void)paint_focus_ring_unlocked(
+            context, bounds.x, bounds.y, bounds.width, bounds.height, widget.radius, rounded,
+            widget_color(widget, "focus",
+                         sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING)));
     }
-
+    const auto canvas_override = widget.theme_overrides.find("canvas_bg");
+    const auto canvas_prop = widget.prop_colors.find("canvas_bg");
+    if (canvas_override != widget.theme_overrides.end())
+        fill_rect(context, bounds, canvas_override->second);
+    else if (canvas_prop != widget.prop_colors.end())
+        fill_rect(context, bounds, canvas_prop->second);
     if (widget.kind == SAO_UI_WIDGET_SCROLLBAR) {
         const ScrollbarGeometry geometry = scrollbar_geometry(widget, bounds);
-        const uint32_t track = widget_color(widget, "track", fill);
-        uint32_t thumb = widget_color(widget, "thumb", border);
+        const uint32_t track = widget_color(widget, "track", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_TRACK));
+        uint32_t thumb = widget_color(widget, "thumb", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_THUMB));
         if (pressed)
-            thumb = widget_color(widget, "thumb_active", darken_argb(accent, 0.12F));
+            thumb = widget_color(widget, "thumb_active", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_PRESSED));
         else if (hovered)
-            thumb = widget_color(widget, "thumb_hover", lighten_argb(thumb, 0.08F));
+            thumb = widget_color(widget, "thumb_hover", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_HOVER));
         const uint32_t arrow = widget_color(widget, "arrow", foreground);
         fill_rounded_rect(context, geometry.track,
                           std::min(geometry.track.width, geometry.track.height) * 0.5F, track);
@@ -836,7 +855,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
 
     if (widget.kind == SAO_UI_WIDGET_CHECKBOX) {
-        const float max_box = std::max(1.0F, std::min(18.0F, bounds.width));
+        const float max_box = std::max(1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
         const float box = std::min(max_box, std::max(1.0F, bounds.height - 4.0F));
         const Rect box_bounds{bounds.x, bounds.y + (bounds.height - box) * 0.5F, box, box};
         fill_rounded_rect(context, box_bounds, std::min(widget.radius, box * 0.25F), border);
@@ -863,7 +882,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
 
     if (widget.kind == SAO_UI_WIDGET_RADIO) {
-        const float max_ring = std::max(1.0F, std::min(18.0F, bounds.width));
+        const float max_ring = std::max(1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
         const float ring = std::min(max_ring, std::max(1.0F, bounds.height - 4.0F));
         const Rect ring_bounds{bounds.x, bounds.y + (bounds.height - ring) * 0.5F, ring, ring};
         fill_ellipse(context, ring_bounds, border);
@@ -904,7 +923,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_ellipse(context,
                          {center - thumb_size * 0.5F,
                           bounds.y + (bounds.height - thumb_size) * 0.5F, thumb_size, thumb_size},
-                         pressed ? darken_argb(accent, 0.12F) : foreground);
+                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE) : foreground);
         } else {
             const float track_x = bounds.x + (bounds.width - thickness) * 0.5F;
             fill_rounded_rect(context, {track_x, bounds.y, thickness, bounds.height},
@@ -918,7 +937,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_ellipse(context,
                          {bounds.x + (bounds.width - thumb_size) * 0.5F, center - thumb_size * 0.5F,
                           thumb_size, thumb_size},
-                         pressed ? darken_argb(accent, 0.12F) : foreground);
+                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE) : foreground);
         }
         return;
     }
@@ -957,9 +976,9 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                    std::max(1.0F, widget.border_width)},
                   border);
     if (widget.kind == SAO_UI_WIDGET_TABLE) {
-        fill_rect(context, {bounds.x, bounds.y, bounds.width, std::min(20.0F, bounds.height)},
+        fill_rect(context, {bounds.x, bounds.y, bounds.width, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_HEADER_HEIGHT))},
                   accent);
-        for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height; row += 18.0F)
+        for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height; row += static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT)))
             fill_rect(context, {bounds.x, row, bounds.width, 1.0F}, border);
     }
     if (!widget.text.empty()) {
@@ -1058,7 +1077,7 @@ sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len
         candidate.radius = static_cast<float>(
             sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
         for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg", "track", "thumb",
-                                "thumb_hover", "thumb_active", "arrow", "focus"}) {
+                                "thumb_hover", "thumb_active", "arrow", "focus", "hover", "pressed", "disabled_fg", "disabled_bg", "disabled_border"}) {
             const auto property = document.find(key);
             if (property == document.end())
                 continue;
@@ -1864,6 +1883,92 @@ sao_status_t sao::ui::detail::paint_rounded_rect(sao_ui_paint_ctx_handle_t conte
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+}
+
+bool stroke_rounded_outline(sao_ui_paint_ctx_s& context, Rect rect, float radius, float width, uint32_t argb) {
+    if (!valid_rect(rect.width, rect.height) || !std::isfinite(radius) || radius < 0.0F || width <= 0.0F) return false;
+    radius = std::clamp(radius, 0.0F, std::min(rect.width, rect.height) * 0.5F);
+    if (radius <= 0.0F) {
+        return stroke_line(context, rect.x, rect.y, rect.x + rect.width, rect.y, width, argb) &&
+               stroke_line(context, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, width, argb) &&
+               stroke_line(context, rect.x + rect.width, rect.y + rect.height, rect.x, rect.y + rect.height, width, argb) &&
+               stroke_line(context, rect.x, rect.y + rect.height, rect.x, rect.y, width, argb);
+    }
+    const float left = rect.x + radius;
+    const float right = rect.x + rect.width - radius;
+    const float top = rect.y + radius;
+    const float bottom = rect.y + rect.height - radius;
+    bool ok = stroke_line(context, left, rect.y, right, rect.y, width, argb) &&
+               stroke_line(context, rect.x + rect.width, top, rect.x + rect.width, bottom, width, argb) &&
+               stroke_line(context, right, rect.y + rect.height, left, rect.y + rect.height, width, argb) &&
+               stroke_line(context, rect.x, bottom, rect.x, top, width, argb);
+    constexpr int kArcSteps = 8;
+    const float pi = 3.14159265358979323846F;
+    const float centers[4][2] = {{left, top}, {right, top}, {right, bottom}, {left, bottom}};
+    const float starts[4] = {-pi, -pi * 0.5F, 0.0F, pi * 0.5F};
+    for (int corner = 0; corner < 4 && ok; ++corner) {
+        for (int step = 0; step < kArcSteps && ok; ++step) {
+            const float a0 = starts[corner] + pi * 0.5F * static_cast<float>(step) / kArcSteps;
+            const float a1 = starts[corner] + pi * 0.5F * static_cast<float>(step + 1) / kArcSteps;
+            ok = stroke_line(context, centers[corner][0] + std::cos(a0) * radius, centers[corner][1] + std::sin(a0) * radius, centers[corner][0] + std::cos(a1) * radius, centers[corner][1] + std::sin(a1) * radius, width, argb);
+        }
+    }
+    return ok;
+}
+
+sao_status_t sao::ui::detail::paint_rounded_rect_stroke(sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius, float stroke_width, uint32_t argb) noexcept {
+    if (context == nullptr || context->raster == nullptr || !finite_float_rect(x, y, width, height) || !std::isfinite(radius) || !std::isfinite(stroke_width) || radius < 0.0F || stroke_width <= 0.0F) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try { std::scoped_lock lock(context->raster->mutex); return stroke_rounded_outline(*context, {x, y, width, height}, radius, stroke_width, argb) ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT; } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
+}
+
+static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y,
+                                      float width, float height, float radius, bool rounded,
+                                      uint32_t argb) noexcept {
+    const uint32_t alpha = (argb >> 24U) & 0xffU;
+    const uint32_t halo = (argb & 0x00ffffffU) | ((alpha / 3U) << 24U);
+    const Rect halo_rect{x - 3.0F, y - 3.0F, width + 6.0F, height + 6.0F};
+    const Rect ring_rect{x - 2.0F, y - 2.0F, width + 4.0F, height + 4.0F};
+    const bool halo_ok =
+        rounded ? stroke_rounded_outline(context, halo_rect, radius + 3.0F, 1.0F, halo)
+                : stroke_line(context, halo_rect.x, halo_rect.y,
+                              halo_rect.x + halo_rect.width, halo_rect.y, 1.0F, halo);
+    if (!halo_ok)
+        return false;
+    if (rounded)
+        return stroke_rounded_outline(context, ring_rect, radius + 2.0F, 2.0F, argb);
+    return stroke_line(context, ring_rect.x, ring_rect.y,
+                       ring_rect.x + ring_rect.width, ring_rect.y, 2.0F, argb) &&
+           stroke_line(context, ring_rect.x + ring_rect.width, ring_rect.y,
+                       ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height, 2.0F,
+                       argb) &&
+           stroke_line(context, ring_rect.x + ring_rect.width,
+                       ring_rect.y + ring_rect.height, ring_rect.x,
+                       ring_rect.y + ring_rect.height, 2.0F, argb) &&
+           stroke_line(context, ring_rect.x, ring_rect.y + ring_rect.height, ring_rect.x,
+                       ring_rect.y, 2.0F, argb);
+}
+
+sao_status_t sao::ui::detail::paint_focus_ring(
+    sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height,
+    float radius, bool rounded, uint32_t argb) noexcept {
+    if (context == nullptr || context->raster == nullptr ||
+        !finite_float_rect(x, y, width, height)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        std::scoped_lock lock(context->raster->mutex);
+        return paint_focus_ring_unlocked(*context, x, y, width, height, radius, rounded, argb)
+                   ? SAO_STATUS_OK
+                   : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::detail::paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius, int32_t elevation, uint32_t argb) noexcept {
+    if (context == nullptr || context->raster == nullptr || !finite_float_rect(x, y, width, height) || elevation < 0 || elevation > 3) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const SaoUiShadowPreset preset = sao::ui::kSaoThemeElevationPresets[elevation]; if (preset.alpha == 0) return SAO_STATUS_OK;
+    try { std::scoped_lock lock(context->raster->mutex); for (int32_t layer = 0; layer < 3; ++layer) { const float spread = static_cast<float>(preset.spread + layer); const uint32_t alpha = static_cast<uint32_t>(preset.alpha) / static_cast<uint32_t>(layer + 1); const uint32_t shadow = (argb & 0x00ffffffU) | (alpha << 24U); fill_rounded_rect(*context, {x + static_cast<float>(preset.offset_x) - spread, y + static_cast<float>(preset.offset_y) - spread, width + spread * 2.0F, height + spread * 2.0F}, radius + spread, shadow); } return SAO_STATUS_OK; } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rounded_rect(

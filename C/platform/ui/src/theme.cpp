@@ -10,7 +10,9 @@
 #include "panel_theme_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cctype>
 #include <cstddef>
 #include <condition_variable>
 #include <cstring>
@@ -18,7 +20,11 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <vector>
 
 struct ThemePanelOverride {
@@ -38,6 +44,8 @@ struct sao_ui_theme_s {
     SaoUiThemeId active{SAO_UI_THEME_DARK};
     std::vector<ThemePanelOverride> overrides;
     std::vector<ThemeListener> listeners;
+    std::array<uint32_t, SAO_UI_TOKEN_COUNT> color_overrides{};
+    std::array<bool, SAO_UI_TOKEN_COUNT> has_color_overrides{};
     std::mutex mutex;
 };
 
@@ -79,12 +87,34 @@ std::vector<std::shared_ptr<ThemeCallbackSlot>>& callbacks_storage() {
 
 struct ThreadThemeTransitionQueue {
     std::deque<SaoUiThemeId> pending;
-    bool dispatching{};
 };
 
 thread_local ThreadThemeTransitionQueue theme_transition_queue;
 
+std::mutex& theme_transition_mutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::condition_variable& theme_transition_cv() {
+    static std::condition_variable cv;
+    return cv;
+}
+
+std::thread::id g_theme_transition_owner;
+bool g_theme_transition_active{};
+
 std::atomic<uint64_t> g_next_callback_handle{1};
+
+constexpr size_t kMaxThemeJsonBytes = 1U << 20U;
+using json = nlohmann::json;
+
+struct ThemeJsonUpdate {
+    bool has_theme{};
+    SaoUiThemeId theme_id{SAO_UI_THEME_DARK};
+    std::array<uint32_t, SAO_UI_TOKEN_COUNT> colors{};
+    std::array<bool, SAO_UI_TOKEN_COUNT> has_colors{};
+};
 
 // Compile-time RGBA -> ARGB shim: keeps the pre-existing
 // SaoUiColorTable / resolve_color pipeline compatible with the RGBA
@@ -175,6 +205,12 @@ constexpr const char* kColorTokenNames[SAO_UI_TOKEN_COUNT] = {
     "ELEM_FIRE",            "ELEM_WATER",            "ELEM_ELECTRIC",
     "ELEM_WOOD",            "ELEM_WIND",             "ELEM_ROCK",
     "ELEM_LIGHT",           "ELEM_DARK",             "ELEM_GENERIC",
+    "DISABLED_FG",         "DISABLED_BG",          "DISABLED_BORDER",
+    "HOVER_SURFACE",       "FOCUS_RING",           "PRESSED_SURFACE",
+    "PLACEHOLDER",         "SELECTION",             "SCROLLBAR_TRACK",
+    "SCROLLBAR_THUMB",     "SCROLLBAR_HOVER",       "SCROLLBAR_PRESSED",
+    "TOOLTIP_SURFACE",     "LOADING",               "SKELETON",
+    "ERROR_SURFACE",       "ERROR_ICON",
 };
 
 static_assert(sizeof(kColorTokenNames) / sizeof(kColorTokenNames[0]) ==
@@ -191,6 +227,124 @@ inline bool is_valid_color_token(int32_t token) {
 
 inline bool is_valid_metric_token(int32_t metric) {
     return metric >= 0 && metric < SAO_UI_METRIC_COUNT;
+}
+
+std::optional<SaoUiThemeId> theme_id_from_json(const json& value) {
+    if (value.is_number_integer()) {
+        const int64_t id = value.get<int64_t>();
+        if (id >= 0 && id < SAO_UI_THEME_COUNT)
+            return static_cast<SaoUiThemeId>(id);
+        return std::nullopt;
+    }
+    if (!value.is_string())
+        return std::nullopt;
+    std::string name = value.get<std::string>();
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (name == "dark")
+        return SAO_UI_THEME_DARK;
+    if (name == "light")
+        return SAO_UI_THEME_LIGHT;
+    if (name == "glass")
+        return SAO_UI_THEME_GLASS;
+    return std::nullopt;
+}
+
+std::optional<SaoUiColorToken> color_token_from_name(std::string_view name) {
+    std::array<char, 64> token_name{};
+    for (int32_t index = 0; index < SAO_UI_COLOR_TOKEN_COUNT; ++index) {
+        const auto token = static_cast<SaoUiColorToken>(index);
+        if (sao_ui_theme_get_token_name(token, token_name.data(), token_name.size()) ==
+                SAO_STATUS_OK &&
+            name == token_name.data()) {
+            return token;
+        }
+    }
+    return std::nullopt;
+}
+
+bool argb_from_json(const json& value, uint32_t* out_argb) {
+    if (out_argb == nullptr)
+        return false;
+    if (value.is_number_unsigned()) {
+        const uint64_t raw = value.get<uint64_t>();
+        if (raw > UINT32_MAX)
+            return false;
+        *out_argb = static_cast<uint32_t>(raw);
+        return true;
+    }
+    if (!value.is_string())
+        return false;
+    const std::string& text = value.get_ref<const std::string&>();
+    if ((text.size() != 7U && text.size() != 9U) || text.front() != '#')
+        return false;
+    uint32_t parsed = 0;
+    for (size_t index = 1; index < text.size(); ++index) {
+        const char ch = text[index];
+        uint32_t nibble = 0;
+        if (ch >= '0' && ch <= '9')
+            nibble = static_cast<uint32_t>(ch - '0');
+        else if (ch >= 'a' && ch <= 'f')
+            nibble = static_cast<uint32_t>(ch - 'a' + 10);
+        else if (ch >= 'A' && ch <= 'F')
+            nibble = static_cast<uint32_t>(ch - 'A' + 10);
+        else
+            return false;
+        parsed = (parsed << 4U) | nibble;
+    }
+    *out_argb = text.size() == 7U ? 0xff000000U | parsed
+                                  : ((parsed & 0xffU) << 24U) | (parsed >> 8U);
+    return true;
+}
+
+sao_status_t parse_theme_json(const uint8_t* json_utf8, size_t json_len,
+                              ThemeJsonUpdate* out_update) {
+    if (out_update == nullptr || json_utf8 == nullptr || json_len == 0U ||
+        json_len > kMaxThemeJsonBytes)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        const auto* begin = reinterpret_cast<const char*>(json_utf8);
+        const json document = json::parse(begin, begin + json_len, nullptr, false, false);
+        if (document.is_discarded() || !document.is_object())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+        ThemeJsonUpdate parsed{};
+        const auto theme_property = document.find("theme_id");
+        if (theme_property != document.end()) {
+            const auto theme_id = theme_id_from_json(*theme_property);
+            if (!theme_id.has_value())
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            parsed.has_theme = true;
+            parsed.theme_id = *theme_id;
+        }
+
+        const auto colors_property = document.find("colors");
+        if (colors_property != document.end() && !colors_property->is_object())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const auto parse_colors = [&parsed](const json& object) {
+            for (auto property = object.begin(); property != object.end(); ++property) {
+                const auto token = color_token_from_name(property.key());
+                if (!token.has_value())
+                    continue;
+                uint32_t argb = 0;
+                if (!argb_from_json(property.value(), &argb))
+                    return false;
+                const size_t index = static_cast<size_t>(*token);
+                parsed.colors[index] = argb;
+                parsed.has_colors[index] = true;
+            }
+            return true;
+        };
+        if (!parse_colors(document))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (colors_property != document.end() && !parse_colors(*colors_property))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        *out_update = parsed;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
 }
 
 bool callback_is_active_on_this_thread(const ThemeCallbackSlot* slot) noexcept {
@@ -389,30 +543,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_metric_by_id(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_set_active_id(
     SaoUiThemeId theme_id) {
-    if (!is_valid_theme_id(theme_id)) {
+    if (!is_valid_theme_id(theme_id))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
     try {
         auto& queue = theme_transition_queue;
-        queue.pending.push_back(theme_id);
-        if (queue.dispatching)
-            return SAO_STATUS_OK;
-
-        queue.dispatching = true;
-        while (!queue.pending.empty()) {
-            const SaoUiThemeId requested = queue.pending.front();
-            queue.pending.pop_front();
+        const std::thread::id caller = std::this_thread::get_id();
+        {
+            std::unique_lock lock(theme_transition_mutex());
+            if (g_theme_transition_active && g_theme_transition_owner != caller)
+                theme_transition_cv().wait(lock, [] { return !g_theme_transition_active; });
+            if (g_theme_transition_active) {
+                queue.pending.push_back(theme_id);
+                return SAO_STATUS_OK;
+            }
+            g_theme_transition_active = true;
+            g_theme_transition_owner = caller;
+            queue.pending.push_back(theme_id);
+        }
+        while (true) {
+            SaoUiThemeId requested = SAO_UI_THEME_DARK;
+            {
+                std::lock_guard lock(theme_transition_mutex());
+                if (queue.pending.empty()) {
+                    g_theme_transition_active = false;
+                    g_theme_transition_owner = {};
+                    theme_transition_cv().notify_all();
+                    return SAO_STATUS_OK;
+                }
+                requested = queue.pending.front();
+                queue.pending.pop_front();
+            }
             const int32_t previous = g_active_theme_id.exchange(requested);
             if (previous != requested) {
                 g_active_theme_generation.fetch_add(1, std::memory_order_acq_rel);
                 invoke_theme_callbacks(requested);
             }
         }
-        queue.dispatching = false;
-        return SAO_STATUS_OK;
     } catch (...) {
+        std::lock_guard lock(theme_transition_mutex());
         theme_transition_queue.pending.clear();
-        theme_transition_queue.dispatching = false;
+        if (g_theme_transition_owner == std::this_thread::get_id()) {
+            g_theme_transition_active = false;
+            g_theme_transition_owner = {};
+            theme_transition_cv().notify_all();
+        }
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
@@ -547,7 +721,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_color(
     sao_ui_theme_handle_t handle, SaoUiColorToken token, uint32_t* out_argb) {
     if (handle == nullptr || out_argb == nullptr || !is_valid_color_token(token)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(handle->mutex);
-    *out_argb = sao_ui_theme_resolve_color(handle->active, token);
+    const size_t index = static_cast<size_t>(token);
+    *out_argb = handle->has_color_overrides[index]
+                    ? handle->color_overrides[index]
+                    : sao_ui_theme_resolve_color(handle->active, token);
     return SAO_STATUS_OK;
 }
 
@@ -600,18 +777,46 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_get_panel_color(
             return SAO_STATUS_OK;
         }
     }
-    *out_argb = sao_ui_theme_resolve_color(handle->active, token);
+    const size_t index = static_cast<size_t>(token);
+    *out_argb = handle->has_color_overrides[index]
+                    ? handle->color_overrides[index]
+                    : sao_ui_theme_resolve_color(handle->active, token);
     return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_load_json(
     sao_ui_theme_handle_t handle, const uint8_t* json_utf8, size_t json_len) {
-    if (handle == nullptr || (json_utf8 == nullptr && json_len != 0U)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    const std::string text(reinterpret_cast<const char*>(json_utf8), json_len);
+    if (handle == nullptr || (json_utf8 == nullptr && json_len != 0U))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    ThemeJsonUpdate update{};
+    const sao_status_t parse_status = parse_theme_json(json_utf8, json_len, &update);
+    if (parse_status != SAO_STATUS_OK)
+        return parse_status;
+
+    std::vector<ThemeListener> listeners;
     SaoUiThemeId selected = SAO_UI_THEME_DARK;
-    if (text.find("\"light\"") != std::string::npos || text.find("\"theme_id\":1") != std::string::npos) selected = SAO_UI_THEME_LIGHT;
-    if (text.find("\"glass\"") != std::string::npos || text.find("\"theme_id\":2") != std::string::npos) selected = SAO_UI_THEME_GLASS;
-    return sao_ui_theme_set_active(handle, selected);
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        selected = update.has_theme ? update.theme_id : handle->active;
+        changed = handle->active != selected;
+        handle->active = selected;
+        handle->color_overrides = update.colors;
+        handle->has_color_overrides = update.has_colors;
+        if (changed)
+            listeners = handle->listeners;
+    }
+    if (changed) {
+        for (const ThemeListener& listener : listeners) {
+            if (listener.callback == nullptr)
+                continue;
+            try {
+                listener.callback(selected, listener.user_data);
+            } catch (...) {
+            }
+        }
+    }
+    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_add_listener(

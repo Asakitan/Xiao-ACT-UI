@@ -178,6 +178,53 @@ std::string_view source_label(PluginSource source) noexcept {
     return index < labels.size() ? labels[index] : labels.front();
 }
 
+enum class ManagerState : std::uint8_t { initializing, loading, ready, empty, unavailable, error };
+
+ManagerState manager_state(const Snapshot& snapshot) {
+    if (!snapshot.loader_available) {
+        if (snapshot.error_message.find("Loading") != std::string::npos)
+            return ManagerState::initializing;
+        if (snapshot.error_message.find("loading") != std::string::npos)
+            return ManagerState::loading;
+        return ManagerState::unavailable;
+    }
+    const bool has_operation_error = !snapshot.error_message.empty() &&
+                                     snapshot.error_message.rfind("__active_plugin__:", 0) != 0;
+    if (has_operation_error)
+        return ManagerState::error;
+    return snapshot.plugins.empty() ? ManagerState::empty : ManagerState::ready;
+}
+
+std::string_view manager_state_label(ManagerState state) {
+    switch (state) {
+    case ManagerState::initializing: return "initializing";
+    case ManagerState::loading: return "loading";
+    case ManagerState::ready: return "ready";
+    case ManagerState::empty: return "empty";
+    case ManagerState::unavailable: return "unavailable";
+    case ManagerState::error: return "error";
+    }
+    return "error";
+}
+
+std::string status_message(std::string_view operation, sao_status_t status);
+
+std::string classified_status_message(std::string_view operation, sao_status_t status) {
+    switch (status) {
+    case SAO_STATUS_ERR_ABI_MISMATCH:
+        return std::string(operation) + ": ABI mismatch";
+    case SAO_STATUS_ERR_NOT_FOUND:
+        return std::string(operation) + ": dependency missing";
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return std::string(operation) + ": permission denied";
+    case SAO_STATUS_ERR_TIMEOUT:
+    case SAO_UI_PANEL_STATUS_ERR_BUSY:
+        return std::string(operation) + ": busy";
+    default:
+        return status_message(operation, status);
+    }
+}
+
 std::string status_message(std::string_view operation, sao_status_t status) {
     return std::string(operation) + " failed (status " + std::to_string(status) + ").";
 }
@@ -405,26 +452,30 @@ Json section_node(std::string title, Json children) {
                 {"children", std::move(children)}};
 }
 std::string build_spec_for_testing(const Snapshot& snapshot) {
+    const ManagerState manager = manager_state(snapshot);
     Json nodes = Json::array();
     Json overview = Json::array();
     Json status_badges = Json::array();
-    status_badges.push_back(badge_node(snapshot.loader_available
-                                           ? "Loader available / 加载器可用"
-                                           : "Loader unavailable / 加载器不可用",
-                                       snapshot.loader_available ? "ok" : "warn"));
+    status_badges.push_back(badge_node(std::string(manager_state_label(manager)),
+                                       manager == ManagerState::ready ? "ok" : manager == ManagerState::error || manager == ManagerState::unavailable ? "bad" : "warn"));
     status_badges.push_back(
         badge_node(std::to_string(snapshot.plugins.size()) + " plugins / 个插件", "accent"));
     overview.push_back(row_node(std::move(status_badges)));
     Json toolbar = Json::array();
     toolbar.push_back(button_node("plugin-manager.refresh",
                                   snapshot.loader_available ? "Refresh / 刷新" : "Retry / 重试",
-                                  std::string(kActionRefresh), Json(), "primary", snapshot.busy));
+                                  std::string(kActionRefresh), Json(), "primary",
+                                  snapshot.busy || manager == ManagerState::loading));
     toolbar.push_back(button_node("plugin-manager.reload-all", "Reload All / 全部重载",
                                   std::string(kActionReloadAll), Json(), "default",
                                   !snapshot.reload_all_available || snapshot.busy));
     overview.push_back(row_node(std::move(toolbar)));
     nodes.push_back(section_node("Controls", std::move(overview)));
-    if (!snapshot.loader_available) {
+    if (manager == ManagerState::initializing || manager == ManagerState::loading) {
+        Json loader = Json::array();
+        loader.push_back(text_node("Loading plugin catalog...", "warn", 42));
+        nodes.push_back(section_node("Loader", std::move(loader)));
+    } else if (manager == ManagerState::unavailable) {
         Json loader = Json::array();
         loader.push_back(text_node(snapshot.error_message.empty()
                                        ? "Plugin loader unavailable / 插件加载器不可用。"
@@ -434,7 +485,8 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                      std::string(kActionRefresh), Json(), "primary",
                                      snapshot.busy));
         nodes.push_back(section_node("Loader", std::move(loader)));
-    } else if (!snapshot.error_message.empty()) {
+    } else if (!snapshot.error_message.empty() &&
+               snapshot.error_message.rfind("__active_plugin__:", 0) != 0) {
         Json errors = Json::array();
         errors.push_back(text_node(snapshot.error_message, "bad", 42));
         errors.push_back(button_node("plugin-manager.error-retry", "Retry / 重试",
@@ -454,6 +506,8 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
+            const bool row_busy = snapshot.busy && (snapshot.error_message.rfind("__active_plugin__:", 0) != 0 ||
+                                                    snapshot.error_message.find("__active_plugin__:" + plugin.plugin_id) != std::string::npos);
             Json details = Json::array();
             Json metadata = Json::array();
             metadata.push_back(badge_node("v" + plugin.version, "accent"));
@@ -474,13 +528,12 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                           active ? "Disable / 禁用" : "Enable / 启用",
                                           active ? std::string(kActionDisable) : std::string(kActionEnable),
                                           Json(plugin.plugin_id), active ? "danger" : "primary",
-                                          snapshot.busy || transitioning ||
+                                          row_busy || transitioning ||
                                               !plugin_state_allows_enable(plugin.state)));
             actions.push_back(button_node("plugin-manager.reload." + std::to_string(index),
                                           "Reload / 重载", std::string(kActionReload),
                                           Json(plugin.plugin_id), "default",
-                                          snapshot.busy ||
-                                              !plugin_state_allows_reload(plugin.state)));
+                                          row_busy || !plugin_state_allows_reload(plugin.state)));
             details.push_back(row_node(std::move(actions)));
             plugin_cards.push_back(card_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
                                               std::move(details)));
@@ -709,17 +762,23 @@ struct Owner::Impl {
         try {
             sao_ui_panel_body_handle_t target_body = nullptr;
             std::string pending_error;
+            std::string active_plugin;
             bool reload_all_available = false;
             {
                 std::lock_guard lock(mutex);
                 target_body = body;
                 reload_all_available = static_cast<bool>(operations.reload_all);
                 pending_error = operation_error;
+                active_plugin = active_plugin_id;
                 snapshot.busy = worker_active || !tasks.empty();
             }
             if (target_body == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
             snapshot.reload_all_available = reload_all_available;
+            if (!active_plugin.empty())
+                snapshot.error_message = snapshot.error_message.empty()
+                    ? "__active_plugin__:" + active_plugin
+                    : snapshot.error_message + " __active_plugin__:" + active_plugin;
             if (!pending_error.empty()) {
                 if (!snapshot.error_message.empty())
                     snapshot.error_message.append(" ");
@@ -791,6 +850,7 @@ struct Owner::Impl {
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
             if (task.kind != TaskKind::refresh)
                 operation_error.clear();
+            active_plugin_id = task.plugin_id;
             tasks.push_back(std::move(task));
             owner_publishing = true;
         }
@@ -856,9 +916,9 @@ struct Owner::Impl {
                     if (task.kind != TaskKind::refresh)
                         operation_error.clear();
                 } else if (task.kind == TaskKind::reload_all) {
-                    operation_error = status_message("Reload All", operation_status);
+                    operation_error = classified_status_message("Reload All", operation_status);
                 } else {
-                    operation_error = status_message(
+                    operation_error = classified_status_message(
                         std::string(task.kind == TaskKind::enable
                                         ? kActionEnable
                                         : task.kind == TaskKind::disable ? kActionDisable
@@ -866,6 +926,7 @@ struct Owner::Impl {
                             " for " + task.plugin_id,
                         operation_status);
                 }
+                active_plugin_id.clear();
                 worker_active = false;
             }
             const sao_status_t refresh_status = refresh_now();
@@ -1116,6 +1177,7 @@ struct Owner::Impl {
     Operations operations;
     Snapshot last_snapshot;
     std::string operation_error;
+    std::string active_plugin_id;
     sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
     sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
     sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};
@@ -1137,7 +1199,7 @@ struct Owner::Impl {
 std::mutex Owner::Impl::deferred_mutex;
 std::vector<std::unique_ptr<Owner::Impl>> Owner::Impl::deferred_cleanup;
 
-void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept { if (state == nullptr) return; std::lock_guard lock(deferred_mutex); deferred_cleanup.push_back(std::move(state)); }
+void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept { if (state == nullptr) return; { std::lock_guard lock(state->mutex); state->accepting = false; } std::lock_guard lock(deferred_mutex); deferred_cleanup.push_back(std::move(state)); }
 void Owner::Impl::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<Impl>> pending; { std::lock_guard lock(deferred_mutex); pending.swap(deferred_cleanup); } std::vector<std::unique_ptr<Impl>> retry; for (auto& state : pending) { const sao_status_t status = state->take_offline(); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex); for (auto& state : retry) deferred_cleanup.push_back(std::move(state)); } }
 
 Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept

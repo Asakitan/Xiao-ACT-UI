@@ -13,6 +13,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include "sao/ui/overlay_host.h"
 #include "sao/core/status.h"
 
@@ -42,6 +46,21 @@ SaoOverlayHostConfig make_default_config() {
     cfg.tagwnd_dump = false;
     cfg.dc_mutation_coordinator = nullptr;
     return cfg;
+}
+
+struct ReentrantDestroyContext {
+    sao_ui_overlay_host_handle_t host = nullptr;
+    size_t callback_count = 0;
+    bool destroy_results[2]{};
+};
+
+void SAO_UI_CALL attempt_reentrant_destroy(uint32_t, int32_t, int32_t, int32_t, int32_t,
+                                           void* user_data) {
+    auto* context = static_cast<ReentrantDestroyContext*>(user_data);
+    if (context == nullptr || context->callback_count >= 2)
+        return;
+    context->destroy_results[context->callback_count++] =
+        sao_ui_overlay_host_destroy(context->host);
 }
 
 }  // namespace
@@ -153,4 +172,175 @@ TEST_CASE("overlay_host_single_instance_guard",
     REQUIRE(sao_ui_overlay_host_create(&cfg, &host_c) == SAO_STATUS_OK);
     REQUIRE(host_c != nullptr);
     REQUIRE(sao_ui_overlay_host_destroy(host_c));
+}
+
+TEST_CASE("overlay_host_reentrant_destroy_from_callback_is_immediate",
+          "[ui][overlay_host][lifetime][reentrant]") {
+    const SaoOverlayHostConfig cfg = make_default_config();
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&cfg, &host) == SAO_STATUS_OK);
+
+    struct Cleanup {
+        sao_ui_overlay_host_handle_t host;
+        ~Cleanup() {
+            if (host != nullptr)
+                (void)sao_ui_overlay_host_destroy(host);
+        }
+    } cleanup{host};
+
+    REQUIRE(host != nullptr);
+
+    ReentrantDestroyContext context{host};
+    REQUIRE(sao_ui_overlay_host_set_mouse(host, &attempt_reentrant_destroy, &context) ==
+            SAO_STATUS_OK);
+    const HWND hwnd = reinterpret_cast<HWND>(sao_ui_overlay_host_hwnd(host));
+    REQUIRE(hwnd != nullptr);
+
+    (void)::SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(1, 1));
+    CHECK(context.callback_count == 1);
+    CHECK_FALSE(context.destroy_results[0]);
+
+    REQUIRE(::PostMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(1, 1)) != FALSE);
+    CHECK(sao_ui_overlay_host_pump_messages(host) == SAO_STATUS_OK);
+    CHECK(context.callback_count == 2);
+    CHECK_FALSE(context.destroy_results[1]);
+
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+}
+
+TEST_CASE("overlay_host_stale_handle_is_benign_during_concurrent_destroy",
+          "[ui][overlay_host][lifetime][concurrency]") {
+    const SaoOverlayHostConfig cfg = make_default_config();
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&cfg, &host) == SAO_STATUS_OK);
+    REQUIRE(host != nullptr);
+
+    struct Cleanup {
+        sao_ui_overlay_host_handle_t host;
+        ~Cleanup() {
+            if (host != nullptr)
+                (void)sao_ui_overlay_host_destroy(host);
+        }
+    } cleanup{host};
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+    std::atomic<bool> entered{false};
+    std::atomic<bool> reader_done{false};
+    std::atomic<bool> fail_fast{false};
+    std::thread reader([&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!start.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        if (!start.load(std::memory_order_acquire)) {
+            fail_fast.store(true, std::memory_order_release);
+            entered.store(true, std::memory_order_release);
+            reader_done.store(true, std::memory_order_release);
+            return;
+        }
+        entered.store(true, std::memory_order_release);
+        while (!stop.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            (void)sao_ui_overlay_host_hwnd(host);
+            (void)sao_ui_overlay_host_control_hwnd(host);
+            (void)sao_ui_overlay_host_owner_hwnd(host);
+            (void)sao_ui_overlay_host_visible(host);
+            (void)sao_ui_overlay_host_input_passthrough(host);
+            (void)sao_ui_overlay_host_capture_excluded(host);
+            (void)sao_ui_overlay_host_current_dpi(host);
+        }
+        if (!stop.load(std::memory_order_acquire))
+            fail_fast.store(true, std::memory_order_release);
+        reader_done.store(true, std::memory_order_release);
+    });
+
+    start.store(true, std::memory_order_release);
+    const auto entered_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!entered.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < entered_deadline)
+        std::this_thread::yield();
+    if (!entered.load(std::memory_order_acquire))
+        fail_fast.store(true, std::memory_order_release);
+
+    bool destroyed = false;
+    if (!fail_fast.load(std::memory_order_acquire))
+        destroyed = sao_ui_overlay_host_destroy(host);
+    stop.store(true, std::memory_order_release);
+    const auto reader_done_deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(2);
+    while (!reader_done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < reader_done_deadline)
+        std::this_thread::yield();
+    if (!reader_done.load(std::memory_order_acquire))
+        fail_fast.store(true, std::memory_order_release);
+    reader.join();
+    if (!destroyed)
+        destroyed = sao_ui_overlay_host_destroy(host);
+
+    CHECK_FALSE(fail_fast.load(std::memory_order_acquire));
+    REQUIRE(destroyed);
+    SaoOverlayHostState state{};
+    CHECK(sao_ui_overlay_host_get_state(host, &state) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_destroy(host));
+    CHECK(sao_ui_overlay_host_hwnd(host) == nullptr);
+    CHECK(sao_ui_overlay_host_control_hwnd(host) == nullptr);
+    CHECK(sao_ui_overlay_host_owner_hwnd(host) == nullptr);
+    CHECK_FALSE(sao_ui_overlay_host_visible(host));
+    CHECK_FALSE(sao_ui_overlay_host_input_passthrough(host));
+    CHECK_FALSE(sao_ui_overlay_host_capture_excluded(host));
+    CHECK(sao_ui_overlay_host_current_dpi(host) == 0u);
+
+    SaoOverlayHostClientRect rect{};
+    CHECK(sao_ui_overlay_host_get_client_rect(host, &rect) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_set_visible(host, true) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_require_owner_thread(host) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_make_current(host) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_release_current(host) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_overlay_host_swap_buffers(host) == SAO_STATUS_ERR_HANDLE_INVALID);
+}
+
+TEST_CASE("overlay_host_destroy_rejects_non_owner_thread_without_retiring",
+          "[ui][overlay_host][lifetime][owner_thread]") {
+    const SaoOverlayHostConfig cfg = make_default_config();
+    sao_ui_overlay_host_handle_t host = nullptr;
+    REQUIRE(sao_ui_overlay_host_create(&cfg, &host) == SAO_STATUS_OK);
+    std::atomic<bool> cross_thread_result{true};
+    std::thread destroyer([&] {
+        cross_thread_result.store(sao_ui_overlay_host_destroy(host),
+                                  std::memory_order_release);
+    });
+    destroyer.join();
+    CHECK_FALSE(cross_thread_result.load(std::memory_order_acquire));
+    CHECK(sao_ui_overlay_host_hwnd(host) != nullptr);
+    REQUIRE(sao_ui_overlay_host_destroy(host));
+}
+
+TEST_CASE("overlay_host_external_hwnd_destruction_clears_tombstones",
+          "[ui][overlay_host][lifetime][external_hwnd]") {
+    const SaoOverlayHostConfig cfg = make_default_config();
+    for (int role = 0; role < 3; ++role) {
+        sao_ui_overlay_host_handle_t host = nullptr;
+        REQUIRE(sao_ui_overlay_host_create(&cfg, &host) == SAO_STATUS_OK);
+        HWND target = nullptr;
+        if (role == 0)
+            target = reinterpret_cast<HWND>(sao_ui_overlay_host_hwnd(host));
+        else if (role == 1)
+            target = reinterpret_cast<HWND>(sao_ui_overlay_host_control_hwnd(host));
+        else
+            target = reinterpret_cast<HWND>(sao_ui_overlay_host_owner_hwnd(host));
+        REQUIRE(target != nullptr);
+        REQUIRE(::DestroyWindow(target) != FALSE);
+        if (role == 0)
+            CHECK(sao_ui_overlay_host_hwnd(host) == nullptr);
+        else if (role == 1)
+            CHECK(sao_ui_overlay_host_control_hwnd(host) == nullptr);
+        else
+            CHECK(sao_ui_overlay_host_owner_hwnd(host) == nullptr);
+        REQUIRE(sao_ui_overlay_host_destroy(host));
+    }
 }
