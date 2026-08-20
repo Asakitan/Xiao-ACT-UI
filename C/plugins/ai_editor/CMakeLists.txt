@@ -151,6 +151,9 @@ target_include_directories(sao_plugin_ai_editor PUBLIC
 )
 
 target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_BUILDING_DLL)
+if (SAO_BUILD_TESTS)
+    target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_TESTING)
+endif()
 target_compile_features(sao_plugin_ai_editor PUBLIC cxx_std_20)
 target_link_libraries(sao_plugin_ai_editor PUBLIC
     sao::ui

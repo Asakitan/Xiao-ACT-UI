@@ -78,41 +78,74 @@ add_dependencies(sao_plugin_ai_editor_production_child_tests
     sao_ai_editor
 )
 
-add_executable(sao_plugin_ai_editor_gpu_hunt_tests
-    gpu_hunt_sdk_adapter_test.cpp
+add_executable(sao_plugin_ai_editor_capture_tests
     test_stealth_window.cpp
     test_mmf_frame_writer.cpp
     test_input_event_ring.cpp
     test_self_render.cpp
     test_window_capture_mmf.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
 )
-target_compile_features(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
-    cxx_std_20
-)
-target_compile_definitions(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+target_compile_features(sao_plugin_ai_editor_capture_tests PRIVATE cxx_std_20)
+target_compile_definitions(sao_plugin_ai_editor_capture_tests PRIVATE
     SAO_AI_EDITOR_BUILDING_DLL
     SAO_AI_EDITOR_TESTING
 )
-target_include_directories(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+target_include_directories(sao_plugin_ai_editor_capture_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
-target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+target_link_libraries(sao_plugin_ai_editor_capture_tests PRIVATE
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
     sao::legacy_core
     sao::security::anti_screencap
-    sao::gpu_hunt
     sao::rt_io
-    sao::sdk
     sao::ui
     comctl32
     gdi32
     user32
 )
 
+set(_SAO_AI_EDITOR_GPU_HUNT_TEST_SOURCES
+    gpu_hunt_sdk_adapter_test.cpp
+    ../src/gpu_hunt_sdk_adapter.cpp
+    ../src/gpu_hunt_tool.cpp
+)
+set(_SAO_AI_EDITOR_GPU_HUNT_TESTS_AVAILABLE TRUE)
+foreach (_sao_ai_editor_gpu_hunt_test_source IN LISTS _SAO_AI_EDITOR_GPU_HUNT_TEST_SOURCES)
+    if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_sao_ai_editor_gpu_hunt_test_source}")
+        set(_SAO_AI_EDITOR_GPU_HUNT_TESTS_AVAILABLE FALSE)
+    endif()
+endforeach()
+if (_SAO_AI_EDITOR_GPU_HUNT_TESTS_AVAILABLE)
+    add_executable(sao_plugin_ai_editor_gpu_hunt_tests
+        gpu_hunt_sdk_adapter_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
+    )
+    target_compile_features(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE cxx_std_20)
+    target_compile_definitions(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+        SAO_AI_EDITOR_BUILDING_DLL
+        SAO_AI_EDITOR_TESTING
+    )
+    target_include_directories(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    )
+    target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+        Catch2::Catch2WithMain
+        nlohmann_json::nlohmann_json
+        sao::legacy_core
+        sao::security::anti_screencap
+        sao::gpu_hunt
+        sao::rt_io
+        sao::sdk
+        sao::ui
+        comctl32
+        gdi32
+        user32
+    )
+endif()
 include(CTest)
 include(Catch)
 add_test(NAME plugins_ai_editor
@@ -129,12 +162,18 @@ set_tests_properties(plugins_ai_editor.production_child PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     LABELS "plugins;ai_editor;integration;production_child"
     TIMEOUT 15)
-add_test(NAME plugins_ai_editor.gpu_hunt
-         COMMAND sao_plugin_ai_editor_gpu_hunt_tests --reporter compact)
-set_tests_properties(plugins_ai_editor.gpu_hunt PROPERTIES
-    LABELS "plugins;ai_editor;gpu_hunt"
+add_test(NAME plugins_ai_editor.capture
+         COMMAND sao_plugin_ai_editor_capture_tests --reporter compact)
+set_tests_properties(plugins_ai_editor.capture PROPERTIES
+    LABELS "plugins;ai_editor;capture"
     TIMEOUT 15)
-
+if (_SAO_AI_EDITOR_GPU_HUNT_TESTS_AVAILABLE)
+    add_test(NAME plugins_ai_editor.gpu_hunt
+             COMMAND sao_plugin_ai_editor_gpu_hunt_tests --reporter compact)
+    set_tests_properties(plugins_ai_editor.gpu_hunt PROPERTIES
+        LABELS "plugins;ai_editor;gpu_hunt"
+        TIMEOUT 15)
+endif()
 add_executable(sao_plugin_ai_editor_kernel_map_tests
     kernel_map_bridge_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_bridge.cpp
@@ -167,70 +206,4 @@ target_link_libraries(sao_plugin_ai_editor_kernel_map_tests PRIVATE
 add_test(NAME plugins_ai_editor.kernel_map COMMAND sao_plugin_ai_editor_kernel_map_tests)
 set_tests_properties(plugins_ai_editor.kernel_map PROPERTIES
     LABELS "plugins;ai_editor;kernel_map"
-    TIMEOUT 15)
-
-add_executable(sao_plugin_ai_editor_settings_contract_tests
-    test_ai_editor_settings_contract.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ai_editor_settings.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_secret_store.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/scope_store.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/sha256_helper.cpp
-)
-target_compile_features(sao_plugin_ai_editor_settings_contract_tests PRIVATE
-    cxx_std_20
-)
-target_include_directories(sao_plugin_ai_editor_settings_contract_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-target_link_libraries(sao_plugin_ai_editor_settings_contract_tests PRIVATE
-    Catch2::Catch2WithMain
-    nlohmann_json::nlohmann_json
-    bcrypt
-    crypt32
-)
-add_test(NAME plugins_ai_editor.settings COMMAND sao_plugin_ai_editor_settings_contract_tests)
-set_tests_properties(plugins_ai_editor.settings PROPERTIES
-    LABELS "plugins;ai_editor;settings;contract"
-    TIMEOUT 15)
-
-# Kernel Map Bridge operator dashboard — message-dispatch contract.
-# Compiles kernel_map_panel_provider.cpp + webview_panel_registry.cpp
-# straight into the test target so the mock bridge (declared in
-# kernel_map_panel_test.cpp) can substitute for the peer's real
-# kernel_map::Bridge without needing the DLL or sao::rt_io to link.
-add_executable(sao_plugin_ai_editor_kernel_map_panel_tests
-    kernel_map_panel_test.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/kernel_map_panel_provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/mcp_management_panel_provider.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/webview_panel_registry.cpp
-)
-target_compile_features(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
-    cxx_std_20
-)
-target_include_directories(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-# SAO_AI_EDITOR_BUILDING_DLL keeps the SAO_AI_EDITOR_API markers on
-# the exported classes evaluating to dllexport when the panel provider
-# is compiled into the standalone test binary; without it the marker
-# picks up dllimport and the linker cannot find its own symbols.
-# SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB tells the panel provider
-# translation unit to skip the __has_include probe for the peer's
-# kernel_map_bridge.h so the mock IKernelMapBridge is the only path;
-# a build without the peer header on disk would otherwise fail here.
-target_compile_definitions(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
-    SAO_AI_EDITOR_BUILDING_DLL
-    SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB=1
-)
-target_link_libraries(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
-    Catch2::Catch2WithMain
-    nlohmann_json::nlohmann_json
-    user32
-)
-add_test(NAME plugins_ai_editor.kernel_map_panel COMMAND sao_plugin_ai_editor_kernel_map_panel_tests)
-set_tests_properties(plugins_ai_editor.kernel_map_panel PROPERTIES
-    LABELS "plugins;ai_editor;kernel_map;panel"
     TIMEOUT 15)

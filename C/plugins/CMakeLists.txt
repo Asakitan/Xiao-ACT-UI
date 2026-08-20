@@ -18,7 +18,7 @@ set(SAO_PLUGINS_VERSION 2)
 add_compile_definitions(SAO_PLUGINS_ABI_VERSION=${SAO_PLUGINS_VERSION})
 
 # ── 单模块开关 (可覆盖) ────────────────────────────────────────────────
-option(SAO_PLUGINS_ENABLE_PYTHON  "构建 Python 插件宿主 (需要 vcpkg python3)" ON)
+option(SAO_PLUGINS_ENABLE_PYTHON  "构建 Python 插件宿主 (明确 opt-in 隔离兼容 target)" OFF)
 option(SAO_PLUGINS_ENABLE_LUA     "构建 Lua 插件宿主 (vcpkg lua)"             OFF)
 option(SAO_PLUGINS_ENABLE_ANGEL   "构建 AngelScript 插件宿主 (vcpkg unofficial-angelscript)" OFF)
 option(SAO_PLUGINS_ENABLE_EMMA    "构建 Emma 插件宿主 (零依赖)"                ON)
@@ -70,7 +70,11 @@ if (NOT SAO_PLUGINS_LEGACY_FACADE_ONLY)
 
     if (SAO_PLUGINS_ENABLE_PYTHON)
         add_subdirectory(python_host)
-        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_python_host)
+        add_library(sao_plugins_python_host_standalone INTERFACE)
+        target_link_libraries(sao_plugins_python_host_standalone INTERFACE
+            sao_plugins_python_host)
+        add_library(sao::plugins::python_host_standalone ALIAS
+            sao_plugins_python_host_standalone)
     endif()
     if (SAO_PLUGINS_ENABLE_EMMA)
         add_subdirectory(emma_host)

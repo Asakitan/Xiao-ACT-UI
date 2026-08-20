@@ -61,12 +61,8 @@ set(SAO_LAUNCHER_SOURCES
     src/provider_config.cpp
     src/launcher_lifecycle.cpp
     src/user_menu.cpp
-    # Phase 12 (Python parity closure): hotkey manager + config panel.
+    # Phase 12 (Python parity closure): hotkey manager.
     src/hotkey_manager.cpp
-    src/hotkey_config_panel.cpp
-    # Phase 13: settings editor UI + profiles.
-    src/settings_config_panel.cpp
-    src/settings_profiles.cpp
     # Phase 14: install_npcap + native comdlg32 file picker fallback.
     src/install_npcap.cpp
 )
@@ -75,21 +71,54 @@ set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)
 if (TARGET sao::ui AND TARGET sao::rt_io AND TARGET sao::sdk AND
     TARGET sao::server::freetier::workshop_client)
     list(APPEND SAO_LAUNCHER_HEADERS
-        src/license_panel_internal.h
         src/plugin_manager_panel_internal.h
         src/process_selector_panel_internal.h
         src/workshop_panel_internal.h)
     list(APPEND SAO_LAUNCHER_SOURCES
-        src/license_panel_internal.cpp
         src/plugin_manager_panel_internal.cpp
         src/process_selector_panel_internal.cpp
         src/workshop_panel_internal.cpp)
+    if (TARGET sao::license::sdk AND TARGET sao::license::client)
+        list(APPEND SAO_LAUNCHER_HEADERS src/license_panel_internal.h)
+        list(APPEND SAO_LAUNCHER_SOURCES src/license_panel_internal.cpp)
+    endif()
     set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION ON)
 endif()
 
 if (TARGET sao::ui)
     list(APPEND SAO_LAUNCHER_SOURCES
-        src/entity_builtin_action_internal.cpp)
+        src/entity_builtin_action_internal.cpp
+        src/hotkey_config_panel.cpp
+        src/settings_config_panel.cpp
+        src/settings_profiles.cpp)
+else()
+    list(APPEND SAO_LAUNCHER_SOURCES
+        src/hotkey_config_panel_stub.cpp
+        src/settings_config_panel_stub.cpp)
+
+    add_library(sao_launcher_ui_off_stubs STATIC EXCLUDE_FROM_ALL
+        src/hotkey_config_panel_stub.cpp
+        src/settings_config_panel_stub.cpp)
+    target_compile_features(sao_launcher_ui_off_stubs PRIVATE cxx_std_20)
+    target_include_directories(sao_launcher_ui_off_stubs PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/platform/core/include
+        ${CMAKE_SOURCE_DIR}/platform/ui/include)
+
+    add_library(sao_launcher_ui_off_link_smoke SHARED EXCLUDE_FROM_ALL
+        src/user_menu.cpp)
+    target_compile_features(sao_launcher_ui_off_link_smoke PRIVATE cxx_std_20)
+    target_include_directories(sao_launcher_ui_off_link_smoke PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/platform/core/include
+        ${CMAKE_SOURCE_DIR}/platform/ui/include
+        ${CMAKE_SOURCE_DIR}/security/obfuscation/include)
+    target_link_libraries(sao_launcher_ui_off_link_smoke PRIVATE
+        sao_launcher_ui_off_stubs
+        user32
+        shell32)
 endif()
 
 if (TARGET sao::plugins::loader AND TARGET sao::rt_io AND TARGET sao::ui)
@@ -128,12 +157,7 @@ if (TARGET sao::plugins::loader)
         target_compile_definitions(sao_launcher_plugins_provider PUBLIC
             SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK=1)
     endif()
-    if (TARGET sao::plugins::python_host)
-        target_link_libraries(sao_launcher_plugins_provider PRIVATE
-            sao::plugins::python_host)
-        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
-            SAO_LAUNCHER_PROVIDER_HAS_PYTHON=1)
-    endif()
+
     if (TARGET sao::plugins::emma_host)
         target_link_libraries(sao_launcher_plugins_provider PRIVATE
             sao::plugins::emma_host)
@@ -283,26 +307,6 @@ _sao_link_meta(sao::shell    SAO_LINKED_SHELL    sao_launcher_shell_provider)
 _sao_link_meta(sao::license  SAO_LINKED_LICENSE  sao_launcher_license_provider)
 _sao_link_meta(sao::plugins  SAO_LINKED_PLUGINS  sao_launcher_plugins_provider)
 
-if (MSVC AND TARGET sao_plugins_python_host)
-    get_target_property(_sao_python_host_resolved
-        sao_plugins_python_host SAO_PYHOST_PYTHON_RESOLVED)
-    if (_sao_python_host_resolved MATCHES "-NOTFOUND$")
-        message(FATAL_ERROR
-            "launcher: Python host resolution metadata is missing")
-    endif()
-    if (_sao_python_host_resolved)
-        get_target_property(_sao_python_runtime_dll
-            sao_plugins_python_host SAO_PYHOST_RUNTIME_DLL)
-        if (NOT _sao_python_runtime_dll OR
-            _sao_python_runtime_dll MATCHES "-NOTFOUND$")
-            message(FATAL_ERROR
-                "launcher: resolved Python host did not publish its runtime DLL basename")
-        endif()
-        target_link_options(SaoAuto PRIVATE
-            "/DELAYLOAD:${_sao_python_runtime_dll}")
-        target_link_libraries(SaoAuto PRIVATE delayimp)
-    endif()
-endif()
 
 # The platform aggregate is not itself a lifecycle ABI provider.  The
 # launcher owns the minimal composition provider in init_pipeline.cpp and may

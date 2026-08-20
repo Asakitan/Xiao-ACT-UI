@@ -19,11 +19,15 @@ set(_sao_launcher_test_sources
     test_working_dir.cpp
     test_init_pipeline.cpp
     test_rt_io_operator_focused.cpp
-    test_entity_builtin_action_focused.cpp
-    test_entity_action_routes_focused.cpp
-    test_settings_owner_focused.cpp
-    test_tool_launch_focused.cpp
 )
+
+if (TARGET sao::ui)
+    list(APPEND _sao_launcher_test_sources
+        test_entity_builtin_action_focused.cpp
+        test_entity_action_routes_focused.cpp
+        test_settings_owner_focused.cpp
+        test_tool_launch_focused.cpp)
+endif()
 # Rollout tests join the same discovery scheme
 # so an operator building a slim launcher can drop them without CMake edits.
 foreach (_maybe
@@ -52,15 +56,15 @@ if (TARGET sao::core AND TARGET sao::ui AND TARGET sao::rt_io)
         sao::ui
         sao::rt_io)
 endif()
-if (TARGET sao::ui AND TARGET sao_license_sdk AND TARGET sao_license_client AND
+if (TARGET sao::ui AND TARGET sao::license::sdk AND TARGET sao::license::client AND
     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_license_panel_focused.cpp")
     list(APPEND _sao_launcher_test_sources
         test_license_panel_focused.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/license_panel_internal.cpp)
     list(APPEND _sao_launcher_panel_test_libraries
         sao::ui
-        sao_license_sdk
-        sao_license_client)
+        sao::license::sdk
+        sao::license::client)
 endif()
 if (TARGET sao::ui AND TARGET sao::server::freetier::workshop_client)
     list(APPEND _sao_launcher_test_sources
@@ -73,10 +77,12 @@ endif()
 list(REMOVE_DUPLICATES _sao_launcher_panel_test_libraries)
 add_executable(sao_launcher_tests ${_sao_launcher_test_sources})
 
-add_executable(sao_tool_launch_child_fixture
-    tool_launch_child_fixture.cpp)
-target_compile_features(sao_tool_launch_child_fixture PRIVATE cxx_std_20)
-target_link_libraries(sao_tool_launch_child_fixture PRIVATE user32)
+if (TARGET sao::ui AND TARGET sao::plugin_ai_editor)
+    add_executable(sao_tool_launch_child_fixture
+        tool_launch_child_fixture.cpp)
+    target_compile_features(sao_tool_launch_child_fixture PRIVATE cxx_std_20)
+    target_link_libraries(sao_tool_launch_child_fixture PRIVATE user32)
+endif()
 
 target_include_directories(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -109,9 +115,7 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/launcher_lifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/user_menu.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_config_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_manager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_config_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_json_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_owner.cpp
@@ -119,9 +123,23 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_theme_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_package_internal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_builtin_action_internal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_provider_publication_internal.cpp
 )
+
+if (TARGET sao::ui)
+    target_sources(sao_launcher_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_config_panel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_config_panel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_builtin_action_internal.cpp)
+else()
+    target_sources(sao_launcher_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_config_panel_stub.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_config_panel_stub.cpp)
+endif()
+
+if (TARGET sao::plugins::loader AND TARGET sao::ui)
+    target_sources(sao_launcher_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_provider_publication_internal.cpp)
+endif()
 
 target_compile_definitions(sao_launcher_tests PRIVATE
     SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER=1)
@@ -134,10 +152,13 @@ target_compile_definitions(sao_launcher_tests
     PRIVATE
         SAO_PYTHON_ROOT_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../../python"
         SAO_CPP_ROOT_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
-        SAO_TOOL_LAUNCH_CHILD_FIXTURE="$<TARGET_FILE:sao_tool_launch_child_fixture>"
 )
 
-add_dependencies(sao_launcher_tests sao_tool_launch_child_fixture)
+if (TARGET sao::ui AND TARGET sao::plugin_ai_editor)
+    target_compile_definitions(sao_launcher_tests PRIVATE
+        SAO_TOOL_LAUNCH_CHILD_FIXTURE="$<TARGET_FILE:sao_tool_launch_child_fixture>")
+    add_dependencies(sao_launcher_tests sao_tool_launch_child_fixture)
+endif()
 if (TARGET sao::plugin_ai_editor)
     target_link_libraries(sao_launcher_tests PRIVATE sao::plugin_ai_editor)
     target_compile_definitions(sao_launcher_tests PRIVATE
@@ -232,6 +253,7 @@ set_tests_properties(launcher.core PROPERTIES
     PROCESSORS 1
     TIMEOUT 15)
 
+if (TARGET sao::ui)
 add_test(NAME launcher.settings
          COMMAND sao_launcher_tests "[settings],[hotkey]"
                  --reporter compact)
@@ -251,6 +273,7 @@ set_tests_properties(launcher.tool_launch PROPERTIES
     RESOURCE_LOCK "sao_launcher_process_resources"
     PROCESSORS 1
     TIMEOUT 15)
+endif()
 
 if (TARGET sao_launcher_plugins_provider)
     add_executable(sao_launcher_provider_tests
@@ -271,12 +294,7 @@ if (TARGET sao_launcher_plugins_provider)
         target_compile_definitions(sao_launcher_provider_tests PRIVATE
             SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK=1)
     endif()
-    if (TARGET sao::plugins::python_host)
-        target_link_libraries(sao_launcher_provider_tests PRIVATE
-            sao::plugins::python_host)
-        target_compile_definitions(sao_launcher_provider_tests PRIVATE
-            SAO_LAUNCHER_PROVIDER_HAS_PYTHON=1)
-    endif()
+
     if (TARGET sao::plugins::emma_host)
         target_link_libraries(sao_launcher_provider_tests PRIVATE
             sao::plugins::emma_host)
