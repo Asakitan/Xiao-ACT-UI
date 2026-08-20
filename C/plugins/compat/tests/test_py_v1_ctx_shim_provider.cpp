@@ -2,9 +2,9 @@
 #include "sao/sdk/sao_sdk.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -15,7 +15,20 @@ using namespace sao::plugins::compat;
 using namespace sao::plugins::sdk_binding;
 
 namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
 
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
@@ -182,8 +195,8 @@ int32_t call(plugin_context_ptr ctx,
 
 nlohmann::json report_for(plugin_context_ptr ctx) {
     char* report = nullptr;
-    assert(sao_plugins_compat_v1_report(ctx, &report) == SAO_OK);
-    assert(report != nullptr);
+    SAO_TEST_ASSERT(sao_plugins_compat_v1_report(ctx, &report) == SAO_OK);
+    SAO_TEST_ASSERT(report != nullptr);
     const auto parsed = nlohmann::json::parse(report);
     sao_plugins_compat_free_string(report);
     return parsed;
@@ -196,7 +209,7 @@ std::string method_status(const nlohmann::json& report,
         methods.begin(), methods.end(), [legacy_name](const auto& method) {
             return method.at("legacy") == legacy_name;
         });
-    assert(found != methods.end());
+    SAO_TEST_ASSERT(found != methods.end());
     return found->at("status").get<std::string>();
 }
 
@@ -206,7 +219,7 @@ int32_t method_status_code(const nlohmann::json& report, const char* legacy_name
         std::find_if(methods.begin(), methods.end(), [legacy_name](const auto& method) {
             return method.at("legacy") == legacy_name;
         });
-    assert(found != methods.end());
+    SAO_TEST_ASSERT(found != methods.end());
     return found->at("status_code").get<int32_t>();
 }
 
@@ -214,60 +227,60 @@ int32_t method_status_code(const nlohmann::json& report, const char* legacy_name
 
 int main() {
     SaoSdkContext sdk{};
-    assert(sao_sdk_bind_context("compat.provider", "1.2.3", &sdk) ==
+    SAO_TEST_ASSERT(sao_sdk_bind_context("compat.provider", "1.2.3", &sdk) ==
            SAO_SDK_OK);
     auto ctx = reinterpret_cast<plugin_context_ptr>(&sdk);
-    assert(sao_plugins_compat_arm_v1_ctx_shim(ctx) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_compat_arm_v1_ctx_shim(ctx) == SAO_OK);
 
-    assert(sao_plugins_compat_is_v1_method("metadata"));
-    assert(sao_plugins_compat_is_v1_method("add_hotkey"));
-    assert(!sao_plugins_compat_is_v1_method("eval_unbounded"));
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("add_hotkey") ==
+    SAO_TEST_ASSERT(sao_plugins_compat_is_v1_method("metadata"));
+    SAO_TEST_ASSERT(sao_plugins_compat_is_v1_method("add_hotkey"));
+    SAO_TEST_ASSERT(!sao_plugins_compat_is_v1_method("eval_unbounded"));
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("add_hotkey") ==
            static_cast<uint16_t>(sdk_method_id::method_register_hotkey));
-    assert(sao_plugins_compat_ctx_v1_register_alias(
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_register_alias(
                "register_menu_surface",
                static_cast<uint16_t>(sdk_method_id::method_register_menu_category)) ==
            SAO_ERR_INVALID_ARGUMENT);
-    assert(sao_plugins_compat_ctx_v1_register_alias(
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_register_alias(
                "register_menu_category",
                static_cast<uint16_t>(sdk_method_id::method_register_menu_surface)) ==
            SAO_ERR_INVALID_ARGUMENT);
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
            static_cast<uint16_t>(sdk_method_id::method_register_menu_surface));
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
            static_cast<uint16_t>(sdk_method_id::method_register_menu_category));
 
     std::string result;
-    assert(call(ctx, "metadata", "{}", &result) == SAO_OK);
+    SAO_TEST_ASSERT(call(ctx, "metadata", "{}", &result) == SAO_OK);
     const auto metadata = nlohmann::json::parse(result);
-    assert(metadata.at("plugin_id") == "compat.provider");
-    assert(metadata.at("plugin_version") == "1.2.3");
+    SAO_TEST_ASSERT(metadata.at("plugin_id") == "compat.provider");
+    SAO_TEST_ASSERT(metadata.at("plugin_version") == "1.2.3");
 
-    assert(call(ctx, "set_setting", R"({"key":"rate","value":7})") ==
+    SAO_TEST_ASSERT(call(ctx, "set_setting", R"({"key":"rate","value":7})") ==
            SAO_OK);
-    assert(call(ctx, "get_setting", R"({"key":"rate","default":3})",
+    SAO_TEST_ASSERT(call(ctx, "get_setting", R"({"key":"rate","default":3})",
                 &result) == SAO_OK);
-    assert(result == "7");
-    assert(call(ctx, "set_defaults",
+    SAO_TEST_ASSERT(result == "7");
+    SAO_TEST_ASSERT(call(ctx, "set_defaults",
                 R"({"defaults":{"rate":9,"name":"legacy"}})") == SAO_OK);
-    assert(call(ctx, "setting", R"({"key":"rate"})", &result) == SAO_OK);
-    assert(result == "7");
-    assert(call(ctx, "setting", R"({"key":"name"})", &result) == SAO_OK);
-    assert(result == R"("legacy")");
-    assert(call(ctx, "set_defaults",
+    SAO_TEST_ASSERT(call(ctx, "setting", R"({"key":"rate"})", &result) == SAO_OK);
+    SAO_TEST_ASSERT(result == "7");
+    SAO_TEST_ASSERT(call(ctx, "setting", R"({"key":"name"})", &result) == SAO_OK);
+    SAO_TEST_ASSERT(result == R"("legacy")");
+    SAO_TEST_ASSERT(call(ctx, "set_defaults",
                 R"({"defaults":{"safe":1,"complex":{"nested":true}}})") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(call(ctx, "setting", R"({"key":"safe","default":"absent"})",
+    SAO_TEST_ASSERT(call(ctx, "setting", R"({"key":"safe","default":"absent"})",
                 &result) == SAO_OK);
-    assert(result == R"("absent")");
+    SAO_TEST_ASSERT(result == R"("absent")");
 
-    assert(call(ctx, "emit", R"({"topic":"compat.event","payload":{"n":1}})") ==
+    SAO_TEST_ASSERT(call(ctx, "emit", R"({"topic":"compat.event","payload":{"n":1}})") ==
            SAO_OK);
-    assert(call(ctx, "register_ui_panel",
+    SAO_TEST_ASSERT(call(ctx, "register_ui_panel",
                 R"({"id":"legacy.panel","metadata":{"title":"Legacy Panel"},"spec":{"kind":"panel","children":[{"kind":"canvas"}]}})",
                 &result) == SAO_OK);
-    assert(nlohmann::json::parse(result).get<uint64_t>() != 0);
-    assert(call(ctx, "register_menu_category",
+    SAO_TEST_ASSERT(nlohmann::json::parse(result).get<uint64_t>() != 0);
+    SAO_TEST_ASSERT(call(ctx, "register_menu_category",
                 R"({"name":"Legacy","icon":"x"})") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
     sdk_context_call_request callback_request{};
@@ -279,98 +292,98 @@ int main() {
     callback_request.timer_callback = counted_timer_callback;
     callback_request.panel_action_callback = panel_action_callback;
     callback_request.callback_user_data = &rejected_callbacks;
-    assert(sao_plugins_compat_v1_call(ctx, "register_action_handler", &callback_request) ==
+    SAO_TEST_ASSERT(sao_plugins_compat_v1_call(ctx, "register_action_handler", &callback_request) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(sao_plugins_compat_v1_call(ctx, "register_menu_surface", &callback_request) ==
+    SAO_TEST_ASSERT(sao_plugins_compat_v1_call(ctx, "register_menu_surface", &callback_request) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(rejected_callbacks.calls == 0);
-    assert(call(ctx, "register_report_view", R"({"id":"report"})") ==
+    SAO_TEST_ASSERT(rejected_callbacks.calls == 0);
+    SAO_TEST_ASSERT(call(ctx, "register_report_view", R"({"id":"report"})") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(call(ctx, "eval_unbounded", "{}") ==
+    SAO_TEST_ASSERT(call(ctx, "eval_unbounded", "{}") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     const auto without_provider = report_for(ctx);
-    assert(without_provider.at("provider_status") == SAO_SDK_ERR_UNSUPPORTED);
-    assert(method_status(without_provider, "metadata") == "supported");
-    assert(method_status(without_provider, "get_setting") == "supported");
-    assert(method_status(without_provider, "emit") == "supported");
-    assert(method_status(without_provider, "register_ui_panel") ==
+    SAO_TEST_ASSERT(without_provider.at("provider_status") == SAO_SDK_ERR_UNSUPPORTED);
+    SAO_TEST_ASSERT(method_status(without_provider, "metadata") == "supported");
+    SAO_TEST_ASSERT(method_status(without_provider, "get_setting") == "supported");
+    SAO_TEST_ASSERT(method_status(without_provider, "emit") == "supported");
+    SAO_TEST_ASSERT(method_status(without_provider, "register_ui_panel") ==
            "supported");
-    assert(method_status(without_provider, "add_hotkey") == "unsupported");
-    assert(method_status(without_provider, "notify") == "unsupported");
-    assert(method_status(without_provider, "register_menu_surface") ==
+    SAO_TEST_ASSERT(method_status(without_provider, "add_hotkey") == "unsupported");
+    SAO_TEST_ASSERT(method_status(without_provider, "notify") == "unsupported");
+    SAO_TEST_ASSERT(method_status(without_provider, "register_menu_surface") ==
            "unsupported");
-    assert(method_status(without_provider, "register_action_handler") == "unsupported");
-    assert(method_status_code(without_provider, "register_menu_category") ==
+    SAO_TEST_ASSERT(method_status(without_provider, "register_action_handler") == "unsupported");
+    SAO_TEST_ASSERT(method_status_code(without_provider, "register_menu_category") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(method_status_code(without_provider, "register_menu_surface") ==
+    SAO_TEST_ASSERT(method_status_code(without_provider, "register_menu_surface") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(method_status_code(without_provider, "register_action_handler") ==
+    SAO_TEST_ASSERT(method_status_code(without_provider, "register_action_handler") ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
-    assert(call(ctx, "add_hotkey",
+    SAO_TEST_ASSERT(call(ctx, "add_hotkey",
                 R"({"id":"toggle","default_key":"CTRL+F7","label":"Toggle"})",
                 nullptr, hotkey_callback) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(call(ctx, "set_interval", R"({"seconds":0.25})", nullptr,
+    SAO_TEST_ASSERT(call(ctx, "set_interval", R"({"seconds":0.25})", nullptr,
                 nullptr, timer_callback) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(call(ctx, "notify",
+    SAO_TEST_ASSERT(call(ctx, "notify",
                 R"({"title":"Legacy","message":"Ready","duration_s":1.5})") ==
                      sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     provider_fixture state;
     auto provider = make_provider(&state);
-    assert(sao_sdk_context_bind_provider(&sdk, &provider) == SAO_SDK_OK);
+    SAO_TEST_ASSERT(sao_sdk_context_bind_provider(&sdk, &provider) == SAO_SDK_OK);
 
-    assert(call(ctx, "add_hotkey",
+    SAO_TEST_ASSERT(call(ctx, "add_hotkey",
                 R"({"id":"toggle","default_key":"CTRL+F7","label":"Toggle"})",
                 &result, hotkey_callback) == SAO_OK);
-    assert(nlohmann::json::parse(result).get<uint64_t>() != 0);
-    assert(state.last_hotkey == "toggle");
-    assert(state.last_virtual_key == 0x76u);
-    assert(state.last_modifiers == 1u);
+    SAO_TEST_ASSERT(nlohmann::json::parse(result).get<uint64_t>() != 0);
+    SAO_TEST_ASSERT(state.last_hotkey == "toggle");
+    SAO_TEST_ASSERT(state.last_virtual_key == 0x76u);
+    SAO_TEST_ASSERT(state.last_modifiers == 1u);
 
-    assert(call(ctx, "set_interval", R"({"seconds":0.25})", &result,
+    SAO_TEST_ASSERT(call(ctx, "set_interval", R"({"seconds":0.25})", &result,
                 nullptr, timer_callback) == SAO_OK);
-    assert(nlohmann::json::parse(result).get<uint64_t>() != 0);
-    assert(state.last_timer_ms == 250u);
+    SAO_TEST_ASSERT(nlohmann::json::parse(result).get<uint64_t>() != 0);
+    SAO_TEST_ASSERT(state.last_timer_ms == 250u);
 
-    assert(call(ctx, "notify",
+    SAO_TEST_ASSERT(call(ctx, "notify",
                 R"({"title":"Legacy","message":"Ready","duration_s":1.5})",
                 &result) == SAO_OK);
-    assert(nlohmann::json::parse(result).get<uint64_t>() != 0);
-    assert(state.last_notify == "Legacy: Ready");
+    SAO_TEST_ASSERT(nlohmann::json::parse(result).get<uint64_t>() != 0);
+    SAO_TEST_ASSERT(state.last_notify == "Legacy: Ready");
 
-    assert(call(ctx, "set_overlay",
+    SAO_TEST_ASSERT(call(ctx, "set_overlay",
                 R"({"surface":"hud","spec":{"kind":"panel","children":[]}})",
                 &result) == SAO_OK);
-    assert(state.last_overlay_surface == "hud");
+    SAO_TEST_ASSERT(state.last_overlay_surface == "hud");
 
     const auto with_provider = report_for(ctx);
-    assert(with_provider.at("provider_status") == SAO_SDK_OK);
-    assert(method_status(with_provider, "add_hotkey") == "supported");
-    assert(method_status(with_provider, "set_interval") == "supported");
-    assert(method_status(with_provider, "notify") == "supported");
-    assert(method_status(with_provider, "set_timeout") == "unsupported");
-    assert(method_status(with_provider, "register_menu_category") == "unsupported");
-    assert(method_status(with_provider, "register_menu_surface") == "unsupported");
-    assert(method_status(with_provider, "register_action_handler") == "unsupported");
+    SAO_TEST_ASSERT(with_provider.at("provider_status") == SAO_SDK_OK);
+    SAO_TEST_ASSERT(method_status(with_provider, "add_hotkey") == "supported");
+    SAO_TEST_ASSERT(method_status(with_provider, "set_interval") == "supported");
+    SAO_TEST_ASSERT(method_status(with_provider, "notify") == "supported");
+    SAO_TEST_ASSERT(method_status(with_provider, "set_timeout") == "unsupported");
+    SAO_TEST_ASSERT(method_status(with_provider, "register_menu_category") == "unsupported");
+    SAO_TEST_ASSERT(method_status(with_provider, "register_menu_surface") == "unsupported");
+    SAO_TEST_ASSERT(method_status(with_provider, "register_action_handler") == "unsupported");
 
     sao_sdk_context_destroy(&sdk);
     const std::vector<std::string> expected_tail = {
         "unregister:overlay:103", "unregister:notify:102",
         "unregister:timer:101", "unregister:hotkey:100", "release"};
-    assert(state.events.size() >= expected_tail.size() + 1);
-    assert(state.events.front() == "retain");
-    assert(std::equal(expected_tail.begin(), expected_tail.end(),
+    SAO_TEST_ASSERT(state.events.size() >= expected_tail.size() + 1);
+    SAO_TEST_ASSERT(state.events.front() == "retain");
+    SAO_TEST_ASSERT(std::equal(expected_tail.begin(), expected_tail.end(),
                       state.events.end() - expected_tail.size()));
 
     char* filters = nullptr;
-    assert(sao_plugins_compat_convert_open_file_filters(
+    SAO_TEST_ASSERT(sao_plugins_compat_convert_open_file_filters(
                R"([{"name":"Text","spec":"*.txt"},["All","*.*"]])",
                &filters) == SAO_OK);
-    assert(std::strcmp(filters, "Text|*.txt|All|*.*") == 0);
+    SAO_TEST_ASSERT(std::strcmp(filters, "Text|*.txt|All|*.*") == 0);
     sao_plugins_compat_free_string(filters);
 
     std::printf("legacy v1 context provider mapping passed\n");

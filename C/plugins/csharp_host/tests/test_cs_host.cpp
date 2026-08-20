@@ -11,7 +11,6 @@
 #include "sao/plugins/csharp_host/cs_host.h"
 #include "sao/plugins/csharp_host/cs_compile.h"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,7 +18,20 @@
 using namespace sao::plugins::csharp_host;
 
 namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
 
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
 bool g_available = false;
 cs_host_handle_t g_host = nullptr;
 
@@ -27,7 +39,7 @@ cs_host_handle_t g_host = nullptr;
 void case_cshost_is_available_matches_env() {
     bool avail = false;
     int32_t rc = sao_plugins_cshost_is_available(&avail);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
     g_available = avail;
     // 只要 API 不崩就 OK; 具体值由环境决定
     std::printf("  [OK] cshost_is_available_matches_env (available=%d)\n",
@@ -41,15 +53,15 @@ void case_cshost_init_returns_ok_or_not_available() {
     int32_t rc = sao_plugins_cshost_init(&cfg, &h);
     if (g_available) {
         // 环境里有 hostfxr → 应 OK (dll 加载成功)
-        assert(rc == SAO_OK || rc == SAO_ERR_OS_CALL_FAILED);
+        SAO_TEST_ASSERT(rc == SAO_OK || rc == SAO_ERR_OS_CALL_FAILED);
         // 拿到 handle
         if (rc == SAO_OK) {
-            assert(h != nullptr);
+            SAO_TEST_ASSERT(h != nullptr);
             g_host = h;
         }
     } else {
         // 无 hostfxr → NOT_INITIALIZED (但 handle 也可能非空作为降级 handle)
-        assert(rc == SAO_ERR_NOT_INITIALIZED);
+        SAO_TEST_ASSERT(rc == SAO_ERR_NOT_INITIALIZED);
     }
     std::printf("  [OK] cshost_init_returns_ok_or_not_available (rc=%d)\n", rc);
 }
@@ -62,18 +74,18 @@ void case_cshost_get_runtime_version_nonempty() {
         return;
     }
     cs_assembly_unload_mode unload_mode = cs_assembly_unload_mode::collectible;
-    assert(sao_plugins_cshost_get_assembly_unload_mode(g_host, &unload_mode) == SAO_OK);
-    assert(unload_mode == cs_assembly_unload_mode::process_resident);
+    SAO_TEST_ASSERT(sao_plugins_cshost_get_assembly_unload_mode(g_host, &unload_mode) == SAO_OK);
+    SAO_TEST_ASSERT(unload_mode == cs_assembly_unload_mode::process_resident);
     char buf[64] = {};
     int32_t rc = sao_plugins_cshost_get_runtime_version(g_host, buf, sizeof(buf));
-    assert(rc == SAO_OK);
-    assert(buf[0] != '\0');   // 版本号非空
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(buf[0] != '\0');   // 版本号非空
     std::printf("  [OK] cshost_get_runtime_version_nonempty (v=%s)\n", buf);
 
     // 老 API 也要能读
     const char* v = sao_plugins_cshost_runtime_version(g_host);
-    assert(v != nullptr);
-    assert(std::strcmp(v, buf) == 0);
+    SAO_TEST_ASSERT(v != nullptr);
+    SAO_TEST_ASSERT(std::strcmp(v, buf) == 0);
 }
 
 // CASE 4: compile 返回保留接口状态
@@ -83,8 +95,8 @@ void case_cshost_compile_returns_expected_stub_status() {
         cs_assembly_handle_t asm_out = nullptr;
         int32_t rc = sao_plugins_cshost_compile_source(
             nullptr, L".", L"plugin.cs", nullptr, &asm_out);
-        assert(rc == SAO_ERR_INVALID_ARGUMENT);
-        assert(asm_out == nullptr);
+        SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
+        SAO_TEST_ASSERT(asm_out == nullptr);
         std::printf("  [OK] cshost_compile_returns_expected_stub_status "
                     "(no hostfxr, INVALID_ARGUMENT)\n");
         return;
@@ -92,13 +104,13 @@ void case_cshost_compile_returns_expected_stub_status() {
     // 有 hostfxr: 尝试建 domain (无隔离 bootstrap 时返 NOT_IMPLEMENTED)
     cs_domain_handle_t dom = nullptr;
     int32_t rc = sao_plugins_cshost_create_domain(g_host, "test_domain", &dom);
-    assert(rc == SAO_ERR_NOT_IMPLEMENTED || rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_ERR_NOT_IMPLEMENTED || rc == SAO_OK);
     // domain 未创建时 dom 是 nullptr, compile 返回 INVALID_ARGUMENT
     if (dom == nullptr) {
         cs_assembly_handle_t asm_out = nullptr;
         rc = sao_plugins_cshost_compile_source(
             dom, L".", L"plugin.cs", nullptr, &asm_out);
-        assert(rc == SAO_ERR_INVALID_ARGUMENT);
+        SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
     }
     std::printf("  [OK] cshost_compile_returns_expected_stub_status "
                 "(stub NOT_IMPLEMENTED)\n");

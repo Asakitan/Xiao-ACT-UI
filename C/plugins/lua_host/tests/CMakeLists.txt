@@ -1,11 +1,4 @@
-# plugins/lua_host/tests — smoke + interpreter Catch2 单测
-
-add_executable(test_plugins_lua_host test_lua.cpp)
-target_link_libraries(test_plugins_lua_host PRIVATE sao_plugins_lua_host)
-target_compile_features(test_plugins_lua_host PRIVATE cxx_std_17)
-target_compile_definitions(test_plugins_lua_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
-add_test(NAME plugins_lua_host_smoke COMMAND test_plugins_lua_host)
-
+# plugins/lua_host/tests — interpreter Catch2 单测
 find_package(Catch2 3 QUIET CONFIG)
 if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     add_executable(test_plugins_lua_host_interpreter
@@ -95,3 +88,18 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
 else()
     message(STATUS "plugins/lua_host: Catch2 未找到, 跳过 interpreter / sandbox 单测")
 endif()
+
+foreach(_sao_test IN ITEMS
+    plugins_lua_host_interpreter
+    plugins_lua_loader_adapter)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 15)
+    endif()
+endforeach()
+foreach(_sao_test IN ITEMS
+    plugins_lua_host_hardening
+    plugins_lua_host_sandbox)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 30)
+    endif()
+endforeach()

@@ -5,8 +5,8 @@
 
 #include "sao/plugins/python_host/py_host.h"
 
-#include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 using namespace sao::plugins::python_host;
@@ -15,6 +15,22 @@ using namespace sao::plugins::python_host;
 #  define SAO_TEST_PYTHON_HOME L""
 #endif
 
+namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
+
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
+} // namespace
 #if defined(SAO_HAS_PYTHON_EMBED)
 
 namespace {
@@ -33,31 +49,31 @@ void case_py_host_init_and_shutdown_roundtrip() {
 
     py_host_handle_t h = nullptr;
     int32_t rc = sao_plugins_pyhost_init(&cfg, &h);
-    assert(rc == SAO_OK);
-    assert(h != nullptr);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(h != nullptr);
 
     py_host_handle_t h2 = nullptr;
     rc = sao_plugins_pyhost_init(&cfg, &h2);
-    assert(rc == SAO_OK);
-    assert(h2 != nullptr);
-    assert(h2 != h);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(h2 != nullptr);
+    SAO_TEST_ASSERT(h2 != h);
 
     rc = sao_plugins_pyhost_shutdown(h2);
-    assert(rc == SAO_OK);
-    assert(std::string(sao_plugins_pyhost_version(h2)).empty());
-    assert(sao_plugins_pyhost_shutdown(h2) == SAO_ERR_HANDLE_INVALID);
-    assert(!std::string(sao_plugins_pyhost_version(h)).empty());
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(std::string(sao_plugins_pyhost_version(h2)).empty());
+    SAO_TEST_ASSERT(sao_plugins_pyhost_shutdown(h2) == SAO_ERR_HANDLE_INVALID);
+    SAO_TEST_ASSERT(!std::string(sao_plugins_pyhost_version(h)).empty());
 
     g_test_host = h;
     std::printf("  [OK] py_host_init_and_shutdown_roundtrip\n");
 }
 
 void case_py_host_reports_correct_version() {
-    assert(g_test_host != nullptr);
+    SAO_TEST_ASSERT(g_test_host != nullptr);
     py_host_handle_t h = g_test_host;
 
     const char* ver = sao_plugins_pyhost_version(h);
-    assert(ver != nullptr);
+    SAO_TEST_ASSERT(ver != nullptr);
     const std::string version(ver);
     const bool supported =
         version.find("3.11") == 0 ||
@@ -67,13 +83,13 @@ void case_py_host_reports_correct_version() {
     if (!supported) {
         std::fprintf(stderr, "unexpected Python version string: %s\n", ver);
     }
-    assert(supported);
-    assert(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
+    SAO_TEST_ASSERT(supported);
+    SAO_TEST_ASSERT(sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME));
 
     const int32_t rc = sao_plugins_pyhost_shutdown(h);
-    assert(rc == SAO_OK);
-    assert(std::string(sao_plugins_pyhost_version(h)).empty());
-    assert(sao_plugins_pyhost_shutdown(h) == SAO_ERR_HANDLE_INVALID);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(std::string(sao_plugins_pyhost_version(h)).empty());
+    SAO_TEST_ASSERT(sao_plugins_pyhost_shutdown(h) == SAO_ERR_HANDLE_INVALID);
     g_test_host = nullptr;
 
     std::printf("  [OK] py_host_reports_correct_version (%s)\n", ver);

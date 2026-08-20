@@ -25,7 +25,7 @@
 #include "sao/plugins/sdk_binding/binding_python.h"
 
 #include <algorithm>
-#include <cassert>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
@@ -33,6 +33,18 @@ using namespace sao::plugins::sdk_binding;
 
 namespace {
 
+[[noreturn]] void sao_test_assertion_failure(const char* file, int line,
+                                              const char* expression) {
+    std::fprintf(stderr, "assertion failed at %s:%d: %s\n", file, line, expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
+
+#define SAO_TEST_ASSERT(condition)                                             \
+    do {                                                                       \
+        if (!(condition))                                                      \
+            sao_test_assertion_failure(__FILE__, __LINE__, #condition);        \
+    } while (false)
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
 static_assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
@@ -75,10 +87,10 @@ void case_sdk_bind_log_info_dispatches(plugin_binding_handle_t plugin) {
         plugin, sdk_method_id::method_log,
         msg, std::strlen(msg),
         nullptr, 0);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
     const char* logged = sao_plugins_binding_test_last_log(plugin);
-    assert(logged != nullptr);
-    assert(std::strcmp(logged, "hello sdk-binding") == 0);
+    SAO_TEST_ASSERT(logged != nullptr);
+    SAO_TEST_ASSERT(std::strcmp(logged, "hello sdk-binding") == 0);
     std::printf("  [OK] sdk_bind_log_info_dispatches\n");
 }
 
@@ -88,13 +100,13 @@ void case_sdk_bind_unknown_method_returns_unsupported(plugin_binding_handle_t pl
     int32_t rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_notify,
         nullptr, 0, nullptr, 0);
-    assert(rc == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    SAO_TEST_ASSERT(rc == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     // register_ui_panel 也未实装
     rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_register_ui_panel,
         "id", 2, nullptr, 0);
-    assert(rc == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    SAO_TEST_ASSERT(rc == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     std::printf("  [OK] sdk_bind_unknown_method_returns_unsupported\n");
 }
@@ -106,14 +118,14 @@ void case_sdk_bind_add_hotkey_requires_callback(plugin_binding_handle_t plugin) 
         plugin, sdk_method_id::method_register_hotkey,
         hotkey_id, std::strlen(hotkey_id),
         nullptr, 0);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
-    assert(sao_plugins_binding_test_has_hotkey(plugin, "F5") == false);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(sao_plugins_binding_test_has_hotkey(plugin, "F5") == false);
 
     // 空 hotkey_id → INVALID_ARGUMENT
     rc = sao_plugins_sdk_bind_call(
         plugin, sdk_method_id::method_register_hotkey,
         nullptr, 0, nullptr, 0);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
 
     std::printf("  [OK] sdk_bind_add_hotkey_requires_callback\n");
 }
@@ -127,12 +139,12 @@ void case_sdk_bind_publish_event_dispatches(plugin_binding_handle_t plugin) {
             plugin, sdk_method_id::method_emit,
             topic, std::strlen(topic),
             nullptr, 0);
-        assert(rc == SAO_OK);
+        SAO_TEST_ASSERT(rc == SAO_OK);
     }
     uint32_t cnt = sao_plugins_binding_test_event_count(plugin, "damage");
-    assert(cnt == 3);
+    SAO_TEST_ASSERT(cnt == 3);
     // 其他 topic 应为 0
-    assert(sao_plugins_binding_test_event_count(plugin, "heal") == 0);
+    SAO_TEST_ASSERT(sao_plugins_binding_test_event_count(plugin, "heal") == 0);
 
     std::printf("  [OK] sdk_bind_publish_event_dispatches\n");
 }
@@ -144,22 +156,22 @@ void case_sdk_bind_plugin_id_returns_manifest_id(plugin_binding_handle_t plugin)
         plugin, sdk_method_id::prop_plugin_id,
         nullptr, 0,
         buf, sizeof(buf));
-    assert(rc == SAO_OK);
-    assert(std::strcmp(buf, "sdk_binding_dispatch") == 0);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(std::strcmp(buf, "sdk_binding_dispatch") == 0);
     std::printf("  [OK] sdk_bind_plugin_id_returns_manifest_id\n");
 }
 
 // CASE 6: method name 表反查双向
 void case_sdk_bind_method_name_roundtrip() {
     const char* name = sao_plugins_binding_method_name(sdk_method_id::method_log);
-    assert(name != nullptr);
-    assert(std::strcmp(name, "log") == 0);
+    SAO_TEST_ASSERT(name != nullptr);
+    SAO_TEST_ASSERT(std::strcmp(name, "log") == 0);
 
     sdk_method_id id = sao_plugins_binding_method_from_name("log");
-    assert(id == sdk_method_id::method_log);
+    SAO_TEST_ASSERT(id == sdk_method_id::method_log);
 
     id = sao_plugins_binding_method_from_name("__notreal__");
-    assert(id == sdk_method_id::method_count_);
+    SAO_TEST_ASSERT(id == sdk_method_id::method_count_);
     std::printf("  [OK] sdk_bind_method_name_roundtrip\n");
 }
 
@@ -172,86 +184,86 @@ void case_sdk_bind_menu_action_capability_truth(plugin_binding_handle_t plugin,
     const auto before =
         snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
     constexpr char category[] = R"({"name":"Static category","icon":"S","priority":1.5})";
-    assert(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_category, category,
+    SAO_TEST_ASSERT(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_category, category,
                                      sizeof(category) - 1, nullptr, 0) == SAO_OK);
     const auto after_category =
         snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
-    assert(after_category.size() == before.size() + 1);
-    assert(std::any_of(after_category.begin(), after_category.end(), [](const auto& record) {
+    SAO_TEST_ASSERT(after_category.size() == before.size() + 1);
+    SAO_TEST_ASSERT(std::any_of(after_category.begin(), after_category.end(), [](const auto& record) {
         return record.plugin_id == "sdk_binding_dispatch" && record.id == "Static category";
     }));
 
     constexpr char callback_category[] =
         R"({"name":"Callback category","builder":{"opaque":true}})";
-    assert(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_category,
+    SAO_TEST_ASSERT(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_category,
                                      callback_category, sizeof(callback_category) - 1, nullptr,
                                      0) == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_surface, "{}", 2,
+    SAO_TEST_ASSERT(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_menu_surface, "{}", 2,
                                      nullptr,
                                      0) == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_action_handler, "{}", 2,
+    SAO_TEST_ASSERT(sao_plugins_sdk_bind_call(plugin, sdk_method_id::method_register_action_handler, "{}", 2,
                                      nullptr,
                                      0) == sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     const auto typed_action_register =
         &sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3;
-    assert(typed_action_register != nullptr);
+    SAO_TEST_ASSERT(typed_action_register != nullptr);
 
     const auto before_surface =
         snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
-    assert(sao::plugins::loader::sao_plugins_ctx_register_menu_surface(
+    SAO_TEST_ASSERT(sao::plugins::loader::sao_plugins_ctx_register_menu_surface(
                context, "surface-does-not-pollute", "{}", 0.0F) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
     const auto after_surface =
         snapshot_extensions(sao_plugins_registry_instance(), extension_kind::menu_category);
-    assert(after_surface.size() == before_surface.size());
-    assert(std::none_of(after_surface.begin(), after_surface.end(), [](const auto& record) {
+    SAO_TEST_ASSERT(after_surface.size() == before_surface.size());
+    SAO_TEST_ASSERT(std::none_of(after_surface.begin(), after_surface.end(), [](const auto& record) {
         return record.plugin_id == "sdk_binding_dispatch" &&
                record.id == "surface-does-not-pollute";
     }));
-    assert(sao::plugins::loader::sao_plugins_ctx_register_menu_category(
+    SAO_TEST_ASSERT(sao::plugins::loader::sao_plugins_ctx_register_menu_category(
                context, "surface-does-not-pollute", "C", nullptr, 0.0F, nullptr) == SAO_OK);
     std::printf("  [OK] sdk_bind_menu_action_capability_truth\n");
 }
 
 void case_sdk_bind_language_menu_action_wrappers_link(
     sao::plugins::loader::plugin_context_t* context) {
-    assert(py_ctx_register_menu_category(nullptr, nullptr) == nullptr);
-    assert(py_ctx_register_menu_surface(nullptr, nullptr) == nullptr);
-    assert(py_ctx_register_action_handler(nullptr, nullptr) == nullptr);
+    SAO_TEST_ASSERT(py_ctx_register_menu_category(nullptr, nullptr) == nullptr);
+    SAO_TEST_ASSERT(py_ctx_register_menu_surface(nullptr, nullptr) == nullptr);
+    SAO_TEST_ASSERT(py_ctx_register_action_handler(nullptr, nullptr) == nullptr);
 
-    assert(lua_ctx_register_menu_category(nullptr) ==
+    SAO_TEST_ASSERT(lua_ctx_register_menu_category(nullptr) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(lua_ctx_register_menu_surface(nullptr) ==
+    SAO_TEST_ASSERT(lua_ctx_register_menu_surface(nullptr) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(lua_ctx_register_action_handler(nullptr) ==
-           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-
-    assert(as_ctx_register_menu_category(context, "Angel category", "A", nullptr, 0.0F) ==
-           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(as_ctx_register_menu_surface(context, "angel-surface", nullptr, 0.0F) ==
-           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(as_ctx_register_action_handler(context, nullptr) ==
+    SAO_TEST_ASSERT(lua_ctx_register_action_handler(nullptr) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
-    assert(sao_csharp_ctx_register_menu_category(context, "CSharp category", "C", nullptr, 0.0F) ==
+    SAO_TEST_ASSERT(as_ctx_register_menu_category(context, "Angel category", "A", nullptr, 0.0F) ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    SAO_TEST_ASSERT(as_ctx_register_menu_surface(context, "angel-surface", nullptr, 0.0F) ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    SAO_TEST_ASSERT(as_ctx_register_action_handler(context, nullptr) ==
+           sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+
+    SAO_TEST_ASSERT(sao_csharp_ctx_register_menu_category(context, "CSharp category", "C", nullptr, 0.0F) ==
            SAO_OK);
-    assert(sao_csharp_ctx_register_menu_surface(context, "csharp-surface", "{}", 0.0F) ==
+    SAO_TEST_ASSERT(sao_csharp_ctx_register_menu_surface(context, "csharp-surface", "{}", 0.0F) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(sao_csharp_ctx_register_action_handler(context, nullptr) ==
+    SAO_TEST_ASSERT(sao_csharp_ctx_register_action_handler(context, nullptr) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
 
     size_t method_count = 1;
-    assert(sao_plugins_binding_emma_get_method_table(nullptr, nullptr, &method_count) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_get_method_table(nullptr, nullptr, &method_count) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(method_count == 0);
+    SAO_TEST_ASSERT(method_count == 0);
     std::printf("  [OK] sdk_bind_language_menu_action_wrappers_link\n");
 }
 
 void case_sdk_bind_method_enum_values_stable() {
-    assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
-    assert(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
-    assert(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
+    SAO_TEST_ASSERT(static_cast<uint16_t>(sdk_method_id::method_register_menu_category) == 36);
+    SAO_TEST_ASSERT(static_cast<uint16_t>(sdk_method_id::method_register_menu_surface) == 37);
+    SAO_TEST_ASSERT(static_cast<uint16_t>(sdk_method_id::method_register_action_handler) == 38);
     std::printf("  [OK] sdk_bind_method_enum_values_stable\n");
 }
 
@@ -259,7 +271,7 @@ void case_sdk_bind_method_enum_values_stable() {
 
 int main() {
     const auto adapter = make_test_host_adapter();
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
 
     sao::plugins::loader::plugin_manifest manifest{};
     manifest.plugin_id = "sdk_binding_dispatch";
@@ -271,18 +283,18 @@ int main() {
 
     const auto registry = sao::plugins::loader::sao_plugins_registry_instance();
     sao::plugins::loader::plugin_handle_t loader_plugin = nullptr;
-    assert(sao::plugins::loader::sao_plugins_registry_add_plugin(
+    SAO_TEST_ASSERT(sao::plugins::loader::sao_plugins_registry_add_plugin(
                registry, &manifest, &loader_plugin) == SAO_OK);
     auto* context = sao::plugins::loader::sao_plugins_ctx_create(loader_plugin);
-    assert(context != nullptr);
+    SAO_TEST_ASSERT(context != nullptr);
 
     static int runtime_state = 0;
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_emma_activate(
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_activate(
                reinterpret_cast<plugin_context_ptr>(context),
                reinterpret_cast<emma_interpreter_ptr>(&runtime_state),
                &plugin) == SAO_OK);
-    assert(plugin != nullptr);
+    SAO_TEST_ASSERT(plugin != nullptr);
 
     std::printf("test_sdk_bind:\n");
     case_sdk_bind_log_info_dispatches(plugin);
@@ -296,9 +308,9 @@ int main() {
     case_sdk_bind_method_enum_values_stable();
     std::printf("test_sdk_bind: 9 cases passed\n");
 
-    assert(sao_plugins_binding_emma_deactivate(plugin) == SAO_OK);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_deactivate(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
     sao::plugins::loader::sao_plugins_ctx_destroy(context);
-    assert(sao::plugins::loader::sao_plugins_registry_remove(registry, loader_plugin) == SAO_OK);
+    SAO_TEST_ASSERT(sao::plugins::loader::sao_plugins_registry_remove(registry, loader_plugin) == SAO_OK);
     return 0;
 }

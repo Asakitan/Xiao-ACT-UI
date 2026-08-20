@@ -90,4 +90,5 @@ endif()
 include(Catch)
 add_test(NAME plugins_compat_shims COMMAND test_plugins_compat_shims_focused)
 set_tests_properties(plugins_compat_shims PROPERTIES
-    LABELS "plugins;compat;focused")
+    LABELS "plugins;compat;focused"
+    TIMEOUT 15)

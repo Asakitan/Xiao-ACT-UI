@@ -11,7 +11,6 @@
 #include "sao/plugins/loader/plugin_manifest.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,7 +20,20 @@ using namespace sao::plugins::compat;
 using namespace sao::plugins::loader;
 
 namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
 
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
 // ── 真实 plugin.json 内嵌 (从 sao_auto/python/plugins/*/plugin.json 直接复制) ──
 
 // star_resonance_plugin/plugin.json — 完整无删改
@@ -228,38 +240,38 @@ void case_parse_star_resonance_plugin_json_no_errors() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kStarResonanceJson, std::strlen(kStarResonanceJson), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.plugin_id == "star_resonance");
-    assert(m.name == std::string("星痕共鸣 Star Resonance"));
-    assert(m.version == "1.0.0");
-    assert(m.entry == "plugin.py");
-    assert(m.language == engine_kind::python);  // language 未声明, 从 entry .py 推
-    assert(m.enabled == false);
-    assert(m.game_ids.size() == 1);
-    assert(m.game_ids[0] == "star_resonance");
-    assert(m.permissions.size() == 5);
-    assert(contains(m.permissions, "memory_access"));
-    assert(contains(m.permissions, "packet_capture"));
-    assert(m.capabilities.size() == 4);
-    assert(m.capabilities[0].id == "parser_adapters");
-    assert(m.capabilities[1].id == "ui_panels");
-    assert(m.capabilities[1].actions.size() == 9);
-    assert(contains(m.capabilities[1].actions, "toggle_dps"));
-    assert(m.settings_schema.size() == 6);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.plugin_id == "star_resonance");
+    SAO_TEST_ASSERT(m.name == std::string("星痕共鸣 Star Resonance"));
+    SAO_TEST_ASSERT(m.version == "1.0.0");
+    SAO_TEST_ASSERT(m.entry == "plugin.py");
+    SAO_TEST_ASSERT(m.language == engine_kind::python);  // language 未声明, 从 entry .py 推
+    SAO_TEST_ASSERT(m.enabled == false);
+    SAO_TEST_ASSERT(m.game_ids.size() == 1);
+    SAO_TEST_ASSERT(m.game_ids[0] == "star_resonance");
+    SAO_TEST_ASSERT(m.permissions.size() == 5);
+    SAO_TEST_ASSERT(contains(m.permissions, "memory_access"));
+    SAO_TEST_ASSERT(contains(m.permissions, "packet_capture"));
+    SAO_TEST_ASSERT(m.capabilities.size() == 4);
+    SAO_TEST_ASSERT(m.capabilities[0].id == "parser_adapters");
+    SAO_TEST_ASSERT(m.capabilities[1].id == "ui_panels");
+    SAO_TEST_ASSERT(m.capabilities[1].actions.size() == 9);
+    SAO_TEST_ASSERT(contains(m.capabilities[1].actions, "toggle_dps"));
+    SAO_TEST_ASSERT(m.settings_schema.size() == 6);
     // parse_error 空
-    assert(m.parse_error.empty());
+    SAO_TEST_ASSERT(m.parse_error.empty());
 
     // normalize 后走一遍, 允许有 warnings (缺 abi_version 会警告)
     char* warns = nullptr;
     rc = sao_plugins_compat_normalize_v1_manifest(&m, &warns);
-    assert(rc == SAO_OK);
-    assert(warns != nullptr);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(warns != nullptr);
     // 应至少有 abi_version 那条 warn, 没有 language / entry warn
     std::string ws(warns);
-    assert(ws.find("abi_version absent") != std::string::npos);
-    assert(ws.find("language absent") == std::string::npos);
-    assert(ws.find("entry absent") == std::string::npos);
+    SAO_TEST_ASSERT(ws.find("abi_version absent") != std::string::npos);
+    SAO_TEST_ASSERT(ws.find("language absent") == std::string::npos);
+    SAO_TEST_ASSERT(ws.find("entry absent") == std::string::npos);
     sao_plugins_compat_free_string(warns);
     std::printf("  [OK] parse_star_resonance_plugin_json_no_errors\n");
 }
@@ -271,27 +283,27 @@ void case_parse_lua_plugin_json_engine_alias_normalized() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kLuaWithEngineAlias, std::strlen(kLuaWithEngineAlias), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.language == engine_kind::lua);  // engine → language
-    assert(m.entry == "plugin.lua");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.language == engine_kind::lua);  // engine → language
+    SAO_TEST_ASSERT(m.entry == "plugin.lua");
 
     // runtime 老字段
     plugin_manifest m2{};
     rc = sao_plugins_compat_parse_manifest_json(
         kLuaWithRuntimeAlias, std::strlen(kLuaWithRuntimeAlias), &m2, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m2.language == engine_kind::lua);  // runtime → language
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m2.language == engine_kind::lua);  // runtime → language
 
     // 现代 language 字段 (真实 example_lua plugin.json) 直接就是 lua
     plugin_manifest m3{};
     rc = sao_plugins_compat_parse_manifest_json(
         kLuaPluginJson, std::strlen(kLuaPluginJson), &m3, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m3.language == engine_kind::lua);
-    assert(m3.plugin_id == "example_lua");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m3.language == engine_kind::lua);
+    SAO_TEST_ASSERT(m3.plugin_id == "example_lua");
     std::printf("  [OK] parse_lua_plugin_json_engine_alias_normalized\n");
 }
 
@@ -301,10 +313,10 @@ void case_parse_missing_entry_infers_from_language() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kMissingEntryPython, std::strlen(kMissingEntryPython), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.language == engine_kind::python);
-    assert(m.entry == "plugin.py");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.language == engine_kind::python);
+    SAO_TEST_ASSERT(m.entry == "plugin.py");
     std::printf("  [OK] parse_missing_entry_infers_from_language\n");
 }
 
@@ -314,10 +326,10 @@ void case_parse_missing_language_infers_from_entry() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kMissingLanguageLuaEntry, std::strlen(kMissingLanguageLuaEntry), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.language == engine_kind::lua);
-    assert(m.entry == "plugin.lua");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.language == engine_kind::lua);
+    SAO_TEST_ASSERT(m.entry == "plugin.lua");
     std::printf("  [OK] parse_missing_language_infers_from_entry\n");
 }
 
@@ -327,12 +339,12 @@ void case_parse_deps_alias_merged_into_requires() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kDepsAliasJson, std::strlen(kDepsAliasJson), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
     // 老 deps 字段 → normalize_requires → requires_list
-    assert(m.requires_list.size() == 2);
-    assert(contains(m.requires_list, "star_resonance"));
-    assert(contains(m.requires_list, "act_platform"));
+    SAO_TEST_ASSERT(m.requires_list.size() == 2);
+    SAO_TEST_ASSERT(contains(m.requires_list, "star_resonance"));
+    SAO_TEST_ASSERT(contains(m.requires_list, "act_platform"));
     std::printf("  [OK] parse_deps_alias_merged_into_requires\n");
 }
 
@@ -342,14 +354,14 @@ void case_parse_dict_requires_flattened() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kDictRequiresJson, std::strlen(kDictRequiresJson), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
     // {"act_platform": ">=1.0"} → "act_platform>=1.0"
-    assert(contains(m.requires_list, "act_platform>=1.0"));
+    SAO_TEST_ASSERT(contains(m.requires_list, "act_platform>=1.0"));
     // Python parity: Python 侧硬编码 runtime_features 展开为单数
     // "runtime_feature:<item>", 不是复数 "runtime_features:...".  见
     // act_platform.plugins._normalize_requires + fixture deep_nested_requires_dict.
-    assert(contains(m.requires_list, "runtime_feature:rgba_frame"));
+    SAO_TEST_ASSERT(contains(m.requires_list, "runtime_feature:rgba_frame"));
     std::printf("  [OK] parse_dict_requires_flattened\n");
 }
 
@@ -362,11 +374,11 @@ void case_parse_utf8_bom_tolerated() {
         sizeof(kBomJsonBytes),
         &m,
         &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.plugin_id == "bom");
-    assert(m.language == engine_kind::python);
-    assert(m.entry == "plugin.py");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.plugin_id == "bom");
+    SAO_TEST_ASSERT(m.language == engine_kind::python);
+    SAO_TEST_ASSERT(m.entry == "plugin.py");
     std::printf("  [OK] parse_utf8_bom_tolerated\n");
 }
 
@@ -376,11 +388,11 @@ void case_parse_json_line_comment_tolerated() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kLineCommentJson, std::strlen(kLineCommentJson), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.plugin_id == "commented");
-    assert(m.language == engine_kind::python);
-    assert(m.entry == "plugin.py");
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.plugin_id == "commented");
+    SAO_TEST_ASSERT(m.language == engine_kind::python);
+    SAO_TEST_ASSERT(m.entry == "plugin.py");
     std::printf("  [OK] parse_json_line_comment_tolerated\n");
 }
 
@@ -390,13 +402,13 @@ void case_parse_hide_seek_requires_array_preserved() {
     char* err = nullptr;
     int32_t rc = sao_plugins_compat_parse_manifest_json(
         kHideSeekJson, std::strlen(kHideSeekJson), &m, &err);
-    assert(rc == SAO_OK);
-    assert(err == nullptr);
-    assert(m.plugin_id == "hide_seek_plugin");
-    assert(m.requires_list.size() == 1);
-    assert(m.requires_list[0] == "star_resonance");
-    assert(m.permissions.size() == 2);
-    assert(contains(m.permissions, "engine_access"));
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(err == nullptr);
+    SAO_TEST_ASSERT(m.plugin_id == "hide_seek_plugin");
+    SAO_TEST_ASSERT(m.requires_list.size() == 1);
+    SAO_TEST_ASSERT(m.requires_list[0] == "star_resonance");
+    SAO_TEST_ASSERT(m.permissions.size() == 2);
+    SAO_TEST_ASSERT(contains(m.permissions, "engine_access"));
     std::printf("  [OK] parse_hide_seek_requires_array_preserved\n");
 }
 

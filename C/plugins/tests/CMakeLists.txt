@@ -33,3 +33,4 @@ target_compile_definitions(sao_plugins_tests PRIVATE
     SAO_TEST_NATIVE_PLUGIN_PATH=L"$<TARGET_FILE:sao_loader_native_fixture>")
 add_dependencies(sao_plugins_tests sao_loader_native_fixture)
 add_test(NAME sao_plugins_tests COMMAND sao_plugins_tests)
+set_tests_properties(sao_plugins_tests PROPERTIES TIMEOUT 30)

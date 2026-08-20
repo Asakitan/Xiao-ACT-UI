@@ -6,7 +6,8 @@
 #include "sao/plugins/sdk_binding/binding_emma.h"
 #include "sao/plugins/sdk_binding/binding_lua.h"
 
-#include <cassert>
+#include <cstdlib>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -21,6 +22,18 @@ using namespace sao::plugins::sdk_binding;
 
 namespace {
 
+[[noreturn]] void sao_test_assertion_failure(const char* file, int line,
+                                              const char* expression) {
+    std::fprintf(stderr, "assertion failed at %s:%d: %s\n", file, line, expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
+
+#define SAO_TEST_ASSERT(condition)                                             \
+    do {                                                                       \
+        if (!(condition))                                                      \
+            sao_test_assertion_failure(__FILE__, __LINE__, #condition);        \
+    } while (false)
 struct fixture_state {
     int loads = 0;
     int unloads = 0;
@@ -226,7 +239,7 @@ old_language_host_adapter_vtable old_fixture_adapter(language_host_kind language
 void wrap_emma_callback(emma_interpreter_ptr runtime, void** out_callback, void** out_user_data,
                         int32_t expected = SAO_OK) {
     static int callable = 0;
-    assert(sao_plugins_binding_emma_wrap_callback(runtime,
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_wrap_callback(runtime,
                                                   reinterpret_cast<emma_value_ptr>(&callable),
                                                   out_callback, out_user_data) == expected);
 }
@@ -239,9 +252,9 @@ void case_language_release_apis() {
                                 language_host_kind::emma, language_host_kind::csharp}) {
         fixture_state state{};
         const auto adapter = fixture_adapter(language, &state);
-        assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+        SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
         plugin_binding_handle_t plugin = nullptr;
-        assert(sao_plugins_binding_plugin_load(language, &context, &runtime, &plugin) == SAO_OK);
+        SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language, &context, &runtime, &plugin) == SAO_OK);
         void* callback = nullptr;
         void* user_data = nullptr;
         int32_t status = SAO_ERR_NOT_IMPLEMENTED;
@@ -265,9 +278,9 @@ void case_language_release_apis() {
                 reinterpret_cast<csharp_domain_ptr>(&runtime), &callable, &callback, &user_data);
             break;
         default:
-            assert(false);
+            SAO_TEST_ASSERT(false);
         }
-        assert(status == SAO_OK && callback != nullptr && user_data != nullptr);
+        SAO_TEST_ASSERT(status == SAO_OK && callback != nullptr && user_data != nullptr);
         switch (language) {
         case language_host_kind::lua:
             sao_plugins_binding_lua_release_callback(user_data);
@@ -286,12 +299,12 @@ void case_language_release_apis() {
             sao_plugins_binding_csharp_release_delegate(user_data);
             break;
         default:
-            assert(false);
+            SAO_TEST_ASSERT(false);
         }
-        assert(state.releases == 1);
-        assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-        assert(state.releases == 1);
-        assert(sao_plugins_binding_unregister_language_host(language) == SAO_OK);
+        SAO_TEST_ASSERT(state.releases == 1);
+        SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+        SAO_TEST_ASSERT(state.releases == 1);
+        SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language) == SAO_OK);
     }
 }
 
@@ -301,9 +314,9 @@ void case_unload_releases_callbacks() {
     fixture_state state{};
     state.release_during_unload = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback_a = nullptr;
     void* user_data_a = nullptr;
@@ -311,16 +324,16 @@ void case_unload_releases_callbacks() {
     void* user_data_b = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback_a, &user_data_a);
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback_b, &user_data_b);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 2);
-    assert(state.events.size() == 4);
-    assert(state.events[0] == "unload:begin");
-    assert(state.events[1] == "release:2");
-    assert(state.events[2] == "release:1");
-    assert(state.events[3] == "unload:end");
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 2);
+    SAO_TEST_ASSERT(state.events.size() == 4);
+    SAO_TEST_ASSERT(state.events[0] == "unload:begin");
+    SAO_TEST_ASSERT(state.events[1] == "release:2");
+    SAO_TEST_ASSERT(state.events[2] == "release:1");
+    SAO_TEST_ASSERT(state.events[3] == "unload:end");
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_failed_unload_retains_callbacks() {
@@ -330,19 +343,19 @@ void case_failed_unload_retains_callbacks() {
     state.fail_unload = true;
     state.release_during_unload = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
-    assert(state.releases == 0);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
+    SAO_TEST_ASSERT(state.releases == 0);
     state.fail_unload = false;
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 1);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_failed_wrap_rolls_back_provider_ownership() {
@@ -350,9 +363,9 @@ void case_failed_wrap_rolls_back_provider_ownership() {
     static int runtime = 0;
     fixture_state state{};
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     for (const bool throw_wrap : {false, true}) {
         state.fail_wrap = !throw_wrap;
@@ -361,12 +374,12 @@ void case_failed_wrap_rolls_back_provider_ownership() {
         void* user_data = reinterpret_cast<void*>(1);
         wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data,
                            SAO_ERR_OS_CALL_FAILED);
-        assert(callback == nullptr && user_data == nullptr);
+        SAO_TEST_ASSERT(callback == nullptr && user_data == nullptr);
     }
-    assert(state.releases == 2);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 2);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 2);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 2);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_tracked_failed_wrap_releases_once() {
@@ -376,21 +389,21 @@ void case_tracked_failed_wrap_releases_once() {
     state.fail_wrap = true;
     state.track_callback_in_dispatch = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = reinterpret_cast<void*>(1);
     void* user_data = reinterpret_cast<void*>(1);
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data,
                        SAO_ERR_OS_CALL_FAILED);
-    assert(state.track_status == SAO_OK);
-    assert(callback == nullptr && user_data == nullptr);
-    assert(state.releases == 1);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 1);
-    assert(!state.release_after_runtime_teardown);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(state.track_status == SAO_OK);
+    SAO_TEST_ASSERT(callback == nullptr && user_data == nullptr);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(!state.release_after_runtime_teardown);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_failed_load_with_plugin_rolls_back() {
@@ -399,14 +412,14 @@ void case_failed_load_with_plugin_rolls_back() {
     fixture_state state{};
     state.fail_load_with_plugin = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = reinterpret_cast<plugin_binding_handle_t>(1);
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_ERR_OS_CALL_FAILED);
-    assert(plugin == nullptr);
-    assert(state.loads == 1 && state.unloads == 1);
-    assert(!state.runtime_alive);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(plugin == nullptr);
+    SAO_TEST_ASSERT(state.loads == 1 && state.unloads == 1);
+    SAO_TEST_ASSERT(!state.runtime_alive);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_old_adapter_prefix_is_compatible() {
@@ -416,20 +429,20 @@ void case_old_adapter_prefix_is_compatible() {
     state.track_callback_in_dispatch = true;
     state.release_during_unload = true;
     const auto adapter = old_fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(
                reinterpret_cast<const language_host_adapter_vtable*>(&adapter)) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
-    assert(plugin != nullptr);
+    SAO_TEST_ASSERT(plugin != nullptr);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
-    assert(callback != nullptr && user_data != nullptr);
-    assert(state.track_status == SAO_OK && state.releases == 0);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.loads == 1 && state.unloads == 1 && state.releases == 1);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(callback != nullptr && user_data != nullptr);
+    SAO_TEST_ASSERT(state.track_status == SAO_OK && state.releases == 0);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.loads == 1 && state.unloads == 1 && state.releases == 1);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_runtime_teardown_sentinel() {
@@ -438,18 +451,18 @@ void case_runtime_teardown_sentinel() {
     fixture_state state{};
     state.release_during_unload = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 1);
-    assert(!state.runtime_alive);
-    assert(!state.release_after_runtime_teardown);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(!state.runtime_alive);
+    SAO_TEST_ASSERT(!state.release_after_runtime_teardown);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_missing_teardown_release_fails_without_uaf() {
@@ -457,19 +470,19 @@ void case_missing_teardown_release_fails_without_uaf() {
     static int runtime = 0;
     fixture_state state{};
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
-    assert(state.releases == 0);
-    assert(!state.runtime_alive);
-    assert(!state.release_after_runtime_teardown);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
+    SAO_TEST_ASSERT(state.releases == 0);
+    SAO_TEST_ASSERT(!state.runtime_alive);
+    SAO_TEST_ASSERT(!state.release_after_runtime_teardown);
     delete static_cast<fixture_callback*>(user_data);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 struct emit_reentry_probe {
@@ -499,31 +512,31 @@ void case_emit_callback_can_reenter_binding() {
 
     const auto registry = sao_plugins_registry_instance();
     sao::plugins::loader::plugin_handle_t loader_plugin = nullptr;
-    assert(sao_plugins_registry_add_plugin(registry, &manifest, &loader_plugin) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_registry_add_plugin(registry, &manifest, &loader_plugin) == SAO_OK);
     auto* context = sao_plugins_ctx_create(loader_plugin);
-    assert(context != nullptr);
+    SAO_TEST_ASSERT(context != nullptr);
 
     static int runtime = 0;
     fixture_state state{};
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t binding = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, context, &runtime, &binding) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, context, &runtime, &binding) ==
            SAO_OK);
 
     emit_reentry_probe probe{binding};
     uint32_t token = 0;
-    assert(sao_plugins_ctx_subscribe(context, "reentry", &emit_reentry_callback, &probe, &token) ==
+    SAO_TEST_ASSERT(sao_plugins_ctx_subscribe(context, "reentry", &emit_reentry_callback, &probe, &token) ==
            SAO_OK);
     constexpr char topic[] = "reentry";
-    assert(sao_plugins_sdk_bind_call(binding, sdk_method_id::method_emit, topic, sizeof(topic) - 1,
+    SAO_TEST_ASSERT(sao_plugins_sdk_bind_call(binding, sdk_method_id::method_emit, topic, sizeof(topic) - 1,
                                      nullptr, 0) == SAO_OK);
-    assert(probe.calls == 1 && probe.status == SAO_OK);
-    assert(sao_plugins_ctx_unsubscribe(context, token) == SAO_OK);
-    assert(sao_plugins_binding_plugin_unload(binding) == SAO_OK);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(probe.calls == 1 && probe.status == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_ctx_unsubscribe(context, token) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(binding) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
     sao_plugins_ctx_destroy(context);
-    assert(sao_plugins_registry_remove(registry, loader_plugin) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_registry_remove(registry, loader_plugin) == SAO_OK);
 }
 
 void case_release_reentry_and_unload_race() {
@@ -533,29 +546,37 @@ void case_release_reentry_and_unload_race() {
     state.reenter_release = true;
     state.block_release = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
     std::thread releaser([user_data] { sao_plugins_binding_emma_release_callback(user_data); });
+    bool release_entered = false;
     {
         std::unique_lock lock(state.mutex);
-        state.release_cv.wait(lock, [&state] { return state.release_entered; });
+        release_entered = state.release_cv.wait_for(
+            lock, std::chrono::seconds(5),
+            [&state] { return state.release_entered; });
     }
-    assert(sao_plugins_binding_plugin_unload(plugin) == sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    int32_t busy_status = 0;
+    if (release_entered)
+        busy_status = sao_plugins_binding_plugin_unload(plugin);
     {
         std::lock_guard lock(state.mutex);
         state.allow_release = true;
     }
     state.release_cv.notify_all();
     releaser.join();
-    assert(state.releases == 1);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
-    assert(state.releases == 1);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(release_entered);
+    SAO_TEST_ASSERT(busy_status ==
+                    sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 void case_release_failure_is_reported_once() {
@@ -565,86 +586,86 @@ void case_release_failure_is_reported_once() {
     state.throw_release = true;
     state.release_during_unload = true;
     const auto adapter = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&adapter) == SAO_OK);
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_load(language_host_kind::emma, &context, &runtime, &plugin) ==
            SAO_OK);
     void* callback = nullptr;
     void* user_data = nullptr;
     wrap_emma_callback(reinterpret_cast<emma_interpreter_ptr>(&runtime), &callback, &user_data);
-    assert(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
-    assert(state.releases == 1);
-    assert(!state.release_after_runtime_teardown);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_unload(plugin) == SAO_ERR_OS_CALL_FAILED);
+    SAO_TEST_ASSERT(state.releases == 1);
+    SAO_TEST_ASSERT(!state.release_after_runtime_teardown);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 }
 
 } // namespace
 
 int main() {
-    assert(json_node::from_string("{\"value\":7}").to_string() == "{\"value\":7}");
+    SAO_TEST_ASSERT(json_node::from_string("{\"value\":7}").to_string() == "{\"value\":7}");
 
     char* error = nullptr;
-    assert(sao_plugins_binding_barrier(&throwing_barrier, nullptr, &error) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_barrier(&throwing_barrier, nullptr, &error) ==
            SAO_ERR_OS_CALL_FAILED);
-    assert(error != nullptr && std::strcmp(error, "barrier fixture") == 0);
+    SAO_TEST_ASSERT(error != nullptr && std::strcmp(error, "barrier fixture") == 0);
     sao_plugins_binding_free_error(error);
 
     static int context = 0;
     static int runtime = 0;
     plugin_binding_handle_t plugin = nullptr;
-    assert(sao_plugins_binding_emma_activate(reinterpret_cast<plugin_context_ptr>(&context),
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_activate(reinterpret_cast<plugin_context_ptr>(&context),
                                              reinterpret_cast<emma_interpreter_ptr>(&runtime),
                                              &plugin) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    assert(plugin == nullptr);
+    SAO_TEST_ASSERT(plugin == nullptr);
 
     fixture_state python_state{};
     auto python = fixture_adapter(language_host_kind::python, &python_state);
-    assert(sao_plugins_binding_register_language_host(&python) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&python) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
     python.flags = SAO_LANGUAGE_HOST_PROVIDER_ISOLATED_PYTHON_ABI;
-    assert(sao_plugins_binding_register_language_host(&python) == SAO_OK);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::python) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&python) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::python) == SAO_OK);
 
     fixture_state state{};
     const auto emma = fixture_adapter(language_host_kind::emma, &state);
-    assert(sao_plugins_binding_register_language_host(&emma) == SAO_OK);
-    assert(sao_plugins_binding_language_host_available(language_host_kind::emma));
-    assert(sao_plugins_binding_emma_activate(reinterpret_cast<plugin_context_ptr>(&context),
+    SAO_TEST_ASSERT(sao_plugins_binding_register_language_host(&emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_language_host_available(language_host_kind::emma));
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_activate(reinterpret_cast<plugin_context_ptr>(&context),
                                              reinterpret_cast<emma_interpreter_ptr>(&runtime),
                                              &plugin) == SAO_OK);
-    assert(plugin != nullptr && state.loads == 1);
+    SAO_TEST_ASSERT(plugin != nullptr && state.loads == 1);
 
     size_t required = 0;
-    assert(sao_plugins_binding_plugin_invoke(plugin, "run", nullptr, 0, nullptr, 0, &required) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_invoke(plugin, "run", nullptr, 0, nullptr, 0, &required) ==
            SAO_ERR_BUFFER_TOO_SMALL);
-    assert(required == sizeof("{\"ok\":true}"));
+    SAO_TEST_ASSERT(required == sizeof("{\"ok\":true}"));
     char output[32]{};
-    assert(sao_plugins_binding_plugin_invoke(plugin, "run", nullptr, 0,
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_invoke(plugin, "run", nullptr, 0,
                                              reinterpret_cast<uint8_t*>(output), sizeof(output),
                                              &required) == SAO_OK);
-    assert(std::strcmp(output, "{\"ok\":true}") == 0);
+    SAO_TEST_ASSERT(std::strcmp(output, "{\"ok\":true}") == 0);
 
-    assert(sao_plugins_binding_plugin_invoke(plugin, "fail", nullptr, 0, nullptr, 0, &required) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_invoke(plugin, "fail", nullptr, 0, nullptr, 0, &required) ==
            SAO_ERR_OS_CALL_FAILED);
-    assert(sao_plugins_binding_plugin_last_error(plugin, nullptr, 0, &required) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_last_error(plugin, nullptr, 0, &required) ==
            SAO_ERR_BUFFER_TOO_SMALL);
     char last_error[32]{};
-    assert(sao_plugins_binding_plugin_last_error(plugin, last_error, sizeof(last_error),
+    SAO_TEST_ASSERT(sao_plugins_binding_plugin_last_error(plugin, last_error, sizeof(last_error),
                                                  &required) == SAO_OK);
-    assert(std::strcmp(last_error, "fixture error") == 0);
+    SAO_TEST_ASSERT(std::strcmp(last_error, "fixture error") == 0);
 
     language_binding_request request{};
-    assert(sao_plugins_binding_dispatch_provider(language_host_kind::emma,
+    SAO_TEST_ASSERT(sao_plugins_binding_dispatch_provider(language_host_kind::emma,
                                                  language_binding_operation::method_table,
                                                  &request) == SAO_OK);
-    assert(state.dispatches == 1);
+    SAO_TEST_ASSERT(state.dispatches == 1);
 
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) ==
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) ==
            sao::plugins::loader::SAO_PLUGINS_ERR_BUSY);
-    assert(sao_plugins_binding_emma_deactivate(plugin) == SAO_OK);
-    assert(state.unloads == 1 && state.invokes == 3);
-    assert(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
+    SAO_TEST_ASSERT(sao_plugins_binding_emma_deactivate(plugin) == SAO_OK);
+    SAO_TEST_ASSERT(state.unloads == 1 && state.invokes == 3);
+    SAO_TEST_ASSERT(sao_plugins_binding_unregister_language_host(language_host_kind::emma) == SAO_OK);
 
     case_language_release_apis();
     case_unload_releases_callbacks();

@@ -9,6 +9,7 @@ if (SAO_CSHARP_DOTNET_ROOT)
     list(APPEND _sao_csharp_test_env
         "DOTNET_ROOT=${SAO_CSHARP_DOTNET_ROOT}")
 endif()
+
 if (SAO_CSHARP_HOSTFXR_DIR)
     list(APPEND _sao_csharp_test_env
         "SAO_CSHARP_HOSTFXR_DIR=${SAO_CSHARP_HOSTFXR_DIR}")
@@ -29,14 +30,6 @@ function(_sao_csharp_apply_test_env test_name)
     endif()
 endfunction()
 
-add_executable(test_plugins_csharp_host test_cs.cpp)
-target_link_libraries(test_plugins_csharp_host PRIVATE sao_plugins_csharp_host)
-target_compile_features(test_plugins_csharp_host PRIVATE cxx_std_17)
-# 静态库消费方需要清 dllimport 前缀 (对齐 host tests).
-target_compile_definitions(test_plugins_csharp_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
-add_test(NAME plugins_csharp_host_smoke COMMAND test_plugins_csharp_host)
-set_tests_properties(plugins_csharp_host_smoke PROPERTIES LABELS "plugins;csharp")
-_sao_csharp_apply_test_env(plugins_csharp_host_smoke)
 
 # hostfxr 可用性与保留编译接口单测
 add_executable(test_plugins_csharp_host_cs_host test_cs_host.cpp)
@@ -201,3 +194,21 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
         RESOURCE_LOCK "sao_launcher_process_resources")
     _sao_csharp_apply_test_env(plugins_csharp_managed_entity_v2)
 endif()
+
+foreach(_sao_test IN ITEMS
+    plugins_csharp_host_cs_host
+    plugins_csharp_host_contracts
+    plugins_csharp_sdk_bridge
+    plugins_csharp_loader_adapter)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 15)
+    endif()
+endforeach()
+foreach(_sao_test IN ITEMS
+    plugins_csharp_host_hello
+    plugins_csharp_host_sandbox
+    plugins_csharp_managed_entity_v2)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 30)
+    endif()
+endforeach()

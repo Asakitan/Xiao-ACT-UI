@@ -11,7 +11,6 @@
 #include "sao/plugins/compat/libs_vendor_bridge.h"
 #include "sao/sdk/sao_sdk.h"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,7 +22,20 @@ using namespace sao::plugins::compat;
 using sao::plugins::sdk_binding::sdk_method_id;
 
 namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
 
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
 constexpr uint16_t k_method_add_hotkey =
     static_cast<uint16_t>(sdk_method_id::method_register_hotkey);
 constexpr uint16_t k_method_register_ui_panel =
@@ -43,37 +55,37 @@ void case_compat_ctx_v1_register_alias_lookup() {
     // 注册两个别名
     int32_t rc = sao_plugins_compat_ctx_v1_register_alias(
         "add_hotkey", k_method_add_hotkey);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
     rc = sao_plugins_compat_ctx_v1_register_alias(
         "register_script", k_method_register_ui_panel);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
 
     // 查一下
     uint16_t id = sao_plugins_compat_ctx_v1_lookup_alias("add_hotkey");
-    assert(id == k_method_add_hotkey);
+    SAO_TEST_ASSERT(id == k_method_add_hotkey);
     id = sao_plugins_compat_ctx_v1_lookup_alias("register_script");
-    assert(id == k_method_register_ui_panel);
+    SAO_TEST_ASSERT(id == k_method_register_ui_panel);
 
     // 未注册的返 0xFFFF
     id = sao_plugins_compat_ctx_v1_lookup_alias("nonexistent_method");
-    assert(id == 0xFFFF);
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
+    SAO_TEST_ASSERT(id == 0xFFFF);
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_category") ==
            static_cast<uint16_t>(sdk_method_id::method_register_menu_category));
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("register_menu_surface") ==
            static_cast<uint16_t>(sdk_method_id::method_register_menu_surface));
-    assert(sao_plugins_compat_ctx_v1_lookup_alias("register_action_handler") ==
+    SAO_TEST_ASSERT(sao_plugins_compat_ctx_v1_lookup_alias("register_action_handler") ==
            static_cast<uint16_t>(sdk_method_id::method_register_action_handler));
 
     // 空 / null 参数
     id = sao_plugins_compat_ctx_v1_lookup_alias(nullptr);
-    assert(id == 0xFFFF);
+    SAO_TEST_ASSERT(id == 0xFFFF);
     id = sao_plugins_compat_ctx_v1_lookup_alias("");
-    assert(id == 0xFFFF);
+    SAO_TEST_ASSERT(id == 0xFFFF);
 
     rc = sao_plugins_compat_ctx_v1_register_alias(nullptr, 0);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
     rc = sao_plugins_compat_ctx_v1_register_alias("", 0);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
 
     std::printf("  [OK] compat_ctx_v1_register_alias_lookup\n");
 }
@@ -84,31 +96,31 @@ void case_compat_ctx_v1_add_hotkey_alias_hits() {
     // 老 name "add_hotkey" → 新 method ADD_HOTKEY
     int32_t rc = sao_plugins_compat_ctx_v1_register_alias(
         "add_hotkey", k_method_add_hotkey);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
 
     // 老 name "emit" 也是 v1 (对齐 old event_bus)
     rc = sao_plugins_compat_ctx_v1_register_alias(
         "publish", k_method_publish_event);
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
 
     uint16_t hit1 = sao_plugins_compat_ctx_v1_lookup_alias("add_hotkey");
-    assert(hit1 == k_method_add_hotkey);
+    SAO_TEST_ASSERT(hit1 == k_method_add_hotkey);
     uint16_t hit2 = sao_plugins_compat_ctx_v1_lookup_alias("publish");
-    assert(hit2 == k_method_publish_event);
+    SAO_TEST_ASSERT(hit2 == k_method_publish_event);
 
     // wrap: 只接受真实现代 SDK context, 不接受任意 non-null 指针
     SaoSdkContext sdk_ctx{};
-    assert(sao_sdk_bind_context("compat.runtime", "1.0", &sdk_ctx) == SAO_SDK_OK);
+    SAO_TEST_ASSERT(sao_sdk_bind_context("compat.runtime", "1.0", &sdk_ctx) == SAO_SDK_OK);
     plugin_context_ptr fake_ctx =
         reinterpret_cast<plugin_context_ptr>(&sdk_ctx);
     plugin_context_ptr wrapped = nullptr;
     rc = sao_plugins_compat_ctx_v1_wrap(fake_ctx, &wrapped);
-    assert(rc == SAO_OK);
-    assert(wrapped == fake_ctx);   // 同一现代 context handle
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(wrapped == fake_ctx);   // 同一现代 context handle
 
     // wrap null 应 INVALID_ARGUMENT
     rc = sao_plugins_compat_ctx_v1_wrap(nullptr, &wrapped);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
 
     sao_sdk_context_destroy(&sdk_ctx);
 
@@ -130,31 +142,31 @@ void case_compat_libs_vendor_probe_finds_dirs() {
     discovered_deps_dirs dirs{};
     int32_t rc = sao_plugins_compat_libs_vendor_probe(
         root.wstring().c_str(), &dirs);
-    assert(rc == SAO_OK);
-    assert(dirs.libs_dirs.size() == 1);
-    assert(dirs.vendor_dirs.size() == 1);
-    assert(dirs.engine_dirs.size() == 0);   // 不存在的目录不加入
-    assert(dirs.ordered.size() == 2);       // libs + vendor
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(dirs.libs_dirs.size() == 1);
+    SAO_TEST_ASSERT(dirs.vendor_dirs.size() == 1);
+    SAO_TEST_ASSERT(dirs.engine_dirs.size() == 0);   // 不存在的目录不加入
+    SAO_TEST_ASSERT(dirs.ordered.size() == 2);       // libs + vendor
     // 顺序: engine (缺) → libs → vendor
-    assert(dirs.ordered[0].find(L"libs") != std::wstring::npos);
-    assert(dirs.ordered[1].find(L"vendor") != std::wstring::npos);
+    SAO_TEST_ASSERT(dirs.ordered[0].find(L"libs") != std::wstring::npos);
+    SAO_TEST_ASSERT(dirs.ordered[1].find(L"vendor") != std::wstring::npos);
 
     // null 参数
     rc = sao_plugins_compat_libs_vendor_probe(nullptr, &dirs);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
     rc = sao_plugins_compat_libs_vendor_probe(root.wstring().c_str(), nullptr);
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
 
     // 建 engine 再扫: 顺序应是 engine → libs → vendor
     fs::create_directories(root / "engine", ec);
     discovered_deps_dirs dirs2{};
     rc = sao_plugins_compat_libs_vendor_probe(root.wstring().c_str(), &dirs2);
-    assert(rc == SAO_OK);
-    assert(dirs2.engine_dirs.size() == 1);
-    assert(dirs2.ordered.size() == 3);
-    assert(dirs2.ordered[0].find(L"engine") != std::wstring::npos);
-    assert(dirs2.ordered[1].find(L"libs") != std::wstring::npos);
-    assert(dirs2.ordered[2].find(L"vendor") != std::wstring::npos);
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(dirs2.engine_dirs.size() == 1);
+    SAO_TEST_ASSERT(dirs2.ordered.size() == 3);
+    SAO_TEST_ASSERT(dirs2.ordered[0].find(L"engine") != std::wstring::npos);
+    SAO_TEST_ASSERT(dirs2.ordered[1].find(L"libs") != std::wstring::npos);
+    SAO_TEST_ASSERT(dirs2.ordered[2].find(L"vendor") != std::wstring::npos);
 
     fs::remove_all(root, ec);
     std::printf("  [OK] compat_libs_vendor_probe_finds_dirs\n");
@@ -170,26 +182,26 @@ void case_compat_format_python_sys_path_uses_pathsep() {
     wchar_t buf[512] = {};
     int32_t rc = sao_plugins_compat_format_python_sys_path(
         &dirs, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
     std::wstring out(buf);
 #if defined(_WIN32)
     // Windows: ';' 分隔
-    assert(out == L"C:\\a\\engine;C:\\a\\libs;C:\\a\\vendor");
+    SAO_TEST_ASSERT(out == L"C:\\a\\engine;C:\\a\\libs;C:\\a\\vendor");
 #else
-    assert(out == L"C:\\a\\engine:C:\\a\\libs:C:\\a\\vendor");
+    SAO_TEST_ASSERT(out == L"C:\\a\\engine:C:\\a\\libs:C:\\a\\vendor");
 #endif
 
     // 空 dirs → 空串
     discovered_deps_dirs empty{};
     rc = sao_plugins_compat_format_python_sys_path(
         &empty, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(rc == SAO_OK);
-    assert(std::wstring(buf).empty());
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(std::wstring(buf).empty());
 
     // buffer 太小 → BUFFER_TOO_SMALL
     wchar_t tiny[4] = {};
     rc = sao_plugins_compat_format_python_sys_path(&dirs, tiny, 4);
-    assert(rc == SAO_ERR_BUFFER_TOO_SMALL);
+    SAO_TEST_ASSERT(rc == SAO_ERR_BUFFER_TOO_SMALL);
 
     std::printf("  [OK] compat_format_python_sys_path_uses_pathsep\n");
 }
@@ -203,25 +215,25 @@ void case_compat_format_lua_package_path_pattern() {
     wchar_t buf[1024] = {};
     int32_t rc = sao_plugins_compat_format_lua_package_path(
         &dirs, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(rc == SAO_OK);
+    SAO_TEST_ASSERT(rc == SAO_OK);
     std::wstring out(buf);
     // 每目录都应展开为 "<dir>\?.lua" + "<dir>\?\init.lua"
-    assert(out.find(L"C:\\a\\libs\\?.lua") != std::wstring::npos);
-    assert(out.find(L"C:\\a\\libs\\?\\init.lua") != std::wstring::npos);
-    assert(out.find(L"C:\\a\\vendor\\?.lua") != std::wstring::npos);
-    assert(out.find(L"C:\\a\\vendor\\?\\init.lua") != std::wstring::npos);
+    SAO_TEST_ASSERT(out.find(L"C:\\a\\libs\\?.lua") != std::wstring::npos);
+    SAO_TEST_ASSERT(out.find(L"C:\\a\\libs\\?\\init.lua") != std::wstring::npos);
+    SAO_TEST_ASSERT(out.find(L"C:\\a\\vendor\\?.lua") != std::wstring::npos);
+    SAO_TEST_ASSERT(out.find(L"C:\\a\\vendor\\?\\init.lua") != std::wstring::npos);
 
     // 空 dirs → 空串
     discovered_deps_dirs empty{};
     rc = sao_plugins_compat_format_lua_package_path(
         &empty, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(rc == SAO_OK);
-    assert(std::wstring(buf).empty());
+    SAO_TEST_ASSERT(rc == SAO_OK);
+    SAO_TEST_ASSERT(std::wstring(buf).empty());
 
     // null dirs
     rc = sao_plugins_compat_format_lua_package_path(
         nullptr, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(rc == SAO_ERR_INVALID_ARGUMENT);
+    SAO_TEST_ASSERT(rc == SAO_ERR_INVALID_ARGUMENT);
 
     std::printf("  [OK] compat_format_lua_package_path_pattern\n");
 }

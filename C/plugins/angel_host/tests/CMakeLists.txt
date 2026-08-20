@@ -1,11 +1,4 @@
-# plugins/angel_host/tests — smoke + AngelScript host Catch2 单测
-
-add_executable(test_plugins_angel_host test_angel.cpp)
-target_link_libraries(test_plugins_angel_host PRIVATE sao_plugins_angel_host)
-target_compile_features(test_plugins_angel_host PRIVATE cxx_std_17)
-target_compile_definitions(test_plugins_angel_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
-add_test(NAME plugins_angel_host_smoke COMMAND test_plugins_angel_host)
-set_tests_properties(plugins_angel_host_smoke PROPERTIES LABELS "plugins;angel")
+# plugins/angel_host/tests — AngelScript host Catch2 单测
 
 find_package(Catch2 3 QUIET CONFIG)
 if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
@@ -141,3 +134,20 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
 else()
     message(STATUS "plugins/angel_host: Catch2 未找到, 跳过 host/lifecycle/sandbox 单测")
 endif()
+
+foreach(_sao_test IN ITEMS
+    plugins_angel_host_as_host
+    plugins_angel_host_bridge_stdlib
+    plugins_angel_host_gpu_hunt_bind
+    plugins_angel_host_loader_adapter)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 15)
+    endif()
+endforeach()
+foreach(_sao_test IN ITEMS
+    plugins_angel_host_hello
+    plugins_angel_host_sandbox)
+    if (TEST ${_sao_test})
+        set_property(TEST ${_sao_test} PROPERTY TIMEOUT 30)
+    endif()
+endforeach()

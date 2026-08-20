@@ -20,7 +20,6 @@
 #include "sao/plugins/loader/plugin_manifest.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,7 +35,20 @@ using namespace sao::plugins::compat;
 using namespace sao::plugins::loader;
 
 namespace {
+[[noreturn]] void sao_test_assert_fail(const char* file, int line,
+                                        const char* expression) {
+    std::fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line,
+                 expression);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
 
+#define SAO_TEST_ASSERT(...)                                                   \
+    do {                                                                       \
+        if (!(__VA_ARGS__)) {                                                  \
+            sao_test_assert_fail(__FILE__, __LINE__, #__VA_ARGS__);            \
+        }                                                                      \
+    } while (false)
 // ── 极简 JSON reader (只读, 只 read fixture) ─────────────────
 //
 // 这里独立于 compat parser (那个是被测对象), 用最小 JSON reader 从 fixture
