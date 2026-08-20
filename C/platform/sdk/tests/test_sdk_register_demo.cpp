@@ -24,11 +24,23 @@
 // The only SDK header a plugin should ever need to include.
 #include "sao/sdk/sao_sdk.h"
 
+#include "sao/ui/d2d_widgets.h"
+#include "sao/ui/widget_input.h"
+#include "sao/ui/widget_data.h"
+#include "sao/ui/widget_table.h"
+#include "sao/ui/widget_chart.h"
+
 // ─── Test-only introspection ─────────────────────────────────────────
 //
 // These live inside `sao_platform_sdk.dll` but are not part of the
 // plugin ABI; the tests import them to inspect state without grubbing
 // through ctx_impl.  Real plugins never use them.
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_widget_state_insertion(void);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_widget_remove(sao_sdk_status_t status);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_fail_next_panel_unregister(sao_sdk_status_t status);
+extern "C" SAO_SDK_API sao_ui_widget_handle_t SAO_SDK_CALL sao_sdk_test_widget_native_handle(
+    const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget);
 extern "C" SAO_SDK_API size_t   SAO_SDK_CALL sao_sdk_test_panel_widget_count(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
 extern "C" SAO_SDK_API uint64_t SAO_SDK_CALL sao_sdk_test_panel_redraw_count(
@@ -202,6 +214,80 @@ TEST_CASE("demo_plugin_removes_widget_and_reregisters",
     sao_sdk_context_destroy(ctx);
 }
 
+TEST_CASE("sdk_typed_widget_wire_covers_native_families", "[sdk][ui][typed][wire]") {
+    auto* ctx = make_ctx("demo.typed.widgets");
+    const auto descriptor = default_panel("demo.panel.typed", "Typed Widgets");
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(ctx, &descriptor, &panel) == SAO_SDK_OK);
+
+    struct Case {
+        int32_t kind;
+        const char* id;
+        const char* text;
+        const char* props;
+        const char* update_props;
+    };
+    const std::vector<Case> cases = {
+        {SAO_SDK_UI_WIDGET_RADIO, "radio", "Radio", R"({"group_id":1,"value_id":2,"selected":true})", R"({"selected":false})"},
+        {SAO_SDK_UI_WIDGET_SLIDER, "slider", nullptr, R"({"min_value":0,"max_value":10,"value":3})", R"({"value":4})"},
+        {SAO_SDK_UI_WIDGET_DROPDOWN, "dropdown", "Pick", R"({"entries":[{"label":"One","item_id":1,"enabled":true,"checked":true}]})", R"({"selected_id":1})"},
+        {SAO_SDK_UI_WIDGET_SCROLLBAR, "scrollbar", nullptr, nullptr, R"({"value":0.25})"},
+        {SAO_SDK_UI_WIDGET_METRIC, "metric", "42", R"({"label":"Score","value":"42","unit":"pts"})", R"({"value":"43"})"},
+        {SAO_SDK_UI_WIDGET_EMPTY_STATE, "empty", "Nothing", R"({"title":"Empty","detail":"Nothing"})", R"({"detail":"Updated"})"},
+        {SAO_SDK_UI_WIDGET_TREE_VIEW, "tree", nullptr, nullptr, R"({"nodes":[]})"},
+        {SAO_SDK_UI_WIDGET_BAR_CHART, "bar-chart", nullptr, nullptr, R"({"bars":[]})"},
+        {SAO_SDK_UI_WIDGET_LINE_CHART, "line-chart", nullptr, nullptr, R"({"series":[]})"},
+        {SAO_SDK_UI_WIDGET_SPARKLINE, "sparkline", nullptr, nullptr, R"({"values":[1,2,3]})"},
+    };
+    std::vector<sao_sdk_ui_widget_t> handles;
+    handles.reserve(cases.size());
+    for (const auto& item : cases) {
+        SaoSdkWidgetSpec spec{};
+        spec.kind = item.kind;
+        spec.widget_id_utf8 = item.id;
+        spec.text_utf8 = item.text;
+        spec.props_json_utf8 = reinterpret_cast<const uint8_t*>(item.props);
+        spec.props_len = item.props == nullptr ? 0 : std::strlen(item.props);
+        spec.width_px = 240;
+        spec.height_px = 48;
+        sao_sdk_ui_widget_t handle = nullptr;
+        REQUIRE(sao_sdk_panel_add_widget(ctx, panel, &spec, &handle) == SAO_SDK_OK);
+        REQUIRE(handle != nullptr);
+        handles.push_back(handle);
+
+        if (item.update_props != nullptr) {
+            spec.props_json_utf8 = reinterpret_cast<const uint8_t*>(item.update_props);
+            spec.props_len = std::strlen(item.update_props);
+            REQUIRE(sao_sdk_panel_update_widget(ctx, panel, handle, &spec) == SAO_SDK_OK);
+        }
+    }
+    REQUIRE(sao_sdk_test_panel_widget_count(ctx, panel) == cases.size());
+
+    SaoSdkWidgetSpec malformed{};
+    malformed.kind = SAO_SDK_UI_WIDGET_RADIO;
+    malformed.widget_id_utf8 = "malformed";
+    malformed.props_json_utf8 = reinterpret_cast<const uint8_t*>(R"({"selected":"bad"})");
+    malformed.props_len = std::strlen(reinterpret_cast<const char*>(malformed.props_json_utf8));
+    CHECK(sao_sdk_panel_add_widget(ctx, panel, &malformed, nullptr) == SAO_SDK_ERR_INVALID_ARGUMENT);
+    CHECK(sao_sdk_test_panel_widget_count(ctx, panel) == cases.size());
+
+    SaoSdkWidgetSpec unknown{};
+    unknown.kind = 0x7fffffff;
+    unknown.widget_id_utf8 = "future";
+    CHECK(sao_sdk_panel_add_widget(ctx, panel, &unknown, nullptr) == SAO_SDK_ERR_INVALID_ARGUMENT);
+    CHECK(sao_sdk_test_panel_widget_count(ctx, panel) == cases.size());
+
+    for (const auto handle : handles)
+        REQUIRE(sao_sdk_panel_remove_widget(ctx, panel, handle) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_test_panel_widget_count(ctx, panel) == 0u);
+
+    SaoSdkWidgetSpec canvas{};
+    canvas.kind = SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS;
+    canvas.widget_id_utf8 = "canvas";
+    CHECK(sao_sdk_panel_add_widget(ctx, panel, &canvas, nullptr) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_test_panel_widget_count(ctx, panel) == 0u);
+    sao_sdk_context_destroy(ctx);
+}
 // ─── CASE 4: subscribe event + receive publish ───────────────────────
 
 namespace {
@@ -525,4 +611,31 @@ TEST_CASE("sdk_context_create_rejects_null_plugin_id",
 
     REQUIRE(sao_sdk_context_create("C:/tmp", "ok", nullptr) ==
             SAO_SDK_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("sdk_typed_widget_rollback_and_teardown_are_retryable",
+          "[sdk][ui][typed][rollback][teardown]") {
+    auto* ctx = make_ctx("demo.typed.rollback");
+    const auto descriptor = default_panel("demo.panel.rollback", "Rollback");
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(ctx, &descriptor, &panel) == SAO_SDK_OK);
+    const auto spec = label_widget("rollback", "rollback");
+    sao_sdk_test_fail_next_widget_state_insertion();
+    sao_sdk_test_fail_next_widget_remove(SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_panel_add_widget(ctx, panel, &spec, nullptr) == SAO_SDK_ERR_INTERNAL);
+    CHECK(sao_sdk_test_panel_widget_count(ctx, panel) == 1u);
+    sao_sdk_context_destroy(ctx);
+
+    ctx = make_ctx("demo.typed.rollback.retry");
+    REQUIRE(sao_sdk_register_ui_panel(ctx, &descriptor, &panel) == SAO_SDK_OK);
+    sao_sdk_ui_widget_t widget = nullptr;
+    REQUIRE(sao_sdk_panel_add_widget(ctx, panel, &spec, &widget) == SAO_SDK_OK);
+    sao_sdk_test_fail_next_widget_remove(SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_panel_remove_widget(ctx, panel, widget) == SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_test_panel_widget_count(ctx, panel) == 1u);
+    REQUIRE(sao_sdk_panel_remove_widget(ctx, panel, widget) == SAO_SDK_OK);
+    sao_sdk_test_fail_next_panel_unregister(SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_unregister_ui_panel(ctx, panel) == SAO_SDK_ERR_BUSY);
+    REQUIRE(sao_sdk_unregister_ui_panel(ctx, panel) == SAO_SDK_OK);
+    sao_sdk_context_destroy(ctx);
 }

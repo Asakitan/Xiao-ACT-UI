@@ -23,12 +23,17 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <new>
 #include <string>
+#include <limits>
+#include <unordered_set>
+#include <vector>
 
+#include <nlohmann/json.hpp>
 // Include the specific widget headers directly.  The umbrella
 // (sao/ui/widget_kit.h) re-declares an extended kind enum whose
 // values collide with the legacy d2d_widgets.h enum — pulling it in
@@ -38,7 +43,8 @@
 #include "sao/ui/widget_data.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_text.h"
-
+#include "sao/ui/widget_table.h"
+#include "sao/ui/widget_chart.h"
 extern "C" void SAO_UI_CALL sao_ui_widget_text_family_destroy(sao_ui_widget_handle_t handle);
 extern "C" void SAO_UI_CALL sao_ui_widget_input_family_destroy(sao_ui_widget_handle_t handle);
 extern "C" void SAO_UI_CALL sao_ui_widget_data_family_destroy(sao_ui_widget_handle_t handle);
@@ -48,6 +54,24 @@ namespace {
 
 std::atomic_bool g_fail_next_panel_state_insertion{false};
 std::atomic<sao_sdk_status_t> g_fail_next_panel_unregister_status{SAO_SDK_OK};
+std::atomic_bool g_fail_next_widget_state_insertion{false};
+std::atomic<sao_sdk_status_t> g_fail_next_widget_remove_status{SAO_SDK_OK};
+
+using Json = nlohmann::json;
+
+
+struct CreatedWidget {
+    sao_ui_widget_handle_t widget = nullptr;
+    sao_ui_script_canvas_handle_t script_canvas = nullptr;
+};
+
+sao_sdk_status_t unregister_native_panel(sao_ui_panel_handle_t panel) noexcept {
+    const auto injected = g_fail_next_panel_unregister_status.exchange(SAO_SDK_OK);
+    if (injected != SAO_SDK_OK)
+        return injected;
+    return invoke_callback_barrier(
+        [&] { return static_cast<sao_sdk_status_t>(sao_ui_panel_unregister(panel)); });
+}
 
 bool valid_widget_kind(int32_t kind) noexcept {
     switch (kind) {
@@ -61,147 +85,247 @@ bool valid_widget_kind(int32_t kind) noexcept {
     case SAO_SDK_UI_WIDGET_CHECKBOX:
     case SAO_SDK_UI_WIDGET_DIVIDER:
     case SAO_SDK_UI_WIDGET_ICON:
+    case SAO_SDK_UI_WIDGET_RADIO:
+    case SAO_SDK_UI_WIDGET_SLIDER:
+    case SAO_SDK_UI_WIDGET_DROPDOWN:
+    case SAO_SDK_UI_WIDGET_SCROLLBAR:
+    case SAO_SDK_UI_WIDGET_METRIC:
+    case SAO_SDK_UI_WIDGET_EMPTY_STATE:
+    case SAO_SDK_UI_WIDGET_TREE_VIEW:
+    case SAO_SDK_UI_WIDGET_BAR_CHART:
+    case SAO_SDK_UI_WIDGET_LINE_CHART:
+    case SAO_SDK_UI_WIDGET_SPARKLINE:
+    case SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS:
         return true;
     default:
         return false;
     }
 }
 
-sao_sdk_status_t unregister_native_panel(sao_ui_panel_handle_t panel) noexcept {
-    const auto injected = g_fail_next_panel_unregister_status.exchange(SAO_SDK_OK);
+bool json_i32(const Json& value, int32_t* out) {
+    if (out == nullptr || !value.is_number_integer()) return false;
+    try {
+        const auto parsed = value.get<int64_t>();
+        if (parsed < std::numeric_limits<int32_t>::min() || parsed > std::numeric_limits<int32_t>::max()) return false;
+        *out = static_cast<int32_t>(parsed);
+        return true;
+    } catch (...) { return false; }
+}
+
+bool json_float(const Json& value, float* out) {
+    if (out == nullptr || !value.is_number()) return false;
+    try {
+        const double parsed = value.get<double>();
+        if (!std::isfinite(parsed) || parsed < std::numeric_limits<float>::lowest() || parsed > std::numeric_limits<float>::max()) return false;
+        *out = static_cast<float>(parsed);
+        return true;
+    } catch (...) { return false; }
+}
+
+bool json_bool(const Json& value, bool* out) {
+    if (out == nullptr || !value.is_boolean()) return false;
+    *out = value.get<bool>();
+    return true;
+}
+
+bool props_only(const Json& props, std::initializer_list<const char*> allowed) {
+    if (!props.is_object()) return false;
+    for (const auto& item : props.items()) {
+        bool found = false;
+        for (const char* key : allowed) if (item.key() == key) { found = true; break; }
+        if (!found) return false;
+    }
+    return true;
+}
+
+sao_sdk_status_t parse_props(const SaoSdkWidgetSpec& spec, Json* out) {
+    if (out == nullptr || (spec.props_json_utf8 == nullptr && spec.props_len != 0)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (spec.props_json_utf8 == nullptr) { *out = Json::object(); return SAO_SDK_OK; }
+    if (spec.props_len == 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    try {
+        *out = Json::parse(reinterpret_cast<const char*>(spec.props_json_utf8), reinterpret_cast<const char*>(spec.props_json_utf8) + spec.props_len);
+        return out->is_object() ? SAO_SDK_OK : SAO_SDK_ERR_INVALID_ARGUMENT;
+    } catch (...) { return SAO_SDK_ERR_INVALID_ARGUMENT; }
+}
+
+bool json_color(const Json& value) {
+    if (!value.is_string())
+        return false;
+    const auto& text = value.get_ref<const std::string&>();
+    if ((text.size() != 7U && text.size() != 9U) || text[0] != '#')
+        return false;
+    for (size_t index = 1; index < text.size(); ++index) {
+        const char c = text[index];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F')))
+            return false;
+    }
+    return true;
+}
+
+bool json_nonnegative_float(const Json& props, const char* key) {
+    const auto item = props.find(key);
+    if (item == props.end())
+        return true;
+    float value = 0.0F;
+    return json_float(*item, &value) && value >= 0.0F;
+}
+
+bool validate_scrollbar_props(const Json& props) {
+    if (!props_only(props, {"fill", "border", "fg", "accent", "canvas_bg", "track",
+                            "thumb", "thumb_hover", "thumb_active", "arrow", "focus",
+                            "radius", "border_width", "value", "ratio", "page_size",
+                            "content_size", "nudge_step", "padding", "tooltip", "text",
+                            "label", "title", "style", "active", "enabled", "show_arrows",
+                            "keyboard_nudge"}))
+        return false;
+    for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg", "track", "thumb",
+                            "thumb_hover", "thumb_active", "arrow", "focus"}) {
+        const auto item = props.find(key);
+        if (item != props.end() && !json_color(*item))
+            return false;
+    }
+    for (const char* key : {"value", "ratio"}) {
+        const auto item = props.find(key);
+        float value = 0.0F;
+        if (item != props.end() &&
+            (!json_float(*item, &value) || value < 0.0F || value > 1.0F))
+            return false;
+    }
+    if (!json_nonnegative_float(props, "radius") ||
+        !json_nonnegative_float(props, "border_width"))
+        return false;
+    const auto padding = props.find("padding");
+    if (padding != props.end() &&
+        (!padding->is_number_integer() || padding->get<int64_t>() < 0))
+        return false;
+    const auto page_size = props.find("page_size");
+    float page = 0.0F;
+    if (page_size != props.end() && (!json_float(*page_size, &page) || page < 0.0F))
+        return false;
+    const auto content_size = props.find("content_size");
+    float content = 0.0F;
+    if (content_size != props.end() &&
+        (!json_float(*content_size, &content) || content <= 0.0F))
+        return false;
+    const auto nudge_step = props.find("nudge_step");
+    float nudge = 0.0F;
+    if (nudge_step != props.end() && (!json_float(*nudge_step, &nudge) || nudge <= 0.0F))
+        return false;
+    for (const char* key : {"tooltip", "text", "label", "title", "style"}) {
+        const auto item = props.find(key);
+        if (item != props.end() && !item->is_string())
+            return false;
+    }
+    for (const char* key : {"active", "enabled", "show_arrows", "keyboard_nudge"}) {
+        const auto item = props.find(key);
+        bool value = false;
+        if (item != props.end() && !json_bool(*item, &value))
+            return false;
+    }
+    return true;
+}
+
+sao_sdk_status_t remove_widget_node(PanelEntry& panel, const WidgetEntry& widget) {
+    const auto injected = g_fail_next_widget_remove_status.exchange(SAO_SDK_OK);
     if (injected != SAO_SDK_OK)
         return injected;
-    return invoke_callback_barrier(
-        [&] { return static_cast<sao_sdk_status_t>(sao_ui_panel_unregister(panel)); });
+    SaoUiBodyMutation mutation{};
+    mutation.kind = SAO_UI_BODY_REMOVE_NODE;
+    mutation.target = widget.layout_node;
+    mutation.widget = widget.ui_widget;
+    return static_cast<sao_sdk_status_t>(sao_ui_panel_update_body(panel.ui_body, &mutation, 1));
 }
-
-// ─── Widget instantiation helper ─────────────────────────────────────
-//
-// Translates SaoSdkWidgetSpec into the widget-kit call for the target
-// kind.  Returns a widget handle (may be null on unimplemented kinds).
-void append_json_string(std::string& json, const char* value) {
-    json.push_back('"');
-    if (value != nullptr) {
-        for (const auto* cursor = reinterpret_cast<const unsigned char*>(value); *cursor != 0;
-             ++cursor) {
-            switch (*cursor) {
-            case '"':
-                json.append("\\\"");
-                break;
-            case '\\':
-                json.append("\\\\");
-                break;
-            case '\b':
-                json.append("\\b");
-                break;
-            case '\f':
-                json.append("\\f");
-                break;
-            case '\n':
-                json.append("\\n");
-                break;
-            case '\r':
-                json.append("\\r");
-                break;
-            case '\t':
-                json.append("\\t");
-                break;
-            default:
-                if (*cursor < 0x20U) {
-                    char escaped[7]{};
-                    (void)std::snprintf(escaped, sizeof(escaped), "\\u%04x", *cursor);
-                    json.append(escaped);
-                } else {
-                    json.push_back(static_cast<char>(*cursor));
-                }
-                break;
-            }
-        }
-    }
-    json.push_back('"');
-}
-
-std::string generic_widget_props(const SaoSdkWidgetSpec& spec) {
-    std::string props{"{\"active\":true"};
-    if (spec.text_utf8 != nullptr) {
-        props.append(",\"text\":");
-        append_json_string(props, spec.text_utf8);
-    }
+Json generic_props(const SaoSdkWidgetSpec& spec, Json props) {
+    if (!props.contains("active")) props["active"] = true;
+    if (spec.text_utf8 != nullptr) props["text"] = spec.text_utf8;
     if (spec.kind == SAO_SDK_UI_WIDGET_PROGRESS_BAR) {
         const float maximum = spec.max_value > 0.0F ? spec.max_value : 1.0F;
-        const float ratio = std::clamp(spec.value / maximum, 0.0F, 1.0F);
-        char value[48]{};
-        (void)std::snprintf(value, sizeof(value), ",\"value\":%.9g", ratio);
-        props.append(value);
+        props["value"] = std::clamp(spec.value / maximum, 0.0F, 1.0F);
     }
-    if (spec.props_json_utf8 != nullptr && spec.props_len >= 2 && spec.props_json_utf8[0] == '{' &&
-        spec.props_json_utf8[spec.props_len - 1] == '}') {
-        const auto* extra = reinterpret_cast<const char*>(spec.props_json_utf8 + 1);
-        const size_t extra_size = spec.props_len - 2;
-        if (extra_size != 0) {
-            props.push_back(',');
-            props.append(extra, extra_size);
-        }
-    }
-    props.push_back('}');
     return props;
 }
 
-sao_ui_widget_handle_t create_widget_for_kind(const SaoSdkWidgetSpec& spec) {
-    if (!valid_widget_kind(spec.kind))
-        return nullptr;
-    sao_ui_widget_handle_t handle = nullptr;
-    int32_t native_kind = SAO_UI_WIDGET_ROUNDED_PANEL;
-    switch (spec.kind) {
-    case SAO_SDK_UI_WIDGET_LABEL:
-        native_kind = SAO_UI_WIDGET_TEXT;
-        break;
-    case SAO_SDK_UI_WIDGET_BUTTON:
-        native_kind = SAO_UI_WIDGET_ACTION_BUTTON;
-        break;
-    case SAO_SDK_UI_WIDGET_PROGRESS_BAR:
-        native_kind = SAO_UI_WIDGET_BAR;
-        break;
-    case SAO_SDK_UI_WIDGET_TABLE:
-        native_kind = SAO_UI_WIDGET_TABLE;
-        break;
-    case SAO_SDK_UI_WIDGET_STATUS_BADGE:
-        native_kind = SAO_UI_WIDGET_STATUS_BADGE;
-        break;
-    case SAO_SDK_UI_WIDGET_TEXT_FIELD:
-        native_kind = SAO_UI_WIDGET_INPUT;
-        break;
-    case SAO_SDK_UI_WIDGET_CHECKBOX:
-        native_kind = SAO_UI_WIDGET_CHECKBOX;
-        break;
-    case SAO_SDK_UI_WIDGET_DIVIDER:
-        native_kind = SAO_UI_WIDGET_DIVIDER;
-        break;
-    case SAO_SDK_UI_WIDGET_ICON:
-        native_kind = SAO_UI_WIDGET_ICON;
-        break;
-    case SAO_SDK_UI_WIDGET_ROUNDED_PANEL:
-        break;
-    default:
-        return nullptr;
+Json initial_typed_props(int32_t kind, const Json& props) {
+    Json result = Json::object();
+    if (kind == SAO_SDK_UI_WIDGET_RADIO && props.contains("selected")) result["selected"] = props.at("selected");
+    if (kind == SAO_SDK_UI_WIDGET_SLIDER) {
+        if (props.contains("value")) result["value"] = props.at("value");
+        if (props.contains("keyboard_nudge")) result["keyboard_nudge"] = props.at("keyboard_nudge");
     }
-    if (sao_ui_widget_create(native_kind, nullptr, &handle) != SAO_STATUS_OK)
-        return nullptr;
-    const auto props = generic_widget_props(spec);
-    if (sao_ui_widget_apply_props(handle, reinterpret_cast<const uint8_t*>(props.data()),
-                                  props.size()) != SAO_STATUS_OK) {
-        sao_ui_widget_destroy(handle);
-        return nullptr;
-    }
-    return handle;
+    if (kind == SAO_SDK_UI_WIDGET_DROPDOWN && props.contains("selected_id")) result["selected_id"] = props.at("selected_id");
+    if (kind == SAO_SDK_UI_WIDGET_METRIC && props.contains("value")) result["value"] = props.at("value");
+    if (kind == SAO_SDK_UI_WIDGET_EMPTY_STATE && props.contains("detail")) result["detail"] = props.at("detail");
+    if (kind != SAO_SDK_UI_WIDGET_RADIO && kind != SAO_SDK_UI_WIDGET_SLIDER && kind != SAO_SDK_UI_WIDGET_DROPDOWN && kind != SAO_SDK_UI_WIDGET_METRIC && kind != SAO_SDK_UI_WIDGET_EMPTY_STATE) result = props;
+    return result;
 }
 
-void update_widget_for_kind(sao_ui_widget_handle_t widget, const SaoSdkWidgetSpec& spec) {
-    if (widget == nullptr)
-        return;
-    const auto props = generic_widget_props(spec);
-    (void)sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(props.data()),
-                                    props.size());
+sao_sdk_status_t create_widget_for_kind(const SaoSdkWidgetSpec& spec, const Json& props, CreatedWidget* out) {
+    if (spec.kind == SAO_SDK_UI_WIDGET_SCROLLBAR && !validate_scrollbar_props(props))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (out == nullptr || !valid_widget_kind(spec.kind)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    *out = {};
+    sao_status_t status = SAO_STATUS_OK;
+    switch (spec.kind) {
+    case SAO_SDK_UI_WIDGET_RADIO: {
+        if (!props_only(props, {"group_id", "value_id", "selected", "disabled"})) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        SaoUiRadioSpec native{}; native.label_utf8 = spec.text_utf8; native.font_size_px = 12; native.ring_size_px = 14;
+        const auto group = props.find("group_id"); const auto value = props.find("value_id");
+        if ((group != props.end() && !json_i32(*group, &native.group_id)) || (value != props.end() && !json_i32(*value, &native.value_id))) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        const auto selected = props.find("selected"); const auto disabled = props.find("disabled");
+        if ((selected != props.end() && !json_bool(*selected, &native.selected)) || (disabled != props.end() && !json_bool(*disabled, &native.disabled))) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        status = sao_ui_radio_create(nullptr, &native, &out->widget); break;
+    }
+    case SAO_SDK_UI_WIDGET_SLIDER: {
+        if (!props_only(props, {"value", "min_value", "max_value", "step", "vertical", "disabled", "show_value_label", "keyboard_nudge"})) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        SaoUiSliderSpec native{}; native.value = std::isfinite(spec.value) ? spec.value : 0.0F; native.min_value = 0.0F; native.max_value = spec.max_value > 0.0F ? spec.max_value : 1.0F; native.track_thickness_px = 4; native.thumb_size_px = 12;
+        const auto set_float = [&](const char* key, float* target) { const auto item = props.find(key); return item == props.end() || json_float(*item, target); };
+        const auto vertical = props.find("vertical"); const auto disabled = props.find("disabled"); const auto label = props.find("show_value_label");
+        if (!set_float("value", &native.value) || !set_float("min_value", &native.min_value) || !set_float("max_value", &native.max_value) || !set_float("step", &native.step) || native.min_value >= native.max_value || native.step < 0.0F || (vertical != props.end() && !json_bool(*vertical, &native.vertical)) || (disabled != props.end() && !json_bool(*disabled, &native.disabled)) || (label != props.end() && !json_bool(*label, &native.show_value_label))) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        status = sao_ui_slider_create(nullptr, &native, &out->widget); break;
+    }
+    case SAO_SDK_UI_WIDGET_DROPDOWN: {
+        if (!props_only(props, {"text", "entries", "selected_id"})) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        std::vector<std::string> labels; std::vector<SaoUiDropdownEntry> entries; const auto items = props.find("entries");
+        if (items != props.end()) {
+            if (!items->is_array() || items->size() > 4096) return SAO_SDK_ERR_INVALID_ARGUMENT;
+            labels.resize(items->size()); entries.resize(items->size()); std::unordered_set<int32_t> ids;
+            for (size_t i = 0; i < items->size(); ++i) { const auto& item = (*items)[i]; if (!props_only(item, {"label", "item_id", "enabled", "checked"})) return SAO_SDK_ERR_INVALID_ARGUMENT; int32_t id = 0; const auto id_json = item.find("item_id"); if (id_json == item.end() || !json_i32(*id_json, &id)) return SAO_SDK_ERR_INVALID_ARGUMENT; const auto label = item.find("label"); if (id != SAO_UI_DROPDOWN_SEPARATOR && (label == item.end() || !label->is_string() || !ids.insert(id).second)) return SAO_SDK_ERR_INVALID_ARGUMENT; labels[i] = label == item.end() ? std::string() : label->get<std::string>(); entries[i].label_utf8 = labels[i].c_str(); entries[i].item_id = id; entries[i].enabled = true; entries[i].checked = false; const auto enabled = item.find("enabled"); const auto checked = item.find("checked"); if ((enabled != item.end() && !json_bool(*enabled, &entries[i].enabled)) || (checked != item.end() && !json_bool(*checked, &entries[i].checked))) return SAO_SDK_ERR_INVALID_ARGUMENT; }
+        }
+        SaoUiDropdownButtonSpec native{}; native.text_utf8 = spec.text_utf8; native.kind = SAO_UI_BTN_NORMAL; native.entries = entries.empty() ? nullptr : entries.data(); native.entry_count = entries.size();
+        const auto text = props.find("text"); if (text != props.end()) { if (!text->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; native.text_utf8 = text->get_ref<const std::string&>().c_str(); }
+        status = sao_ui_dropdown_button_create(nullptr, &native, &out->widget); break;
+    }
+    case SAO_SDK_UI_WIDGET_METRIC: {
+        if (!props_only(props, {"label", "value", "unit", "emphasize"})) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        SaoUiMetricSpec native{}; native.label_utf8 = ""; native.value_utf8 = spec.text_utf8 == nullptr ? "" : spec.text_utf8; native.value_font_size_px = 14;
+        const auto label = props.find("label"); const auto value = props.find("value"); const auto unit = props.find("unit"); const auto emphasize = props.find("emphasize");
+        if (label != props.end() && !label->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (value != props.end() && !value->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (unit != props.end() && !unit->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (emphasize != props.end() && !json_bool(*emphasize, &native.emphasize)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        if (label != props.end()) native.label_utf8 = label->get_ref<const std::string&>().c_str(); if (value != props.end()) native.value_utf8 = value->get_ref<const std::string&>().c_str(); if (unit != props.end()) native.unit_utf8 = unit->get_ref<const std::string&>().c_str();
+        status = sao_ui_metric_create(nullptr, &native, &out->widget); break;
+    }
+    case SAO_SDK_UI_WIDGET_EMPTY_STATE: {
+        if (!props_only(props, {"title", "detail", "action", "action_enabled", "icon_slot"})) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        SaoUiEmptyStateSpec native{}; native.detail_utf8 = spec.text_utf8 == nullptr ? "" : spec.text_utf8; native.action_enabled = false; native.icon_slot = -1;
+        const auto title = props.find("title"); const auto detail = props.find("detail"); const auto action = props.find("action"); const auto enabled = props.find("action_enabled"); const auto icon = props.find("icon_slot");
+        if (title != props.end() && !title->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (detail != props.end() && !detail->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (action != props.end() && !action->is_string()) return SAO_SDK_ERR_INVALID_ARGUMENT; if (enabled != props.end() && !json_bool(*enabled, &native.action_enabled)) return SAO_SDK_ERR_INVALID_ARGUMENT; if (icon != props.end() && !json_i32(*icon, &native.icon_slot)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        if (title != props.end()) native.title_utf8 = title->get_ref<const std::string&>().c_str(); if (detail != props.end()) native.detail_utf8 = detail->get_ref<const std::string&>().c_str(); if (action != props.end()) native.action_utf8 = action->get_ref<const std::string&>().c_str();
+        status = sao_ui_empty_state_create(nullptr, &native, &out->widget); break;
+    }
+    case SAO_SDK_UI_WIDGET_TREE_VIEW: { SaoUiTreeViewSpec native{}; native.row_height_px = 22; native.indent_px = 16; native.caret_width_px = 12; status = sao_ui_tree_view_create(nullptr, &native, &out->widget); break; }
+    case SAO_SDK_UI_WIDGET_BAR_CHART: { SaoUiBarChartSpec native{}; status = sao_ui_bar_chart_create(nullptr, &native, &out->widget); break; }
+    case SAO_SDK_UI_WIDGET_LINE_CHART: { SaoUiLineChartSpec native{}; status = sao_ui_line_chart_create(nullptr, &native, &out->widget); break; }
+    case SAO_SDK_UI_WIDGET_SPARKLINE: { SaoUiSparklineSpec native{}; native.max_points = 64; native.line_width_px = 1.0F; status = sao_ui_sparkline_create(nullptr, &native, &out->widget); break; }
+    case SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS:
+        return SAO_SDK_ERR_UNSUPPORTED;
+    default: {
+        int32_t native_kind = SAO_UI_WIDGET_ROUNDED_PANEL;
+        switch (spec.kind) { case SAO_SDK_UI_WIDGET_LABEL: native_kind = SAO_UI_WIDGET_TEXT; break; case SAO_SDK_UI_WIDGET_BUTTON: native_kind = SAO_UI_WIDGET_ACTION_BUTTON; break; case SAO_SDK_UI_WIDGET_PROGRESS_BAR: native_kind = SAO_UI_WIDGET_BAR; break; case SAO_SDK_UI_WIDGET_TABLE: native_kind = SAO_UI_WIDGET_TABLE; break; case SAO_SDK_UI_WIDGET_STATUS_BADGE: native_kind = SAO_UI_WIDGET_STATUS_BADGE; break; case SAO_SDK_UI_WIDGET_TEXT_FIELD: native_kind = SAO_UI_WIDGET_INPUT; break; case SAO_SDK_UI_WIDGET_CHECKBOX: native_kind = SAO_UI_WIDGET_CHECKBOX; break; case SAO_SDK_UI_WIDGET_DIVIDER: native_kind = SAO_UI_WIDGET_DIVIDER; break; case SAO_SDK_UI_WIDGET_ICON: native_kind = SAO_UI_WIDGET_ICON; break; case SAO_SDK_UI_WIDGET_SCROLLBAR: native_kind = SAO_UI_WIDGET_SCROLLBAR; break; case SAO_SDK_UI_WIDGET_ROUNDED_PANEL: break; default: return SAO_SDK_ERR_INVALID_ARGUMENT; }
+        status = sao_ui_widget_create(native_kind, nullptr, &out->widget); break;
+    }
+    }
+    if (status != SAO_STATUS_OK || out->widget == nullptr) return status == SAO_STATUS_OK ? SAO_SDK_ERR_UNSUPPORTED : static_cast<sao_sdk_status_t>(status);
+    return SAO_SDK_OK;
 }
 
 void clear_legacy_canvases(PanelEntry& panel) {
@@ -218,7 +342,7 @@ void clear_legacy_canvases(PanelEntry& panel) {
 void destroy_panel_resources(PanelEntry& panel) {
     clear_legacy_canvases(panel);
     for (const auto& widget : panel.widgets)
-        destroy_widget_for_kind(widget.kind, widget.ui_widget);
+        destroy_widget_for_kind(widget.kind, widget.ui_widget, widget.script_canvas);
     panel.widgets.clear();
 }
 
@@ -652,43 +776,46 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     if (out_widget != nullptr)
         *out_widget = nullptr;
     auto* state = cast_ctx(ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
-    if (panel == nullptr || widget_spec == nullptr)
+    if (state == nullptr || panel == nullptr || widget_spec == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    if (!valid_widget_kind(widget_spec->kind))
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-
-    // Create the underlying platform widget outside the lock — some
-    // widget_kit paths take their own locks.
-    sao_ui_widget_handle_t ui_widget = create_widget_for_kind(*widget_spec);
-    if (ui_widget == nullptr)
+    Json parsed;
+    const auto parse_status = parse_props(*widget_spec, &parsed);
+    if (parse_status != SAO_SDK_OK || !valid_widget_kind(widget_spec->kind))
+        return parse_status != SAO_SDK_OK ? parse_status : SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (widget_spec->kind == SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS)
         return SAO_SDK_ERR_UNSUPPORTED;
 
+    CreatedWidget created;
+    const auto create_status = create_widget_for_kind(*widget_spec, parsed, &created);
+    if (create_status != SAO_SDK_OK)
+        return create_status;
+
+    Json wire_props = widget_spec->kind <= SAO_SDK_UI_WIDGET_ICON ||
+                              widget_spec->kind == SAO_SDK_UI_WIDGET_SCROLLBAR
+                          ? generic_props(*widget_spec, parsed)
+                          : initial_typed_props(widget_spec->kind, parsed);
+    const std::string wire_json = wire_props.dump();
     pause_context_api_test_point(ContextApiTestPoint::panel_operation_unlocked);
     std::lock_guard<std::mutex> lk(state->mu);
     auto it = state->panels.find(panel);
     if (it == state->panels.end()) {
-        destroy_widget_for_kind(widget_spec->kind, ui_widget);
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
         return SAO_SDK_ERR_NOT_FOUND;
     }
     PanelEntry& pe = it->second;
     if (pe.unregistering) {
-        destroy_widget_for_kind(widget_spec->kind, ui_widget);
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
         return SAO_SDK_ERR_BUSY;
     }
-
-    // Reject duplicate widget_id inside the same panel.
     if (widget_spec->widget_id_utf8 != nullptr && widget_spec->widget_id_utf8[0] != '\0') {
         for (const auto& w : pe.widgets) {
             if (w.widget_id == widget_spec->widget_id_utf8) {
-                destroy_widget_for_kind(widget_spec->kind, ui_widget);
+                destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
                 return SAO_SDK_ERR_ALREADY_EXISTS;
             }
         }
     }
 
-    // Batch mutation so the platform sees one dirty-rects snapshot.
     SaoUiLayoutSpec layout{};
     layout.fixed_width_px = widget_spec->width_px;
     layout.fixed_height_px = widget_spec->height_px;
@@ -696,35 +823,52 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     layout.absolute_y_px = widget_spec->y_px;
     layout.absolute_z = widget_spec->z_order;
     layout.hit_testable = true;
-
-    sao_ui_layout_node_handle_t new_node = nullptr;
-    SaoUiBodyMutation mut{};
-    mut.kind = SAO_UI_BODY_ADD_WIDGET;
-    mut.target = nullptr; // root of body
-    mut.widget = ui_widget;
-    mut.spec = &layout;
-    mut.out_new_node = &new_node;
-    const sao_status_t update_rc = sao_ui_panel_update_body(pe.ui_body, &mut, 1);
-    if (update_rc != SAO_STATUS_OK) {
-        destroy_widget_for_kind(widget_spec->kind, ui_widget);
-        return static_cast<sao_sdk_status_t>(update_rc);
+    WidgetEntry entry;
+    entry.sdk_handle = reinterpret_cast<sao_sdk_ui_widget_t>(reinterpret_cast<uintptr_t>(&pe) + pe.next_widget_id);
+    entry.ui_widget = created.widget;
+    entry.script_canvas = created.script_canvas;
+    entry.widget_id = widget_spec->widget_id_utf8 == nullptr ? std::string() : widget_spec->widget_id_utf8;
+    entry.props_json = wire_json;
+    entry.kind = widget_spec->kind;
+    SaoUiBodyMutation mutations[2]{};
+    mutations[0].kind = SAO_UI_BODY_ADD_WIDGET;
+    mutations[0].widget = created.widget;
+    mutations[0].spec = &layout;
+    mutations[0].out_new_node = &entry.layout_node;
+    mutations[1].kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    mutations[1].widget = created.widget;
+    mutations[1].props_json_utf8 = reinterpret_cast<const uint8_t*>(wire_json.data());
+    mutations[1].props_len = wire_json.size();
+    const auto batch_status = sao_ui_panel_update_body(pe.ui_body, mutations, 2);
+    if (batch_status != SAO_STATUS_OK) {
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
+        return static_cast<sao_sdk_status_t>(batch_status);
     }
-    update_widget_for_kind(ui_widget, *widget_spec);
 
-    WidgetEntry we;
-    we.sdk_handle =
-        reinterpret_cast<sao_sdk_ui_widget_t>(reinterpret_cast<uintptr_t>(&pe) + pe.next_widget_id);
-    we.ui_widget = ui_widget;
-    pe.next_widget_id += 8;
-    we.widget_id =
-        (widget_spec->widget_id_utf8 == nullptr) ? std::string() : widget_spec->widget_id_utf8;
-    we.kind = widget_spec->kind;
-    we.layout_node = new_node;
-    pe.widgets.push_back(std::move(we));
-
-    if (out_widget != nullptr) {
+    try {
+        pe.next_widget_id += 8;
+        pe.widgets.push_back(std::move(entry));
+    } catch (...) {
+        SaoUiBodyMutation rollback{};
+        rollback.kind = SAO_UI_BODY_REMOVE_NODE;
+        rollback.target = entry.layout_node;
+        (void)sao_ui_panel_update_body(pe.ui_body, &rollback, 1);
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
+        return SAO_SDK_ERR_INTERNAL;
+    }
+    if (g_fail_next_widget_state_insertion.exchange(false)) {
+        WidgetEntry& residual = pe.widgets.back();
+        const auto remove_status = remove_widget_node(pe, residual);
+        if (remove_status == SAO_SDK_OK) {
+            destroy_widget_for_kind(residual.kind, residual.ui_widget, residual.script_canvas);
+            pe.widgets.pop_back();
+            return SAO_SDK_ERR_INTERNAL;
+        }
+        residual.cleanup_pending = true;
+        return SAO_SDK_ERR_INTERNAL;
+    }
+    if (out_widget != nullptr)
         *out_widget = pe.widgets.back().sdk_handle;
-    }
     return SAO_SDK_OK;
 }
 
@@ -735,13 +879,15 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
     if (!lease)
         return lease.status();
     auto* state = cast_ctx(ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
-    if (panel == nullptr)
+    if (state == nullptr || panel == nullptr || widget == nullptr || widget_spec == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    if (widget == nullptr)
+    Json parsed;
+    const auto parse_status = parse_props(*widget_spec, &parsed);
+    if (parse_status != SAO_SDK_OK)
+        return parse_status;
+    if (!valid_widget_kind(widget_spec->kind))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    if (widget_spec == nullptr)
+    if (widget_spec->kind == SAO_SDK_UI_WIDGET_SCROLLBAR && !validate_scrollbar_props(parsed))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
 
     std::lock_guard<std::mutex> lk(state->mu);
@@ -751,34 +897,38 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
     PanelEntry& pe = it->second;
     if (pe.unregistering)
         return SAO_SDK_ERR_BUSY;
-
     WidgetEntry* target = nullptr;
-    for (auto& w : pe.widgets) {
-        if (w.sdk_handle == widget) {
-            target = &w;
+    for (auto& candidate : pe.widgets) {
+        if (candidate.sdk_handle == widget) {
+            target = &candidate;
             break;
         }
     }
     if (target == nullptr)
         return SAO_SDK_ERR_NOT_FOUND;
+    if (target->kind != widget_spec->kind || !valid_widget_kind(widget_spec->kind))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (target->kind == SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS)
+        return SAO_SDK_ERR_UNSUPPORTED;
 
-    // The layout-node handle produced by sao_ui_panel_update_body is a
-    // synthetic value in the current slice — passing it as the update
-    // target still logs the mutation in the panel body so callers see
-    // one dirty-rects batch.
-    SaoUiBodyMutation mut{};
-    mut.kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
-    mut.target = target->layout_node;
-    mut.widget = target->ui_widget;
-    const auto props = generic_widget_props(*widget_spec);
-    mut.props_json_utf8 = reinterpret_cast<const uint8_t*>(props.data());
-    mut.props_len = props.size();
-    const sao_status_t update_rc = sao_ui_panel_update_body(pe.ui_body, &mut, 1);
-    if (update_rc != SAO_STATUS_OK)
-        return static_cast<sao_sdk_status_t>(update_rc);
+    const Json wire_props = widget_spec->kind <= SAO_SDK_UI_WIDGET_ICON ||
+                                    widget_spec->kind == SAO_SDK_UI_WIDGET_SCROLLBAR
+                                ? generic_props(*widget_spec, parsed)
+                                : parsed;
+    const std::string wire_json = wire_props.dump();
+    SaoUiBodyMutation mutation{};
+    mutation.kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
+    mutation.target = target->layout_node;
+    mutation.widget = target->ui_widget;
+    mutation.props_json_utf8 = reinterpret_cast<const uint8_t*>(wire_json.data());
+    mutation.props_len = wire_json.size();
+    const auto update_status = sao_ui_panel_update_body(pe.ui_body, &mutation, 1);
+    if (update_status != SAO_STATUS_OK)
+        return static_cast<sao_sdk_status_t>(update_status);
+    target->props_json = wire_json;
+    target->cleanup_pending = false;
     return SAO_SDK_OK;
 }
-
 sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                      sao_sdk_ui_widget_t widget) {
     ContextApiLease lease(cast_ctx(ctx_impl));
@@ -805,13 +955,10 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget(void* ctx_impl, sao_sdk_ui_
     if (rem == pe.widgets.end())
         return SAO_SDK_ERR_NOT_FOUND;
 
-    SaoUiBodyMutation mut{};
-    mut.kind = SAO_UI_BODY_REMOVE_NODE;
-    mut.target = rem->layout_node;
-    const sao_status_t update_rc = sao_ui_panel_update_body(pe.ui_body, &mut, 1);
+    const auto update_rc = remove_widget_node(pe, *rem);
     if (update_rc != SAO_STATUS_OK)
         return static_cast<sao_sdk_status_t>(update_rc);
-    destroy_widget_for_kind(rem->kind, rem->ui_widget);
+    destroy_widget_for_kind(rem->kind, rem->ui_widget, rem->script_canvas);
     pe.widgets.erase(rem);
     return SAO_SDK_OK;
 }
@@ -923,11 +1070,14 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget_boundary(
 
 } // namespace
 
-void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget) {
-    if (widget == nullptr)
+void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget,
+                             sao_ui_script_canvas_handle_t script_canvas) {
+    if (kind == SAO_SDK_UI_WIDGET_SCRIPTABLE_CANVAS && script_canvas != nullptr) {
+        sao_ui_script_canvas_destroy(script_canvas);
         return;
-    (void)kind;
-    sao_ui_widget_destroy(widget);
+    }
+    if (widget != nullptr)
+        sao_ui_widget_destroy(widget);
 }
 
 sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
@@ -993,6 +1143,14 @@ void test_fail_next_panel_state_insertion() noexcept {
 
 void test_fail_next_panel_unregister(sao_sdk_status_t status) noexcept {
     g_fail_next_panel_unregister_status.store(status);
+}
+
+void test_fail_next_widget_state_insertion() noexcept {
+    g_fail_next_widget_state_insertion.store(true);
+}
+
+void test_fail_next_widget_remove(sao_sdk_status_t status) noexcept {
+    g_fail_next_widget_remove_status.store(status);
 }
 
 // ─── Public free-function wrappers ──────────────────────────────────
@@ -1162,6 +1320,16 @@ sao_sdk_test_fail_next_panel_unregister(sao_sdk_status_t status) {
     sao_sdk_internal::test_fail_next_panel_unregister(status);
 }
 
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_fail_next_widget_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_widget_state_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_fail_next_widget_remove(sao_sdk_status_t status) {
+    sao_sdk_internal::test_fail_next_widget_remove(status);
+}
+
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_panel_widget_count(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
     try {
@@ -1287,4 +1455,19 @@ sao_sdk_test_fire_render_hook(int32_t hook_point, const struct SaoSdkRenderHookP
     } catch (...) {
     }
 }
+extern "C" SAO_SDK_API sao_ui_widget_handle_t SAO_SDK_CALL sao_sdk_test_widget_native_handle(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget) {
+    try {
+        if (panel == nullptr || widget == nullptr) return nullptr;
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease) return nullptr;
+        auto* state = lease.state();
+        std::lock_guard<std::mutex> lock(state->mu);
+        const auto panel_it = state->panels.find(panel);
+        if (panel_it == state->panels.end()) return nullptr;
+        for (const auto& entry : panel_it->second.widgets)
+            if (entry.sdk_handle == widget) return entry.ui_widget;
+        return nullptr;
+    } catch (...) { return nullptr; }
+}
+
 #endif

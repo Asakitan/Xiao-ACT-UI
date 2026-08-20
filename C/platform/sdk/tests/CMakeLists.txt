@@ -22,6 +22,7 @@ target_compile_definitions(sao_platform_sdk_tests PRIVATE
 )
 
 target_link_libraries(sao_platform_sdk_tests PRIVATE
+    nlohmann_json::nlohmann_json
     sao::core
     sao::engine
     sao::ui
@@ -35,3 +36,4 @@ target_compile_features(sao_platform_sdk_tests PRIVATE cxx_std_20)
 include(CTest)
 include(Catch)
 add_test(NAME sao_platform_sdk_tests COMMAND sao_platform_sdk_tests)
+set_tests_properties(sao_platform_sdk_tests PROPERTIES TIMEOUT 15)

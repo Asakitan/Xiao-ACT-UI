@@ -57,8 +57,11 @@ struct ContextCallbackGate {
 struct WidgetEntry {
     sao_sdk_ui_widget_t sdk_handle = nullptr; // opaque token handed to plugin
     sao_ui_widget_handle_t ui_widget = nullptr;
+    sao_ui_script_canvas_handle_t script_canvas = nullptr;
     std::string widget_id; // caller-defined id (unique per panel)
+    std::string props_json;
     int32_t kind = 0;
+    bool cleanup_pending = false;
     // A synthetic layout-node handle produced by
     // sao_ui_panel_update_body().  Kept so remove/update mutations know
     // which node to touch.
@@ -456,8 +459,12 @@ sao_sdk_status_t sdk_gpu_hunt_sweep_owner(ContextState* owner);
 bool gpu_callback_reentered(ContextState* owner) noexcept;
 
 void destroy_hotkey_bridge(void* bridge);
-void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget);
+void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget,
+                             sao_ui_script_canvas_handle_t script_canvas = nullptr);
 sao_sdk_status_t cleanup_ui_panels(ContextState* state);
+
+void test_fail_next_widget_state_insertion() noexcept;
+void test_fail_next_widget_remove(sao_sdk_status_t status) noexcept;
 
 // Cast helper.
 inline ContextState* cast_ctx(void* ctx_impl) {
