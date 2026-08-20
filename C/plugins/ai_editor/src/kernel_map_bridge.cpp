@@ -3,6 +3,7 @@
 #include "sao/ai_editor/kernel_map_bridge.h"
 
 #include <mutex>
+#include <unordered_set>
 #include <utility>
 
 #include "sao/core/status.h"
@@ -28,6 +29,16 @@ namespace {
 // pass a stale value to the wire; a compile-time assert would be
 // stronger but requires the security header.
 constexpr uint32_t kFlagNoInvokeEntry = 0x00000002u;
+
+std::mutex& shared_bridge_ownership_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+size_t& shared_bridge_owner_count() {
+    static size_t count = 0;
+    return count;
+}
 
 // Translate an rt_io sao_status_t into the AI editor's status enum.
 // Mirrors gpu_hunt_sdk_adapter.cpp::map_rt_io_status but returns the
@@ -209,9 +220,81 @@ int32_t Bridge::enumerate(std::vector<uint64_t>& out_bases) {
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t Bridge::reconcile_cache() {
+    BridgeStatus snapshot{};
+    const int32_t status = this->status(snapshot);
+    if (status == SAO_AI_EDITOR_OK && !snapshot.active && snapshot.map_count == 0) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        active_snapshot_.reset();
+    }
+    return status;
+}
+
+int32_t Bridge::teardown_all(std::vector<uint64_t>& residual_bases) {
+    residual_bases.clear();
+    std::unordered_set<uint64_t> residual_set;
+    const auto remember_residual = [&](uint64_t base) {
+        if (residual_set.insert(base).second) {
+            residual_bases.push_back(base);
+        }
+    };
+    std::vector<uint64_t> bases;
+    int32_t first_error = enumerate(bases);
+    if (first_error == SAO_AI_EDITOR_OK) {
+        for (const uint64_t base : bases) {
+            const int32_t status = unmap(base);
+            if (status != SAO_AI_EDITOR_OK) {
+                remember_residual(base);
+                if (first_error == SAO_AI_EDITOR_OK) first_error = status;
+            }
+        }
+    }
+    if (first_error == SAO_AI_EDITOR_OK || !bases.empty()) {
+        std::vector<uint64_t> remaining;
+        const int32_t enumerate_status = enumerate(remaining);
+        if (enumerate_status != SAO_AI_EDITOR_OK) {
+            if (first_error == SAO_AI_EDITOR_OK) first_error = enumerate_status;
+            for (const uint64_t base : bases) remember_residual(base);
+        } else {
+            for (const uint64_t base : remaining) {
+                remember_residual(base);
+            }
+            if (!remaining.empty() && first_error == SAO_AI_EDITOR_OK) first_error = SAO_AI_EDITOR_ERR_BUSY;
+        }
+    }
+    const int32_t deactivate_status = deactivate();
+    if (deactivate_status != SAO_AI_EDITOR_OK &&
+        deactivate_status != SAO_AI_EDITOR_ERR_NOT_INITIALIZED && first_error == SAO_AI_EDITOR_OK) {
+        first_error = deactivate_status;
+    }
+    const int32_t reconcile_status = reconcile_cache();
+    if (reconcile_status != SAO_AI_EDITOR_OK && first_error == SAO_AI_EDITOR_OK) first_error = reconcile_status;
+    return first_error;
+}
+
 Bridge& shared_bridge() {
     static Bridge instance;
     return instance;
+}
+
+bool acquire_shared_bridge_owner() noexcept {
+    std::lock_guard<std::mutex> guard(shared_bridge_ownership_mutex());
+    ++shared_bridge_owner_count();
+    return true;
+}
+
+int32_t release_shared_bridge_owner(std::vector<uint64_t>& residual_bases) {
+    std::lock_guard<std::mutex> guard(shared_bridge_ownership_mutex());
+    if (shared_bridge_owner_count() == 0) {
+        residual_bases.clear();
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    --shared_bridge_owner_count();
+    if (shared_bridge_owner_count() != 0) {
+        residual_bases.clear();
+        return SAO_AI_EDITOR_OK;
+    }
+    return shared_bridge().teardown_all(residual_bases);
 }
 
 }  // namespace sao::ai_editor::kernel_map

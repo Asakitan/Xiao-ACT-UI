@@ -145,6 +145,8 @@ std::wstring build_environment_block(
 NodeRuntime::~NodeRuntime() { shutdown(); }
 
 int32_t NodeRuntime::boot(const BootOptions& options) {
+    std::unique_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
+    std::unique_lock<std::mutex> shutdown_guard(shutdown_mutex_);
     if (process_ != nullptr) {
         return SAO_AI_EDITOR_ERR_ALREADY_RUNNING;
     }
@@ -255,10 +257,7 @@ int32_t NodeRuntime::boot(const BootOptions& options) {
     owned_stdout_write.reset();
     owned_stderr_write.reset();
 
-    {
-        std::lock_guard<std::mutex> guard(shutdown_mutex_);
-        shutdown_started_ = false;
-    }
+    shutdown_started_ = false;
     {
         std::lock_guard<std::mutex> guard(pending_mutex_);
         pending_.clear();
@@ -268,12 +267,16 @@ int32_t NodeRuntime::boot(const BootOptions& options) {
     state_.store(State::running, std::memory_order_release);
     const std::shared_ptr<NodeRuntime> lifetime = weak_from_this().lock();
     if (!lifetime) {
+        lifecycle_guard.unlock();
+        shutdown_guard.unlock();
         shutdown();
         return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
     }
     reader_ = std::thread([lifetime] { lifetime->reader_loop(); });
     dispatcher_ = std::thread([lifetime] { lifetime->dispatch_loop(); });
     stderr_reader_ = std::thread([lifetime] { lifetime->stderr_loop(); });
+    lifecycle_guard.unlock();
+    shutdown_guard.unlock();
 
     Json initialize_params{
         {"protocolVersion", "sao-ai-editor/1"},
@@ -302,6 +305,7 @@ int32_t NodeRuntime::boot(const BootOptions& options) {
 }
 
 bool NodeRuntime::alive() const noexcept {
+    std::shared_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
     if (process_ == nullptr ||
         state_.load(std::memory_order_acquire) != State::running) {
         return false;
@@ -311,6 +315,7 @@ bool NodeRuntime::alive() const noexcept {
 
 int32_t NodeRuntime::request(std::string_view method, const Json& params,
                              uint32_t timeout_ms, Json& result) {
+    std::shared_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
     int64_t id = 0;
     std::shared_ptr<Pending> pending;
     try {
@@ -339,7 +344,9 @@ int32_t NodeRuntime::request(std::string_view method, const Json& params,
                      {"id", id},
                      {"method", std::string(method)},
                      {"params", params}};
-        if (!send_framed(request.dump())) {
+        const bool sent = send_framed(request.dump());
+        lifecycle_guard.unlock();
+        if (!sent) {
             std::lock_guard<std::mutex> guard(pending_mutex_);
             pending_.erase(id);
             return SAO_AI_EDITOR_ERR_IPC_CLOSED;
@@ -376,6 +383,7 @@ int32_t NodeRuntime::request(std::string_view method, const Json& params,
 }
 
 int32_t NodeRuntime::notify(std::string_view method, const Json& params) {
+    std::shared_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
     try {
         if (process_ == nullptr) {
             return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
@@ -389,6 +397,7 @@ int32_t NodeRuntime::notify(std::string_view method, const Json& params) {
         Json notification{{"jsonrpc", "2.0"},
                            {"method", std::string(method)},
                            {"params", params}};
+        lifecycle_guard.unlock();
         return send_framed(notification.dump()) ? SAO_AI_EDITOR_OK
                                                 : SAO_AI_EDITOR_ERR_IPC_CLOSED;
     } catch (...) {
@@ -709,7 +718,8 @@ void NodeRuntime::fail_protocol(std::string_view message) {
 }
 
 void NodeRuntime::shutdown() {
-    std::lock_guard<std::mutex> guard(shutdown_mutex_);
+    std::unique_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
+    std::unique_lock<std::mutex> shutdown_guard(shutdown_mutex_);
     if (shutdown_started_) {
         return;
     }
@@ -718,7 +728,10 @@ void NodeRuntime::shutdown() {
     state_.store(State::closed, std::memory_order_release);
     fail_pending("node runtime shut down", SAO_AI_EDITOR_ERR_IPC_CLOSED);
     dispatch_ready_.notify_all();
-    if (process_ != nullptr) {
+    HANDLE process = static_cast<HANDLE>(process_);
+    process_ = nullptr;
+    lifecycle_guard.unlock();
+    if (process != nullptr) {
         {
             std::lock_guard<std::mutex> write_guard(write_mutex_);
             if (stdin_write_ != nullptr) {
@@ -726,10 +739,10 @@ void NodeRuntime::shutdown() {
                 stdin_write_ = nullptr;
             }
         }
-        WaitForSingleObject(process_, 2000);
-        if (WaitForSingleObject(process_, 0) != WAIT_OBJECT_0) {
-            TerminateProcess(process_, 1);
-            WaitForSingleObject(process_, 500);
+        WaitForSingleObject(process, 2000);
+        if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
+            TerminateProcess(process, 1);
+            WaitForSingleObject(process, 500);
         }
     }
     if (stdout_read_ != nullptr) {
@@ -742,23 +755,31 @@ void NodeRuntime::shutdown() {
     dispatch_ready_.notify_all();
     join_worker(dispatcher_);
     join_worker(stderr_reader_);
-    if (stdout_read_ != nullptr) {
-        CloseHandle(stdout_read_);
-        stdout_read_ = nullptr;
+    HANDLE stdout_read = nullptr;
+    HANDLE stderr_read = nullptr;
+    HANDLE thread = nullptr;
+    lifecycle_guard.lock();
+    stdout_read = static_cast<HANDLE>(stdout_read_);
+    stdout_read_ = nullptr;
+    stderr_read = static_cast<HANDLE>(stderr_read_);
+    stderr_read_ = nullptr;
+    thread = static_cast<HANDLE>(thread_);
+    thread_ = nullptr;
+    lifecycle_guard.unlock();
+    if (stdout_read != nullptr) {
+        CloseHandle(stdout_read);
     }
-    if (stderr_read_ != nullptr) {
-        CloseHandle(stderr_read_);
-        stderr_read_ = nullptr;
+    if (stderr_read != nullptr) {
+        CloseHandle(stderr_read);
     }
-    if (thread_ != nullptr) {
-        CloseHandle(thread_);
-        thread_ = nullptr;
+    if (thread != nullptr) {
+        CloseHandle(thread);
     }
-    if (process_ != nullptr) {
-        CloseHandle(process_);
-        process_ = nullptr;
+    if (process != nullptr) {
+        CloseHandle(process);
     }
     native_runtime_.store(nullptr, std::memory_order_release);
+    shutdown_started_ = false;
 }
 
 }  // namespace sao::ai_editor::native

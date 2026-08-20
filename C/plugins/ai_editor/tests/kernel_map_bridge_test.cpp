@@ -210,6 +210,8 @@ struct WireRecorder {
     std::vector<uint8_t> next_enumerate_reply; // KMOP_ENUMERATE reply body
     // status byte returned for the next call (default = OK)
     uint8_t next_status_byte = 0;
+    uint8_t next_enumerate_status_byte = 0;
+    sao_status_t next_enumerate_transport_status = SAO_STATUS_OK;
 };
 
 sao_status_t SAO_RT_IO_CALL recording_shim(uint8_t cmd,
@@ -254,7 +256,9 @@ sao_status_t SAO_RT_IO_CALL recording_shim(uint8_t cmd,
     }
 
     if (out_status != nullptr) {
-        *out_status = recorder->next_status_byte;
+        *out_status = cmd == SAO_RT_IO_KMOP_ENUMERATE
+                          ? recorder->next_enumerate_status_byte
+                          : recorder->next_status_byte;
     }
     size_t written = 0;
     if (reply_body != nullptr && !reply_body->empty()) {
@@ -273,6 +277,10 @@ sao_status_t SAO_RT_IO_CALL recording_shim(uint8_t cmd,
     {
         std::lock_guard<std::mutex> guard(recorder->mutex);
         recorder->hops.push_back(std::move(hop));
+    }
+    if (cmd == SAO_RT_IO_KMOP_ENUMERATE &&
+        recorder->next_enumerate_transport_status != SAO_STATUS_OK) {
+        return recorder->next_enumerate_transport_status;
     }
     return SAO_STATUS_OK;
 }
@@ -926,4 +934,32 @@ TEST_CASE("kernel_map_tools: partial registration rollback retries cleanly",
             SAO_AI_EDITOR_OK);
     REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
             SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+TEST_CASE("kernel_map_bridge: last owner reconciles after initial enumerate failure",
+          "[plugins][ai_editor][kernel_map][ownership][teardown][recovery]") {
+    WireRecorder recorder;
+    recorder.next_enumerate_transport_status = SAO_STATUS_ERR_ACCESS_DENIED;
+    SaoRtIoKmStatusReply status{};
+    recorder.next_status_reply.resize(sizeof(status));
+    std::memcpy(recorder.next_status_reply.data(), &status, sizeof(status));
+    ShimGuard guard(recorder);
+
+    REQUIRE(km::acquire_shared_bridge_owner());
+    REQUIRE(km::acquire_shared_bridge_owner());
+
+    std::vector<uint64_t> residual;
+    REQUIRE(km::release_shared_bridge_owner(residual) == SAO_AI_EDITOR_OK);
+    CHECK(recorder.hops.empty());
+
+    REQUIRE(km::release_shared_bridge_owner(residual) ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+    bool saw_deactivate = false;
+    bool saw_status = false;
+    for (const auto& hop : recorder.hops) {
+        saw_deactivate = saw_deactivate ||
+                         hop.cmd == SAO_RT_IO_KMOP_DEACTIVATE;
+        saw_status = saw_status || hop.cmd == SAO_RT_IO_KMOP_STATUS;
+    }
+    CHECK(saw_deactivate);
+    CHECK(saw_status);
 }

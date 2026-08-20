@@ -411,6 +411,23 @@ json section_node(std::string title, json children) {
                 {"children", std::move(children)}};
 }
 
+json container_node(std::string id, json children, std::string_view layout,
+                    int32_t width, int32_t min_width, float weight,
+                    int32_t fallback_min_width) {
+    return json{{"type", "section"},
+                {"id", std::move(id)},
+                {"container", true},
+                {"layout", layout},
+                {"orientation", layout},
+                {"width", width},
+                {"min_width", min_width},
+                {"weight", weight},
+                {"fallback", {{"layout", "vertical"},
+                               {"min_width", fallback_min_width},
+                               {"threshold_width", fallback_min_width}}},
+                {"children", std::move(children)}};
+}
+
 std::string trim_copy(std::string_view value) {
     size_t begin = 0;
     size_t end = value.size();
@@ -2388,14 +2405,23 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
 
     json main_section = section_node(
         "Main", json::array({std::move(transcript_panel), std::move(composer_panel)}));
-    nodes.push_back(std::move(main_section));
+    main_section["width"] = 0;
+    main_section["min_width"] = 620;
+    main_section["weight"] = 1.0;
 
     json secondary_children = json::array();
     secondary_children.push_back(std::move(inspector_panel));
     secondary_children.push_back(std::move(history_drawer));
     secondary_children.push_back(std::move(diagnostics_section));
     secondary_children.push_back(std::move(platform_section));
-    nodes.push_back(section_node("Secondary", std::move(secondary_children)));
+    json secondary_section = section_node("Secondary", std::move(secondary_children));
+    secondary_section["width"] = 360;
+    secondary_section["min_width"] = 300;
+    secondary_section["weight"] = 0.0;
+    nodes.push_back(container_node(
+        "ai-editor-columns",
+        json::array({std::move(main_section), std::move(secondary_section)}),
+        "horizontal", 0, 960, 1.0F, 960));
 
     std::string serialized =
         json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
@@ -3596,6 +3622,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         return owner_status;
     try {
         auto state = std::make_unique<AiEditorMainPanelState>();
+        AiEditorMainPanelState* raw_state = state.get();
         state->compositor = borrowed_compositor;
         state->launcher = borrowed_launcher;
         state->backend_status = borrowed_launcher == nullptr
@@ -3650,8 +3677,8 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
                 throw std::runtime_error("AI Editor panel handle collision");
             slot->second = std::move(state);
         } catch (...) {
-            (void)sao_ui_panel_set_action_handler(state->panel, nullptr, nullptr);
-            (void)sao_ui_panel_unregister(state->panel);
+            (void)sao_ui_panel_set_action_handler(raw_state->panel, nullptr, nullptr);
+            (void)sao_ui_panel_unregister(raw_state->panel);
             throw;
         }
         *out_panel = handle;
@@ -3844,16 +3871,25 @@ sao_ai_editor_main_panel_try_destroy(sao_ai_editor_main_panel_t panel) {
         state->worker_stop_requested = true;
         state->worker_cv.notify_all();
     }
+    bool final_claim_valid = true;
     {
         std::lock_guard registry_lock(registry_mutex());
         const auto found = registry().find(panel);
-        if (found == registry().end() || found->second.get() != state)
-            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
-        std::lock_guard state_lock(state->mutex);
-        if (!state->destroy_claimed)
-            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
-        owned = std::move(found->second);
-        registry().erase(found);
+        if (found == registry().end() || found->second.get() != state) {
+            final_claim_valid = false;
+        } else {
+            std::lock_guard state_lock(state->mutex);
+            if (!state->destroy_claimed) {
+                final_claim_valid = false;
+            } else {
+                owned = std::move(found->second);
+                registry().erase(found);
+            }
+        }
+    }
+    if (!final_claim_valid) {
+        release_destroy_claim(*state, previous_accepting, previous_teardown_failed);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     // owned destroyed here (outside registry lock).
     return SAO_AI_EDITOR_OK;

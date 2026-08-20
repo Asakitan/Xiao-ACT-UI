@@ -91,6 +91,8 @@ public:
     // mapped image.  out_bases is cleared before use.  The proxy is
     // called twice: once to size the reply buffer, once to fill it.
     int32_t enumerate(std::vector<uint64_t>& out_bases);
+    int32_t teardown_all(std::vector<uint64_t>& residual_bases);
+    int32_t reconcile_cache();
 
 private:
     struct ActivationSnapshot {
@@ -107,5 +109,10 @@ private:
 // registrations (tool registry + command palette) share this instance
 // so a single wire channel handles every operator request.
 Bridge& shared_bridge();
+
+// Runtime ownership guards the process-wide bridge.  Only the last runtime
+// releases the shared bridge and performs kernel-map teardown.
+bool acquire_shared_bridge_owner() noexcept;
+int32_t release_shared_bridge_owner(std::vector<uint64_t>& residual_bases);
 
 }  // namespace sao::ai_editor::kernel_map

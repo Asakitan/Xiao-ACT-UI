@@ -48,6 +48,10 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
             existing->second.visible = true;
             existing->second.disposed = false;
             existing->second.last_reveal_ms = now_ms();
+            existing->second.html.clear();
+            existing->second.initial_state = Json::object();
+            existing->second.message_seq = 0;
+            existing->second.last_post_ms = 0;
             out_state = existing->second;
             return SAO_AI_EDITOR_OK;
         }
@@ -104,6 +108,10 @@ int32_t WebviewPanelRegistry::dispose(const std::string& panel_id,
     const bool already = it->second.disposed;
     it->second.disposed = true;
     it->second.visible = false;
+    it->second.html.clear();
+    it->second.initial_state = Json::object();
+    it->second.message_seq = 0;
+    it->second.last_post_ms = 0;
     out_state = it->second;
     out_state.options.extras["already"] = already;
     return SAO_AI_EDITOR_OK;
@@ -191,6 +199,22 @@ std::vector<WebviewPanelState> WebviewPanelRegistry::list_alive(WebviewPanelOwne
         }
     }
     return out;
+}
+
+std::optional<WebviewPanelState> WebviewPanelRegistry::active_panel() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::optional<WebviewPanelState> active;
+    for (const auto& [panel_id, state] : panels_) {
+        (void)panel_id;
+        if (state.disposed || !state.visible) continue;
+        if (!active.has_value() || state.last_reveal_ms > active->last_reveal_ms ||
+            (state.last_reveal_ms == active->last_reveal_ms && state.created_ms > active->created_ms) ||
+            (state.last_reveal_ms == active->last_reveal_ms && state.created_ms == active->created_ms &&
+             state.panel_id > active->panel_id)) {
+            active = state;
+        }
+    }
+    return active;
 }
 
 size_t WebviewPanelRegistry::total_created() const {

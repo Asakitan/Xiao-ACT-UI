@@ -120,7 +120,7 @@ ExtensionHost::~ExtensionHost() { deactivate_all(); }
 
 int32_t ExtensionHost::configure(const Json& params) {
     try {
-        std::lock_guard<std::mutex> runtime_guard(runtime_mutex_);
+        std::unique_lock<std::shared_mutex> runtime_guard(runtime_mutex_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (has_inflight_operation_locked(extensions_) ||
             (node_runtime_ && node_runtime_->alive())) {
@@ -246,7 +246,7 @@ int32_t ExtensionHost::configure(const Json& params) {
 
 int32_t ExtensionHost::ensure_runtime(
     std::shared_ptr<NodeRuntime>& runtime) {
-    std::lock_guard<std::mutex> runtime_guard(runtime_mutex_);
+    std::unique_lock<std::shared_mutex> runtime_guard(runtime_mutex_);
     std::shared_ptr<NodeRuntime> stale_runtime;
     NodeRuntime::BootOptions options;
     {

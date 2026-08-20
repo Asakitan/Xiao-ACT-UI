@@ -124,6 +124,7 @@ public:
 
     // List only non-disposed panels owned by one lifecycle domain.
     std::vector<WebviewPanelState> list_alive(WebviewPanelOwner owner) const;
+    std::optional<WebviewPanelState> active_panel() const;
 
     // Total create-count (including disposed) for diagnostics.
     size_t total_created() const;

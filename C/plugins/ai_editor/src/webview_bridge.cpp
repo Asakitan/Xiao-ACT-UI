@@ -39,6 +39,7 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"{C82E4A03-9F16-4B7D-A5E8-2C6F1B4D8E93}";
 constexpr UINT kPostWebMessage = WM_APP + 3U;
+constexpr UINT_PTR kPanelMaterializeTimerId = 0xA03u;
 
 struct WebviewPostRequest final {
     std::string panel_id;
@@ -50,6 +51,15 @@ struct WebviewPostRequest final {
     bool accepted = false;
     bool cancelled = false;
 };
+
+nlohmann::json make_webview_panel_message_envelope(
+    std::string_view panel_id, uint64_t message_seq,
+    const nlohmann::json& message) {
+    return nlohmann::json{{"method", "webviewPanel.message"},
+                          {"panelId", std::string(panel_id)},
+                          {"messageSeq", static_cast<int64_t>(message_seq)},
+                          {"message", message}};
+}
 
 class ScopedCoInitialize final {
 public:
@@ -91,6 +101,7 @@ private:
 };
 
 struct WebViewSession {
+    std::weak_ptr<WebViewSession> self;
     HWND window = nullptr;
     sao_ai_editor_runtime_t runtime_handle = nullptr;
     Microsoft::WRL::ComPtr<ICoreWebView2Environment> environment;
@@ -108,12 +119,15 @@ struct WebViewSession {
     DWORD ui_thread_id = 0;
     std::unordered_map<WebviewPostRequest*,
                        std::shared_ptr<WebviewPostRequest>> pending_posts;
+    std::string active_panel_id;
+    std::string materialized_html;
     // Off-screen frame capture and compositor input bridge state.
     std::unique_ptr<sao::ai_editor::WindowCaptureToMmf> mmf_capture;
     std::unique_ptr<sao::ai_editor::InputEventRingReader> input_reader;
     bool off_screen = false;
     bool capture_registered = false;
-    bool capture_unregister_attempted = false;
+    enum class CaptureUnregisterState : uint8_t { pending, succeeded, retryable_failed };
+    CaptureUnregisterState capture_unregister_state = CaptureUnregisterState::pending;
     int32_t capture_unregister_status = SAO_OK;
 
     int32_t unregister_capture_protection_once() noexcept {
@@ -121,8 +135,8 @@ struct WebViewSession {
         {
             std::lock_guard<std::mutex> guard(mutex);
             if (!capture_registered) return capture_unregister_status;
-            if (capture_unregister_attempted) return capture_unregister_status;
-            capture_unregister_attempted = true;
+            if (capture_unregister_state == CaptureUnregisterState::succeeded) return capture_unregister_status;
+            capture_unregister_state = CaptureUnregisterState::pending;
             target = window;
         }
         const int32_t rc =
@@ -130,6 +144,7 @@ struct WebViewSession {
         {
             std::lock_guard<std::mutex> guard(mutex);
             capture_unregister_status = rc;
+            capture_unregister_state = rc == SAO_OK ? CaptureUnregisterState::succeeded : CaptureUnregisterState::retryable_failed;
             if (rc == SAO_OK) capture_registered = false;
         }
         return rc;
@@ -233,7 +248,8 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
     auto request = std::make_shared<WebviewPostRequest>();
     request->panel_id = std::string(panel_id);
     request->message_seq = message_seq;
-    request->message = message;
+    request->message = make_webview_panel_message_envelope(
+        panel_id, message_seq, message);
     const DWORD current_thread_id = GetCurrentThreadId();
     DWORD ui_thread_id = 0;
     HWND window = nullptr;
@@ -256,7 +272,8 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
             return false;
         }
         try {
-            const std::wstring payload = utf8_to_wide(message.dump());
+            const std::wstring payload =
+                utf8_to_wide(request->message.dump());
             return !payload.empty() &&
                    SUCCEEDED(view->PostWebMessageAsJson(payload.c_str()));
         } catch (...) {
@@ -301,6 +318,91 @@ private:
     NativeRuntime* runtime_ = nullptr;
 };
 
+bool clear_materialized_registry_panel(
+    const std::shared_ptr<WebViewSession>& session,
+    const Microsoft::WRL::ComPtr<ICoreWebView2>& view) {
+    if (session == nullptr) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
+    bool had_materialized_panel = false;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        had_materialized_panel = !session->active_panel_id.empty() ||
+                                 !session->materialized_html.empty();
+        controller = session->controller;
+    }
+    bool succeeded = true;
+    if (view != nullptr && had_materialized_panel) {
+        static constexpr wchar_t kClearActivePanelScript[] =
+            L"if (window.__saoSetActivePanel) "
+            L"window.__saoSetActivePanel(null);";
+        static constexpr wchar_t kBlankHtml[] =
+            L"<html><body></body></html>";
+        succeeded = SUCCEEDED(view->ExecuteScript(
+                         kClearActivePanelScript, nullptr)) &&
+                    SUCCEEDED(view->NavigateToString(kBlankHtml));
+    }
+    if (controller != nullptr &&
+        FAILED(controller->put_IsVisible(FALSE))) {
+        succeeded = false;
+    }
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        session->active_panel_id.clear();
+        session->materialized_html.clear();
+    }
+    return succeeded;
+}
+
+bool materialize_registry_panel(
+    const std::shared_ptr<WebViewSession>& session,
+    const Microsoft::WRL::ComPtr<ICoreWebView2>& view, bool force) {
+    if (session == nullptr || view == nullptr ||
+        session->runtime_handle == nullptr) {
+        return false;
+    }
+    RuntimeLease lease(session->runtime_handle);
+    NativeRuntime* runtime = lease.get();
+    if (runtime == nullptr) return false;
+    const auto active = runtime->active_webview_panel();
+    if (!active.has_value()) {
+        return clear_materialized_registry_panel(session, view);
+    }
+    const std::string html = active->html.empty()
+        ? std::string{"<html><body></body></html>"}
+        : active->html;
+    const bool html_changed = session->materialized_html != html;
+    const bool changed = force || session->active_panel_id != active->panel_id ||
+                         html_changed;
+    if (!changed) return true;
+    const std::string script = "window.__saoSetActivePanel(" +
+                               nlohmann::json(active->panel_id).dump() +
+                               ");";
+    const std::wstring wide_script = utf8_to_wide(script);
+    const std::wstring wide_html = utf8_to_wide(html);
+    if (wide_script.empty() || wide_html.empty() ||
+        FAILED(view->AddScriptToExecuteOnDocumentCreated(
+            wide_script.c_str(), nullptr))) {
+        return false;
+    }
+    if (html_changed) {
+        if (FAILED(view->NavigateToString(wide_html.c_str()))) return false;
+    } else if (FAILED(view->ExecuteScript(wide_script.c_str(), nullptr))) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        controller = session->controller;
+    }
+    if (controller != nullptr && FAILED(controller->put_IsVisible(TRUE))) {
+        return false;
+    }
+    session->active_panel_id = active->panel_id;
+    session->materialized_html = html;
+    return true;
+}
 class EnvironmentReadyHandler
     : public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler {
 public:
@@ -533,8 +635,11 @@ HRESULT ControllerReadyHandler::Invoke(
         L"  if (window.chrome && window.chrome.webview) {\n"
         L"    window.chrome.webview.addEventListener('message', (event) => {\n"
         L"      const reply = event.data;\n"
-        L"      if (!reply || reply.method !==\n"
-        L"          'webviewPanel.postMessage.ack') { return; }\n"
+        L"      if (!reply) { return; }\n"
+        L"      if (reply.method !== 'webviewPanel.postMessage.ack') {\n"
+        L"        if (reply.method === 'webviewPanel.message') window.postMessage(reply.message, '*');\n"
+        L"        return;\n"
+        L"      }\n"
         L"      const waiter = pending.get(reply.id);\n"
         L"      if (!waiter) { return; }\n"
         L"      pending.delete(reply.id);\n"
@@ -599,7 +704,7 @@ HRESULT ControllerReadyHandler::Invoke(
         session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
         return setup_hr;
     }
-    if (!session_->navigate_url.empty()) {
+    if (materialize_registry_panel(session_, view_snapshot, true)) { } else if (!session_->navigate_url.empty()) {
         setup_hr = view_snapshot->Navigate(session_->navigate_url.c_str());
     } else {
         setup_hr = view_snapshot->NavigateToString(
@@ -760,6 +865,14 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
     case WM_TIMER: {
         constexpr UINT_PTR kCaptureTimerId = 0xA01u;
         constexpr UINT_PTR kInputTimerId = 0xA02u;
+        if (wparam == kPanelMaterializeTimerId) {
+            Microsoft::WRL::ComPtr<ICoreWebView2> view;
+            { std::lock_guard<std::mutex> guard(session->mutex); if (!session->teardown_started) view = session->view; }
+            const auto shared_session = session->self.lock();
+            if (view != nullptr && shared_session != nullptr)
+                (void)materialize_registry_panel(shared_session, view, false);
+            return 0;
+        }
         if (wparam == kCaptureTimerId) {
             sao::ai_editor::WindowCaptureToMmf* capture = nullptr;
             {
@@ -938,8 +1051,11 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         if (controller != nullptr) {
             controller->Close();
         }
-        const int32_t unregister_status =
+        int32_t unregister_status =
             session->unregister_capture_protection_once();
+        if (unregister_status != SAO_OK) {
+            unregister_status = session->unregister_capture_protection_once();
+        }
         if (unregister_status != SAO_OK) {
             session->status.store(unregister_status,
                                   std::memory_order_release);
@@ -1193,6 +1309,7 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     }
 
     auto session = std::make_shared<WebViewSession>();
+    session->self = session;
     session->runtime_handle = config.runtime_handle;
     session->bridge_enabled = config.bridge_native_runtime;
     session->navigate_url = utf8_to_wide(config.url);
@@ -1234,8 +1351,11 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
             sao::ai_editor::webview_hardening_registered(hardening_status);
     }
     auto destroy_hardened_window = [&]() -> int32_t {
-        const int32_t unregister_status =
+        int32_t unregister_status =
             session->unregister_capture_protection_once();
+        if (unregister_status != SAO_OK) {
+            unregister_status = session->unregister_capture_protection_once();
+        }
         if (IsWindow(window)) {
             DestroyWindow(window);
         }
@@ -1277,7 +1397,8 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     if (!SetWindowPos(window, nullptr, -32000, -32000, width_px, height_px,
                       SWP_NOACTIVATE | SWP_NOZORDER) ||
         SetTimer(window, /*kCaptureTimerId=*/0xA01u, 33u, nullptr) == 0 ||
-        SetTimer(window, /*kInputTimerId=*/0xA02u, 5u, nullptr) == 0) {
+        SetTimer(window, /*kInputTimerId=*/0xA02u, 5u, nullptr) == 0 ||
+        SetTimer(window, kPanelMaterializeTimerId, 50u, nullptr) == 0) {
         const int32_t cleanup_status = destroy_hardened_window();
         FreeLibrary(loader);
         return cleanup_status != SAO_OK

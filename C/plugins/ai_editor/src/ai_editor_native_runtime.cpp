@@ -861,8 +861,6 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 
 NativeRuntime::~NativeRuntime() {
     set_webview_post_message_handler({});
-    const auto kernel_map_bridge =
-        sao::ai_editor::kernel_map::shared_bridge_handle();
     if (mcp_management_panel_ != nullptr) {
         (void)mcp_management_panel_->unregister_from_runtime(webview_panels_);
         mcp_management_panel_.reset();
@@ -871,11 +869,6 @@ NativeRuntime::~NativeRuntime() {
         (void)kernel_map_panel_->unregister_from_runtime(webview_panels_);
         kernel_map_panel_.reset();
     }
-    {
-        std::lock_guard<std::mutex> lock(event_mutex_);
-        stopping_ = true;
-    }
-    event_ready_.notify_all();
 
     std::vector<std::shared_ptr<WorkflowExecution>> workflows;
     {
@@ -929,15 +922,42 @@ NativeRuntime::~NativeRuntime() {
             *extension_host_);
         extension_host_.reset();
     }
+    const auto kernel_map_bridge =
+        sao::ai_editor::kernel_map::shared_bridge_handle();
     (void)sao::ai_editor::kernel_map::unregister_kernel_map_tools(
         tools_, kernel_map_bridge);
     sao::ai_editor::kernel_map::abandon_kernel_map_tools(tools_);
+
+    if (kernel_map_bridge_owner_) {
+        std::vector<uint64_t> residual_kernel_maps;
+        kernel_map_teardown_status_ =
+            sao::ai_editor::kernel_map::release_shared_bridge_owner(
+                residual_kernel_maps);
+        kernel_map_bridge_owner_ = false;
+        if (kernel_map_teardown_status_ != SAO_AI_EDITOR_OK &&
+            kernel_map_teardown_status_ != SAO_AI_EDITOR_ERR_NOT_INITIALIZED &&
+            kernel_map_teardown_status_ != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            emit("kernelMap.teardownFailed",
+                 Json{{"status", kernel_map_teardown_status_},
+                      {"residualBases", residual_kernel_maps.size()}});
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(event_mutex_);
+        stopping_ = true;
+    }
+    event_ready_.notify_all();
 }
 
 void NativeRuntime::set_webview_post_message_handler(
     WebviewPostMessageHandler handler) {
     std::lock_guard<std::mutex> guard(webview_bridge_mutex_);
     webview_post_message_handler_ = std::move(handler);
+}
+
+std::optional<WebviewPanelState> NativeRuntime::active_webview_panel() const {
+    return webview_panels_.active_panel();
 }
 
 int32_t NativeRuntime::initialize() {
@@ -1003,6 +1023,12 @@ int32_t NativeRuntime::initialize() {
     builtin_mcp_registration_status_ = register_builtin_mcp_server();
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
+    if (!kernel_map_bridge_owner_) {
+        if (!sao::ai_editor::kernel_map::acquire_shared_bridge_owner()) {
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+        }
+        kernel_map_bridge_owner_ = true;
+    }
     // kernel_map wiring: surface the four native kernelMap.* tool descriptors
     // on tools/list and register the sao.kernelMap.* command handlers.  Both
     // registrations are idempotent (see kernel_map_tools.cpp /
@@ -1037,6 +1063,7 @@ int32_t NativeRuntime::initialize() {
     // built-in stub HTML that still exercises the message dispatch.
     kernel_map_panel_ = std::make_unique<KernelMapPanelProvider>();
     kernel_map_panel_->install_file_picker(&pick_kernel_driver_file);
+
     registration_status = kernel_map_panel_->register_with_runtime(
         webview_panels_,
         resolve_panel_assets(options_.system_root, "kernel_map_panel"));
@@ -4447,8 +4474,16 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
     }
     if (method == "vscode.workspace.writeTextDocument") {
         Json arguments = params;
-        arguments["confirmed"] = true;
-        return tools_.execute("agent", "editFile", arguments, result);
+        arguments.erase("confirmed");
+        Json policy_params = Json::object();
+        for (const char* key : {"mode", "approval", "permissions"}) if (params.contains(key)) policy_params[key] = params[key];
+        RuntimePolicySnapshot policy;
+        { std::lock_guard<std::mutex> lock(store_mutex_); const int32_t status = prepare_runtime_policy(scopes_, policy_params, policy); if (status != SAO_AI_EDITOR_OK) return status; }
+        const Json descriptor{{"name", "editFile"}, {"readOnly", false}};
+        ToolExecutionPlan plan;
+        const int32_t permission_status = prepare_tool_execution(policy, "editFile", "editFile", &descriptor, arguments, plan);
+        if (permission_status != SAO_AI_EDITOR_OK) return permission_status;
+        return tools_.execute(plan.mode, "editFile", plan.arguments, result);
     }
     if (method == "vscode.workspace.findFiles") {
         const Json arguments{
@@ -4499,6 +4534,16 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
             !params.contains("value")) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
+        Json policy_params = Json::object();
+        for (const char* key : {"mode", "approval", "permissions"}) if (params.contains(key)) policy_params[key] = params[key];
+        RuntimePolicySnapshot policy;
+        { std::lock_guard<std::mutex> lock(store_mutex_); const int32_t status = prepare_runtime_policy(scopes_, policy_params, policy); if (status != SAO_AI_EDITOR_OK) return status; }
+        const Json descriptor{{"name", "updateConfiguration"}, {"category", "write"}, {"readOnly", false}};
+        ToolExecutionPlan plan;
+        Json arguments = params;
+        arguments.erase("confirmed");
+        const int32_t permission_status = prepare_tool_execution(policy, "updateConfiguration", "updateConfiguration", &descriptor, arguments, plan);
+        if (permission_status != SAO_AI_EDITOR_OK) return permission_status;
         std::lock_guard<std::mutex> lock(store_mutex_);
         Json existing;
         (void)scopes_.load_scope_config("workspace", "", existing);

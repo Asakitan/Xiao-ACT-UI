@@ -501,6 +501,23 @@ json section_node(std::string title, json children) {
                 {"children", std::move(children)}};
 }
 
+json container_node(std::string id, json children, std::string_view layout,
+                    int32_t width, int32_t min_width, float weight,
+                    int32_t fallback_min_width) {
+    return json{{"type", "section"},
+                {"id", std::move(id)},
+                {"container", true},
+                {"layout", layout},
+                {"orientation", layout},
+                {"width", width},
+                {"min_width", min_width},
+                {"weight", weight},
+                {"fallback", {{"layout", "vertical"},
+                               {"min_width", fallback_min_width},
+                               {"threshold_width", fallback_min_width}}},
+                {"children", std::move(children)}};
+}
+
 void append_button_rows(json& nodes, json buttons, size_t columns) {
     for (size_t begin = 0; begin < buttons.size(); begin += columns) {
         json row = json::array();
@@ -2161,7 +2178,8 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
         dirty ? "存在未保存更改：请先 Apply 或 Discard，再切换作用域。"
               : "System provides defaults; Workspace overrides System; Plugin overrides both.",
         dirty ? "warn" : "muted", 32));
-    nodes.push_back(card_node("Scope", std::move(scope_children), dirty ? "warn" : "cyan"));
+    json rail_nodes = json::array();
+    rail_nodes.push_back(card_node("Scope", std::move(scope_children), dirty ? "warn" : "cyan"));
 
     json search_children = json::array();
     search_children.push_back(
@@ -2204,7 +2222,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
             " advanced fields / 高级字段",
         "muted"));
     search_children.push_back(row_node(std::move(advanced_actions)));
-    nodes.push_back(card_node("Search", std::move(search_children), "cyan"));
+    rail_nodes.push_back(card_node("Search", std::move(search_children), "cyan"));
 
     json nav_buttons = json::array();
     for (const auto& page : kPages) {
@@ -2214,13 +2232,15 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     }
     json navigation = json::array();
     append_button_rows(navigation, std::move(nav_buttons), 4);
-    nodes.push_back(card_node("Categories", std::move(navigation), "gold"));
+    rail_nodes.push_back(card_node("Categories", std::move(navigation), "gold"));
+
+    json content_nodes = json::array();
 
     if (!state.last_error.empty())
-        nodes.push_back(text_node("Error: " + state.last_error, "bad", 42));
+        content_nodes.push_back(text_node("Error: " + state.last_error, "bad", 42));
     if (!state.status_message.empty())
-        nodes.push_back(text_node(state.status_message,
-                                  state.save_phase == SavePhase::Failed ? "bad" : "accent", 36));
+        content_nodes.push_back(text_node(state.status_message,
+                                          state.save_phase == SavePhase::Failed ? "bad" : "accent", 36));
     if (!state.validation_errors.empty()) {
         json errors = json::array();
         errors.push_back(text_node("Validation errors / 验证错误: " +
@@ -2232,7 +2252,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                 break;
             errors.push_back(text_node(key + ": " + message, "bad", 28));
         }
-        nodes.push_back(card_node("Validation", std::move(errors), "bad"));
+        content_nodes.push_back(card_node("Validation", std::move(errors), "bad"));
     }
 
     if (!state.metadata_loaded && state.launcher != nullptr) {
@@ -2241,10 +2261,10 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
         loading.push_back(text_node("settings.describe is loading in the background. / "
                                     "正在后台加载 settings.describe。",
                                     "muted", 34));
-        nodes.push_back(card_node("Schema", std::move(loading), "warn"));
+        content_nodes.push_back(card_node("Schema", std::move(loading), "warn"));
     } else if (state.search_query.empty() && state.review_filter == "all" &&
                state.active_page == "overview") {
-        nodes.push_back(build_overview(state));
+        content_nodes.push_back(build_overview(state));
     } else {
         std::vector<const FieldMeta*> fields = visible_fields(state);
         const bool searching = !state.search_query.empty();
@@ -2255,13 +2275,13 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                       : (page_definition(state.active_page) != nullptr
                              ? std::string(page_definition(state.active_page)->label)
                              : "Settings");
-        nodes.push_back(text_node(content_title, "title", 28));
+        content_nodes.push_back(text_node(content_title, "title", 28));
         if (!searching && !filtering) {
             if (const auto* page = page_definition(state.active_page); page != nullptr)
-                nodes.push_back(text_node(std::string(page->description), "muted", 34));
+                content_nodes.push_back(text_node(std::string(page->description), "muted", 34));
         } else {
             const std::string reason = searching ? " matching fields" : " reviewed fields";
-            nodes.push_back(text_node(std::to_string(fields.size()) + reason +
+            content_nodes.push_back(text_node(std::to_string(fields.size()) + reason +
                                           " across all categories.",
                                       "muted", 28));
         }
@@ -2278,7 +2298,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
             empty_actions.push_back(
                 button_node("empty.overview", "Overview", "nav.page", {{"page", "overview"}}));
             empty.push_back(row_node(std::move(empty_actions)));
-            nodes.push_back(card_node("Empty", std::move(empty), "warn"));
+            content_nodes.push_back(card_node("Empty", std::move(empty), "warn"));
         } else {
             const size_t offset = std::min(
                 state.result_offset, ((fields.size() - 1U) / kFieldsPerPage) * kFieldsPerPage);
@@ -2288,13 +2308,13 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                 const FieldMeta& item = *fields[index];
                 if (searching || filtering) {
                     const auto* page = page_definition(item.page);
-                    nodes.push_back(text_node(
+                    content_nodes.push_back(text_node(
                         page == nullptr ? item.page : std::string(page->label), "subtitle", 24));
                 } else if (!item.group.empty() && item.group != current_group) {
                     current_group = item.group;
-                    nodes.push_back(text_node(current_group, "subtitle", 24));
+                    content_nodes.push_back(text_node(current_group, "subtitle", 24));
                 }
-                nodes.push_back(build_field_card(state, item));
+                content_nodes.push_back(build_field_card(state, item));
             }
             if (fields.size() > kFieldsPerPage) {
                 json paging = json::array();
@@ -2306,7 +2326,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                                            "muted", 24));
                 paging.push_back(button_node("results.next", "Next / 下一页", "results.next",
                                              json::object(), "default", end >= fields.size()));
-                nodes.push_back(row_node(std::move(paging), "center"));
+                content_nodes.push_back(row_node(std::move(paging), "center"));
             }
         }
     }
@@ -2338,7 +2358,17 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                                              synchronization_locked));
     footer.push_back(row_node(std::move(footer_actions)));
     json footer_node = card_node("Footer", std::move(footer), dirty ? "warn" : "ok");
-    nodes.push_back(std::move(footer_node));
+    content_nodes.push_back(std::move(footer_node));
+
+    json rail = container_node("settings-category-rail", std::move(rail_nodes),
+                               "vertical", 248, 188, 0.0F, 760);
+    rail["role"] = "category-rail";
+    json content = container_node("settings-content", std::move(content_nodes),
+                                  "vertical", 0, 520, 1.0F, 760);
+    content["role"] = "content";
+    nodes.push_back(container_node(
+        "settings-layout", json::array({std::move(rail), std::move(content)}),
+        "horizontal", 0, 760, 1.0F, 760));
 
     json document{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}};
     std::string serialized = document.dump();
@@ -4440,14 +4470,20 @@ sao_ai_editor_settings_panel_try_destroy(sao_ai_editor_settings_panel_t panel) {
         }
 
         bool rpc_busy = false;
+        bool claim_valid = false;
         {
             std::lock_guard state_lock(state->mutex);
-            if (!state->destroy_claimed)
-                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
-            rpc_busy = (state->rpc_kind != RpcKind::None && !state->rpc_future.valid()) ||
-                       (state->rpc_future.valid() &&
-                        state->rpc_future.wait_for(std::chrono::milliseconds(0)) !=
-                            std::future_status::ready);
+            claim_valid = state->destroy_claimed;
+            if (claim_valid) {
+                rpc_busy = (state->rpc_kind != RpcKind::None && !state->rpc_future.valid()) ||
+                           (state->rpc_future.valid() &&
+                            state->rpc_future.wait_for(std::chrono::milliseconds(0)) !=
+                                std::future_status::ready);
+            }
+        }
+        if (!claim_valid) {
+            release_destroy_claim(*state, previous_accepting, previous_teardown_failed);
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
         if (rpc_busy) {
             release_destroy_claim(*state, previous_accepting, previous_teardown_failed);
@@ -4520,16 +4556,25 @@ sao_ai_editor_settings_panel_try_destroy(sao_ai_editor_settings_panel_t panel) {
         }
 
         std::unique_ptr<AiEditorSettingsPanelState> owned;
+        bool final_claim_valid = true;
         {
             std::lock_guard registry_lock(registry_mutex());
             const auto found = registry().find(panel);
-            if (found == registry().end() || found->second.get() != state)
-                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
-            std::lock_guard state_lock(state->mutex);
-            if (!state->destroy_claimed)
-                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
-            owned = std::move(found->second);
-            registry().erase(found);
+            if (found == registry().end() || found->second.get() != state) {
+                final_claim_valid = false;
+            } else {
+                std::lock_guard state_lock(state->mutex);
+                if (!state->destroy_claimed) {
+                    final_claim_valid = false;
+                } else {
+                    owned = std::move(found->second);
+                    registry().erase(found);
+                }
+            }
+        }
+        if (!final_claim_valid) {
+            release_destroy_claim(*state, previous_accepting, previous_teardown_failed);
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
         return SAO_AI_EDITOR_OK;
     } catch (...) {

@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -90,7 +91,7 @@ private:
 
     NativeRuntime& runtime_;
     mutable std::mutex mutex_;
-    mutable std::mutex runtime_mutex_;
+    mutable std::shared_mutex runtime_mutex_;
     std::shared_ptr<NodeRuntime> node_runtime_;
     NodeRuntime::BootOptions boot_options_{};
     std::unordered_map<std::string, ExtensionRecord> extensions_;

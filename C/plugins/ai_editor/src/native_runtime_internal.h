@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -265,6 +266,7 @@ public:
                                              Json& result);
     void set_webview_post_message_handler(
         WebviewPostMessageHandler handler);
+    std::optional<WebviewPanelState> active_webview_panel() const;
 
     mutable std::mutex store_mutex_;
     mutable std::mutex state_mutex_;
@@ -299,6 +301,8 @@ public:
     };
     mutable std::mutex cost_stats_mutex_;
     std::unordered_map<std::string, CostStatsRow> cost_stats_;
+    int32_t kernel_map_teardown_status_ = SAO_AI_EDITOR_OK;
+    bool kernel_map_bridge_owner_ = false;
 };
 
 }  // namespace sao::ai_editor::native

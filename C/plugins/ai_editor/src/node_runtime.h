@@ -7,6 +7,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -107,6 +108,7 @@ private:
     bool shutdown_started_ = false;
 
     mutable std::mutex state_mutex_;
+    mutable std::shared_mutex lifecycle_mutex_;
     std::string protocol_version_;
     Json server_info_;
     Json capabilities_;

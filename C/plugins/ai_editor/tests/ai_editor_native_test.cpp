@@ -924,6 +924,7 @@ TEST_CASE("AI Editor file tools enforce mode permissions and workspace bounds",
             SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION);
 }
 
+
 TEST_CASE("AI Editor tool permission resolver applies tool alias category and mode precedence",
           "[plugins][ai_editor][native][tools][permissions][policy]") {
     RuntimeFixture fixture;
@@ -11008,6 +11009,7 @@ TEST_CASE("vscode.window.createWebviewPanel mints an id and reveal marks visible
             SAO_AI_EDITOR_ERR_NOT_FOUND);
 }
 
+
 TEST_CASE("vscode.window.postMessageToWebview rejects an unavailable bridge",
           "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
     RuntimeFixture fixture;
@@ -11152,6 +11154,7 @@ TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
             static_cast<int64_t>(html_b.size()));
     REQUIRE(listed_after["result"]["totalCreated"].get<int64_t>() >= 2);
 }
+
 
 TEST_CASE("ExtensionHost rolls back failed activation side effects in reverse order",
           "[plugins][ai_editor][native][extensions][node][activation_rollback]") {

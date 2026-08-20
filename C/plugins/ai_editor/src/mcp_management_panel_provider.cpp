@@ -87,22 +87,29 @@ int32_t McpManagementPanelProvider::register_with_runtime(
     options.extras = Json{{"builtin", true}, {"kind", "mcp-management"}};
 
     WebviewPanelState state;
+    bool adopted_by_provider = false;
     int32_t status = registry.create(
         std::string{kMcpManagementPanelId}, std::string{kMcpManagementViewType},
         std::string{kMcpManagementPanelTitle}, options,
         WebviewPanelOwner::native_runtime, state);
     if (status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
         const auto existing = registry.snapshot(std::string{kMcpManagementPanelId});
-        if (!existing.has_value()) {
+        if (!existing.has_value() || existing->disposed || existing->owner != WebviewPanelOwner::native_runtime || existing->view_type != kMcpManagementViewType || existing->title != kMcpManagementPanelTitle) {
             return status;
         }
         state = *existing;
     } else if (status != SAO_AI_EDITOR_OK) {
         return status;
+    } else {
+        adopted_by_provider = true;
     }
     status = registry.set_html(std::string{kMcpManagementPanelId},
                                load_bundled_html(assets_root), state);
     if (status != SAO_AI_EDITOR_OK) {
+        if (adopted_by_provider) {
+            WebviewPanelState rollback;
+            (void)registry.dispose(std::string{kMcpManagementPanelId}, rollback);
+        }
         return status;
     }
     registered_ = true;
