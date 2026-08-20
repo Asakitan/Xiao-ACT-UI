@@ -412,6 +412,8 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     Json schema;
     bool is_custom = false;
     bool custom_read_only = true;
+    CustomExecuteFn custom_execute_fn = nullptr;
+    void* custom_execute_user = nullptr;
     bool found_tool = false;
     bool is_gpu_hunt = false;
     if (is_builtin_name(resolved_name)) {
@@ -439,6 +441,8 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
             if (found != custom_tools_.end()) {
                 schema = found->second.parameters;
                 custom_read_only = found->second.read_only;
+                custom_execute_fn = found->second.execute_fn;
+                custom_execute_user = found->second.execute_user;
                 is_custom = true;
                 found_tool = true;
             }
@@ -492,11 +496,10 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
         // surfaced as `ok:false` responses rather than JSON-RPC errors.
         dispatch_status = dispatch_gpu_hunt_tool(name, arguments, result);
     } else if (is_custom) {
-        // Custom tools: sync passthrough — the runtime hands the arguments
-        // back to the caller so an external handler can carry out the real
-        // work.  The ask/plan gating mirrors the built-in mutating-tool
-        // behaviour so a user-defined "writeSomething" tool cannot slip past
-        // permission mode.
+        // Custom tools share the built-in mutating-tool permission gates. A
+        // native registration may provide a direct callback; callback-less
+        // tools preserve the historical passthrough response used by the
+        // public tools.register API.
         if (!custom_read_only && mode == "ask") {
             return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
         }
@@ -507,10 +510,15 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
                           {"custom", true}};
             return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
         }
-        result = Json{{"custom", true},
-                      {"name", std::string(name)},
-                      {"arguments", arguments}};
-        dispatch_status = SAO_AI_EDITOR_OK;
+        if (custom_execute_fn != nullptr) {
+            dispatch_status =
+                custom_execute_fn(arguments, result, custom_execute_user);
+        } else {
+            result = Json{{"custom", true},
+                          {"name", std::string(name)},
+                          {"arguments", arguments}};
+            dispatch_status = SAO_AI_EDITOR_OK;
+        }
     } else {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
@@ -577,7 +585,9 @@ bool NativeToolRegistry::is_builtin_name(std::string_view name) noexcept {
 int32_t NativeToolRegistry::register_custom(std::string_view name,
                                             std::string_view description,
                                             const Json& parameters,
-                                            bool read_only) {
+                                            bool read_only,
+                                            CustomExecuteFn execute_fn,
+                                            void* execute_user) {
     if (name.empty() || !valid_utf8(name)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -603,6 +613,8 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     tool.description = std::string(description);
     tool.parameters = std::move(schema);
     tool.read_only = read_only;
+    tool.execute_fn = execute_fn;
+    tool.execute_user = execute_user;
     std::lock_guard<std::mutex> lock(custom_mutex_);
     // Reject a custom-tool registration whose name collides with an existing
     // alias.  Re-registering an existing custom name still updates the

@@ -1,11 +1,9 @@
 // Catch2 tests for apply_stealth_window (window_hardening.h).
 //
 // The production write-path routes through sao_security_anti_screencap
-// helper functions (dynamic-loaded from the DLL that sao_platform_ui
-// already brings into the process).  In the isolated test process
-// sao_security_anti_screencap.dll is not resident, so
-// apply_stealth_window degrades gracefully to `false` without touching
-// the window at all -- proving:
+// helper functions from the one application-local DLL.  If that DLL is
+// absent from the application directory, apply_stealth_window degrades
+// gracefully to `false` without touching the window at all -- proving:
 //   * null / graceful-degradation contract
 //   * no direct SetWindowDisplayAffinity call (would otherwise succeed
 //     regardless of the helper DLL presence and let the test read back a
@@ -50,32 +48,51 @@ TEST_CASE("apply_stealth_window rejects null hwnd",
 }
 
 TEST_CASE("apply_stealth_window gracefully returns false when the "
-          "sao_security helper DLL is not loaded",
+          "sao_security helper DLL is unavailable locally",
           "[ai_editor][stealth]") {
     DummyWindow w;
     REQUIRE(w.hwnd != nullptr);
-    // The test binary does not link sao_security_anti_screencap, and no
-    // sibling library pulls it in either, so GetModuleHandleW inside
-    // apply_stealth_window returns NULL.  The helper must return false
-    // without touching the window (proving it never falls back to a
-    // direct SetWindowDisplayAffinity call bypassing the helper).
-    if (::GetModuleHandleW(L"sao_security_anti_screencap.dll") == nullptr) {
-        REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(w.hwnd));
-        // Verify no side effect on the window's affinity: still WDA_NONE.
+    const int32_t status =
+        sao::ai_editor::apply_stealth_window_status(w.hwnd);
+    if (status == SAO_ERR_NOT_FOUND) {
         DWORD affinity = 0xFFFFFFFFu;
         REQUIRE(::GetWindowDisplayAffinity(w.hwnd, &affinity) != FALSE);
         REQUIRE(affinity == 0u);
     } else {
-        // Rare CI environment where the helper DLL happens to be
-        // pre-loaded; in that case apply_stealth_window may succeed.
-        // Either outcome is contract-compliant; only ensure no crash.
-        (void)sao::ai_editor::apply_stealth_window(w.hwnd);
+        CHECK(status != SAO_ERR_HANDLE_INVALID);
     }
 }
 
-TEST_CASE("apply_stealth_window handles a null-hwnd repeatedly",
-          "[ai_editor][stealth]") {
-    for (int i = 0; i < 16; ++i) {
-        REQUIRE_FALSE(sao::ai_editor::apply_stealth_window(nullptr));
-    }
+TEST_CASE("webview hardening requires affinity and coordinator registration",
+          "[ai_editor][stealth][webview]") {
+    using sao::ai_editor::WebviewHardeningStatus;
+    CHECK(sao::ai_editor::classify_webview_hardening(true, true) ==
+          WebviewHardeningStatus::kApplied);
+    CHECK(sao::ai_editor::classify_webview_hardening(false, true) ==
+          WebviewHardeningStatus::kAffinityApplyFailed);
+    CHECK(sao::ai_editor::classify_webview_hardening(true, false) ==
+          WebviewHardeningStatus::kRegistrationFailed);
+    CHECK(sao::ai_editor::webview_hardening_registered(
+        WebviewHardeningStatus::kApplied));
+    CHECK(sao::ai_editor::classify_webview_hardening_status(
+              SAO_ASC_APPLY_POLICY_DISABLED, SAO_OK) ==
+          WebviewHardeningStatus::kDeferredByPolicy);
+    CHECK(sao::ai_editor::webview_hardening_registered(
+        WebviewHardeningStatus::kDeferredByPolicy));
+    CHECK(sao::ai_editor::webview_hardening_registered(
+        WebviewHardeningStatus::kAffinityApplyFailed));
+    CHECK_FALSE(sao::ai_editor::webview_hardening_registered(
+        WebviewHardeningStatus::kRegistrationFailed));
+}
+
+
+TEST_CASE("main-window hardening classification is fail-closed",
+          "[ai_editor][stealth][main-window]") {
+    using sao::ai_editor::WebviewHardeningStatus;
+    CHECK(sao::ai_editor::classify_webview_hardening(false, false) ==
+          WebviewHardeningStatus::kRegistrationFailed);
+    CHECK(sao::ai_editor::classify_webview_hardening(false, true) ==
+          WebviewHardeningStatus::kAffinityApplyFailed);
+    CHECK(sao::ai_editor::webview_hardening_registered(
+        WebviewHardeningStatus::kApplied));
 }

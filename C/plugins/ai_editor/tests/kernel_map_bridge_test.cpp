@@ -2,14 +2,19 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -21,6 +26,7 @@
 #include "sao/rt_io/kernel_map_wire/proxy.h"
 #include "sao/rt_io/kernel_map_wire/wire.h"
 
+#include "../src/extension_host.h"
 #include "../src/kernel_map_commands.h"
 #include "../src/kernel_map_tools.h"
 #include "../src/native_tool_registry.h"
@@ -45,12 +51,143 @@ int32_t dispatch_gpu_hunt_tool(std::string_view,
 }
 }  // namespace sao::ai_editor::native
 
+// The focused bridge target compiles kernel_map_commands.cpp directly but
+// does not link the full extension host.  These seams remain unused here;
+// the dedicated runtime tests cover their real implementations.
+namespace sao::ai_editor::native {
+namespace {
+struct CommandFailureInjection final {
+    int32_t register_fail_call = 0;
+    int32_t register_fail_count = 0;
+    int32_t unregister_fail_call = 0;
+    int32_t unregister_fail_count = 0;
+    int32_t restore_fail_call = 0;
+    int32_t restore_fail_count = 0;
+    int32_t register_calls = 0;
+    int32_t unregister_calls = 0;
+    int32_t restore_calls = 0;
+};
+
+struct CommandHostState final {
+    std::unordered_map<std::string, ExtensionHost::NativeCommandRegistration>
+        commands;
+};
+
+std::unordered_map<const ExtensionHost*, CommandHostState>& command_hosts() {
+    static std::unordered_map<const ExtensionHost*, CommandHostState> states;
+    return states;
+}
+
+CommandFailureInjection& command_failures() {
+    static CommandFailureInjection failures;
+    return failures;
+}
+
+bool failure_active(int32_t call, int32_t first, int32_t count) {
+    return first > 0 && count > 0 && call >= first && call < first + count;
+}
+}  // namespace
+
+int32_t ExtensionHost::register_native_command(
+    std::string_view command_id, NativeCommandHandler handler, uint64_t owner) {
+    auto& failures = command_failures();
+    ++failures.register_calls;
+    if (failure_active(failures.register_calls, failures.register_fail_call,
+                       failures.register_fail_count)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    auto& commands = command_hosts()[this].commands;
+    const std::string id(command_id);
+    const auto found = commands.find(id);
+    if (found != commands.end() && found->second.owner != owner &&
+        (found->second.owner != 0u || owner != 0u)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    commands[id] =
+        NativeCommandRegistration{std::move(handler), owner};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ExtensionHost::unregister_native_command(std::string_view command_id,
+                                                 uint64_t owner) {
+    auto& failures = command_failures();
+    ++failures.unregister_calls;
+    if (failure_active(failures.unregister_calls,
+                       failures.unregister_fail_call,
+                       failures.unregister_fail_count)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    auto& commands = command_hosts()[this].commands;
+    const auto found = commands.find(std::string(command_id));
+    if (found == commands.end()) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    if (found->second.owner != owner) return SAO_AI_EDITOR_ERR_BUSY;
+    commands.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::optional<ExtensionHost::NativeCommandRegistration>
+ExtensionHost::snapshot_native_command(std::string_view command_id) const {
+    const auto host = command_hosts().find(this);
+    if (host == command_hosts().end()) return std::nullopt;
+    const auto found = host->second.commands.find(std::string(command_id));
+    if (found == host->second.commands.end()) return std::nullopt;
+    return found->second;
+}
+
+int32_t ExtensionHost::restore_native_command(
+    std::string_view command_id,
+    const std::optional<NativeCommandRegistration>& prior,
+    uint64_t owner) {
+    auto& failures = command_failures();
+    ++failures.restore_calls;
+    if (failure_active(failures.restore_calls, failures.restore_fail_call,
+                       failures.restore_fail_count)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    auto& commands = command_hosts()[this].commands;
+    const std::string id(command_id);
+    const auto found = commands.find(id);
+    if (found != commands.end() && found->second.owner != owner) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    if (prior.has_value()) {
+        commands[id] = *prior;
+    } else if (found != commands.end()) {
+        commands.erase(found);
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+void reset_kernel_map_command_test_host(const ExtensionHost& host) {
+    command_hosts().erase(&host);
+    command_failures() = CommandFailureInjection{};
+}
+
+void configure_kernel_map_command_test_failures(
+    int32_t register_fail_call, int32_t register_fail_count,
+    int32_t unregister_fail_call, int32_t unregister_fail_count,
+    int32_t restore_fail_call, int32_t restore_fail_count) {
+    command_failures() = CommandFailureInjection{
+        register_fail_call, register_fail_count, unregister_fail_call,
+        unregister_fail_count, restore_fail_call, restore_fail_count, 0, 0, 0};
+}
+
+size_t kernel_map_command_test_handler_count(const ExtensionHost& host) {
+    const auto found = command_hosts().find(&host);
+    return found == command_hosts().end() ? 0u : found->second.commands.size();
+}
+}  // namespace sao::ai_editor::native
+
 namespace km = sao::ai_editor::kernel_map;
 namespace nt = sao::ai_editor::native;
 
 namespace {
 
 using Json = nlohmann::json;
+
+nt::ExtensionHost& command_test_host() {
+    return *reinterpret_cast<nt::ExtensionHost*>(static_cast<uintptr_t>(0x1000));
+}
 
 // Recorded wire hop the shim captures on every proxy call so tests
 // can assert opcode + payload byte-by-byte.
@@ -159,8 +296,8 @@ private:
 // does not leak between cases.  The shared_bridge() singleton would
 // tie all tests together and turn idempotency assertions into a
 // serialisation puzzle.
-std::unique_ptr<km::Bridge> make_bridge() {
-    return std::make_unique<km::Bridge>();
+std::shared_ptr<km::Bridge> make_bridge() {
+    return std::make_shared<km::Bridge>();
 }
 
 // Interpret the raw payload for KMOP_ACTIVATE.
@@ -211,23 +348,6 @@ TEST_CASE("kernel_map_bridge: activate forwards to proxy",
     REQUIRE(req.invoke_result_slot_va == 0x1122334455667788ull);
     REQUIRE(req.idle_timeout_ms == 45000u);
     REQUIRE(req.pool_tag_seed == 0xA5A5A5A5A5A5A5A5ull);
-}
-
-TEST_CASE("kernel_map_bridge: idempotent activate",
-          "[plugins][ai_editor][kernel_map]") {
-    WireRecorder recorder;
-    ShimGuard guard(recorder);
-
-    auto bridge = make_bridge();
-    REQUIRE(bridge->activate(0xdeadbeefull, 12345u, 42u) == SAO_AI_EDITOR_OK);
-    // Same params -> no second wire hop, still OK.
-    REQUIRE(bridge->activate(0xdeadbeefull, 12345u, 42u) == SAO_AI_EDITOR_OK);
-    REQUIRE(recorder.hops.size() == 1);
-
-    // Different params -> new wire call.
-    REQUIRE(bridge->activate(0xdeadbeefull, 12345u, 43u) == SAO_AI_EDITOR_OK);
-    REQUIRE(recorder.hops.size() == 2);
-    REQUIRE(recorder.hops.back().cmd == SAO_RT_IO_KMOP_ACTIVATE);
 }
 
 TEST_CASE("kernel_map_bridge: status translates reply",
@@ -394,7 +514,7 @@ TEST_CASE("kernel_map_tools: registration creates four tools",
     nt::NativeToolRegistry registry(scopes, 0u, 0u);
 
     auto bridge = make_bridge();
-    km::register_kernel_map_tools(registry, *bridge);
+    km::register_kernel_map_tools(registry, bridge);
 
     const Json descriptors = registry.describe("chat");
     REQUIRE(descriptors.is_array());
@@ -429,43 +549,20 @@ TEST_CASE("kernel_map_tools: registration creates four tools",
     }
 }
 
-TEST_CASE("kernel_map_tools: registration is idempotent",
+TEST_CASE("kernel_map_tools: exec kernelMap.status reaches bridge",
           "[plugins][ai_editor][kernel_map]") {
+    WireRecorder recorder;
+    SaoRtIoKmStatusReply reply{};
+    reply.active = 1;
+    reply.map_count = 9;
+    recorder.next_status_reply.resize(sizeof(reply));
+    std::memcpy(recorder.next_status_reply.data(), &reply, sizeof(reply));
+    ShimGuard guard(recorder);
+
     nt::ScopeStore scopes;
     nt::NativeToolRegistry registry(scopes, 0u, 0u);
     auto bridge = make_bridge();
-
-    km::register_kernel_map_tools(registry, *bridge);
-    km::register_kernel_map_tools(registry, *bridge);
-
-    const Json descriptors = registry.describe("chat");
-    size_t count = 0;
-    for (const auto& entry : descriptors) {
-        if (!entry.is_object() || !entry.contains("name")) {
-            continue;
-        }
-        const std::string name = entry["name"].get<std::string>();
-        if (name.rfind("kernelMap.", 0) == 0) {
-            ++count;
-        }
-    }
-    REQUIRE(count == 4);
-}
-
-TEST_CASE("kernel_map_tools: exec kernelMap.status intentionally not "
-          "reachable through registry",
-          "[plugins][ai_editor][kernel_map]") {
-    // NativeToolRegistry::execute() has no custom-exec seam today (see
-    // the header TODO in kernel_map_tools.h).  Calling a custom tool
-    // returns an echo of the request payload, NOT a live bridge call.
-    // We assert the current behaviour so the follow-up ticket can
-    // flip this test into "goes through the bridge" once the seam
-    // lands, and any accidental introduction of a live path breaks
-    // this case loud.
-    nt::ScopeStore scopes;
-    nt::NativeToolRegistry registry(scopes, 0u, 0u);
-    auto bridge = make_bridge();
-    km::register_kernel_map_tools(registry, *bridge);
+    km::register_kernel_map_tools(registry, bridge);
 
     Json result;
     const int32_t status =
@@ -473,11 +570,51 @@ TEST_CASE("kernel_map_tools: exec kernelMap.status intentionally not "
                           Json::object(), result);
     REQUIRE(status == SAO_AI_EDITOR_OK);
     REQUIRE(result.is_object());
-    // Echo passthrough behaviour: the response carries
-    // `{custom: true, name: "kernelMap.status", arguments: {...}}`.
-    REQUIRE(result.value("custom", false) == true);
-    REQUIRE(result.value("name", std::string{}) == "kernelMap.status");
+    REQUIRE(result.value("ok", false) == true);
+    REQUIRE(result.value("active", false) == true);
+    REQUIRE(result.value("map_count", 0u) == 9u);
+    REQUIRE(recorder.hops.size() == 1u);
+    REQUIRE(recorder.hops.front().cmd == SAO_RT_IO_KMOP_STATUS);
 }
+
+    TEST_CASE("kernel_map_tools: registration retains bridge until unregister",
+          "[plugins][ai_editor][kernel_map][registration]") {
+    nt::ScopeStore scopes;
+    nt::NativeToolRegistry registry(scopes, 0u, 0u);
+    auto bridge = std::make_shared<km::Bridge>();
+    std::weak_ptr<km::Bridge> weak = bridge;
+    REQUIRE(km::register_kernel_map_tools(registry, bridge) == SAO_AI_EDITOR_OK);
+    bridge.reset();
+    REQUIRE_FALSE(weak.expired());
+    auto owner = weak.lock();
+    REQUIRE(owner != nullptr);
+    REQUIRE(km::unregister_kernel_map_tools(registry, owner) == SAO_AI_EDITOR_OK);
+    owner.reset();
+    REQUIRE(weak.expired());
+}
+
+TEST_CASE("kernel_map_tools: mutating callbacks preserve mode gates",
+          "[plugins][ai_editor][kernel_map]") {
+        WireRecorder recorder;
+        ShimGuard guard(recorder);
+
+        nt::ScopeStore scopes;
+        nt::NativeToolRegistry registry(scopes, 0u, 0u);
+        auto bridge = make_bridge();
+        km::register_kernel_map_tools(registry, bridge);
+
+        Json result;
+        const Json arguments{{"driver_path", "C:\\fixture.sys"}};
+        REQUIRE(registry.execute("ask", "kernelMap.map", arguments, result) ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+        REQUIRE(recorder.hops.empty());
+
+        result = Json::object();
+        REQUIRE(registry.execute("plan", "kernelMap.map", arguments, result) ==
+            SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED);
+        REQUIRE(result.value("confirmationRequired", false) == true);
+        REQUIRE(recorder.hops.empty());
+    }
 
 TEST_CASE("kernel_map_commands: status returns bridge snapshot",
           "[plugins][ai_editor][kernel_map]") {
@@ -539,6 +676,37 @@ TEST_CASE("kernel_map_commands: enumerate reports hex bases",
             std::string("0xffffc00000000002"));
 }
 
+TEST_CASE("kernel_map_commands: canonical uint64 parser rejects malformed input",
+          "[plugins][ai_editor][kernel_map]") {
+    uint64_t value = 0;
+    REQUIRE(km::parse_kernel_map_uint64_text("0x10", value));
+    REQUIRE(value == 16);
+    REQUIRE(km::parse_kernel_map_uint64_text("10", value));
+    REQUIRE(value == 10);
+    for (const std::string text : {"", " 10", "10 ", "+10", "-1",
+                                   "0x", "0x10junk",
+                                   "18446744073709551616"}) {
+        REQUIRE_FALSE(km::parse_kernel_map_uint64_text(text, value));
+    }
+    REQUIRE_FALSE(km::parse_kernel_map_uint64(Json(10), value));
+    REQUIRE_FALSE(km::parse_kernel_map_uint64(Json(1.5), value));
+    REQUIRE_FALSE(km::parse_kernel_map_uint64(Json(true), value));
+}
+
+TEST_CASE("kernel_map_commands: wrong argument types do not reach bridge",
+          "[plugins][ai_editor][kernel_map]") {
+    WireRecorder recorder;
+    ShimGuard guard(recorder);
+    Json out;
+    REQUIRE(km::handle_kernel_map_command("sao.kernelMap.status",
+                                           Json::array(), out) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(km::handle_kernel_map_command(
+                "sao.kernelMap.unmap", Json{{"target_base", 4096}}, out) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(recorder.hops.empty());
+}
+
 TEST_CASE("kernel_map_commands: unknown command returns NOT_FOUND",
           "[plugins][ai_editor][kernel_map]") {
     Json out;
@@ -578,4 +746,184 @@ TEST_CASE("kernel_map_commands: unmap parses hex + decimal target_base",
                 "sao.kernelMap.unmap", args_missing, out) ==
             SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
     REQUIRE(recorder.hops.empty());
+}
+
+
+TEST_CASE("kernel_map_commands: partial unregister retains owner for retry",
+          "[plugins][ai_editor][kernel_map][registration][recovery]") {
+    auto& host = command_test_host();
+    nt::reset_kernel_map_command_test_host(host);
+    auto bridge = make_bridge();
+    REQUIRE(km::register_kernel_map_commands(host, bridge) == SAO_AI_EDITOR_OK);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 6u);
+
+    nt::configure_kernel_map_command_test_failures(
+        0, 0, 2, 1, 0, 0);
+    REQUIRE(km::unregister_kernel_map_commands(host) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) != 0u);
+
+    nt::configure_kernel_map_command_test_failures(0, 0, 0, 0, 0, 0);
+    REQUIRE(km::unregister_kernel_map_commands(host) == SAO_AI_EDITOR_OK);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 0u);
+    REQUIRE(km::unregister_kernel_map_commands(host) ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+    nt::reset_kernel_map_command_test_host(host);
+}
+
+TEST_CASE("kernel_map_commands: final abandonment releases failed owner for address reuse",
+          "[plugins][ai_editor][kernel_map][registration][teardown]") {
+    auto& host = command_test_host();
+    nt::reset_kernel_map_command_test_host(host);
+    auto bridge = make_bridge();
+    std::weak_ptr<km::Bridge> weak = bridge;
+    REQUIRE(km::register_kernel_map_commands(host, bridge) == SAO_AI_EDITOR_OK);
+
+    nt::configure_kernel_map_command_test_failures(
+        0, 0, 2, 1, 0, 0);
+    REQUIRE(km::unregister_kernel_map_commands(host) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    bridge.reset();
+    REQUIRE_FALSE(weak.expired());
+
+    km::abandon_kernel_map_commands(host);
+    km::abandon_kernel_map_commands(host);
+    nt::reset_kernel_map_command_test_host(host);
+    REQUIRE(weak.expired());
+    REQUIRE(km::unregister_kernel_map_commands(host) ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    auto replacement_bridge = make_bridge();
+    REQUIRE(km::register_kernel_map_commands(host, replacement_bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 6u);
+    REQUIRE(km::unregister_kernel_map_commands(host) == SAO_AI_EDITOR_OK);
+    nt::reset_kernel_map_command_test_host(host);
+}
+
+TEST_CASE("kernel_map_commands: failed registration rollback is retryable",
+          "[plugins][ai_editor][kernel_map][registration][recovery]") {
+    auto& host = command_test_host();
+    nt::reset_kernel_map_command_test_host(host);
+    auto bridge = make_bridge();
+
+    nt::configure_kernel_map_command_test_failures(
+        4, 1, 0, 0, 1, 1);
+    REQUIRE(km::register_kernel_map_commands(host, bridge) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) != 0u);
+
+    nt::configure_kernel_map_command_test_failures(0, 0, 0, 0, 0, 0);
+    REQUIRE(km::register_kernel_map_commands(host, bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 6u);
+    REQUIRE(km::unregister_kernel_map_commands(host) == SAO_AI_EDITOR_OK);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 0u);
+    nt::reset_kernel_map_command_test_host(host);
+}
+
+TEST_CASE("kernel_map_commands: foreign conflict remains intact after rollback",
+          "[plugins][ai_editor][kernel_map][registration][recovery]") {
+    auto& host = command_test_host();
+    nt::reset_kernel_map_command_test_host(host);
+    constexpr uint64_t foreign_owner = 0xA11CEu;
+    REQUIRE(host.register_native_command(
+                "sao.kernelMap.map",
+                [](const Json&, Json&) { return SAO_AI_EDITOR_OK; },
+                foreign_owner) == SAO_AI_EDITOR_OK);
+
+    auto bridge = make_bridge();
+    REQUIRE(km::register_kernel_map_commands(host, bridge) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(nt::kernel_map_command_test_handler_count(host) == 1u);
+    const auto retained =
+        host.snapshot_native_command("sao.kernelMap.map");
+    REQUIRE(retained.has_value());
+    REQUIRE(retained->owner == foreign_owner);
+    REQUIRE(km::unregister_kernel_map_commands(host) ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+    REQUIRE(host.unregister_native_command("sao.kernelMap.map",
+                                           foreign_owner) ==
+            SAO_AI_EDITOR_OK);
+    nt::reset_kernel_map_command_test_host(host);
+}
+
+TEST_CASE("kernel_map_tools: partial unregister retains BUSY tool for retry",
+          "[plugins][ai_editor][kernel_map][registration][recovery]") {
+    nt::ScopeStore scopes;
+    nt::NativeToolRegistry registry(scopes, 0u, 0u);
+    auto bridge = make_bridge();
+    km::clear_kernel_map_tool_failure_injection();
+    REQUIRE(km::register_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_OK);
+
+    km::set_kernel_map_tool_failure_injection(0, 0, 2, 1,
+                                              SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(registry.describe("chat").size() > 4u);
+
+    km::clear_kernel_map_tool_failure_injection();
+    REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("kernel_map_tools: final abandonment releases failed owner for address reuse",
+          "[plugins][ai_editor][kernel_map][registration][teardown]") {
+    nt::ScopeStore scopes;
+    std::aligned_storage_t<sizeof(nt::NativeToolRegistry),
+                           alignof(nt::NativeToolRegistry)>
+        storage;
+    auto* registry = ::new (static_cast<void*>(&storage))
+        nt::NativeToolRegistry(scopes, 0u, 0u);
+
+    auto bridge = make_bridge();
+    std::weak_ptr<km::Bridge> weak = bridge;
+    km::clear_kernel_map_tool_failure_injection();
+    REQUIRE(km::register_kernel_map_tools(*registry, bridge) ==
+            SAO_AI_EDITOR_OK);
+
+    km::set_kernel_map_tool_failure_injection(0, 0, 2, 1,
+                                              SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(km::unregister_kernel_map_tools(*registry, bridge) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    bridge.reset();
+    REQUIRE_FALSE(weak.expired());
+
+    km::abandon_kernel_map_tools(*registry);
+    km::abandon_kernel_map_tools(*registry);
+    registry->~NativeToolRegistry();
+    REQUIRE(weak.expired());
+
+    km::clear_kernel_map_tool_failure_injection();
+    registry = ::new (static_cast<void*>(&storage))
+        nt::NativeToolRegistry(scopes, 0u, 0u);
+    auto replacement_bridge = make_bridge();
+    REQUIRE(km::register_kernel_map_tools(*registry, replacement_bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(km::unregister_kernel_map_tools(*registry, replacement_bridge) ==
+            SAO_AI_EDITOR_OK);
+    registry->~NativeToolRegistry();
+}
+
+TEST_CASE("kernel_map_tools: partial registration rollback retries cleanly",
+          "[plugins][ai_editor][kernel_map][registration][recovery]") {
+    nt::ScopeStore scopes;
+    nt::NativeToolRegistry registry(scopes, 0u, 0u);
+    auto bridge = make_bridge();
+    km::clear_kernel_map_tool_failure_injection();
+    km::set_kernel_map_tool_failure_injection(3, 1, 1, 1,
+                                              SAO_AI_EDITOR_ERR_BUSY);
+    REQUIRE(km::register_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_ERR_BUSY);
+
+    km::clear_kernel_map_tool_failure_injection();
+    REQUIRE(km::register_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(km::unregister_kernel_map_tools(registry, bridge) ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
 }

@@ -139,8 +139,8 @@ public:
     int32_t register_with_runtime(WebviewPanelRegistry& registry,
                                   const std::string& assets_root) override;
 
-    // Idempotent teardown counterpart.  Marks the panel disposed but
-    // keeps the registry entry for post-mortem inspection.
+    // Idempotent teardown counterpart.  Releases provider ownership while
+    // keeping the live registry record reusable for same-provider adoption.
     int32_t unregister_from_runtime(WebviewPanelRegistry& registry) override;
 
     // Test / production seams — inject before register_with_runtime()
@@ -170,13 +170,16 @@ public:
     bool is_registered() const noexcept;
 
 private:
-    Json handle_status_locked();
-    Json handle_enumerate_locked();
-    Json handle_activate_locked(const Json& args);
-    Json handle_deactivate_locked();
-    Json handle_unmap_locked(const Json& args);
-    Json handle_load_driver_locked();
-    Json handle_refresh_locked();
+    Json handle_status(const std::shared_ptr<IKernelMapBridge>& bridge);
+    Json handle_enumerate(const std::shared_ptr<IKernelMapBridge>& bridge);
+    Json handle_activate(const std::shared_ptr<IKernelMapBridge>& bridge,
+                         const Json& args);
+    Json handle_deactivate(const std::shared_ptr<IKernelMapBridge>& bridge);
+    Json handle_unmap(const std::shared_ptr<IKernelMapBridge>& bridge,
+                      const Json& args);
+    Json handle_load_driver(const std::shared_ptr<IKernelMapBridge>& bridge,
+                            const FilePicker& picker);
+    Json handle_refresh();
     Json build_error(std::string_view cmd,
                      std::string_view reason,
                      const Json& request_id) const;
@@ -191,7 +194,7 @@ private:
     std::string load_bundled_html(const std::string& assets_root) const;
 
     mutable std::mutex mutex_;
-    std::unique_ptr<IKernelMapBridge> bridge_;
+    std::shared_ptr<IKernelMapBridge> bridge_;
     PostToPage post_to_page_;
     FilePicker file_picker_;
     bool registered_ = false;

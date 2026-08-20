@@ -27,6 +27,9 @@ int32_t validate_json_against_schema(const Json& arguments,
 
 class NativeToolRegistry final {
 public:
+    using CustomExecuteFn =
+        int32_t (*)(const Json& arguments, Json& result, void* user);
+
     NativeToolRegistry(const ScopeStore& scopes,
                        uint32_t maximum_file_bytes,
                        uint32_t maximum_search_results) noexcept;
@@ -47,11 +50,15 @@ public:
     // (per-runtime) — it does not survive a runtime restart.  Names must be
     // non-empty and cannot shadow a built-in (readFile/listFiles/…); collisions
     // fail with SAO_AI_EDITOR_ERR_INVALID_ARGUMENT.  Re-registering the same
-    // custom name updates the descriptor.
+    // custom name updates the descriptor. `execute_fn` is optional; when it
+    // is null execute() preserves the historical passthrough response. The
+    // callback user pointer is non-owning and must outlive the registration.
     int32_t register_custom(std::string_view name,
                             std::string_view description,
                             const Json& parameters,
-                            bool read_only);
+                            bool read_only,
+                            CustomExecuteFn execute_fn = nullptr,
+                            void* execute_user = nullptr);
     // Remove a previously registered custom tool.  Returning NOT_FOUND lets
     // callers distinguish "already gone" from "argument was rubbish".
     int32_t unregister_custom(std::string_view name);
@@ -113,6 +120,8 @@ private:
         std::string description;
         Json parameters;
         bool read_only = true;
+        CustomExecuteFn execute_fn = nullptr;
+        void* execute_user = nullptr;
     };
 
     struct AliasEntry final {

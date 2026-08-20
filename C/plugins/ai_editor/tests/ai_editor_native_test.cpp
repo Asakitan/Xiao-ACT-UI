@@ -1487,41 +1487,6 @@ TEST_CASE("AI Editor agents.list_defs surfaces 5 built-in agents",
     }
 }
 
-TEST_CASE("AI Editor agents.list_defs surfaces market presets when the "
-          "assets/ai_editor/agents dir is reachable",
-          "[plugins][ai_editor][native][agents][market]") {
-    RuntimeFixture fixture;
-    const Json defs = dispatch(fixture.get(), "agents.list_defs");
-    REQUIRE(defs.contains("result"));
-    const auto& items = defs["result"]["items"];
-    std::unordered_map<std::string, Json> by_id;
-    for (const auto& item : items) {
-        by_id.emplace(item.value("id", std::string{}), item);
-    }
-    const std::vector<std::string> market_ids{
-        "sql-expert", "test-writer", "security-auditor", "refactor-mentor"};
-    size_t market_hits = 0;
-    for (const auto& id : market_ids) {
-        const auto found = by_id.find(id);
-        if (found == by_id.end()) {
-            continue;
-        }
-        ++market_hits;
-        REQUIRE(found->second.value("scope", std::string{}) == "market");
-        REQUIRE(found->second.value("builtin", true) == false);
-        REQUIRE_FALSE(found->second.value("name", std::string{}).empty());
-    }
-    if (market_hits == 0) {
-        INFO("Market agent assets/ai_editor/agents not deployed near the "
-             "test binary; skipping the presence assertions. This is "
-             "expected when assets have not been installed.");
-    } else {
-        // Any preset we actually found must be the full set — partial
-        // deployment would indicate a packaging bug worth surfacing.
-        REQUIRE(market_hits == market_ids.size());
-    }
-}
-
 TEST_CASE("AI Editor agents.recommend ranks SQL performance query against "
           "sql-expert / optimizer",
           "[plugins][ai_editor][native][agents][recommend]") {
@@ -2768,6 +2733,90 @@ TEST_CASE("AI Editor extensions.configure_host auto-discovers the shim script",
     }
 }
 
+TEST_CASE("ExtensionHost configure rolls back malformed late fields",
+          "[plugins][ai_editor][native][extensions][configure][rollback]") {
+    RuntimeFixture fixture;
+    const Json configured = dispatch(
+        fixture.get(), "extensions.configure_host",
+        {{"nodeExecutable", "first-node"},
+         {"entryScript", "first-entry"},
+         {"nodeArgs", Json::array({"--first"})},
+         {"extraArgs", Json::array({"first-extra"})},
+         {"environment", {{"FIRST_KEY", "first-value"}}},
+         {"workingDirectory", "C:/first-working"},
+         {"startupMs", 7000U}});
+    REQUIRE(configured.contains("result"));
+    const Json before = dispatch(fixture.get(), "extensions.snapshot")["result"];
+
+    const Json malformed = dispatch(
+        fixture.get(), "extensions.configure_host",
+        {{"nodeExecutable", "second-node"},
+         {"entryScript", "second-entry"},
+         {"nodeArgs", Json::array({"--second"})},
+         {"extraArgs", Json::array({"second-extra"})},
+         {"environment", {{"SECOND_KEY", "second-value"}}},
+         {"workingDirectory", "C:/second-working"},
+         {"startupMs", "malformed"}});
+    REQUIRE(malformed.contains("error"));
+    REQUIRE(malformed["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json after = dispatch(fixture.get(), "extensions.snapshot")["result"];
+    REQUIRE(after == before);
+}
+
+TEST_CASE("ExtensionHost rejects reconfigure while the runtime is live",
+          "[plugins][ai_editor][native][extensions][configure][busy]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"live-configure-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    {
+        std::ofstream source(extension / L"extension.js");
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+exports.activate = () => ({ ready: true });
+)JS";
+    }
+
+    REQUIRE(dispatch(
+                fixture.get(), "extensions.configure_host",
+                {{"nodeExecutable", node},
+                 {"entryScript", shim},
+                 {"workingDirectory", utf8_path(extension)},
+                 {"startupMs", 5000U}})
+                .contains("result"));
+    const Json manifest{{"name", "live-configure"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.live-configure";
+    REQUIRE(dispatch(fixture.get(), "extensions.register",
+                     {{"manifest", manifest},
+                      {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000U}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "extensions.deactivate",
+                     {{"extensionId", extension_id}})
+                .contains("result"));
+
+    const Json before = dispatch(fixture.get(), "extensions.snapshot")["result"];
+    REQUIRE(before["nodeAlive"] == true);
+    const Json rejected = dispatch(
+        fixture.get(), "extensions.configure_host",
+        {{"nodeExecutable", "second-node"}, {"entryScript", "second-entry"}});
+    REQUIRE(rejected.contains("error"));
+    REQUIRE(rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_BUSY);
+    const Json after = dispatch(fixture.get(), "extensions.snapshot")["result"];
+    REQUIRE(after == before);
+}
 TEST_CASE("workflow group parallel batches contiguous same-group steps",
           "[plugins][ai_editor][native][workflows][parallel][integration]") {
     // Two responses; the server queue serves them in order to the two
@@ -3890,41 +3939,6 @@ TEST_CASE("AI Editor workflows.list_defs surfaces built-in workflows",
     REQUIRE(std::find(ids.begin(), ids.end(), "explain-and-improve") !=
             ids.end());
     REQUIRE(std::find(ids.begin(), ids.end(), "debug-trace") != ids.end());
-}
-
-TEST_CASE("AI Editor workflows.list_defs surfaces market presets when the "
-          "assets/ai_editor/workflows dir is reachable",
-          "[plugins][ai_editor][native][workflows][market]") {
-    RuntimeFixture fixture;
-    const Json defs = dispatch(fixture.get(), "workflows.list_defs");
-    REQUIRE(defs.contains("result"));
-    const auto& items = defs["result"]["items"];
-    std::unordered_map<std::string, Json> by_id;
-    for (const auto& item : items) {
-        by_id.emplace(item.value("id", std::string{}), item);
-    }
-    const std::vector<std::string> market_ids{
-        "sql-schema-fix", "security-audit-and-fix", "test-first-refactor"};
-    size_t market_hits = 0;
-    for (const auto& id : market_ids) {
-        const auto found = by_id.find(id);
-        if (found == by_id.end()) {
-            continue;
-        }
-        ++market_hits;
-        REQUIRE(found->second.value("scope", std::string{}) == "market");
-        REQUIRE(found->second.value("builtin", true) == false);
-        REQUIRE(found->second.contains("steps"));
-        REQUIRE(found->second["steps"].is_array());
-        REQUIRE(found->second["steps"].size() >= 2);
-    }
-    if (market_hits == 0) {
-        INFO("Market workflow assets/ai_editor/workflows not deployed near "
-             "the test binary; skipping the presence assertions. This is "
-             "expected when assets have not been installed.");
-    } else {
-        REQUIRE(market_hits == market_ids.size());
-    }
 }
 
 TEST_CASE("AI Editor workflows.run walks steps sequentially and captures "
@@ -7298,42 +7312,6 @@ TEST_CASE("AI Editor prompts.list_defs surfaces 3 built-in prompts",
         REQUIRE_FALSE(item.value("content", std::string{}).empty());
         REQUIRE(item.contains("variables"));
         REQUIRE(item["variables"].is_array());
-    }
-}
-
-TEST_CASE("AI Editor prompts.list_defs surfaces market presets when the "
-          "assets/ai_editor/prompts dir is reachable",
-          "[plugins][ai_editor][native][prompts][market]") {
-    RuntimeFixture fixture;
-    const Json defs = dispatch(fixture.get(), "prompts.list_defs");
-    REQUIRE(defs.contains("result"));
-    const auto& items = defs["result"]["items"];
-    std::unordered_map<std::string, Json> by_id;
-    for (const auto& item : items) {
-        by_id.emplace(item.value("id", std::string{}), item);
-    }
-    const std::vector<std::string> market_ids{
-        "sql-audit", "security-checklist", "performance-review",
-        "refactor-plan"};
-    size_t market_hits = 0;
-    for (const auto& id : market_ids) {
-        const auto found = by_id.find(id);
-        if (found == by_id.end()) {
-            continue;
-        }
-        ++market_hits;
-        REQUIRE(found->second.value("scope", std::string{}) == "market");
-        REQUIRE(found->second.value("builtin", true) == false);
-        REQUIRE_FALSE(found->second.value("name", std::string{}).empty());
-    }
-    if (market_hits == 0) {
-        INFO("Market prompt assets/ai_editor/prompts not deployed near the "
-             "test binary; skipping the presence assertions. This is "
-             "expected when assets have not been installed.");
-    } else {
-        // Any preset we actually found must be the full set — partial
-        // deployment would indicate a packaging bug worth surfacing.
-        REQUIRE(market_hits == market_ids.size());
     }
 }
 

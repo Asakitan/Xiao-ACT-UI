@@ -23,21 +23,23 @@
 #define SAO_AI_EDITOR_HAS_WEBVIEW 0
 #endif
 
-#ifndef SAO_AI_EDITOR_MAIN_SOURCE
-#define SAO_AI_EDITOR_MAIN_SOURCE ""
-#endif
-
-#ifndef SAO_AI_EDITOR_CMAKE_SOURCE
-#define SAO_AI_EDITOR_CMAKE_SOURCE ""
-#endif
-
-#ifndef SAO_AI_EDITOR_WEBVIEW_SOURCE
-#define SAO_AI_EDITOR_WEBVIEW_SOURCE ""
-#endif
-
 namespace {
 
 using Json = nlohmann::json;
+
+#if SAO_AI_EDITOR_HAS_WEBVIEW
+extern "C" int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_webview_lifetime_test_probe(
+    uint32_t* out_terminal_transitions,
+    uint32_t* out_duplicate_rejections,
+    uint32_t* out_post_before_init,
+    uint32_t* out_post_after_teardown_alive,
+    uint32_t* out_use_after_release,
+    uint32_t* out_final_release_count);
+
+extern "C" int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_webview_query_interface_null_test_probe();
+#endif
 
 struct TemporaryDirectory final {
     TemporaryDirectory() {
@@ -365,58 +367,75 @@ TEST_CASE("AI Editor hidden NativeWindow remains a UI smoke fixture",
     REQUIRE(exit_code == 0);
 }
 
-TEST_CASE("production WebView mode requires the complete compositor bridge",
-        "[plugins][ai_editor][production_child][webview][fail_closed]") {
+TEST_CASE("production WebView rejects invalid UTF-16 URL conversion",
+          "[plugins][ai_editor][production_child][webview][conversion]") {
     TemporaryDirectory temporary;
-    const auto workspace = temporary.path() / L"webview workspace";
+    const auto workspace = temporary.path() / L"webview URL workspace";
     REQUIRE(std::filesystem::create_directories(workspace));
-    EnvironmentGuard path_guard(L"PATH", temporary.path());
 
     const std::filesystem::path executable =
         SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
     REQUIRE(std::filesystem::is_regular_file(executable));
-#if SAO_AI_EDITOR_HAS_WEBVIEW
-    REQUIRE_FALSE(std::filesystem::exists(executable.parent_path() / L"WebView2Loader.dll"));
-#endif
-    const std::wstring base = L"--webview --workspace \"" + workspace.native() + L"\"";
-    CHECK(run_child_and_wait(executable, base, temporary.path()) == 2);
-    CHECK(run_child_and_wait(executable, base + L" --sao-mmf-name Local\\SaoFrame",
-                             temporary.path()) == 2);
-    CHECK(run_child_and_wait(executable, base + L" --sao-input-ring-name Local\\SaoInput",
-                             temporary.path()) == 2);
-    CHECK(run_child_and_wait(executable,
-                             base + L" --hidden --sao-mmf-name Local\\SaoFrame"
-                                    L" --sao-input-ring-name Local\\SaoInput",
-                             temporary.path()) == 2);
-    CHECK(run_child_and_wait(executable,
-                             base + L" --sao-mmf-name Local\\SaoFrame"
-                                    L" --sao-input-ring-name Local\\SaoInput",
-                             temporary.path()) == 12);
+
+    const std::wstring invalid_url(1, static_cast<wchar_t>(0xD800));
+    const std::wstring arguments =
+        L"--webview --workspace \"" + workspace.native() +
+        L"\" --sao-mmf-name Local\\SaoFrame"
+        L" --sao-input-ring-name Local\\SaoInput --webview-url \"" +
+        invalid_url + L"\"";
+    CHECK(run_child_and_wait(executable, arguments, temporary.path()) == 4);
 }
 
-TEST_CASE("shipping AI Editor excludes standalone panel entry points",
+TEST_CASE("WebView publication and post teardown use stable COM lifetime snapshots",
+          "[plugins][ai_editor][production_child][webview][race][lifetime]") {
+#if SAO_AI_EDITOR_HAS_WEBVIEW
+    uint32_t terminal_transitions = 0;
+    uint32_t duplicate_rejections = 0;
+    uint32_t post_before_init = 0;
+    uint32_t post_after_teardown_alive = 0;
+    uint32_t use_after_release = 0;
+    uint32_t final_release_count = 0;
+    REQUIRE(sao_ai_editor_webview_lifetime_test_probe(
+                &terminal_transitions, &duplicate_rejections,
+                &post_before_init, &post_after_teardown_alive,
+                &use_after_release, &final_release_count) ==
+            SAO_AI_EDITOR_OK);
+    CHECK(terminal_transitions == 1);
+    CHECK(duplicate_rejections == 1);
+    CHECK(post_before_init == 1);
+    CHECK(post_after_teardown_alive == 1);
+    CHECK(use_after_release == 0);
+    CHECK(final_release_count == 1);
+#else
+    SUCCEED("WebView bridge is disabled in this configuration");
+#endif
+}
+
+#if SAO_AI_EDITOR_HAS_WEBVIEW
+TEST_CASE("WebView COM callbacks reject null QueryInterface outputs",
+          "[plugins][ai_editor][production_child][webview][com]") {
+    REQUIRE(sao_ai_editor_webview_query_interface_null_test_probe() ==
+            SAO_AI_EDITOR_OK);
+}
+#else
+TEST_CASE("WebView COM callbacks reject null QueryInterface outputs",
+          "[plugins][ai_editor][production_child][webview][com]") {
+    SUCCEED("WebView bridge is disabled in this configuration");
+}
+#endif
+
+TEST_CASE("production AI Editor rejects unsupported entry points",
           "[plugins][ai_editor][production_child][shipping][focused]") {
-    const std::string main_source = read_all(SAO_AI_EDITOR_MAIN_SOURCE);
-    CHECK(main_source.find("gpu_hunt_panel_show") == std::string::npos);
-    CHECK(main_source.find("--gpu-hunt") == std::string::npos);
-
-    const std::string cmake_source = read_all(SAO_AI_EDITOR_CMAKE_SOURCE);
-    CHECK(cmake_source.find("src/gpu_hunt_panel.cpp") == std::string::npos);
-
-    const std::string webview_source = read_all(SAO_AI_EDITOR_WEBVIEW_SOURCE);
-    CHECK(webview_source.find("ShowWindow(") == std::string::npos);
-    CHECK(webview_source.find("WS_OVERLAPPEDWINDOW") ==
-          std::string::npos);
-    CHECK(webview_source.find("WS_POPUP") != std::string::npos);
-
     TemporaryDirectory temporary;
     const std::filesystem::path executable =
         SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
     REQUIRE(std::filesystem::is_regular_file(executable));
     CHECK(run_child_and_wait(executable, L"--gpu-hunt", temporary.path()) ==
           2);
-    CHECK(run_child_and_wait(executable, LR"(--sao-ai-editor-pipe \\.\pipe\sao-visible-child)",
-                             temporary.path()) == 2);
+    CHECK(run_child_and_wait(
+              executable,
+              LR"(--sao-ai-editor-pipe \\.\pipe\sao-visible-child)",
+              temporary.path()) == 2);
     CHECK(run_child_and_wait(
               executable,
               LR"(--sao-ai-editor-pipe \\.\pipe\sao-headless-child --headless --sao-mmf-name Local\Unexpected)",

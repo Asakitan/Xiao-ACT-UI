@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -117,59 +119,129 @@ Json ExtensionRecord::to_json() const {
 ExtensionHost::~ExtensionHost() { deactivate_all(); }
 
 int32_t ExtensionHost::configure(const Json& params) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (has_inflight_operation_locked(extensions_)) {
-        return SAO_AI_EDITOR_ERR_BUSY;
-    }
-    if (!params.is_object() ||
-        !params.contains("nodeExecutable") ||
-        !params["nodeExecutable"].is_string()) {
+    try {
+        std::lock_guard<std::mutex> runtime_guard(runtime_mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (has_inflight_operation_locked(extensions_) ||
+            (node_runtime_ && node_runtime_->alive())) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        if (!params.is_object() || !params.contains("nodeExecutable") ||
+            !params["nodeExecutable"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+
+        NodeRuntime::BootOptions candidate;
+        candidate.node_executable =
+            params["nodeExecutable"].get<std::string>();
+        if (candidate.node_executable.empty() ||
+            !valid_utf8(candidate.node_executable)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+
+        if (params.contains("entryScript")) {
+            if (!params["entryScript"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            candidate.entry_script =
+                params["entryScript"].get<std::string>();
+            if (!valid_utf8(candidate.entry_script)) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        }
+        if (candidate.entry_script.empty()) {
+            candidate.entry_script = default_shim_path_utf8();
+            if (candidate.entry_script.empty()) {
+                return SAO_AI_EDITOR_ERR_NOT_FOUND;
+            }
+        }
+
+        const auto parse_string_array = [](const Json& value,
+                                           std::vector<std::string>& target) {
+            if (!value.is_array()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            target.reserve(value.size());
+            for (const auto& item : value) {
+                if (!item.is_string()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                const std::string string = item.get<std::string>();
+                if (!valid_utf8(string)) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                target.push_back(string);
+            }
+            return SAO_AI_EDITOR_OK;
+        };
+
+        if (params.contains("nodeArgs") &&
+            parse_string_array(params["nodeArgs"], candidate.node_args) !=
+                SAO_AI_EDITOR_OK) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (params.contains("extraArgs") &&
+            parse_string_array(params["extraArgs"], candidate.extra_args) !=
+                SAO_AI_EDITOR_OK) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (params.contains("environment")) {
+            if (!params["environment"].is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            candidate.environment.reserve(params["environment"].size());
+            for (const auto& [key, value] : params["environment"].items()) {
+                if (key.empty() || !valid_utf8(key) || !value.is_string()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                const std::string string = value.get<std::string>();
+                if (!valid_utf8(string)) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                candidate.environment.emplace_back(key, string);
+            }
+        }
+        if (params.contains("workingDirectory")) {
+            if (!params["workingDirectory"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            candidate.working_directory =
+                params["workingDirectory"].get<std::string>();
+            if (!valid_utf8(candidate.working_directory)) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        }
+        if (params.contains("startupMs")) {
+            if (!params["startupMs"].is_number_unsigned() &&
+                !params["startupMs"].is_number_integer()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            uint64_t startup_ms = 0;
+            if (params["startupMs"].is_number_unsigned()) {
+                startup_ms = params["startupMs"].get<uint64_t>();
+            } else {
+                const int64_t signed_startup_ms =
+                    params["startupMs"].get<int64_t>();
+                if (signed_startup_ms < 0) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                startup_ms = static_cast<uint64_t>(signed_startup_ms);
+            }
+            if (startup_ms > std::numeric_limits<uint32_t>::max()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            candidate.startup_ms = static_cast<uint32_t>(startup_ms);
+        }
+
+        boot_options_ = std::move(candidate);
+        return SAO_AI_EDITOR_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    } catch (const Json::exception&) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    boot_options_ = NodeRuntime::BootOptions{};
-    boot_options_.node_executable =
-        params["nodeExecutable"].get<std::string>();
-    if (params.contains("entryScript") &&
-        params["entryScript"].is_string() &&
-        !params["entryScript"].get<std::string>().empty()) {
-        boot_options_.entry_script =
-            params["entryScript"].get<std::string>();
-    } else {
-        boot_options_.entry_script = default_shim_path_utf8();
-        if (boot_options_.entry_script.empty()) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
-        }
-    }
-    if (params.contains("nodeArgs") && params["nodeArgs"].is_array()) {
-        for (const auto& item : params["nodeArgs"]) {
-            if (!item.is_string()) {
-                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-            }
-            boot_options_.node_args.push_back(item.get<std::string>());
-        }
-    }
-    if (params.contains("extraArgs") && params["extraArgs"].is_array()) {
-        for (const auto& item : params["extraArgs"]) {
-            if (!item.is_string()) {
-                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-            }
-            boot_options_.extra_args.push_back(item.get<std::string>());
-        }
-    }
-    if (params.contains("environment") &&
-        params["environment"].is_object()) {
-        for (const auto& [key, value] : params["environment"].items()) {
-            if (!value.is_string()) {
-                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-            }
-            boot_options_.environment.emplace_back(
-                key, value.get<std::string>());
-        }
-    }
-    boot_options_.working_directory =
-        params.value("workingDirectory", std::string{});
-    boot_options_.startup_ms = params.value("startupMs", 15000U);
-    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ExtensionHost::ensure_runtime(
@@ -463,10 +535,18 @@ int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
 int32_t ExtensionHost::execute_command(std::string_view command_id,
                                        const Json& args, uint32_t timeout_ms,
                                        Json& out) {
+    NativeCommandHandler native_handler;
     std::shared_ptr<NodeRuntime> node;
     {
         std::lock_guard<std::mutex> guard(mutex_);
+        const auto native = native_commands_.find(std::string(command_id));
+        if (native != native_commands_.end()) {
+            native_handler = native->second.handler;
+        }
         node = node_runtime_;
+    }
+    if (native_handler) {
+        return native_handler(args, out);
     }
     if (!node || !node->alive()) {
         return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
@@ -474,6 +554,76 @@ int32_t ExtensionHost::execute_command(std::string_view command_id,
     Json params{{"command", std::string(command_id)}, {"arguments", args}};
     return node->request("commands.execute", params,
                          timeout_ms == 0 ? 15000 : timeout_ms, out);
+}
+
+int32_t ExtensionHost::register_native_command(
+    std::string_view command_id, NativeCommandHandler handler,
+    uint64_t owner) {
+    if (command_id.empty() || !valid_utf8(command_id) || !handler) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::string id(command_id);
+    const auto found = native_commands_.find(id);
+    if (found != native_commands_.end() && found->second.owner != owner &&
+        (found->second.owner != 0 || owner != 0)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    native_commands_.insert_or_assign(
+        id, NativeCommandRegistration{std::move(handler), owner});
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ExtensionHost::unregister_native_command(
+    std::string_view command_id, uint64_t owner) {
+    if (command_id.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto found = native_commands_.find(std::string(command_id));
+    if (found == native_commands_.end()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    if (found->second.owner != owner &&
+        (found->second.owner != 0 || owner != 0)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    native_commands_.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::optional<ExtensionHost::NativeCommandRegistration>
+ExtensionHost::snapshot_native_command(std::string_view command_id) const {
+    if (command_id.empty()) {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto found = native_commands_.find(std::string(command_id));
+    if (found == native_commands_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+int32_t ExtensionHost::restore_native_command(
+    std::string_view command_id,
+    const std::optional<NativeCommandRegistration>& prior,
+    uint64_t owner) {
+    if (command_id.empty() || owner == 0) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::string id(command_id);
+    const auto found = native_commands_.find(id);
+    if (found != native_commands_.end() && found->second.owner != owner) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
+    if (prior.has_value()) {
+        native_commands_.insert_or_assign(id, *prior);
+    } else if (found != native_commands_.end()) {
+        native_commands_.erase(found);
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ExtensionHost::post_webview_message(const Json& params, Json& out) {

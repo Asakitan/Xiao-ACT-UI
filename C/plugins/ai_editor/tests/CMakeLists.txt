@@ -73,9 +73,6 @@ target_link_libraries(sao_plugin_ai_editor_production_child_tests PRIVATE
 target_compile_definitions(sao_plugin_ai_editor_production_child_tests PRIVATE
     SAO_AI_EDITOR_PRODUCTION_EXECUTABLE="$<TARGET_FILE:sao_ai_editor>"
     SAO_AI_EDITOR_HAS_WEBVIEW=$<BOOL:${SAO_BUILD_WEBVIEW_BRIDGE}>
-    SAO_AI_EDITOR_MAIN_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../src/sao_ai_editor_main.cpp"
-    SAO_AI_EDITOR_CMAKE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../CMakeLists.txt"
-    SAO_AI_EDITOR_WEBVIEW_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../src/webview_bridge.cpp"
 )
 add_dependencies(sao_plugin_ai_editor_production_child_tests
     sao_ai_editor
@@ -88,10 +85,6 @@ add_executable(sao_plugin_ai_editor_gpu_hunt_tests
     test_input_event_ring.cpp
     test_self_render.cpp
     test_window_capture_mmf.cpp
-    test_ai_editor_main_panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ai_editor_main_panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ai_editor_settings_panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_central_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
 )
@@ -109,6 +102,8 @@ target_include_directories(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
 target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
+    sao::legacy_core
+    sao::security::anti_screencap
     sao::gpu_hunt
     sao::rt_io
     sao::sdk
@@ -120,22 +115,25 @@ target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
 
 include(CTest)
 include(Catch)
-# Per-case discovery: this binary is a long monolith (~20s); splitting into
-# per-case entries lets CTest spread the cases across parallel workers.
-catch_discover_tests(sao_plugin_ai_editor_tests
-    TEST_PREFIX "plugins_ai_editor."
-    PROPERTIES LABELS "plugins;ai_editor"
-)
-catch_discover_tests(sao_plugin_ai_editor_production_child_tests
-    TEST_PREFIX "plugins_ai_editor.production_child."
-    PROPERTIES LABELS "plugins;ai_editor;integration;production_child"
-)
-# Per-case discovery retained: GPU Hunt cases are not safe to run inside a
-# single shared process (case 18 segfaults when run after the others), so
-# each case keeps its own process.
-catch_discover_tests(sao_plugin_ai_editor_gpu_hunt_tests
-    TEST_PREFIX "plugins_ai_editor.gpu_hunt."
-    PROPERTIES LABELS "plugins;ai_editor;gpu_hunt")
+add_test(NAME plugins_ai_editor
+         COMMAND sao_plugin_ai_editor_tests --reporter compact)
+set_tests_properties(plugins_ai_editor PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    LABELS "plugins;ai_editor"
+    TIMEOUT 30)
+
+add_test(NAME plugins_ai_editor.production_child
+         COMMAND sao_plugin_ai_editor_production_child_tests
+                 --reporter compact)
+set_tests_properties(plugins_ai_editor.production_child PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    LABELS "plugins;ai_editor;integration;production_child"
+    TIMEOUT 15)
+add_test(NAME plugins_ai_editor.gpu_hunt
+         COMMAND sao_plugin_ai_editor_gpu_hunt_tests --reporter compact)
+set_tests_properties(plugins_ai_editor.gpu_hunt PROPERTIES
+    LABELS "plugins;ai_editor;gpu_hunt"
+    TIMEOUT 15)
 
 add_executable(sao_plugin_ai_editor_kernel_map_tests
     kernel_map_bridge_test.cpp
@@ -168,7 +166,8 @@ target_link_libraries(sao_plugin_ai_editor_kernel_map_tests PRIVATE
 )
 add_test(NAME plugins_ai_editor.kernel_map COMMAND sao_plugin_ai_editor_kernel_map_tests)
 set_tests_properties(plugins_ai_editor.kernel_map PROPERTIES
-    LABELS "plugins;ai_editor;kernel_map")
+    LABELS "plugins;ai_editor;kernel_map"
+    TIMEOUT 15)
 
 add_executable(sao_plugin_ai_editor_settings_contract_tests
     test_ai_editor_settings_contract.cpp
@@ -193,7 +192,8 @@ target_link_libraries(sao_plugin_ai_editor_settings_contract_tests PRIVATE
 )
 add_test(NAME plugins_ai_editor.settings COMMAND sao_plugin_ai_editor_settings_contract_tests)
 set_tests_properties(plugins_ai_editor.settings PROPERTIES
-    LABELS "plugins;ai_editor;settings;contract")
+    LABELS "plugins;ai_editor;settings;contract"
+    TIMEOUT 15)
 
 # Kernel Map Bridge operator dashboard — message-dispatch contract.
 # Compiles kernel_map_panel_provider.cpp + webview_panel_registry.cpp
@@ -232,4 +232,5 @@ target_link_libraries(sao_plugin_ai_editor_kernel_map_panel_tests PRIVATE
 )
 add_test(NAME plugins_ai_editor.kernel_map_panel COMMAND sao_plugin_ai_editor_kernel_map_panel_tests)
 set_tests_properties(plugins_ai_editor.kernel_map_panel PROPERTIES
-    LABELS "plugins;ai_editor;kernel_map;panel")
+    LABELS "plugins;ai_editor;kernel_map;panel"
+    TIMEOUT 15)

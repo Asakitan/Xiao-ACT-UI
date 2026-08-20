@@ -405,6 +405,12 @@ json card_node(std::string title, json children, std::string_view accent = "cyan
                 {"children", std::move(children)}};
 }
 
+json section_node(std::string title, json children) {
+    return json{{"type", "section"},
+                {"title", clamp_utf8_bytes(std::move(title), kMaximumUiTitleBytes)},
+                {"children", std::move(children)}};
+}
+
 std::string trim_copy(std::string_view value) {
     size_t begin = 0;
     size_t end = value.size();
@@ -2104,15 +2110,14 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                       "diagnostics.refresh", json::object(), "ghost",
                                       !launcher_bound));
     app_bar.push_back(row_node(std::move(app_actions)));
-    json app_bar_node = card_node("App Bar", std::move(app_bar), "gold");
-    app_bar_node["role"] = "app_bar";
+    json app_bar_node = card_node("AI Editor", std::move(app_bar), "gold");
     nodes.push_back(std::move(app_bar_node));
 
     json transcript = json::array();
     transcript.push_back(text_node("Transcript", "title", 26));
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
-        transcript.push_back(text_node("No messages yet. Write a prompt in the composer below.",
+        transcript.push_back(text_node("No messages yet. Start with a prompt in Composer.",
                                        "muted", 42));
     } else {
         size_t begin = 0;
@@ -2146,9 +2151,6 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         }
     }
     json transcript_panel = card_node("Transcript", std::move(transcript), "cyan");
-    transcript_panel["role"] = "transcript";
-    transcript_panel["primary"] = true;
-    transcript_panel["min_height"] = 360;
 
     json inspector = json::array();
     inspector.push_back(text_node("Inspector", "title", 26));
@@ -2259,7 +2261,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         "platform.kernel_map.open", "Kernel Map", "platform.kernel_map.open", json::object(),
         "default", !launcher_bound));
     platform_help.push_back(row_node(std::move(platform_actions)));
-    inspector.push_back(card_node("Platform Tools", std::move(platform_help), "accent"));
+    json platform_section = section_node("Platform Tools", std::move(platform_help));
 
     json diagnostics = json::array();
     json diagnostic_actions = json::array();
@@ -2273,9 +2275,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                    ? "No diagnostic output yet."
                                    : tail_text(state.output_text, kUiTextChunkBytes * 2U);
     append_text_chunks(diagnostics, output, state.output_text.empty() ? "muted" : "mono", 100, 2);
-    inspector.push_back(card_node("Diagnostics", std::move(diagnostics), "warn"));
-    json inspector_panel = card_node("Inspector", std::move(inspector), "gold");
-    inspector_panel["role"] = "inspector";
+    json diagnostics_section = section_node("Diagnostics", std::move(diagnostics));
+    json inspector_panel = section_node("Inspector", std::move(inspector));
 
     json history = json::array();
     history.push_back(text_node("History", "title", 26));
@@ -2346,16 +2347,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                         entry.id == state.conversation_id ? "ok" : "cyan"));
         }
     }
-    json history_drawer = card_node("History Drawer", std::move(history), "cyan");
-    history_drawer["role"] = "drawer";
-    history_drawer["placement"] = "right";
-    history_drawer["collapsible"] = true;
-
-    json workspace = row_node(
-        json::array({std::move(transcript_panel), std::move(inspector_panel),
-                     std::move(history_drawer)}));
-    workspace["role"] = "workspace";
-    nodes.push_back(std::move(workspace));
+    json history_drawer = section_node("History", std::move(history));
 
     json composer = json::array();
     composer.push_back(text_node("Composer", "title", 24));
@@ -2393,9 +2385,17 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                            json::object(), "ghost", state.composer_text.empty()));
     composer.push_back(row_node(std::move(composer_actions)));
     json composer_panel = card_node("Composer", std::move(composer), "gold");
-    composer_panel["role"] = "composer";
-    composer_panel["sticky"] = "bottom";
-    nodes.push_back(std::move(composer_panel));
+
+    json main_section = section_node(
+        "Main", json::array({std::move(transcript_panel), std::move(composer_panel)}));
+    nodes.push_back(std::move(main_section));
+
+    json secondary_children = json::array();
+    secondary_children.push_back(std::move(inspector_panel));
+    secondary_children.push_back(std::move(history_drawer));
+    secondary_children.push_back(std::move(diagnostics_section));
+    secondary_children.push_back(std::move(platform_section));
+    nodes.push_back(section_node("Secondary", std::move(secondary_children)));
 
     std::string serialized =
         json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();

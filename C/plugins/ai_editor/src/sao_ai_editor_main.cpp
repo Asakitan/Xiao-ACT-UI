@@ -798,6 +798,9 @@ struct UiState final {
     HWND status_bar = nullptr;
     DWORD auto_exit_ms = 0;
     int exit_code = 0;
+    bool capture_registered = false;
+    bool capture_unregister_attempted = false;
+    int32_t capture_unregister_status = SAO_OK;
 };
 
 void set_status(const UiState& state, std::wstring_view text) {
@@ -1021,6 +1024,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     case WM_DESTROY:
         KillTimer(window, kEventTimerId);
         KillTimer(window, kAutoExitTimerId);
+        if (state->capture_registered &&
+            !state->capture_unregister_attempted) {
+            state->capture_unregister_attempted = true;
+            state->capture_unregister_status =
+                sao::ai_editor::unregister_capture_protection_window_status(
+                    window);
+            if (state->capture_unregister_status != SAO_OK) {
+                state->exit_code = state->capture_unregister_status;
+            } else {
+                state->capture_registered = false;
+            }
+        }
         state->bridge->clear(window);
         PostQuitMessage(state->exit_code);
         return 0;
@@ -1063,7 +1078,24 @@ public:
         if (window_ == nullptr) {
             return false;
         }
-        sao::ai_editor::apply_stealth_window(window_);
+        const sao::ai_editor::WebviewHardeningStatus hardening_status =
+            sao::ai_editor::harden_window(window_, true);
+        state_.capture_registered =
+            sao::ai_editor::webview_hardening_registered(hardening_status);
+        if (hardening_status !=
+            sao::ai_editor::WebviewHardeningStatus::kApplied) {
+            if (state_.capture_registered &&
+                !state_.capture_unregister_attempted) {
+                state_.capture_unregister_attempted = true;
+                state_.capture_unregister_status =
+                    sao::ai_editor::unregister_capture_protection_window_status(
+                        window_);
+                state_.capture_registered = false;
+            }
+            DestroyWindow(window_);
+            window_ = nullptr;
+            return false;
+        }
         if (!hidden_) {
             ShowWindow(window_, show_command_);
         }
@@ -1345,9 +1377,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             if (create_status != SAO_AI_EDITOR_OK || runtime == nullptr) {
                 return 7;
             }
-            const auto url_utf8 = wide_to_utf8(arguments.webview_url);
             sao::ai_editor::native::WebViewConfig config;
-            config.url = url_utf8.value_or(std::string{});
+            if (!arguments.webview_url.empty()) {
+                const auto url_utf8 = wide_to_utf8(arguments.webview_url);
+                if (!url_utf8.has_value()) {
+                    sao_ai_editor_runtime_destroy(runtime);
+                    return 4;
+                }
+                config.url = *url_utf8;
+            }
             config.user_data_folder =
                 wide_to_utf8((*workspace / L".sao" /
                               L"webview").native()).value_or(std::string{});

@@ -1,23 +1,21 @@
 // SAO AI Editor - kernel-map command-palette wiring implementation.
-//
-// TODO(kernel_map): ExtensionHost has no C++-side "register command
-// handler" seam; see kernel_map_commands.h for the full rationale.
-// register_kernel_map_commands() records the association in a module
-// static so a Node-side shim (or a future seam) can hand a command
-// invocation to handle_kernel_map_command() and route to the Bridge.
-// This is the operator-executable path for driving the kernel_map
-// wire from the AI editor host today.
 
 #include "kernel_map_commands.h"
 
+#include <array>
 #include <charconv>
 #include <cstddef>
+#include <exception>
 #include <fstream>
 #include <ios>
+#include <limits>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -28,80 +26,103 @@
 #include "extension_host.h"
 
 namespace sao::ai_editor::kernel_map {
-
 namespace {
-
 using Json = nlohmann::json;
 
-// Guard the "installed" state so a caller that wires the runtime
-// twice does not race the module-local bridge pointer.
+struct CommandRegistrationState final {
+    sao::ai_editor::native::ExtensionHost* host = nullptr;
+    uint64_t owner = 0;
+    std::shared_ptr<Bridge> bridge;
+    std::array<std::optional<
+                   sao::ai_editor::native::ExtensionHost::NativeCommandRegistration>,
+               6>
+        rollback_snapshot{};
+    bool rollback_pending = false;
+};
+
 std::mutex& command_mutex() {
-    static std::mutex m;
-    return m;
+    static std::mutex mutex;
+    return mutex;
 }
 
-// The module-local bridge pointer resolved by
-// register_kernel_map_commands.  handle_kernel_map_command() falls
-// back to shared_bridge() when this is null so tests that skip the
-// registration step still land on a working bridge.
-Bridge*& registered_bridge_slot() {
-    static Bridge* slot = nullptr;
-    return slot;
+std::unordered_map<sao::ai_editor::native::ExtensionHost*, uint64_t>&
+command_owners() {
+    static std::unordered_map<sao::ai_editor::native::ExtensionHost*, uint64_t>
+        owners;
+    return owners;
 }
 
-Bridge& resolve_bridge() {
+std::unordered_map<sao::ai_editor::native::ExtensionHost*,
+                   CommandRegistrationState>&
+command_states() {
+    static std::unordered_map<sao::ai_editor::native::ExtensionHost*,
+                              CommandRegistrationState>
+        states;
+    return states;
+}
+
+uint64_t next_owner() {
+    static uint64_t value = 1;
+    return value++;
+}
+
+std::shared_ptr<Bridge> resolve_bridge() {
     std::lock_guard<std::mutex> guard(command_mutex());
-    if (registered_bridge_slot() != nullptr) {
-        return *registered_bridge_slot();
+    for (const auto& [host, state] : command_states()) {
+        (void)host;
+        if (state.bridge != nullptr) {
+            return state.bridge;
+        }
     }
-    return shared_bridge();
+    return shared_bridge_handle();
 }
 
-std::string format_hex_u64(uint64_t v) {
-    std::ostringstream oss;
-    oss << "0x" << std::hex << std::nouppercase << v;
-    return oss.str();
+std::string format_hex_u64(uint64_t value) {
+    std::ostringstream stream;
+    stream << "0x" << std::hex << std::nouppercase << value;
+    return stream.str();
 }
 
-// Parse a numeric string accepting both `0x`-prefixed hex and plain
-// decimal.  Returns true on success and writes the result to `out`.
-// Empty inputs / trailing junk are rejected so `"0x123abc oops"` does
-// not silently become 0x123abc.
-bool parse_u64(std::string_view text, uint64_t& out) {
-    out = 0;
-    if (text.empty()) {
+bool require_object(const Json& args, Json& out) {
+    if (args.is_object()) {
+        return true;
+    }
+    out = Json{{"ok", false}, {"error", "arguments must be an object"}};
+    return false;
+}
+
+bool parse_uint64_field(const Json& args, std::string_view name,
+                        uint64_t& out, Json& reply) {
+    const std::string key(name);
+    if (!args.contains(key)) {
+        return true;
+    }
+    if (!parse_kernel_map_uint64(args[key], out)) {
+        reply = Json{{"ok", false},
+                     {"error", key +
+                                  " must be a decimal or 0x-prefixed hexadecimal string"}};
         return false;
     }
-    std::string_view remainder = text;
-    int base = 10;
-    if (remainder.size() >= 2 &&
-        remainder[0] == '0' &&
-        (remainder[1] == 'x' || remainder[1] == 'X')) {
-        base = 16;
-        remainder.remove_prefix(2);
-    }
-    if (remainder.empty()) {
-        return false;
-    }
-    uint64_t value = 0;
-    const auto* first = remainder.data();
-    const auto* last = remainder.data() + remainder.size();
-    const auto result = std::from_chars(first, last, value, base);
-    if (result.ec != std::errc{} || result.ptr != last) {
-        return false;
-    }
-    out = value;
     return true;
 }
 
-// Read a file at `path` into memory.  Rejects anything larger than
-// the wire-layer's 32 MiB cap before allocation (matches the cap
-// enforced inside Bridge::map).  On success returns SAO_AI_EDITOR_OK
-// and moves the bytes into `out`.
+bool parse_uint32_field(const Json& args, std::string_view name,
+                        uint32_t& out, Json& reply) {
+    const std::string key(name);
+    if (!args.contains(key)) {
+        return true;
+    }
+    if (!parse_kernel_map_uint32(args[key], out)) {
+        reply = Json{{"ok", false},
+                     {"error", key + " must be a non-negative uint32 integer"}};
+        return false;
+    }
+    return true;
+}
+
 int32_t read_driver_file(std::string_view path, std::vector<uint8_t>& out) {
     out.clear();
-    std::ifstream stream{std::string(path),
-                          std::ios::binary | std::ios::ate};
+    std::ifstream stream(std::string(path), std::ios::binary | std::ios::ate);
     if (!stream) {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
@@ -122,71 +143,70 @@ int32_t read_driver_file(std::string_view path, std::vector<uint8_t>& out) {
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t cmd_activate(const Json& args, Json& out) {
-    // Every field is optional so an operator can activate with sane
-    // defaults from the command palette without typing JSON.  The
-    // proxy layer will surface NOT_INITIALIZED if the slot VA is 0,
-    // which is desirable in a stock build.
-    const uint64_t slot_va = args.value(
-        "invoke_result_slot_va",
-        static_cast<uint64_t>(0));
-    const uint32_t timeout_ms = args.value(
-        "idle_timeout_ms", static_cast<uint32_t>(60000));
-    const uint64_t seed = args.value(
-        "pool_tag_seed", static_cast<uint64_t>(0));
-    const int32_t status =
-        resolve_bridge().activate(slot_va, timeout_ms, seed);
-    out = Json{{"ok", status == SAO_AI_EDITOR_OK},
-               {"status", status}};
+int32_t cmd_activate(Bridge& bridge, const Json& args, Json& out) {
+    if (!require_object(args, out)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    uint64_t slot_va = 0;
+    uint64_t seed = 0;
+    uint32_t timeout_ms = 60000;
+    if (!parse_uint64_field(args, "invoke_result_slot_va", slot_va, out) ||
+        !parse_uint64_field(args, "pool_tag_seed", seed, out) ||
+        !parse_uint32_field(args, "idle_timeout_ms", timeout_ms, out)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const int32_t status = bridge.activate(slot_va, timeout_ms, seed);
+    out = Json{{"ok", status == SAO_AI_EDITOR_OK}, {"status", status}};
     return status;
 }
 
-int32_t cmd_deactivate(const Json&, Json& out) {
-    const int32_t status = resolve_bridge().deactivate();
-    out = Json{{"ok", status == SAO_AI_EDITOR_OK},
-               {"status", status}};
+int32_t cmd_deactivate(Bridge& bridge, const Json& args, Json& out) {
+    if (!require_object(args, out)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const int32_t status = bridge.deactivate();
+    out = Json{{"ok", status == SAO_AI_EDITOR_OK}, {"status", status}};
     return status;
 }
 
-int32_t cmd_status(const Json&, Json& out) {
-    BridgeStatus snap{};
-    const int32_t status = resolve_bridge().status(snap);
+int32_t cmd_status(Bridge& bridge, const Json& args, Json& out) {
+    if (!require_object(args, out)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    BridgeStatus snapshot{};
+    const int32_t status = bridge.status(snapshot);
     if (status != SAO_AI_EDITOR_OK) {
         out = Json{{"ok", false}, {"status", status}};
         return status;
     }
-    out = Json{{"ok", true},
-               {"active", snap.active},
-               {"map_count", snap.map_count}};
+    out = Json{{"ok", true}, {"active", snapshot.active},
+               {"map_count", snapshot.map_count}};
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t cmd_map(const Json& args, Json& out) {
-    if (!args.is_object() ||
-        !args.contains("driver_path") ||
+int32_t cmd_map(Bridge& bridge, const Json& args, Json& out) {
+    if (!args.is_object() || !args.contains("driver_path") ||
         !args["driver_path"].is_string()) {
         out = Json{{"ok", false},
                    {"error", "driver_path (string) is required"}};
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const std::string driver_path =
-        args["driver_path"].get<std::string>();
+    const std::string path = args["driver_path"].get<std::string>();
     std::vector<uint8_t> bytes;
-    const int32_t read_status = read_driver_file(driver_path, bytes);
+    const int32_t read_status = read_driver_file(path, bytes);
     if (read_status != SAO_AI_EDITOR_OK) {
-        out = Json{{"ok", false},
-                   {"error", "failed to read driver file"},
+        out = Json{{"ok", false}, {"error", "failed to read driver file"},
                    {"status", read_status}};
         return read_status;
     }
     if (bytes.empty()) {
-        out = Json{{"ok", false},
-                   {"error", "driver file is empty"}};
+        out = Json{{"ok", false}, {"error", "driver file is empty"}};
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     MapResult result{};
-    const int32_t status = resolve_bridge().map(
-        bytes.data(), static_cast<uint32_t>(bytes.size()), result);
+    const int32_t status = bridge.map(bytes.data(),
+                                      static_cast<uint32_t>(bytes.size()),
+                                      result);
     if (status != SAO_AI_EDITOR_OK) {
         out = Json{{"ok", false}, {"status", status}};
         return status;
@@ -197,107 +217,253 @@ int32_t cmd_map(const Json& args, Json& out) {
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t cmd_unmap(const Json& args, Json& out) {
-    if (!args.is_object() ||
-        !args.contains("target_base")) {
-        out = Json{{"ok", false},
-                   {"error", "target_base is required"}};
+int32_t cmd_unmap(Bridge& bridge, const Json& args, Json& out) {
+    if (!args.is_object() || !args.contains("target_base")) {
+        out = Json{{"ok", false}, {"error", "target_base is required"}};
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     uint64_t base = 0;
-    // Accept either a JSON number (safe for values <= 2^53) or a
-    // decimal / hex string.  A stringified value is required for
-    // full-range 64-bit addresses because JS number precision only
-    // covers ~53 bits.
-    const auto& field = args["target_base"];
-    if (field.is_string()) {
-        if (!parse_u64(field.get_ref<const std::string&>(), base)) {
-            out = Json{{"ok", false},
-                       {"error", "target_base could not be parsed"}};
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        }
-    } else if (field.is_number_unsigned()) {
-        base = field.get<uint64_t>();
-    } else if (field.is_number_integer()) {
-        const int64_t signed_base = field.get<int64_t>();
-        if (signed_base <= 0) {
-            out = Json{{"ok", false},
-                       {"error", "target_base must be positive"}};
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        }
-        base = static_cast<uint64_t>(signed_base);
-    } else {
+    if (!parse_kernel_map_uint64(args["target_base"], base) || base == 0) {
         out = Json{{"ok", false},
-                   {"error", "target_base must be string or number"}};
+                   {"error", "target_base must be a non-zero decimal or 0x-prefixed hexadecimal string"}};
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    if (base == 0) {
-        out = Json{{"ok", false},
-                   {"error", "target_base must not be zero"}};
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-    }
-    const int32_t status = resolve_bridge().unmap(base);
+    const int32_t status = bridge.unmap(base);
     if (status != SAO_AI_EDITOR_OK) {
         out = Json{{"ok", false}, {"status", status}};
         return status;
     }
-    out = Json::object();
-    out["ok"] = true;
+    out = Json{{"ok", true}};
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t cmd_enumerate(const Json&, Json& out) {
+int32_t cmd_enumerate(Bridge& bridge, const Json& args, Json& out) {
+    if (!require_object(args, out)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
     std::vector<uint64_t> bases;
-    const int32_t status = resolve_bridge().enumerate(bases);
+    const int32_t status = bridge.enumerate(bases);
     if (status != SAO_AI_EDITOR_OK) {
         out = Json{{"ok", false}, {"status", status}};
         return status;
     }
-    Json arr = Json::array();
-    for (const auto& base : bases) {
-        arr.push_back(format_hex_u64(base));
+    Json values = Json::array();
+    for (const uint64_t base : bases) {
+        values.push_back(format_hex_u64(base));
     }
-    out = Json{{"ok", true}, {"bases", std::move(arr)}};
+    out = Json{{"ok", true}, {"bases", std::move(values)}};
     return SAO_AI_EDITOR_OK;
+}
+
+constexpr std::array<std::string_view, 6> kCommandIds{
+    "sao.kernelMap.activate", "sao.kernelMap.deactivate",
+    "sao.kernelMap.status", "sao.kernelMap.map", "sao.kernelMap.unmap",
+    "sao.kernelMap.enumerate"};
+
+using CommandSnapshot = std::array<
+    std::optional<sao::ai_editor::native::ExtensionHost::NativeCommandRegistration>,
+    kCommandIds.size()>;
+
+int32_t restore_command_snapshot(
+    sao::ai_editor::native::ExtensionHost& host, uint64_t owner,
+    const CommandSnapshot& snapshot) {
+    int32_t first_error = SAO_AI_EDITOR_OK;
+    for (size_t i = 0; i < kCommandIds.size(); ++i) {
+        const auto current = host.snapshot_native_command(kCommandIds[i]);
+        if (snapshot[i].has_value() && current.has_value() &&
+            current->owner == snapshot[i]->owner &&
+            current->owner != owner) {
+            // Registration failed before touching this foreign-owned slot;
+            // it already equals the prior ownership state and needs no
+            // transaction-owner restore operation.
+            continue;
+        }
+        const int32_t status = host.restore_native_command(
+            kCommandIds[i], snapshot[i], owner);
+        if (status != SAO_AI_EDITOR_OK && first_error == SAO_AI_EDITOR_OK) {
+            first_error = status;
+        }
+    }
+    return first_error;
+}
+
+bool snapshot_is_empty(const CommandSnapshot& snapshot) {
+    for (const auto& prior : snapshot) {
+        if (prior.has_value()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
 
-void register_kernel_map_commands(sao::ai_editor::native::ExtensionHost& host,
-                                   Bridge& bridge) {
-    // ExtensionHost has no C++ command sink today (see header TODO);
-    // reference the parameter to keep the signature intentional and
-    // record the bridge so handle_kernel_map_command() can find it
-    // without going through shared_bridge().
-    (void)host;
+std::shared_ptr<Bridge> shared_bridge_handle() {
+    return std::shared_ptr<Bridge>(&shared_bridge(), [](Bridge*) {});
+}
+
+int32_t register_kernel_map_commands(
+    sao::ai_editor::native::ExtensionHost& host,
+    const std::shared_ptr<Bridge>& bridge) {
+    if (bridge == nullptr) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+
     std::lock_guard<std::mutex> guard(command_mutex());
-    registered_bridge_slot() = &bridge;
+    auto& states = command_states();
+    auto& owners = command_owners();
+    auto found = states.find(&host);
+    if (found != states.end() && found->second.rollback_pending) {
+        const int32_t recovery_status = restore_command_snapshot(
+            host, found->second.owner, found->second.rollback_snapshot);
+        if (recovery_status != SAO_AI_EDITOR_OK) {
+            return recovery_status;
+        }
+        if (snapshot_is_empty(found->second.rollback_snapshot)) {
+            owners.erase(&host);
+            states.erase(found);
+            found = states.end();
+        } else {
+            found->second.rollback_pending = false;
+        }
+    }
+    auto owner_entry = owners.find(&host);
+    if (owner_entry == owners.end()) {
+        owner_entry = owners.emplace(&host, next_owner()).first;
+    }
+    const uint64_t owner = owner_entry->second;
+
+    std::array<std::optional<sao::ai_editor::native::ExtensionHost::NativeCommandRegistration>,
+               kCommandIds.size()> prior{};
+    for (size_t i = 0; i < kCommandIds.size(); ++i) {
+        prior[i] = host.snapshot_native_command(kCommandIds[i]);
+    }
+
+    size_t registered = 0;
+    for (; registered < kCommandIds.size(); ++registered) {
+        const std::string id(kCommandIds[registered]);
+        const int32_t status = host.register_native_command(
+            id,
+            [bridge, id](const Json& args, Json& out) {
+                return dispatch_kernel_map_command(*bridge, id, args, out);
+            },
+            owner);
+        if (status != SAO_AI_EDITOR_OK) {
+            const int32_t rollback_status = restore_command_snapshot(
+                host, owner, prior);
+            if (rollback_status != SAO_AI_EDITOR_OK) {
+                const std::shared_ptr<Bridge> recovery_bridge =
+                    found != states.end() ? found->second.bridge : bridge;
+                states[&host] = CommandRegistrationState{
+                    &host, owner, recovery_bridge, prior, true};
+                owners[&host] = owner;
+                return rollback_status;
+            }
+            if (found == states.end()) {
+                owners.erase(&host);
+            }
+            return status;
+        }
+    }
+
+    states[&host] = CommandRegistrationState{&host, owner, bridge, {}, false};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t unregister_kernel_map_commands(
+    sao::ai_editor::native::ExtensionHost& host) {
+    std::lock_guard<std::mutex> guard(command_mutex());
+    auto& states = command_states();
+    auto& owners = command_owners();
+    auto state_entry = states.find(&host);
+    const auto owner_entry = owners.find(&host);
+    if (owner_entry == owners.end()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    const uint64_t owner = owner_entry->second;
+    if (state_entry != states.end() && state_entry->second.rollback_pending) {
+        const int32_t recovery_status = restore_command_snapshot(
+            host, owner, state_entry->second.rollback_snapshot);
+        if (recovery_status != SAO_AI_EDITOR_OK) {
+            return recovery_status;
+        }
+        if (snapshot_is_empty(state_entry->second.rollback_snapshot)) {
+            states.erase(state_entry);
+            owners.erase(owner_entry);
+            return SAO_AI_EDITOR_OK;
+        }
+        state_entry->second.rollback_pending = false;
+    }
+    int32_t first_error = SAO_AI_EDITOR_OK;
+    for (const auto id : kCommandIds) {
+        const int32_t status = host.unregister_native_command(id, owner);
+        if (status != SAO_AI_EDITOR_OK &&
+            status != SAO_AI_EDITOR_ERR_NOT_FOUND &&
+            first_error == SAO_AI_EDITOR_OK) {
+            first_error = status;
+        }
+    }
+    if (first_error == SAO_AI_EDITOR_OK) {
+        states.erase(&host);
+        owners.erase(owner_entry);
+    }
+    return first_error;
+}
+
+void abandon_kernel_map_commands(
+    sao::ai_editor::native::ExtensionHost& host) {
+    std::lock_guard<std::mutex> guard(command_mutex());
+    command_states().erase(&host);
+    command_owners().erase(&host);
+}
+
+int32_t dispatch_kernel_map_command(Bridge& bridge,
+                                    std::string_view command_id,
+                                    const Json& args,
+                                    Json& out) {
+    try {
+        if (command_id == "sao.kernelMap.activate") {
+            return cmd_activate(bridge, args, out);
+        }
+        if (command_id == "sao.kernelMap.deactivate") {
+            return cmd_deactivate(bridge, args, out);
+        }
+        if (command_id == "sao.kernelMap.status") {
+            return cmd_status(bridge, args, out);
+        }
+        if (command_id == "sao.kernelMap.map") {
+            return cmd_map(bridge, args, out);
+        }
+        if (command_id == "sao.kernelMap.unmap") {
+            return cmd_unmap(bridge, args, out);
+        }
+        if (command_id == "sao.kernelMap.enumerate") {
+            return cmd_enumerate(bridge, args, out);
+        }
+        out = Json{{"ok", false}, {"error", "unknown kernelMap command"}};
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    } catch (const std::exception& error) {
+        out = Json{{"ok", false}, {"error", error.what()}};
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        out = Json{{"ok", false}, {"error", "kernelMap command failed"}};
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t handle_kernel_map_command(std::string_view command_id,
-                                   const Json& args,
-                                   Json& out) {
-    if (command_id == "sao.kernelMap.activate") {
-        return cmd_activate(args, out);
+                                  const Json& args,
+                                  Json& out) {
+    try {
+        const auto bridge = resolve_bridge();
+        return dispatch_kernel_map_command(*bridge, command_id, args, out);
+    } catch (const std::exception& error) {
+        out = Json{{"ok", false}, {"error", error.what()}};
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        out = Json{{"ok", false}, {"error", "kernelMap command failed"}};
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    if (command_id == "sao.kernelMap.deactivate") {
-        return cmd_deactivate(args, out);
-    }
-    if (command_id == "sao.kernelMap.status") {
-        return cmd_status(args, out);
-    }
-    if (command_id == "sao.kernelMap.map") {
-        return cmd_map(args, out);
-    }
-    if (command_id == "sao.kernelMap.unmap") {
-        return cmd_unmap(args, out);
-    }
-    if (command_id == "sao.kernelMap.enumerate") {
-        return cmd_enumerate(args, out);
-    }
-    out = Json{{"ok", false},
-               {"error", "unknown kernelMap command"}};
-    return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
 }  // namespace sao::ai_editor::kernel_map

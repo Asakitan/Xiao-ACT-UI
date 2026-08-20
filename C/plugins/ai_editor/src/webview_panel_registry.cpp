@@ -35,8 +35,22 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     std::string panel_id = panel_id_hint;
     if (panel_id.empty()) {
         panel_id = mint_id_locked();
-    } else if (panels_.find(panel_id) != panels_.end()) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    } else {
+        const auto existing = panels_.find(panel_id);
+        if (existing != panels_.end()) {
+            if (!existing->second.disposed ||
+                existing->second.owner != owner ||
+                existing->second.view_type != view_type) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            existing->second.title = title;
+            existing->second.options = options;
+            existing->second.visible = true;
+            existing->second.disposed = false;
+            existing->second.last_reveal_ms = now_ms();
+            out_state = existing->second;
+            return SAO_AI_EDITOR_OK;
+        }
     }
     WebviewPanelState state;
     state.panel_id = panel_id;

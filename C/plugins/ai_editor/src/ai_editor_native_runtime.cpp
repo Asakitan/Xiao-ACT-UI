@@ -11,6 +11,7 @@
 #include "sha256_helper.h"
 
 #include <windows.h>
+#include <commdlg.h>
 
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,24 @@ namespace {
 constexpr uint32_t kDefaultEventDrainLimit = 32U;
 constexpr uint32_t kMaximumEventDrainLimit = 64U;
 constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
+
+std::string pick_kernel_driver_file() {
+    std::vector<wchar_t> path(32768u, L'\0');
+    constexpr wchar_t filter[] =
+        L"Driver images (*.sys)\0*.sys\0All files (*.*)\0*.*\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.lpstrDefExt = L"sys";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST |
+                   OFN_NOCHANGEDIR | OFN_DONTADDTORECENT;
+    if (::GetOpenFileNameW(&dialog) == FALSE) {
+        return {};
+    }
+    return wide_to_utf8(path.data());
+}
 
 std::string status_message(int32_t status) {
     switch (status) {
@@ -842,8 +861,16 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 
 NativeRuntime::~NativeRuntime() {
     set_webview_post_message_handler({});
-    extension_host_.reset();
-
+    const auto kernel_map_bridge =
+        sao::ai_editor::kernel_map::shared_bridge_handle();
+    if (mcp_management_panel_ != nullptr) {
+        (void)mcp_management_panel_->unregister_from_runtime(webview_panels_);
+        mcp_management_panel_.reset();
+    }
+    if (kernel_map_panel_ != nullptr) {
+        (void)kernel_map_panel_->unregister_from_runtime(webview_panels_);
+        kernel_map_panel_.reset();
+    }
     {
         std::lock_guard<std::mutex> lock(event_mutex_);
         stopping_ = true;
@@ -894,6 +921,17 @@ NativeRuntime::~NativeRuntime() {
         workflow_executions_.clear();
     }
     mcp_client_.reset();
+
+    if (extension_host_ != nullptr) {
+        (void)sao::ai_editor::kernel_map::unregister_kernel_map_commands(
+            *extension_host_);
+        sao::ai_editor::kernel_map::abandon_kernel_map_commands(
+            *extension_host_);
+        extension_host_.reset();
+    }
+    (void)sao::ai_editor::kernel_map::unregister_kernel_map_tools(
+        tools_, kernel_map_bridge);
+    sao::ai_editor::kernel_map::abandon_kernel_map_tools(tools_);
 }
 
 void NativeRuntime::set_webview_post_message_handler(
@@ -903,6 +941,47 @@ void NativeRuntime::set_webview_post_message_handler(
 }
 
 int32_t NativeRuntime::initialize() {
+    const auto kernel_map_bridge =
+        sao::ai_editor::kernel_map::shared_bridge_handle();
+    auto cleanup_kernel_map = [&] {
+        int32_t first_error = SAO_AI_EDITOR_OK;
+        if (mcp_management_panel_ != nullptr) {
+            (void)mcp_management_panel_->unregister_from_runtime(webview_panels_);
+            mcp_management_panel_.reset();
+        }
+        if (kernel_map_panel_ != nullptr) {
+            (void)kernel_map_panel_->unregister_from_runtime(webview_panels_);
+            kernel_map_panel_.reset();
+        }
+        if (extension_host_ != nullptr) {
+            const int32_t status =
+                sao::ai_editor::kernel_map::unregister_kernel_map_commands(
+                    *extension_host_);
+            if (status != SAO_AI_EDITOR_OK &&
+                status != SAO_AI_EDITOR_ERR_NOT_FOUND &&
+                first_error == SAO_AI_EDITOR_OK) {
+                first_error = status;
+            }
+            if (status == SAO_AI_EDITOR_OK ||
+                status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                extension_host_.reset();
+            }
+        }
+        const int32_t tools_status =
+            sao::ai_editor::kernel_map::unregister_kernel_map_tools(
+                tools_, kernel_map_bridge);
+        if (tools_status != SAO_AI_EDITOR_OK &&
+            tools_status != SAO_AI_EDITOR_ERR_NOT_FOUND &&
+            first_error == SAO_AI_EDITOR_OK) {
+            first_error = tools_status;
+        }
+        return first_error;
+    };
+    const int32_t cleanup_status = cleanup_kernel_map();
+    if (cleanup_status != SAO_AI_EDITOR_OK &&
+        cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+        return cleanup_status;
+    }
     const int32_t status = scopes_.initialize(
         options_.workspace_root, options_.system_root,
         options_.plugin_roots_json);
@@ -931,20 +1010,43 @@ int32_t NativeRuntime::initialize() {
     // duplicate entries.  The Bridge is a process-wide singleton; sharing
     // one instance between the tool + command paths keeps a single wire
     // channel serialising the operator's requests.
-    auto& kernel_map_bridge = sao::ai_editor::kernel_map::shared_bridge();
-    sao::ai_editor::kernel_map::register_kernel_map_tools(
-        tools_, kernel_map_bridge);
-    sao::ai_editor::kernel_map::register_kernel_map_commands(
-        *extension_host_, kernel_map_bridge);
+    int32_t registration_status =
+        sao::ai_editor::kernel_map::register_kernel_map_tools(
+            tools_, kernel_map_bridge);
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t cleanup_status = cleanup_kernel_map();
+        return cleanup_status != SAO_AI_EDITOR_OK &&
+                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? cleanup_status
+                   : registration_status;
+    }
+    registration_status =
+        sao::ai_editor::kernel_map::register_kernel_map_commands(
+            *extension_host_, kernel_map_bridge);
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t cleanup_status = cleanup_kernel_map();
+        return cleanup_status != SAO_AI_EDITOR_OK &&
+                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? cleanup_status
+                   : registration_status;
+    }
     // Operator-facing kernel map dashboard.  Constructs the panel
     // provider and registers it in the webview panel registry so the
     // sidebar surfaces the built-in view.  Registration is idempotent;
     // when the on-disk assets are missing the provider falls back to a
     // built-in stub HTML that still exercises the message dispatch.
     kernel_map_panel_ = std::make_unique<KernelMapPanelProvider>();
-    (void)kernel_map_panel_->register_with_runtime(
+    kernel_map_panel_->install_file_picker(&pick_kernel_driver_file);
+    registration_status = kernel_map_panel_->register_with_runtime(
         webview_panels_,
         resolve_panel_assets(options_.system_root, "kernel_map_panel"));
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t cleanup_status = cleanup_kernel_map();
+        return cleanup_status != SAO_AI_EDITOR_OK &&
+                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? cleanup_status
+                   : registration_status;
+    }
     mcp_management_panel_ = std::make_unique<McpManagementPanelProvider>();
     mcp_management_panel_->install_snapshot_provider(
         [this] { return mcp_management_snapshot(); });
@@ -958,9 +1060,16 @@ int32_t NativeRuntime::initialize() {
         }
         return false;
     });
-    (void)mcp_management_panel_->register_with_runtime(
+    registration_status = mcp_management_panel_->register_with_runtime(
         webview_panels_,
         resolve_panel_assets(options_.system_root, "mcp_management_panel"));
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t cleanup_status = cleanup_kernel_map();
+        return cleanup_status != SAO_AI_EDITOR_OK &&
+                       cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? cleanup_status
+                   : registration_status;
+    }
     return SAO_AI_EDITOR_OK;
 }
 

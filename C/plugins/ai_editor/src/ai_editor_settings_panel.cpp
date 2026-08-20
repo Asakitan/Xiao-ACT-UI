@@ -54,9 +54,6 @@ constexpr size_t kMaximumPanelSpecBytes = 192U * 1024U;
 constexpr int32_t kDialogCloseAdvanceMs = 1000;
 constexpr std::chrono::milliseconds kSavedStatusLifetime{5000};
 
-constexpr char kDarkThemeOverride[] =
-    R"({"colors":{"APP_BG":"#10141c","APP_CARD":"#171d28","APP_BORDER":"#2b3546","APP_TEXT":"#e8edf6","APP_TEXT_2":"#c5cedd","APP_TEXT_DIM":"#8e9bad","APP_ACCENT":"#5ba7ff","APP_BLUE":"#5ba7ff","APP_GREEN":"#54c987","APP_RED":"#ef6677","APP_ORANGE":"#e8a15a","APP_GOLD":"#e7c46a"}})";
-
 enum class FieldKind {
     Boolean,
     Integer,
@@ -1957,7 +1954,7 @@ std::string scope_label(std::string_view scope) {
 json build_overview(const AiEditorSettingsPanelState& state) {
     json children = json::array();
     json connection = json::array();
-    connection.push_back(text_node("Backend / 后端", "title", 24));
+
     connection.push_back(
         badge_node(state.backend_connected ? "Connected / 已连接" : "Offline / 离线",
                    state.backend_connected ? "ok" : "warn"));
@@ -1971,7 +1968,7 @@ json build_overview(const AiEditorSettingsPanelState& state) {
         card_node("Backend", std::move(connection), state.backend_connected ? "ok" : "warn"));
 
     json assistant = json::array();
-    assistant.push_back(text_node("Active AI / 当前 AI", "title", 24));
+
     assistant.push_back(text_node(
         "Provider: " + summary_value(state, {"ai.provider", "ai_editor.provider", "provider"},
                                      "not configured"),
@@ -1997,7 +1994,7 @@ json build_overview(const AiEditorSettingsPanelState& state) {
             ++configured_secrets;
     }
     json draft = json::array();
-    draft.push_back(text_node("Draft / 草稿", "title", 24));
+
     draft.push_back(badge_node(state_dirty(state) ? "Dirty / 有未保存更改" : "Clean / 已同步",
                                state_dirty(state) ? "warn" : "ok"));
     draft.push_back(text_node("Scope: " + scope_label(state.selected_scope) +
@@ -2014,7 +2011,7 @@ json build_overview(const AiEditorSettingsPanelState& state) {
     children.push_back(card_node("Draft", std::move(draft), state_dirty(state) ? "warn" : "ok"));
 
     json quick = json::array();
-    quick.push_back(text_node("Quick Settings / 快速设置", "title", 24));
+
     json quick_buttons = json::array();
     quick_buttons.push_back(
         button_node("overview.editor", "Editor & Files", "nav.page", {{"page", "editor"}}));
@@ -2051,13 +2048,13 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
         state_badges.push_back(badge_node("Unavailable / 条件未满足", "warn"));
     children.push_back(row_node(std::move(state_badges)));
     const auto validation = state.validation_errors.find(field.key);
-    children.push_back(text_node("Effective / 生效值: " + effective_display(state, field),
+    children.push_back(text_node("Effective: " + effective_display(state, field),
                                  validation == state.validation_errors.end() ? "value" : "bad",
                                  30));
     children.push_back(
-        text_node("Selected scope override / 当前作用域覆盖: " + override_display(state, field),
+        text_node("Scope override: " + override_display(state, field),
                   "muted", 30));
-    children.push_back(text_node("Inheritance / 继承: " + inheritance_display(state, field),
+    children.push_back(text_node("Inheritance: " + inheritance_display(state, field),
                                  has_override ? "accent" : "muted", 30));
     if (!field.description.empty())
         children.push_back(text_node(field.description, "muted", 38));
@@ -2077,7 +2074,7 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
                                     state.rpc_kind != RpcKind::None || state.save_pending ||
                                     followup_load_active(state) || !dependencies_met;
     if (field.kind == FieldKind::Boolean) {
-        actions.push_back(button_node("field." + token + ".toggle", "Toggle / 切换", "field.toggle",
+        actions.push_back(button_node("field." + token + ".toggle", "Toggle", "field.toggle",
                                       {{"key", field.key}}, "primary", interaction_locked));
     } else if (field.kind == FieldKind::Enum && !field.options.empty()) {
         const json* current = effective_value(state, field);
@@ -2094,24 +2091,24 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
                                           active ? "primary" : "default", interaction_locked));
         }
         if (field.options.size() > maximum_options) {
-            actions.push_back(button_node("field." + token + ".edit", "Select... / 选择...",
+            actions.push_back(button_node("field." + token + ".edit", "Select...",
                                           "field.edit", {{"key", field.key}}, "default",
                                           interaction_locked));
         }
     } else {
         actions.push_back(button_node(
             "field." + token + ".edit",
-            is_secret_field(field) ? "Set Protected Value / 设置受保护值" : "Edit / 编辑",
+            is_secret_field(field) ? "Set Protected Value" : "Edit",
             "field.edit", {{"key", field.key}}, "primary", interaction_locked));
     }
     if (is_secret_field(field)) {
-        actions.push_back(button_node("field." + token + ".clear", "Clear / 清除", "field.clear",
+        actions.push_back(button_node("field." + token + ".clear", "Clear", "field.clear",
                                       {{"key", field.key}}, "danger", interaction_locked));
     }
-    actions.push_back(button_node("field." + token + ".reset", "Reset / 重置", "field.reset",
+    actions.push_back(button_node("field." + token + ".reset", "Reset", "field.reset",
                                   {{"key", field.key}}, "ghost", interaction_locked));
     children.push_back(row_node(std::move(actions)));
-    return card_node(field.key, std::move(children),
+    return card_node(field.label, std::move(children),
                      validation == state.validation_errors.end() ? "cyan" : "bad");
 }
 
@@ -2126,20 +2123,28 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                               "scope is written; higher scopes override lower scopes.",
                               "muted", 34));
 
-    json status_row = json::array();
-    status_row.push_back(
+    json status_row_one = json::array();
+    status_row_one.push_back(
+        badge_node(dirty ? "Unsaved changes" : "Saved", dirty ? "warn" : "ok"));
+    status_row_one.push_back(badge_node("Save: " + save_phase_text(state.save_phase),
+                                       save_phase_style(state.save_phase)));
+    status_row_one.push_back(badge_node(
+        state.validation_errors.empty()
+            ? "Validation: OK"
+            : "Validation: " + std::to_string(state.validation_errors.size()),
+        state.validation_errors.empty() ? "ok" : "bad"));
+    nodes.push_back(row_node(std::move(status_row_one)));
+
+    json status_row_two = json::array();
+    status_row_two.push_back(badge_node("Scope: " + scope_label(state.selected_scope), "accent"));
+    status_row_two.push_back(
         badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
                    state.backend_connected ? "ok" : "warn"));
-    status_row.push_back(badge_node(dirty ? "Dirty draft" : "Clean", dirty ? "warn" : "ok"));
-    status_row.push_back(badge_node("Scope: " + scope_label(state.selected_scope), "accent"));
-    status_row.push_back(badge_node("State: " + save_phase_text(state.save_phase),
-                                    save_phase_style(state.save_phase)));
-    status_row.push_back(badge_node("Sync: " + rpc_kind_text(state.rpc_kind),
-                                    state.rpc_kind == RpcKind::None ? "muted" : "warn"));
-    nodes.push_back(row_node(std::move(status_row)));
+    status_row_two.push_back(badge_node("Sync: " + rpc_kind_text(state.rpc_kind),
+                                       state.rpc_kind == RpcKind::None ? "muted" : "warn"));
+    nodes.push_back(row_node(std::move(status_row_two)));
 
     json scope_children = json::array();
-    scope_children.push_back(text_node("Scope / 作用域", "title", 24));
     json scope_buttons = json::array();
     for (const std::string_view scope : {"system", "workspace", "plugin"}) {
         std::string label = scope_label(scope);
@@ -2159,7 +2164,6 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     nodes.push_back(card_node("Scope", std::move(scope_children), dirty ? "warn" : "cyan"));
 
     json search_children = json::array();
-    search_children.push_back(text_node("Search / 搜索", "title", 24));
     search_children.push_back(
         text_node(state.search_query.empty()
                       ? "Search label (中文/English), stable key, description and keywords."
@@ -2209,7 +2213,6 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
             state.search_query.empty() && state.active_page == page.id ? "primary" : "default"));
     }
     json navigation = json::array();
-    navigation.push_back(text_node("Categories / 分类", "title", 24));
     append_button_rows(navigation, std::move(nav_buttons), 4);
     nodes.push_back(card_node("Categories", std::move(navigation), "gold"));
 
@@ -2334,7 +2337,8 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                                              state.save_phase == SavePhase::Saving ||
                                              synchronization_locked));
     footer.push_back(row_node(std::move(footer_actions)));
-    nodes.push_back(card_node("Actions", std::move(footer), dirty ? "warn" : "ok"));
+    json footer_node = card_node("Footer", std::move(footer), dirty ? "warn" : "ok");
+    nodes.push_back(std::move(footer_node));
 
     json document{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}};
     std::string serialized = document.dump();
@@ -2357,7 +2361,6 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                                           state.active_page == page.id ? "primary" : "default"));
     }
     json compact_navigation = json::array();
-    compact_navigation.push_back(text_node("Categories / 分类", "title", 24));
     append_button_rows(compact_navigation, std::move(compact_nav), 4);
     compact_nodes.push_back(card_node("Categories", std::move(compact_navigation), "gold"));
     return json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact_nodes)}}.dump();
@@ -4231,7 +4234,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_p
         descriptor.modal = false;
         descriptor.overlay_style = false;
         descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
-        descriptor.theme_override_json_utf8 = kDarkThemeOverride;
+        descriptor.theme_override_json_utf8 = nullptr;
         descriptor.initial_opacity = 1.0F;
         descriptor.auto_scroll = true;
 

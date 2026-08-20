@@ -33,6 +33,7 @@ using sao::ai_editor::native::KernelMapPanelProvider;
 using sao::ai_editor::native::McpManagementPanelProvider;
 using sao::ai_editor::native::NativePanelProvider;
 using sao::ai_editor::native::WebviewPanelOwner;
+using sao::ai_editor::native::WebviewPanelOptions;
 using sao::ai_editor::native::WebviewPanelRegistry;
 using sao::ai_editor::native::WebviewPanelState;
 
@@ -329,29 +330,6 @@ TEST_CASE("panel: unavailable_bridge_short_circuits_errors",
     REQUIRE(fx.mock->calls.empty());
 }
 
-TEST_CASE("panel: register_with_runtime_is_idempotent",
-          "[plugins][ai_editor][kernel_map_panel]") {
-    Fixture fx;
-    WebviewPanelRegistry registry;
-
-    const int32_t first =
-        fx.provider.register_with_runtime(registry, /*assets_root*/ "");
-    REQUIRE(first == SAO_AI_EDITOR_OK);
-    REQUIRE(fx.provider.is_registered());
-    REQUIRE(registry.list_alive().size() == 1);
-    REQUIRE(registry.list_alive()[0].panel_id ==
-            std::string(KernelMapPanelProvider::panel_id()));
-    REQUIRE(registry.list_alive()[0].view_type ==
-            std::string(KernelMapPanelProvider::view_type()));
-
-    // A second call is a no-op — no new panel is created.
-    const int32_t second =
-        fx.provider.register_with_runtime(registry, /*assets_root*/ "");
-    REQUIRE(second == SAO_AI_EDITOR_OK);
-    REQUIRE(registry.list_alive().size() == 1);
-    REQUIRE(registry.total_created() == 1);
-}
-
 TEST_CASE("panel: load_driver_invokes_bridge_when_picker_present",
           "[plugins][ai_editor][kernel_map_panel]") {
     // Prove the not-implemented reply IS conditional on the delegate.
@@ -385,6 +363,76 @@ TEST_CASE("panel: load_driver_invokes_bridge_when_picker_present",
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("panel: malformed numeric fields are rejected without bridge calls",
+          "[plugins][ai_editor][kernel_map_panel]") {
+    Fixture fx;
+    Json reply;
+    REQUIRE(fx.provider.handle_message(
+                Json{{"cmd", "unmap"}, {"args", Json{{"target_base", 4096}}}},
+                reply) == SAO_AI_EDITOR_OK);
+    REQUIRE(reply["status"] == "error");
+    REQUIRE(fx.mock->calls.empty());
+
+    REQUIRE(fx.provider.handle_message(
+                Json{{"cmd", "activate"},
+                     {"args", Json{{"pool_tag_seed", " 0x10"}}}},
+                reply) == SAO_AI_EDITOR_OK);
+    REQUIRE(reply["status"] == "error");
+    REQUIRE(fx.mock->calls.empty());
+}
+
+TEST_CASE("panel: post callback may reenter provider",
+          "[plugins][ai_editor][kernel_map_panel]") {
+    Fixture fx;
+    bool reentered = false;
+    fx.provider.install_post_to_page([&](const std::string&, const Json&) {
+        Json nested;
+        reentered = fx.provider.handle_message(Json{{"cmd", "refresh"}}, nested) ==
+                    SAO_AI_EDITOR_OK;
+        return true;
+    });
+    const Json reply = dispatch(fx.provider, Json{{"cmd", "refresh"}});
+    REQUIRE(reply["status"] == "ok");
+    REQUIRE(reentered);
+}
+
+TEST_CASE("panel: duplicate adoption checks owner, title, and view",
+          "[plugins][ai_editor][kernel_map_panel]") {
+    Fixture fx;
+    WebviewPanelRegistry registry;
+    WebviewPanelOptions options;
+    WebviewPanelState state;
+    REQUIRE(registry.create(std::string(KernelMapPanelProvider::panel_id()),
+                            std::string(KernelMapPanelProvider::view_type()),
+                            std::string(KernelMapPanelProvider::panel_id()),
+                            options, WebviewPanelOwner::extension_host, state) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(fx.provider.register_with_runtime(registry, "") ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("panel: same provider unregister and reregister reuses live record",
+          "[plugins][ai_editor][kernel_map_panel]") {
+    Fixture fx;
+    WebviewPanelRegistry registry;
+    REQUIRE(fx.provider.register_with_runtime(registry, "") == SAO_AI_EDITOR_OK);
+    REQUIRE(fx.provider.unregister_from_runtime(registry) == SAO_AI_EDITOR_OK);
+    REQUIRE_FALSE(fx.provider.is_registered());
+    REQUIRE(fx.provider.register_with_runtime(registry, "") == SAO_AI_EDITOR_OK);
+    REQUIRE(fx.provider.is_registered());
+    REQUIRE(registry.list_alive().size() == 1);
+    REQUIRE(registry.total_created() == 1);
+}
+
+TEST_CASE("panel: picker cancellation is a non-error reply",
+          "[plugins][ai_editor][kernel_map_panel]") {
+    Fixture fx;
+    fx.provider.install_file_picker([] { return std::string{}; });
+    const Json reply = dispatch(fx.provider, Json{{"cmd", "load_driver"}});
+    REQUIRE(reply["status"] == "cancelled");
+    REQUIRE(fx.mock->calls.empty());
 }
 
 TEST_CASE("panel: MCP management implements the native provider contract",

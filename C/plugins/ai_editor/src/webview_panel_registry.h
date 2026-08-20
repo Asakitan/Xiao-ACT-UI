@@ -73,8 +73,9 @@ public:
 
     // Create a fresh panel record and return its snapshot.  When
     // `panel_id` is empty the registry mints one (`wvp-<counter>-<pid>`).
-    // Returns SAO_AI_EDITOR_ERR_INVALID_ARGUMENT if `view_type` is empty
-    // or if a supplied `panel_id` already exists.
+    // A disposed supplied id is revived without incrementing total_created
+    // when its owner and view type match.  Returns INVALID_ARGUMENT if
+    // `view_type` is empty or a live/mismatched supplied id already exists.
     int32_t create(const std::string& panel_id_hint,
                    const std::string& view_type,
                    const std::string& title,

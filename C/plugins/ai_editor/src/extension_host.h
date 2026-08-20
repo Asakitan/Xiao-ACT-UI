@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -45,6 +47,14 @@ struct ExtensionRecord {
 
 class ExtensionHost final {
 public:
+    using NativeCommandHandler =
+        std::function<int32_t(const Json& args, Json& out)>;
+
+    struct NativeCommandRegistration final {
+        NativeCommandHandler handler;
+        uint64_t owner = 0;
+    };
+
     explicit ExtensionHost(NativeRuntime& runtime) : runtime_(runtime) {}
     ~ExtensionHost();
 
@@ -60,6 +70,17 @@ public:
     int32_t deactivate(std::string_view extension_id, Json& out);
     int32_t execute_command(std::string_view command_id, const Json& args,
                             uint32_t timeout_ms, Json& out);
+    int32_t register_native_command(std::string_view command_id,
+                                    NativeCommandHandler handler,
+                                    uint64_t owner = 0);
+    int32_t unregister_native_command(std::string_view command_id,
+                                      uint64_t owner = 0);
+    std::optional<NativeCommandRegistration> snapshot_native_command(
+        std::string_view command_id) const;
+    int32_t restore_native_command(
+        std::string_view command_id,
+        const std::optional<NativeCommandRegistration>& prior,
+        uint64_t owner);
     int32_t post_webview_message(const Json& params, Json& out);
     Json snapshot() const;
 
@@ -73,6 +94,7 @@ private:
     std::shared_ptr<NodeRuntime> node_runtime_;
     NodeRuntime::BootOptions boot_options_{};
     std::unordered_map<std::string, ExtensionRecord> extensions_;
+    std::unordered_map<std::string, NativeCommandRegistration> native_commands_;
 };
 
 }  // namespace sao::ai_editor::native

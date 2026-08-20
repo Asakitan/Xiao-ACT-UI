@@ -1,25 +1,23 @@
 #include "kernel_map_panel_provider.h"
 
+#include <windows.h>
+
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
-// The peer agent owns kernel_map_bridge.h under
-// include/sao/ai_editor/.  If that header hasn't landed yet the panel
-// still builds (guarded by __has_include) and reports "bridge
-// unavailable" via KernelMapDefaultBridge::is_available().
-//
-// Test builds define SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB=1 so the
-// panel test target does not need to link against the peer's rt_io
-// proxy (which the real header pulls in transitively).  In stub mode
-// the default bridge always reports unavailable; tests inject a mock
-// via install_bridge().
+#include <nlohmann/json.hpp>
+
+#include "kernel_map_commands.h"
+
 #if defined(SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB) && \
     SAO_AI_EDITOR_KERNEL_MAP_PANEL_TEST_STUB
 #define SAO_AI_EDITOR_KERNEL_MAP_BRIDGE_AVAILABLE 0
@@ -31,37 +29,8 @@
 #endif
 
 namespace sao::ai_editor::native {
-
 namespace {
-
-// Parse "0xDEADBEEF" or "deadbeef" or plain integer strings into a
-// 64-bit base address.  Returns false on empty / malformed input; the
-// caller is expected to translate a false into an "invalid target_base"
-// error reply.
-bool parse_hex_address(const std::string& value, uint64_t& out) {
-    std::string s = value;
-    // Trim surrounding whitespace + a single 0x/0X prefix.
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-    if (s.empty()) { return false; }
-    int base = 16;
-    if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s.erase(0, 2);
-    }
-    if (s.empty()) { return false; }
-    for (char c : s) {
-        if (!std::isxdigit(static_cast<unsigned char>(c))) {
-            return false;
-        }
-    }
-    try {
-        out = std::stoull(s, nullptr, base);
-    } catch (...) {
-        return false;
-    }
-    return true;
-}
+using Json = nlohmann::json;
 
 std::string format_hex_address(uint64_t value) {
     char buffer[32];
@@ -70,36 +39,72 @@ std::string format_hex_address(uint64_t value) {
     return std::string(buffer);
 }
 
-// Best-effort asset loader.  Missing / unreadable files return an empty
-// string, which triggers the built-in stub HTML.
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
-    if (!stream) { return {}; }
-    std::ostringstream out;
-    out << stream.rdbuf();
-    return out.str();
+    if (!stream) return {};
+    std::ostringstream output;
+    output << stream.rdbuf();
+    return output.str();
 }
 
-// A minimal HTML shell used when the real assets aren't reachable
-// (unit tests, headless configurations, first-boot before assets have
-// been installed).  Keeps the same panelId / cmd contract so a smoke
-// test can still exercise the message dispatch even without the CSS/JS
-// bundle.
 std::string builtin_stub_html() {
     return R"HTML(<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Kernel Map Bridge</title></head>
-<body>
-  <h1>Kernel Map Bridge</h1>
-  <p data-role="bridge-availability">bridge: probing</p>
-  <p>Operator dashboard assets missing — running in stub mode.</p>
-</body></html>)HTML";
+<body><h1>Kernel Map Bridge</h1><p>bridge: probing</p></body></html>)HTML";
+}
+
+int32_t read_driver_file_bounded(std::string_view path,
+                                 std::vector<uint8_t>& out) {
+    constexpr uint64_t kMaxBytes = 32ull * 1024ull * 1024ull;
+    out.clear();
+    const std::wstring wide_path = std::filesystem::u8path(std::string(path)).wstring();
+    HANDLE handle = CreateFileW(wide_path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    struct HandleGuard final {
+        HANDLE value = INVALID_HANDLE_VALUE;
+        ~HandleGuard() {
+            if (value != INVALID_HANDLE_VALUE) CloseHandle(value);
+        }
+    } handle_guard{handle};
+
+    const bool disk_file = GetFileType(handle) == FILE_TYPE_DISK;
+    BY_HANDLE_FILE_INFORMATION information{};
+    const bool has_information =
+        GetFileInformationByHandle(handle, &information) != FALSE;
+    LARGE_INTEGER size{};
+    const bool has_size = GetFileSizeEx(handle, &size) != FALSE;
+    if (!disk_file || !has_information || !has_size ||
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+        size.QuadPart <= 0 ||
+        static_cast<uint64_t>(size.QuadPart) > kMaxBytes) {
+        return size.QuadPart > static_cast<LONGLONG>(kMaxBytes)
+                   ? SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
+                   : SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+
+    out.resize(static_cast<size_t>(size.QuadPart));
+    size_t offset = 0;
+    while (offset < out.size()) {
+        const DWORD request = static_cast<DWORD>(
+            std::min<size_t>(out.size() - offset, 1024u * 1024u));
+        DWORD read = 0;
+        if (ReadFile(handle, out.data() + offset, request, &read, nullptr) == FALSE ||
+            read == 0) {
+            out.clear();
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+        }
+        offset += read;
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 }  // namespace
-
-// -----------------------------------------------------------------------------
-// KernelMapDefaultBridge — production forwarder to the peer's bridge.
-// -----------------------------------------------------------------------------
 
 KernelMapDefaultBridge::KernelMapDefaultBridge() {
 #if SAO_AI_EDITOR_KERNEL_MAP_BRIDGE_AVAILABLE
@@ -110,30 +115,20 @@ KernelMapDefaultBridge::KernelMapDefaultBridge() {
 }
 
 #if SAO_AI_EDITOR_KERNEL_MAP_BRIDGE_AVAILABLE
-
 Json KernelMapDefaultBridge::status() {
     sao::ai_editor::kernel_map::BridgeStatus reply{};
-    const int32_t rc =
-        sao::ai_editor::kernel_map::shared_bridge().status(reply);
-    Json payload = Json::object();
-    payload["active"] = reply.active;
-    payload["mapped_count"] = static_cast<int64_t>(reply.map_count);
-    payload["rc"] = rc;
-    return payload;
+    const int32_t rc = sao::ai_editor::kernel_map::shared_bridge().status(reply);
+    return Json{{"active", reply.active},
+                {"mapped_count", static_cast<int64_t>(reply.map_count)},
+                {"rc", rc}};
 }
 
 Json KernelMapDefaultBridge::enumerate() {
     std::vector<uint64_t> bases;
-    const int32_t rc =
-        sao::ai_editor::kernel_map::shared_bridge().enumerate(bases);
-    Json payload = Json::object();
-    Json array = Json::array();
-    for (uint64_t base : bases) {
-        array.push_back(format_hex_address(base));
-    }
-    payload["bases"] = std::move(array);
-    payload["rc"] = rc;
-    return payload;
+    const int32_t rc = sao::ai_editor::kernel_map::shared_bridge().enumerate(bases);
+    Json values = Json::array();
+    for (const uint64_t base : bases) values.push_back(format_hex_address(base));
+    return Json{{"bases", std::move(values)}, {"rc", rc}};
 }
 
 Json KernelMapDefaultBridge::activate(const ActivateConfig& config) {
@@ -148,77 +143,46 @@ Json KernelMapDefaultBridge::deactivate() {
     return Json{{"ok", rc == SAO_AI_EDITOR_OK}, {"rc", rc}};
 }
 
-Json KernelMapDefaultBridge::map(const std::vector<uint8_t>& driver_bytes) {
-    if (driver_bytes.empty()) {
-        return Json{{"ok", false},
-                    {"target_base", "0x0000000000000000"},
+Json KernelMapDefaultBridge::map(const std::vector<uint8_t>& bytes) {
+    if (bytes.empty()) {
+        return Json{{"ok", false}, {"target_base", "0x0000000000000000"},
                     {"rc", SAO_AI_EDITOR_ERR_INVALID_ARGUMENT}};
     }
-    sao::ai_editor::kernel_map::MapResult reply{};
+    sao::ai_editor::kernel_map::MapResult result{};
     const int32_t rc = sao::ai_editor::kernel_map::shared_bridge().map(
-        driver_bytes.data(),
-        static_cast<uint32_t>(driver_bytes.size()),
-        reply);
-    Json payload;
-    payload["ok"] = rc == SAO_AI_EDITOR_OK;
-    payload["rc"] = rc;
-    payload["target_base"] = format_hex_address(reply.target_base);
-    payload["entry_status"] = reply.entry_status;
-    return payload;
+        bytes.data(), static_cast<uint32_t>(bytes.size()), result);
+    return Json{{"ok", rc == SAO_AI_EDITOR_OK},
+                {"rc", rc},
+                {"target_base", format_hex_address(result.target_base)},
+                {"entry_status", result.entry_status}};
 }
 
 Json KernelMapDefaultBridge::unmap(uint64_t target_base) {
-    const int32_t rc =
-        sao::ai_editor::kernel_map::shared_bridge().unmap(target_base);
+    const int32_t rc = sao::ai_editor::kernel_map::shared_bridge().unmap(target_base);
     return Json{{"ok", rc == SAO_AI_EDITOR_OK},
-                {"target_base", format_hex_address(target_base)},
-                {"rc", rc}};
+                {"target_base", format_hex_address(target_base)}, {"rc", rc}};
 }
-
-#else  // !SAO_AI_EDITOR_KERNEL_MAP_BRIDGE_AVAILABLE
-
-Json KernelMapDefaultBridge::status() {
-    return Json{{"active", false}, {"mapped_count", 0}};
-}
-
-Json KernelMapDefaultBridge::enumerate() {
-    return Json{{"bases", Json::array()}};
-}
-
-Json KernelMapDefaultBridge::activate(const ActivateConfig&) {
-    return Json{{"ok", false}};
-}
-
-Json KernelMapDefaultBridge::deactivate() {
-    return Json{{"ok", false}};
-}
-
+#else
+Json KernelMapDefaultBridge::status() { return Json{{"active", false}, {"mapped_count", 0}}; }
+Json KernelMapDefaultBridge::enumerate() { return Json{{"bases", Json::array()}}; }
+Json KernelMapDefaultBridge::activate(const ActivateConfig&) { return Json{{"ok", false}}; }
+Json KernelMapDefaultBridge::deactivate() { return Json{{"ok", false}}; }
 Json KernelMapDefaultBridge::map(const std::vector<uint8_t>&) {
     return Json{{"ok", false}, {"target_base", "0x0000000000000000"}};
 }
-
-Json KernelMapDefaultBridge::unmap(uint64_t target_base) {
-    (void)target_base;
-    return Json{{"ok", false}};
-}
-
+Json KernelMapDefaultBridge::unmap(uint64_t) { return Json{{"ok", false}}; }
 #endif
 
-// -----------------------------------------------------------------------------
-// KernelMapPanelProvider.
-// -----------------------------------------------------------------------------
-
 KernelMapPanelProvider::KernelMapPanelProvider()
-    : bridge_(std::make_unique<KernelMapDefaultBridge>()) {}
+    : bridge_(std::make_shared<KernelMapDefaultBridge>()) {}
 
 KernelMapPanelProvider::~KernelMapPanelProvider() = default;
 
 void KernelMapPanelProvider::install_bridge(
     std::unique_ptr<IKernelMapBridge> bridge) {
+    if (bridge == nullptr) return;
     std::lock_guard<std::mutex> guard(mutex_);
-    if (bridge != nullptr) {
-        bridge_ = std::move(bridge);
-    }
+    bridge_ = std::shared_ptr<IKernelMapBridge>(std::move(bridge));
 }
 
 void KernelMapPanelProvider::install_post_to_page(PostToPage sender) {
@@ -238,313 +202,250 @@ bool KernelMapPanelProvider::is_registered() const noexcept {
 
 std::string KernelMapPanelProvider::load_bundled_html(
     const std::string& assets_root) const {
-    if (assets_root.empty()) {
-        return builtin_stub_html();
-    }
+    if (assets_root.empty()) return builtin_stub_html();
     const std::filesystem::path root(assets_root);
-    const std::filesystem::path html_path = root / "index.html";
-    const std::filesystem::path css_path = root / "panel.css";
-    const std::filesystem::path js_path = root / "panel.js";
-    std::string html = read_file(html_path);
-    if (html.empty()) { return builtin_stub_html(); }
-    std::string css = read_file(css_path);
-    std::string js = read_file(js_path);
-    // Inline the sibling assets so a single setWebviewHtml call is
-    // enough — the panel record doesn't need to expose localResource
-    // roots this way.  Fall back to the raw HTML (which already
-    // <link>s / <script>s the assets by relative path) if inlining
-    // isn't possible.
+    std::string html = read_file(root / "index.html");
+    if (html.empty()) return builtin_stub_html();
+    const std::string css = read_file(root / "panel.css");
+    const std::string js = read_file(root / "panel.js");
     if (!css.empty()) {
-        const std::string link = R"(<link rel="stylesheet" href="panel.css">)";
-        const std::string replacement =
-            "<style>\n" + css + "\n</style>";
-        const auto pos = html.find(link);
-        if (pos != std::string::npos) {
-            html.replace(pos, link.size(), replacement);
-        }
+        const std::string tag = R"(<link rel="stylesheet" href="panel.css">)";
+        const auto pos = html.find(tag);
+        if (pos != std::string::npos) html.replace(pos, tag.size(), "<style>\n" + css + "\n</style>");
     }
     if (!js.empty()) {
-        const std::string script_tag = R"(<script src="panel.js"></script>)";
-        const std::string replacement =
-            "<script>\n" + js + "\n</script>";
-        const auto pos = html.find(script_tag);
-        if (pos != std::string::npos) {
-            html.replace(pos, script_tag.size(), replacement);
-        }
+        const std::string tag = R"(<script src="panel.js"></script>)";
+        const auto pos = html.find(tag);
+        if (pos != std::string::npos) html.replace(pos, tag.size(), "<script>\n" + js + "\n</script>");
     }
     return html;
 }
 
 int32_t KernelMapPanelProvider::register_with_runtime(
     WebviewPanelRegistry& registry, const std::string& assets_root) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (registered_) {
-        return SAO_AI_EDITOR_OK;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (registered_) return SAO_AI_EDITOR_OK;
     }
+
     WebviewPanelOptions options;
     options.enable_scripts = true;
     options.retain_context_when_hidden = true;
     options.view_column = 1;
-    options.extras = Json{{"builtin", true},
-                          {"kind", "operator-dashboard"}};
+    options.extras = Json{{"builtin", true}, {"kind", "operator-dashboard"}};
 
     WebviewPanelState state;
+    bool created = false;
     int32_t status = registry.create(
         std::string{kKernelMapPanelId}, std::string{kKernelMapViewType},
-        std::string{kKernelMapPanelTitle}, options, WebviewPanelOwner::native_runtime, state);
+        std::string{kKernelMapPanelTitle}, options,
+        WebviewPanelOwner::native_runtime, state);
     if (status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
-        // Registry rejects duplicate ids — treat as "already registered"
-        // by another instance and simply reuse the entry.
-        auto existing = registry.snapshot(std::string{kKernelMapPanelId});
-        if (!existing.has_value()) {
-            return status;
+        const auto existing = registry.snapshot(std::string{kKernelMapPanelId});
+        if (!existing.has_value() || existing->disposed ||
+            existing->owner != WebviewPanelOwner::native_runtime ||
+            existing->view_type != kKernelMapViewType ||
+            existing->title != kKernelMapPanelTitle) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        state = existing.value();
+        state = *existing;
     } else if (status != SAO_AI_EDITOR_OK) {
         return status;
+    } else {
+        created = true;
     }
+
     const std::string html = load_bundled_html(assets_root);
     status = registry.set_html(std::string{kKernelMapPanelId}, html, state);
     if (status != SAO_AI_EDITOR_OK) {
+        if (created) {
+            WebviewPanelState rollback;
+            (void)registry.dispose(std::string{kKernelMapPanelId}, rollback);
+        }
         return status;
     }
-    registered_ = true;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        registered_ = true;
+    }
     return SAO_AI_EDITOR_OK;
 }
 
 int32_t KernelMapPanelProvider::unregister_from_runtime(
     WebviewPanelRegistry& registry) {
     std::lock_guard<std::mutex> guard(mutex_);
-    if (!registered_) {
-        return SAO_AI_EDITOR_OK;
-    }
+    if (!registered_) return SAO_AI_EDITOR_OK;
     WebviewPanelState state;
     const int32_t status =
         registry.dispose(std::string{kKernelMapPanelId}, state);
-    if (status != SAO_AI_EDITOR_OK &&
-        status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+    if (status != SAO_AI_EDITOR_OK && status != SAO_AI_EDITOR_ERR_NOT_FOUND)
         return status;
-    }
     registered_ = false;
     return SAO_AI_EDITOR_OK;
 }
 
 int32_t KernelMapPanelProvider::handle_message(const Json& message,
                                                Json& out_reply) {
-    if (!message.is_object()) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-    }
-    // Accept `cmd` or `command` — the JS UI uses cmd, but stray VSCode-
-    // shaped commands sometimes come through with `command`.
-    std::string cmd = message.value("cmd", std::string{});
-    if (cmd.empty()) {
-        cmd = message.value("command", std::string{});
-    }
-    if (cmd.empty()) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-    }
-    const Json request_id = message.value("requestId", Json());
-    const Json args = message.value("args", Json::object());
+    try {
+        if (!message.is_object() || !message.contains("cmd") &&
+            !message.contains("command")) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const Json& cmd_value = message.contains("cmd")
+                                    ? message["cmd"] : message["command"];
+        if (!cmd_value.is_string() || cmd_value.get<std::string>().empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string cmd = cmd_value.get<std::string>();
+        const Json request_id = message.value("requestId", Json());
+        const Json args = message.contains("args") ? message["args"] : Json::object();
+        if (!args.is_object()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
 
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (cmd == "status") {
-        out_reply = handle_status_locked();
-    } else if (cmd == "enumerate") {
-        out_reply = handle_enumerate_locked();
-    } else if (cmd == "activate") {
-        out_reply = handle_activate_locked(args);
-    } else if (cmd == "deactivate") {
-        out_reply = handle_deactivate_locked();
-    } else if (cmd == "unmap") {
-        out_reply = handle_unmap_locked(args);
-    } else if (cmd == "refresh") {
-        out_reply = handle_refresh_locked();
-    } else if (cmd == "load_driver") {
-        out_reply = handle_load_driver_locked();
-    } else {
-        out_reply = build_error(cmd, "unknown command", request_id);
-        // Inject the request id + cmd into the error envelope so the
-        // page can correlate correctly.
+        std::shared_ptr<IKernelMapBridge> bridge;
+        FilePicker picker;
+        PostToPage post;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            bridge = bridge_;
+            picker = file_picker_;
+            post = post_to_page_;
+        }
+
+        if (cmd == "status") out_reply = handle_status(bridge);
+        else if (cmd == "enumerate") out_reply = handle_enumerate(bridge);
+        else if (cmd == "activate") out_reply = handle_activate(bridge, args);
+        else if (cmd == "deactivate") out_reply = handle_deactivate(bridge);
+        else if (cmd == "unmap") out_reply = handle_unmap(bridge, args);
+        else if (cmd == "refresh") out_reply = handle_refresh();
+        else if (cmd == "load_driver") out_reply = handle_load_driver(bridge, picker);
+        else out_reply = build_error(cmd, "unknown command", request_id);
+
         out_reply["cmd"] = cmd;
-        if (!request_id.is_null()) {
-            out_reply["requestId"] = request_id;
+        if (!request_id.is_null()) out_reply["requestId"] = request_id;
+        static thread_local bool post_in_progress = false;
+        if (post && !post_in_progress) {
+            post_in_progress = true;
+            try { (void)post(std::string{kKernelMapPanelId}, out_reply); }
+            catch (...) {}
+            post_in_progress = false;
         }
         return SAO_AI_EDITOR_OK;
+    } catch (const std::exception& error) {
+        out_reply = build_error("", error.what(), Json());
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        out_reply = build_error("", "kernel map panel message failed", Json());
+        return SAO_AI_EDITOR_OK;
     }
-    out_reply["cmd"] = cmd;
-    if (!request_id.is_null()) {
-        out_reply["requestId"] = request_id;
-    }
-    return SAO_AI_EDITOR_OK;
 }
 
-Json KernelMapPanelProvider::build_reply(std::string_view /*cmd*/,
-                                         std::string_view status,
-                                         const Json& payload,
-                                         const Json& /*request_id*/) const {
-    Json reply = Json::object();
-    reply["status"] = std::string(status);
-    if (!payload.is_null()) {
-        reply["payload"] = payload;
-    }
+Json KernelMapPanelProvider::build_reply(std::string_view, std::string_view status,
+                                         const Json& payload, const Json&) const {
+    Json reply{{"status", std::string(status)}};
+    if (!payload.is_null()) reply["payload"] = payload;
     return reply;
 }
 
-Json KernelMapPanelProvider::build_error(std::string_view /*cmd*/,
-                                         std::string_view reason,
-                                         const Json& /*request_id*/) const {
-    Json reply = Json::object();
-    reply["status"] = "error";
-    reply["reason"] = std::string(reason);
-    return reply;
+Json KernelMapPanelProvider::build_error(std::string_view, std::string_view reason,
+                                         const Json&) const {
+    return Json{{"status", "error"}, {"reason", std::string(reason)}};
 }
 
-Json KernelMapPanelProvider::handle_status_locked() {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_status(
+    const std::shared_ptr<IKernelMapBridge>& bridge) {
+    if (bridge == nullptr || !bridge->is_available()) {
         Json reply = build_error("status", "bridge unavailable", Json());
         reply["payload"] = Json{{"active", false}, {"mapped_count", 0}};
         return reply;
     }
-    return build_reply("status", "ok", bridge_->status(), Json());
+    return build_reply("status", "ok", bridge->status(), Json());
 }
 
-Json KernelMapPanelProvider::handle_enumerate_locked() {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_enumerate(
+    const std::shared_ptr<IKernelMapBridge>& bridge) {
+    if (bridge == nullptr || !bridge->is_available()) {
         Json reply = build_error("enumerate", "bridge unavailable", Json());
         reply["payload"] = Json{{"bases", Json::array()}};
         return reply;
     }
-    return build_reply("enumerate", "ok", bridge_->enumerate(), Json());
+    return build_reply("enumerate", "ok", bridge->enumerate(), Json());
 }
 
-Json KernelMapPanelProvider::handle_activate_locked(const Json& args) {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_activate(
+    const std::shared_ptr<IKernelMapBridge>& bridge, const Json& args) {
+    if (bridge == nullptr || !bridge->is_available())
         return build_error("activate", "bridge unavailable", Json());
-    }
     IKernelMapBridge::ActivateConfig config{};
-    if (args.is_object()) {
-        // slot_va is passed either as a hex string ("0x...") or a raw
-        // integer.  Hex strings arrive from the JS panel because JSON
-        // numbers cannot faithfully represent 64-bit kernel VAs.
-        if (args.contains("invoke_result_slot_va")) {
-            const Json& slot = args["invoke_result_slot_va"];
-            if (slot.is_number_unsigned()) {
-                config.invoke_result_slot_va = slot.get<uint64_t>();
-            } else if (slot.is_string()) {
-                (void)parse_hex_address(slot.get<std::string>(),
-                                        config.invoke_result_slot_va);
-            }
-        }
-        config.idle_timeout_ms = args.value("idle_timeout_ms", 60000U);
-        if (args.contains("pool_tag_seed")) {
-            const Json& tag = args["pool_tag_seed"];
-            if (tag.is_number_unsigned()) {
-                config.pool_tag_seed = tag.get<uint64_t>();
-            } else if (tag.is_string()) {
-                (void)parse_hex_address(tag.get<std::string>(),
-                                        config.pool_tag_seed);
-            }
+    if (args.contains("invoke_result_slot_va") &&
+        !sao::ai_editor::kernel_map::parse_kernel_map_uint64(
+            args["invoke_result_slot_va"], config.invoke_result_slot_va)) {
+        return build_error("activate", "invalid invoke_result_slot_va", Json());
+    }
+    if (args.contains("pool_tag_seed") &&
+        !sao::ai_editor::kernel_map::parse_kernel_map_uint64(
+            args["pool_tag_seed"], config.pool_tag_seed)) {
+        return build_error("activate", "invalid pool_tag_seed", Json());
+    }
+    if (args.contains("idle_timeout_ms")) {
+        if (!sao::ai_editor::kernel_map::parse_kernel_map_uint32(
+                args["idle_timeout_ms"], config.idle_timeout_ms)) {
+            return build_error("activate", "invalid idle_timeout_ms", Json());
         }
     }
-    Json payload = bridge_->activate(config);
-    const bool ok = payload.value("ok", false);
-    return build_reply("activate", ok ? "ok" : "error", payload, Json());
+    const Json payload = bridge->activate(config);
+    return build_reply("activate", payload.value("ok", false) ? "ok" : "error",
+                       payload, Json());
 }
 
-Json KernelMapPanelProvider::handle_deactivate_locked() {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_deactivate(
+    const std::shared_ptr<IKernelMapBridge>& bridge) {
+    if (bridge == nullptr || !bridge->is_available())
         return build_error("deactivate", "bridge unavailable", Json());
-    }
-    Json payload = bridge_->deactivate();
-    const bool ok = payload.value("ok", false);
-    return build_reply("deactivate", ok ? "ok" : "error", payload, Json());
+    const Json payload = bridge->deactivate();
+    return build_reply("deactivate", payload.value("ok", false) ? "ok" : "error",
+                       payload, Json());
 }
 
-Json KernelMapPanelProvider::handle_unmap_locked(const Json& args) {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_unmap(
+    const std::shared_ptr<IKernelMapBridge>& bridge, const Json& args) {
+    if (bridge == nullptr || !bridge->is_available())
         return build_error("unmap", "bridge unavailable", Json());
-    }
-    const std::string target =
-        args.is_object() ? args.value("target_base", std::string{}) : std::string{};
-    if (target.empty()) {
-        return build_error("unmap", "target_base is required", Json());
-    }
     uint64_t base = 0;
-    if (!parse_hex_address(target, base)) {
-        Json reply = build_error("unmap", "invalid target_base", Json());
-        reply["payload"] = Json{{"target_base", target}};
-        return reply;
+    if (!args.contains("target_base") ||
+        !sao::ai_editor::kernel_map::parse_kernel_map_uint64(
+            args["target_base"], base) || base == 0) {
+        return build_error("unmap", "invalid target_base", Json());
     }
-    Json payload = bridge_->unmap(base);
-    const bool ok = payload.value("ok", false);
-    return build_reply("unmap", ok ? "ok" : "error", payload, Json());
+    const Json payload = bridge->unmap(base);
+    return build_reply("unmap", payload.value("ok", false) ? "ok" : "error",
+                       payload, Json());
 }
 
-Json KernelMapPanelProvider::handle_load_driver_locked() {
-    if (bridge_ == nullptr || !bridge_->is_available()) {
+Json KernelMapPanelProvider::handle_load_driver(
+    const std::shared_ptr<IKernelMapBridge>& bridge, const FilePicker& picker) {
+    if (bridge == nullptr || !bridge->is_available())
         return build_error("load_driver", "bridge unavailable", Json());
+    if (!picker) return Json{{"status", "not_implemented"},
+                             {"reason", "no file picker in current build"}};
+    const std::string path = picker();
+    if (path.empty()) return build_reply("load_driver", "cancelled", Json::object(), Json());
+    std::vector<uint8_t> bytes;
+    const int32_t status = read_driver_file_bounded(path, bytes);
+    if (status != SAO_AI_EDITOR_OK) {
+        return Json{{"status", "error"},
+                    {"reason", status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT
+                                    ? "driver image exceeds 32 MiB cap"
+                                    : "unable to read driver image"},
+                    {"payload", Json{{"path", path}, {"status", status}}}};
     }
-    if (!file_picker_) {
-        Json reply;
-        reply["status"] = "not_implemented";
-        reply["reason"] = "no file picker in current build";
-        return reply;
-    }
-    const std::string image_path = file_picker_();
-    if (image_path.empty()) {
-        return build_error("load_driver", "cancelled", Json());
-    }
-    // Peer's Bridge::map() takes raw PE bytes, not a path.  Read the
-    // file locally under a strict 32 MiB cap that mirrors the wire
-    // layer's own limit.  Files that exceed the cap are refused before
-    // we even touch the bridge.
-    constexpr std::uintmax_t kMaxDriverBytes = 32ull * 1024ull * 1024ull;
-    std::error_code file_ec;
-    const auto file_size =
-        std::filesystem::file_size(image_path, file_ec);
-    if (file_ec) {
-        Json reply = build_error("load_driver", "unable to stat driver image",
-                                 Json());
-        reply["payload"] = Json{{"path", image_path},
-                                {"error", file_ec.message()}};
-        return reply;
-    }
-    if (file_size == 0) {
-        return build_error("load_driver", "driver image is empty", Json());
-    }
-    if (file_size > kMaxDriverBytes) {
-        Json reply = build_error("load_driver", "driver image exceeds 32 MiB cap",
-                                 Json());
-        reply["payload"] = Json{{"path", image_path},
-                                {"size", static_cast<int64_t>(file_size)}};
-        return reply;
-    }
-    std::ifstream stream(image_path, std::ios::binary);
-    if (!stream) {
-        Json reply = build_error("load_driver", "unable to open driver image",
-                                 Json());
-        reply["payload"] = Json{{"path", image_path}};
-        return reply;
-    }
-    std::vector<uint8_t> driver_bytes(static_cast<size_t>(file_size));
-    stream.read(reinterpret_cast<char*>(driver_bytes.data()),
-                static_cast<std::streamsize>(driver_bytes.size()));
-    if (!stream) {
-        Json reply = build_error("load_driver", "short read on driver image",
-                                 Json());
-        reply["payload"] = Json{{"path", image_path}};
-        return reply;
-    }
-    Json payload = bridge_->map(driver_bytes);
-    payload["path"] = image_path;
-    const bool ok = payload.value("ok", false);
-    return build_reply("load_driver", ok ? "ok" : "error", payload, Json());
+    const Json payload = bridge->map(bytes);
+    Json with_path = payload;
+    with_path["path"] = path;
+    return build_reply("load_driver", with_path.value("ok", false) ? "ok" : "error",
+                       with_path, Json());
 }
 
-Json KernelMapPanelProvider::handle_refresh_locked() {
-    // Refresh is a no-op on the native side — the page auto-polls
-    // status/enumerate.  We echo an ok reply so the log gets a
-    // completion marker.
+Json KernelMapPanelProvider::handle_refresh() {
     return build_reply("refresh", "ok", Json::object(), Json());
 }
 
