@@ -317,15 +317,15 @@ struct SettingsPanelFixture {
         REQUIRE(owner->load(info) == SAO_STATUS_OK);
         REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
         REQUIRE(Settings::set_compositor_for_testing(compositor) == SAO_STATUS_OK);
-        Settings::sao_launcher_settings_panel_set_owner(owner.get());
-        sao_launcher_settings_profiles_set_owner(owner.get());
+        REQUIRE(Settings::settings_panel_bind_owner(owner.get()) == SAO_STATUS_OK);
+        REQUIRE(Settings::settings_profiles_bind_owner(owner.get()) == SAO_STATUS_OK);
         Settings::set_profiles_directory_for_testing((root / L"profiles").wstring());
     }
 
     ~SettingsPanelFixture() {
         (void)Settings::take_offline_for_testing();
-        Settings::sao_launcher_settings_panel_set_owner(nullptr);
-        sao_launcher_settings_profiles_set_owner(nullptr);
+        (void)Settings::settings_panel_unbind_owner(nullptr);
+        (void)Settings::settings_profiles_unbind_owner(nullptr);
         Settings::set_profiles_directory_for_testing(L"");
         if (compositor != nullptr)
             (void)sao_ui_compositor_try_destroy(compositor);
@@ -489,3 +489,26 @@ TEST_CASE("hotkey manager preserves native maps when unregister fails",
     sao::launcher::hotkey::clear_native_hooks_for_testing();
     sao_launcher_hotkey_set_settings_owner(nullptr);
 }
+
+TEST_CASE("settings panel and profile bindings teardown before owner release",
+          "[launcher][settings][panel][profiles][teardown][focused]") {
+    SettingsPanelFixture fixture;
+    Settings::open_config_panel();
+    REQUIRE(Settings::take_offline_for_testing() == SAO_STATUS_OK);
+    REQUIRE(Settings::settings_panel_unbind_owner(fixture.owner.get()) == SAO_STATUS_OK);
+    REQUIRE(Settings::settings_profiles_unbind_owner(fixture.owner.get()) == SAO_STATUS_OK);
+}
+
+TEST_CASE("hotkey panel handler restore failure remains retryable", "[launcher][hotkey][teardown][rollback][focused]") {
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    sao::launcher::hotkey::Owner owner(compositor);
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    owner.fail_next_unregister_for_testing(SAO_STATUS_ERR_OS_CALL_FAILED);
+    owner.fail_next_handler_restore_for_testing(SAO_STATUS_ERR_OS_CALL_FAILED, SAO_STATUS_OK);
+    CHECK(owner.take_offline() != SAO_STATUS_OK);
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+

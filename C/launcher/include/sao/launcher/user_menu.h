@@ -9,6 +9,10 @@
 
 namespace sao::launcher {
 
+namespace hotkey {
+class Owner;
+}
+
 bool buildUserDocsIndexPath(const wchar_t* base_dir,
                             wchar_t* path_out,
                             std::size_t path_capacity) noexcept;
@@ -25,6 +29,8 @@ public:
 
     bool create(const wchar_t* base_dir) noexcept;
     void destroy() noexcept;
+    void bind_hotkey_owner(hotkey::Owner* owner) noexcept;
+    void unbind_hotkey_owner(hotkey::Owner* owner) noexcept;
 
 private:
     static LRESULT CALLBACK windowProc(HWND window,
@@ -49,6 +55,7 @@ private:
     bool notification_icon_added_ = false;
     bool window_class_registered_ = false;
     wchar_t docs_index_path_[MAX_PATH]{};
+    hotkey::Owner* hotkey_owner_ = nullptr;
 };
 
 } // namespace sao::launcher

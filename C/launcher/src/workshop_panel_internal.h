@@ -145,6 +145,8 @@ class Owner final {
     // serviced by the compositor owner thread.
     sao_status_t dispatch_panel_event_for_testing(std::int32_t event_kind);
     void fail_next_unregister_for_testing(sao_status_t status);
+    static void drain_deferred_cleanup_for_owner() noexcept;
+    static void drain_deferred_cleanup_for_testing() noexcept;
 
     [[nodiscard]] Snapshot snapshot() const;
 

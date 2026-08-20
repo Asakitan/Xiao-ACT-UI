@@ -24,6 +24,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -125,13 +126,17 @@ SaoPanelDescriptor panel_descriptor_for_testing() noexcept {
 }
 
 struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
+    enum class RetirementState : std::uint8_t { offline, online, retiring, retry_pending, deferred };
+    static std::mutex deferred_mutex;
+    static std::vector<std::shared_ptr<Impl>> deferred_cleanup;
+
     explicit Impl(sao_ui_compositor_handle_t value) noexcept : compositor(value) {}
 
     struct CallbackLease final {
         explicit CallbackLease(Impl* value) noexcept : state(value) {
             if (state == nullptr) return;
             std::lock_guard lock(state->mutex);
-            if (!state->accepting || state->retiring) return;
+            if (!state->accepting || state->retirement != RetirementState::online) return;
             ++state->callbacks_in_flight;
             active = true;
         }
@@ -223,7 +228,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         void* wake_window = nullptr;
         {
             std::lock_guard lock(mutex);
-            if (result.generation != capture_generation || panel == nullptr || retiring)
+            if (result.generation != capture_generation || panel == nullptr || retirement != RetirementState::online)
                 return;
             pending_capture = std::move(result);
             capture_running = false;
@@ -257,7 +262,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void complete_capture(const CaptureResult& result) {
         {
             std::lock_guard lock(mutex);
-            if (result.generation != capture_generation || panel == nullptr || retiring) return;
+            if (result.generation != capture_generation || panel == nullptr || retirement != RetirementState::online) return;
         }
         if (result.system_error) {
             set_status(result.id, PanelStatus::system_error,
@@ -308,7 +313,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         std::uint64_t generation = 0;
         {
             std::lock_guard lock(mutex);
-            if (panel == nullptr || retiring) return SAO_STATUS_ERR_NOT_INITIALIZED;
+            if (panel == nullptr || retirement != RetirementState::online) return SAO_STATUS_ERR_NOT_INITIALIZED;
             generation = ++capture_generation;
             hooks = capture_hooks;
             pending_capture.reset();
@@ -347,6 +352,10 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         panel = created_panel;
         body = created_body;
         accepting = true;
+        action_handler_attached = true;
+        event_handler_attached = true;
+        retirement = RetirementState::online;
+        cleanup_pending = false;
         creating = false;
         return SAO_STATUS_OK;
     }
@@ -357,7 +366,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         sao_ui_panel_handle_t existing = nullptr;
         {
             std::lock_guard lock(mutex);
-            if (creating || retiring) return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            if (creating || retirement == RetirementState::retiring || retirement == RetirementState::retry_pending || cleanup_pending) return SAO_UI_PANEL_STATUS_ERR_BUSY;
             existing = panel;
             if (existing == nullptr) creating = true;
         }
@@ -393,8 +402,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         {
             std::lock_guard lock(mutex);
             if (panel == nullptr) return SAO_STATUS_OK;
-            if (retiring || callbacks_in_flight != 0U) return SAO_UI_PANEL_STATUS_ERR_BUSY;
-            retiring = true;
+            if (retirement == RetirementState::retiring || callbacks_in_flight != 0U) return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            retirement = RetirementState::retiring;
             accepting = false;
             target = panel;
         }
@@ -407,34 +416,42 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         }
         if (status == SAO_STATUS_OK) {
             event_detached = true;
-            status = sao_ui_panel_unregister(target);
+            sao_status_t injected = std::exchange(fail_next_unregister_status, SAO_STATUS_OK);
+            status = injected == SAO_STATUS_OK ? sao_ui_panel_unregister(target) : injected;
         }
         if (status == SAO_STATUS_OK) {
             std::lock_guard lock(mutex);
             panel = nullptr;
             body = nullptr;
-            retiring = false;
+            accepting = true;
+            cleanup_pending = false;
+            retirement = RetirementState::offline;
             return SAO_STATUS_OK;
         }
         sao_status_t rollback_status = SAO_STATUS_OK;
         if (event_detached) {
-            rollback_status = sao_ui_panel_set_event_handler(target, &event_callback, this);
+            const sao_status_t injected = std::exchange(fail_next_event_restore_status, SAO_STATUS_OK);
+            rollback_status = injected == SAO_STATUS_OK ? sao_ui_panel_set_event_handler(target, &event_callback, this) : injected;
         }
         if (action_detached) {
-            const sao_status_t restore_status =
-                sao_ui_panel_set_action_handler(target, &action_callback, this);
+            const sao_status_t injected = std::exchange(fail_next_action_restore_status, SAO_STATUS_OK);
+            const sao_status_t restore_status = injected == SAO_STATUS_OK ? sao_ui_panel_set_action_handler(target, &action_callback, this) : injected;
             if (rollback_status == SAO_STATUS_OK)
                 rollback_status = restore_status;
         }
         {
             std::lock_guard lock(mutex);
-            if (rollback_status == SAO_STATUS_OK) {
-                retiring = false;
-                accepting = true;
-            }
+            retirement = RetirementState::retry_pending;
+            cleanup_pending = true;
+            accepting = false;
         }
         return rollback_status == SAO_STATUS_OK ? status : rollback_status;
     }
+
+    void fail_next_unregister(sao_status_t status) noexcept { std::lock_guard lock(mutex); fail_next_unregister_status = status; }
+    void fail_next_handler_restore(sao_status_t action_status, sao_status_t event_status) noexcept { std::lock_guard lock(mutex); fail_next_action_restore_status = action_status; fail_next_event_restore_status = event_status; }
+    static void defer_cleanup(std::shared_ptr<Impl> state) noexcept { if (state == nullptr) return; { std::lock_guard lock(state->mutex); state->accepting = false; state->cleanup_pending = true; state->retirement = RetirementState::deferred; } std::lock_guard lock(deferred_mutex); deferred_cleanup.push_back(std::move(state)); }
+    static void drain_deferred_cleanup() noexcept { std::vector<std::shared_ptr<Impl>> pending; { std::lock_guard lock(deferred_mutex); pending.swap(deferred_cleanup); } std::vector<std::shared_ptr<Impl>> retry; for (auto& state : pending) { if (state->take_offline() != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex); for (auto& state : retry) deferred_cleanup.push_back(std::move(state)); } }
 
     sao_status_t set_owner_wake_window(void* window) noexcept {
         std::lock_guard lock(mutex);
@@ -534,8 +551,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void preserve_for_non_owner_destruction() noexcept {
         std::lock_guard lock(mutex);
         accepting = false;
-        retiring = true;
-        non_owner_keepalive = shared_from_this();
+        cleanup_pending = true;
+        retirement = RetirementState::deferred;
     }
     sao_status_t set_capture_hooks(CaptureHooks hooks) noexcept {
         std::lock_guard lock(mutex);
@@ -556,11 +573,19 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void* owner_wake_window{};
     std::size_t callbacks_in_flight{};
     bool capture_running{};
-    std::shared_ptr<Impl> non_owner_keepalive;
+    sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
+    sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
+    sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};
     bool accepting{};
     bool creating{};
-    bool retiring{};
+    bool action_handler_attached{};
+    bool event_handler_attached{};
+    bool cleanup_pending{};
+    RetirementState retirement{RetirementState::offline};
 };
+
+std::mutex Owner::Impl::deferred_mutex;
+std::vector<std::shared_ptr<Owner::Impl>> Owner::Impl::deferred_cleanup;
 
 std::string format_combo_utf8(std::uint32_t vk, std::uint32_t modifiers) {
     std::string out;
@@ -608,12 +633,12 @@ Owner::Owner(sao_ui_compositor_handle_t compositor) noexcept {
 
 Owner::~Owner() {
     if (impl_ == nullptr) return;
-    impl_->stop_capture();
-    if (impl_->panel_handle() == nullptr) return;
-    if (sao_ui_compositor_require_owner_thread(impl_->compositor) == SAO_STATUS_OK)
-        (void)impl_->take_offline();
-    else
-        impl_->preserve_for_non_owner_destruction();
+    auto state = std::move(impl_);
+    state->stop_capture();
+    if (state->panel_handle() == nullptr) return;
+    if (sao_ui_compositor_require_owner_thread(state->compositor) == SAO_STATUS_OK && state->take_offline() == SAO_STATUS_OK)
+        return;
+    Impl::defer_cleanup(std::move(state));
 }
 
 sao_status_t Owner::open() noexcept { return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->open(); }
@@ -634,26 +659,29 @@ sao_status_t Owner::dispatch_action_for_testing(std::string_view action, std::st
 sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->dispatch_event_for_testing(event_kind);
 }
+void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept { if (impl_ != nullptr) impl_->fail_next_unregister(status); }
+
+void Owner::fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept { if (impl_ != nullptr) impl_->fail_next_handler_restore(action_status, event_status); }
+
+void Owner::drain_deferred_cleanup_for_owner() noexcept { Impl::drain_deferred_cleanup(); }
+
+void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_cleanup_for_owner(); }
+
 sao_ui_panel_handle_t Owner::panel_handle() const noexcept { return impl_ == nullptr ? nullptr : impl_->panel_handle(); }
 bool Owner::is_capturing() const noexcept { return impl_ != nullptr && impl_->is_capturing(); }
 
-std::mutex g_panel_mutex;
-std::unique_ptr<Owner> g_panel_owner;
+void open_config_panel() {}
 
-void open_config_panel() {
-#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) || defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
-    void* raw = nullptr;
-    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK || raw == nullptr) return;
-    std::lock_guard lock(g_panel_mutex);
-    if (g_panel_owner == nullptr)
-        g_panel_owner = std::make_unique<Owner>(static_cast<sao_ui_compositor_handle_t>(raw));
-    (void)g_panel_owner->open();
-#endif
+void open_config_panel(Owner* owner) {
+    if (owner != nullptr)
+        (void)owner->open();
 }
 
-void close_config_panel() {
-    std::lock_guard lock(g_panel_mutex);
-    if (g_panel_owner != nullptr) (void)g_panel_owner->close();
+void close_config_panel() {}
+
+void close_config_panel(Owner* owner) {
+    if (owner != nullptr)
+        (void)owner->close();
 }
 
 } // namespace sao::launcher::hotkey

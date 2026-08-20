@@ -153,6 +153,8 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx);
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms);
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
                                    intptr_t l_param, int32_t* out_handled);
+sao_status_t sao_platform_bind_user_menu(sao_platform_ctx* ctx, void* user_menu);
+sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_menu);
 
 // ---------------------------------------------------------------------------
 // RT I/O operator flow.

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -61,6 +62,8 @@ struct Operations {
 
 struct Snapshot {
     bool panel_created{};
+    bool action_handler_attached{};
+    bool event_handler_attached{};
     bool visible{};
     bool loading{};
     FilterMode filter{FilterMode::all};
@@ -94,6 +97,10 @@ class Owner final {
     // Owner-thread, retryable panel retirement. Any failure preserves the
     // registered panel and callback ownership for a later retry.
     sao_status_t take_offline() noexcept;
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept;
+    void fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept;
+    static void drain_deferred_cleanup_for_owner() noexcept;
+    static void drain_deferred_cleanup_for_testing() noexcept;
     sao_status_t refresh() noexcept;
     sao_status_t set_filter(FilterMode filter) noexcept;
     sao_status_t attach(ProcessIdentity identity) noexcept;
@@ -104,6 +111,8 @@ class Owner final {
   private:
     struct OperationGuard;
     struct State;
+    struct AdoptStateTag {};
+    explicit Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept;
 
     sao_status_t require_owner_thread() const noexcept;
     sao_status_t begin_operation() noexcept;
@@ -121,6 +130,11 @@ class Owner final {
                                                   void* user_data) noexcept;
     static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
                                                  void* user_data) noexcept;
+
+    static void defer_state(std::unique_ptr<State> state) noexcept;
+    static void drain_deferred_cleanup() noexcept;
+    static std::mutex deferred_mutex_;
+    static std::vector<std::unique_ptr<State>> deferred_cleanup_;
 
     std::unique_ptr<State> state_;
 };

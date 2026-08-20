@@ -513,6 +513,10 @@ SaoPanelDescriptor panel_descriptor() noexcept {
 
 class Owner::Impl final {
   public:
+    static std::mutex deferred_mutex_;
+    static std::vector<std::unique_ptr<Impl>> deferred_cleanup_;
+
+  public:
     enum class TaskKind {
         List,
         Detail,
@@ -573,7 +577,7 @@ class Owner::Impl final {
         if (require_owner_thread() != SAO_STATUS_OK)
             return false;
         bool worker_stopped = false;
-        for (int attempt = 0; attempt < 2 && panel_handle() != nullptr; ++attempt) {
+        for (int attempt = 0; attempt < 1 && panel_handle() != nullptr; ++attempt) {
             if (claim_retirement() != SAO_STATUS_OK)
                 return false;
             if (!worker_stopped) {
@@ -587,6 +591,9 @@ class Owner::Impl final {
         }
         return panel_handle() == nullptr;
     }
+
+    static void defer_cleanup(std::unique_ptr<Impl> state) noexcept;
+    static void drain_deferred_cleanup() noexcept;
 
     sao_status_t open() {
         const sao_status_t owner_status = require_owner_thread();
@@ -1547,6 +1554,16 @@ class Owner::Impl final {
     std::size_t callbacks_in_flight_{};
 };
 
+std::mutex Owner::Impl::deferred_mutex_;
+std::vector<std::unique_ptr<Owner::Impl>> Owner::Impl::deferred_cleanup_;
+
+void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept { if (state != nullptr) { std::lock_guard lock(deferred_mutex_); deferred_cleanup_.push_back(std::move(state)); } }
+void Owner::Impl::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<Impl>> pending; { std::lock_guard lock(deferred_mutex_); pending.swap(deferred_cleanup_); } std::vector<std::unique_ptr<Impl>> retry; for (auto& state : pending) { const sao_status_t status = state->try_take_offline(); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex_); for (auto& state : retry) deferred_cleanup_.push_back(std::move(state)); } }
+
+void Owner::drain_deferred_cleanup_for_owner() noexcept { Impl::drain_deferred_cleanup(); }
+
+void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_cleanup_for_owner(); }
+
 Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_dir)
     : Owner(compositor, std::move(base_dir), make_production_operations()) {}
 
@@ -1555,8 +1572,11 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_d
     : impl_(std::make_unique<Impl>(compositor, std::move(base_dir), std::move(operations))) {}
 
 Owner::~Owner() {
-    if (impl_ != nullptr && !impl_->shutdown_noexcept())
-        (void)impl_.release();
+    if (impl_ == nullptr)
+        return;
+    auto state = std::move(impl_);
+    if (!state->shutdown_noexcept())
+        Impl::defer_cleanup(std::move(state));
 }
 
 sao_status_t Owner::open() {

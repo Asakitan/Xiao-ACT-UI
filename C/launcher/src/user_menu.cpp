@@ -210,6 +210,7 @@ bool UserMenu::create(const wchar_t* base_dir) noexcept {
 }
 
 void UserMenu::destroy() noexcept {
+    hotkey_owner_ = nullptr;
     if (notification_icon_added_) {
         (void)Shell_NotifyIconW(NIM_DELETE, &notification_icon_);
         notification_icon_added_ = false;
@@ -228,6 +229,15 @@ void UserMenu::destroy() noexcept {
     instance_ = nullptr;
     taskbar_created_message_ = 0;
     docs_index_path_[0] = L'\0';
+}
+
+void UserMenu::bind_hotkey_owner(hotkey::Owner* owner) noexcept {
+    hotkey_owner_ = owner;
+}
+
+void UserMenu::unbind_hotkey_owner(hotkey::Owner* owner) noexcept {
+    if (owner == nullptr || owner == hotkey_owner_)
+        hotkey_owner_ = nullptr;
 }
 
 LRESULT CALLBACK UserMenu::windowProc(HWND window,
@@ -351,7 +361,7 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     if (command == kOpenSettingsCommand) {
         sao::launcher::settings::open_config_panel();
     } else if (command == kOpenHotkeysCommand) {
-        sao::launcher::hotkey::open_config_panel();
+        sao::launcher::hotkey::open_config_panel(hotkey_owner_);
     } else if (command == kOpenUserGuideCommand) {
         openUserGuide();
     } else if (command == kExitCommand) {

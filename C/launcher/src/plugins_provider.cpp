@@ -17,9 +17,6 @@
 #include "sao/plugins/loader/plugin_scanner.h"
 #include "sao_plugins/sao_status.h"
 
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
-#include "sao/plugins/python_host/py_host.h"
-#endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
 #include "sao/plugins/emma_host/emma_loader_adapter.h"
 #endif
@@ -77,9 +74,6 @@ struct sao_plugins_registry_body {
     bool platform_provider_owned = false;
     bool deps_provider_owned = false;
     std::mutex operation_mutex;
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
-    sao::plugins::python_host::py_loader_adapter_owner_t python_owner{};
-#endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
     sao::plugins::emma_host::emma_loader_adapter_owner_t emma_owner{};
 #endif
@@ -1628,27 +1622,6 @@ registerHostAdapters(sao_plugins_registry_body& owned,
                      const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
     (void)owned;
     [[maybe_unused]] int32_t status = SAO_OK;
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
-    if (configuration.python_home.empty()) {
-        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED;
-        owned.python_launch_strategy = SAO_PLUGINS_PYTHON_LAUNCH_DEFER_DEGRADED;
-    } else if (!sao::plugins::python_host::sao_plugins_pyhost_available(
-                   configuration.python_home.c_str())) {
-        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE;
-        owned.python_launch_strategy = SAO_PLUGINS_PYTHON_LAUNCH_DEFER_DEGRADED;
-    } else {
-        sao::plugins::python_host::py_host_config python_host_config{};
-        python_host_config.python_home = configuration.python_home.c_str();
-        status = sao::plugins::python_host::sao_plugins_pyhost_register_loader_adapter(
-            &python_host_config, &owned.python_owner);
-        if (status != SAO_OK)
-            return status;
-        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_READY;
-        owned.python_launch_strategy = SAO_PLUGINS_PYTHON_LAUNCH_IN_PROCESS;
-    }
-#else
-    (void)configuration;
-#endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
     status = sao::plugins::emma_host::sao_plugins_emma_register_loader_adapter(&owned.emma_owner);
     if (status != SAO_OK)
@@ -1798,15 +1771,6 @@ int32_t unregisterHostAdapters(sao_plugins_registry_body& owned) noexcept {
         if (status != SAO_OK)
             return status;
         owned.emma_owner = nullptr;
-    }
-#endif
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
-    if (owned.python_owner != nullptr) {
-        status = sao::plugins::python_host::sao_plugins_pyhost_unregister_loader_adapter(
-            owned.python_owner);
-        if (status != SAO_OK)
-            return status;
-        owned.python_owner = nullptr;
     }
 #endif
     return SAO_OK;

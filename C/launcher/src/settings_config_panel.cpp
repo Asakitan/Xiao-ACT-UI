@@ -61,6 +61,9 @@ struct PanelState final {
     std::size_t callbacks{};
     bool visible{};
     sao_status_t last_status{SAO_STATUS_OK};
+    sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
+    sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
+    sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};
     std::string status_text{"Ready"};
     std::string rendered_spec;
 };
@@ -693,10 +696,26 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
 } // namespace
 
 extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque) noexcept {
+    settings_owner::SettingsOwner* previous = nullptr;
     try {
-        std::lock_guard lock(state().mutex);
-        state().owner = reinterpret_cast<settings_owner::SettingsOwner*>(owner_opaque);
-        state().accepting = owner_opaque != nullptr;
+        {
+            std::lock_guard lock(state().mutex);
+            previous = state().owner;
+            if (previous == owner_opaque)
+                return SAO_STATUS_OK;
+            state().owner = nullptr;
+            state().accepting = false;
+        }
+        if (previous != nullptr)
+            previous->retire_and_wait();
+        auto* next = reinterpret_cast<settings_owner::SettingsOwner*>(owner_opaque);
+        if (next != nullptr)
+            next->resume_after_retire();
+        {
+            std::lock_guard lock(state().mutex);
+            state().owner = next;
+            state().accepting = next != nullptr;
+        }
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -705,6 +724,19 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
 
 sao_status_t settings_panel_set_owner(void* owner_opaque) noexcept {
     return sao_launcher_settings_panel_set_owner(owner_opaque);
+}
+
+sao_status_t settings_panel_bind_owner(void* owner_opaque) noexcept {
+    return sao_launcher_settings_panel_set_owner(owner_opaque);
+}
+
+sao_status_t settings_panel_unbind_owner(void* owner_opaque) noexcept {
+    {
+        std::lock_guard lock(state().mutex);
+        if (owner_opaque != nullptr && state().owner != owner_opaque)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    return sao_launcher_settings_panel_set_owner(nullptr);
 }
 
 sao_status_t rebind_owner_for_testing(void* owner_opaque) noexcept {
@@ -836,29 +868,82 @@ sao_status_t take_offline_for_testing() noexcept {
         if (status == SAO_STATUS_OK)
             action_attached = false;
     }
-    if (status == SAO_STATUS_OK)
-        status = sao_ui_panel_unregister(panel);
+    if (status == SAO_STATUS_OK) {
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(state().mutex);
+            injected = std::exchange(state().fail_next_unregister_status, SAO_STATUS_OK);
+        }
+        status = injected == SAO_STATUS_OK ? sao_ui_panel_unregister(panel) : injected;
+    }
+    if (status == SAO_STATUS_OK) {
+        std::lock_guard lock(state().mutex);
+        state().panel = nullptr;
+        state().body = nullptr;
+        state().visible = false;
+        state().action_attached = false;
+        state().event_attached = false;
+        state().retiring = false;
+        state().accepting = true;
+        state().rendered_spec.clear();
+        return SAO_STATUS_OK;
+    }
+    bool rollback_ok = true;
+    if (!action_attached) {
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(state().mutex);
+            injected = std::exchange(state().fail_next_action_restore_status, SAO_STATUS_OK);
+        }
+        const sao_status_t restore_status =
+            injected == SAO_STATUS_OK
+                ? sao_ui_panel_set_action_handler(panel, &panel_action_callback, nullptr)
+                : injected;
+        action_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && action_attached;
+    }
+    if (!event_attached) {
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(state().mutex);
+            injected = std::exchange(state().fail_next_event_restore_status, SAO_STATUS_OK);
+        }
+        const sao_status_t restore_status =
+            injected == SAO_STATUS_OK
+                ? sao_ui_panel_set_event_handler(panel, &panel_event_callback, nullptr)
+                : injected;
+        event_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && event_attached;
+    }
     {
         std::lock_guard lock(state().mutex);
-        if (status == SAO_STATUS_OK) {
-            state().panel = nullptr;
-            state().body = nullptr;
-            state().visible = false;
-            state().action_attached = false;
-            state().event_attached = false;
-            state().retiring = false;
-            state().accepting = true;
-            state().rendered_spec.clear();
-        } else {
-            state().action_attached = action_attached;
-            state().event_attached = event_attached;
-            state().retiring = false;
-        }
+        state().action_attached = action_attached;
+        state().event_attached = event_attached;
+        state().retiring = false;
+        state().accepting = rollback_ok;
     }
-    return status;
+    return rollback_ok ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
 #else
     return SAO_STATUS_ERR_CAPABILITY_MISSING;
 #endif
+}
+
+void drain_deferred_cleanup_for_owner() noexcept {}
+
+void drain_deferred_cleanup_for_testing() noexcept {
+    drain_deferred_cleanup_for_owner();
+}
+
+void fail_next_unregister_for_testing(sao_status_t status) noexcept {
+    std::lock_guard lock(state().mutex);
+    state().fail_next_unregister_status = status;
+}
+
+void fail_next_handler_restore_for_testing(sao_status_t action_status,
+                                           sao_status_t event_status) noexcept {
+    std::lock_guard lock(state().mutex);
+    state().fail_next_action_restore_status = action_status;
+    state().fail_next_event_restore_status = event_status;
 }
 
 sao_status_t snapshot_for_testing(std::string& out_json) noexcept {

@@ -27,7 +27,9 @@
 #endif
 #include "entity_action_routes_internal.h"
 #include "entity_builtin_action_internal.h"
+#include "settings_config_panel.h"
 #include "settings_owner_internal.h"
+#include "settings_profiles.h"
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
 
@@ -1846,6 +1848,9 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                                                             g_composition_test_hooks.user_data)
                : SAO_STATUS_OK;
 }
+sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
+sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
+
 sao_status_t sao_platform_rt_io_operator_preflight(
     sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
     sao_launcher_rt_io_operator_report_t* out_report) {
@@ -1943,6 +1948,7 @@ struct sao_platform_ctx {
     sao_ui_overlay_host_handle_t overlay_host;
     sao_ui_compositor_handle_t compositor;
     bool sdk_compositor_bound;
+    void* user_menu = nullptr;
     sao_ui_entity_shell_handle_t entity_shell;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     sao_ui_fisheye_backdrop_handle_t fisheye_backdrop;
@@ -1972,6 +1978,24 @@ struct sao_platform_ctx {
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
 };
+
+void clear_settings_bindings() noexcept {
+    (void)sao_launcher_hotkey_set_settings_owner(nullptr);
+    (void)sao::launcher::settings::settings_profiles_unbind_owner(nullptr);
+    (void)sao::launcher::settings::settings_panel_unbind_owner(nullptr);
+}
+
+void drain_deferred_cleanup_for_owner() noexcept {
+    sao::launcher::hotkey::Owner::drain_deferred_cleanup_for_owner();
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+    sao::launcher::license_panel::Owner::drain_deferred_cleanup_for_owner();
+#endif
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    sao::launcher::workshop_panel::Owner::drain_deferred_cleanup_for_owner();
+    sao::launcher::process_selector_panel::Owner::drain_deferred_cleanup_for_owner();
+    sao::launcher::plugin_manager_panel::Owner::drain_deferred_cleanup_for_owner();
+#endif
+}
 
 sao_status_t create_ai_editor_owner(
     const wchar_t* base_dir,
@@ -2006,6 +2030,9 @@ struct SharedPanelVisibilityProbe {
 };
 
 sao_status_t reload_plugins(void* user_data);
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept;
+#endif
 
 void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t panel,
                                                  const SaoPanelDescriptor* descriptor,
@@ -2114,6 +2141,16 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
 sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
     if (ctx == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+    if (ctx->license_panel) {
+        const sao_status_t status = ctx->license_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->license_panel.reset();
+        ctx->license_panel_visible = false;
+        ctx->builtin_action_state.authority.license_activation = false;
+    }
+#endif
     if (ctx->workshop_panel) {
         const sao_status_t status = ctx->workshop_panel->try_take_offline();
         if (status != SAO_STATUS_OK)
@@ -2138,16 +2175,6 @@ sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
         ctx->builtin_action_state.authority.plugin_manager = false;
         ctx->builtin_action_state.authority.plugin_status = false;
     }
-#if defined(SAO_LAUNCHER_LICENSE_PANEL)
-    if (ctx->license_panel) {
-        const sao_status_t status = ctx->license_panel->take_offline();
-        if (status != SAO_STATUS_OK)
-            return status;
-        ctx->license_panel.reset();
-        ctx->license_panel_visible = false;
-        ctx->builtin_action_state.authority.license_activation = false;
-    }
-#endif
     if (ctx->fisheye_backdrop != nullptr) {
         const sao_status_t status = sao_ui_fisheye_backdrop_try_destroy(ctx->fisheye_backdrop);
         if (status != SAO_STATUS_OK)
@@ -2156,6 +2183,9 @@ sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
         ctx->builtin_action_state.authority.fisheye_procedural = false;
         ctx->builtin_action_state.authority.fisheye_live = false;
     }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    sync_entity_publication_authority(ctx);
+#endif
     return SAO_STATUS_OK;
 }
 #else
@@ -2205,6 +2235,9 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
 sao_status_t retire_hotkeys(sao_platform_ctx* ctx) noexcept {
     if (ctx == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
+    const sao_status_t menu_status = sao_platform_unbind_user_menu(ctx, nullptr);
+    if (menu_status != SAO_STATUS_OK)
+        return menu_status;
     if (!sao::launcher::hotkey::unregister_all().empty())
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     sao::launcher::hotkey::clear_callbacks();
@@ -2218,6 +2251,13 @@ sao_status_t retire_hotkeys(sao_platform_ctx* ctx) noexcept {
     return SAO_STATUS_OK;
 }
 
+sao_status_t retire_settings_panel() noexcept {
+    const sao_status_t panel_status = sao::launcher::settings::take_offline_for_testing();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    clear_settings_bindings();
+    return SAO_STATUS_OK;
+}
 
 void write_platform_bringup_diagnostic(const char* line, int length) noexcept {
     if (line == nullptr || length <= 0)
@@ -3129,17 +3169,9 @@ sao_status_t prepare_rt_io_operator_shutdown(sao_platform_ctx* ctx) noexcept {
     if (ctx == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
-    if (ctx->process_selector_panel) {
-        const sao_status_t status =
-            ctx->process_selector_panel->take_offline();
-        if (status != SAO_STATUS_OK)
-            return status;
-        ctx->process_selector_panel.reset();
-        ctx->builtin_action_state.authority.process_selector = false;
-#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-        sync_entity_publication_authority(ctx);
-#endif
-    }
+    const sao_status_t shared_ui_status = retire_shared_ui_owners(ctx);
+    if (shared_ui_status != SAO_STATUS_OK)
+        return shared_ui_status;
 #endif
     if (ctx->window_rect_registered) {
         const sao_status_t status = sao_rt_io_window_rect_revoke(
@@ -3488,6 +3520,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 
     const auto delete_and_fail = [&](const char* stage, sao_status_t failure_status) noexcept {
         trace_platform_bringup_failure(stage, failure_status);
+        clear_settings_bindings();
         delete ctx;
         return failure_status;
     };
@@ -3509,7 +3542,18 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_load", status);
     }
-    sao_launcher_hotkey_set_settings_owner(ctx->settings_owner.get());
+    status = sao::launcher::settings::settings_panel_bind_owner(ctx->settings_owner.get());
+    if (status != SAO_STATUS_OK) {
+        return delete_and_fail("settings_panel_bind_owner", status);
+    }
+    status = sao::launcher::settings::settings_profiles_bind_owner(ctx->settings_owner.get());
+    if (status != SAO_STATUS_OK) {
+        return delete_and_fail("settings_profiles_bind_owner", status);
+    }
+    status = sao_launcher_hotkey_set_settings_owner(ctx->settings_owner.get());
+    if (status != SAO_STATUS_OK) {
+        return delete_and_fail("hotkey_settings_owner_bind", status);
+    }
     status = ctx->settings_owner->get_truthy("nervgear_mode", true, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_nervgear_mode", status);
@@ -3746,6 +3790,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+    drain_deferred_cleanup_for_owner();
     if (ctx->ai_editor) {
         const sao_status_t ai_editor_status = ctx->ai_editor->take_offline();
         if (ai_editor_status != SAO_STATUS_OK) {
@@ -3761,6 +3806,10 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
     const sao_status_t hotkey_status = retire_hotkeys(ctx);
     if (hotkey_status != SAO_STATUS_OK)
         return hotkey_status;
+    const sao_status_t settings_panel_status = retire_settings_panel();
+    if (settings_panel_status != SAO_STATUS_OK)
+        return settings_panel_status;
+    drain_deferred_cleanup_for_owner();
     if (ctx->streaming_flow_started) {
         const sao_status_t streaming_status = sao_streaming_flow_teardown(2.0, 2.0);
         if (streaming_status != SAO_STATUS_OK) {
@@ -3974,6 +4023,7 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (!ctx || !ctx->entity_shell || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
+    drain_deferred_cleanup_for_owner();
     sao_status_t status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     const sao_status_t provider_status =
@@ -4015,6 +4065,11 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         }
     }
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    if (ctx->plugin_manager_panel) {
+        const sao_status_t plugin_manager_status = ctx->plugin_manager_panel->service_ui();
+        if (status == SAO_STATUS_OK && plugin_manager_status != SAO_STATUS_OK)
+            status = plugin_manager_status;
+    }
     if (ctx->process_selector_panel) {
         const sao_status_t process_selector_status = ctx->process_selector_panel->service_ui();
         if (status == SAO_STATUS_OK && process_selector_status != SAO_STATUS_OK)
@@ -4064,6 +4119,25 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
     const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     return fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status;
 }
+
+sao_status_t sao_platform_bind_user_menu(sao_platform_ctx* ctx, void* user_menu) {
+    if (ctx == nullptr || user_menu == nullptr || ctx->hotkey_owner == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    static_cast<sao::launcher::UserMenu*>(user_menu)->bind_hotkey_owner(ctx->hotkey_owner.get());
+    ctx->user_menu = user_menu;
+    return SAO_STATUS_OK;
+}
+sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_menu) {
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (user_menu != nullptr && ctx->user_menu != user_menu)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (ctx->user_menu != nullptr) {
+        static_cast<sao::launcher::UserMenu*>(ctx->user_menu)->unbind_hotkey_owner(ctx->hotkey_owner.get());
+        ctx->user_menu = nullptr;
+    }
+    return SAO_STATUS_OK;
+}
 #else
 sao_status_t sao_platform_bringup(const sao_platform_config*, sao_platform_ctx**) {
     return SAO_STATUS_NOT_IMPLEMENTED;
@@ -4087,6 +4161,12 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t, intpt
                                    int32_t* out_handled) {
     if (out_handled)
         *out_handled = 0;
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_platform_rt_io_operator_preflight(

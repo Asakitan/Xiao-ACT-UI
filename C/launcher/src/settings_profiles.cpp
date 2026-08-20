@@ -73,6 +73,15 @@ extern "C" sao_status_t sao_launcher_settings_profiles_set_owner(void* owner_opa
     } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
 }
 sao_status_t settings_profiles_set_owner(void* owner_opaque) noexcept { return sao_launcher_settings_profiles_set_owner(owner_opaque); }
+sao_status_t settings_profiles_bind_owner(void* owner_opaque) noexcept { return sao_launcher_settings_profiles_set_owner(owner_opaque); }
+sao_status_t settings_profiles_unbind_owner(void* owner_opaque) noexcept {
+    {
+        std::lock_guard lock(g_owner_mutex);
+        if (owner_opaque != nullptr && g_owner != owner_opaque)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    return sao_launcher_settings_profiles_set_owner(nullptr);
+}
 std::recursive_mutex& settings_action_mutex() noexcept { return g_settings_action_mutex; }
 void set_profiles_directory_for_testing(std::wstring path) noexcept { try { std::lock_guard lock(g_profiles_mutex); g_profiles_override = fs::path(std::move(path)); } catch (...) {} }
 std::vector<std::string> list_profiles() {

@@ -9,12 +9,15 @@
 #include "sao/core/status.h"
 #include "sao/ui/abi.h"
 
+#include <cstddef>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct sao_ui_compositor_s;
 typedef struct sao_ui_compositor_s* sao_ui_compositor_handle_t;
@@ -35,6 +38,7 @@ struct Operations {
     // Blocking activation call. Returns SAO_OK on success; the status string
     // surface in the UI maps non-OK codes to human-readable text.
     using Activate = std::function<sao_status_t(std::string_view key)>;
+    using CancelActivation = std::function<void()>;
     // Reads the 32-byte HWID into out_hex (must hold >=65 chars).
     using GetHwid = std::function<sao_status_t(std::string& out_hex)>;
     // Reads tier/expiry after a successful activation.
@@ -45,6 +49,7 @@ struct Operations {
     using RefreshLicense = std::function<sao_status_t()>;
 
     Activate activate;
+    CancelActivation cancel_activation;
     GetHwid get_hwid;
     GetStatus get_status;
     CopyToClipboard copy_to_clipboard;
@@ -87,6 +92,10 @@ class Owner final {
     // Owner-thread, retryable panel retirement. Any failure preserves the
     // registered panel and callback ownership for a later retry.
     sao_status_t take_offline() noexcept;
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept;
+    void fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept;
+    static void drain_deferred_cleanup_for_owner() noexcept;
+    static void drain_deferred_cleanup_for_testing() noexcept;
     sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
     sao_status_t dispatch_action(std::string_view action_id,
                                  std::string_view payload_json = {}) noexcept;
@@ -94,6 +103,8 @@ class Owner final {
 
   private:
     struct State;
+    struct AdoptStateTag {};
+    explicit Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept;
     struct OperationGuard;
 
     sao_status_t require_owner_thread() const noexcept;
@@ -113,6 +124,11 @@ class Owner final {
     static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
                                                  void* user_data) noexcept;
     static void activation_thread_main(Owner* owner, std::string key) noexcept;
+
+    static void defer_state(std::unique_ptr<State> state) noexcept;
+    static void drain_deferred_cleanup() noexcept;
+    static std::mutex deferred_mutex_;
+    static std::vector<std::unique_ptr<State>> deferred_cleanup_;
 
     std::unique_ptr<State> state_;
 };

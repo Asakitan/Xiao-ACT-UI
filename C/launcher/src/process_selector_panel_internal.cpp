@@ -430,6 +430,8 @@ Json parse_payload(std::string_view payload_json, bool& valid) {
 } // namespace
 
 struct Owner::State {
+    static std::mutex deferred_mutex;
+    static std::vector<std::unique_ptr<State>> deferred_cleanup;
     enum class WorkKind : std::uint8_t {
         refresh,
         attach,
@@ -561,6 +563,10 @@ struct Owner::State {
         }
     }
 
+    Owner* owner{};
+    sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
+    sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
+    sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};
     sao_ui_compositor_handle_t compositor{};
     Operations operations;
     mutable std::mutex mutex;
@@ -589,6 +595,17 @@ struct Owner::State {
     std::string rendered_spec_json;
     std::jthread worker;
 };
+
+std::mutex Owner::deferred_mutex_;
+std::vector<std::unique_ptr<Owner::State>> Owner::deferred_cleanup_;
+
+void Owner::defer_state(std::unique_ptr<State> state) noexcept { if (state == nullptr) return; state->owner = nullptr; { std::lock_guard lock(state->mutex); state->accepting = false; state->retiring = false; } std::lock_guard lock(deferred_mutex_); deferred_cleanup_.push_back(std::move(state)); }
+
+void Owner::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<State>> pending; { std::lock_guard lock(deferred_mutex_); pending.swap(deferred_cleanup_); } std::vector<std::unique_ptr<State>> retry; for (auto& state : pending) { auto owner = std::unique_ptr<Owner>(new (std::nothrow) Owner(std::move(state), AdoptStateTag{})); if (owner == nullptr) { retry.push_back(std::move(state)); continue; } const sao_status_t status = owner->take_offline(); state = std::move(owner->state_); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex_); for (auto& state : retry) deferred_cleanup_.push_back(std::move(state)); } }
+
+void Owner::drain_deferred_cleanup_for_owner() noexcept { drain_deferred_cleanup(); }
+
+void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_cleanup_for_owner(); }
 
 struct Owner::OperationGuard {
     explicit OperationGuard(Owner& value) noexcept
@@ -650,13 +667,17 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, sao_rt_io_proxy_handle_t pro
     : Owner(compositor, make_default_operations(proxy)) {}
 
 Owner::Owner(sao_ui_compositor_handle_t compositor, Operations operations)
-    : state_(std::make_unique<State>(compositor, std::move(operations))) {}
+    : state_(std::make_unique<State>(compositor, std::move(operations))) { state_->owner = this; }
+
+Owner::Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept : state_(std::move(state)) { if (state_) state_->owner = this; }
 
 Owner::~Owner() noexcept {
     if (!state_)
         return;
-    if (take_offline() != SAO_STATUS_OK)
-        std::terminate();
+    if (take_offline() == SAO_STATUS_OK)
+        return;
+    auto state = std::move(state_);
+    defer_state(std::move(state));
 }
 
 sao_status_t Owner::require_owner_thread() const noexcept {
@@ -694,6 +715,10 @@ bool Owner::begin_callback() noexcept {
     return true;
 }
 
+void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept { if (state_) { std::lock_guard lock(state_->mutex); state_->fail_next_unregister_status = status; } }
+
+void Owner::fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept { if (state_) { std::lock_guard lock(state_->mutex); state_->fail_next_action_restore_status = action_status; state_->fail_next_event_restore_status = event_status; } }
+
 void Owner::end_callback() noexcept {
     if (!state_)
         return;
@@ -706,7 +731,8 @@ void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
                                               const std::uint8_t* payload_json_utf8,
                                               std::size_t payload_len,
                                               void* user_data) noexcept {
-    auto* owner = static_cast<Owner*>(user_data);
+    auto* state = static_cast<State*>(user_data);
+    Owner* owner = state == nullptr ? nullptr : state->owner;
     const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
     if (owner == nullptr || !action.has_value() ||
         (payload_json_utf8 == nullptr && payload_len != 0U) || !owner->begin_callback()) {
@@ -729,7 +755,8 @@ void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
 
 void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind,
                                              void* user_data) noexcept {
-    auto* owner = static_cast<Owner*>(user_data);
+    auto* state = static_cast<State*>(user_data);
+    Owner* owner = state == nullptr ? nullptr : state->owner;
     if (owner == nullptr || !owner->begin_callback())
         return;
     struct CallbackGuard {
@@ -811,10 +838,10 @@ sao_status_t Owner::ensure_panel() noexcept {
 
     bool action_attached = false;
     bool event_attached = false;
-    status = sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, this);
+    status = sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, state_.get());
     action_attached = status == SAO_STATUS_OK;
     if (status == SAO_STATUS_OK) {
-        status = sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, this);
+        status = sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, state_.get());
         event_attached = status == SAO_STATUS_OK;
     }
     if (status != SAO_STATUS_OK) {
@@ -1060,8 +1087,11 @@ sao_status_t Owner::take_offline() noexcept {
         if (status == SAO_STATUS_OK)
             action_attached = false;
     }
-    if (status == SAO_STATUS_OK)
-        status = sao_ui_panel_unregister(panel);
+    if (status == SAO_STATUS_OK) {
+        sao_status_t injected = SAO_STATUS_OK;
+        { std::lock_guard lock(state_->mutex); injected = std::exchange(state_->fail_next_unregister_status, SAO_STATUS_OK); }
+        status = injected == SAO_STATUS_OK ? sao_ui_panel_unregister(panel) : injected;
+    }
 
     if (status == SAO_STATUS_OK) {
         std::lock_guard lock(state_->mutex);
@@ -1083,14 +1113,28 @@ sao_status_t Owner::take_offline() noexcept {
 
     bool rollback_ok = true;
     if (had_action_handler && !action_attached) {
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(state_->mutex);
+            injected = std::exchange(state_->fail_next_action_restore_status, SAO_STATUS_OK);
+        }
         const sao_status_t restore_status =
-            sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, this);
+            injected == SAO_STATUS_OK
+                ? sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, state_.get())
+                : injected;
         action_attached = restore_status == SAO_STATUS_OK;
         rollback_ok = rollback_ok && action_attached;
     }
     if (had_event_handler && !event_attached) {
+        sao_status_t injected = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(state_->mutex);
+            injected = std::exchange(state_->fail_next_event_restore_status, SAO_STATUS_OK);
+        }
         const sao_status_t restore_status =
-            sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, this);
+            injected == SAO_STATUS_OK
+                ? sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, state_.get())
+                : injected;
         event_attached = restore_status == SAO_STATUS_OK;
         rollback_ok = rollback_ok && event_attached;
     }
@@ -1260,6 +1304,8 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
         {
             std::lock_guard lock(state_->mutex);
             copy.panel_created = state_->panel != nullptr;
+            copy.action_handler_attached = state_->action_handler_attached;
+            copy.event_handler_attached = state_->event_handler_attached;
             copy.visible = state_->visible;
             copy.loading = state_->loading;
             copy.filter = state_->filter;

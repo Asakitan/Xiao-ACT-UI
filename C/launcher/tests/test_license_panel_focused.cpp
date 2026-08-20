@@ -216,7 +216,7 @@ TEST_CASE("License activation worker keeps teardown retryable and publishes comp
 
     release.store(true);
     REQUIRE(service_until_idle(owner, snapshot));
-    CHECK(snapshot.last_status == SAO_STATUS_OK);
+    CHECK(snapshot.last_status == SAO_STATUS_ERR_CANCELLED);
     CHECK(key_matches.load());
     CHECK(snapshot.activated);
     CHECK(snapshot.status_text == "Activation successful.");

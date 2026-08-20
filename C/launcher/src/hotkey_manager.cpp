@@ -127,6 +127,9 @@ std::vector<std::string> unregister_native_locked(State& s) {
 bool save_locked(State& s) {
     if (s.owner == nullptr)
         return false;
+    auto owner_lease = s.owner->acquire_lease();
+    if (!owner_lease)
+        return false;
     nlohmann::ordered_json values = nlohmann::ordered_json::object();
     for (const auto& binding : s.bindings) {
         values[binding.id] = nlohmann::ordered_json{
@@ -135,7 +138,7 @@ bool save_locked(State& s) {
             {"mods", binding.modifiers},
         };
     }
-    return s.owner->set_value_and_save("hotkeys", values) == SAO_STATUS_OK;
+    return owner_lease->set_value_and_save("hotkeys", values) == SAO_STATUS_OK;
 }
 
 std::vector<std::string> conflicts_locked(const State& s, const std::string* changed_id,
@@ -154,9 +157,24 @@ std::vector<std::string> conflicts_locked(const State& s, const std::string* cha
 
 extern "C" sao_status_t sao_launcher_hotkey_set_settings_owner(void* settings_owner_opaque) noexcept {
     auto& s = state();
-    std::lock_guard lock(s.mu);
-    s.owner = reinterpret_cast<sao::launcher::settings_owner::SettingsOwner*>(
+    auto* next = reinterpret_cast<sao::launcher::settings_owner::SettingsOwner*>(
         settings_owner_opaque);
+    sao::launcher::settings_owner::SettingsOwner* previous = nullptr;
+    {
+        std::lock_guard lock(s.mu);
+        previous = s.owner;
+        if (previous == next)
+            return SAO_STATUS_OK;
+        s.owner = nullptr;
+    }
+    if (previous != nullptr)
+        previous->retire_and_wait();
+    if (next != nullptr)
+        next->resume_after_retire();
+    {
+        std::lock_guard lock(s.mu);
+        s.owner = next;
+    }
     return SAO_STATUS_OK;
 }
 
@@ -168,8 +186,11 @@ void load_or_default(const std::vector<HotkeyBinding>& default_bindings) {
     s.defaults = default_bindings;
     if (s.owner == nullptr)
         return;
+    auto owner_lease = s.owner->acquire_lease();
+    if (!owner_lease)
+        return;
     nlohmann::ordered_json section;
-    if (s.owner->get_value("hotkeys", section) != SAO_STATUS_OK)
+    if (owner_lease->get_value("hotkeys", section) != SAO_STATUS_OK)
         return;
 
     auto apply_entry = [&](const std::string& id, const nlohmann::ordered_json& entry) {

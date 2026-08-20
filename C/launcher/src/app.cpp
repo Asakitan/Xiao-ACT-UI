@@ -410,6 +410,12 @@ int App::bringUpUi() {
     if (!user_menu_.create(state_.base_dir)) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
+    if (sao_platform_bind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                    &user_menu_) != SAO_STATUS_OK) {
+        (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
+        user_menu_.destroy();
+        return SAO_EXIT_UI_ONLINE_FAIL;
+    }
     return SAO_EXIT_OK;
 }
 
@@ -476,10 +482,19 @@ void App::shutdown() noexcept {
     if (shutdown_called_) {
         return;
     }
-    user_menu_.destroy();
-    if (!runFullShutdown(state_, security_initialized_)) {
-        return;
+    if (state_.platform_ctx != nullptr) {
+        (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
     }
+    user_menu_.destroy();
+    bool shutdown_complete = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (runFullShutdown(state_, security_initialized_)) {
+            shutdown_complete = true;
+            break;
+        }
+    }
+    if (!shutdown_complete)
+        return;
     security_initialized_ = false;
     if (single_instance_mutex_) {
         releaseSingleInstance(single_instance_mutex_);

@@ -56,6 +56,11 @@ class Owner final {
     sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
     [[nodiscard]] sao_ui_panel_handle_t panel_handle() const noexcept;
     [[nodiscard]] bool is_capturing() const noexcept;
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept;
+    void fail_next_handler_restore_for_testing(sao_status_t action_status,
+                                               sao_status_t event_status) noexcept;
+    static void drain_deferred_cleanup_for_owner() noexcept;
+    static void drain_deferred_cleanup_for_testing() noexcept;
 
   private:
     struct Impl;
@@ -64,6 +69,8 @@ class Owner final {
 
 void open_config_panel();
 void close_config_panel();
+void open_config_panel(Owner* owner);
+void close_config_panel(Owner* owner);
 std::string format_combo_utf8(std::uint32_t vk, std::uint32_t modifiers);
 
 } // namespace sao::launcher::hotkey

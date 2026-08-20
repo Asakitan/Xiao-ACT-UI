@@ -96,6 +96,7 @@ struct Owner final {
     [[nodiscard]] sao_status_t open() noexcept;
     [[nodiscard]] sao_status_t close() noexcept;
     [[nodiscard]] sao_status_t refresh() noexcept;
+    [[nodiscard]] sao_status_t service_ui() noexcept;
 
     // Detaches callbacks and unregisters the compositor panel. BUSY keeps the
     // instance owned and retryable when a callback is in flight.
@@ -112,6 +113,9 @@ struct Owner final {
                                 std::string_view payload_json = {}) noexcept;
     [[nodiscard]] sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
     void fail_next_unregister_for_testing(sao_status_t status) noexcept;
+    void fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept;
+    static void drain_deferred_cleanup_for_owner() noexcept;
+    static void drain_deferred_cleanup_for_testing() noexcept;
 
   private: // Pimpl state.
     struct Impl;

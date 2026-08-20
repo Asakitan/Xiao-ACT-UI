@@ -526,6 +526,8 @@ TEST_CASE("Workshop destructor retries a transient unregister failure without lo
         owner.fail_next_unregister_for_testing(SAO_STATUS_ERR_OS_CALL_FAILED);
     }
 
+    CHECK(panel_count() == before + 1U);
+    Owner::drain_deferred_cleanup_for_owner();
     CHECK(panel_count() == before);
 }
 

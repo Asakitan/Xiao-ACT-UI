@@ -498,6 +498,8 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
     return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
 struct Owner::Impl {
+    static std::mutex deferred_mutex;
+    static std::vector<std::unique_ptr<Impl>> deferred_cleanup;
     enum class TaskKind : std::uint8_t {
         refresh,
         reload_all,
@@ -696,6 +698,13 @@ struct Owner::Impl {
         return enqueue_task(Task{TaskKind::refresh, {}});
     }
 
+    sao_status_t service_ui() noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        return publish_cached_state(false);
+    }
+
     sao_status_t publish_snapshot(Snapshot snapshot) noexcept {
         try {
             sao_ui_panel_body_handle_t target_body = nullptr;
@@ -724,17 +733,24 @@ struct Owner::Impl {
         }
     }
 
-    sao_status_t publish_cached_state() noexcept {
+    sao_status_t publish_cached_state(bool force) noexcept {
         try {
             Snapshot snapshot;
             {
                 std::lock_guard lock(mutex);
+                if (!force && !cache_dirty)
+                    return SAO_STATUS_OK;
                 if (snapshot_available)
                     snapshot = last_snapshot;
                 else
                     snapshot.error_message = "Loading plugin catalog...";
             }
-            return publish_snapshot(std::move(snapshot));
+            const sao_status_t status = publish_snapshot(std::move(snapshot));
+            if (status == SAO_STATUS_OK) {
+                std::lock_guard lock(mutex);
+                cache_dirty = false;
+            }
+            return status;
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
@@ -754,10 +770,11 @@ struct Owner::Impl {
                 snapshot.error_message = "Plugin snapshot operation unavailable.";
             {
                 std::lock_guard lock(mutex);
-                last_snapshot = snapshot;
+                last_snapshot = std::move(snapshot);
                 snapshot_available = true;
+                cache_dirty = true;
             }
-            return publish_snapshot(std::move(snapshot));
+            return SAO_STATUS_OK;
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
@@ -777,7 +794,7 @@ struct Owner::Impl {
             tasks.push_back(std::move(task));
             owner_publishing = true;
         }
-        const sao_status_t publish_status = publish_cached_state();
+        const sao_status_t publish_status = publish_cached_state(true);
         {
             std::lock_guard lock(mutex);
             owner_publishing = false;
@@ -850,22 +867,12 @@ struct Owner::Impl {
                         operation_status);
                 }
                 worker_active = false;
-                worker_publishing = true;
             }
             const sao_status_t refresh_status = refresh_now();
-            bool republish_error = false;
             {
                 std::lock_guard lock(mutex);
-                if (refresh_status != SAO_STATUS_OK && operation_error.empty()) {
+                if (refresh_status != SAO_STATUS_OK && operation_error.empty())
                     operation_error = status_message("Plugin Manager refresh", refresh_status);
-                    republish_error = true;
-                }
-            }
-            if (republish_error)
-                (void)publish_cached_state();
-            {
-                std::lock_guard lock(mutex);
-                worker_publishing = false;
             }
         }
     }
@@ -1001,13 +1008,16 @@ struct Owner::Impl {
         bool action_restored = !had_action;
         bool event_restored = !had_event;
         if (had_event && event_detached) {
-            event_restored = sao_ui_panel_set_event_handler(target_panel, &event_callback, this) ==
+            const sao_status_t injected = std::exchange(fail_next_event_restore_status, SAO_STATUS_OK);
+            event_restored = injected == SAO_STATUS_OK &&
+                             sao_ui_panel_set_event_handler(target_panel, &event_callback, this) ==
                              SAO_STATUS_OK;
         } else if (had_event) {
             event_restored = true;
         }
         if (had_action && action_detached) {
-            action_restored =
+            const sao_status_t injected = std::exchange(fail_next_action_restore_status, SAO_STATUS_OK);
+            action_restored = injected == SAO_STATUS_OK &&
                 sao_ui_panel_set_action_handler(target_panel, &action_callback, this) ==
                 SAO_STATUS_OK;
         } else if (had_action) {
@@ -1086,12 +1096,15 @@ struct Owner::Impl {
             return true;
         if (require_owner_thread() != SAO_STATUS_OK)
             return false;
-        for (int attempt = 0; attempt < 2 && panel_handle() != nullptr; ++attempt) {
+        for (int attempt = 0; attempt < 1 && panel_handle() != nullptr; ++attempt) {
             if (take_offline() == SAO_STATUS_OK)
                 break;
         }
         return panel_handle() == nullptr;
     }
+
+    static void defer_cleanup(std::unique_ptr<Impl> state) noexcept;
+    static void drain_deferred_cleanup() noexcept;
 
     sao_ui_compositor_handle_t compositor{};
     mutable std::mutex mutex;
@@ -1104,6 +1117,8 @@ struct Owner::Impl {
     Snapshot last_snapshot;
     std::string operation_error;
     sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
+    sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
+    sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};
     std::size_t callbacks_in_flight{};
     bool action_handler_attached{};
     bool event_handler_attached{};
@@ -1116,7 +1131,14 @@ struct Owner::Impl {
     bool worker_publishing{};
     bool owner_publishing{};
     bool snapshot_available{};
+    bool cache_dirty{true};
 };
+
+std::mutex Owner::Impl::deferred_mutex;
+std::vector<std::unique_ptr<Owner::Impl>> Owner::Impl::deferred_cleanup;
+
+void Owner::Impl::defer_cleanup(std::unique_ptr<Impl> state) noexcept { if (state == nullptr) return; std::lock_guard lock(deferred_mutex); deferred_cleanup.push_back(std::move(state)); }
+void Owner::Impl::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<Impl>> pending; { std::lock_guard lock(deferred_mutex); pending.swap(deferred_cleanup); } std::vector<std::unique_ptr<Impl>> retry; for (auto& state : pending) { const sao_status_t status = state->take_offline(); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex); for (auto& state : retry) deferred_cleanup.push_back(std::move(state)); } }
 
 Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept
     : Owner(borrowed_compositor, make_default_operations()) {}
@@ -1130,8 +1152,11 @@ Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor, Operations operatio
     : impl_(new (std::nothrow) Impl(borrowed_compositor, std::move(operations))) {}
 
 Owner::~Owner() {
-    if (impl_ != nullptr && !impl_->shutdown_noexcept())
-        (void)impl_.release();
+    if (impl_ == nullptr)
+        return;
+    auto state = std::move(impl_);
+    if (!state->shutdown_noexcept())
+        Impl::defer_cleanup(std::move(state));
 }
 
 Owner::Owner(Owner&& other) noexcept = default;
@@ -1139,8 +1164,11 @@ Owner::Owner(Owner&& other) noexcept = default;
 Owner& Owner::operator=(Owner&& other) noexcept {
     if (this == &other)
         return *this;
-    if (impl_ != nullptr && !impl_->shutdown_noexcept())
-        (void)impl_.release();
+    if (impl_ != nullptr) {
+        auto state = std::move(impl_);
+        if (!state->shutdown_noexcept())
+            Impl::defer_cleanup(std::move(state));
+    }
     impl_ = std::move(other.impl_);
     return *this;
 }
@@ -1160,6 +1188,10 @@ sao_status_t Owner::close() noexcept {
 
 sao_status_t Owner::refresh() noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->refresh();
+}
+
+sao_status_t Owner::service_ui() noexcept {
+    return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->service_ui();
 }
 
 sao_status_t Owner::take_offline() noexcept {
@@ -1189,9 +1221,21 @@ sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept
                             : impl_->dispatch_event_for_testing(event_kind);
 }
 
+void Owner::fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept {
+    if (impl_ != nullptr) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->fail_next_action_restore_status = action_status;
+        impl_->fail_next_event_restore_status = event_status;
+    }
+}
+
 void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept {
     if (impl_ != nullptr)
         impl_->fail_next_unregister_for_testing(status);
 }
+
+void Owner::drain_deferred_cleanup_for_owner() noexcept { Impl::drain_deferred_cleanup(); }
+
+void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_cleanup_for_owner(); }
 
 } // namespace sao::launcher::plugin_manager_panel

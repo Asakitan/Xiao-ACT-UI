@@ -350,6 +350,59 @@ TEST_CASE("production OPEN_AI_EDITOR child completes native handshake",
     CloseHandle(child);
 }
 
+TEST_CASE("AI Editor owner open retires a snapshotted stale panel before relaunch",
+          "[launcher][tool_launch][ui_service][child_exit][snapshot][reopen][focused]") {
+    TempTree tree;
+    tree.install_fixture();
+    ScopedEnvironment python_path(L"PYTHONPATH", nullptr);
+    BoundCompositor compositor;
+    const auto marker = tree.root / L"ai_editor_fixture_marker.txt";
+
+    sao::launcher::tool_launch::AiEditorProcessOwner owner(tree.root.wstring());
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    sao::launcher::tool_launch::AiEditorLaunchSnapshot first;
+    REQUIRE(wait_for_phase(
+        owner, sao::launcher::tool_launch::AiEditorLaunchPhase::started, first));
+    REQUIRE(wait_for_layer_count(owner, compositor.get(), 1));
+    REQUIRE(wait_for_marker_line_count(marker, 1));
+
+    HANDLE child = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE,
+                               first.process_id);
+    REQUIRE(child != nullptr);
+    REQUIRE(TerminateProcess(child, 27));
+    REQUIRE(WaitForSingleObject(child, 5000) == WAIT_OBJECT_0);
+
+    sao::launcher::tool_launch::AiEditorLaunchSnapshot stopped;
+    REQUIRE(wait_for_phase(
+        owner, sao::launcher::tool_launch::AiEditorLaunchPhase::failed,
+        stopped));
+    CHECK(stopped.has_exit_code);
+    CHECK(stopped.exit_code == 27);
+    CHECK(compositor_layer_count(compositor.get()) == 1);
+
+    std::atomic<sao_status_t> foreign_status{SAO_STATUS_OK};
+    std::thread foreign([&] { foreign_status.store(owner.open()); });
+    foreign.join();
+    CHECK(foreign_status.load() == SAO_STATUS_ERR_ACCESS_DENIED);
+    CHECK(compositor_layer_count(compositor.get()) == 1);
+    CHECK(marker_line_count(marker) == 1);
+
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    sao::launcher::tool_launch::AiEditorLaunchSnapshot second;
+    REQUIRE(wait_for_phase(
+        owner, sao::launcher::tool_launch::AiEditorLaunchPhase::started,
+        second));
+    REQUIRE(second.process_id != 0);
+    CHECK(second.process_id != first.process_id);
+    CloseHandle(child);
+    REQUIRE(wait_for_marker_line_count(marker, 2));
+    REQUIRE(wait_for_layer_count(owner, compositor.get(), 1));
+    CHECK(compositor_layer_count(compositor.get()) == 1);
+
+    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
+    CHECK(compositor_layer_count(compositor.get()) == 0);
+}
+
 TEST_CASE("AI Editor worker cancels when owner is destroyed",
           "[launcher][tool_launch][focused]") {
     TempTree tree;

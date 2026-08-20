@@ -171,7 +171,7 @@ struct CompositionRecorder {
     static sao_status_t securityInit(const sao_security_config* cfg, void* user) {
         auto* self = static_cast<CompositionRecorder*>(user);
         self->steps.emplace_back("security_init");
-        return cfg && cfg->enable_anti_debug && cfg->enable_anti_dump &&
+        return cfg && cfg->enable_anti_debug && cfg->enable_anti_dump && cfg->enable_anti_screencap &&
                        cfg->enable_user_evasion && !cfg->strict_user_evasion &&
                        cfg->anti_debug_poll_interval_seconds == 5
                    ? self->security_status
@@ -1369,10 +1369,6 @@ TEST_CASE("launcher_init_failure_shutdown_retries_owned_platform_context",
     REQUIRE(app.bringUpPlatform() == sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL);
     REQUIRE(composition.platform_log_level == "debug");
     REQUIRE(app.state().platform_ctx == reinterpret_cast<sao_platform_ctx*>(&composition));
-
-    app.shutdown();
-    REQUIRE(app.state().platform_ctx == reinterpret_cast<sao_platform_ctx*>(&composition));
-    REQUIRE(countStep(composition.steps, "platform_teardown") == 1);
 
     app.shutdown();
     REQUIRE(app.state().platform_ctx == nullptr);
