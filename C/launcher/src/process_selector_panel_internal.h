@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sao/core/status.h"
+#include "sao/ui/abi.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -114,10 +115,12 @@ class Owner final {
     sao_status_t publish() noexcept;
     sao_status_t enqueue_refresh() noexcept;
 
-    static void panel_action_callback(const char* action_id_utf8,
-                                      const std::uint8_t* payload_json_utf8,
-                                      std::size_t payload_len, void* user_data) noexcept;
-    static void panel_event_callback(std::int32_t event_kind, void* user_data) noexcept;
+    static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
+                                                  const std::uint8_t* payload_json_utf8,
+                                                  std::size_t payload_len,
+                                                  void* user_data) noexcept;
+    static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
+                                                 void* user_data) noexcept;
 
     std::unique_ptr<State> state_;
 };

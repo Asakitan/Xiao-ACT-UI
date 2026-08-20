@@ -16,6 +16,11 @@
 
 #include "launcher_lifecycle.h"
 
+#if __has_include("sao_security/anti_screencap/capture_mode.h")
+#include "sao_security/anti_screencap/capture_mode.h"
+#define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -346,6 +351,18 @@ int App::initSecurity() {
     if (sao_security_init(&cfg) != SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
+#if defined(SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API)
+    // init_pipeline's composition provider treats enable_anti_screencap as
+    // the launcher-level switch; consume it here so the flag is not ignored.
+    // Registering every current-process top-level window up front closes the
+    // startup gap before the overlay message pump begins its lazy sweep.
+    if (cfg.enable_anti_screencap) {
+        if (sao_security_anti_screencap_register_process_windows() < 0) {
+            (void)sao_security_shutdown();
+            return SAO_EXIT_PLATFORM_INIT_FAIL;
+        }
+    }
+#endif
     security_initialized_ = true;
     return SAO_EXIT_OK;
 }

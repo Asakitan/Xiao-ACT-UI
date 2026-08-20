@@ -52,6 +52,7 @@ struct PluginSnapshot {
 struct Snapshot {
     bool loader_available{};
     bool reload_all_available{};
+    bool busy{};
     std::vector<PluginSnapshot> plugins;
     std::string error_message;
 };
@@ -110,6 +111,7 @@ struct Owner final {
     dispatch_action_for_testing(std::string_view action_id,
                                 std::string_view payload_json = {}) noexcept;
     [[nodiscard]] sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept;
 
   private: // Pimpl state.
     struct Impl;

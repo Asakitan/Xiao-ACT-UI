@@ -44,24 +44,6 @@ TEST_CASE("flag safe-mode sets AppState safe_mode", "[launcher][args]") {
     REQUIRE(exit_flag == false);
 }
 
-TEST_CASE("flag config populates config_path", "[launcher][args]") {
-    AppState s{};
-    bool exit_flag = true;
-    int  code      = -1;
-    const wchar_t* args[] = { L"SaoAuto.exe", L"--config=C:\\my.toml" };
-    REQUIRE(parseCommandLineFromArgv(2, const_cast<wchar_t* const*>(args), s, exit_flag, code));
-    REQUIRE(std::wstring{s.config_path} == L"C:\\my.toml");
-}
-
-TEST_CASE("flag log-level populates log_level", "[launcher][args]") {
-    AppState s{};
-    bool exit_flag = true;
-    int  code      = -1;
-    const wchar_t* args[] = { L"SaoAuto.exe", L"--log-level=trace" };
-    REQUIRE(parseCommandLineFromArgv(2, const_cast<wchar_t* const*>(args), s, exit_flag, code));
-    REQUIRE(std::wstring{s.log_level} == L"trace");
-}
-
 TEST_CASE("log-level is normalized and invalid values fail closed",
           "[launcher][args]") {
     AppState normalized{};

@@ -96,6 +96,10 @@ using VisibilityChangedCallback = std::function<void(bool visible)>;
 // adopts this file must link sao::server::freetier::workshop_client.
 Operations make_production_operations();
 
+[[nodiscard]] bool item_count_within_capacity_for_testing(
+    std::uint32_t item_count, std::uint32_t item_cap,
+    std::uint32_t requested_size) noexcept;
+
 // Stable descriptor/theme helpers are exposed for launcher composition and
 // focused contract tests. The mainline may use the visibility hook below to
 // show or hide its shared fisheye backdrop; this component never creates one.

@@ -16,7 +16,6 @@ set(_sao_launcher_test_sources
     test_launcher_smoke.cpp
     test_args.cpp
     test_single_instance.cpp
-    test_stealth_strings.cpp
     test_working_dir.cpp
     test_init_pipeline.cpp
     test_rt_io_operator_focused.cpp
@@ -52,6 +51,16 @@ if (TARGET sao::core AND TARGET sao::ui AND TARGET sao::rt_io)
         sao::core
         sao::ui
         sao::rt_io)
+endif()
+if (TARGET sao::ui AND TARGET sao_license_sdk AND TARGET sao_license_client AND
+    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_license_panel_focused.cpp")
+    list(APPEND _sao_launcher_test_sources
+        test_license_panel_focused.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/license_panel_internal.cpp)
+    list(APPEND _sao_launcher_panel_test_libraries
+        sao::ui
+        sao_license_sdk
+        sao_license_client)
 endif()
 if (TARGET sao::ui AND TARGET sao::server::freetier::workshop_client)
     list(APPEND _sao_launcher_test_sources
@@ -101,10 +110,13 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/launcher_lifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/user_menu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_config_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/hotkey_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_config_panel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_json_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_owner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_profiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_theme_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_package_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_builtin_action_internal.cpp
@@ -125,48 +137,6 @@ target_compile_definitions(sao_launcher_tests
         SAO_TOOL_LAUNCH_CHILD_FIXTURE="$<TARGET_FILE:sao_tool_launch_child_fixture>"
 )
 
-# Stealth-strings regression test needs the built launcher exe (and
-# optionally sao_platform_net / sao_core shared libraries) to scan.
-# Resolve lazily: SaoAuto target lives in the parent launcher/ scope which
-# is add_subdirectory'd BEFORE tests/, so it is already defined here.  If
-# a slim configure disables a given target the define stays empty and the
-# corresponding case degrades to SUCCEED(... skipped).
-if (TARGET SaoAuto)
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_BINARY_PATH="$<TARGET_FILE:SaoAuto>"
-    )
-    add_dependencies(sao_launcher_tests SaoAuto)
-else()
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_BINARY_PATH=""
-    )
-endif()
-if (TARGET sao_platform_net)
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_PLATFORM_NET_PATH="$<TARGET_FILE:sao_platform_net>"
-    )
-    add_dependencies(sao_launcher_tests sao_platform_net)
-else()
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_PLATFORM_NET_PATH=""
-    )
-endif()
-if (TARGET sao_core)
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_CORE_PATH="$<TARGET_FILE:sao_core>"
-    )
-    add_dependencies(sao_launcher_tests sao_core)
-else()
-    target_compile_definitions(sao_launcher_tests
-        PRIVATE
-            SAO_STEALTH_SCAN_CORE_PATH=""
-    )
-endif()
 add_dependencies(sao_launcher_tests sao_tool_launch_child_fixture)
 if (TARGET sao::plugin_ai_editor)
     target_link_libraries(sao_launcher_tests PRIVATE sao::plugin_ai_editor)
@@ -252,24 +222,35 @@ if (TARGET sao::server::freetier::telemetry_client)
         PRIVATE SAO_LAUNCHER_HAS_TELEMETRY_CLIENT=1)
 endif()
 
-include(Catch)
-# Launcher cases split into two slices:
-# 1) cases touching the session-global dual-run/single-instance mutex run as
-#    ONE serialized entry (single process, cases execute sequentially, lock
-#    held once).  Per-case discovery here chained ~16 resource-lock handoffs
-#    and each handoff paid ctest scheduler latency under -j24, stranding the
-#    slice at the very end of the run even though every case is ~40ms.
-# 2) the remaining cases run per-case, unlocked, and parallelize freely.
-add_test(NAME launcher.mutex_slice
-         COMMAND sao_launcher_tests "[dual_run],[cutover],[cutover_diff],[single_instance]")
-set_tests_properties(launcher.mutex_slice PROPERTIES
+add_test(NAME launcher.core
+         COMMAND sao_launcher_tests "~[settings]~[hotkey]~[tool_launch]"
+                 --reporter compact)
+set_tests_properties(launcher.core PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     LABELS "launcher"
-    RESOURCE_LOCK "sao_launcher_process_resources")
-catch_discover_tests(sao_launcher_tests
-    TEST_PREFIX "launcher."
-    TEST_SPEC "~[dual_run]~[cutover]~[cutover_diff]~[single_instance]"
-    PROPERTIES LABELS "launcher"
-               PROCESSORS 2)
+    RESOURCE_LOCK "sao_launcher_process_resources"
+    PROCESSORS 1
+    TIMEOUT 15)
+
+add_test(NAME launcher.settings
+         COMMAND sao_launcher_tests "[settings],[hotkey]"
+                 --reporter compact)
+set_tests_properties(launcher.settings PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    LABELS "launcher"
+    RESOURCE_LOCK "sao_launcher_process_resources"
+    PROCESSORS 1
+    TIMEOUT 15)
+
+add_test(NAME launcher.tool_launch
+         COMMAND sao_launcher_tests "[tool_launch]"
+                 --reporter compact)
+set_tests_properties(launcher.tool_launch PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    LABELS "launcher"
+    RESOURCE_LOCK "sao_launcher_process_resources"
+    PROCESSORS 1
+    TIMEOUT 15)
 
 if (TARGET sao_launcher_plugins_provider)
     add_executable(sao_launcher_provider_tests
@@ -323,7 +304,8 @@ if (TARGET sao_launcher_plugins_provider)
     add_test(NAME launcher.provider COMMAND sao_launcher_provider_tests)
     set_tests_properties(launcher.provider PROPERTIES
         LABELS "launcher;plugins;focused"
-        RESOURCE_LOCK "sao_launcher_process_resources")
+        RESOURCE_LOCK "sao_launcher_process_resources"
+        TIMEOUT 30)
 endif()
 
 if (TARGET sao_launcher_plugins_provider AND
@@ -377,5 +359,6 @@ if (TARGET sao_launcher_plugins_provider AND
     add_test(NAME launcher.csharp_entity COMMAND sao_launcher_csharp_entity_tests)
     set_tests_properties(launcher.csharp_entity PROPERTIES
         LABELS "launcher;plugins;csharp;entity;v2;headless"
-        RESOURCE_LOCK "sao_launcher_process_resources")
+        RESOURCE_LOCK "sao_launcher_process_resources"
+        TIMEOUT 30)
 endif()

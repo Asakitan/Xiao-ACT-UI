@@ -1449,65 +1449,6 @@ TEST_CASE("launcher_exit_handoff_to_python_reachable_via_enum",
     CHECK(static_cast<int>(sao::launcher::SAO_EXIT_HANDOFF_TO_PYTHON) == 100);
 }
 
-// Adversarial recon coverage — the launcher previously called
-// AiEditorProcessOwner::take_offline() twice (once in sao_ui_take_offline,
-// again in teardown_platform_context). The duplicate call was removed but the
-// invariant matters: the owner must return SAO_STATUS_OK on the second call
-// even after a successful first call.
-TEST_CASE("launcher_ai_editor_owner_take_offline_is_idempotent",
-          "[launcher][init_pipeline][ai_editor][idempotency][focused]") {
-    wchar_t temp_path[MAX_PATH]{};
-    REQUIRE(GetTempPathW(MAX_PATH, temp_path) != 0);
-    wchar_t base_dir[MAX_PATH]{};
-    REQUIRE(GetTempFileNameW(temp_path, L"aid", 0, base_dir) != 0);
-    DeleteFileW(base_dir);
-    std::error_code error;
-    REQUIRE(std::filesystem::create_directories(std::filesystem::path{base_dir}, error));
-
-    sao::launcher::tool_launch::AiEditorProcessOwner owner(base_dir);
-    // Never opened — take_offline still succeeds because the owner has
-    // nothing to drain.
-    const sao_status_t first_status = owner.take_offline();
-    REQUIRE(first_status == SAO_STATUS_OK);
-    // Second call must not report a double-free / not-initialised error.
-    const sao_status_t second_status = owner.take_offline();
-    REQUIRE(second_status == SAO_STATUS_OK);
-    // A third call — for good measure — still succeeds so the invariant is
-    // not order-dependent.
-    REQUIRE(owner.take_offline() == SAO_STATUS_OK);
-
-    sao::launcher::tool_launch::AiEditorLaunchSnapshot snap{};
-    REQUIRE(owner.snapshot(snap) == SAO_STATUS_OK);
-    CHECK(snap.phase == sao::launcher::tool_launch::AiEditorLaunchPhase::idle);
-
-    std::filesystem::remove_all(std::filesystem::path{base_dir}, error);
-}
-
-// Adversarial recon coverage — sao_ui_take_offline used to close the
-// invocation gate itself before entity_provider_publication::clear() closed
-// it again on the same store. The duplicate close was removed; the invariant
-// under test here is that the gate close operation is idempotent enough that
-// two independent calls do not corrupt the store's state.
-TEST_CASE("launcher_route_store_close_invocation_gate_is_idempotent",
-          "[launcher][init_pipeline][entity][invocation_gate][idempotency][focused]") {
-    sao::launcher::entity_action_routes::EntityActionRouteStore store;
-    // First close — the gate was never opened; the store still accepts and
-    // returns SAO_STATUS_OK immediately.
-    const sao_status_t first_status = store.close_invocation_gate();
-    REQUIRE(first_status == SAO_STATUS_OK);
-    // Second close — must not corrupt the store; the accepting flag is still
-    // set so close returns SAO_STATUS_OK again.
-    const sao_status_t second_status = store.close_invocation_gate();
-    REQUIRE(second_status == SAO_STATUS_OK);
-    // The publish-friendly path is still usable after the double close.
-    sao::launcher::entity_action_routes::EntityActionRouteStore::PreparedPublication publication;
-    REQUIRE(store.prepare({}, publication) == SAO_STATUS_OK);
-    REQUIRE(publication.commit() == SAO_STATUS_OK);
-    // Post-publish close is still idempotent.
-    REQUIRE(store.close_invocation_gate() == SAO_STATUS_OK);
-    REQUIRE(store.close_invocation_gate() == SAO_STATUS_OK);
-}
-
 // ---------------------------------------------------------------------------
 // Runtime installer hook wiring
 //

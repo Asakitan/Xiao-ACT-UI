@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <iterator>
@@ -34,14 +35,73 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::size_t kMaximumActionPayloadBytes = 16U * 1024U;
+constexpr std::size_t kMaximumActionIdBytes = 64U;
 constexpr std::size_t kMaximumStatusBytes = 1024U;
 constexpr std::size_t kMaximumPanelSpecBytes = 256U * 1024U;
+constexpr std::size_t kMaximumImagePathBytes = SAO_PROCESS_IMAGE_PATH_MAX - 1U;
+constexpr std::size_t kMaximumBaseNameBytes = 1024U;
 constexpr int kEnumerationAttempts = 3;
 
-// This is a solid token-only theme. The panel does not create a fisheye layer,
-// install a custom render callback, or depend on the fisheye subsystem.
-constexpr char kSolidDarkCyanTheme[] =
-    R"({"colors":{"APP_BG":"#090f16","APP_CARD":"#111b25","APP_BORDER":"#21475a","APP_TEXT":"#e7f7fb","APP_TEXT_2":"#b8d7df","APP_TEXT_DIM":"#6f929d","APP_ACCENT":"#25d7f2","APP_BLUE":"#25d7f2","APP_GREEN":"#49d6a0","APP_RED":"#ff6f7f","APP_ORANGE":"#f5a85b","APP_GOLD":"#e6c76a","OVERLAY_BG":"#090f16"}})";
+bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7fU) {
+            ++offset;
+            continue;
+        }
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation_count = 1;
+            code_point = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation_count = 2;
+            code_point = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (std::size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xc0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3fU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation_count + 1U;
+    }
+    return true;
+}
+
+bool valid_text(std::string_view value, std::size_t maximum, bool required) noexcept {
+    return (!required || !value.empty()) && value.size() <= maximum &&
+           value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+std::optional<std::string_view> bounded_c_text(const char* value,
+                                               std::size_t maximum) noexcept {
+    if (value == nullptr)
+        return std::nullopt;
+    const void* terminator = std::memchr(value, '\0', maximum + 1U);
+    if (terminator == nullptr)
+        return std::nullopt;
+    const auto length =
+        static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
+    const std::string_view result(value, length);
+    return valid_text(result, maximum, true) ? std::optional<std::string_view>(result)
+                                              : std::nullopt;
+}
 
 struct CoreProcessCloser {
     void operator()(sao_core_process_handle_t process) const noexcept {
@@ -98,12 +158,14 @@ std::vector<ProcessRecord> normalize_snapshot(std::vector<ProcessRecord> records
     normalized.reserve(records.size());
     for (ProcessRecord& record : records) {
         if (record.pid == 0U || record.pid == 4U || record.pid == current_process_id ||
-            record.start_time_100ns == 0U || record.image_path_utf8.empty()) {
+            record.start_time_100ns == 0U ||
+            !valid_text(record.image_path_utf8, kMaximumImagePathBytes, true) ||
+            !valid_text(record.base_name_utf8, kMaximumBaseNameBytes, false)) {
             continue;
         }
         if (record.base_name_utf8.empty())
             record.base_name_utf8 = base_name_from_path(record.image_path_utf8);
-        if (record.base_name_utf8.empty())
+        if (!valid_text(record.base_name_utf8, kMaximumBaseNameBytes, true))
             continue;
         normalized.push_back(std::move(record));
     }
@@ -152,114 +214,113 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
     return node;
 }
 
+Json badge_node(std::string text, std::string_view style = "muted") {
+    return Json{{"type", "badge"},
+                {"text", bounded_text(std::move(text), 256U)},
+                {"style", style},
+                {"height", 22}};
+}
+
 Json row_node(Json children) {
     return Json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
+Json card_node(std::string title, Json children) {
     return Json{{"type", "card"},
                 {"title", bounded_text(std::move(title), 512U)},
-                {"accent", accent},
                 {"children", std::move(children)}};
 }
 
+Json section_node(std::string title, Json children) {
+    return Json{{"type", "section"},
+                {"title", bounded_text(std::move(title), 512U)},
+                {"children", std::move(children)}};
+}
 std::string build_panel_spec(const Snapshot& snapshot) {
     Json nodes = Json::array();
-
-    Json controls = Json::array();
+    Json filters = Json::array();
     Json actions = Json::array();
-    actions.push_back(
-        button_node("process.refresh", snapshot.loading ? "Refreshing..." : "Refresh",
-                    kRefreshAction, Json::object(), "primary", snapshot.loading));
+    actions.push_back(button_node("process.refresh", snapshot.loading ? "Refreshing..." : "Refresh",
+                                  kRefreshAction, Json::object(), "primary", snapshot.loading));
     actions.push_back(button_node("process.filter.all", "Show all", kFilterAction,
                                   {{"mode", "all"}},
                                   snapshot.filter == FilterMode::all ? "primary" : "ghost"));
-    actions.push_back(
-        button_node("process.filter.game", "Likely games", kFilterAction, {{"mode", "likely_game"}},
-                    snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
-    controls.push_back(row_node(std::move(actions)));
-    Json discovery_badges = Json::array();
-    discovery_badges.push_back(
-        Json{{"type", "badge"},
-             {"text", snapshot.loading ? "Scanning" : "Ready"},
-             {"style", snapshot.loading ? "warn" : "ok"},
-             {"height", 22}});
-    discovery_badges.push_back(
-        Json{{"type", "badge"},
-             {"text", std::to_string(snapshot.visible_processes.size()) + " shown"},
-             {"style", "accent"},
-             {"height", 22}});
-    discovery_badges.push_back(
-        Json{{"type", "badge"},
-             {"text", std::to_string(snapshot.all_processes.size()) + " available"},
-             {"style", "muted"},
-             {"height", 22}});
-    controls.push_back(row_node(std::move(discovery_badges)));
-    nodes.push_back(card_node("Processes", std::move(controls), "cyan"));
-
+    actions.push_back(button_node("process.filter.game", "Likely games", kFilterAction,
+                                  {{"mode", "likely_game"}},
+                                  snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
+    filters.push_back(row_node(std::move(actions)));
+    Json badges = Json::array();
+    badges.push_back(Json{{"type", "badge"}, {"text", snapshot.loading ? "Scanning" : "Ready"},
+                          {"style", snapshot.loading ? "warn" : "ok"}, {"height", 22}});
+    badges.push_back(Json{{"type", "badge"},
+                          {"text", std::to_string(snapshot.visible_processes.size()) + " shown"},
+                          {"style", "accent"}, {"height", 22}});
+    badges.push_back(Json{{"type", "badge"},
+                          {"text", std::to_string(snapshot.all_processes.size()) + " available"},
+                          {"style", "muted"}, {"height", 22}});
+    filters.push_back(row_node(std::move(badges)));
+    nodes.push_back(section_node("Filters / 筛选", std::move(filters)));
     if (snapshot.attached_process.has_value()) {
         const ProcessRecord& process = *snapshot.attached_process;
-        Json attached = Json::array();
-        Json attached_row = Json::array();
-        attached_row.push_back(text_node(process.base_name_utf8, "accent", 24));
-        attached_row.push_back(text_node("PID " + std::to_string(process.pid), "mono", 22));
-        attached_row.push_back(text_node(process.image_path_utf8, "muted", 24));
-        attached.push_back(row_node(std::move(attached_row)));
-        nodes.push_back(card_node("Attached", std::move(attached), "ok"));
+        Json details = Json::array();
+        details.push_back(row_node(Json::array({badge_node("Attached", "ok"),
+                                                badge_node("PID " + std::to_string(process.pid), "accent")})));
+        details.push_back(text_node(process.image_path_utf8, "mono", 34));
+        nodes.push_back(section_node(
+            "Attached / 已附加",
+            Json::array({card_node(process.base_name_utf8, std::move(details))})));
     }
-
     if (!snapshot.status_text.empty()) {
         const std::string_view style = snapshot.last_status == SAO_STATUS_OK ? "muted" : "bad";
         Json status = Json::array();
         status.push_back(text_node(snapshot.status_text, style, 28));
-        nodes.push_back(card_node(snapshot.last_status == SAO_STATUS_OK ? "Status" : "Error",
-                                  std::move(status),
-                                  snapshot.last_status == SAO_STATUS_OK ? "cyan" : "bad"));
+        if (snapshot.last_status != SAO_STATUS_OK)
+            status.push_back(button_node("process.status-retry", "Retry / 重试", kRefreshAction,
+                                         Json::object(), "primary"));
+        nodes.push_back(section_node(
+            snapshot.last_status == SAO_STATUS_OK ? "Status / 状态" : "Error / 错误",
+            std::move(status)));
     }
-
     if (snapshot.visible_processes.empty()) {
         Json empty = Json::array();
-        empty.push_back(text_node(
-            snapshot.loading
-                ? "Scanning running processes..."
-            : snapshot.filter == FilterMode::likely_game
-                ? "No likely game processes matched. Switch to Show all or refresh."
-                : "No queryable processes are available. Refresh to try again.",
-            "muted", 44));
-        nodes.push_back(card_node("Process List", std::move(empty), "cyan"));
+        empty.push_back(text_node(snapshot.loading
+                                      ? "Scanning running processes..."
+                                      : snapshot.filter == FilterMode::likely_game
+                                            ? "No likely game processes matched. Switch to Show all or refresh."
+                                            : "No queryable processes are available. Refresh to try again.",
+                                  "muted", 44));
+        empty.push_back(button_node("process.empty-refresh", "Refresh", kRefreshAction,
+                                    Json::object(), "primary", snapshot.loading));
+        nodes.push_back(section_node("Process List / 进程列表", std::move(empty)));
     } else {
-        Json rows = Json::array();
+        Json cards = Json::array();
         for (const ProcessRecord& process : snapshot.visible_processes) {
-            Json row = Json::array();
-            row.push_back(text_node(process.base_name_utf8, "value", 24));
-            row.push_back(Json{{"type", "badge"},
-                               {"text", "PID " + std::to_string(process.pid)},
-                               {"style", is_likely_game_process(process) ? "ok" : "muted"},
-                               {"height", 22}});
-            row.push_back(text_node(process.image_path_utf8, "mono", 24));
-            row.push_back(button_node(
+            Json details = Json::array();
+            details.push_back(row_node(Json::array({
+                badge_node("PID " + std::to_string(process.pid),
+                           is_likely_game_process(process) ? "ok" : "muted"),
+                badge_node(is_likely_game_process(process) ? "Likely game" : "Process", "muted")})));
+            details.push_back(text_node(process.image_path_utf8, "mono", 34));
+            details.push_back(button_node(
                 "process.attach." + std::to_string(process.pid), "Select / Attach", kAttachAction,
-                {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "primary"));
-            rows.push_back(row_node(std::move(row)));
+                {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "primary",
+                snapshot.loading));
+            cards.push_back(card_node(process.base_name_utf8, std::move(details)));
         }
-        nodes.push_back(card_node("Process List", std::move(rows), "cyan"));
+        nodes.push_back(section_node("Process List / 进程列表", std::move(cards)));
     }
-
-    std::string serialized =
-        Json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+    std::string serialized = Json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
-
     Json compact = Json::array();
-    compact.push_back(text_node(
-        "The process list exceeded the panel budget. Use Likely games to narrow it.", "bad", 48));
+    compact.push_back(text_node("The process list exceeded the panel budget. Use Likely games to narrow it.",
+                                "bad", 48));
     compact.push_back(button_node("process.refresh.compact", "Refresh", kRefreshAction,
                                   Json::object(), "primary"));
     compact.push_back(button_node("process.filter.compact", "Likely games", kFilterAction,
                                   {{"mode", "likely_game"}}, "primary"));
     return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
-
 sao_status_t query_with_core(std::uint32_t pid, ProcessRecord& out) {
     if (pid == 0U)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -279,8 +340,17 @@ sao_status_t query_with_core(std::uint32_t pid, ProcessRecord& out) {
         candidate.pid = info.pid;
         candidate.parent_pid = info.parent_pid;
         candidate.start_time_100ns = info.start_time_100ns;
-        candidate.image_path_utf8 = image_path.data();
+        const void* terminator = std::memchr(image_path.data(), '\0', image_path.size());
+        if (terminator == nullptr)
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        const auto length = static_cast<std::size_t>(
+            static_cast<const char*>(terminator) - image_path.data());
+        candidate.image_path_utf8.assign(image_path.data(), length);
+        if (!valid_text(candidate.image_path_utf8, kMaximumImagePathBytes, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         candidate.base_name_utf8 = base_name_from_path(candidate.image_path_utf8);
+        if (!valid_text(candidate.base_name_utf8, kMaximumBaseNameBytes, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         out = std::move(candidate);
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
@@ -344,8 +414,10 @@ std::optional<std::uint64_t> json_unsigned(const Json& object, std::string_view 
 
 Json parse_payload(std::string_view payload_json, bool& valid) {
     valid = false;
-    if (payload_json.size() > kMaximumActionPayloadBytes)
+    if (payload_json.size() > kMaximumActionPayloadBytes ||
+        payload_json.find('\0') != std::string_view::npos || !valid_utf8(payload_json)) {
         return {};
+    }
     if (payload_json.empty()) {
         valid = true;
         return Json::object();
@@ -358,42 +430,119 @@ Json parse_payload(std::string_view payload_json, bool& valid) {
 } // namespace
 
 struct Owner::State {
-    State(sao_ui_compositor_handle_t borrowed_compositor, Operations value)
-        : compositor(borrowed_compositor), operations(std::move(value)),
-          worker([this](std::stop_token stop) { worker_main(stop); }) {}
+    enum class WorkKind : std::uint8_t {
+        refresh,
+        attach,
+    };
+
+    struct WorkItem {
+        WorkKind kind{WorkKind::refresh};
+        std::uint64_t generation{};
+        ProcessIdentity identity{};
+    };
 
     struct Completion {
+        WorkKind kind{WorkKind::refresh};
         std::uint64_t generation{};
         sao_status_t status{SAO_STATUS_OK};
+        std::string status_text;
         std::vector<ProcessRecord> processes;
+        std::optional<ProcessRecord> attached_process;
     };
+
+    State(sao_ui_compositor_handle_t borrowed_compositor, Operations value)
+        : compositor(borrowed_compositor), operations(std::move(value)) {
+        if (operations.current_process_id == 0U)
+            operations.current_process_id = GetCurrentProcessId();
+        worker = std::jthread([this](std::stop_token stop) { worker_main(stop); });
+    }
 
     void worker_main(std::stop_token stop) noexcept {
         while (!stop.stop_requested()) {
-            std::uint64_t generation = 0;
+            WorkItem item;
             std::function<sao_status_t(std::vector<ProcessRecord>&)> enumerate;
-            std::uint32_t current_process_id = 0;
-            {
+            std::function<sao_status_t(std::uint32_t, ProcessRecord&)> query_process;
+            std::function<sao_status_t(std::uint32_t)> attach_operation;
+            std::uint32_t current_process_id = 0U;
+            try {
                 std::unique_lock lock(mutex);
-                if (!worker_cv.wait(lock, stop, [this] { return refresh_requested; }))
+                if (!worker_cv.wait(lock, stop, [this] { return !work_items.empty(); }))
                     break;
-                generation = requested_generation;
-                refresh_requested = false;
-                refresh_in_flight = true;
+                item = std::move(work_items.front());
+                work_items.pop_front();
+                worker_active = true;
                 enumerate = operations.enumerate_snapshot;
+                query_process = operations.query_process;
+                attach_operation = operations.attach;
                 current_process_id = operations.current_process_id;
+            } catch (...) {
+                Completion failure{};
+                failure.kind = item.kind;
+                failure.generation = item.generation;
+                failure.status = SAO_STATUS_ERR_UNKNOWN;
+                std::lock_guard lock(mutex);
+                worker_active = false;
+                completions.push_back(std::move(failure));
+                continue;
             }
 
             Completion completion{};
-            completion.generation = generation;
+            completion.kind = item.kind;
+            completion.generation = item.generation;
             try {
-                if (!enumerate) {
+                if (item.kind == WorkKind::refresh) {
+                    if (!enumerate) {
+                        completion.status = SAO_STATUS_ERR_NOT_INITIALIZED;
+                    } else {
+                        completion.status = enumerate(completion.processes);
+                        if (completion.status == SAO_STATUS_OK) {
+                            completion.processes = normalize_snapshot(
+                                std::move(completion.processes), current_process_id);
+                        }
+                    }
+                } else if (!query_process || !attach_operation) {
                     completion.status = SAO_STATUS_ERR_NOT_INITIALIZED;
+                    completion.status_text = "Attach operations are not configured.";
                 } else {
-                    completion.status = enumerate(completion.processes);
-                    if (completion.status == SAO_STATUS_OK) {
-                        completion.processes =
-                            normalize_snapshot(std::move(completion.processes), current_process_id);
+                    ProcessRecord candidate{};
+                    completion.status = query_process(item.identity.pid, candidate);
+                    if (completion.status != SAO_STATUS_OK) {
+                        completion.status_text =
+                            status_description(completion.status, "Identity recheck failed");
+                    } else if (candidate.pid != item.identity.pid ||
+                               candidate.start_time_100ns == 0U ||
+                               !valid_text(candidate.image_path_utf8, kMaximumImagePathBytes,
+                                           true) ||
+                               !valid_text(candidate.base_name_utf8, kMaximumBaseNameBytes,
+                                           false)) {
+                        completion.status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        completion.status_text =
+                            "Identity recheck returned invalid UTF-8 or length.";
+                    } else {
+                        std::vector<ProcessRecord> normalized = normalize_snapshot(
+                            std::vector<ProcessRecord>{std::move(candidate)}, current_process_id);
+                        const bool process_missing =
+                            normalized.empty() || normalized.front().pid != item.identity.pid;
+                        if (process_missing || normalized.front().start_time_100ns !=
+                                                   item.identity.start_time_100ns) {
+                            completion.status = SAO_STATUS_ERR_PROCESS_GONE;
+                            completion.status_text =
+                                process_missing
+                                    ? "Attach rejected: process exited before attach."
+                                    : "Attach rejected: PID identity changed before attach.";
+                        } else {
+                            ProcessRecord validated = std::move(normalized.front());
+                            completion.status = attach_operation(item.identity.pid);
+                            if (completion.status == SAO_STATUS_OK) {
+                                completion.status_text =
+                                    "Attached PID " + std::to_string(validated.pid) + " · " +
+                                    validated.base_name_utf8;
+                                completion.attached_process = std::move(validated);
+                            } else {
+                                completion.status_text =
+                                    status_description(completion.status, "Attach failed");
+                            }
+                        }
                     }
                 }
             } catch (const std::bad_alloc&) {
@@ -404,9 +553,9 @@ struct Owner::State {
 
             {
                 std::lock_guard lock(mutex);
-                refresh_in_flight = false;
+                worker_active = false;
                 completions.push_back(std::move(completion));
-                while (completions.size() > 8U)
+                while (completions.size() > 16U)
                     completions.pop_front();
             }
         }
@@ -416,6 +565,7 @@ struct Owner::State {
     Operations operations;
     mutable std::mutex mutex;
     std::condition_variable_any worker_cv;
+    std::deque<WorkItem> work_items;
     std::deque<Completion> completions;
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
@@ -428,8 +578,8 @@ struct Owner::State {
     bool action_handler_attached{};
     bool event_handler_attached{};
     bool loading{};
-    bool refresh_requested{};
-    bool refresh_in_flight{};
+    bool worker_active{};
+    bool dirty{true};
     std::uint64_t requested_generation{};
     FilterMode filter{FilterMode::all};
     sao_status_t last_status{SAO_STATUS_OK};
@@ -500,10 +650,7 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, sao_rt_io_proxy_handle_t pro
     : Owner(compositor, make_default_operations(proxy)) {}
 
 Owner::Owner(sao_ui_compositor_handle_t compositor, Operations operations)
-    : state_(std::make_unique<State>(compositor, std::move(operations))) {
-    if (state_->operations.current_process_id == 0U)
-        state_->operations.current_process_id = GetCurrentProcessId();
-}
+    : state_(std::make_unique<State>(compositor, std::move(operations))) {}
 
 Owner::~Owner() noexcept {
     if (!state_)
@@ -555,10 +702,13 @@ void Owner::end_callback() noexcept {
         --state_->callbacks_in_flight;
 }
 
-void Owner::panel_action_callback(const char* action_id_utf8, const std::uint8_t* payload_json_utf8,
-                                  std::size_t payload_len, void* user_data) noexcept {
+void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
+                                              const std::uint8_t* payload_json_utf8,
+                                              std::size_t payload_len,
+                                              void* user_data) noexcept {
     auto* owner = static_cast<Owner*>(user_data);
-    if (owner == nullptr || action_id_utf8 == nullptr ||
+    const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
+    if (owner == nullptr || !action.has_value() ||
         (payload_json_utf8 == nullptr && payload_len != 0U) || !owner->begin_callback()) {
         return;
     }
@@ -572,12 +722,13 @@ void Owner::panel_action_callback(const char* action_id_utf8, const std::uint8_t
         const std::string_view payload(
             payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
             payload_len);
-        (void)owner->dispatch_action(action_id_utf8, payload);
+        (void)owner->dispatch_action(*action, payload);
     } catch (...) {
     }
 }
 
-void Owner::panel_event_callback(std::int32_t event_kind, void* user_data) noexcept {
+void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind,
+                                             void* user_data) noexcept {
     auto* owner = static_cast<Owner*>(user_data);
     if (owner == nullptr || !owner->begin_callback())
         return;
@@ -648,7 +799,7 @@ sao_status_t Owner::ensure_panel() noexcept {
     descriptor.modal = false;
     descriptor.overlay_style = false;
     descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
-    descriptor.theme_override_json_utf8 = kSolidDarkCyanTheme;
+    descriptor.theme_override_json_utf8 = nullptr;
     descriptor.initial_opacity = 1.0F;
     descriptor.auto_scroll = true;
 
@@ -705,6 +856,7 @@ sao_status_t Owner::ensure_panel() noexcept {
         state_->body = body;
         state_->action_handler_attached = true;
         state_->event_handler_attached = true;
+        state_->dirty = true;
     }
     return SAO_STATUS_OK;
 }
@@ -717,7 +869,10 @@ sao_status_t Owner::publish() noexcept {
             std::lock_guard lock(state_->mutex);
             if (state_->body == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
+            if (!state_->dirty && !state_->rendered_spec_json.empty())
+                return SAO_STATUS_OK;
             body = state_->body;
+            state_->dirty = false;
             view.panel_created = true;
             view.visible = state_->visible;
             view.loading = state_->loading;
@@ -731,15 +886,14 @@ sao_status_t Owner::publish() noexcept {
         std::string spec = build_panel_spec(view);
         const sao_status_t status = sao_ui_panel_body_set_spec(
             body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
-        if (status != SAO_STATUS_OK)
-            return status;
-        {
-            std::lock_guard lock(state_->mutex);
-            if (state_->body != body)
-                return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard lock(state_->mutex);
+        if (state_->body != body)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (status == SAO_STATUS_OK)
             state_->rendered_spec_json = std::move(spec);
-        }
-        return SAO_STATUS_OK;
+        else
+            state_->dirty = true;
+        return status;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (...) {
@@ -783,9 +937,11 @@ sao_status_t Owner::service_ui() noexcept {
         return operation.status;
     try {
         std::deque<State::Completion> completions;
-        bool changed = false;
+        bool publish_needed = false;
         {
             std::lock_guard lock(state_->mutex);
+            if (state_->panel == nullptr || state_->body == nullptr)
+                return SAO_STATUS_OK;
             completions.swap(state_->completions);
             while (!completions.empty()) {
                 State::Completion completion = std::move(completions.front());
@@ -794,21 +950,30 @@ sao_status_t Owner::service_ui() noexcept {
                     continue;
                 state_->loading = false;
                 state_->last_status = completion.status;
-                if (completion.status == SAO_STATUS_OK) {
-                    state_->processes = std::move(completion.processes);
-                    state_->status_text = "Refresh complete: " +
-                                          std::to_string(state_->processes.size()) +
-                                          " queryable processes.";
+                if (completion.kind == State::WorkKind::refresh) {
+                    if (completion.status == SAO_STATUS_OK) {
+                        state_->processes = std::move(completion.processes);
+                        state_->status_text =
+                            "Refresh complete: " + std::to_string(state_->processes.size()) +
+                            " queryable processes.";
+                    } else {
+                        state_->status_text =
+                            status_description(completion.status, "Refresh failed");
+                    }
                 } else {
-                    state_->status_text =
-                        status_description(completion.status, "Refresh failed");
+                    state_->status_text = completion.status_text.empty()
+                                              ? status_description(completion.status,
+                                                                   "Attach failed")
+                                              : std::move(completion.status_text);
+                    if (completion.status == SAO_STATUS_OK)
+                        state_->attached_process = std::move(completion.attached_process);
                 }
-                changed = true;
+                state_->dirty = true;
+                publish_needed = true;
             }
+            publish_needed = publish_needed || state_->dirty;
         }
-        if (!changed)
-            return SAO_STATUS_OK;
-        return publish();
+        return publish_needed ? publish() : SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (...) {
@@ -858,7 +1023,8 @@ sao_status_t Owner::take_offline() noexcept {
     {
         std::lock_guard lock(state_->mutex);
         if (state_->creating || state_->retiring || state_->operations_in_flight != 0U ||
-            state_->callbacks_in_flight != 0U) {
+            state_->callbacks_in_flight != 0U || state_->worker_active ||
+            !state_->work_items.empty()) {
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         }
         if (state_->panel == nullptr) {
@@ -873,7 +1039,7 @@ sao_status_t Owner::take_offline() noexcept {
         was_accepting = state_->accepting;
         state_->accepting = false;
         ++state_->requested_generation;
-        state_->refresh_requested = false;
+        state_->work_items.clear();
         state_->loading = false;
         state_->completions.clear();
         panel = state_->panel;
@@ -909,6 +1075,7 @@ sao_status_t Owner::take_offline() noexcept {
         state_->action_handler_attached = false;
         state_->event_handler_attached = false;
         state_->rendered_spec_json.clear();
+        state_->dirty = true;
         state_->accepting = true;
         state_->retiring = false;
         return SAO_STATUS_OK;
@@ -950,28 +1117,31 @@ sao_status_t Owner::refresh() noexcept {
 }
 
 sao_status_t Owner::enqueue_refresh() noexcept {
+    sao_status_t enqueue_status = SAO_STATUS_OK;
     {
         std::lock_guard lock(state_->mutex);
         if (!state_->accepting || state_->retiring)
             return SAO_STATUS_ERR_CANCELLED;
+        if (state_->loading || state_->worker_active || !state_->work_items.empty())
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (!state_->operations.enumerate_snapshot) {
             state_->loading = false;
             state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
             state_->status_text = "Process enumeration operation is not configured.";
+            enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
         } else {
             ++state_->requested_generation;
-            state_->refresh_requested = true;
+            state_->work_items.push_back(
+                State::WorkItem{State::WorkKind::refresh, state_->requested_generation, {}});
             state_->loading = true;
             state_->last_status = SAO_STATUS_OK;
             state_->status_text = "Scanning running processes...";
         }
+        state_->dirty = true;
     }
     state_->worker_cv.notify_all();
     const sao_status_t publish_status = publish();
-    if (publish_status != SAO_STATUS_OK)
-        return publish_status;
-    std::lock_guard lock(state_->mutex);
-    return state_->operations.enumerate_snapshot ? SAO_STATUS_OK : SAO_STATUS_ERR_NOT_INITIALIZED;
+    return publish_status == SAO_STATUS_OK ? enqueue_status : publish_status;
 }
 
 sao_status_t Owner::set_filter(FilterMode filter) noexcept {
@@ -990,6 +1160,7 @@ sao_status_t Owner::set_filter(FilterMode filter) noexcept {
         state_->status_text = filter == FilterMode::all
                                   ? "Filter changed: showing all queryable processes."
                                   : "Filter changed: showing likely game processes.";
+        state_->dirty = true;
     }
     return publish();
 }
@@ -1004,87 +1175,47 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
 
-    bool selected_identity_exists = false;
+    sao_status_t enqueue_status = SAO_STATUS_OK;
     {
         std::lock_guard lock(state_->mutex);
-        selected_identity_exists =
+        if (state_->loading || state_->worker_active || !state_->work_items.empty())
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        const bool selected_identity_exists =
             std::ranges::any_of(state_->processes, [&](const ProcessRecord& process) {
                 return process.identity() == identity;
             });
-    }
-    if (!selected_identity_exists) {
-        {
-            std::lock_guard lock(state_->mutex);
+        if (!selected_identity_exists) {
             state_->last_status = SAO_STATUS_ERR_NOT_FOUND;
             state_->status_text =
                 "Attach rejected: selection is no longer in the current snapshot.";
-        }
-        (void)publish();
-        return SAO_STATUS_ERR_NOT_FOUND;
-    }
-
-    const auto query_process = state_->operations.query_process;
-    const auto attach_operation = state_->operations.attach;
-    if (!query_process || !attach_operation)
-        return SAO_STATUS_ERR_NOT_INITIALIZED;
-
-    try {
-        ProcessRecord candidate{};
-        const sao_status_t query_status = query_process(identity.pid, candidate);
-        if (query_status != SAO_STATUS_OK) {
-            {
-                std::lock_guard lock(state_->mutex);
-                state_->last_status = query_status;
-                state_->status_text = status_description(query_status, "Identity recheck failed");
-            }
-            (void)publish();
-            return query_status;
-        }
-        std::vector<ProcessRecord> normalized = normalize_snapshot(
-            std::vector<ProcessRecord>{candidate}, state_->operations.current_process_id);
-        const bool process_missing = normalized.empty() || normalized.front().pid != identity.pid;
-        if (process_missing || normalized.front().start_time_100ns != identity.start_time_100ns) {
-            {
-                std::lock_guard lock(state_->mutex);
-                state_->last_status = SAO_STATUS_ERR_PROCESS_GONE;
-                state_->status_text = process_missing
-                                          ? "Attach rejected: process exited before attach."
-                                          : "Attach rejected: PID identity changed before attach.";
-            }
-            (void)publish();
-            return SAO_STATUS_ERR_PROCESS_GONE;
-        }
-        const ProcessRecord validated = std::move(normalized.front());
-        {
-            std::lock_guard lock(state_->mutex);
+            state_->dirty = true;
+            enqueue_status = SAO_STATUS_ERR_NOT_FOUND;
+        } else if (!state_->operations.query_process || !state_->operations.attach) {
+            state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+            state_->status_text = "Attach operations are not configured.";
+            state_->dirty = true;
+            enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+        } else {
+            ++state_->requested_generation;
+            state_->work_items.push_back(State::WorkItem{
+                State::WorkKind::attach, state_->requested_generation, identity});
+            state_->loading = true;
             state_->last_status = SAO_STATUS_OK;
             state_->status_text =
-                "Identity verified; attaching PID " + std::to_string(identity.pid) + ".";
+                "Verifying identity and attaching PID " + std::to_string(identity.pid) + ".";
+            state_->dirty = true;
         }
-
-        const sao_status_t attach_status = attach_operation(identity.pid);
-        {
-            std::lock_guard lock(state_->mutex);
-            state_->last_status = attach_status;
-            if (attach_status == SAO_STATUS_OK) {
-                state_->attached_process = validated;
-                state_->status_text = "Attached PID " + std::to_string(validated.pid) + " · " +
-                                      validated.base_name_utf8;
-            } else {
-                state_->status_text = status_description(attach_status, "Attach failed");
-            }
-        }
-        const sao_status_t publish_status = publish();
-        return publish_status == SAO_STATUS_OK ? attach_status : publish_status;
-    } catch (const std::bad_alloc&) {
-        return SAO_STATUS_ERR_UNKNOWN;
-    } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+    if (enqueue_status == SAO_STATUS_OK)
+        state_->worker_cv.notify_all();
+    const sao_status_t publish_status = publish();
+    return publish_status == SAO_STATUS_OK ? enqueue_status : publish_status;
 }
 
 sao_status_t Owner::dispatch_action(std::string_view action_id,
                                     std::string_view payload_json) noexcept {
+    if (!valid_text(action_id, kMaximumActionIdBytes, true))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     OperationGuard operation(*this);
     if (operation.status != SAO_STATUS_OK)
         return operation.status;
@@ -1100,6 +1231,8 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
         if (mode == payload.end() || !mode->is_string())
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         const std::string value = mode->get<std::string>();
+        if (!valid_text(value, 32U, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (value == "all")
             return set_filter(FilterMode::all);
         if (value == "likely_game")
@@ -1108,7 +1241,8 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
     }
     if (action_id == kAttachAction) {
         const std::optional<std::uint64_t> pid = json_unsigned(payload, "pid");
-        const std::optional<std::uint64_t> start_time = json_unsigned(payload, "start_time_100ns");
+        const std::optional<std::uint64_t> start_time =
+            json_unsigned(payload, "start_time_100ns");
         if (!pid.has_value() || !start_time.has_value() ||
             *pid > (std::numeric_limits<std::uint32_t>::max)()) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;

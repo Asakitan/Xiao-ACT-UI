@@ -1,20 +1,69 @@
-// hotkey_config_panel.h — user-facing hotkey rebinding UI panel.
-//
-// Phase 12 (Python parity closure) — port of gui_modules/sao_hotkey_manager.py
-// interactive config dialog. Presents each binding as a row with a "rebind"
-// button that captures the next VK combo.
-
 #pragma once
 
+#include "sao/core/status.h"
+#include "sao/ui/panel_sdk.h"
+
+#include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
+#include <string_view>
 
 namespace sao::launcher::hotkey {
 
-// Open the config panel. Returns after user closes it.
-// Persists any changes via hotkey_manager::save().
-void open_config_panel();
+inline constexpr char kPanelId[] = "sao.launcher.hotkey_config";
+inline constexpr char kPanelTitle[] = "Hotkey Configuration";
+inline constexpr char kCaptureAction[] = "hotkey.capture";
+inline constexpr char kResetAction[] = "hotkey.reset";
+inline constexpr std::uint32_t kCaptureCompletionMessage = 0x8000u + 0x4A31u;
 
-// Preview a "captured" combo (called from capture-mode widget).
-std::string format_combo_utf8(uint32_t vk, uint32_t modifiers);
+enum class PanelStatus {
+    ready,
+    capturing,
+    success,
+    cancelled,
+    conflict,
+    system_error,
+    save_error,
+};
+
+struct CaptureHooks {
+    std::function<short(int)> get_async_key_state;
+    std::function<bool()> post_owner_wake;
+};
+
+SaoPanelDescriptor panel_descriptor_for_testing() noexcept;
+std::string build_panel_spec_for_testing();
+
+class Owner final {
+  public:
+    explicit Owner(sao_ui_compositor_handle_t compositor) noexcept;
+    ~Owner();
+
+    Owner(const Owner&) = delete;
+    Owner& operator=(const Owner&) = delete;
+    Owner(Owner&&) = delete;
+    Owner& operator=(Owner&&) = delete;
+
+    sao_status_t open() noexcept;
+    sao_status_t close() noexcept;
+    sao_status_t take_offline() noexcept;
+    sao_status_t set_owner_wake_window(void* window) noexcept;
+    sao_status_t drain_capture_for_owner() noexcept;
+    sao_status_t set_capture_hooks_for_testing(CaptureHooks hooks) noexcept;
+    sao_status_t dispatch_action_for_testing(std::string_view action,
+                                             std::string_view payload_json = {}) noexcept;
+    sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
+    [[nodiscard]] sao_ui_panel_handle_t panel_handle() const noexcept;
+    [[nodiscard]] bool is_capturing() const noexcept;
+
+  private:
+    struct Impl;
+    std::shared_ptr<Impl> impl_;
+};
+
+void open_config_panel();
+void close_config_panel();
+std::string format_combo_utf8(std::uint32_t vk, std::uint32_t modifiers);
 
 } // namespace sao::launcher::hotkey

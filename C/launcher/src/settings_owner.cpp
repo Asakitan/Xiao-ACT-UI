@@ -533,10 +533,22 @@ sao_status_t write_file_atomically(const std::wstring& target, std::string_view 
 
 } // namespace
 
+struct SettingsOwner::Lease::LeaseState final {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::size_t active = 0;
+    bool retiring = false;
+};
+SettingsOwner::Lease::Lease(SettingsOwner* owner, std::shared_ptr<LeaseState> state) noexcept : owner_(owner), state_(std::move(state)) {}
+SettingsOwner::Lease::~Lease() noexcept { release(); }
+SettingsOwner::Lease::Lease(Lease&& other) noexcept : owner_(std::exchange(other.owner_, nullptr)), state_(std::move(other.state_)) {}
+SettingsOwner::Lease& SettingsOwner::Lease::operator=(Lease&& other) noexcept { if (this != &other) { release(); owner_ = std::exchange(other.owner_, nullptr); state_ = std::move(other.state_); } return *this; }
+void SettingsOwner::Lease::release() noexcept { if (owner_ == nullptr || state_ == nullptr) return; { std::lock_guard lock(state_->mutex); if (state_->active != 0U) --state_->active; } state_->cv.notify_all(); owner_ = nullptr; state_.reset(); }
 SettingsOwner::SettingsOwner(ConstructionToken, std::wstring path, std::wstring registry_path)
-    : path_(std::move(path)), registry_path_(std::move(registry_path)) {}
+    : path_(std::move(path)), registry_path_(std::move(registry_path)), lease_state_(std::make_shared<Lease::LeaseState>()) {}
 
 SettingsOwner::~SettingsOwner() noexcept {
+    retire_and_wait();
     if (registry_registered_) {
         unregister_path(registry_path_);
     }
@@ -790,6 +802,32 @@ sao_status_t SettingsOwner::set_value_and_save(std::string_view top_level_key,
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+}
+
+sao_status_t SettingsOwner::restore_snapshot(Json document, bool dirty) noexcept {
+    if (!document.is_object()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::string serialized;
+        const auto status = settings_json::serialize_python_compatible(document, settings_codec::kMaxPlaintextBytes, serialized);
+        if (status != SAO_STATUS_OK) return status;
+        std::lock_guard lock(mutex_); document_.swap(document); dirty_ = dirty; return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) { return SAO_STATUS_ERR_UNKNOWN; }
+    catch (const nlohmann::json::exception&) { return SAO_STATUS_ERR_INVALID_ARGUMENT; }
+    catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
+}
+
+SettingsOwner::Lease SettingsOwner::acquire_lease() const noexcept {
+    try {
+        const auto state = lease_state_; if (state == nullptr) return {};
+        std::lock_guard lock(state->mutex); if (state->retiring) return {};
+        ++state->active; return Lease(const_cast<SettingsOwner*>(this), state);
+    } catch (...) { return {}; }
+}
+void SettingsOwner::retire_and_wait() noexcept {
+    try { const auto state = lease_state_; if (state == nullptr) return; std::unique_lock lock(state->mutex); state->retiring = true; state->cv.wait(lock, [&state] { return state->active == 0U; }); } catch (...) {}
+}
+void SettingsOwner::resume_after_retire() noexcept {
+    try { const auto state = lease_state_; if (state == nullptr) return; std::lock_guard lock(state->mutex); state->retiring = false; } catch (...) {}
 }
 
 bool SettingsOwner::dirty() const noexcept {

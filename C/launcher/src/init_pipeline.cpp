@@ -86,6 +86,8 @@
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/streaming_flow.h"
 #include "sao/ui/theme.h"
+#include "hotkey_config_panel.h"
+#include "hotkey_manager.h"
 #endif
 
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
@@ -223,8 +225,6 @@ namespace {
 
 constexpr UINT_PTR kUiFrameTimerId = 0x53415549U;
 constexpr int32_t kUiFrameIntervalMs = 16;
-constexpr int32_t kHomeHotkeyId = 0x5341;
-constexpr int32_t kInsertHotkeyId = 0x5342;
 constexpr int kMaximumTeardownAttempts = 3;
 constexpr int kMaximumStreamingReleaseAttempts = 2;
 constexpr uint64_t kRtIoMandatoryLiveStepMask =
@@ -1953,8 +1953,7 @@ struct sao_platform_ctx {
     std::unique_ptr<sao::launcher::license_panel::Owner> license_panel;
     bool license_panel_visible;
 #endif
-    bool home_hotkey_registered;
-    bool insert_hotkey_registered;
+    std::unique_ptr<sao::launcher::hotkey::Owner> hotkey_owner;
     SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
@@ -2203,6 +2202,22 @@ sao_status_t map_sdk_runtime_status(sao_sdk_status_t status) noexcept {
 }
 
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept;
+sao_status_t retire_hotkeys(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    if (!sao::launcher::hotkey::unregister_all().empty())
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    sao::launcher::hotkey::clear_callbacks();
+    if (ctx->hotkey_owner) {
+        const sao_status_t status = ctx->hotkey_owner->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->hotkey_owner.reset();
+    }
+    sao_launcher_hotkey_set_settings_owner(nullptr);
+    return SAO_STATUS_OK;
+}
+
 
 void write_platform_bringup_diagnostic(const char* line, int length) noexcept {
     if (line == nullptr || length <= 0)
@@ -3494,6 +3509,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_load", status);
     }
+    sao_launcher_hotkey_set_settings_owner(ctx->settings_owner.get());
     status = ctx->settings_owner->get_truthy("nervgear_mode", true, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_nervgear_mode", status);
@@ -3647,6 +3663,15 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_compositor_create", status);
     }
+    try {
+        ctx->hotkey_owner = std::make_unique<sao::launcher::hotkey::Owner>(ctx->compositor);
+    } catch (...) {
+        return rollback_and_fail("hotkey_owner_create", SAO_STATUS_ERR_UNKNOWN);
+    }
+    status = ctx->hotkey_owner->set_owner_wake_window(render_hwnd);
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("hotkey_owner_wake_window", status);
+    }
     status = map_sdk_runtime_status(sao_sdk_platform_bind_ui_compositor(ctx->compositor));
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("sdk_platform_bind_ui_compositor", status);
@@ -3693,6 +3718,19 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_entity_shell_set_nervgear_mode", status);
     }
+    sao::launcher::hotkey::clear_callbacks();
+    sao::launcher::hotkey::set_callback("toggle_sao_menu", [ctx] {
+        if (sao_ui_entity_shell_home(ctx->entity_shell) == SAO_STATUS_OK) {
+            (void)tick_shared_fisheye(ctx);
+            (void)sao_ui_compositor_tick(ctx->compositor);
+        }
+    });
+    sao::launcher::hotkey::set_callback("toggle_float_button", [ctx] {
+        if (sao_ui_entity_shell_insert(ctx->entity_shell) == SAO_STATUS_OK) {
+            (void)tick_shared_fisheye(ctx);
+            (void)sao_ui_compositor_tick(ctx->compositor);
+        }
+    });
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     auto& authority = ctx->entity_provider_publication.builtin_authority;
     sync_entity_publication_authority(ctx);
@@ -3720,14 +3758,9 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
     if (shared_ui_status != SAO_STATUS_OK)
         return shared_ui_status;
 #endif
-    if (ctx->insert_hotkey_registered) {
-        (void)UnregisterHotKey(nullptr, kInsertHotkeyId);
-        ctx->insert_hotkey_registered = false;
-    }
-    if (ctx->home_hotkey_registered) {
-        (void)UnregisterHotKey(nullptr, kHomeHotkeyId);
-        ctx->home_hotkey_registered = false;
-    }
+    const sao_status_t hotkey_status = retire_hotkeys(ctx);
+    if (hotkey_status != SAO_STATUS_OK)
+        return hotkey_status;
     if (ctx->streaming_flow_started) {
         const sao_status_t streaming_status = sao_streaming_flow_teardown(2.0, 2.0);
         if (streaming_status != SAO_STATUS_OK) {
@@ -3887,28 +3920,19 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return status;
     }
-    if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
+    sao::launcher::hotkey::load_or_default({
+        {"toggle_sao_menu", "Home", VK_HOME, MOD_NOREPEAT},
+        {"toggle_float_button", "Insert", VK_INSERT, MOD_NOREPEAT},
+    });
+    if (!sao::launcher::hotkey::register_all().empty()) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
             ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
             ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
-        return SAO_STATUS_INTERNAL;
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    ctx->home_hotkey_registered = true;
-    if (!RegisterHotKey(nullptr, kInsertHotkeyId, MOD_NOREPEAT, VK_INSERT)) {
-        UnregisterHotKey(nullptr, kHomeHotkeyId);
-        ctx->home_hotkey_registered = false;
-#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-        (void)sao::launcher::entity_provider_publication::clear(
-            ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
-            ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
-#endif
-        (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
-        return SAO_STATUS_INTERNAL;
-    }
-    ctx->insert_hotkey_registered = true;
     return SAO_STATUS_OK;
 }
 
@@ -3937,22 +3961,9 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
         ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
-    if (ctx->insert_hotkey_registered) {
-        if (!UnregisterHotKey(nullptr, kInsertHotkeyId)) {
-            if (status == SAO_STATUS_OK)
-                status = SAO_STATUS_INTERNAL;
-        } else {
-            ctx->insert_hotkey_registered = false;
-        }
-    }
-    if (ctx->home_hotkey_registered) {
-        if (!UnregisterHotKey(nullptr, kHomeHotkeyId)) {
-            if (status == SAO_STATUS_OK)
-                status = SAO_STATUS_INTERNAL;
-        } else {
-            ctx->home_hotkey_registered = false;
-        }
-    }
+    const sao_status_t hotkey_status = retire_hotkeys(ctx);
+    if (hotkey_status != SAO_STATUS_OK)
+        return hotkey_status;
     const sao_status_t offline_status = sao_ui_entity_shell_take_offline(ctx->entity_shell);
     const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     if (status != SAO_STATUS_OK)
@@ -4039,29 +4050,19 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
         *out_handled = 1;
         return sao_ui_tick(ctx, kUiFrameIntervalMs);
     }
+    if (message == sao::launcher::hotkey::kCaptureCompletionMessage) {
+        *out_handled = 1;
+        return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner()
+                                 : SAO_STATUS_OK;
+    }
     if (message != WM_HOTKEY)
         return SAO_STATUS_OK;
-    if (w_param == kHomeHotkeyId) {
-        *out_handled = 1;
-        const sao_status_t status = sao_ui_entity_shell_home(ctx->entity_shell);
-        const sao_status_t fisheye_status =
-            status == SAO_STATUS_OK ? tick_shared_fisheye(ctx) : status;
-        const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
-        return status != SAO_STATUS_OK
-                   ? status
-                   : (fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status);
-    }
-    if (w_param == kInsertHotkeyId) {
-        *out_handled = 1;
-        const sao_status_t status = sao_ui_entity_shell_insert(ctx->entity_shell);
-        const sao_status_t fisheye_status =
-            status == SAO_STATUS_OK ? tick_shared_fisheye(ctx) : status;
-        const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
-        return status != SAO_STATUS_OK
-                   ? status
-                   : (fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status);
-    }
-    return SAO_STATUS_OK;
+    if (!sao::launcher::hotkey::dispatch_by_native_id(static_cast<int>(w_param)))
+        return SAO_STATUS_OK;
+    *out_handled = 1;
+    const sao_status_t fisheye_status = tick_shared_fisheye(ctx);
+    const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    return fisheye_status == SAO_STATUS_OK ? compositor_status : fisheye_status;
 }
 #else
 sao_status_t sao_platform_bringup(const sao_platform_config*, sao_platform_ctx**) {
@@ -4196,13 +4197,9 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
 #endif
 #if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
         if (cfg->enable_anti_dump) {
-            // Scrub this module's PE headers and start the snapshot watcher so
-            // later memory dumps capture a sanitized image.  Failures are
-            // non-fatal: a partially scrubbed image still leaks less than none.
-            HMODULE self_module = GetModuleHandleW(nullptr);
-            if (self_module != nullptr)
-                (void)sao_security_anti_dump_erase_headers(
-                    reinterpret_cast<void*>(self_module));
+            // Start the watcher while the image headers are still available to
+            // the MSVC thread bootstrap.  Release/hardened header erasure
+            // follows after every security worker that needs a thread is running.
             (void)sao_security_anti_dump_snapshot_watch_start(1000u);
         }
 #endif
@@ -4216,6 +4213,17 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
                 return worker_status;
             }
         }
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER) && !defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+        if (cfg->enable_anti_dump) {
+            // Later memory dumps capture a sanitized image.  Erasure failures
+            // remain non-fatal: a partially scrubbed image still leaks less
+            // than an untouched image.
+            HMODULE self_module = GetModuleHandleW(nullptr);
+            if (self_module != nullptr)
+                (void)sao_security_anti_dump_erase_headers(
+                    reinterpret_cast<void*>(self_module));
+        }
+#endif
         return SAO_STATUS_OK;
     } catch (...) {
         stop_anti_debug_worker();

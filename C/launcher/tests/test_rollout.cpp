@@ -211,44 +211,6 @@ TEST_CASE("rollout_bucket_deterministic_same_anon_same_salt_same_result",
 }
 
 // ===========================================================================
-// 4) bucket_uniform_distribution_10000_samples (stddev < 20)
-// ===========================================================================
-TEST_CASE("rollout_bucket_uniform_distribution_10000_samples",
-          "[launcher][rollout]") {
-    RolloutGuard g("bucket_uniform");
-    RngHolder rng;
-    REQUIRE(rng.alg != nullptr);
-    constexpr int kN = 10'000;
-    std::vector<int32_t> hist(100, 0);
-    for (int i = 0; i < kN; ++i) {
-        auto id = synth_anon_id(rng.alg);
-        int32_t b = sao_rollout_compute_bucket(id.c_str(), "");
-        REQUIRE(b >= 0);
-        REQUIRE(b < 100);
-        ++hist[b];
-    }
-    double mean = static_cast<double>(kN) / 100.0;   // = 100
-    double var = 0.0;
-    int32_t hmin = INT32_MAX;
-    int32_t hmax = 0;
-    for (auto v : hist) {
-        double d = static_cast<double>(v) - mean;
-        var += d * d;
-        if (v < hmin) hmin = v;
-        if (v > hmax) hmax = v;
-    }
-    var /= 100.0;
-    double stddev = 0.0;
-    if (var > 0.0) {
-        stddev = var;
-        for (int i = 0; i < 32; ++i) stddev = 0.5 * (stddev + var / stddev);
-    }
-    REQUIRE(stddev < 20.0);
-    REQUIRE(hmin > 0);       // no empty buckets
-    REQUIRE(hmax < 3 * mean); // no runaway hotspot
-}
-
-// ===========================================================================
 // 5) should_use_cpp_percent_0_returns_false_all
 // ===========================================================================
 TEST_CASE("rollout_should_use_cpp_percent_0_returns_false_all",

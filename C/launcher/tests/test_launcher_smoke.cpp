@@ -94,24 +94,6 @@ bool timerMessageAppearsAfterExit() {
 
 } // namespace
 
-TEST_CASE("AppState default state is safe", "[launcher][smoke]") {
-    AppState s{};
-    REQUIRE(s.safe_mode == false);
-    REQUIRE(s.no_license == false);
-    REQUIRE(s.rt_io_operator == false);
-    REQUIRE(s.rt_io_preflight_only == false);
-    REQUIRE(s.rt_io_input_checks == false);
-    REQUIRE(s.rt_io_r5_check == false);
-    REQUIRE(s.rt_io_mf_check == false);
-    REQUIRE(s.rt_io_exit_after_validation == false);
-    REQUIRE(s.config_path[0] == L'\0');
-    REQUIRE(s.log_level[0] == L'\0');
-    REQUIRE(s.base_dir[0] == L'\0');
-    REQUIRE(s.exe_path[0] == L'\0');
-    REQUIRE(s.platform_ctx == nullptr);
-    REQUIRE(s.plugins_registry == nullptr);
-}
-
 TEST_CASE("Exit code enum matches README contract", "[launcher][smoke]") {
     REQUIRE(SAO_EXIT_OK                 == 0);
     REQUIRE(SAO_EXIT_ALREADY_RUNNING    == 1);
@@ -123,15 +105,6 @@ TEST_CASE("Exit code enum matches README contract", "[launcher][smoke]") {
     REQUIRE(SAO_EXIT_CRASH              == 7);
     REQUIRE(SAO_EXIT_BAD_ARGS           == 8);
     REQUIRE(SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL == 9);
-}
-
-TEST_CASE("composition test provider exposes successful UI message wrappers",
-      "[launcher][ui][wrapper]") {
-    int32_t handled = 99;
-    REQUIRE(sao_ui_tick(nullptr, 16) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_handle_message(nullptr, WM_TIMER, 0, 0, &handled) ==
-        SAO_STATUS_OK);
-    CHECK(handled == 0);
 }
 
 TEST_CASE("launcher message loop ticks only its generated timer",

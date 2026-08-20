@@ -6,12 +6,18 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <exception>
 #include <mutex>
 #include <new>
+#include <optional>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 
 #if (defined(SAO_LINKED_PLUGINS) || defined(SAO_LAUNCHER_PLUGIN_MANAGER_WITH_LOADER)) &&           \
@@ -30,14 +36,76 @@ namespace {
 
 using Json = nlohmann::json;
 
-constexpr char kThemeOverride[] =
-    R"({"colors":{"APP_BG":"#0b1018","APP_CARD":"#131b27","APP_BORDER":"#2a3850","APP_TEXT":"#eef4ff","APP_TEXT_2":"#c9d5e7","APP_TEXT_DIM":"#8292a8","APP_ACCENT":"#63b3ff","APP_BLUE":"#63b3ff","APP_GREEN":"#57d39b","APP_RED":"#ff6f7f","APP_ORANGE":"#f0a45d","APP_GOLD":"#e9ca72"}})";
-
 constexpr std::string_view kActionRefresh = "plugin_manager.refresh";
 constexpr std::string_view kActionReloadAll = "plugin_manager.reload_all";
 constexpr std::string_view kActionEnable = "plugin_manager.enable";
 constexpr std::string_view kActionDisable = "plugin_manager.disable";
 constexpr std::string_view kActionReload = "plugin_manager.reload";
+constexpr std::size_t kMaximumActionPayloadBytes = 4096U;
+constexpr std::size_t kMaximumPluginIdBytes = 256U;
+constexpr std::size_t kMaximumPanelSpecBytes = 256U * 1024U;
+constexpr std::size_t kMaximumTaskQueue = 32U;
+
+bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7fU) {
+            ++offset;
+            continue;
+        }
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation_count = 1;
+            code_point = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation_count = 2;
+            code_point = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (std::size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xc0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3fU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation_count + 1U;
+    }
+    return true;
+}
+
+bool valid_text(std::string_view value, std::size_t maximum, bool required) noexcept {
+    return (!required || !value.empty()) && value.size() <= maximum &&
+           value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+std::optional<std::string_view> bounded_c_text(const char* value,
+                                               std::size_t maximum) noexcept {
+    if (value == nullptr)
+        return std::nullopt;
+    const void* terminator = std::memchr(value, '\0', maximum + 1U);
+    if (terminator == nullptr)
+        return std::nullopt;
+    const auto length =
+        static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
+    const std::string_view result(value, length);
+    return valid_text(result, maximum, true) ? std::optional<std::string_view>(result)
+                                              : std::nullopt;
+}
 
 std::string clamp_utf8(std::string value, std::size_t maximum) {
     if (value.size() <= maximum)
@@ -85,10 +153,9 @@ Json row_node(Json children) {
     return Json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
+Json card_node(std::string title, Json children) {
     return Json{{"type", "card"},
                 {"title", clamp_utf8(std::move(title), 512U)},
-                {"accent", accent},
                 {"children", std::move(children)}};
 }
 
@@ -103,9 +170,9 @@ std::string_view state_style(PluginState state) noexcept {
 
 std::string_view source_label(PluginSource source) noexcept {
     static constexpr std::array<std::string_view, 3> labels{
-        "Unknown source / 来源未知",
-        "Built-in / 内置",
-        "User / 用户",
+        "Unknown source",
+        "Built-in",
+        "User",
     };
     const auto index = static_cast<std::size_t>(source);
     return index < labels.size() ? labels[index] : labels.front();
@@ -175,7 +242,7 @@ Snapshot snapshot_loader() {
     Snapshot snapshot;
     const Loader::registry_handle_t registry = Loader::sao_plugins_registry_instance();
     if (registry == nullptr) {
-        snapshot.error_message = "Plugin loader registry unavailable / 插件加载器注册表不可用。";
+        snapshot.error_message = "Plugin loader registry unavailable.";
         return snapshot;
     }
 
@@ -252,7 +319,7 @@ Operations make_default_operations() noexcept {
 Snapshot snapshot_loader() {
     Snapshot snapshot;
     snapshot.error_message =
-        "Plugin loader unavailable / 插件加载器不可用。The panel remains available in this build.";
+        "Plugin loader unavailable. The panel remains available in this build.";
     return snapshot;
 }
 
@@ -278,19 +345,9 @@ Operations make_default_operations_with_reload_all(ReloadAllHandler reload_all_h
 
 std::string_view plugin_state_label(PluginState state) noexcept {
     static constexpr std::array<std::string_view, 13> labels{
-        "Unknown / 未知",
-        "Discovered / 已发现",
-        "Validating / 校验中",
-        "Resolving dependencies / 解析依赖中",
-        "Bootstrapping / 初始化依赖中",
-        "Loading / 加载中",
-        "Enabled / 已启用",
-        "Disabled / 已禁用",
-        "Unloading / 卸载中",
-        "Unloaded / 已卸载",
-        "Failed / 失败",
-        "Enabling / 启用中",
-        "Disabling / 禁用中",
+        "Unknown", "Discovered", "Validating", "Resolving dependencies",
+        "Bootstrapping", "Loading", "Enabled", "Disabled",
+        "Unloading", "Unloaded", "Failed", "Enabling", "Disabling",
     };
     const auto index = static_cast<std::size_t>(state);
     return index < labels.size() ? labels[index] : labels.front();
@@ -336,16 +393,20 @@ SaoPanelDescriptor descriptor_for_testing() noexcept {
     descriptor.modal = false;
     descriptor.overlay_style = false;
     descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
-    descriptor.theme_override_json_utf8 = kThemeOverride;
+    descriptor.theme_override_json_utf8 = nullptr;
     descriptor.initial_opacity = 1.0F;
     descriptor.auto_scroll = true;
     return descriptor;
 }
 
+Json section_node(std::string title, Json children) {
+    return Json{{"type", "section"},
+                {"title", clamp_utf8(std::move(title), 512U)},
+                {"children", std::move(children)}};
+}
 std::string build_spec_for_testing(const Snapshot& snapshot) {
     Json nodes = Json::array();
-    Json app_bar = Json::array();
-    app_bar.push_back(text_node("Plugin Manager", "title", 30));
+    Json overview = Json::array();
     Json status_badges = Json::array();
     status_badges.push_back(badge_node(snapshot.loader_available
                                            ? "Loader available / 加载器可用"
@@ -353,77 +414,116 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                        snapshot.loader_available ? "ok" : "warn"));
     status_badges.push_back(
         badge_node(std::to_string(snapshot.plugins.size()) + " plugins / 个插件", "accent"));
-    app_bar.push_back(row_node(std::move(status_badges)));
-
+    overview.push_back(row_node(std::move(status_badges)));
     Json toolbar = Json::array();
-    toolbar.push_back(button_node("plugin-manager.refresh", "Refresh / 刷新",
-                                  std::string(kActionRefresh), Json(), "primary"));
+    toolbar.push_back(button_node("plugin-manager.refresh",
+                                  snapshot.loader_available ? "Refresh / 刷新" : "Retry / 重试",
+                                  std::string(kActionRefresh), Json(), "primary", snapshot.busy));
     toolbar.push_back(button_node("plugin-manager.reload-all", "Reload All / 全部重载",
                                   std::string(kActionReloadAll), Json(), "default",
-                                  !snapshot.reload_all_available));
-    app_bar.push_back(row_node(std::move(toolbar)));
-    nodes.push_back(card_node("Plugin Manager", std::move(app_bar), "gold"));
-
-    if (!snapshot.error_message.empty()) {
+                                  !snapshot.reload_all_available || snapshot.busy));
+    overview.push_back(row_node(std::move(toolbar)));
+    nodes.push_back(section_node("Controls", std::move(overview)));
+    if (!snapshot.loader_available) {
+        Json loader = Json::array();
+        loader.push_back(text_node(snapshot.error_message.empty()
+                                       ? "Plugin loader unavailable / 插件加载器不可用。"
+                                       : snapshot.error_message,
+                                   "warn", 42));
+        loader.push_back(button_node("plugin-manager.retry", "Retry / 重试",
+                                     std::string(kActionRefresh), Json(), "primary",
+                                     snapshot.busy));
+        nodes.push_back(section_node("Loader", std::move(loader)));
+    } else if (!snapshot.error_message.empty()) {
         Json errors = Json::array();
         errors.push_back(text_node(snapshot.error_message, "bad", 42));
-        nodes.push_back(card_node("Error / 错误", std::move(errors), "bad"));
-    }
-
-    if (!snapshot.loader_available) {
-        Json unavailable = Json::array();
-        unavailable.push_back(
-            text_node("Plugin loader unavailable / 插件加载器不可用。", "warn", 40));
-        nodes.push_back(card_node("Unavailable / 不可用", std::move(unavailable), "warn"));
+        errors.push_back(button_node("plugin-manager.error-retry", "Retry / 重试",
+                                     std::string(kActionRefresh), Json(), "primary",
+                                     snapshot.busy));
+        nodes.push_back(section_node("Error", std::move(errors)));
     } else if (snapshot.plugins.empty()) {
         Json empty = Json::array();
         empty.push_back(text_node("No plugins discovered / 未发现插件。", "muted", 34));
-        nodes.push_back(card_node("Plugins / 插件", std::move(empty), "cyan"));
+        empty.push_back(button_node("plugin-manager.empty-retry", "Refresh / 刷新",
+                                    std::string(kActionRefresh), Json(), "primary",
+                                    snapshot.busy));
+        nodes.push_back(section_node("Plugins", std::move(empty)));
     } else {
-        Json plugin_rows = Json::array();
-        plugin_rows.push_back(text_node("Plugins / 插件", "title", 26));
+        Json plugin_cards = Json::array();
         for (std::size_t index = 0; index < snapshot.plugins.size(); ++index) {
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
-            Json row = Json::array();
-            row.push_back(text_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
-                                    "value", 24));
-            row.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
-                                     state_style(plugin.state)));
-            row.push_back(badge_node(std::string(source_label(plugin.source)), "muted"));
-            row.push_back(text_node(plugin.version + " · " + plugin.language, "muted", 22));
-            row.push_back(
-                button_node("plugin-manager.toggle." + std::to_string(index),
-                            active ? "Disable / 禁用" : "Enable / 启用",
-                            active ? std::string(kActionDisable) : std::string(kActionEnable),
-                            Json(plugin.plugin_id), active ? "danger" : "primary",
-                            transitioning || !plugin_state_allows_enable(plugin.state)));
-            row.push_back(button_node("plugin-manager.reload." + std::to_string(index),
-                                      "Reload / 重载", std::string(kActionReload),
-                                      Json(plugin.plugin_id), "default",
-                                      !plugin_state_allows_reload(plugin.state)));
-            plugin_rows.push_back(row_node(std::move(row)));
-
-            std::string metadata = plugin.plugin_id;
+            Json details = Json::array();
+            Json metadata = Json::array();
+            metadata.push_back(badge_node("v" + plugin.version, "accent"));
+            metadata.push_back(badge_node(plugin.language.empty() ? "language unknown" : plugin.language,
+                                          "muted"));
+            metadata.push_back(badge_node(std::string(source_label(plugin.source)), "muted"));
+            metadata.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
+                                          state_style(plugin.state)));
+            details.push_back(row_node(std::move(metadata)));
+            details.push_back(text_node("ID: " + plugin.plugin_id, "mono", 24));
             if (!plugin.description.empty())
-                metadata += " · " + plugin.description;
-            metadata += " · " +
-                        (plugin.source_path.empty() ? std::string("unknown") : plugin.source_path);
-            plugin_rows.push_back(text_node(std::move(metadata), "mono", 26));
+                details.push_back(text_node(clamp_utf8(plugin.description, 320U), "muted", 38));
+            if (!plugin.source_path.empty())
+                details.push_back(text_node("Source: " + clamp_utf8(plugin.source_path, 320U),
+                                           "mono", 30));
+            Json actions = Json::array();
+            actions.push_back(button_node("plugin-manager.toggle." + std::to_string(index),
+                                          active ? "Disable / 禁用" : "Enable / 启用",
+                                          active ? std::string(kActionDisable) : std::string(kActionEnable),
+                                          Json(plugin.plugin_id), active ? "danger" : "primary",
+                                          snapshot.busy || transitioning ||
+                                              !plugin_state_allows_enable(plugin.state)));
+            actions.push_back(button_node("plugin-manager.reload." + std::to_string(index),
+                                          "Reload / 重载", std::string(kActionReload),
+                                          Json(plugin.plugin_id), "default",
+                                          snapshot.busy ||
+                                              !plugin_state_allows_reload(plugin.state)));
+            details.push_back(row_node(std::move(actions)));
+            plugin_cards.push_back(card_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
+                                              std::move(details)));
         }
-        nodes.push_back(card_node("Plugins / 插件", std::move(plugin_rows), "cyan"));
+        nodes.push_back(section_node("Plugins", std::move(plugin_cards)));
+    }
+    std::string spec =
+        Json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+    if (spec.size() <= kMaximumPanelSpecBytes)
+        return spec;
+    Json compact = Json::array();
+    compact.push_back(text_node("Plugin Manager content exceeded the panel budget.", "bad", 44));
+    compact.push_back(button_node("plugin-manager.budget-retry", "Retry / 重试",
+                                  std::string(kActionRefresh), Json(), "primary", snapshot.busy));
+    return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
+}
+struct Owner::Impl {
+    enum class TaskKind : std::uint8_t {
+        refresh,
+        reload_all,
+        enable,
+        disable,
+        reload,
+    };
+
+    struct Task {
+        TaskKind kind{TaskKind::refresh};
+        std::string plugin_id;
+    };
+
+    Impl(sao_ui_compositor_handle_t borrowed_compositor, Operations initial_operations) noexcept
+        : compositor(borrowed_compositor), operations(std::move(initial_operations)) {
+        try {
+            worker = std::jthread([this](std::stop_token stop) { worker_main(stop); });
+            worker_online = true;
+        } catch (...) {
+            worker_accepting = false;
+        }
     }
 
-    return Json{{"version", 1}, {"title", ""}, {"surface", "solid"}, {"nodes", std::move(nodes)}}
-        .dump();
-}
-
-struct Owner::Impl {
-    Impl(sao_ui_compositor_handle_t borrowed_compositor, Operations initial_operations) noexcept
-        : compositor(borrowed_compositor), operations(std::move(initial_operations)) {}
-
-    ~Impl() = default;
+    ~Impl() {
+        stop_worker();
+    }
 
     struct CallbackLease final {
         explicit CallbackLease(Impl* candidate) noexcept : state(candidate) {
@@ -439,10 +539,8 @@ struct Owner::Impl {
         ~CallbackLease() {
             if (!active)
                 return;
-            {
-                std::lock_guard lock(state->mutex);
-                --state->callbacks_in_flight;
-            }
+            std::lock_guard lock(state->mutex);
+            --state->callbacks_in_flight;
         }
 
         explicit operator bool() const noexcept {
@@ -457,14 +555,16 @@ struct Owner::Impl {
                                             const std::uint8_t* payload_json_utf8,
                                             std::size_t payload_len, void* user_data) {
         auto* state = static_cast<Impl*>(user_data);
+        const auto action = bounded_c_text(action_id_utf8, 64U);
         CallbackLease lease(state);
-        if (!lease || action_id_utf8 == nullptr ||
-            (payload_json_utf8 == nullptr && payload_len != 0U))
+        if (!lease || !action.has_value() ||
+            (payload_json_utf8 == nullptr && payload_len != 0U)) {
             return;
+        }
         const std::string_view payload(
             payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
             payload_json_utf8 == nullptr ? 0U : payload_len);
-        (void)state->dispatch(action_id_utf8, payload);
+        (void)state->dispatch(*action, payload);
     }
 
     static void SAO_UI_CALL event_callback(std::int32_t event_kind, void* user_data) {
@@ -487,9 +587,14 @@ struct Owner::Impl {
             return owner_status;
         try {
             std::lock_guard lock(mutex);
-            if (retiring || callbacks_in_flight != 0U)
+            if (retiring || callbacks_in_flight != 0U || worker_active || worker_publishing ||
+                owner_publishing || !tasks.empty()) {
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            }
             operations = std::move(replacement);
+            last_snapshot = {};
+            snapshot_available = false;
+            operation_error.clear();
             return SAO_STATUS_OK;
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
@@ -504,7 +609,8 @@ struct Owner::Impl {
             sao_ui_panel_handle_t existing = nullptr;
             {
                 std::lock_guard lock(mutex);
-                if (creating || retiring)
+                if (creating || retiring || worker_active || worker_publishing ||
+                    owner_publishing || !tasks.empty())
                     return SAO_UI_PANEL_STATUS_ERR_BUSY;
                 existing = panel;
                 if (existing == nullptr) {
@@ -544,13 +650,13 @@ struct Owner::Impl {
                     accepting = true;
                 }
                 if (status == SAO_STATUS_OK)
-                    status = refresh_now();
-                if (status != SAO_STATUS_OK) {
+                    status = enqueue_task(Task{TaskKind::refresh, {}});
+                if (status != SAO_STATUS_OK)
                     return cleanup_failed_create(status);
-                }
                 existing = created_panel;
             } else {
-                const sao_status_t refresh_status = refresh_now();
+                const sao_status_t refresh_status =
+                    enqueue_task(Task{TaskKind::refresh, {}});
                 if (refresh_status != SAO_STATUS_OK)
                     return refresh_status;
             }
@@ -587,15 +693,48 @@ struct Owner::Impl {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        return enqueue_task(Task{TaskKind::refresh, {}});
+    }
+
+    sao_status_t publish_snapshot(Snapshot snapshot) noexcept {
         try {
+            sao_ui_panel_body_handle_t target_body = nullptr;
+            std::string pending_error;
+            bool reload_all_available = false;
             {
                 std::lock_guard lock(mutex);
-                if (creating || retiring)
-                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
-                if (panel == nullptr || body == nullptr)
-                    return SAO_STATUS_ERR_NOT_INITIALIZED;
+                target_body = body;
+                reload_all_available = static_cast<bool>(operations.reload_all);
+                pending_error = operation_error;
+                snapshot.busy = worker_active || !tasks.empty();
             }
-            return refresh_now();
+            if (target_body == nullptr)
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+            snapshot.reload_all_available = reload_all_available;
+            if (!pending_error.empty()) {
+                if (!snapshot.error_message.empty())
+                    snapshot.error_message.append(" ");
+                snapshot.error_message.append(pending_error);
+            }
+            const std::string spec = build_spec_for_testing(snapshot);
+            return sao_ui_panel_body_set_spec(
+                target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
+    sao_status_t publish_cached_state() noexcept {
+        try {
+            Snapshot snapshot;
+            {
+                std::lock_guard lock(mutex);
+                if (snapshot_available)
+                    snapshot = last_snapshot;
+                else
+                    snapshot.error_message = "Loading plugin catalog...";
+            }
+            return publish_snapshot(std::move(snapshot));
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
@@ -604,37 +743,130 @@ struct Owner::Impl {
     sao_status_t refresh_now() noexcept {
         try {
             std::function<Snapshot()> snapshot_operation;
-            sao_ui_panel_body_handle_t target_body = nullptr;
-            std::string pending_error;
-            bool reload_all_available = false;
             {
                 std::lock_guard lock(mutex);
-                target_body = body;
                 snapshot_operation = operations.snapshot;
-                reload_all_available = static_cast<bool>(operations.reload_all);
-                pending_error = operation_error;
             }
-            if (target_body == nullptr)
-                return SAO_STATUS_ERR_NOT_INITIALIZED;
             Snapshot snapshot;
-            if (snapshot_operation) {
+            if (snapshot_operation)
                 snapshot = snapshot_operation();
-            } else {
-                snapshot.error_message =
-                    "Plugin snapshot operation unavailable / 插件快照操作不可用。";
+            else
+                snapshot.error_message = "Plugin snapshot operation unavailable.";
+            {
+                std::lock_guard lock(mutex);
+                last_snapshot = snapshot;
+                snapshot_available = true;
             }
-            snapshot.reload_all_available = reload_all_available;
-            if (!pending_error.empty()) {
-                if (!snapshot.error_message.empty())
-                    snapshot.error_message.append(" ");
-                snapshot.error_message.append(pending_error);
-            }
-            const std::string spec = build_spec_for_testing(snapshot);
-            const sao_status_t status = sao_ui_panel_body_set_spec(
-                target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
-            return status;
+            return publish_snapshot(std::move(snapshot));
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
+    sao_status_t enqueue_task(Task task) noexcept {
+        {
+            std::lock_guard lock(mutex);
+            if (!worker_online || !worker_accepting || !accepting || retiring ||
+                panel == nullptr) {
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+            }
+            if (tasks.size() >= kMaximumTaskQueue)
+                return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            if (task.kind != TaskKind::refresh)
+                operation_error.clear();
+            tasks.push_back(std::move(task));
+            owner_publishing = true;
+        }
+        const sao_status_t publish_status = publish_cached_state();
+        {
+            std::lock_guard lock(mutex);
+            owner_publishing = false;
+        }
+        worker_cv.notify_all();
+        return publish_status;
+    }
+
+    void worker_main(std::stop_token stop) noexcept {
+        while (!stop.stop_requested()) {
+            Task task;
+            std::function<sao_status_t()> reload_all_handler;
+            std::function<sao_status_t(std::string_view)> plugin_handler;
+            try {
+                std::unique_lock lock(mutex);
+                if (!worker_cv.wait(lock, stop, [this] {
+                        return (!tasks.empty() && !owner_publishing) || !worker_accepting;
+                    })) {
+                    break;
+                }
+                if (stop.stop_requested() || !worker_accepting)
+                    break;
+                task = std::move(tasks.front());
+                tasks.pop_front();
+                worker_active = true;
+                if (task.kind == TaskKind::reload_all) {
+                    reload_all_handler = operations.reload_all;
+                } else if (task.kind == TaskKind::enable) {
+                    plugin_handler = operations.enable;
+                } else if (task.kind == TaskKind::disable) {
+                    plugin_handler = operations.disable;
+                } else if (task.kind == TaskKind::reload) {
+                    plugin_handler = operations.reload;
+                }
+            } catch (...) {
+                std::lock_guard lock(mutex);
+                worker_active = false;
+                operation_error = "Plugin operation handler copy failed.";
+                continue;
+            }
+
+            sao_status_t operation_status = task.kind == TaskKind::refresh
+                                                ? SAO_STATUS_OK
+                                                : SAO_STATUS_ERR_CAPABILITY_MISSING;
+            try {
+                if (task.kind == TaskKind::reload_all) {
+                    if (reload_all_handler)
+                        operation_status = reload_all_handler();
+                } else if (task.kind != TaskKind::refresh && plugin_handler) {
+                    operation_status = plugin_handler(task.plugin_id);
+                }
+            } catch (...) {
+                operation_status = SAO_STATUS_ERR_UNKNOWN;
+            }
+
+            {
+                std::lock_guard lock(mutex);
+                if (operation_status == SAO_STATUS_OK) {
+                    if (task.kind != TaskKind::refresh)
+                        operation_error.clear();
+                } else if (task.kind == TaskKind::reload_all) {
+                    operation_error = status_message("Reload All", operation_status);
+                } else {
+                    operation_error = status_message(
+                        std::string(task.kind == TaskKind::enable
+                                        ? kActionEnable
+                                        : task.kind == TaskKind::disable ? kActionDisable
+                                                                         : kActionReload) +
+                            " for " + task.plugin_id,
+                        operation_status);
+                }
+                worker_active = false;
+                worker_publishing = true;
+            }
+            const sao_status_t refresh_status = refresh_now();
+            bool republish_error = false;
+            {
+                std::lock_guard lock(mutex);
+                if (refresh_status != SAO_STATUS_OK && operation_error.empty()) {
+                    operation_error = status_message("Plugin Manager refresh", refresh_status);
+                    republish_error = true;
+                }
+            }
+            if (republish_error)
+                (void)publish_cached_state();
+            {
+                std::lock_guard lock(mutex);
+                worker_publishing = false;
+            }
         }
     }
 
@@ -642,81 +874,36 @@ struct Owner::Impl {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        if (!valid_text(action_id, 64U, true) ||
+            payload_json.size() > kMaximumActionPayloadBytes ||
+            payload_json.find('\0') != std::string_view::npos || !valid_utf8(payload_json)) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
         if (action_id == kActionRefresh) {
             clear_operation_message();
             return refresh();
         }
+        if (action_id == kActionReloadAll)
+            return enqueue_task(Task{TaskKind::reload_all, {}});
 
-        if (action_id == kActionReloadAll) {
-            std::function<sao_status_t()> handler;
-            try {
-                std::lock_guard lock(mutex);
-                handler = operations.reload_all;
-            } catch (...) {
-                set_operation_error("Reload All handler copy failed.");
-                (void)refresh();
-                return SAO_STATUS_ERR_UNKNOWN;
-            }
-            sao_status_t operation = SAO_STATUS_ERR_CAPABILITY_MISSING;
-            if (handler) {
-                try {
-                    operation = handler();
-                } catch (...) {
-                    operation = SAO_STATUS_ERR_UNKNOWN;
-                }
-            }
-            if (operation == SAO_STATUS_OK)
-                clear_operation_message();
-            else
-                set_operation_error(status_message("Reload All", operation));
-            const sao_status_t refresh_status = refresh();
-            return operation == SAO_STATUS_OK ? refresh_status : operation;
-        }
-
-        if (action_id != kActionEnable && action_id != kActionDisable &&
-            action_id != kActionReload) {
-            set_operation_error("Unknown Plugin Manager action: " + std::string(action_id));
-            (void)refresh();
-            return SAO_STATUS_ERR_NOT_FOUND;
-        }
-
-        const Json payload = Json::parse(payload_json.begin(), payload_json.end(), nullptr, false);
-        if (!payload.is_string() || payload.get_ref<const std::string&>().empty()) {
-            set_operation_error("Plugin action payload must be the plugin id JSON string.");
-            (void)refresh();
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        }
-        const std::string plugin_id = payload.get<std::string>();
-        std::function<sao_status_t(std::string_view)> handler;
-        try {
-            std::lock_guard lock(mutex);
-            if (action_id == kActionEnable)
-                handler = operations.enable;
-            else if (action_id == kActionDisable)
-                handler = operations.disable;
-            else
-                handler = operations.reload;
-        } catch (...) {
-            set_operation_error("Plugin operation handler copy failed.");
-            (void)refresh();
-            return SAO_STATUS_ERR_UNKNOWN;
-        }
-
-        sao_status_t operation = SAO_STATUS_ERR_CAPABILITY_MISSING;
-        if (handler) {
-            try {
-                operation = handler(plugin_id);
-            } catch (...) {
-                operation = SAO_STATUS_ERR_UNKNOWN;
-            }
-        }
-        if (operation == SAO_STATUS_OK)
-            clear_operation_message();
+        TaskKind kind{};
+        if (action_id == kActionEnable)
+            kind = TaskKind::enable;
+        else if (action_id == kActionDisable)
+            kind = TaskKind::disable;
+        else if (action_id == kActionReload)
+            kind = TaskKind::reload;
         else
-            set_operation_error(
-                status_message(std::string(action_id) + " for " + plugin_id, operation));
-        const sao_status_t refresh_status = refresh();
-        return operation == SAO_STATUS_OK ? refresh_status : operation;
+            return SAO_STATUS_ERR_NOT_FOUND;
+
+        const Json payload =
+            Json::parse(payload_json.begin(), payload_json.end(), nullptr, false, false);
+        if (!payload.is_string())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::string plugin_id = payload.get<std::string>();
+        if (!valid_text(plugin_id, kMaximumPluginIdBytes, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return enqueue_task(Task{kind, std::move(plugin_id)});
     }
 
     sao_status_t dispatch_event(std::int32_t event_kind) noexcept {
@@ -743,6 +930,11 @@ struct Owner::Impl {
         return lease ? dispatch_event(event_kind) : SAO_UI_PANEL_STATUS_ERR_BUSY;
     }
 
+    void fail_next_unregister_for_testing(sao_status_t status) noexcept {
+        std::lock_guard lock(mutex);
+        fail_next_unregister_status = status;
+    }
+
     sao_status_t take_offline() noexcept {
         {
             std::lock_guard lock(mutex);
@@ -758,11 +950,12 @@ struct Owner::Impl {
         bool was_accepting = false;
         {
             std::lock_guard lock(mutex);
-            if (creating || retiring || callbacks_in_flight != 0U)
+            if (creating || retiring || callbacks_in_flight != 0U || worker_active ||
+                worker_publishing || owner_publishing || !tasks.empty()) {
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
-            if (panel == nullptr) {
-                return SAO_STATUS_OK;
             }
+            if (panel == nullptr)
+                return SAO_STATUS_OK;
             retiring = true;
             target_panel = panel;
             had_action = action_handler_attached;
@@ -782,8 +975,14 @@ struct Owner::Impl {
             status = sao_ui_panel_set_event_handler(target_panel, nullptr, nullptr);
             event_detached = status == SAO_STATUS_OK;
         }
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_panel_unregister(target_panel);
+        if (status == SAO_STATUS_OK) {
+            sao_status_t injected = SAO_STATUS_OK;
+            {
+                std::lock_guard lock(mutex);
+                injected = std::exchange(fail_next_unregister_status, SAO_STATUS_OK);
+            }
+            status = injected == SAO_STATUS_OK ? sao_ui_panel_unregister(target_panel) : injected;
+        }
 
         if (status == SAO_STATUS_OK) {
             std::lock_guard lock(mutex);
@@ -792,22 +991,28 @@ struct Owner::Impl {
             action_handler_attached = false;
             event_handler_attached = false;
             accepting = false;
+            last_snapshot = {};
+            snapshot_available = false;
+            operation_error.clear();
             retiring = false;
             return SAO_STATUS_OK;
         }
 
         bool action_restored = !had_action;
         bool event_restored = !had_event;
-        if (had_event && event_detached)
+        if (had_event && event_detached) {
             event_restored = sao_ui_panel_set_event_handler(target_panel, &event_callback, this) ==
                              SAO_STATUS_OK;
-        else if (had_event)
+        } else if (had_event) {
             event_restored = true;
-        if (had_action && action_detached)
-            action_restored = sao_ui_panel_set_action_handler(target_panel, &action_callback,
-                                                              this) == SAO_STATUS_OK;
-        else if (had_action)
+        }
+        if (had_action && action_detached) {
+            action_restored =
+                sao_ui_panel_set_action_handler(target_panel, &action_callback, this) ==
+                SAO_STATUS_OK;
+        } else if (had_action) {
             action_restored = true;
+        }
 
         {
             std::lock_guard lock(mutex);
@@ -841,14 +1046,6 @@ struct Owner::Impl {
         operation_error.clear();
     }
 
-    void set_operation_error(std::string message) noexcept {
-        try {
-            std::lock_guard lock(mutex);
-            operation_error = std::move(message);
-        } catch (...) {
-        }
-    }
-
     void finish_create_failure() noexcept {
         std::lock_guard lock(mutex);
         creating = false;
@@ -864,22 +1061,61 @@ struct Owner::Impl {
         return teardown_status == SAO_STATUS_OK ? primary_status : teardown_status;
     }
 
+    void stop_worker() noexcept {
+        {
+            std::lock_guard lock(mutex);
+            worker_accepting = false;
+            tasks.clear();
+        }
+        worker_cv.notify_all();
+        if (worker.joinable()) {
+            worker.request_stop();
+            worker_cv.notify_all();
+            worker.join();
+        }
+        std::lock_guard lock(mutex);
+        worker_active = false;
+        worker_publishing = false;
+        owner_publishing = false;
+        worker_online = false;
+    }
+
     bool shutdown_noexcept() noexcept {
-        return take_offline() == SAO_STATUS_OK;
+        stop_worker();
+        if (panel_handle() == nullptr)
+            return true;
+        if (require_owner_thread() != SAO_STATUS_OK)
+            return false;
+        for (int attempt = 0; attempt < 2 && panel_handle() != nullptr; ++attempt) {
+            if (take_offline() == SAO_STATUS_OK)
+                break;
+        }
+        return panel_handle() == nullptr;
     }
 
     sao_ui_compositor_handle_t compositor{};
     mutable std::mutex mutex;
+    std::condition_variable_any worker_cv;
+    std::deque<Task> tasks;
+    std::jthread worker;
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
     Operations operations;
+    Snapshot last_snapshot;
     std::string operation_error;
+    sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
     std::size_t callbacks_in_flight{};
     bool action_handler_attached{};
     bool event_handler_attached{};
     bool accepting{};
     bool creating{};
     bool retiring{};
+    bool worker_accepting{true};
+    bool worker_online{};
+    bool worker_active{};
+    bool worker_publishing{};
+    bool owner_publishing{};
+    bool snapshot_available{};
 };
 
 Owner::Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept
@@ -951,6 +1187,11 @@ sao_status_t Owner::dispatch_action_for_testing(std::string_view action_id,
 sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
                             : impl_->dispatch_event_for_testing(event_kind);
+}
+
+void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept {
+    if (impl_ != nullptr)
+        impl_->fail_next_unregister_for_testing(status);
 }
 
 } // namespace sao::launcher::plugin_manager_panel

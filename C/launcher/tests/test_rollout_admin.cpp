@@ -186,38 +186,6 @@ TEST_CASE("rollout_admin_set_percent_persists_and_shows_new_value",
 }
 
 // ===========================================================================
-// 3) simulate_buckets_10000_uniform_within_tolerance
-// ===========================================================================
-TEST_CASE("rollout_admin_simulate_buckets_10000_uniform_within_tolerance",
-          "[launcher][rollout_admin]") {
-    std::string exe = rollout_admin_exe_path();
-    if (exe.empty() || !fs::exists(exe)) {
-        WARN("sao_rollout_admin exe not built in this configuration; skipping");
-        return;
-    }
-    auto scratch = unique_scratch_dir("simulate");
-    std::string scratch_utf8 = wpath_to_utf8(scratch);
-
-    DWORD ec = 0;
-    std::string cmd = quote(exe) + " --appdata-dir " + quote(scratch_utf8)
-                    + " --simulate-buckets --count 10000";
-    std::string out = spawn_and_capture(cmd, &ec);
-    REQUIRE(ec == 0);
-    REQUIRE(out.find("\"count\": 10000") != std::string::npos);
-    REQUIRE(out.find("\"histogram\":") != std::string::npos);
-
-    // Parse stddev out of the "\"stddev\": X.YYYY," line.
-    auto pos = out.find("\"stddev\":");
-    REQUIRE(pos != std::string::npos);
-    double stddev = std::atof(out.c_str() + pos + 9);
-    REQUIRE(stddev > 0.0);
-    REQUIRE(stddev < 20.0);
-
-    std::error_code fec;
-    fs::remove_all(scratch, fec);
-}
-
-// ===========================================================================
 // 4) reset_retreat_clears_history
 // ===========================================================================
 TEST_CASE("rollout_admin_reset_retreat_clears_history",

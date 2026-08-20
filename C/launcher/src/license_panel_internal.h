@@ -7,6 +7,7 @@
 #pragma once
 
 #include "sao/core/status.h"
+#include "sao/ui/abi.h"
 
 #include <cstdint>
 #include <functional>
@@ -66,6 +67,7 @@ struct Snapshot {
     std::string tier;
     std::uint64_t expiry_ms{};
     bool activated{};
+    std::string rendered_spec_json;
 };
 
 class Owner final {
@@ -85,6 +87,7 @@ class Owner final {
     // Owner-thread, retryable panel retirement. Any failure preserves the
     // registered panel and callback ownership for a later retry.
     sao_status_t take_offline() noexcept;
+    sao_status_t dispatch_event_for_testing(std::int32_t event_kind) noexcept;
     sao_status_t dispatch_action(std::string_view action_id,
                                  std::string_view payload_json = {}) noexcept;
     sao_status_t snapshot(Snapshot& out) const noexcept;
@@ -101,12 +104,14 @@ class Owner final {
     void handle_panel_event(std::int32_t event_kind) noexcept;
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
-    void run_activation(std::string key) noexcept;
+    sao_status_t run_activation(std::string key) noexcept;
 
-    static void panel_action_callback(const char* action_id_utf8,
-                                      const std::uint8_t* payload_json_utf8,
-                                      std::size_t payload_len, void* user_data) noexcept;
-    static void panel_event_callback(std::int32_t event_kind, void* user_data) noexcept;
+    static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
+                                                  const std::uint8_t* payload_json_utf8,
+                                                  std::size_t payload_len,
+                                                  void* user_data) noexcept;
+    static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
+                                                 void* user_data) noexcept;
     static void activation_thread_main(Owner* owner, std::string key) noexcept;
 
     std::unique_ptr<State> state_;

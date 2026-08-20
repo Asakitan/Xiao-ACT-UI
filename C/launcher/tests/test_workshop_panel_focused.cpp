@@ -255,13 +255,8 @@ TEST_CASE("Workshop panel freezes the white-gold theme and native spec",
     CHECK(descriptor.auto_scroll);
     CHECK_FALSE(descriptor.visible);
 
-    const auto theme = nlohmann::json::parse(sao::launcher::workshop_panel::theme_override_json());
-    REQUIRE(theme.contains("colors"));
-    CHECK(theme["colors"]["APP_BG"] == "#FFFCF5");
-    CHECK(theme["colors"]["APP_CARD"] == "#FFFFFF");
-    CHECK(theme["colors"]["APP_BORDER"] == "#E2D5B0");
-    CHECK(theme["colors"]["APP_GOLD"] == "#D4A520");
-    CHECK(theme["colors"]["APP_ACCENT"] == "#2FA9B8");
+    CHECK(sao::launcher::workshop_panel::theme_override_json() == nullptr);
+    CHECK(descriptor.theme_override_json_utf8 == nullptr);
 
     BoundCompositor compositor;
     TempDirectory base;
@@ -271,9 +266,12 @@ TEST_CASE("Workshop panel freezes the white-gold theme and native spec",
     REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
 
     const auto snapshot = owner.snapshot();
+    const nlohmann::json spec = nlohmann::json::parse(snapshot.last_spec);
     CHECK(snapshot.visible);
     CHECK(snapshot.items.size() == 2);
-    CHECK(snapshot.last_spec.find("Plugin Workshop") != std::string::npos);
+    CHECK(snapshot.last_spec.find("Plugin Workshop") == std::string::npos);
+    CHECK(snapshot.last_spec.find("#") == std::string::npos);
+    CHECK(spec.dump().find("section") != std::string::npos);
     CHECK(snapshot.last_spec.find("Catalog") != std::string::npos);
     CHECK(snapshot.last_spec.find("Task Center") != std::string::npos);
     CHECK(snapshot.last_spec.find("workshop.refresh") != std::string::npos);
@@ -529,4 +527,52 @@ TEST_CASE("Workshop destructor retries a transient unregister failure without lo
     }
 
     CHECK(panel_count() == before);
+}
+
+
+TEST_CASE("Workshop item count boundary rejects backend overflow",
+          "[launcher][workshop][item_count][bounds][focused]") {
+    using sao::launcher::workshop_panel::item_count_within_capacity_for_testing;
+
+    CHECK(item_count_within_capacity_for_testing(0U, 12U, 12U));
+    CHECK(item_count_within_capacity_for_testing(12U, 12U, 12U));
+    CHECK_FALSE(item_count_within_capacity_for_testing(13U, 12U, 12U));
+    CHECK_FALSE(item_count_within_capacity_for_testing(12U, 11U, 12U));
+    CHECK_FALSE(item_count_within_capacity_for_testing(12U, 12U, 11U));
+}
+
+TEST_CASE("Workshop rejects malformed bounded JSON without queue mutation",
+          "[launcher][workshop][json][bounds][focused]") {
+    BoundCompositor compositor;
+    TempDirectory base;
+    FakeBackend backend;
+    Owner owner(compositor.get(), base.root, backend.operations());
+    REQUIRE(owner.open() == SAO_STATUS_OK);
+    REQUIRE(service_until(owner, [&] { return owner.snapshot().completed_operations >= 1; }));
+    const auto before = owner.snapshot();
+
+    CHECK(owner.dispatch_action_for_testing("workshop.plugin.detail", "{") ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(owner.dispatch_action_for_testing("workshop.plugin.detail", R"({"id":7})") ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(owner.dispatch_action_for_testing("workshop.plugin.detail",
+                                            R"({"id":"../escape"})") ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    std::string embedded_nul = R"({"id":"com.example.alpha"})";
+    embedded_nul.push_back('\0');
+    CHECK(owner.dispatch_action_for_testing(
+              "workshop.plugin.detail",
+              std::string_view(embedded_nul.data(), embedded_nul.size())) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    const std::string oversized_payload(1025U, 'x');
+    CHECK(owner.dispatch_action_for_testing("workshop.plugin.detail", oversized_payload) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    const std::string oversized_action(65U, 'x');
+    CHECK(owner.dispatch_action_for_testing(oversized_action, "{}") ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    const auto after = owner.snapshot();
+    CHECK(after.queued_operations == before.queued_operations);
+    CHECK(after.completed_operations == before.completed_operations);
+    REQUIRE(owner.try_take_offline() == SAO_STATUS_OK);
 }

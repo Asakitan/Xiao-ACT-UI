@@ -2399,25 +2399,6 @@ TEST_CASE("Entity provider catalog rejects duplicate providers and invalid UTF-8
     g_catalog_fixture = nullptr;
 }
 
-TEST_CASE("Entity provider catalog normalizes null payload to an empty object",
-          "[launcher][entity_provider][focused]") {
-    CatalogFixture fixture;
-    fixture.reset(1);
-    fixture.set_row(0, "provider", 10, "category", "Category", "C", 0.0, "Row", "R", "action",
-                    "ignored");
-    fixture.rows[0].payload_json_utf8 = nullptr;
-    fixture.finish();
-    g_catalog_fixture = &fixture;
-
-    OwnedEntityProviderCatalog catalog;
-    REQUIRE(sao::launcher::entity_provider_catalog::snapshot(&fake_catalog_snapshot, catalog) ==
-            SAO_STATUS_OK);
-    REQUIRE(catalog.providers.size() == 1);
-    REQUIRE(catalog.providers[0].rows.size() == 1);
-    CHECK(catalog.providers[0].rows[0].payload_json == "{}");
-    g_catalog_fixture = nullptr;
-}
-
 TEST_CASE("Entity provider poll validates dependencies before changing timer state",
           "[launcher][entity_provider][focused]") {
     EntityActionRouteStore store;

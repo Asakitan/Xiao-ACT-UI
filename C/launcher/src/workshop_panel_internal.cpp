@@ -41,9 +41,6 @@ constexpr std::uint32_t kMaximumPage = 1'000'000;
 constexpr std::uint32_t kMaximumTotal = 1'000'000;
 constexpr std::size_t kDownloadPathCapacity = 32U * 1024U;
 
-constexpr char kThemeOverride[] =
-    R"({"colors":{"APP_BG":"#FFFCF5","APP_CARD":"#FFFFFF","APP_BORDER":"#E2D5B0","APP_TEXT":"#3D3929","APP_TEXT_2":"#8B7D5A","APP_TEXT_DIM":"#9A9488","APP_ACCENT":"#2FA9B8","APP_BLUE":"#2FA9B8","APP_GREEN":"#5EAA6C","APP_RED":"#D04040","APP_ORANGE":"#D4A520","APP_GOLD":"#D4A520"}})";
-
 bool valid_utf8(std::string_view value) noexcept {
     std::size_t offset = 0;
     while (offset < value.size()) {
@@ -89,6 +86,20 @@ bool valid_utf8(std::string_view value) noexcept {
 bool valid_string(std::string_view value, std::size_t maximum, bool required) noexcept {
     return (!required || !value.empty()) && value.size() <= maximum &&
            value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+std::optional<std::string_view> bounded_c_text(const char* value,
+                                               std::size_t maximum) noexcept {
+    if (value == nullptr)
+        return std::nullopt;
+    const void* terminator = std::memchr(value, '\0', maximum + 1U);
+    if (terminator == nullptr)
+        return std::nullopt;
+    const auto length =
+        static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
+    const std::string_view result(value, length);
+    return valid_string(result, maximum, true) ? std::optional<std::string_view>(result)
+                                                : std::nullopt;
 }
 
 bool valid_plugin_id(std::string_view id) noexcept {
@@ -166,6 +177,19 @@ bool valid_base_dir(const std::filesystem::path& base_dir) {
         return false;
     const std::string value = path_to_utf8(base_dir);
     return valid_string(value, kMaximumBasePathBytes, true);
+}
+
+std::string bounded_text(std::string value, std::size_t maximum) {
+    if (value.size() <= maximum)
+        return value;
+    if (maximum <= 3U)
+        return value.substr(0, maximum);
+    std::size_t end = maximum - 3U;
+    while (end > 0U && (static_cast<unsigned char>(value[end]) & 0xc0U) == 0x80U)
+        --end;
+    value.resize(end);
+    value.append("...");
+    return value;
 }
 
 bool path_is_within(const std::filesystem::path& root, const std::filesystem::path& candidate) {
@@ -274,29 +298,34 @@ std::string status_text(sao_status_t status) {
 }
 
 json text_node(std::string text, std::string_view style = "value", std::int32_t height = 24) {
-    return json{{"type", "text"}, {"text", std::move(text)}, {"style", style}, {"height", height}};
+    return json{{"type", "text"}, {"text", bounded_text(std::move(text), 4096U)}, {"style", style}, {"height", height}};
 }
 
 json badge_node(std::string text, std::string_view style) {
-    return json{{"type", "badge"}, {"text", std::move(text)}, {"style", style}, {"height", 22}};
+    return json{{"type", "badge"}, {"text", bounded_text(std::move(text), 256U)}, {"style", style}, {"height", 22}};
 }
 
 json row_node(json children) {
     return json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-json card_node(std::string title, json children, std::string_view accent) {
+json card_node(std::string title, json children) {
     return json{{"type", "card"},
-                {"title", std::move(title)},
-                {"accent", accent},
+                {"title", bounded_text(std::move(title), 512U)},
+                {"children", std::move(children)}};
+}
+
+json section_node(std::string title, json children) {
+    return json{{"type", "section"},
+                {"title", bounded_text(std::move(title), 512U)},
                 {"children", std::move(children)}};
 }
 
 json button_node(std::string id, std::string label, std::string action, json payload,
-                 std::string_view style, bool disabled) {
+                 std::string_view style = "default", bool disabled = false) {
     json node{{"type", "button"},
               {"id", std::move(id)},
-              {"label", std::move(label)},
+              {"label", bounded_text(std::move(label), 256U)},
               {"action", std::move(action)},
               {"style", style},
               {"height", 28}};
@@ -342,6 +371,12 @@ sao_status_t parse_plugin_id(std::string_view payload_json, std::string& id_out)
 
 } // namespace
 
+bool item_count_within_capacity_for_testing(std::uint32_t item_count,
+                                            std::uint32_t item_cap,
+                                            std::uint32_t requested_size) noexcept {
+    return item_count <= item_cap && item_count <= requested_size;
+}
+
 bool Operations::complete() const noexcept {
     return static_cast<bool>(list) && static_cast<bool>(detail) && static_cast<bool>(download) &&
            static_cast<bool>(verify) && static_cast<bool>(install) && static_cast<bool>(uninstall);
@@ -361,6 +396,10 @@ Operations make_production_operations() {
             map_workshop_status(sao_workshop_list_plugins(page, size, nullptr, &raw));
         if (status != SAO_STATUS_OK || stop.stop_requested())
             return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : status;
+        if (!item_count_within_capacity_for_testing(raw.item_count, raw.item_cap, size) ||
+            raw.item_count > items.size()) {
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
         PluginPage candidate;
         candidate.page = raw.page;
         candidate.size = raw.size;
@@ -446,7 +485,7 @@ Operations make_production_operations() {
 }
 
 const char* theme_override_json() noexcept {
-    return kThemeOverride;
+    return nullptr;
 }
 
 SaoPanelDescriptor panel_descriptor() noexcept {
@@ -466,7 +505,7 @@ SaoPanelDescriptor panel_descriptor() noexcept {
     descriptor.visible = false;
     descriptor.remember_geometry = true;
     descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
-    descriptor.theme_override_json_utf8 = kThemeOverride;
+    descriptor.theme_override_json_utf8 = nullptr;
     descriptor.initial_opacity = 1.0F;
     descriptor.auto_scroll = true;
     return descriptor;
@@ -527,13 +566,23 @@ class Owner::Impl final {
     }
 
     bool shutdown_noexcept() noexcept {
-        stop_and_join();
-        if (panel_handle() == nullptr)
+        if (panel_handle() == nullptr) {
+            stop_and_join();
             return true;
+        }
         if (require_owner_thread() != SAO_STATUS_OK)
             return false;
+        bool worker_stopped = false;
         for (int attempt = 0; attempt < 2 && panel_handle() != nullptr; ++attempt) {
-            if (retire_panel() == SAO_STATUS_OK)
+            if (claim_retirement() != SAO_STATUS_OK)
+                return false;
+            if (!worker_stopped) {
+                stop_and_join();
+                worker_stopped = true;
+            }
+            const sao_status_t status = retire_panel_claimed();
+            release_retirement_claim(status);
+            if (status == SAO_STATUS_OK)
                 break;
         }
         return panel_handle() == nullptr;
@@ -630,8 +679,13 @@ class Owner::Impl final {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        const sao_status_t claim_status = claim_retirement();
+        if (claim_status != SAO_STATUS_OK)
+            return claim_status;
         stop_and_join();
-        return retire_panel();
+        const sao_status_t status = retire_panel_claimed();
+        release_retirement_claim(status);
+        return status;
     }
 
     void set_visibility_changed_callback(VisibilityChangedCallback callback) {
@@ -698,8 +752,15 @@ class Owner::Impl final {
         return SAO_STATUS_ERR_NOT_FOUND;
     }
 
+    sao_status_t dispatch_action_for_testing(std::string_view action,
+                                             std::string_view payload_json) {
+        CallbackLease lease(this);
+        return lease ? dispatch_action(action, payload_json) : SAO_UI_PANEL_STATUS_ERR_BUSY;
+    }
+
     sao_status_t dispatch_panel_event_for_testing(std::int32_t event_kind) {
-        return handle_panel_event(event_kind);
+        CallbackLease lease(this);
+        return lease ? handle_panel_event(event_kind) : SAO_UI_PANEL_STATUS_ERR_BUSY;
     }
 
     void fail_next_unregister_for_testing(sao_status_t status) noexcept {
@@ -730,24 +791,52 @@ class Owner::Impl final {
     }
 
   private:
+    struct CallbackLease final {
+        explicit CallbackLease(Impl* candidate) noexcept : state(candidate) {
+            if (state == nullptr)
+                return;
+            std::lock_guard lock(state->mutex_);
+            if (!state->callback_accepting_ || state->retiring_ || state->panel_ == nullptr)
+                return;
+            ++state->callbacks_in_flight_;
+            active = true;
+        }
+
+        ~CallbackLease() {
+            if (!active)
+                return;
+            std::lock_guard lock(state->mutex_);
+            --state->callbacks_in_flight_;
+        }
+
+        explicit operator bool() const noexcept {
+            return active;
+        }
+
+        Impl* state{};
+        bool active{};
+    };
+
     static void SAO_UI_CALL panel_action_callback(const char* action_key,
                                                   const std::uint8_t* payload,
                                                   std::size_t payload_len, void* user_data) {
         auto* self = static_cast<Impl*>(user_data);
-        if (self == nullptr || action_key == nullptr || (payload == nullptr && payload_len != 0)) {
+        const auto action = bounded_c_text(action_key, 64U);
+        CallbackLease lease(self);
+        if (!lease || !action.has_value() || (payload == nullptr && payload_len != 0U))
             return;
-        }
         try {
             const std::string_view payload_view(
                 payload == nullptr ? "" : reinterpret_cast<const char*>(payload), payload_len);
-            (void)self->dispatch_action(action_key, payload_view);
+            (void)self->dispatch_action(*action, payload_view);
         } catch (...) {
         }
     }
 
     static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind, void* user_data) {
         auto* self = static_cast<Impl*>(user_data);
-        if (self == nullptr)
+        CallbackLease lease(self);
+        if (!lease)
             return;
         (void)self->handle_panel_event(event_kind);
     }
@@ -791,6 +880,7 @@ class Owner::Impl final {
             panel_ready_ = false;
             action_handler_attached_ = false;
             event_handler_attached_ = false;
+            callback_accepting_ = false;
         }
         status = sao_ui_panel_set_action_handler(panel, &panel_action_callback, this);
         if (status == SAO_STATUS_OK) {
@@ -802,6 +892,7 @@ class Owner::Impl final {
         if (status == SAO_STATUS_OK) {
             std::lock_guard lock(mutex_);
             event_handler_attached_ = true;
+            callback_accepting_ = true;
         }
         if (status == SAO_STATUS_OK)
             status = publish_spec(true);
@@ -821,8 +912,10 @@ class Owner::Impl final {
             }
             if (event_status == SAO_STATUS_OK) {
                 std::lock_guard lock(mutex_);
-                if (panel_ == panel)
+                if (panel_ == panel) {
                     event_handler_attached_ = false;
+                    callback_accepting_ = false;
+                }
             }
             const sao_status_t action_status =
                 sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
@@ -832,8 +925,10 @@ class Owner::Impl final {
             }
             if (action_status == SAO_STATUS_OK) {
                 std::lock_guard lock(mutex_);
-                if (panel_ == panel)
+                if (panel_ == panel) {
                     action_handler_attached_ = false;
+                    callback_accepting_ = false;
+                }
             }
             const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
             if (unregister_status == SAO_STATUS_OK || panel_is_gone(unregister_status))
@@ -1091,129 +1186,112 @@ class Owner::Impl final {
         }
         return "Workshop operation";
     }
-
     std::string build_spec() const {
         json nodes = json::array();
         const bool busy = worker_active_ || !tasks_.empty();
-        json app_bar = json::array();
-        app_bar.push_back(text_node("◇ Plugin Workshop", "title", 32));
+        json controls = json::array();
         json status_badges = json::array();
-        status_badges.push_back(
-            badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
+        status_badges.push_back(badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
         status_badges.push_back(badge_node("Page " + std::to_string(current_page_), "accent"));
         status_badges.push_back(badge_node(std::to_string(total_) + " plugins", "gold"));
-        app_bar.push_back(row_node(std::move(status_badges)));
+        controls.push_back(row_node(std::move(status_badges)));
         json navigation = json::array();
-        navigation.push_back(button_node("workshop.refresh", "Refresh", "workshop.refresh",
-                                         json::object(), "primary", busy));
+        navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "Refresh" : "Retry",
+                                         "workshop.refresh", json::object(), "primary", busy));
         navigation.push_back(button_node("workshop.previous", "Previous", "workshop.page.previous",
                                          json::object(), "default", busy || current_page_ <= 1));
-        navigation.push_back(
-            button_node("workshop.next", "Next", "workshop.page.next", json::object(), "default",
-                        busy || !next_page_available(current_page_, page_size_, total_)));
+        navigation.push_back(button_node("workshop.next", "Next", "workshop.page.next", json::object(),
+                                         "default", busy || !next_page_available(current_page_, page_size_, total_)));
         navigation.push_back(button_node("workshop.close", "Close", "workshop.close",
                                          json::object(), "ghost", false));
-        app_bar.push_back(row_node(std::move(navigation)));
-        nodes.push_back(card_node("Workshop", std::move(app_bar), "gold"));
+        controls.push_back(row_node(std::move(navigation)));
+        nodes.push_back(section_node("Controls", std::move(controls)));
 
         json catalog = json::array();
-        catalog.push_back(text_node("Catalog", "title", 28));
         if (items_.empty()) {
-            catalog.push_back(text_node(busy ? "Loading plugins..." : "No plugins on this page.",
-                                        "muted", 38));
+            catalog.push_back(text_node(busy ? "Loading plugins..." : "No plugins on this page.", "muted", 38));
+            if (!busy)
+                catalog.push_back(button_node("workshop.catalog-retry", "Refresh", "workshop.refresh",
+                                              json::object(), "primary"));
         } else {
             for (std::size_t index = 0; index < items_.size(); ++index) {
                 const PluginSummary& item = items_[index];
-                json row = json::array();
-                row.push_back(text_node(item.name + " · v" + item.version, "value", 24));
-                row.push_back(text_node(item.author.empty() ? item.id : item.author, "muted", 22));
-                row.push_back(badge_node(format_rating(item.rating), "gold"));
-                row.push_back(badge_node(std::to_string(item.downloads) + " downloads", "accent"));
+                json details = json::array();
+                json metadata = json::array();
+                metadata.push_back(badge_node("v" + item.version, "accent"));
+                metadata.push_back(badge_node(item.tag.empty() ? "untagged" : item.tag, "muted"));
+                metadata.push_back(badge_node(item.author.empty() ? item.id : item.author, "muted"));
+                details.push_back(row_node(std::move(metadata)));
+                json metrics = json::array();
+                metrics.push_back(badge_node(format_rating(item.rating), "gold"));
+                metrics.push_back(badge_node(std::to_string(item.downloads) + " downloads", "accent"));
+                details.push_back(row_node(std::move(metrics)));
                 const json payload{{"id", item.id}};
-                row.push_back(button_node("detail." + std::to_string(index), "View",
-                                          "workshop.plugin.detail", payload, "default", busy));
-                row.push_back(button_node("install." + std::to_string(index), "Install",
-                                          "workshop.plugin.install", payload, "primary", busy));
-                row.push_back(button_node("uninstall." + std::to_string(index), "Remove",
-                                          "workshop.plugin.uninstall", payload, "danger", busy));
-                catalog.push_back(row_node(std::move(row)));
+                json actions = json::array();
+                actions.push_back(button_node("detail." + std::to_string(index), "View",
+                                              "workshop.plugin.detail", payload, "default", busy));
+                actions.push_back(button_node("install." + std::to_string(index), "Install",
+                                              "workshop.plugin.install", payload, "primary", busy));
+                actions.push_back(button_node("uninstall." + std::to_string(index), "Remove",
+                                              "workshop.plugin.uninstall", payload, "danger", busy));
+                details.push_back(row_node(std::move(actions)));
+                catalog.push_back(card_node(item.name + " · v" + item.version, std::move(details)));
             }
         }
+        nodes.push_back(section_node("Catalog", std::move(catalog)));
 
         json detail_children = json::array();
-        detail_children.push_back(text_node("Plugin Detail", "title", 28));
         if (detail_.has_value()) {
             const PluginDetail& detail = *detail_;
-            detail_children.push_back(
-                text_node(detail.summary.name + "  v" + detail.summary.version, "title", 30));
-            detail_children.push_back(text_node(
-                detail.description.empty() ? "No description supplied." : detail.description,
-                "value", 72));
-            detail_children.push_back(text_node("Package: " + format_bytes(detail.size_bytes) +
-                                                    " · " + detail.signature_algorithm,
-                                                "muted", 28));
-            detail_children.push_back(
-                text_node("Minimum client: " + std::to_string(detail.min_client_version_major) +
+            detail_children.push_back(row_node(json::array({
+                badge_node("v" + detail.summary.version, "accent"),
+                badge_node(detail.summary.tag.empty() ? "untagged" : detail.summary.tag, "muted"),
+                badge_node(detail.summary.author.empty() ? detail.summary.id : detail.summary.author, "muted")})));
+            detail_children.push_back(text_node(detail.description.empty() ? "No description supplied."
+                                                                            : bounded_text(detail.description, 640U),
+                                                "value", 72));
+            detail_children.push_back(text_node("Package: " + format_bytes(detail.size_bytes) + " · " +
+                                                    detail.signature_algorithm, "muted", 28));
+            detail_children.push_back(text_node("Minimum client: " + std::to_string(detail.min_client_version_major) +
                               "." + std::to_string(detail.min_client_version_minor) + "." +
-                              std::to_string(detail.min_client_version_patch),
-                          "muted", 24));
+                              std::to_string(detail.min_client_version_patch), "muted", 24));
             detail_children.push_back(text_node("SHA-256 " + detail.sha256_hex, "mono", 30));
             const json payload{{"id", detail.summary.id}};
             json detail_actions = json::array();
-            detail_actions.push_back(button_node("detail.install", "Install",
-                                                 "workshop.plugin.install", payload, "primary",
-                                                 busy));
-            detail_actions.push_back(button_node("detail.remove", "Remove",
-                                                 "workshop.plugin.uninstall", payload, "danger",
-                                                 busy));
+            detail_actions.push_back(button_node("detail.install", "Install", "workshop.plugin.install",
+                                                 payload, "primary", busy));
+            detail_actions.push_back(button_node("detail.remove", "Remove", "workshop.plugin.uninstall",
+                                                 payload, "danger", busy));
             detail_children.push_back(row_node(std::move(detail_actions)));
+            nodes.push_back(section_node("Detail", json::array({card_node(detail.summary.name,
+                                                                            std::move(detail_children))} )));
         } else {
-            detail_children.push_back(
-                text_node("Select a plugin to review its package and compatibility details.",
-                          "muted", 52));
+            detail_children.push_back(text_node("Select a plugin to review its package and compatibility details.",
+                                                "muted", 52));
+            nodes.push_back(section_node("Detail", std::move(detail_children)));
         }
-        nodes.push_back(row_node(json::array({card_node("Catalog", std::move(catalog), "gold"),
-                                              card_node("Detail", std::move(detail_children),
-                                                        "cyan")})));
 
         json task_center = json::array();
-        task_center.push_back(text_node("Task Center", "title", 28));
         json task_badges = json::array();
         task_badges.push_back(badge_node(busy ? "In progress" : "Ready", busy ? "warn" : "ok"));
-        task_badges.push_back(
-            badge_node(std::to_string(completed_operations_) + " completed", "accent"));
+        task_badges.push_back(badge_node(std::to_string(completed_operations_) + " completed", "accent"));
         const std::uint64_t remaining = queued_operations_ > completed_operations_
-                                            ? queued_operations_ - completed_operations_
-                                            : 0;
+                                            ? queued_operations_ - completed_operations_ : 0;
         task_badges.push_back(badge_node(std::to_string(remaining) + " pending", "gold"));
         task_center.push_back(row_node(std::move(task_badges)));
-        task_center.push_back(
-            text_node(status_text_, last_status_ == SAO_STATUS_OK ? "value" : "bad", 30));
-        task_center.push_back(json{{"type", "bar"},
-                                   {"pct", progress_percent_},
-                                   {"caption", progress_text_},
-                                   {"height", 24}});
+        task_center.push_back(text_node(status_text_, last_status_ == SAO_STATUS_OK ? "value" : "bad", 30));
+        task_center.push_back(json{{"type", "bar"}, {"pct", progress_percent_},
+                                   {"caption", progress_text_}, {"height", 24}});
         if (!error_text_.empty())
             task_center.push_back(text_node(error_text_, "bad", 42));
-        nodes.push_back(card_node("Task Center", std::move(task_center),
-                                  error_text_.empty() ? "cyan" : "bad"));
-
+        nodes.push_back(section_node("Task Center", std::move(task_center)));
         std::string spec = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
         if (spec.size() <= kMaximumPanelSpecBytes)
             return spec;
-        return json{
-            {"version", 1},
-            {"title", ""},
-            {"nodes",
-             json::array(
-                 {text_node("Plugin Workshop", "title", 32),
-                  card_node("Spec Limit",
-                            json::array({text_node(
-                                "Workshop content is too large to display.", "bad", 44)}),
-                            "bad")})}}
-            .dump();
+        return json{{"version", 1}, {"title", ""},
+                    {"nodes", json::array({section_node("Spec Limit",
+                        json::array({text_node("Workshop content is too large to display.", "bad", 44)}))})}}.dump();
     }
-
     sao_status_t publish_spec(bool force) {
         sao_ui_panel_body_handle_t body = nullptr;
         std::string spec;
@@ -1273,6 +1351,7 @@ class Owner::Impl final {
             panel_ready_ = false;
             action_handler_attached_ = false;
             event_handler_attached_ = false;
+            callback_accepting_ = false;
             hide_requested_ = false;
             notify = visibility_known_ && visible_;
             visibility_known_ = true;
@@ -1318,24 +1397,28 @@ class Owner::Impl final {
                     action_handler_attached_ = action_attached;
                 if (restore_event)
                     event_handler_attached_ = event_attached;
+                callback_accepting_ = action_handler_attached_ && event_handler_attached_;
             }
         }
         return first_status;
     }
 
-    sao_status_t retire_panel() noexcept {
-        {
-            std::lock_guard lock(mutex_);
-            if (retiring_)
-                return SAO_UI_PANEL_STATUS_ERR_BUSY;
-            retiring_ = true;
+    sao_status_t claim_retirement() noexcept {
+        std::lock_guard lock(mutex_);
+        if (retiring_ || callbacks_in_flight_ != 0U)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        retiring_ = true;
+        callback_accepting_ = false;
+        return SAO_STATUS_OK;
+    }
+
+    void release_retirement_claim(sao_status_t status) noexcept {
+        std::lock_guard lock(mutex_);
+        retiring_ = false;
+        if (status != SAO_STATUS_OK && panel_ != nullptr && action_handler_attached_ &&
+            event_handler_attached_) {
+            callback_accepting_ = true;
         }
-        const sao_status_t status = retire_panel_claimed();
-        {
-            std::lock_guard lock(mutex_);
-            retiring_ = false;
-        }
-        return status;
     }
 
     sao_status_t retire_panel_claimed() noexcept {
@@ -1459,7 +1542,9 @@ class Owner::Impl final {
     bool retiring_{};
     bool action_handler_attached_{};
     bool event_handler_attached_{};
+    bool callback_accepting_{};
     bool dirty_{true};
+    std::size_t callbacks_in_flight_{};
 };
 
 Owner::Owner(sao_ui_compositor_handle_t compositor, std::filesystem::path base_dir)
@@ -1504,7 +1589,7 @@ sao_status_t Owner::dispatch_action_for_testing(std::string_view action,
     if (impl_ == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     try {
-        return impl_->dispatch_action(action, payload_json);
+        return impl_->dispatch_action_for_testing(action, payload_json);
     } catch (...) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }

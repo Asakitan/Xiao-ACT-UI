@@ -1,4 +1,4 @@
-// license_panel_internal.cpp — native activation panel implementation.
+// license_panel_internal.cpp - native activation panel implementation.
 //
 // Mirrors the removed Python webview license_panel.html:
 //   - license key text input (monospace)
@@ -33,8 +33,10 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -46,11 +48,70 @@ using json = nlohmann::json;
 
 constexpr std::size_t kMaximumPanelSpecBytes = 64U * 1024U;
 constexpr std::size_t kMaximumActionPayloadBytes = 4096U;
+constexpr std::size_t kMaximumActionIdBytes = 64U;
 constexpr std::size_t kMaximumKeyBytes = 256U;
 constexpr std::size_t kMaximumStatusBytes = 1024U;
 
-constexpr char kSolidDarkCyanTheme[] =
-    R"({"colors":{"APP_BG":"#0E1418","APP_CARD":"#162024","APP_BORDER":"#1E2E32","APP_TEXT":"#E0EAE6","APP_TEXT_2":"#8FA8A2","APP_TEXT_DIM":"#6E7C78","APP_ACCENT":"#2FA9B8","APP_BLUE":"#2FA9B8","APP_GREEN":"#5EAA6C","APP_RED":"#D04040","APP_ORANGE":"#D4A520","APP_GOLD":"#D4A520"}})";
+bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7fU) {
+            ++offset;
+            continue;
+        }
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation_count = 1;
+            code_point = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation_count = 2;
+            code_point = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (std::size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xc0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3fU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation_count + 1U;
+    }
+    return true;
+}
+
+bool valid_text(std::string_view value, std::size_t maximum, bool required) noexcept {
+    return (!required || !value.empty()) && value.size() <= maximum &&
+           value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+std::optional<std::string_view> bounded_c_text(const char* value,
+                                               std::size_t maximum) noexcept {
+    if (value == nullptr)
+        return std::nullopt;
+    const void* terminator = std::memchr(value, '\0', maximum + 1U);
+    if (terminator == nullptr)
+        return std::nullopt;
+    const auto length =
+        static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
+    const std::string_view result(value, length);
+    return valid_text(result, maximum, true) ? std::optional<std::string_view>(result)
+                                              : std::nullopt;
+}
 
 std::string bounded_text(std::string value, std::size_t maximum) {
     if (value.size() <= maximum)
@@ -172,90 +233,87 @@ json row_node(json children) {
     return json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-json card_node(std::string title, json children, std::string_view accent = "cyan") {
+json card_node(std::string title, json children) {
     return json{{"type", "card"},
                 {"title", bounded_text(std::move(title), 512U)},
-                {"accent", accent},
                 {"children", std::move(children)}};
 }
 
+json section_node(std::string title, json children) {
+    return json{{"type", "section"},
+                {"title", bounded_text(std::move(title), 512U)},
+                {"children", std::move(children)}};
+}
 std::string build_panel_spec(const Snapshot& snapshot) {
     json nodes = json::array();
-
-    // Status card — tier / expiry / hwid.
-    json status_rows = json::array();
+    json status = json::array();
     {
         json row = json::array();
         row.push_back(text_node("授权等级 (Tier)", "muted", 22));
         row.push_back(text_node(snapshot.activated ? snapshot.tier : "—",
                                 snapshot.activated ? "accent" : "muted", 22));
-        status_rows.push_back(row_node(std::move(row)));
+        status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
         row.push_back(text_node("到期时间 (Expiry)", "muted", 22));
         row.push_back(text_node(snapshot.activated ? format_expiry(snapshot.expiry_ms) : "—",
                                 snapshot.activated ? "accent" : "muted", 22));
-        status_rows.push_back(row_node(std::move(row)));
+        status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
         row.push_back(text_node("设备指纹 (HWID)", "muted", 22));
         row.push_back(text_node(snapshot.hwid_hex.empty() ? "—" : snapshot.hwid_hex,
                                 "mono", 22));
-        status_rows.push_back(row_node(std::move(row)));
+        status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
         row.push_back(button_node("license.copy_hwid", "Copy HWID", kCopyHwidAction,
-                                  json::object(), "ghost",
-                                  snapshot.hwid_hex.empty() || snapshot.busy));
-        status_rows.push_back(row_node(std::move(row)));
+                                  json::object(), "ghost", snapshot.hwid_hex.empty() || snapshot.busy));
+        row.push_back(button_node("license.refresh", "Refresh status", kRefreshAction,
+                                  json::object(), "default", snapshot.busy));
+        status.push_back(row_node(std::move(row)));
     }
-    nodes.push_back(card_node("License Status", std::move(status_rows), "cyan"));
+    nodes.push_back(section_node("License Status", std::move(status)));
 
-    // Activation card — key input + activate button.
-    json activate_rows = json::array();
-    {
-        json row = json::array();
-        row.push_back(input_node("license.key_input", snapshot.license_key, kKeyInputAction));
-        row.push_back(button_node("license.activate",
-                                   snapshot.busy ? "Activating..." : "Activate",
-                                   kActivateAction, json::object(), "primary",
-                                   snapshot.busy));
-        activate_rows.push_back(row_node(std::move(row)));
-    }
-    if (snapshot.busy) {
-        activate_rows.push_back(text_node("Verifying with license server...", "muted", 22));
-    }
-    nodes.push_back(card_node("Activation", std::move(activate_rows), "cyan"));
-
-    // Status / error message card.
+    json activation = json::array();
+    activation.push_back(text_node("Activation key / 激活码", "muted", 22));
+    activation.push_back(input_node("license.key_input", snapshot.license_key, kKeyInputAction));
+    json activation_actions = json::array();
+    activation_actions.push_back(button_node(
+        "license.activate", snapshot.busy ? "Activating..." : "Activate", kActivateAction,
+        json::object(), "primary", snapshot.busy));
+    activation_actions.push_back(button_node("license.skip", "Skip / Use Free Tier", kSkipAction,
+                                             json::object(), "ghost", snapshot.busy));
+    activation.push_back(row_node(std::move(activation_actions)));
+    if (snapshot.busy)
+        activation.push_back(text_node("Verifying with license server...", "muted", 22));
+    nodes.push_back(section_node("Activation", std::move(activation)));
     if (!snapshot.error_text.empty()) {
         json msg = json::array();
         msg.push_back(text_node(snapshot.error_text, "bad", 28));
-        nodes.push_back(card_node("Error", std::move(msg), "bad"));
+        msg.push_back(button_node("license.error-retry", "Retry / 重试", kRefreshAction,
+                                  json::object(), "primary", snapshot.busy));
+        nodes.push_back(section_node("Error", std::move(msg)));
     } else if (!snapshot.status_text.empty()) {
         json msg = json::array();
         msg.push_back(text_node(snapshot.status_text, "muted", 28));
-        nodes.push_back(card_node("Message", std::move(msg), "cyan"));
+        nodes.push_back(section_node("Status", std::move(msg)));
     }
-
-    std::string serialized =
-        json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+    std::string serialized = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
-
     json compact = json::array();
     compact.push_back(text_node("Panel spec exceeded budget.", "bad", 48));
     return json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
-
 sao_status_t default_get_hwid(std::string& out_hex) {
     std::array<std::uint8_t, 32> hwid{};
     const int32_t status = sao_license_sdk_get_hwid(hwid.data());
     if (status != SAO_OK)
-        return static_cast<sao_status_t>(SAO_STATUS_ERR_OS_CALL_FAILED);
+        return static_cast<sao_status_t>(status);
     constexpr char digits[] = "0123456789abcdef";
     out_hex.resize(hwid.size() * 2U);
     for (std::size_t index = 0; index < hwid.size(); ++index) {
@@ -269,11 +327,11 @@ sao_status_t default_get_status(std::string& out_tier, std::uint64_t& out_expiry
     sao_license_tier_t tier = SAO_LICENSE_TIER_UNKNOWN;
     int32_t status = sao_license_sdk_get_tier(&tier);
     if (status != SAO_OK)
-        return static_cast<sao_status_t>(SAO_STATUS_ERR_OS_CALL_FAILED);
+        return static_cast<sao_status_t>(status);
     std::uint64_t expiry_ms = 0U;
     status = sao_license_sdk_get_expiry_ms(&expiry_ms);
     if (status != SAO_OK)
-        return static_cast<sao_status_t>(SAO_STATUS_ERR_OS_CALL_FAILED);
+        return static_cast<sao_status_t>(status);
     out_tier = tier_name(tier);
     out_expiry_ms = expiry_ms;
     return SAO_STATUS_OK;
@@ -309,15 +367,15 @@ sao_status_t default_copy_to_clipboard(std::string_view text) {
 }
 
 sao_status_t default_refresh_license() {
-    const int32_t status = sao_license_sdk_refresh();
-    return status == SAO_OK ? SAO_STATUS_OK
-                            : static_cast<sao_status_t>(SAO_STATUS_ERR_OS_CALL_FAILED);
+    return static_cast<sao_status_t>(sao_license_sdk_refresh());
 }
 
 json parse_payload(std::string_view payload_json, bool& valid) {
     valid = false;
-    if (payload_json.size() > kMaximumActionPayloadBytes)
+    if (payload_json.size() > kMaximumActionPayloadBytes ||
+        payload_json.find('\0') != std::string_view::npos || !valid_utf8(payload_json)) {
         return {};
+    }
     if (payload_json.empty()) {
         valid = true;
         return json::object();
@@ -336,14 +394,10 @@ bool Operations::complete() const noexcept {
 Operations make_default_operations() {
     Operations operations{};
     operations.activate = [](std::string_view key) -> sao_status_t {
-        if (key.empty())
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        if (key.size() > kMaximumKeyBytes)
+        if (!valid_text(key, kMaximumKeyBytes, true))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         std::string owned(key);
-        const int32_t status = sao_license_client_activate(owned.c_str());
-        return status == SAO_OK ? SAO_STATUS_OK
-                                 : static_cast<sao_status_t>(SAO_STATUS_ERR_OS_CALL_FAILED);
+        return static_cast<sao_status_t>(sao_license_client_activate(owned.c_str()));
     };
     operations.get_hwid = &default_get_hwid;
     operations.get_status = &default_get_status;
@@ -355,19 +409,16 @@ Operations make_default_operations() {
 struct Owner::State {
     explicit State(sao_ui_compositor_handle_t borrowed_compositor, Operations value)
         : compositor(borrowed_compositor), operations(std::move(value)) {
-        refresh_hwid();
-    }
-
-    void refresh_hwid() {
-        std::string hwid_hex;
-        const sao_status_t status = operations.get_hwid(hwid_hex);
-        if (status == SAO_STATUS_OK)
-            hwid_hex_ = bounded_text(std::move(hwid_hex), 128U);
+        if (compositor == nullptr || !operations.complete()) {
+            startup_status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+            accepting = false;
+        }
     }
 
     sao_ui_compositor_handle_t compositor{};
     Operations operations;
     mutable std::mutex mutex;
+    sao_status_t startup_status{SAO_STATUS_OK};
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
     std::size_t operations_in_flight{};
@@ -387,6 +438,8 @@ struct Owner::State {
     std::string license_key;
     std::string tier;
     std::uint64_t expiry_ms{};
+    std::string rendered_spec_json;
+    bool publish_pending{true};
     std::atomic<bool> activation_running{false};
     std::thread activation_thread;
 };
@@ -414,10 +467,12 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, Operations operations)
     : state_(std::make_unique<State>(compositor, std::move(operations))) {}
 
 Owner::~Owner() noexcept {
-    if (state_) {
-        if (state_->activation_thread.joinable())
-            state_->activation_thread.join();
-    }
+    if (!state_)
+        return;
+    if (state_->activation_thread.joinable())
+        state_->activation_thread.join();
+    if (take_offline() != SAO_STATUS_OK)
+        std::terminate();
 }
 
 sao_status_t Owner::require_owner_thread() const noexcept {
@@ -431,6 +486,8 @@ sao_status_t Owner::begin_operation() noexcept {
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
     std::lock_guard lock(state_->mutex);
+    if (state_->startup_status != SAO_STATUS_OK)
+        return state_->startup_status;
     if (!state_->accepting || state_->retiring)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     ++state_->operations_in_flight;
@@ -449,7 +506,7 @@ bool Owner::begin_callback() noexcept {
     if (!state_)
         return false;
     std::lock_guard lock(state_->mutex);
-    if (!state_->accepting || state_->retiring)
+    if (state_->startup_status != SAO_STATUS_OK || !state_->accepting || state_->retiring)
         return false;
     ++state_->callbacks_in_flight;
     return true;
@@ -463,11 +520,13 @@ void Owner::end_callback() noexcept {
         --state_->callbacks_in_flight;
 }
 
-void Owner::panel_action_callback(const char* action_id_utf8,
-                                   const std::uint8_t* payload_json_utf8,
-                                   std::size_t payload_len, void* user_data) noexcept {
+void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
+                                              const std::uint8_t* payload_json_utf8,
+                                              std::size_t payload_len,
+                                              void* user_data) noexcept {
     auto* owner = static_cast<Owner*>(user_data);
-    if (owner == nullptr || action_id_utf8 == nullptr ||
+    const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
+    if (owner == nullptr || !action.has_value() ||
         (payload_json_utf8 == nullptr && payload_len != 0U) || !owner->begin_callback()) {
         return;
     }
@@ -481,12 +540,13 @@ void Owner::panel_action_callback(const char* action_id_utf8,
         const std::string_view payload(
             payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
             payload_len);
-        (void)owner->dispatch_action(action_id_utf8, payload);
+        (void)owner->dispatch_action(*action, payload);
     } catch (...) {
     }
 }
 
-void Owner::panel_event_callback(std::int32_t event_kind, void* user_data) noexcept {
+void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind,
+                                             void* user_data) noexcept {
     auto* owner = static_cast<Owner*>(user_data);
     if (owner == nullptr || !owner->begin_callback())
         return;
@@ -519,6 +579,8 @@ sao_status_t Owner::ensure_panel() noexcept {
         return owner_status;
     {
         std::lock_guard lock(state_->mutex);
+        if (state_->startup_status != SAO_STATUS_OK)
+            return state_->startup_status;
         if (state_->panel != nullptr)
             return SAO_STATUS_OK;
         if (!state_->accepting || state_->retiring || state_->creating)
@@ -553,7 +615,7 @@ sao_status_t Owner::ensure_panel() noexcept {
     descriptor.modal = false;
     descriptor.overlay_style = false;
     descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
-    descriptor.theme_override_json_utf8 = kSolidDarkCyanTheme;
+    descriptor.theme_override_json_utf8 = nullptr;
     descriptor.initial_opacity = 1.0F;
     descriptor.auto_scroll = true;
 
@@ -622,7 +684,10 @@ sao_status_t Owner::publish() noexcept {
             std::lock_guard lock(state_->mutex);
             if (state_->body == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
+            if (!state_->publish_pending && !state_->rendered_spec_json.empty())
+                return SAO_STATUS_OK;
             body = state_->body;
+            state_->publish_pending = false;
             view.panel_created = true;
             view.visible = state_->visible;
             view.busy = state_->busy;
@@ -638,6 +703,13 @@ sao_status_t Owner::publish() noexcept {
         std::string spec = build_panel_spec(view);
         const sao_status_t status = sao_ui_panel_body_set_spec(
             body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
+        std::lock_guard lock(state_->mutex);
+        if (state_->body != body)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (status == SAO_STATUS_OK)
+            state_->rendered_spec_json = std::move(spec);
+        else
+            state_->publish_pending = true;
         return status;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -653,6 +725,26 @@ sao_status_t Owner::open() noexcept {
     const sao_status_t panel_status = ensure_panel();
     if (panel_status != SAO_STATUS_OK)
         return panel_status;
+
+    Operations::GetHwid get_hwid;
+    bool needs_hwid = false;
+    {
+        std::lock_guard lock(state_->mutex);
+        needs_hwid = state_->hwid_hex_.empty();
+        get_hwid = state_->operations.get_hwid;
+    }
+    if (needs_hwid) {
+        try {
+            std::string hwid_hex;
+            const sao_status_t hwid_status = get_hwid(hwid_hex);
+            if (hwid_status == SAO_STATUS_OK && valid_text(hwid_hex, 128U, true)) {
+                std::lock_guard lock(state_->mutex);
+                state_->hwid_hex_ = std::move(hwid_hex);
+                state_->publish_pending = true;
+            }
+        } catch (...) {
+        }
+    }
 
     const sao_status_t publish_status = publish();
     sao_ui_panel_handle_t panel = nullptr;
@@ -705,10 +797,9 @@ sao_status_t Owner::service_ui() noexcept {
     bool publish_needed = false;
     {
         std::lock_guard lock(state_->mutex);
-        if (state_->activation_running.load() == false && state_->busy) {
-            // Activation thread finished; drain results.
-            publish_needed = true;
-        }
+        if (state_->panel == nullptr || state_->body == nullptr)
+            return SAO_STATUS_OK;
+        publish_needed = state_->publish_pending;
     }
     if (publish_needed)
         return publish();
@@ -719,177 +810,291 @@ sao_status_t Owner::take_offline() noexcept {
     const sao_status_t owner_status = require_owner_thread();
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
+    if (!state_)
+        return SAO_STATUS_OK;
+
     sao_ui_panel_handle_t panel = nullptr;
-    sao_ui_panel_body_handle_t body = nullptr;
+    bool had_action_handler = false;
+    bool had_event_handler = false;
     {
         std::lock_guard lock(state_->mutex);
         if (state_->panel == nullptr)
             return SAO_STATUS_OK;
-        if (state_->operations_in_flight != 0U || state_->callbacks_in_flight != 0U ||
-            state_->activation_running.load()) {
-            state_->retiring = true;
+        if (state_->creating || state_->retiring || state_->operations_in_flight != 0U ||
+            state_->callbacks_in_flight != 0U || state_->activation_running.load())
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
-        }
+        if (state_->body == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
         state_->retiring = true;
+        state_->accepting = false;
         panel = state_->panel;
-        body = state_->body;
+        had_action_handler = state_->action_handler_attached;
+        had_event_handler = state_->event_handler_attached;
     }
-    if (state_->activation_thread.joinable())
-        state_->activation_thread.join();
 
-    sao_status_t rollback_status = SAO_STATUS_OK;
-    if (state_->event_handler_attached) {
-        const sao_status_t detach_status =
-            sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
-        if (detach_status != SAO_STATUS_OK)
-            rollback_status = detach_status;
-        else
-            state_->event_handler_attached = false;
+    bool action_attached = had_action_handler;
+    bool event_attached = had_event_handler;
+    sao_status_t status = SAO_STATUS_OK;
+    if (had_event_handler) {
+        status = sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
+        if (status == SAO_STATUS_OK)
+            event_attached = false;
     }
-    if (state_->action_handler_attached) {
-        const sao_status_t detach_status =
-            sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
-        if (detach_status != SAO_STATUS_OK) {
-            if (rollback_status == SAO_STATUS_OK)
-                rollback_status = detach_status;
-        } else {
-            state_->action_handler_attached = false;
-        }
+    if (status == SAO_STATUS_OK && had_action_handler) {
+        status = sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+        if (status == SAO_STATUS_OK)
+            action_attached = false;
     }
-    const sao_status_t unregister_status = sao_ui_panel_unregister(panel);
-    {
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_panel_unregister(panel);
+
+    if (status == SAO_STATUS_OK) {
         std::lock_guard lock(state_->mutex);
         state_->panel = nullptr;
         state_->body = nullptr;
-        state_->accepting = false;
+        state_->visible = false;
+        state_->busy = false;
+        state_->action_handler_attached = false;
+        state_->event_handler_attached = false;
+        state_->accepting = true;
+        state_->retiring = false;
+        state_->rendered_spec_json.clear();
+        state_->publish_pending = true;
+        return SAO_STATUS_OK;
+    }
+
+    bool rollback_ok = true;
+    if (had_action_handler && !action_attached) {
+        const sao_status_t restore_status =
+            sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, this);
+        action_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && action_attached;
+    }
+    if (had_event_handler && !event_attached) {
+        const sao_status_t restore_status =
+            sao_ui_panel_set_event_handler(panel, &Owner::panel_event_callback, this);
+        event_attached = restore_status == SAO_STATUS_OK;
+        rollback_ok = rollback_ok && event_attached;
+    }
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->action_handler_attached = action_attached;
+        state_->event_handler_attached = event_attached;
+        state_->accepting = rollback_ok && action_attached == had_action_handler &&
+                            event_attached == had_event_handler;
         state_->retiring = false;
     }
-    if (unregister_status != SAO_STATUS_OK)
-        return rollback_status == SAO_STATUS_OK ? unregister_status
-                                                : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
-    (void)body;
-    return rollback_status;
+    return rollback_ok ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
 }
 
 sao_status_t Owner::dispatch_action(std::string_view action_id,
                                      std::string_view payload_json) noexcept {
-    if (action_id.empty())
+    if (!state_ || !valid_text(action_id, kMaximumActionIdBytes, true))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    bool valid_payload = false;
-    json payload = parse_payload(payload_json, valid_payload);
-    if (!valid_payload)
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-
-    // The input widget reports its current text in the payload when the user
-    // commits (Enter) or the field loses focus. Mirror it into the stored key.
-    if (action_id == kKeyInputAction) {
-        if (payload.contains("value") && payload["value"].is_string()) {
-            std::lock_guard lock(state_->mutex);
-            state_->license_key = bounded_text(payload["value"].get<std::string>(),
-                                                kMaximumKeyBytes);
-        } else if (payload.contains("text") && payload["text"].is_string()) {
-            std::lock_guard lock(state_->mutex);
-            state_->license_key = bounded_text(payload["text"].get<std::string>(),
-                                                kMaximumKeyBytes);
-        }
-        return publish();
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->panel == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
 
-    if (action_id == kCopyHwidAction) {
-        std::string hwid_hex;
-        {
-            std::lock_guard lock(state_->mutex);
-            hwid_hex = state_->hwid_hex_;
-        }
-        if (hwid_hex.empty()) {
-            std::lock_guard lock(state_->mutex);
-            state_->error_text = "HWID not available yet.";
-            state_->status_text.clear();
-        }
-        const sao_status_t clip_status = state_->operations.copy_to_clipboard(hwid_hex);
-        {
-            std::lock_guard lock(state_->mutex);
-            if (clip_status == SAO_STATUS_OK) {
-                state_->status_text = "HWID copied to clipboard.";
-                state_->error_text.clear();
-            } else {
-                state_->error_text = status_description(clip_status, "Copy HWID failed");
-                state_->status_text.clear();
+    try {
+        bool valid_payload = false;
+        json payload = parse_payload(payload_json, valid_payload);
+        if (!valid_payload)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+        if (action_id == kKeyInputAction) {
+            const auto value = payload.find("value");
+            const auto text = payload.find("text");
+            const json* source = value != payload.end() && value->is_string()
+                                     ? &*value
+                                     : text != payload.end() && text->is_string() ? &*text
+                                                                                  : nullptr;
+            if (source == nullptr)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            std::string key = source->get<std::string>();
+            if (!valid_text(key, kMaximumKeyBytes, false))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            {
+                std::lock_guard lock(state_->mutex);
+                state_->license_key = std::move(key);
+                state_->last_status = SAO_STATUS_OK;
+                state_->publish_pending = true;
             }
+            return publish();
         }
-        return publish();
-    }
 
-    if (action_id == kRefreshAction) {
-        {
-            std::lock_guard lock(state_->mutex);
-            state_->refresh_hwid();
+        if (action_id == kCopyHwidAction) {
+            std::string hwid_hex;
+            Operations::CopyToClipboard copy_to_clipboard;
+            {
+                std::lock_guard lock(state_->mutex);
+                hwid_hex = state_->hwid_hex_;
+                copy_to_clipboard = state_->operations.copy_to_clipboard;
+            }
+            if (hwid_hex.empty()) {
+                {
+                    std::lock_guard lock(state_->mutex);
+                    state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+                    state_->error_text = "HWID not available yet.";
+                    state_->status_text.clear();
+                    state_->publish_pending = true;
+                }
+                const sao_status_t publish_status = publish();
+                return publish_status == SAO_STATUS_OK ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                                       : publish_status;
+            }
+            const sao_status_t clip_status = copy_to_clipboard(hwid_hex);
+            {
+                std::lock_guard lock(state_->mutex);
+                state_->last_status = clip_status;
+                if (clip_status == SAO_STATUS_OK) {
+                    state_->status_text = "HWID copied to clipboard.";
+                    state_->error_text.clear();
+                } else {
+                    state_->error_text = status_description(clip_status, "Copy HWID failed");
+                    state_->status_text.clear();
+                }
+                state_->publish_pending = true;
+            }
+            const sao_status_t publish_status = publish();
+            return publish_status == SAO_STATUS_OK ? clip_status : publish_status;
+        }
+
+        if (action_id == kRefreshAction) {
+            Operations::RefreshLicense refresh_license;
+            Operations::GetHwid get_hwid;
+            Operations::GetStatus get_status;
+            {
+                std::lock_guard lock(state_->mutex);
+                refresh_license = state_->operations.refresh_license;
+                get_hwid = state_->operations.get_hwid;
+                get_status = state_->operations.get_status;
+            }
+            std::string hwid_hex;
             std::string tier;
             std::uint64_t expiry_ms = 0U;
-            const sao_status_t status = state_->operations.get_status(tier, expiry_ms);
-            if (status == SAO_STATUS_OK) {
-                state_->tier = std::move(tier);
-                state_->expiry_ms = expiry_ms;
-                state_->activated = true;
-                state_->status_text = "Status refreshed.";
-                state_->error_text.clear();
-            } else {
-                state_->error_text = status_description(status, "Status refresh failed");
-                state_->status_text.clear();
-            }
-        }
-        return publish();
-    }
-
-    if (action_id == kActivateAction || action_id == kSkipAction) {
-        if (state_->activation_running.load())
-            return SAO_UI_PANEL_STATUS_ERR_BUSY;
-        std::string key;
-        {
-            std::lock_guard lock(state_->mutex);
-            key = state_->license_key;
-        }
-        if (action_id == kSkipAction) {
-            // Skip = accept free tier, no activation needed.
-            std::lock_guard lock(state_->mutex);
-            state_->activated = true;
-            state_->tier = "free";
-            state_->expiry_ms = 0U;
-            state_->status_text = "Skipped — using free tier.";
-            state_->error_text.clear();
-            state_->last_status = SAO_STATUS_OK;
-        } else {
-            if (key.empty()) {
+            sao_status_t status = refresh_license();
+            if (status == SAO_STATUS_OK)
+                status = get_hwid(hwid_hex);
+            if (status == SAO_STATUS_OK && !valid_text(hwid_hex, 128U, true))
+                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (status == SAO_STATUS_OK)
+                status = get_status(tier, expiry_ms);
+            if (status == SAO_STATUS_OK && !valid_text(tier, 64U, true))
+                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+            {
                 std::lock_guard lock(state_->mutex);
-                state_->error_text = "请输入激活码 (Please enter an activation key).";
+                state_->last_status = status;
+                if (status == SAO_STATUS_OK) {
+                    state_->hwid_hex_ = std::move(hwid_hex);
+                    state_->tier = std::move(tier);
+                    state_->expiry_ms = expiry_ms;
+                    state_->activated = true;
+                    state_->status_text = "Status refreshed.";
+                    state_->error_text.clear();
+                } else {
+                    state_->error_text =
+                        "Refresh failed: " +
+                        license_status_description(static_cast<std::int32_t>(status));
+                    state_->status_text.clear();
+                }
+                state_->publish_pending = true;
+            }
+            const sao_status_t publish_status = publish();
+            return publish_status == SAO_STATUS_OK ? status : publish_status;
+        }
+
+        if (action_id == kActivateAction || action_id == kSkipAction) {
+            std::string key;
+            {
+                std::lock_guard lock(state_->mutex);
+                if (state_->activation_running.load())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+                key = state_->license_key;
+            }
+            sao_status_t action_status = SAO_STATUS_OK;
+            if (action_id == kSkipAction) {
+                std::lock_guard lock(state_->mutex);
+                state_->activated = true;
+                state_->tier = "free";
+                state_->expiry_ms = 0U;
+                state_->status_text = "Skipped - using free tier.";
+                state_->error_text.clear();
+                state_->last_status = SAO_STATUS_OK;
+                state_->publish_pending = true;
+            } else if (key.empty()) {
+                std::lock_guard lock(state_->mutex);
+                state_->error_text = "Please enter an activation key.";
                 state_->status_text.clear();
                 state_->last_status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                state_->publish_pending = true;
+                action_status = SAO_STATUS_ERR_INVALID_ARGUMENT;
             } else {
-                run_activation(std::move(key));
+                action_status = run_activation(std::move(key));
             }
+            const sao_status_t publish_status = publish();
+            return publish_status == SAO_STATUS_OK ? action_status : publish_status;
         }
-        return publish();
-    }
 
-    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return SAO_STATUS_ERR_NOT_FOUND;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
 }
 
-void Owner::run_activation(std::string key) noexcept {
+sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept {
+    const sao_status_t owner_status = require_owner_thread();
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    if (!begin_callback())
+        return SAO_UI_PANEL_STATUS_ERR_BUSY;
+    struct CallbackGuard {
+        Owner& owner;
+        ~CallbackGuard() {
+            owner.end_callback();
+        }
+    } callback{*this};
+    handle_panel_event(event_kind);
+    return SAO_STATUS_OK;
+}
+
+sao_status_t Owner::run_activation(std::string key) noexcept {
     {
         std::lock_guard lock(state_->mutex);
         if (state_->activation_running.load())
-            return;
-        state_->busy = true;
-        state_->status_text = "Activating...";
-        state_->error_text.clear();
-        state_->activation_running.store(true);
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
     }
-    if (state_->activation_thread.joinable())
-        state_->activation_thread.join();
-    state_->activation_thread = std::thread(&Owner::activation_thread_main, this,
-                                             std::move(key));
+    try {
+        if (state_->activation_thread.joinable())
+            state_->activation_thread.join();
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->busy = true;
+            state_->status_text = "Activating...";
+            state_->error_text.clear();
+            state_->activation_running.store(true);
+            state_->publish_pending = true;
+        }
+        state_->activation_thread =
+            std::thread(&Owner::activation_thread_main, this, std::move(key));
+        return SAO_STATUS_OK;
+    } catch (...) {
+        std::lock_guard lock(state_->mutex);
+        state_->busy = false;
+        state_->activation_running.store(false);
+        state_->last_status = SAO_STATUS_ERR_OS_CALL_FAILED;
+        state_->status_text.clear();
+        state_->error_text = "Activation worker could not start.";
+        state_->publish_pending = true;
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
 }
-
 void Owner::activation_thread_main(Owner* owner, std::string key) noexcept {
     if (owner == nullptr || owner->state_ == nullptr)
         return;
@@ -900,33 +1105,34 @@ void Owner::activation_thread_main(Owner* owner, std::string key) noexcept {
     bool activated = false;
     try {
         status = state.operations.activate(key);
+        if (status == SAO_STATUS_OK)
+            status = state.operations.refresh_license();
         if (status == SAO_STATUS_OK) {
             status = state.operations.get_status(tier, expiry_ms);
-            if (status == SAO_STATUS_OK)
+            if (status == SAO_STATUS_OK && valid_text(tier, 64U, true))
                 activated = true;
+            else if (status == SAO_STATUS_OK)
+                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
     } catch (...) {
         status = SAO_STATUS_ERR_UNKNOWN;
     }
 
-    {
-        std::lock_guard lock(state.mutex);
-        state.busy = false;
-        state.activation_running.store(false);
-        state.last_status = status;
-        if (activated) {
-            state.activated = true;
-            state.tier = std::move(tier);
-            state.expiry_ms = expiry_ms;
-            state.status_text = "Activation successful.";
-            state.error_text.clear();
-            // Best-effort live refresh so feature flags update without restart.
-            (void)state.operations.refresh_license();
-        } else {
-            state.error_text = license_status_description(static_cast<int32_t>(status));
-            state.status_text.clear();
-        }
+    std::lock_guard lock(state.mutex);
+    state.busy = false;
+    state.activation_running.store(false);
+    state.last_status = status;
+    if (activated) {
+        state.activated = true;
+        state.tier = std::move(tier);
+        state.expiry_ms = expiry_ms;
+        state.status_text = "Activation successful.";
+        state.error_text.clear();
+    } else {
+        state.error_text = license_status_description(static_cast<std::int32_t>(status));
+        state.status_text.clear();
     }
+    state.publish_pending = true;
 }
 
 sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
@@ -944,6 +1150,7 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
     out.tier = state_->tier;
     out.expiry_ms = state_->expiry_ms;
     out.activated = state_->activated;
+    out.rendered_spec_json = state_->rendered_spec_json;
     return SAO_STATUS_OK;
 }
 
