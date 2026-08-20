@@ -7,14 +7,17 @@
 #include "sao/ui/widget_kit.h"
 
 #include "panel_theme_internal.h"
+#include "widget_paint_internal.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -52,10 +55,51 @@ std::atomic<int32_t> g_body_replace_failure_point{0};
 std::atomic<int32_t> g_theme_upload_failure_count{0};
 std::atomic<int32_t> g_create_theme_switch{-1};
 
-int32_t titlebar_height(const sao::ui::detail::PanelResolvedTheme& theme) noexcept {
-    return theme.metrics[SAO_UI_METRIC_PADDING_L] * 2;
+int64_t saturating_add_i64(int64_t left, int64_t right) noexcept {
+    if (right > 0 && left > std::numeric_limits<int64_t>::max() - right)
+        return std::numeric_limits<int64_t>::max();
+    if (right < 0 && left < std::numeric_limits<int64_t>::min() - right)
+        return std::numeric_limits<int64_t>::min();
+    return left + right;
 }
 
+int64_t saturating_sub_i64(int64_t left, int64_t right) noexcept {
+    if (right > 0 && left < std::numeric_limits<int64_t>::min() + right)
+        return std::numeric_limits<int64_t>::min();
+    if (right < 0 && left > std::numeric_limits<int64_t>::max() + right)
+        return std::numeric_limits<int64_t>::max();
+    return left - right;
+}
+
+int32_t clamp_i64_to_i32(int64_t value) noexcept {
+    return static_cast<int32_t>(std::clamp(
+        value, static_cast<int64_t>(std::numeric_limits<int32_t>::min()),
+        static_cast<int64_t>(std::numeric_limits<int32_t>::max())));
+}
+
+int64_t rounded_finite_long_double_to_i64(long double value) noexcept {
+    const long double rounded = std::round(value);
+    if (rounded <= static_cast<long double>(std::numeric_limits<int64_t>::min()))
+        return std::numeric_limits<int64_t>::min();
+    if (rounded >= static_cast<long double>(std::numeric_limits<int64_t>::max()))
+        return std::numeric_limits<int64_t>::max();
+    return static_cast<int64_t>(rounded);
+}
+
+int32_t saturating_float_to_i32(float value) noexcept {
+    if (std::isnan(value))
+        return 0;
+    if (value <= static_cast<float>(std::numeric_limits<int32_t>::min()))
+        return std::numeric_limits<int32_t>::min();
+    if (value >= static_cast<float>(std::numeric_limits<int32_t>::max()))
+        return std::numeric_limits<int32_t>::max();
+    return static_cast<int32_t>(value);
+}
+
+int32_t titlebar_height(const sao::ui::detail::PanelResolvedTheme& theme) noexcept {
+    const int64_t padding = theme.metrics[SAO_UI_METRIC_PADDING_L];
+    return clamp_i64_to_i32(saturating_add_i64(padding, padding));
+}
 bool parse_argb(const json& value, uint32_t* out_argb) {
     if (out_argb == nullptr)
         return false;
@@ -166,6 +210,16 @@ struct PanelContent {
     struct ThemeLayoutNode {
         sao_ui_layout_node_handle_t node{};
         SaoUiLayoutSpec spec{};
+        std::string semantic_type;
+        bool has_title{};
+    };
+
+    struct ContainerVisual {
+        sao_ui_layout_node_handle_t node{};
+        int32_t kind{};
+        std::string title;
+        uint32_t accent{};
+        bool accent_is_explicit{};
     };
 
     sao_ui_layout_tree_handle_t tree{};
@@ -175,8 +229,13 @@ struct PanelContent {
     std::unordered_map<std::string, OwnedWidget*> by_id;
     std::unordered_map<sao_ui_widget_handle_t, OwnedWidget*> by_handle;
     std::vector<ThemeLayoutNode> theme_layout_nodes;
+    std::vector<ContainerVisual> containers;
     sao::ui::detail::PanelResolvedTheme layout_theme;
     bool uses_theme_layout_metrics{};
+    int32_t scroll_offset_px{};
+    int32_t content_extent_px{};
+    int32_t viewport_top_px{};
+    int32_t viewport_height_px{};
     std::mutex mutex;
 
     ~PanelContent() {
@@ -191,6 +250,8 @@ struct PanelFrame {
     uint32_t stride{};
 };
 
+constexpr size_t kPanelCallbackKindCount = 4U;
+
 } // namespace
 
 struct sao_ui_panel_s {
@@ -201,6 +262,21 @@ struct sao_ui_panel_s {
     std::string theme_page;
     SaoPanelState state{};
     bool show_titlebar{true};
+    bool show_close_button{};
+    bool movable{};
+    bool resizable{};
+    int32_t interaction_mode{};
+    int32_t resize_edges{};
+    int32_t pointer_down_x{};
+    int32_t pointer_down_y{};
+    SaoPanelState interaction_start_state{};
+    sao_ui_widget_handle_t hovered_widget{};
+    sao_ui_widget_handle_t pressed_widget{};
+    bool close_armed{};
+    bool scrollbar_hovered{};
+    bool scrollbar_pressed{};
+    int32_t scrollbar_drag_start_y{};
+    int32_t scrollbar_drag_start_offset{};
     int32_t min_width{};
     int32_t min_height{};
     int32_t max_width{};
@@ -219,8 +295,9 @@ struct sao_ui_panel_s {
     std::condition_variable lifecycle_cv;
     size_t operations_in_flight{};
     size_t callbacks_in_flight{};
-    std::array<uint64_t, 3> callback_generations{1, 1, 1};
-    std::array<std::unordered_map<uint64_t, size_t>, 3> callback_in_flight_by_generation;
+    std::array<uint64_t, kPanelCallbackKindCount> callback_generations{1, 1, 1, 1};
+    std::array<std::unordered_map<uint64_t, size_t>, kPanelCallbackKindCount>
+        callback_in_flight_by_generation;
     bool accepting_operations{true};
     bool destroy_requested{};
     bool finalizing{};
@@ -273,7 +350,9 @@ void erase_panel_storage(sao_ui_panel_s* panel) {
     }
 }
 
-enum class CallbackKind : size_t { Action = 0, Event = 1, Render = 2 };
+enum class CallbackKind : size_t { Action = 0, Event = 1, Render = 2, Theme = 3, Count = 4 };
+
+static_assert(static_cast<size_t>(CallbackKind::Count) == kPanelCallbackKindCount);
 
 struct ActiveCallback {
     sao_ui_panel_s* panel{};
@@ -346,6 +425,8 @@ void finalize_panel(sao_ui_panel_s* panel) noexcept {
 }
 
 void finalize_if_ready(sao_ui_panel_s* panel) noexcept {
+    if (callback_is_active(panel, CallbackKind::Theme, 0))
+        return;
     if (claim_finalization(panel))
         finalize_panel(panel);
 }
@@ -662,6 +743,7 @@ int32_t widget_kind(const std::string& type) {
 
 json make_widget_props(const json& node, const std::string& type) {
     json props = node;
+    props["enabled"] = !node.value("disabled", false);
     if (type == "bar" && node.contains("pct"))
         props["value"] = node["pct"];
     if (type == "kv") {
@@ -669,7 +751,6 @@ json make_widget_props(const json& node, const std::string& type) {
             node.value("label", std::string()) + ": " + node.value("value", std::string());
     } else if (type == "button") {
         props["text"] = node.value("label", std::string());
-        props["enabled"] = !node.value("disabled", false);
     } else if (type == "input") {
         props["text"] = node.value("value", std::string());
     } else if (type == "table") {
@@ -680,83 +761,157 @@ json make_widget_props(const json& node, const std::string& type) {
     return props;
 }
 
-sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t parent,
-                          const json& nodes,
-                          const sao::ui::detail::PanelResolvedTheme& theme) {
-    if (!nodes.is_array())
+SaoUiLayoutSpec container_spec_for_theme(
+    std::string_view semantic_type, bool has_title,
+    const sao::ui::detail::PanelResolvedTheme& theme) {
+    SaoUiLayoutSpec spec{};
+    sao_ui_layout_spec_defaults(&spec);
+    const int32_t pad_s = theme.metrics[SAO_UI_METRIC_PADDING_S];
+    const int32_t pad_m = theme.metrics[SAO_UI_METRIC_PADDING_M];
+    if (semantic_type == "row") {
+        spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
+    } else if (semantic_type == "panel") {
+        spec.pad_top_px = pad_m;
+        spec.pad_right_px = pad_m;
+        spec.pad_bottom_px = pad_m;
+        spec.pad_left_px = pad_m;
+        spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_M];
+    } else {
+        spec.pad_top_px = pad_s;
+        spec.pad_right_px = pad_s;
+        spec.pad_bottom_px = pad_s;
+        spec.pad_left_px = pad_s;
+        spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
+    }
+    if (has_title && semantic_type != "row")
+        spec.pad_top_px += pad_m + 14;
+    return spec;
+}
+
+sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t parent,
+                          const json & nodes,
+                          const sao::ui::detail::PanelResolvedTheme & theme,
+                          std::string_view parent_type = {}) {
+    if (not nodes.is_array())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    for (const auto& node : nodes) {
-        if (!node.is_object())
+    for (const auto node : nodes) {
+        if (not node.is_object())
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        const std::string type = node.value("type", std::string());
-        if (node.contains("children") && node["children"].is_array()) {
-            SaoUiLayoutSpec spec{};
-            sao_ui_layout_spec_defaults(&spec);
-            spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
+        const std::string type = normalized_type(node);
+        if (node.contains("children") and node["children"].is_array()) {
+            std::string container_title = node.value("title", std::string());
+            if (container_title.empty())
+                container_title = node.value("label", std::string());
+            const bool has_title = !container_title.empty();
+            const SaoUiLayoutSpec spec =
+                container_spec_for_theme(type, has_title, theme);
             sao_ui_layout_node_handle_t child = nullptr;
             const int32_t mode = type == "row" ? SAO_UI_LAYOUT_HORIZONTAL : SAO_UI_LAYOUT_VERTICAL;
-            sao_status_t status = sao_ui_layout_node_add_container(parent, mode, &spec, &child);
+            sao_status_t status = sao_ui_layout_node_add_container(parent, mode, & spec, & child);
             if (status != SAO_STATUS_OK)
                 return status;
-            content.theme_layout_nodes.push_back({child, spec});
-            status = append_nodes(content, child, node["children"], theme);
+            content.theme_layout_nodes.push_back({child, spec, type, has_title});
+            uint32_t accent = theme.colors[SAO_UI_TOKEN_APP_ACCENT];
+            bool accent_is_explicit = false;
+            const auto accent_property = node.find("accent");
+            if (accent_property != node.end()) {
+                if (!accent_property->is_string() || !parse_argb(*accent_property, &accent))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                accent_is_explicit = true;
+            }
+            content.containers.push_back(
+                {child, node.value("kind", 0), std::move(container_title), accent,
+                 accent_is_explicit});
+            status = append_nodes(content, child, node["children"], theme, type);
             if (status != SAO_STATUS_OK)
                 return status;
             continue;
         }
-
         auto owned = std::make_unique<OwnedWidget>();
         owned->kind = widget_kind(type);
         owned->id = node.value("id", std::string());
         owned->action = node.value("action", std::string());
-        owned->enabled = !node.value("disabled", false);
+        const auto disabled_property = node.find("disabled");
+        if (disabled_property != node.end() && !disabled_property->is_boolean())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        owned->enabled = disabled_property == node.end() || !disabled_property->get<bool>();
         if (node.contains("payload"))
             owned->action_args = node["payload"].dump();
         owned->props = make_widget_props(node, type);
-        if (!owned->id.empty() && content.by_id.contains(owned->id)) {
+        if (not owned->id.empty() and content.by_id.contains(owned->id))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        }
-        sao_status_t status = sao_ui_widget_create(owned->kind, nullptr, &owned->handle);
+        sao_status_t status = sao_ui_widget_create(owned->kind, nullptr, & owned->handle);
         if (status != SAO_STATUS_OK)
             return status;
         const std::string props = owned->props.dump();
-        status = sao_ui_widget_apply_props(
-            owned->handle, reinterpret_cast<const uint8_t*>(props.data()), props.size());
+        status = sao_ui_widget_apply_props(owned->handle,
+                                           reinterpret_cast<const uint8_t*>(props.data()),
+                                           props.size());
         if (status != SAO_STATUS_OK)
             return status;
-
         SaoUiLayoutSpec spec{};
-        sao_ui_layout_spec_defaults(&spec);
-        if (type == "spacer") {
+        sao_ui_layout_spec_defaults(& spec);
+        if (type == "spacer")
             spec.fixed_height_px = std::max(0, node.value("size", 8));
-        } else if (node.contains("height") && node["height"].is_number_integer()) {
+        else if (node.contains("height") and node["height"].is_number_integer())
             spec.fixed_height_px = std::max(1, node["height"].get<int32_t>());
-        }
-        if (node.contains("width") && node["width"].is_number_integer()) {
+        if (node.contains("width") and node["width"].is_number_integer())
             spec.fixed_width_px = std::max(1, node["width"].get<int32_t>());
+        if (parent_type == "row") {
+            if (type == "button")
+                spec.min_width_px = std::max(spec.min_width_px, 72);
+            else if (type != "spacer") {
+                spec.weight = 1.0F;
+                spec.min_width_px = std::max(spec.min_width_px, 40);
+            }
         }
-        status = sao_ui_layout_node_add_widget(parent, owned->handle, &spec, &owned->node);
+        std::string text_value;
+        if (node.contains("text") and node["text"].is_string())
+            text_value = node["text"].get<std::string>();
+        else if (node.contains("label") and node["label"].is_string())
+            text_value = node["label"].get<std::string>();
+        else if (node.contains("value") and node["value"].is_string())
+            text_value = node["value"].get<std::string>();
+        if (not text_value.empty() and (type == "text" or type == "kv" or type == "input"))
+            spec.min_height_px = std::max(spec.min_height_px,
+                                          18 + static_cast<int32_t>(text_value.size() / 64U) * 16);
+        status = sao_ui_layout_node_add_widget(parent, owned->handle, & spec, & owned->node);
         if (status != SAO_STATUS_OK)
             return status;
         content.by_handle.emplace(owned->handle, owned.get());
-        if (!owned->id.empty())
+        if (not owned->id.empty())
             content.by_id.emplace(owned->id, owned.get());
         content.widgets.push_back(std::move(owned));
     }
     return SAO_STATUS_OK;
 }
 
-sao_status_t arrange_content(PanelContent& content, int32_t width, int32_t height, int32_t top) {
-    content.root_spec.fixed_width_px = width;
-    content.root_spec.fixed_height_px = std::max(1, height - top);
-    sao_status_t status = sao_ui_layout_node_set_spec(content.root, &content.root_spec);
+sao_status_t arrange_content(PanelContent & content, int32_t width, int32_t height, int32_t top) {
+    const int32_t viewport_height = std::max(1, height - top);
+    content.viewport_top_px = top;
+    content.viewport_height_px = viewport_height;
+    SaoUiLayoutSpec natural_spec = content.root_spec;
+    natural_spec.fixed_width_px = 0;
+    natural_spec.fixed_height_px = 0;
+    sao_status_t status = sao_ui_layout_node_set_spec(content.root, & natural_spec);
     if (status != SAO_STATUS_OK)
         return status;
     SaoUiSize preferred{};
-    status = sao_ui_layout_measure(content.root, {width, std::max(1, height - top)}, &preferred);
+    status = sao_ui_layout_measure(content.root, {width, 1 << 30}, & preferred);
     if (status != SAO_STATUS_OK)
         return status;
-    return sao_ui_layout_arrange(content.root, {0, top, width, std::max(1, height - top)});
+    content.content_extent_px = std::max(viewport_height, preferred.height_px);
+    content.scroll_offset_px = std::clamp(content.scroll_offset_px, 0,
+                                           std::max(0, content.content_extent_px - viewport_height));
+    content.root_spec.fixed_width_px = width;
+    content.root_spec.fixed_height_px = viewport_height;
+    status = sao_ui_layout_node_set_spec(content.root, & content.root_spec);
+    if (status != SAO_STATUS_OK)
+        return status;
+    status = sao_ui_layout_measure(content.root, {width, viewport_height}, & preferred);
+    if (status != SAO_STATUS_OK)
+        return status;
+    return sao_ui_layout_arrange(content.root, {0, top, width, content.content_extent_px});
 }
 
 sao_status_t build_content(const json& normalized, int32_t width, int32_t height, int32_t top,
@@ -859,48 +1014,251 @@ sao_status_t build_body_content(const SaoUiPanelBodyModelNode* nodes, size_t nod
     return SAO_STATUS_OK;
 }
 
-sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const SaoPanelState& state,
-                         bool show_titlebar, const std::string& title,
-                         const sao::ui::detail::PanelResolvedTheme& theme,
+struct PanelScrollbarGeometry {
+    bool visible{};
+    int32_t hit_x{};
+    int32_t hit_y{};
+    int32_t hit_width{};
+    int32_t hit_height{};
+    float track_x{};
+    float track_y{};
+    float track_width{};
+    float track_height{};
+    float thumb_x{};
+    float thumb_y{};
+    float thumb_width{};
+    float thumb_height{};
+    float thumb_travel{};
+    int32_t range{};
+};
+
+struct PanelScrollbarGeometryTestSnapshot {
+    bool visible{};
+    uint8_t _pad[3]{};
+    int32_t hit_x{};
+    int32_t hit_y{};
+    int32_t hit_width{};
+    int32_t hit_height{};
+    float track_x{};
+    float track_y{};
+    float track_width{};
+    float track_height{};
+    float thumb_x{};
+    float thumb_y{};
+    float thumb_width{};
+    float thumb_height{};
+};
+
+constexpr int32_t kPanelScrollbarWidth = 7;
+
+PanelScrollbarGeometry panel_scrollbar_geometry(int32_t panel_width, int32_t panel_height,
+                                                int32_t top,
+                                                int32_t viewport_height, int32_t content_extent,
+                                                int32_t scroll_offset) {
+    PanelScrollbarGeometry geometry{};
+    const int32_t bounded_width = std::max(0, panel_width);
+    const int32_t bounded_height = std::max(0, panel_height);
+    const int32_t bounded_top = std::clamp(top, 0, bounded_height);
+    const int32_t available_height = std::max(0, bounded_height - bounded_top);
+    const int32_t bounded_viewport = std::min(std::max(0, viewport_height), available_height);
+    geometry.hit_width = std::min(kPanelScrollbarWidth, bounded_width);
+    geometry.hit_height = bounded_viewport;
+    geometry.hit_x = bounded_width - geometry.hit_width;
+    geometry.hit_y = bounded_top;
+    geometry.track_x = static_cast<float>(geometry.hit_x);
+    geometry.track_width = static_cast<float>(geometry.hit_width);
+    const int32_t vertical_inset = std::min(2, bounded_viewport / 2);
+    geometry.track_y = static_cast<float>(bounded_top + vertical_inset);
+    geometry.track_height = static_cast<float>(
+        std::max(0, bounded_viewport - vertical_inset * 2));
+    geometry.range = clamp_i64_to_i32(std::max(
+        int64_t{0}, static_cast<int64_t>(content_extent) - static_cast<int64_t>(viewport_height)));
+    geometry.visible = content_extent > viewport_height && geometry.hit_width > 0 &&
+                       geometry.hit_height > 0 && geometry.track_width > 0.0F &&
+                       geometry.track_height > 0.0F;
+    if (!geometry.visible)
+        return geometry;
+    const float thumb_height = std::min(
+        geometry.track_height,
+        std::max(18.0F, geometry.track_height * static_cast<float>(viewport_height) /
+                                  static_cast<float>(std::max(1, content_extent))));
+    geometry.thumb_travel = std::max(0.0F, geometry.track_height - thumb_height);
+    const float fraction = geometry.range > 0
+                               ? static_cast<float>(std::clamp(scroll_offset, 0, geometry.range)) /
+                                     static_cast<float>(geometry.range)
+                               : 0.0F;
+    geometry.thumb_x = geometry.track_x;
+    geometry.thumb_y = geometry.track_y + geometry.thumb_travel * fraction;
+    geometry.thumb_width = geometry.track_width;
+    geometry.thumb_height = thumb_height;
+    return geometry;
+}
+
+uint32_t blend_scrollbar_color(uint32_t from, uint32_t to, float amount) {
+    const float t = std::clamp(amount, 0.0F, 1.0F);
+    const auto channel = [t](uint32_t left, uint32_t right) {
+        return static_cast<uint32_t>(std::lround(
+            static_cast<float>(left) + (static_cast<float>(right) - static_cast<float>(left)) * t));
+    };
+    return (channel((from >> 24U) & 0xffU, (to >> 24U) & 0xffU) << 24U) |
+           (channel((from >> 16U) & 0xffU, (to >> 16U) & 0xffU) << 16U) |
+           (channel((from >> 8U) & 0xffU, (to >> 8U) & 0xffU) << 8U) |
+           channel(from & 0xffU, to & 0xffU);
+}
+sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const SaoPanelState & state,
+                         bool show_titlebar, const std::string & title, bool show_close_button,
+                         const sao::ui::detail::PanelResolvedTheme & theme,
                          sao_ui_panel_s* panel, sao_ui_offscreen_raster_handle_t raster) {
     const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
     sao_ui_paint_ctx_handle_t context = nullptr;
-    sao_status_t status = sao_ui_paint_ctx_create_offscreen(raster, &context);
+    sao_status_t status = sao_ui_paint_ctx_create_offscreen(raster, & context);
     if (status != SAO_STATUS_OK)
         return status;
     status = sao_ui_paint_ctx_begin_frame(context);
-    if (status == SAO_STATUS_OK) {
+    const int32_t top = show_titlebar ? titlebar_height(theme) : 0;
+    bool scrollbar_hovered = false;
+    bool scrollbar_pressed = false;
+    if (panel != nullptr) {
+        std::lock_guard lock(panel->mutex);
+        scrollbar_hovered = panel->scrollbar_hovered;
+        scrollbar_pressed = panel->scrollbar_pressed;
+    }
+    if (status == SAO_STATUS_OK)
         status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                             static_cast<float>(state.height),
                                             theme.colors[SAO_UI_TOKEN_APP_BG]);
-    }
-    if (status == SAO_STATUS_OK && show_titlebar) {
-        status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
-                                            static_cast<float>(titlebar_height(theme)),
-                                            theme.colors[SAO_UI_TOKEN_APP_CARD]);
-        if (status == SAO_STATUS_OK && !title.empty()) {
-            const float inset = static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_M]);
+    if (status == SAO_STATUS_OK and show_titlebar) {
+        status = sao_ui_paint_ctx_fill_rounded_rect(
+            context, 1.0F, 1.0F, static_cast<float>(std::max(1, state.width - 2)),
+            static_cast<float>(std::max(1, top - 1)),
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]),
+            theme.colors[SAO_UI_TOKEN_APP_CARD]);
+        if (status == SAO_STATUS_OK and not title.empty())
             status = sao_ui_paint_ctx_draw_utf8(
-                context, inset, inset, title.c_str(), 12.0F,
+                context, static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_M]),
+                static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]), title.c_str(), 12.0F,
                 theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+        if (status == SAO_STATUS_OK and show_close_button) {
+            const float close_x = static_cast<float>(state.width - top + theme.metrics[SAO_UI_METRIC_PADDING_S]);
+            const float close_y = static_cast<float>(top / 2);
+            const float arm = 5.0F;
+            status = sao_ui_paint_ctx_stroke_line(context, close_x - arm, close_y - arm,
+                                                   close_x + arm, close_y + arm, 1.5F,
+                                                   theme.colors[SAO_UI_TOKEN_CLOSE_RED]);
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_paint_ctx_stroke_line(context, close_x + arm, close_y - arm,
+                                                       close_x - arm, close_y + arm, 1.5F,
+                                                       theme.colors[SAO_UI_TOKEN_CLOSE_RED]);
         }
     }
-    if (status == SAO_STATUS_OK && content != nullptr) {
+    if (status == SAO_STATUS_OK and content != nullptr) {
         std::scoped_lock lock(content->mutex);
-        for (const auto& widget : content->widgets) {
-            SaoUiRect rect{};
-            status = sao_ui_layout_node_get_rect(widget->node, &rect);
-            if (status != SAO_STATUS_OK)
-                break;
-            status = sao_ui_widget_paint_at(widget->handle, context, rect.x_px, rect.y_px,
-                                            std::max(1, rect.width_px), std::max(1, rect.height_px),
-                                            1.0F);
-            if (status != SAO_STATUS_OK)
-                break;
+        const int32_t viewport_height = std::max(1, content->viewport_height_px);
+        status = sao_ui_paint_ctx_push_clip(context, 0.0F, static_cast<float>(top),
+                                            static_cast<float>(state.width),
+                                            static_cast<float>(viewport_height));
+        const float scroll = static_cast<float>(content->scroll_offset_px);
+        if (status == SAO_STATUS_OK) {
+            for (size_t index = 0; index < content->containers.size(); ++index) {
+                const auto visual = content->containers[index];
+                SaoUiRect rect{};
+                if (sao_ui_layout_node_get_rect(visual.node, & rect) != SAO_STATUS_OK)
+                    continue;
+                const float y = static_cast<float>(rect.y_px) - scroll;
+                const float radius = static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]);
+                status = sao_ui_paint_ctx_fill_rounded_rect(
+                    context, static_cast<float>(rect.x_px), y, static_cast<float>(rect.width_px),
+                    static_cast<float>(rect.height_px), radius, theme.colors[SAO_UI_TOKEN_APP_CARD]);
+                if (status != SAO_STATUS_OK)
+                    break;
+                status = sao_ui_paint_ctx_fill_rect(
+                    context, static_cast<float>(rect.x_px), y, 3.0F,
+                    static_cast<float>(rect.height_px), visual.accent);
+                if (status != SAO_STATUS_OK)
+                    break;
+                status = sao_ui_paint_ctx_stroke_line(
+                    context, static_cast<float>(rect.x_px), y,
+                    static_cast<float>(rect.x_px + rect.width_px), y, 1.0F,
+                    theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, static_cast<float>(rect.x_px),
+                        y + static_cast<float>(rect.height_px - 1),
+                        static_cast<float>(rect.x_px + rect.width_px),
+                        y + static_cast<float>(rect.height_px - 1), 1.0F,
+                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, static_cast<float>(rect.x_px), y,
+                        static_cast<float>(rect.x_px),
+                        y + static_cast<float>(rect.height_px), 1.0F,
+                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, static_cast<float>(rect.x_px + rect.width_px - 1), y,
+                        static_cast<float>(rect.x_px + rect.width_px - 1),
+                        y + static_cast<float>(rect.height_px), 1.0F,
+                        theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+                if (status != SAO_STATUS_OK)
+                    break;
+                if (not visual.title.empty()) {
+                    status = sao_ui_paint_ctx_draw_utf8(
+                        context, static_cast<float>(rect.x_px + theme.metrics[SAO_UI_METRIC_PADDING_S]),
+                        y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
+                        visual.title.c_str(), 11.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+                    if (status != SAO_STATUS_OK)
+                        break;
+                }
+            }
         }
+        if (status == SAO_STATUS_OK) {
+            for (size_t index = 0; index < content->widgets.size(); ++index) {
+                auto widget = content->widgets[index].get();
+                SaoUiRect rect{};
+                status = sao_ui_layout_node_get_rect(widget->node, & rect);
+                if (status != SAO_STATUS_OK)
+                    break;
+                status = sao_ui_widget_paint_at(
+                    widget->handle, context, rect.x_px, rect.y_px - content->scroll_offset_px,
+                    std::max(1, rect.width_px), std::max(1, rect.height_px), 1.0F);
+                if (status != SAO_STATUS_OK)
+                    break;
+            }
+        }
+        if (status == SAO_STATUS_OK) {
+            const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+                state.width, state.height, top, viewport_height, content->content_extent_px,
+                content->scroll_offset_px);
+            if (geometry.visible) {
+                const uint32_t border = theme.colors[SAO_UI_TOKEN_APP_BORDER];
+                const uint32_t accent = theme.colors[SAO_UI_TOKEN_APP_ACCENT];
+                const uint32_t track = scrollbar_hovered
+                                           ? blend_scrollbar_color(
+                                                 border, theme.colors[SAO_UI_TOKEN_WHITE], 0.18F)
+                                           : border;
+                const uint32_t thumb = scrollbar_pressed
+                                           ? blend_scrollbar_color(
+                                                 accent, theme.colors[SAO_UI_TOKEN_BLACK], 0.18F)
+                                           : (scrollbar_hovered
+                                                  ? blend_scrollbar_color(
+                                                        accent, theme.colors[SAO_UI_TOKEN_WHITE],
+                                                        0.18F)
+                                                  : accent);
+                status = sao_ui_paint_ctx_fill_rounded_rect(
+                    context, geometry.track_x, geometry.track_y, geometry.track_width,
+                    geometry.track_height, 2.0F, track);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_fill_rounded_rect(
+                        context, geometry.thumb_x, geometry.thumb_y, geometry.thumb_width,
+                        geometry.thumb_height, 2.0F, thumb);
+            }
+        }
+        const sao_status_t pop_status = sao_ui_paint_ctx_pop_clip(context);
+        if (status == SAO_STATUS_OK)
+            status = pop_status;
     }
     PanelCallbackLease render_lease(panel, CallbackKind::Render);
-    if (status == SAO_STATUS_OK && render_lease && render_lease.render() != nullptr) {
+    if (status == SAO_STATUS_OK and render_lease and render_lease.render() != nullptr) {
         try {
             render_lease.render()(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                   static_cast<float>(state.height), render_lease.user_data());
@@ -909,20 +1267,13 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
         }
     }
     if (status == SAO_STATUS_OK) {
-        const uint32_t border = theme.colors[SAO_UI_TOKEN_APP_BORDER];
-        status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F,
-                                            static_cast<float>(state.width), 1.0F, border);
+        status = sao_ui_paint_ctx_stroke_line(context, 0.0F, 0.0F,
+                                               static_cast<float>(std::max(0, state.width - 1)), 0.0F,
+                                               1.0F, theme.colors[SAO_UI_TOKEN_APP_BORDER]);
         if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_fill_rect(
-                context, 0.0F, static_cast<float>(state.height - 1),
-                static_cast<float>(state.width), 1.0F, border);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, 1.0F,
-                                                static_cast<float>(state.height), border);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(state.width - 1), 0.0F, 1.0F,
-                static_cast<float>(state.height), border);
+            status = sao_ui_paint_ctx_stroke_line(context, 0.0F, 0.0F, 0.0F,
+                                                   static_cast<float>(std::max(0, state.height - 1)),
+                                                   1.0F, theme.colors[SAO_UI_TOKEN_APP_BORDER]);
     }
     const sao_status_t end_status = sao_ui_paint_ctx_end_frame(context);
     sao_ui_paint_ctx_destroy(context);
@@ -930,7 +1281,7 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
 }
 
 sao_status_t render_frame(const std::shared_ptr<PanelContent>& content, const SaoPanelState& state,
-                          bool show_titlebar, const std::string& title,
+                          bool show_titlebar, const std::string& title, bool show_close_button,
                           const sao::ui::detail::PanelResolvedTheme& theme,
                           sao_ui_panel_s* panel, PanelFrame* out_frame) {
     SaoUiOffscreenRasterDesc desc{};
@@ -940,7 +1291,7 @@ sao_status_t render_frame(const std::shared_ptr<PanelContent>& content, const Sa
     sao_status_t status = sao_ui_offscreen_raster_create(&desc, &raster);
     if (status != SAO_STATUS_OK)
         return status;
-    status = paint_panel(content, state, show_titlebar, title, theme, panel, raster);
+    status = paint_panel(content, state, show_titlebar, title, show_close_button, theme, panel, raster);
     if (status == SAO_STATUS_OK) {
         size_t required = 0;
         status = sao_ui_offscreen_raster_snapshot(raster, nullptr, 0, &required, &out_frame->width,
@@ -1013,6 +1364,10 @@ sao_status_t prepare_panel_theme_layout(
         return SAO_STATUS_OK;
     {
         std::lock_guard lock(content->mutex);
+        for (auto& visual : content->containers) {
+            if (!visual.accent_is_explicit)
+                visual.accent = theme.colors[SAO_UI_TOKEN_APP_ACCENT];
+        }
         if (content->layout_theme.metrics == theme.metrics) {
             content->layout_theme = theme;
             return SAO_STATUS_OK;
@@ -1028,7 +1383,8 @@ sao_status_t prepare_panel_theme_layout(
         content->root_spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
     }
     for (auto& layout_node : content->theme_layout_nodes) {
-        layout_node.spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
+        layout_node.spec = container_spec_for_theme(layout_node.semantic_type,
+                                                    layout_node.has_title, theme);
         const sao_status_t status =
             sao_ui_layout_node_set_spec(layout_node.node, &layout_node.spec);
         if (status != SAO_STATUS_OK)
@@ -1048,16 +1404,18 @@ sao_status_t snapshot_panel(sao_ui_panel_s* panel,
                             PanelFrame* out_frame) {
     SaoPanelState state{};
     bool titlebar = false;
+    bool close_button = false;
     std::string title;
     std::shared_ptr<PanelContent> content;
     {
         std::scoped_lock lock(panel->mutex);
         state = panel->state;
         titlebar = panel->show_titlebar;
+        close_button = panel->show_close_button;
         title = panel->title;
         content = panel->content;
     }
-    return render_frame(content, state, titlebar, title, theme, panel, out_frame);
+    return render_frame(content, state, titlebar, title, close_button, theme, panel, out_frame);
 }
 
 sao_status_t upload_panel(sao_ui_panel_s* panel) {
@@ -1128,42 +1486,124 @@ void retry_dirty_theme(sao_ui_panel_s* panel) noexcept {
     }
 }
 
-sao_status_t resolve_action_at(sao_ui_panel_s* panel, int32_t x, int32_t y, std::string* out_action,
-                               std::string* out_args) {
+bool point_in_rect(int32_t x, int32_t y, int32_t left, int32_t top, int32_t width, int32_t height) {
+    if (width <= 0 || height <= 0)
+        return false;
+    const int64_t right = static_cast<int64_t>(left) + width;
+    const int64_t bottom = static_cast<int64_t>(top) + height;
+    return static_cast<int64_t>(x) >= left && static_cast<int64_t>(y) >= top &&
+           static_cast<int64_t>(x) < right && static_cast<int64_t>(y) < bottom;
+}
+
+int32_t nearest_resize_axis_edge(int32_t coordinate, int32_t extent, int32_t leading_edge,
+                                 int32_t trailing_edge) {
+    const bool near_leading = coordinate <= 6;
+    const bool near_trailing = static_cast<int64_t>(coordinate) >=
+                               static_cast<int64_t>(extent) - 7;
+    if (!near_leading)
+        return near_trailing ? trailing_edge : 0;
+    if (!near_trailing)
+        return leading_edge;
+    const int64_t leading_delta = coordinate;
+    const int64_t trailing_delta =
+        static_cast<int64_t>(coordinate) - (static_cast<int64_t>(extent) - 1);
+    const int64_t leading_distance = leading_delta < 0 ? -leading_delta : leading_delta;
+    const int64_t trailing_distance = trailing_delta < 0 ? -trailing_delta : trailing_delta;
+    return leading_distance <= trailing_distance ? leading_edge : trailing_edge;
+}
+
+sao_status_t widget_at(sao_ui_panel_s* panel, int32_t x, int32_t y,
+                       sao_ui_widget_handle_t* out_widget) {
+    if (panel == nullptr || out_widget == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_widget = nullptr;
     std::shared_ptr<PanelContent> content;
+    bool titlebar = false;
     {
         std::scoped_lock lock(panel->mutex);
         content = panel->content;
+        titlebar = panel->show_titlebar;
     }
     if (content == nullptr)
         return SAO_STATUS_OK;
+    const auto theme = resolve_panel_theme(panel);
+    const int32_t top = titlebar ? titlebar_height(theme) : 0;
+    std::scoped_lock lock(content->mutex);
+    const int64_t bottom = static_cast<int64_t>(top) + content->viewport_height_px;
+    if (static_cast<int64_t>(y) < top || static_cast<int64_t>(y) >= bottom)
+        return SAO_STATUS_OK;
+    const int64_t content_y = static_cast<int64_t>(y) + content->scroll_offset_px;
+    if (content_y < std::numeric_limits<int32_t>::min() ||
+        content_y > std::numeric_limits<int32_t>::max())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    SaoUiHitResult hit{};
+    const sao_status_t status = sao_ui_layout_hit_test(
+        content->root, x, static_cast<int32_t>(content_y), &hit);
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (hit.widget == nullptr)
+        return SAO_STATUS_OK;
+    const auto found = content->by_handle.find(hit.widget);
+    if (found != content->by_handle.end() && !found->second->enabled)
+        return SAO_STATUS_OK;
+    *out_widget = hit.widget;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t resolve_action_at(sao_ui_panel_s* panel, int32_t x, int32_t y, std::string* out_action,
+                               std::string* out_args) {
+    std::shared_ptr<PanelContent> content;
+    bool titlebar = false;
+    int32_t panel_width = 0;
+    int32_t panel_height = 0;
     {
-        std::scoped_lock lock(content->mutex);
-        SaoUiHitResult hit{};
-        const sao_status_t status = sao_ui_layout_hit_test(content->root, x, y, &hit);
-        if (status != SAO_STATUS_OK)
-            return status;
-        if (hit.widget == nullptr)
-            return SAO_STATUS_ERR_NOT_FOUND;
-        const auto found = content->by_handle.find(hit.widget);
-        if (found == content->by_handle.end() || !found->second->enabled ||
-            found->second->action.empty()) {
-            return SAO_STATUS_ERR_NOT_FOUND;
-        }
-        *out_action = found->second->action;
-        *out_args = found->second->action_args;
+        std::scoped_lock lock(panel->mutex);
+        content = panel->content;
+        titlebar = panel->show_titlebar;
+        panel_width = panel->state.width;
+        panel_height = panel->state.height;
     }
+    if (content == nullptr)
+        return SAO_STATUS_OK;
+    const auto theme = resolve_panel_theme(panel);
+    const int32_t top = titlebar ? titlebar_height(theme) : 0;
+    std::scoped_lock lock(content->mutex);
+    const int64_t content_bottom = static_cast<int64_t>(top) + content->viewport_height_px;
+    if (static_cast<int64_t>(y) < top || static_cast<int64_t>(y) >= content_bottom)
+        return SAO_STATUS_ERR_NOT_FOUND;
+    const int64_t content_y = static_cast<int64_t>(y) + content->scroll_offset_px;
+    if (content_y < std::numeric_limits<int32_t>::min() ||
+        content_y > std::numeric_limits<int32_t>::max())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+        panel_width, panel_height, top, content->viewport_height_px, content->content_extent_px,
+        content->scroll_offset_px);
+    if (geometry.visible &&
+        point_in_rect(x, y, geometry.hit_x, geometry.hit_y, geometry.hit_width,
+                      geometry.hit_height))
+        return SAO_STATUS_ERR_NOT_FOUND;
+    SaoUiHitResult hit{};
+    const sao_status_t status = sao_ui_layout_hit_test(
+        content->root, x, static_cast<int32_t>(content_y), &hit);
+    if (status != SAO_STATUS_OK or hit.widget == nullptr)
+        return status == SAO_STATUS_OK ? SAO_STATUS_ERR_NOT_FOUND : status;
+    const auto found = content->by_handle.find(hit.widget);
+    if (found == content->by_handle.end() or not found->second->enabled or
+        found->second->action.empty())
+        return SAO_STATUS_ERR_NOT_FOUND;
+    *out_action = found->second->action;
+    *out_args = found->second->action_args;
     return SAO_STATUS_OK;
 }
 
 sao_status_t dispatch_action_at(sao_ui_panel_s* panel, int32_t x, int32_t y) {
     std::string action;
     std::string args;
-    const sao_status_t status = resolve_action_at(panel, x, y, &action, &args);
+    const sao_status_t status = resolve_action_at(panel, x, y, & action, & args);
     if (status != SAO_STATUS_OK)
         return status;
     PanelCallbackLease callback(panel, CallbackKind::Action);
-    if (!callback || callback.action() == nullptr)
+    if (not callback or callback.action() == nullptr)
         return SAO_STATUS_OK;
     try {
         callback.action()(action.c_str(), reinterpret_cast<const uint8_t*>(args.data()),
@@ -1174,54 +1614,437 @@ sao_status_t dispatch_action_at(sao_ui_panel_s* panel, int32_t x, int32_t y) {
     return SAO_STATUS_OK;
 }
 
-void SAO_UI_CALL layer_button_callback(int32_t button, int32_t action, int32_t, float x, float y,
-                                       void* user_data) {
-    if (button != 0 || action != 1 || user_data == nullptr)
-        return;
-    auto* panel = static_cast<sao_ui_panel_s*>(user_data);
-    PanelOperation operation(panel);
-    if (!operation)
-        return;
-    std::string action_key;
-    std::string action_args;
-    const sao_status_t status = resolve_action_at(
-        panel, static_cast<int32_t>(x), static_cast<int32_t>(y), &action_key, &action_args);
-    PanelCallbackLease callback(panel, CallbackKind::Action);
-    if (status == SAO_STATUS_OK && callback && callback.action() != nullptr) {
-        try {
-            callback.action()(action_key.c_str(),
-                              reinterpret_cast<const uint8_t*>(action_args.data()),
-                              action_args.size(), callback.user_data());
-        } catch (...) {
-        }
+sao_status_t set_hovered_widget(sao_ui_panel_s* panel, sao_ui_widget_handle_t next) {
+    sao_ui_widget_handle_t previous = nullptr;
+    {
+        std::lock_guard lock(panel->mutex);
+        previous = panel->hovered_widget;
+        if (previous == next)
+            return SAO_STATUS_OK;
+        panel->hovered_widget = next;
     }
+    sao_status_t status = SAO_STATUS_OK;
+    if (previous != nullptr)
+        status = sao_ui_widget_set_hovered(previous, false);
+    if (next != nullptr) {
+        const sao_status_t next_status = sao_ui_widget_set_hovered(next, true);
+        if (status == SAO_STATUS_OK && next_status != SAO_STATUS_OK)
+            status = next_status;
+    }
+    const sao_status_t upload_status = upload_panel(panel);
+    return status == SAO_STATUS_OK ? upload_status : status;
 }
 
-void notify(sao_ui_panel_s* panel, int32_t event) {
+sao_status_t update_scrollbar_hover(sao_ui_panel_s* panel, int32_t x, int32_t y) {
+    const auto theme = resolve_panel_theme(panel);
+    SaoPanelState state{};
+    bool titlebar = false;
+    std::shared_ptr<PanelContent> content;
+    {
+        std::scoped_lock lock(panel->mutex);
+        state = panel->state;
+        titlebar = panel->show_titlebar;
+        content = panel->content;
+    }
+    if (content == nullptr)
+        return SAO_STATUS_OK;
+    const int32_t top = titlebar ? titlebar_height(theme) : 0;
+    bool hovered = false;
+    {
+        std::scoped_lock lock(content->mutex);
+        const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+            state.width, state.height, top, content->viewport_height_px,
+            content->content_extent_px,
+            content->scroll_offset_px);
+        hovered = geometry.visible &&
+                  point_in_rect(x, y, geometry.hit_x, geometry.hit_y, geometry.hit_width,
+                                geometry.hit_height);
+    }
+    bool changed = false;
+    {
+        std::lock_guard lock(panel->mutex);
+        if (panel->scrollbar_hovered != hovered) {
+            panel->scrollbar_hovered = hovered;
+            changed = true;
+        }
+    }
+    return changed ? upload_panel(panel) : SAO_STATUS_OK;
+}
+
+sao_status_t panel_cursor_pos(sao_ui_panel_s* panel, int32_t ix, int32_t iy) {
+    if (panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    PanelOperation operation(panel);
+    if (not operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    int32_t mode = 0;
+    int32_t edges = 0;
+    int32_t start_x = 0;
+    int32_t start_y = 0;
+    bool movable = false;
+    bool resizable = false;
+    SaoPanelState start_state{};
+    {
+        std::scoped_lock lock(panel->mutex);
+        mode = panel->interaction_mode;
+        movable = panel->movable;
+        resizable = panel->resizable;
+        edges = panel->resize_edges;
+        start_x = panel->pointer_down_x;
+        start_y = panel->pointer_down_y;
+        start_state = panel->interaction_start_state;
+    }
+    const int64_t delta_x = static_cast<int64_t>(ix) - start_x;
+    const int64_t delta_y = static_cast<int64_t>(iy) - start_y;
+    if (mode == 1 && movable) {
+        return sao_ui_panel_set_position(
+            panel, clamp_i64_to_i32(saturating_add_i64(start_state.x, delta_x)),
+            clamp_i64_to_i32(saturating_add_i64(start_state.y, delta_y)));
+    }
+    if (mode == 2 && resizable) {
+        int64_t next_x = start_state.x;
+        int64_t next_y = start_state.y;
+        int64_t next_w = start_state.width;
+        int64_t next_h = start_state.height;
+        if ((edges & 1) != 0) {
+            next_x = saturating_add_i64(next_x, delta_x);
+            next_w = saturating_sub_i64(next_w, delta_x);
+        }
+        if ((edges & 2) != 0)
+            next_w = saturating_add_i64(next_w, delta_x);
+        if ((edges & 4) != 0) {
+            next_y = saturating_add_i64(next_y, delta_y);
+            next_h = saturating_sub_i64(next_h, delta_y);
+        }
+        if ((edges & 8) != 0)
+            next_h = saturating_add_i64(next_h, delta_y);
+        return sao_ui_panel_set_geometry(
+            panel, clamp_i64_to_i32(next_x), clamp_i64_to_i32(next_y),
+            clamp_i64_to_i32(next_w), clamp_i64_to_i32(next_h));
+    }
+    if (mode == 3) {
+        std::shared_ptr<PanelContent> content;
+        SaoPanelState state{};
+        int32_t drag_start_offset = 0;
+        bool show_titlebar = false;
+        const auto theme = resolve_panel_theme(panel);
+        {
+            std::lock_guard lock(panel->mutex);
+            state = panel->state;
+            show_titlebar = panel->show_titlebar;
+            drag_start_offset = panel->scrollbar_drag_start_offset;
+            content = panel->content;
+        }
+        const int32_t top = show_titlebar ? titlebar_height(theme) : 0;
+        if (content != nullptr) {
+            std::lock_guard lock(content->mutex);
+            const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+                state.width, state.height, top, content->viewport_height_px,
+                content->content_extent_px,
+                drag_start_offset);
+            const long double mapped = geometry.thumb_travel > 0.0F
+                                           ? static_cast<long double>(drag_start_offset) +
+                                                 static_cast<long double>(delta_y) *
+                                                     static_cast<long double>(geometry.range) /
+                                                     static_cast<long double>(geometry.thumb_travel)
+                                           : static_cast<long double>(drag_start_offset);
+            const int64_t mapped_offset = rounded_finite_long_double_to_i64(mapped);
+            content->scroll_offset_px = clamp_i64_to_i32(std::clamp(
+                mapped_offset, int64_t{0}, static_cast<int64_t>(geometry.range)));
+        }
+        return upload_panel(panel);
+    }
+    sao_ui_widget_handle_t hit = nullptr;
+    sao_status_t status = widget_at(panel, ix, iy, &hit);
+    if (status != SAO_STATUS_OK)
+        return status;
+    status = set_hovered_widget(panel, hit);
+    const sao_status_t scrollbar_status = update_scrollbar_hover(panel, ix, iy);
+    if (status == SAO_STATUS_OK)
+        status = scrollbar_status;
+    return status;
+}
+
+sao_status_t panel_cursor_leave(sao_ui_panel_s* panel) {
+    if (panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    PanelOperation operation(panel);
+    if (not operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_status_t status = set_hovered_widget(panel, nullptr);
+    bool changed = false;
+    {
+        std::lock_guard lock(panel->mutex);
+        if (panel->scrollbar_hovered) {
+            panel->scrollbar_hovered = false;
+            changed = true;
+        }
+    }
+    if (changed && status == SAO_STATUS_OK)
+        status = upload_panel(panel);
+    return status;
+}
+
+sao_status_t panel_scroll(sao_ui_panel_s* panel, float dy) {
+    if (panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!std::isfinite(dy))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    PanelOperation operation(panel);
+    if (not operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::shared_ptr<PanelContent> content;
+    {
+        std::lock_guard lock(panel->mutex);
+        content = panel->content;
+    }
+    if (content == nullptr)
+        return SAO_STATUS_OK;
+    {
+        std::lock_guard lock(content->mutex);
+        const int64_t range = std::max(
+            int64_t{0}, static_cast<int64_t>(content->content_extent_px) -
+                            static_cast<int64_t>(content->viewport_height_px));
+        const long double scaled = -static_cast<long double>(dy) * 32.0L;
+        const int64_t delta = rounded_finite_long_double_to_i64(scaled);
+        const int64_t next_offset = saturating_add_i64(content->scroll_offset_px, delta);
+        content->scroll_offset_px = clamp_i64_to_i32(
+            std::clamp(next_offset, int64_t{0}, range));
+    }
+    return upload_panel(panel);
+}
+
+void SAO_UI_CALL layer_cursor_pos_callback(float x, float y, void* user_data) {
+    if (user_data != nullptr)
+        (void)panel_cursor_pos(static_cast<sao_ui_panel_s*>(user_data),
+                               saturating_float_to_i32(x), saturating_float_to_i32(y));
+}
+
+void SAO_UI_CALL layer_cursor_leave_callback(void* user_data) {
+    if (user_data != nullptr)
+        (void)panel_cursor_leave(static_cast<sao_ui_panel_s*>(user_data));
+}
+
+void SAO_UI_CALL layer_scroll_callback(float, float dy, void* user_data) {
+    if (user_data != nullptr)
+        (void)panel_scroll(static_cast<sao_ui_panel_s*>(user_data), dy);
+}
+
+sao_status_t notify(sao_ui_panel_s* panel, int32_t event);
+
+sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action, int32_t ix,
+                          int32_t iy) {
+    if (panel == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    PanelOperation operation(panel);
+    if (not operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (button != 0)
+        return SAO_STATUS_OK;
+    const auto theme = resolve_panel_theme(panel);
+    SaoPanelState state{};
+    bool titlebar = false;
+    bool close_button = false;
+    bool movable = false;
+    bool resizable = false;
+    {
+        std::scoped_lock lock(panel->mutex);
+        state = panel->state;
+        titlebar = panel->show_titlebar;
+        close_button = panel->show_close_button;
+        movable = panel->movable;
+        resizable = panel->resizable;
+    }
+    const int32_t top = titlebar ? titlebar_height(theme) : 0;
+    sao_status_t status = SAO_STATUS_OK;
+    if (action == 0) {
+        int32_t mode = 0;
+        int32_t edges = 0;
+        const bool close_armed =
+            close_button && point_in_rect(ix, iy, state.width - top, 0, top, top);
+        std::shared_ptr<PanelContent> content;
+        sao_ui_widget_handle_t previous_pressed = nullptr;
+        {
+            std::lock_guard lock(panel->mutex);
+            content = panel->content;
+            previous_pressed = panel->pressed_widget;
+            panel->pressed_widget = nullptr;
+            panel->pointer_down_x = ix;
+            panel->pointer_down_y = iy;
+            panel->interaction_start_state = state;
+            panel->close_armed = close_armed;
+            panel->interaction_mode = 0;
+            panel->resize_edges = 0;
+            panel->scrollbar_pressed = false;
+        }
+        if (previous_pressed != nullptr)
+            status = sao_ui_widget_set_pressed(previous_pressed, false);
+        bool handled_scrollbar = false;
+        bool page_changed = false;
+        bool scrollbar_pressed = false;
+        int32_t drag_start_y = 0;
+        int32_t drag_start_offset = 0;
+        if (mode == 0 && !close_armed && content != nullptr) {
+            std::lock_guard lock(content->mutex);
+            const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+                state.width, state.height, top, content->viewport_height_px,
+                content->content_extent_px,
+                content->scroll_offset_px);
+            if (geometry.visible && point_in_rect(ix, iy, geometry.hit_x, geometry.hit_y,
+                                                  geometry.hit_width, geometry.hit_height)) {
+                handled_scrollbar = true;
+                const bool in_thumb = static_cast<float>(ix) >= geometry.thumb_x &&
+                                      static_cast<float>(ix) <
+                                          geometry.thumb_x + geometry.thumb_width &&
+                                      static_cast<float>(iy) >= geometry.thumb_y &&
+                                      static_cast<float>(iy) <
+                                          geometry.thumb_y + geometry.thumb_height;
+                if (in_thumb) {
+                    mode = 3;
+                    scrollbar_pressed = true;
+                    drag_start_y = iy;
+                    drag_start_offset = content->scroll_offset_px;
+                } else {
+                    const int32_t previous_offset = content->scroll_offset_px;
+                    const float thumb_center_y = geometry.thumb_y + geometry.thumb_height * 0.5F;
+                    if (static_cast<float>(iy) < thumb_center_y) {
+                        content->scroll_offset_px = std::max(
+                            0, previous_offset - content->viewport_height_px);
+                    } else {
+                        content->scroll_offset_px = std::min(
+                            geometry.range, previous_offset + content->viewport_height_px);
+                    }
+                    page_changed = content->scroll_offset_px != previous_offset;
+                }
+            }
+        }
+        if (!handled_scrollbar && resizable && !close_armed) {
+            edges |= nearest_resize_axis_edge(ix, state.width, 1, 2);
+            edges |= nearest_resize_axis_edge(iy, state.height, 4, 8);
+            if (edges != 0)
+                mode = 2;
+        }
+        if (mode == 0 && movable && iy < top && !close_armed && !handled_scrollbar)
+            mode = 1;
+        {
+            std::lock_guard lock(panel->mutex);
+            panel->resize_edges = edges;
+            panel->interaction_mode = mode;
+            panel->scrollbar_pressed = scrollbar_pressed;
+            if (scrollbar_pressed) {
+                panel->scrollbar_drag_start_y = drag_start_y;
+                panel->scrollbar_drag_start_offset = drag_start_offset;
+            }
+        }
+        if (mode == 0 && !close_armed && !handled_scrollbar) {
+            sao_ui_widget_handle_t pressed = nullptr;
+            const sao_status_t hit_status = widget_at(panel, ix, iy, &pressed);
+            if (status == SAO_STATUS_OK && hit_status != SAO_STATUS_OK)
+                status = hit_status;
+            {
+                std::lock_guard lock(panel->mutex);
+                panel->pressed_widget = pressed;
+            }
+            if (pressed != nullptr) {
+                const sao_status_t pressed_status = sao_ui_widget_set_pressed(pressed, true);
+                if (status == SAO_STATUS_OK && pressed_status != SAO_STATUS_OK)
+                    status = pressed_status;
+            }
+        }
+        if (page_changed || scrollbar_pressed) {
+            const sao_status_t upload_status = upload_panel(panel);
+            if (status == SAO_STATUS_OK)
+                status = upload_status;
+        }
+        return status;
+    }
+    if (action != 1)
+        return SAO_STATUS_OK;
+    sao_ui_widget_handle_t pressed = nullptr;
+    bool close = false;
+    int32_t mode = 0;
+    {
+        std::lock_guard lock(panel->mutex);
+        pressed = panel->pressed_widget;
+        panel->pressed_widget = nullptr;
+        close = panel->close_armed && point_in_rect(ix, iy, state.width - top, 0, top, top);
+        panel->close_armed = false;
+        mode = panel->interaction_mode;
+        panel->interaction_mode = 0;
+        panel->resize_edges = 0;
+        panel->scrollbar_pressed = false;
+    }
+    if (pressed != nullptr) {
+        const sao_status_t pressed_status = sao_ui_widget_set_pressed(pressed, false);
+        if (status == SAO_STATUS_OK && pressed_status != SAO_STATUS_OK)
+            status = pressed_status;
+        sao_ui_widget_handle_t hit = nullptr;
+        const sao_status_t hit_status = widget_at(panel, ix, iy, &hit);
+        if (status == SAO_STATUS_OK && hit_status != SAO_STATUS_OK)
+            status = hit_status;
+        if (hit_status == SAO_STATUS_OK && pressed == hit) {
+            const sao_status_t action_status = dispatch_action_at(panel, ix, iy);
+            if (status == SAO_STATUS_OK && action_status != SAO_STATUS_OK)
+                status = action_status;
+        }
+    }
+    if (close && mode == 0) {
+        const sao_status_t event_status = notify(panel, SAO_UI_PANEL_EVENT_CLOSE);
+        if (status == SAO_STATUS_OK && event_status != SAO_STATUS_OK)
+            status = event_status;
+    }
+    const sao_status_t upload_status = upload_panel(panel);
+    return status == SAO_STATUS_OK ? upload_status : status;
+}
+
+void SAO_UI_CALL layer_button_callback(int32_t button, int32_t action, int32_t, float x, float y,
+                                       void* user_data) {
+    if (user_data != nullptr)
+        (void)panel_button(static_cast<sao_ui_panel_s*>(user_data), button, action,
+                           saturating_float_to_i32(x), saturating_float_to_i32(y));
+}
+
+sao_status_t notify(sao_ui_panel_s* panel, int32_t event) {
     PanelCallbackLease callback(panel, CallbackKind::Event);
     if (callback && callback.event() != nullptr) {
         try {
             callback.event()(event, callback.user_data());
         } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
         }
     }
+    return SAO_STATUS_OK;
 }
 
 void SAO_UI_CALL active_theme_changed(SaoUiThemeId, void* user_data) {
     auto* panel = static_cast<sao_ui_panel_s*>(user_data);
-    PanelOperation operation(panel);
-    if (!operation)
+    if (panel == nullptr)
         return;
-    {
-        std::lock_guard lock(panel->mutex);
-        panel->requested_theme_generation = std::max(
-            panel->requested_theme_generation, sao::ui::detail::process_theme_generation());
-        panel->theme_dirty = true;
-    }
+    ActiveCallback theme_marker{panel, CallbackKind::Theme, 0, active_callback};
+    active_callback = &theme_marker;
     try {
-        (void)upload_panel(panel);
+        {
+            PanelOperation operation(panel);
+            if (!operation) {
+                active_callback = theme_marker.previous;
+                return;
+            }
+            {
+                std::lock_guard lock(panel->mutex);
+                panel->requested_theme_generation = std::max(
+                    panel->requested_theme_generation,
+                    sao::ui::detail::process_theme_generation());
+                panel->theme_dirty = true;
+            }
+            try {
+                (void)upload_panel(panel);
+            } catch (...) {
+            }
+        }
     } catch (...) {
     }
+    active_callback = theme_marker.previous;
+    finalize_if_ready(panel);
 }
 
 } // namespace
@@ -1258,6 +2081,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
         panel->title = config->title_utf8 == nullptr ? "" : config->title_utf8;
         panel->theme_page = config->theme_page_utf8 == nullptr ? "" : config->theme_page_utf8;
         panel->show_titlebar = config->show_titlebar;
+        panel->show_close_button = config->show_close_button;
+        panel->movable = config->movable;
+        panel->resizable = config->resizable;
         panel->min_width = config->min_width;
         panel->min_height = config->min_height;
         panel->max_width = config->max_width;
@@ -1293,7 +2119,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_create(sao_ui_compositor_handle
             status = sao_ui_layer_create(compositor, &layer_config, &panel->layer);
             if (status == SAO_STATUS_OK) {
                 status = sao_ui_layer_set_input_callbacks(
-                    panel->layer, nullptr, nullptr, &layer_button_callback, nullptr, panel.get());
+                    panel->layer, &layer_cursor_pos_callback, &layer_cursor_leave_callback,
+                    &layer_button_callback, &layer_scroll_callback, panel.get());
             }
             if (status == SAO_STATUS_OK) {
                 status = sao_ui_layer_set_visible(panel->layer, false);
@@ -1608,7 +2435,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_replace_body_model(
         bool rendered_latest = false;
         for (int32_t pass = 0; pass < kMaximumThemePasses; ++pass) {
             frame = {};
-            status = render_frame(replacement, state, show_titlebar, title, theme, panel, &frame);
+            status = render_frame(replacement, state, show_titlebar, title, panel->show_close_button,
+                                  theme, panel, &frame);
             if (status != SAO_STATUS_OK)
                 return fail_with_rollback(status);
             const uint64_t latest_generation = sao::ui::detail::process_theme_generation();
@@ -1765,8 +2593,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_position(sao_ui_panel_handl
             panel->state.x = x;
             panel->state.y = y;
         }
-        notify(panel, SAO_UI_PANEL_EVENT_MOVE);
-        return SAO_STATUS_OK;
+        return notify(panel, SAO_UI_PANEL_EVENT_MOVE);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -1824,8 +2651,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_geometry(sao_ui_panel_handl
             (void)upload_panel(panel);
             return status;
         }
-        notify(panel, SAO_UI_PANEL_EVENT_RESIZE);
-        return SAO_STATUS_OK;
+        return notify(panel, SAO_UI_PANEL_EVENT_RESIZE);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -1889,7 +2715,8 @@ sao_ui_panel_rasterize(sao_ui_panel_handle_t panel, sao_ui_offscreen_raster_hand
             title = panel->title;
             content = panel->content;
         }
-        return paint_panel(content, state, show_titlebar, title, theme, panel, raster);
+        return paint_panel(content, state, show_titlebar, title, panel->show_close_button,
+                            theme, panel, raster);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -2039,15 +2866,96 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_enumerate(sao_ui_compositor_han
 }
 
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
-sao_ui_panel_test_pointer_button(sao_ui_panel_handle_t panel, int32_t x, int32_t y) {
-    if (panel == nullptr)
+sao_ui_panel_test_pointer_move(sao_ui_panel_handle_t panel, int32_t x, int32_t y) {
+    return panel_cursor_pos(panel, x, y);
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_leave(sao_ui_panel_handle_t panel) {
+    return panel_cursor_leave(panel);
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_button_state(sao_ui_panel_handle_t panel, int32_t button, int32_t action,
+                                       int32_t x, int32_t y) {
+    return panel_button(panel, button, action, x, y);
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_scroll(sao_ui_panel_handle_t panel, float dy) {
+    return panel_scroll(panel, dy);
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_get_scroll_state(sao_ui_panel_handle_t panel, int32_t* out_offset,
+                                    int32_t* out_extent, int32_t* out_viewport) {
+    if (panel == nullptr || out_offset == nullptr || out_extent == nullptr || out_viewport == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     PanelOperation operation(panel);
-    if (!operation)
+    if (not operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    try {
-        return dispatch_action_at(panel, x, y);
-    } catch (...) {
-        return SAO_STATUS_ERR_UNKNOWN;
+    std::shared_ptr<PanelContent> content;
+    {
+        std::lock_guard lock(panel->mutex);
+        content = panel->content;
     }
+    if (content == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    std::lock_guard lock(content->mutex);
+    *out_offset = content->scroll_offset_px;
+    *out_extent = content->content_extent_px;
+    *out_viewport = content->viewport_height_px;
+    return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_get_scrollbar_geometry(
+    sao_ui_panel_handle_t panel, PanelScrollbarGeometryTestSnapshot* out_geometry) {
+    if (panel == nullptr || out_geometry == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    PanelOperation operation(panel);
+    if (not operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    SaoPanelState state{};
+    bool show_titlebar = false;
+    std::shared_ptr<PanelContent> content;
+    {
+        std::lock_guard lock(panel->mutex);
+        state = panel->state;
+        show_titlebar = panel->show_titlebar;
+        content = panel->content;
+    }
+    if (content == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const auto theme = resolve_panel_theme(panel);
+    const int32_t top = show_titlebar ? titlebar_height(theme) : 0;
+    std::lock_guard lock(content->mutex);
+    const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+        state.width, state.height, top, content->viewport_height_px,
+        content->content_extent_px, content->scroll_offset_px);
+    *out_geometry = {
+        geometry.visible,
+        {},
+        geometry.hit_x,
+        geometry.hit_y,
+        geometry.hit_width,
+        geometry.hit_height,
+        geometry.track_x,
+        geometry.track_y,
+        geometry.track_width,
+        geometry.track_height,
+        geometry.thumb_x,
+        geometry.thumb_y,
+        geometry.thumb_width,
+        geometry.thumb_height,
+    };
+    return SAO_STATUS_OK;
+}
+
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_button(sao_ui_panel_handle_t panel, int32_t x, int32_t y) {
+    const sao_status_t press_status = panel_button(panel, 0, 0, x, y);
+    if (press_status != SAO_STATUS_OK)
+        return press_status;
+    return panel_button(panel, 0, 1, x, y);
 }

@@ -105,11 +105,10 @@ TEST_CASE("overlay_host_wm_size_updates_client_rect",
     CHECK(rect.width  == 640);
     CHECK(rect.height == 480);
 
-    // Send WM_SIZE — simulates a compositor-driven resize.  wParam
-    // = SIZE_RESTORED (0), lParam = MAKELPARAM(new_cx, new_cy).
-    ::SendMessageW(hwnd, WM_SIZE, 0,
-                   MAKELPARAM(static_cast<WORD>(800),
-                              static_cast<WORD>(600)));
+    // Resize the real HWND so WM_SIZE observes GetClientRect rather than
+    // trusting the message's 16-bit lParam dimensions.
+    REQUIRE(::SetWindowPos(hwnd, nullptr, 0, 0, 800, 600,
+                           SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER));
 
     REQUIRE(sao_ui_overlay_host_get_client_rect(host, &rect) == SAO_STATUS_OK);
     CHECK(rect.width  == 800);
@@ -137,7 +136,8 @@ TEST_CASE("overlay_host_wm_size_updates_client_rect",
     };
     REQUIRE(sao_ui_overlay_host_set_size_fn(
         host, &SizeTrampoline::fn, nullptr) == SAO_STATUS_OK);
-    ::SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(320, 240));
+    REQUIRE(::SetWindowPos(hwnd, nullptr, 0, 0, 320, 240,
+                           SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER));
     CHECK(s_size_cb.hit_count >= 1);
     CHECK(s_size_cb.last_w == 320);
     CHECK(s_size_cb.last_h == 240);

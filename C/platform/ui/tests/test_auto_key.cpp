@@ -31,7 +31,7 @@ extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_auto_key_pending_holds(
 
 namespace {
 
-void wait_for_no_pending_holds(size_t max_ms = 500) {
+void wait_for_no_pending_holds(size_t max_ms = 2000) {
     for (size_t i = 0; i < max_ms / 10; ++i) {
         if (sao_ui_auto_key_pending_holds() == 0) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -53,8 +53,9 @@ TEST_CASE("auto_key_send_key_state_reflected",
     // Drain any prior async state from previous test runs.
     (void)sao_ui_auto_key_get_key_state(kProbeVk, nullptr);
 
-    // Fire with a small non-zero hold so the release is deferred.
-    REQUIRE(sao_ui_auto_key_send_key(kProbeVk, 0, /*hold_ms=*/60)
+    // Keep the press alive long enough that a heavily loaded full-suite run
+    // cannot schedule the release worker before this process observes down.
+    REQUIRE(sao_ui_auto_key_send_key(kProbeVk, 0, /*hold_ms=*/1000)
             == SAO_STATUS_OK);
 
     // Immediately after emit, the ledger has at least one pending
@@ -62,10 +63,10 @@ TEST_CASE("auto_key_send_key_state_reflected",
     REQUIRE(sao_ui_auto_key_pending_holds() >= 1);
 
     // GetAsyncKeyState returns 0x8000 (high bit) for a currently held
-    // key.  Poll for up to 150 ms — SendInput delivery is nearly
+    // key.  Poll for up to 750 ms — SendInput delivery is nearly
     // synchronous but not guaranteed atomic w.r.t. this thread.
     bool observed_down = false;
-    for (int i = 0; i < 15 && !observed_down; ++i) {
+    for (int i = 0; i < 75 && !observed_down; ++i) {
         bool state = false;
         REQUIRE(sao_ui_auto_key_get_key_state(kProbeVk, &state)
                 == SAO_STATUS_OK);

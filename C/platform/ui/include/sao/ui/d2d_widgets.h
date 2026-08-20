@@ -89,6 +89,43 @@ enum sao_ui_scrollbar_hit_part_e : int32_t {
     SAO_UI_SCROLLBAR_HIT_INCREMENT_ARROW = 5,
 };
 
+struct SaoUiScrollbarGeometry {
+    int32_t horizontal;
+    float decrement_x;
+    float decrement_y;
+    float decrement_width;
+    float decrement_height;
+    float increment_x;
+    float increment_y;
+    float increment_width;
+    float increment_height;
+    float track_hit_x;
+    float track_hit_y;
+    float track_hit_width;
+    float track_hit_height;
+    float track_x;
+    float track_y;
+    float track_width;
+    float track_height;
+    float thumb_x;
+    float thumb_y;
+    float thumb_width;
+    float thumb_height;
+    float travel;
+    float page_fraction;
+};
+
+// ABI version 1 preserves the field order and offsets above.  This structure is
+// append-only because callers may use aggregate initialization without a size field.
+#define SAO_UI_SCROLLBAR_GEOMETRY_ABI_VERSION 1U
+
+#if defined(__cplusplus)
+static_assert(sizeof(SaoUiScrollbarGeometry) == 92U);
+static_assert(offsetof(SaoUiScrollbarGeometry, horizontal) == 0U);
+static_assert(offsetof(SaoUiScrollbarGeometry, decrement_x) == 4U);
+static_assert(offsetof(SaoUiScrollbarGeometry, page_fraction) == 88U);
+#endif
+
 // Text alignment (bar labels, table cells).  Mirrors Tk's anchor semantics.
 enum sao_ui_text_align_e : int32_t {
     SAO_UI_TEXT_ALIGN_LEFT = 0,
@@ -179,12 +216,15 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_scrollbar_hit_test(sao_ui_widg
                                                                      int32_t* out_part,
                                                                      float* out_page_value);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_scrollbar_geometry_compute(
+    float bounds_x, float bounds_y, float bounds_width, float bounds_height, float page_size,
+    float content_size, float value, int32_t show_arrows, SaoUiScrollbarGeometry* out_geometry);
+
 // ── Paint context ────────────────────────────────────────────
 
-// A paint context wraps an ID2D1RenderTarget + typography sources
-// (IDWriteFactory / IDWriteTextFormat cache).  Widgets take one
-// during their paint() call.  Created by the compositor per-layer,
-// released between layer draws.
+// The real ID2D1RenderTarget backend is not implemented yet, so this entry
+// point returns SAO_STATUS_ERR_NOT_IMPLEMENTED and leaves out_ctx null.
+// Headless/native software callers use sao_ui_paint_ctx_create_offscreen().
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_paint_ctx_create(void* d2d_render_target, // ID2D1RenderTarget*
                         void* dwrite_factory,    // IDWriteFactory*
@@ -229,6 +269,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create_offscreen(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_handle_t ctx,
                                                                float x, float y, float width,
                                                                float height, uint32_t argb);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rounded_rect(
+    sao_ui_paint_ctx_handle_t ctx, float x, float y, float width, float height, float radius,
+    uint32_t argb);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_stroke_line(sao_ui_paint_ctx_handle_t ctx,
                                                                  float x1, float y1, float x2,

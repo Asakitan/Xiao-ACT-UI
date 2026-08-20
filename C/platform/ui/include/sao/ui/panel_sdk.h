@@ -175,7 +175,7 @@ struct SaoUiBodyMutation {
     sao_ui_layout_node_handle_t target; // parent for ADD_*, self for others
     int32_t layout_mode;                // for ADD_CONTAINER
     int32_t new_index;                  // for REORDER
-    sao_ui_widget_handle_t widget;      // for ADD_WIDGET
+    sao_ui_widget_handle_t widget;      // ADD_WIDGET; identity fallback for REMOVE/props
     const SaoUiLayoutSpec* spec;        // for ADD_* + UPDATE_SPEC
     const uint8_t* props_json_utf8;     // for UPDATE_WIDGET_PROPS
     size_t props_len;

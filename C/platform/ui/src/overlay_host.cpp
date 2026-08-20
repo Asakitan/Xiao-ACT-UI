@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <string>
@@ -50,6 +51,7 @@ struct sao_ui_overlay_host_s {
     void* dc_mutation_token = nullptr;
 
     std::mutex input_update_mu;
+    std::mutex capture_mode_mu;
     std::mutex state_mu;
     bool visible = false;
     bool input_passthrough = true;
@@ -68,6 +70,7 @@ struct sao_ui_overlay_host_s {
     SaoOverlayHostClientRect client_rect{};
     SaoOverlayHostClientRect desired_rect{};
     uint32_t current_dpi = 96;
+    uint64_t last_process_window_sweep_ms = 0u;
     SaoOverlayHostWMCounters wm_counters{};
 
     sao_ui_size_fn_t size_fn = nullptr;
@@ -425,10 +428,25 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             ::ReleaseCapture();
         return 0;
     case WM_SIZE: {
+        RECT client{};
+        if (!::GetClientRect(hwnd, &client))
+            return 0;
+        const int64_t width_value = static_cast<int64_t>(client.right) - client.left;
+        const int64_t height_value = static_cast<int64_t>(client.bottom) - client.top;
+        const int32_t width =
+            width_value <= 0
+                ? 0
+                : width_value > std::numeric_limits<int32_t>::max()
+                      ? std::numeric_limits<int32_t>::max()
+                      : static_cast<int32_t>(width_value);
+        const int32_t height =
+            height_value <= 0
+                ? 0
+                : height_value > std::numeric_limits<int32_t>::max()
+                      ? std::numeric_limits<int32_t>::max()
+                      : static_cast<int32_t>(height_value);
         sao_ui_size_fn_t callback = nullptr;
         void* user_data = nullptr;
-        const int32_t width = LOWORD(lparam);
-        const int32_t height = HIWORD(lparam);
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
             host->client_rect.width = width;
@@ -537,16 +555,38 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     return ::DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
-void destroy_created_host(sao_ui_overlay_host_s* host) {
-    if (host->hwnd != nullptr)
-        ::DestroyWindow(host->hwnd);
-    if (host->control_hwnd != nullptr)
-        ::DestroyWindow(host->control_hwnd);
-    if (host->owner_hwnd != nullptr)
-        ::DestroyWindow(host->owner_hwnd);
+bool destroy_created_window(HWND& window) {
+    if (window == nullptr)
+        return true;
+    const HWND candidate = window;
+    if (::DestroyWindow(candidate) || !::IsWindow(candidate)) {
+        window = nullptr;
+        return true;
+    }
+    return false;
+}
+
+bool destroy_created_host(sao_ui_overlay_host_s* host) {
+    (void)destroy_created_window(host->hwnd);
+    (void)destroy_created_window(host->control_hwnd);
+    (void)destroy_created_window(host->owner_hwnd);
+    if (host->hwnd != nullptr && !::IsWindow(host->hwnd))
+        host->hwnd = nullptr;
+    if (host->control_hwnd != nullptr && !::IsWindow(host->control_hwnd))
+        host->control_hwnd = nullptr;
+    if (host->owner_hwnd != nullptr && !::IsWindow(host->owner_hwnd))
+        host->owner_hwnd = nullptr;
+    if (host->hwnd != nullptr || host->control_hwnd != nullptr || host->owner_hwnd != nullptr)
+        return false;
     if (host->class_atom != 0)
         ::UnregisterClassW(host->class_name.c_str(), host->hinstance);
     delete host;
+    return true;
+}
+
+void rollback_created_host(sao_ui_overlay_host_s* host) {
+    if (destroy_created_host(host))
+        release_single_instance_lock();
 }
 
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
@@ -623,8 +663,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
                                          width > 0 ? width : 1920, height > 0 ? height : 1080,
                                          host->owner_hwnd, nullptr, host->hinstance, host);
     if (host->hwnd == nullptr) {
-        destroy_created_host(host);
-        release_single_instance_lock();
+        rollback_created_host(host);
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
@@ -639,8 +678,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     }
     OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
     if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
-        destroy_created_host(host);
-        release_single_instance_lock();
+        rollback_created_host(host);
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     empty.release();
@@ -652,8 +690,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
         const sao_status_t register_status = sao_ui_dc_mutation_coordinator_register(
             host->dc_mutation, host->hwnd, &host->dc_mutation_token);
         if (register_status != SAO_STATUS_OK) {
-            destroy_created_host(host);
-            release_single_instance_lock();
+            rollback_created_host(host);
             return register_status;
         }
     }
@@ -665,8 +702,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
                 (void)sao_ui_dc_mutation_coordinator_invalidate(
                     host->dc_mutation, host->hwnd, 1.0);
             }
-            destroy_created_host(host);
-            release_single_instance_lock();
+            rollback_created_host(host);
             return protection_status;
         }
     }
@@ -910,6 +946,7 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
     if (handle == nullptr || handle->hwnd == nullptr || handle->control_hwnd == nullptr) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
+    std::lock_guard<std::mutex> transaction_lock(handle->capture_mode_mu);
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
     const SaoAntiScreencapAffinityPair pair = capture_topology(handle);
     bool previous_requested = false;
@@ -947,6 +984,18 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
             return affinity_status;
         }
     }
+    const int32_t threat_status =
+        sao_security_anti_screencap_react_to_capture_threat(exclude);
+    if (threat_status != SAO_STATUS_OK && exclude) {
+        // The registered-window sweep failed; the host must not claim
+        // exclusion.  Unwind the mode change and surface the failure.
+        const int32_t unwind = sao_security_anti_screencap_overlay_host_set_capture_mode(
+            &pair, previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
+            &effective);
+        if (!previous_requested) (void)invoke_protection_provider(handle, false);
+        if (unwind != SAO_STATUS_OK) return static_cast<sao_status_t>(unwind);
+        return static_cast<sao_status_t>(threat_status);
+    }
     std::lock_guard<std::mutex> lock(handle->state_mu);
     // MONITORED is a compatibility fallback, not strict exclusion.  Do not
     // advertise the host as capture-excluded unless the facade applied an
@@ -956,6 +1005,7 @@ sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool e
     handle->protection_requested = exclude;
     return SAO_STATUS_OK;
 #else
+    (void)exclude;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     handle->capture_excluded = false;
     handle->protection_requested = false;
@@ -1017,6 +1067,50 @@ extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_pump_messages(sao_ui_overlay_host_handle_t handle) {
     if (handle == nullptr || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
+#if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
+    // Threat sweep: the cached detector runs one fresh module scan per
+    // second.  When protection was requested and something is detected,
+    // raise the exclusion reaction so every registered window is swept.
+    {
+        bool protection_requested = false;
+        {
+            std::lock_guard<std::mutex> lock(handle->state_mu);
+            protection_requested = handle->protection_requested;
+        }
+        if (protection_requested) {
+            if (sao_security_anti_screencap_cached_flags(handle->hwnd, 1000u) != 0u) {
+                const int32_t reaction_status =
+                    sao_security_anti_screencap_react_to_capture_threat(true);
+                if (reaction_status != SAO_STATUS_OK)
+                    return reaction_status;
+            }
+            // Startup-gap sweep: lazily register every current-process
+            // top-level window (tray owner, WebView2 bridge, legacy core
+            // windows, decoys) that has not been registered explicitly.
+            // Throttled to 2s; registration is idempotent.
+            const uint64_t now_ms = ::GetTickCount64();
+            bool sweep_due = false;
+            {
+                std::lock_guard<std::mutex> lock(handle->state_mu);
+                if (handle->last_process_window_sweep_ms == 0u ||
+                    now_ms - handle->last_process_window_sweep_ms >= 2000u) {
+                    handle->last_process_window_sweep_ms = now_ms;
+                    sweep_due = true;
+                }
+            }
+            if (sweep_due) {
+                const int32_t register_status =
+                    sao_security_anti_screencap_register_process_windows();
+                if (register_status < 0) {
+                    std::lock_guard<std::mutex> lock(handle->state_mu);
+                    if (handle->last_process_window_sweep_ms == now_ms)
+                        handle->last_process_window_sweep_ms = 0u;
+                    return register_status;
+                }
+            }
+        }
+    }
+#endif
     MSG message{};
     for (uint32_t count = 0; count < 128 && ::PeekMessageW(&message, handle->hwnd, 0, 0, PM_REMOVE);
          ++count) {

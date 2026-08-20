@@ -3,10 +3,12 @@
 
 #include "sao/ui/d2d_widgets.h"
 #include "sao/ui/sao_ui_scriptable_canvas.h"
+#include "sao/ui/theme.h"
 
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -277,5 +279,155 @@ TEST_CASE("scriptable canvas rasterizes stateful line rectangle and bitmap opera
     REQUIRE(pixels[14U * 16U + 15U].g == 255);
 
     sao_ui_script_canvas_destroy(canvas);
+    sao_ui_offscreen_raster_destroy(raster);
+}
+
+
+TEST_CASE("generic widget semantic styles use the dark active theme",
+          "[ui][raster][widget][style]") {
+    SaoUiThemeId original_theme = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active_id(&original_theme) == SAO_STATUS_OK);
+    struct ThemeReset {
+        SaoUiThemeId original;
+        ~ThemeReset() {
+            (void)sao_ui_theme_set_active_id(original);
+        }
+    } reset{original_theme};
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+
+    sao_ui_widget_handle_t widget = nullptr;
+    REQUIRE(sao_ui_widget_create(SAO_UI_WIDGET_ACTION_BUTTON, nullptr, & widget) == SAO_STATUS_OK);
+    constexpr char props[] = R"({"style":"danger","text":"Danger"})";
+    REQUIRE(sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(props),
+                                      sizeof(props) - 1U) == SAO_STATUS_OK);
+    const auto pixels = paint_widget_snapshot(widget, 48, 32, 0, 0, 48, 32);
+    const Pixel center = pixels[16U * 48U + 24U];
+    const uint32_t expected = sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_RED);
+    CHECK(center.r == static_cast<uint8_t>((expected >> 16U) & 0xffU));
+    CHECK(center.g == static_cast<uint8_t>((expected >> 8U) & 0xffU));
+    CHECK(center.b == static_cast<uint8_t>(expected & 0xffU));
+    REQUIRE(sao_ui_widget_set_hovered(widget, true) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_widget_set_pressed(widget, true) == SAO_STATUS_OK);
+    const auto pressed = paint_widget_snapshot(widget, 48, 32, 0, 0, 48, 32);
+    CHECK(pressed[16U * 48U + 24U].r != center.r);
+    sao_ui_widget_destroy(widget);
+}
+
+TEST_CASE("scrollbar geometry validates finite bounds and output postconditions",
+          "[ui][raster][widget][scroll]") {
+    auto compute = [](float bounds_x, float bounds_y, float bounds_width, float bounds_height,
+                      float page_size, float content_size, float value, int32_t show_arrows,
+                      SaoUiScrollbarGeometry* geometry) {
+        return sao_ui_scrollbar_geometry_compute(bounds_x, bounds_y, bounds_width, bounds_height,
+                                                 page_size, content_size, value, show_arrows,
+                                                 geometry);
+    };
+    SaoUiScrollbarGeometry geometry{};
+    constexpr float kValid[] = {0.0F, 0.0F, 100.0F, 20.0F, 25.0F, 100.0F, 0.5F};
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+
+    CHECK(compute(0.0F, 0.0F, 0.0F, 20.0F, 25.0F, 100.0F, 0.5F, 0, &geometry) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(compute(0.0F, 0.0F, 100.0F, 0.0F, 25.0F, 100.0F, 0.5F, 0, &geometry) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(compute(0.0F, 0.0F, -1.0F, 20.0F, 25.0F, 100.0F, 0.5F, 0, &geometry) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(compute(0.0F, 0.0F, 100.0F, -1.0F, 25.0F, 100.0F, 0.5F, 0, &geometry) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    for (size_t index = 0; index < sizeof(kValid) / sizeof(kValid[0]); ++index) {
+        auto inputs = std::array<float, 7>{kValid[0], kValid[1], kValid[2], kValid[3],
+                                           kValid[4], kValid[5], kValid[6]};
+        inputs[index] = nan;
+        CHECK(compute(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6],
+                      0, &geometry) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+        inputs[index] = infinity;
+        CHECK(compute(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6],
+                      0, &geometry) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    }
+
+    const float float_max = std::numeric_limits<float>::max();
+    CHECK(compute(float_max * 0.75F, 0.0F, float_max * 0.5F, 20.0F, 25.0F, 100.0F, 0.5F, 0,
+                  &geometry) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(compute(0.0F, float_max * 0.75F, 20.0F, float_max * 0.5F, 25.0F, 100.0F, 0.5F, 0,
+                  &geometry) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    const auto check_postconditions = [](const SaoUiScrollbarGeometry& result,
+                                         int32_t horizontal) {
+        CHECK(result.horizontal == horizontal);
+        const float values[] = {
+            result.decrement_x,      result.decrement_y,      result.decrement_width,
+            result.decrement_height, result.increment_x,      result.increment_y,
+            result.increment_width,  result.increment_height, result.track_hit_x,
+            result.track_hit_y,      result.track_hit_width,  result.track_hit_height,
+            result.track_x,          result.track_y,          result.track_width,
+            result.track_height,     result.thumb_x,         result.thumb_y,
+            result.thumb_width,      result.thumb_height,    result.travel,
+            result.page_fraction};
+        for (float value : values)
+            CHECK(std::isfinite(value));
+        const float dimensions[] = {result.decrement_width, result.decrement_height,
+                                    result.increment_width, result.increment_height,
+                                    result.track_hit_width, result.track_hit_height,
+                                    result.track_width, result.track_height, result.thumb_width,
+                                    result.thumb_height, result.travel, result.page_fraction};
+        for (float value : dimensions)
+            CHECK(value >= 0.0F);
+    };
+
+    REQUIRE(compute(-20.0F, 8.0F, 160.0F, 24.0F, 40.0F, 160.0F, 0.4F, 1, &geometry) ==
+            SAO_STATUS_OK);
+    check_postconditions(geometry, 1);
+    REQUIRE(compute(8.0F, -20.0F, 24.0F, 160.0F, 40.0F, 160.0F, 0.4F, 1, &geometry) ==
+            SAO_STATUS_OK);
+    check_postconditions(geometry, 0);
+}
+
+TEST_CASE("paint context and raster primitives reject unbounded work",
+          "[ui][raster][bounds][abi]") {
+    sao_ui_paint_ctx_handle_t unavailable =
+        reinterpret_cast<sao_ui_paint_ctx_handle_t>(uintptr_t{1});
+    CHECK(sao_ui_paint_ctx_create(nullptr, nullptr, &unavailable) ==
+          SAO_STATUS_ERR_NOT_IMPLEMENTED);
+    CHECK(unavailable == nullptr);
+
+    SaoUiOffscreenRasterDesc desc{16, 16, 0x00000000U};
+    sao_ui_offscreen_raster_handle_t raster = nullptr;
+    sao_ui_paint_ctx_handle_t context = nullptr;
+    REQUIRE(sao_ui_offscreen_raster_create(&desc, &raster) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_paint_ctx_create_offscreen(raster, &context) == SAO_STATUS_OK);
+
+    const float float_max = std::numeric_limits<float>::max();
+    CHECK(sao_ui_paint_ctx_push_clip(context, float_max * 0.75F, 0.0F,
+                                     float_max * 0.5F, 1.0F) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_paint_ctx_stroke_line(context, -float_max * 0.5F, 8.0F,
+                                         float_max * 0.5F, 8.0F, 1.0F,
+                                         0xffffffffU) == SAO_STATUS_OK);
+    CHECK(sao_ui_paint_ctx_stroke_line(context, 0.0F, 0.0F, 1.0F, 1.0F,
+                                       float_max, 0xffffffffU) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    const int32_t polygon[] = {
+        std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max(),
+        std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max(),
+    };
+    REQUIRE(sao_ui_paint_ctx_fill_polygon(context, polygon, 4U, 0xff00ff00U) ==
+            SAO_STATUS_OK);
+    CHECK(sao_ui_paint_ctx_draw_scanlines(
+              context, 0.0F, 0.0F, 16.0F, 16.0F,
+              std::numeric_limits<float>::denorm_min(), 1.0F, 0xffffffffU) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(sao_ui_paint_ctx_draw_scanlines(context, float_max * 0.75F, 0.0F,
+                                          float_max * 0.5F, 1.0F, 1.0F, 1.0F,
+                                          0xffffffffU) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+
+    const auto pixels = snapshot(raster);
+    CHECK(pixels[8U * 16U + 8U].g == 255U);
+    sao_ui_paint_ctx_destroy(context);
     sao_ui_offscreen_raster_destroy(raster);
 }

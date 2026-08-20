@@ -992,11 +992,32 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_body(sao_ui_panel_body_h
                 created_by_mutation[index] = staged.back().id;
                 break;
             }
-            case SAO_UI_BODY_REMOVE_NODE:
-                if (mutation.target == nullptr || target_node == nullptr || target == 1)
+            case SAO_UI_BODY_REMOVE_NODE: {
+                uint64_t remove_target = target;
+                BodyRecord::Node* remove_node = target_node;
+                if (mutation.widget != nullptr) {
+                    const sao_status_t widget_status =
+                        validate_body_widget(mutation.widget);
+                    if (widget_status != SAO_STATUS_OK)
+                        return widget_status;
+                }
+                if (mutation.widget != nullptr &&
+                    (remove_node == nullptr ||
+                     remove_node->widget != mutation.widget)) {
+                    const auto found = std::ranges::find_if(
+                        staged, [&](const BodyRecord::Node& node) {
+                            return node.widget == mutation.widget;
+                        });
+                    if (found != staged.end()) {
+                        remove_target = found->id;
+                        remove_node = &*found;
+                    }
+                }
+                if (remove_node == nullptr || remove_target == 1)
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                remove_model_subtree(staged, target);
+                remove_model_subtree(staged, remove_target);
                 break;
+            }
             case SAO_UI_BODY_UPDATE_SPEC:
                 if (target_node == nullptr || mutation.spec == nullptr)
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;

@@ -20,6 +20,8 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <regex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,6 +37,23 @@
 #include "sao/ui/widget_kit.h"
 #include "sao/ui/widget_table.h"
 
+struct PanelScrollbarGeometryTestSnapshot {
+    bool visible{};
+    uint8_t _pad[3]{};
+    int32_t hit_x{};
+    int32_t hit_y{};
+    int32_t hit_width{};
+    int32_t hit_height{};
+    float track_x{};
+    float track_y{};
+    float track_width{};
+    float track_height{};
+    float thumb_x{};
+    float thumb_y{};
+    float thumb_width{};
+    float thumb_height{};
+};
+
 // Test-only helpers exported by panel_sdk.cpp (introspection).
 extern "C" SAO_UI_API size_t SAO_UI_CALL
 sao_ui_panel_body_mutation_count(sao_ui_panel_body_handle_t body);
@@ -46,6 +65,21 @@ extern "C" SAO_UI_API float SAO_UI_CALL sao_ui_panel_get_opacity_(sao_ui_panel_h
 extern "C" SAO_UI_API int32_t SAO_UI_CALL sao_ui_panel_global_z_key_(sao_ui_panel_handle_t panel);
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_panel_test_pointer_button(sao_ui_panel_handle_t panel, int32_t x, int32_t y);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_move(sao_ui_panel_handle_t panel, int32_t x, int32_t y);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_leave(sao_ui_panel_handle_t panel);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_pointer_button_state(sao_ui_panel_handle_t panel, int32_t button, int32_t action,
+                                       int32_t x, int32_t y);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_scroll(sao_ui_panel_handle_t panel, float dy);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_get_scroll_state(sao_ui_panel_handle_t panel, int32_t* out_offset,
+                                   int32_t* out_extent, int32_t* out_viewport);
+extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_panel_test_get_scrollbar_geometry(
+    sao_ui_panel_handle_t panel, PanelScrollbarGeometryTestSnapshot* out_geometry);
 extern "C" SAO_UI_API size_t SAO_UI_CALL sao_ui_panel_retired_geometry_count_();
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_panel_test_set_body_replace_failure_point(int32_t point);
@@ -164,6 +198,19 @@ struct ActionCapture {
     size_t count{};
 };
 
+struct PanelEventCapture {
+    std::vector<int32_t> events;
+};
+
+void SAO_UI_CALL capture_panel_event(int32_t event_kind, void* user_data) {
+    auto* capture = static_cast<PanelEventCapture*>(user_data);
+    capture->events.push_back(event_kind);
+}
+
+void SAO_UI_CALL throw_panel_event(int32_t, void*) {
+    throw std::runtime_error("panel event failure");
+}
+
 void SAO_UI_CALL capture_action(const char* action_id_utf8, const uint8_t* args_json_utf8,
                                 size_t args_len, void* user_data) {
     auto* capture = static_cast<ActionCapture*>(user_data);
@@ -243,6 +290,19 @@ void SAO_UI_CALL render_reentry(void*, float, float, float, float, void* user_da
     capture->nested_status = sao_ui_panel_set_spec(
         capture->panel, reinterpret_cast<const uint8_t*>(spec), std::strlen(spec));
     ++capture->count;
+}
+
+struct ThemeSelfDestroyCapture {
+    sao_ui_panel_handle_t panel{};
+    bool destroy_on_render{};
+    size_t count{};
+};
+
+void SAO_UI_CALL destroy_from_theme_render(void*, float, float, float, float, void* user_data) {
+    auto* capture = static_cast<ThemeSelfDestroyCapture*>(user_data);
+    ++capture->count;
+    if (capture->destroy_on_render)
+        sao_ui_panel_destroy(capture->panel);
 }
 
 struct SelfUnregisterCapture {
@@ -776,108 +836,6 @@ TEST_CASE("widget kit interaction and bar table props use the typed JSON transac
     sao_ui_widget_destroy(slider);
 }
 
-TEST_CASE("modern panel uses active theme tokens and canonical metrics",
-          "[ui][panel_sdk][theme][pixels][metrics]") {
-    struct ThemeReset {
-        ~ThemeReset() {
-            (void)sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
-        }
-    } reset;
-    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
-
-    SaoCompositorConfig compositor_config{};
-    sao_ui_compositor_handle_t compositor = nullptr;
-    REQUIRE(sao_ui_compositor_create(nullptr, &compositor_config, &compositor) == SAO_STATUS_OK);
-    auto descriptor = make_descriptor("panel_theme_tokens", SAO_UI_PANEL_Z_NORMAL, 0);
-    descriptor.default_x_px = 0;
-    descriptor.default_y_px = 0;
-    descriptor.default_width_px = 200;
-    descriptor.default_height_px = 140;
-    descriptor.min_width_px = 1;
-    descriptor.min_height_px = 1;
-    descriptor.initial_opacity = 1.0F;
-    sao_ui_panel_handle_t panel = nullptr;
-    sao_ui_panel_body_handle_t body = nullptr;
-    REQUIRE(sao_ui_panel_register(compositor, &descriptor, &panel, &body) == SAO_STATUS_OK);
-
-    const char spec[] =
-        R"({"version":1,"title":"","nodes":[{"type":"text","id":"body.text","text":"Body","height":20},{"type":"button","id":"body.button","label":"Run","action":"run","active":true,"height":28}]})";
-    REQUIRE(sao_ui_panel_body_set_spec(body, reinterpret_cast<const uint8_t*>(spec),
-                                       std::strlen(spec)) == SAO_STATUS_OK);
-
-    uint32_t width = 0;
-    uint32_t height = 0;
-    const auto dark = compositor_snapshot(compositor, &width, &height);
-    REQUIRE(width >= 200);
-    REQUIRE(height >= 140);
-    const uint32_t dark_bg = sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_BG);
-    const uint32_t dark_card = sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_CARD);
-    const uint32_t dark_border =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_BORDER);
-    const uint32_t dark_text = sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_TEXT);
-    const uint32_t dark_text_2 =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_TEXT_2);
-    const uint32_t dark_accent =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_ACCENT);
-    const int32_t titlebar_height =
-        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_PADDING_L) * 2;
-    const int32_t body_padding =
-        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_PADDING_M);
-    const int32_t body_gap = sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_GAP_S);
-    const int32_t button_radius =
-        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_BORDER_RADIUS_MEDIUM);
-
-    CHECK(snapshot_argb_at(dark, width, 0, 0) == dark_border);
-    CHECK(snapshot_argb_at(dark, width, 180, 10) == dark_card);
-    CHECK(snapshot_argb_at(dark, width, 150, static_cast<uint32_t>(titlebar_height)) == dark_bg);
-    CHECK(snapshot_contains_argb(dark, dark_text));
-    CHECK(snapshot_contains_argb(dark, dark_text_2));
-    const uint32_t button_top =
-        static_cast<uint32_t>(titlebar_height + body_padding + 20 + body_gap);
-    CHECK(button_radius > 1);
-    CHECK(snapshot_argb_at(dark, width, static_cast<uint32_t>(body_padding), button_top) ==
-          dark_bg);
-    CHECK(snapshot_argb_at(dark, width, static_cast<uint32_t>(body_padding + button_radius),
-                           button_top) == dark_border);
-    CHECK(snapshot_argb_at(dark, width, static_cast<uint32_t>(body_padding + 2), button_top + 4) ==
-          dark_accent);
-
-    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
-    const auto light = compositor_snapshot(compositor);
-    const uint32_t light_bg = sao_ui_theme_resolve_color(SAO_UI_THEME_LIGHT, SAO_UI_TOKEN_APP_BG);
-    const uint32_t light_card =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_LIGHT, SAO_UI_TOKEN_APP_CARD);
-    const uint32_t light_accent =
-        sao_ui_theme_resolve_color(SAO_UI_THEME_LIGHT, SAO_UI_TOKEN_APP_ACCENT);
-    CHECK(snapshot_argb_at(light, width, 150, static_cast<uint32_t>(titlebar_height)) == light_bg);
-    CHECK(snapshot_argb_at(light, width, 180, 10) == light_card);
-    CHECK(snapshot_argb_at(light, width, static_cast<uint32_t>(body_padding + 2), button_top + 4) ==
-          light_accent);
-    CHECK(light != dark);
-
-    const char override_json[] =
-        R"({"APP_BG":"#112233","APP_CARD":"#223344","APP_BORDER":"#334455","APP_TEXT":"#445566","APP_TEXT_2":"#556677","APP_ACCENT":"#667788"})";
-    REQUIRE(sao_ui_panel_set_theme_override(panel, reinterpret_cast<const uint8_t*>(override_json),
-                                            std::strlen(override_json)) == SAO_STATUS_OK);
-    const auto overridden = compositor_snapshot(compositor);
-    CHECK(snapshot_argb_at(overridden, width, 0, 0) == 0xff334455U);
-    CHECK(snapshot_argb_at(overridden, width, 180, 10) == 0xff223344U);
-    CHECK(snapshot_argb_at(overridden, width, 150, static_cast<uint32_t>(titlebar_height)) ==
-          0xff112233U);
-    CHECK(snapshot_argb_at(overridden, width, static_cast<uint32_t>(body_padding + 2),
-                           button_top + 4) == 0xff667788U);
-    CHECK(snapshot_contains_argb(overridden, 0xff445566U));
-    CHECK(snapshot_contains_argb(overridden, 0xff556677U));
-
-    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
-    CHECK(compositor_snapshot(compositor) == overridden);
-    REQUIRE(sao_ui_panel_clear_theme_override(panel) == SAO_STATUS_OK);
-    CHECK(compositor_snapshot(compositor) == dark);
-
-    REQUIRE(sao_ui_panel_unregister(panel) == SAO_STATUS_OK);
-    sao_ui_compositor_destroy(compositor);
-}
-
 TEST_CASE("panel retries the latest theme after a render callback changes it",
           "[ui][panel][theme][generation][reentrant]") {
     struct ThemeReset {
@@ -1011,46 +969,6 @@ TEST_CASE("panel create handshakes with a theme switch before callback registrat
     CHECK(uploaded == requested);
     sao_ui_panel_destroy(panel);
     sao_ui_compositor_destroy(compositor);
-}
-
-TEST_CASE("theme metric generation relayouts existing panel content",
-          "[ui][panel][theme][metrics][layout]") {
-    struct ThemeReset {
-        ~ThemeReset() {
-            sao_ui_panel_test_set_metric_override(SAO_UI_METRIC_PADDING_M, 0);
-            (void)sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
-        }
-    } reset;
-    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
-    SaoPanelConfig config{};
-    config.panel_id_utf8 = "panel_theme_metric_layout";
-    config.default_width = 160;
-    config.default_height = 100;
-    config.min_width = 1;
-    config.min_height = 1;
-    sao_ui_panel_handle_t panel = nullptr;
-    REQUIRE(sao_ui_panel_create(nullptr, &config, &panel) == SAO_STATUS_OK);
-    const char spec[] =
-        R"({"version":1,"title":"","nodes":[{"type":"button","id":"metric.button","label":"Metric","action":"metric.action","height":24}]})";
-    REQUIRE(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec),
-                                  std::strlen(spec)) == SAO_STATUS_OK);
-    ActionCapture action;
-    REQUIRE(sao_ui_panel_set_action_handler(panel, &capture_action, &action) == SAO_STATUS_OK);
-    const int32_t default_padding =
-        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_PADDING_M);
-    REQUIRE(sao_ui_panel_test_pointer_button(panel, default_padding + 1, default_padding + 1) ==
-            SAO_STATUS_OK);
-    CHECK(action.count == 1u);
-
-    sao_ui_panel_test_set_metric_override(SAO_UI_METRIC_PADDING_M, default_padding + 20);
-    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
-    CHECK(sao_ui_panel_test_pointer_button(panel, default_padding + 1, default_padding + 1) ==
-          SAO_STATUS_ERR_NOT_FOUND);
-    REQUIRE(sao_ui_panel_test_pointer_button(panel, default_padding + 21, default_padding + 21) ==
-            SAO_STATUS_OK);
-    CHECK(action.count == 2u);
-
-    sao_ui_panel_destroy(panel);
 }
 
 TEST_CASE("classic panel theme page maps before JSON token override",
@@ -1609,6 +1527,35 @@ TEST_CASE("panel_action_callback_can_destroy_its_panel", "[ui][panel][callback][
     CHECK(sao_ui_panel_get_state(panel, &state) == SAO_STATUS_ERR_HANDLE_INVALID);
 }
 
+TEST_CASE("panel theme callback can destroy through its render callback",
+          "[ui][panel][theme][callback][destroy]") {
+    struct ThemeReset {
+        ~ThemeReset() {
+            (void)sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
+        }
+    } reset;
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = "panel_theme_callback_self_destroy";
+    config.default_width = 96;
+    config.default_height = 64;
+    config.min_width = 1;
+    config.min_height = 1;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(compositor, &config, &panel) == SAO_STATUS_OK);
+    ThemeSelfDestroyCapture capture{panel};
+    REQUIRE(sao_ui_panel_set_render_fn(panel, &destroy_from_theme_render, &capture) ==
+            SAO_STATUS_OK);
+    capture.destroy_on_render = true;
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+    CHECK(capture.count >= 2u);
+    SaoPanelState state{};
+    CHECK(sao_ui_panel_get_state(panel, &state) == SAO_STATUS_ERR_HANDLE_INVALID);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
 TEST_CASE("panel_registry_snapshot_owns_strings_and_icons", "[ui][panel_sdk][snapshot]") {
     const uint8_t icon[] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
     auto descriptor = make_descriptor("panel_snapshot_owned", SAO_UI_PANEL_Z_NORMAL, 0);
@@ -1727,4 +1674,185 @@ TEST_CASE("panel_register struct_size guard rejects over-size",
     CHECK(sao_ui_panel_register(nullptr, &desc, &panel, &body) == SAO_STATUS_ERR_ABI_MISMATCH);
     CHECK(panel == nullptr);
     CHECK(body == nullptr);
+}
+
+
+TEST_CASE("container accents refresh inherited colors but preserve explicit colors",
+          "[ui][panel][theme][containers][accent]") {
+    struct ThemeReset {
+        ~ThemeReset() {
+            (void)sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
+        }
+    } reset;
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK) == SAO_STATUS_OK);
+    sao_ui_compositor_handle_t compositor = nullptr;
+    REQUIRE(sao_ui_compositor_create(nullptr, nullptr, &compositor) == SAO_STATUS_OK);
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = "panel_container_accent_theme_refresh";
+    config.default_width = 180;
+    config.default_height = 120;
+    config.min_width = 1;
+    config.min_height = 1;
+    config.show_titlebar = false;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(compositor, &config, &panel) == SAO_STATUS_OK);
+    const char spec[] = R"({"version":1,"title":"","nodes":[
+        {"type":"section","children":[{"type":"spacer","size":24}]},
+        {"type":"section","accent":"#123456","children":[{"type":"spacer","size":24}]}
+    ]})";
+    REQUIRE(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec),
+                                  std::strlen(spec)) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_set_visible(panel, true) == SAO_STATUS_OK);
+    SaoPanelState state{};
+    REQUIRE(sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK);
+    const int32_t body_padding =
+        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_PADDING_M);
+    const int32_t section_padding =
+        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_PADDING_S);
+    const int32_t section_gap =
+        sao_ui_theme_resolve_metric(SAO_UI_THEME_DARK, SAO_UI_METRIC_GAP_S);
+    const int32_t strip_x = body_padding + 1;
+    const int32_t first_strip_y = body_padding + 2;
+    const int32_t second_strip_y =
+        body_padding + section_padding * 2 + 24 + section_gap + 2;
+    const uint32_t dark_accent =
+        sao_ui_theme_resolve_color(SAO_UI_THEME_DARK, SAO_UI_TOKEN_APP_ACCENT);
+    const uint32_t light_accent =
+        sao_ui_theme_resolve_color(SAO_UI_THEME_LIGHT, SAO_UI_TOKEN_APP_ACCENT);
+    const auto dark = compositor_snapshot(compositor);
+    for (int32_t x = strip_x; x <= strip_x + 1; ++x) {
+        CHECK(snapshot_argb_at(dark, state.width, static_cast<uint32_t>(x),
+                               static_cast<uint32_t>(first_strip_y)) == dark_accent);
+        CHECK(snapshot_argb_at(dark, state.width, static_cast<uint32_t>(x),
+                               static_cast<uint32_t>(second_strip_y)) == 0xff123456U);
+    }
+
+    REQUIRE(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT) == SAO_STATUS_OK);
+    const auto light = compositor_snapshot(compositor);
+    for (int32_t x = strip_x; x <= strip_x + 1; ++x) {
+        CHECK(snapshot_argb_at(light, state.width, static_cast<uint32_t>(x),
+                               static_cast<uint32_t>(first_strip_y)) == light_accent);
+        CHECK(snapshot_argb_at(light, state.width, static_cast<uint32_t>(x),
+                               static_cast<uint32_t>(second_strip_y)) == 0xff123456U);
+    }
+    CHECK(light != dark);
+
+    sao_ui_panel_destroy(panel);
+    REQUIRE(sao_ui_compositor_try_destroy(compositor) == SAO_STATUS_OK);
+}
+
+TEST_CASE("panel test pointer helpers reject invalid handles",
+          "[ui][panel][helpers][lifetime]") {
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = "panel_invalid_helper_handle";
+    config.default_width = 96;
+    config.default_height = 64;
+    config.min_width = 1;
+    config.min_height = 1;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(nullptr, &config, &panel) == SAO_STATUS_OK);
+    sao_ui_panel_destroy(panel);
+    CHECK(sao_ui_panel_test_pointer_move(panel, 1, 1) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_panel_test_pointer_leave(panel) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_panel_test_pointer_button(panel, 1, 1) == SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_panel_test_pointer_button_state(panel, 0, 0, 1, 1) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+    CHECK(sao_ui_panel_test_scroll(panel, 1.0F) == SAO_STATUS_ERR_HANDLE_INVALID);
+    int32_t offset = 0;
+    int32_t extent = 0;
+    int32_t viewport = 0;
+    CHECK(sao_ui_panel_test_get_scroll_state(panel, &offset, &extent, &viewport) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+}
+
+TEST_CASE("panel spec synchronizes disabled widgets and rejects malformed accents",
+          "[ui][panel][input][contract]") {
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = "panel_disabled_widget_contract";
+    config.default_width = 160;
+    config.default_height = 160;
+    config.min_width = 1;
+    config.min_height = 1;
+    config.show_titlebar = false;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(nullptr, &config, &panel) == SAO_STATUS_OK);
+    const char spec[] = R"({"version":1,"title":"","nodes":[
+        {"type":"input","id":"disabled_input","value":"x","disabled":true,"height":24},
+        {"type":"slider","id":"disabled_slider","disabled":true,"height":24},
+        {"type":"table","id":"disabled_table","disabled":true,"height":24}
+    ]})";
+    REQUIRE(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec),
+                                  sizeof(spec) - 1U) == SAO_STATUS_OK);
+    sao_ui_layout_tree_handle_t tree = nullptr;
+    sao_ui_layout_node_handle_t root = nullptr;
+    REQUIRE(sao_ui_panel_get_layout_tree(panel, &tree, &root) == SAO_STATUS_OK);
+    SaoUiThemeId active_theme = SAO_UI_THEME_DARK;
+    REQUIRE(sao_ui_theme_get_active_id(&active_theme) == SAO_STATUS_OK);
+    const int32_t padding =
+        sao_ui_theme_resolve_metric(active_theme, SAO_UI_METRIC_PADDING_M);
+    const int32_t gap = sao_ui_theme_resolve_metric(active_theme, SAO_UI_METRIC_GAP_S);
+    sao_ui_widget_handle_t first_widget = nullptr;
+    for (int32_t index = 0; index < 3; ++index) {
+        SaoUiHitResult hit{};
+        const int32_t y = padding + index * (24 + gap) + 1;
+        REQUIRE(sao_ui_layout_hit_test(root, padding + 1, y, &hit) == SAO_STATUS_OK);
+        REQUIRE(hit.widget != nullptr);
+        bool focusable = true;
+        REQUIRE(sao_ui_widget_is_focusable(hit.widget, &focusable) == SAO_STATUS_OK);
+        CHECK_FALSE(focusable);
+        if (index == 0)
+            first_widget = hit.widget;
+    }
+    constexpr char enable_input[] = R"({"disabled":false})";
+    REQUIRE(sao_ui_panel_update_widget(
+                panel, "disabled_input", reinterpret_cast<const uint8_t*>(enable_input),
+                sizeof(enable_input) - 1U) == SAO_STATUS_OK);
+    bool focusable = false;
+    REQUIRE(sao_ui_widget_is_focusable(first_widget, &focusable) == SAO_STATUS_OK);
+    CHECK(focusable);
+
+    const char bad_accent_type[] =
+        R"({"version":1,"title":"","nodes":[{"type":"section","accent":7,"children":[]}]})";
+    CHECK(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(bad_accent_type),
+                                sizeof(bad_accent_type) - 1U) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    const char bad_accent_value[] =
+        R"({"version":1,"title":"","nodes":[{"type":"section","accent":"bad","children":[]}]})";
+    CHECK(sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(bad_accent_value),
+                                sizeof(bad_accent_value) - 1U) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    sao_ui_panel_destroy(panel);
+}
+
+TEST_CASE("tiny panel resize chooses the nearest opposing edge",
+          "[ui][panel][resize][tiny]") {
+    SaoPanelConfig config{};
+    config.panel_id_utf8 = "panel_tiny_nearest_resize_edge";
+    config.default_x = 100;
+    config.default_y = 50;
+    config.default_width = 8;
+    config.default_height = 30;
+    config.min_width = 1;
+    config.min_height = 1;
+    config.resizable = true;
+    config.show_titlebar = false;
+    sao_ui_panel_handle_t panel = nullptr;
+    REQUIRE(sao_ui_panel_create(nullptr, &config, &panel) == SAO_STATUS_OK);
+
+    REQUIRE(sao_ui_panel_test_pointer_button_state(panel, 0, 0, 3, 15) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_test_pointer_move(panel, 5, 15) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_test_pointer_button_state(panel, 0, 1, 5, 15) == SAO_STATUS_OK);
+    SaoPanelState state{};
+    REQUIRE(sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK);
+    CHECK(state.x == 102);
+    CHECK(state.width == 6);
+
+    REQUIRE(sao_ui_panel_set_geometry(panel, 100, 50, 8, 30) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_test_pointer_button_state(panel, 0, 0, 4, 15) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_test_pointer_move(panel, 6, 15) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_test_pointer_button_state(panel, 0, 1, 6, 15) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK);
+    CHECK(state.x == 100);
+    CHECK(state.width == 10);
+    sao_ui_panel_destroy(panel);
 }

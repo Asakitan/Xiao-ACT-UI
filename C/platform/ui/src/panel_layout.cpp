@@ -11,10 +11,12 @@
 // "empty result".
 
 #include "sao/ui/panel_layout.h"
+#include "sao/ui/widget_kit.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -25,6 +27,42 @@
 namespace {
 
 constexpr int32_t kUnbounded = 1 << 30;
+constexpr int64_t kMaxLayoutI64 = std::numeric_limits<int32_t>::max();
+
+inline int64_t nonnegative_i64(int32_t value) {
+    return std::max<int64_t>(0, value);
+}
+
+inline int64_t saturating_add_nonnegative(int64_t lhs, int64_t rhs) {
+    lhs = std::max<int64_t>(0, lhs);
+    rhs = std::max<int64_t>(0, rhs);
+    if (lhs > std::numeric_limits<int64_t>::max() - rhs)
+        return std::numeric_limits<int64_t>::max();
+    return lhs + rhs;
+}
+
+inline int64_t saturating_mul_nonnegative(int64_t lhs, int64_t rhs) {
+    lhs = std::max<int64_t>(0, lhs);
+    rhs = std::max<int64_t>(0, rhs);
+    if (lhs == 0 || rhs == 0) return 0;
+    if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+        return std::numeric_limits<int64_t>::max();
+    return lhs * rhs;
+}
+
+inline int64_t saturating_add_i64(int64_t lhs, int64_t rhs) {
+    if (rhs > 0 && lhs > std::numeric_limits<int64_t>::max() - rhs)
+        return std::numeric_limits<int64_t>::max();
+    if (rhs < 0 && lhs < std::numeric_limits<int64_t>::min() - rhs)
+        return std::numeric_limits<int64_t>::min();
+    return lhs + rhs;
+}
+
+inline int32_t clamp_nonnegative_i32(int64_t value) {
+    if (value <= 0) return 0;
+    if (value > kMaxLayoutI64) return std::numeric_limits<int32_t>::max();
+    return static_cast<int32_t>(value);
+}
 
 inline int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
     if (v < lo) return lo;
@@ -44,6 +82,7 @@ inline int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
 struct sao_ui_layout_node_s {
     // Identity.
     sao_ui_layout_node_s* parent = nullptr;
+    sao_ui_layout_tree_s* tree = nullptr;
     std::vector<std::unique_ptr<sao_ui_layout_node_s>> children;
     // Config.
     int32_t layout_mode = SAO_UI_LAYOUT_VERTICAL;
@@ -66,6 +105,7 @@ struct sao_ui_layout_node_s {
     SaoUiSize measured{0, 0};
     SaoUiRect arranged{0, 0, 0, 0};
     bool dirty = true;
+    bool paint_dirty = true;
 };
 
 struct sao_ui_layout_tree_s {
@@ -77,6 +117,10 @@ struct sao_ui_layout_tree_s {
 };
 
 namespace {
+
+bool valid_layout_mode(int32_t mode) {
+    return mode >= SAO_UI_LAYOUT_VERTICAL && mode <= SAO_UI_LAYOUT_DOCK;
+}
 
 const char* layout_mode_name(int32_t mode) {
     switch (mode) {
@@ -134,41 +178,279 @@ nlohmann::json layout_node_json(const sao_ui_layout_node_s& node) {
 static void mark_dirty_up(sao_ui_layout_node_s* node) {
     while (node != nullptr) {
         node->dirty = true;
+        node->paint_dirty = true;
         node = node->parent;
     }
 }
 
-// Preferred size hint for a leaf widget.  Since widget size hints are
-// wired up in later slices (calling into d2d_widgets.cpp), we approx
-// with the spec's fixed size or (100, 24) for text-ish defaults.
-static SaoUiSize widget_size_hint(const sao_ui_layout_node_s* node) {
-    SaoUiSize hint{100, 24};
-    if (node->spec.fixed_width_px > 0) hint.width_px = node->spec.fixed_width_px;
-    if (node->spec.fixed_height_px > 0) hint.height_px = node->spec.fixed_height_px;
-    return hint;
+static bool rect_has_area(const SaoUiRect& rect) {
+    return rect.width_px > 0 && rect.height_px > 0;
+}
+
+static bool rect_equal(const SaoUiRect& left, const SaoUiRect& right) {
+    return left.x_px == right.x_px && left.y_px == right.y_px &&
+           left.width_px == right.width_px && left.height_px == right.height_px;
+}
+
+static void record_dirty_rect(sao_ui_layout_node_s* node, const SaoUiRect& rect) {
+    if (node->tree != nullptr && rect_has_area(rect))
+        node->tree->dirty_rects.push_back(rect);
+}
+
+static SaoUiSize widget_size_hint(const sao_ui_layout_node_s* node, SaoUiSize available) {
+    int64_t width = 100;
+    int64_t height = 24;
+    if (node->widget != nullptr) {
+        SaoUiWidgetSizeHint widget_hint{};
+        if (sao_ui_widget_get_size_hint(node->widget, std::max(0, available.width_px),
+                                        std::max(0, available.height_px),
+                                        &widget_hint) == SAO_STATUS_OK) {
+            width = std::max(nonnegative_i64(widget_hint.min_width_px),
+                             nonnegative_i64(widget_hint.preferred_width_px));
+            height = std::max(nonnegative_i64(widget_hint.min_height_px),
+                              nonnegative_i64(widget_hint.preferred_height_px));
+            if (widget_hint.max_width_px > 0)
+                width = std::min(width, nonnegative_i64(widget_hint.max_width_px));
+            if (widget_hint.max_height_px > 0)
+                height = std::min(height, nonnegative_i64(widget_hint.max_height_px));
+        }
+    }
+    if (node->spec.fixed_width_px > 0) width = node->spec.fixed_width_px;
+    if (node->spec.fixed_height_px > 0) height = node->spec.fixed_height_px;
+    return {clamp_nonnegative_i32(width), clamp_nonnegative_i32(height)};
 }
 
 static SaoUiSize apply_clamp(const SaoUiLayoutSpec& spec, SaoUiSize s) {
-    if (spec.min_width_px > 0) s.width_px = std::max(s.width_px, spec.min_width_px);
-    if (spec.min_height_px > 0) s.height_px = std::max(s.height_px, spec.min_height_px);
-    if (spec.max_width_px > 0) s.width_px = std::min(s.width_px, spec.max_width_px);
-    if (spec.max_height_px > 0) s.height_px = std::min(s.height_px, spec.max_height_px);
-    return s;
+    int64_t width = std::max<int64_t>(0, s.width_px);
+    int64_t height = std::max<int64_t>(0, s.height_px);
+    if (spec.min_width_px > 0) width = std::max(width, nonnegative_i64(spec.min_width_px));
+    if (spec.min_height_px > 0) height = std::max(height, nonnegative_i64(spec.min_height_px));
+    if (spec.max_width_px > 0) width = std::min(width, nonnegative_i64(spec.max_width_px));
+    if (spec.max_height_px > 0) height = std::min(height, nonnegative_i64(spec.max_height_px));
+    return {clamp_nonnegative_i32(width), clamp_nonnegative_i32(height)};
 }
 
-static void insets_of(const SaoUiLayoutSpec& spec, int32_t& l, int32_t& t, int32_t& r, int32_t& b) {
-    l = spec.margin_left_px + spec.pad_left_px;
-    t = spec.margin_top_px + spec.pad_top_px;
-    r = spec.margin_right_px + spec.pad_right_px;
-    b = spec.margin_bottom_px + spec.pad_bottom_px;
+static void insets_of(const SaoUiLayoutSpec& spec, int64_t& l, int64_t& t,
+                      int64_t& r, int64_t& b) {
+    l = saturating_add_nonnegative(nonnegative_i64(spec.margin_left_px),
+                                   nonnegative_i64(spec.pad_left_px));
+    t = saturating_add_nonnegative(nonnegative_i64(spec.margin_top_px),
+                                   nonnegative_i64(spec.pad_top_px));
+    r = saturating_add_nonnegative(nonnegative_i64(spec.margin_right_px),
+                                   nonnegative_i64(spec.pad_right_px));
+    b = saturating_add_nonnegative(nonnegative_i64(spec.margin_bottom_px),
+                                   nonnegative_i64(spec.pad_bottom_px));
+}
+
+inline bool finite_positive_weight(float value) noexcept {
+    return std::isfinite(value) && value > 0.0F;
+}
+
+static std::vector<int32_t> allocate_integer_weight_shares(
+    int32_t total, const std::vector<double>& weights) {
+    const int32_t budget = std::max(0, total);
+    std::vector<int32_t> shares(weights.size(), 0);
+    double weight_scale = 0.0;
+    for (const double weight : weights) {
+        if (std::isfinite(weight) && weight > weight_scale)
+            weight_scale = weight;
+    }
+    if (!(weight_scale > 0.0) || budget == 0)
+        return shares;
+
+    double weight_sum = 0.0;
+    for (const double weight : weights) {
+        if (std::isfinite(weight) && weight > 0.0)
+            weight_sum += weight / weight_scale;
+    }
+    if (!(weight_sum > 0.0) || !std::isfinite(weight_sum))
+        return shares;
+
+    std::vector<double> remainders(weights.size(), -1.0);
+    int64_t assigned = 0;
+    for (size_t index = 0; index < weights.size(); ++index) {
+        const double weight = weights[index];
+        if (!std::isfinite(weight) || weight <= 0.0)
+            continue;
+        const double exact = static_cast<double>(budget) * (weight / weight_scale) /
+                             weight_sum;
+        const int32_t share = static_cast<int32_t>(std::floor(exact));
+        shares[index] = share;
+        assigned += share;
+        remainders[index] = exact - static_cast<double>(share);
+    }
+
+    int32_t leftover = budget - clamp_nonnegative_i32(assigned);
+    while (leftover > 0) {
+        size_t best = weights.size();
+        for (size_t index = 0; index < remainders.size(); ++index) {
+            if (remainders[index] < 0.0)
+                continue;
+            if (best == weights.size() || remainders[index] > remainders[best])
+                best = index;
+        }
+        if (best == weights.size())
+            break;
+        ++shares[best];
+        remainders[best] = -1.0;
+        --leftover;
+    }
+    return shares;
+}
+
+static void compress_sizes_to_budget(std::vector<int32_t>& sizes, int32_t total) {
+    const int32_t budget = std::max(0, total);
+    int64_t size_sum = 0;
+    for (const int32_t size : sizes)
+        size_sum = saturating_add_nonnegative(size_sum, size);
+    if (size_sum <= budget || size_sum == 0)
+        return;
+
+    std::vector<int64_t> remainders(sizes.size(), 0);
+    int64_t assigned = 0;
+    for (size_t index = 0; index < sizes.size(); ++index) {
+        const int64_t numerator = static_cast<int64_t>(std::max(0, sizes[index])) * budget;
+        sizes[index] = static_cast<int32_t>(numerator / size_sum);
+        remainders[index] = numerator % size_sum;
+        assigned += sizes[index];
+    }
+    int32_t leftover = budget - clamp_nonnegative_i32(assigned);
+    while (leftover > 0 && !remainders.empty()) {
+        size_t best = 0;
+        for (size_t index = 1; index < remainders.size(); ++index) {
+            if (remainders[index] > remainders[best])
+                best = index;
+        }
+        ++sizes[best];
+        remainders[best] = -1;
+        --leftover;
+    }
+}
+
+static std::vector<int32_t> allocate_weighted_main_sizes(
+    const std::vector<std::unique_ptr<sao_ui_layout_node_s>>& children, int32_t available,
+    int32_t requested_gap, bool vertical, int32_t* out_gap) {
+    const int32_t count = static_cast<int32_t>(children.size());
+    const int32_t nonnegative_available = std::max(0, available);
+    const int32_t gap = count > 1
+                            ? std::min(std::max(0, requested_gap),
+                                       nonnegative_available / std::max(1, count - 1))
+                            : 0;
+    if (out_gap != nullptr)
+        *out_gap = gap;
+
+    std::vector<int32_t> sizes(static_cast<size_t>(count), 0);
+    std::vector<int32_t> maximums(static_cast<size_t>(count), kUnbounded);
+    std::vector<double> weights(static_cast<size_t>(count), 0.0);
+    int64_t base_sum = 0;
+    for (int32_t index = 0; index < count; ++index) {
+        const auto& child = children[static_cast<size_t>(index)];
+        const auto& spec = child->spec;
+        const int32_t measured = vertical ? child->measured.height_px : child->measured.width_px;
+        const int32_t minimum = std::max(0, vertical ? spec.min_height_px : spec.min_width_px);
+        const int32_t maximum = (vertical ? spec.max_height_px : spec.max_width_px) > 0
+                                    ? std::max(minimum, vertical ? spec.max_height_px
+                                                                 : spec.max_width_px)
+                                    : kUnbounded;
+        maximums[static_cast<size_t>(index)] = maximum;
+        const int32_t fixed = vertical ? spec.fixed_height_px : spec.fixed_width_px;
+        const bool weighted = finite_positive_weight(spec.weight) && fixed <= 0;
+        weights[static_cast<size_t>(index)] = weighted ? static_cast<double>(spec.weight) : 0.0;
+        const int32_t base = fixed > 0
+                                 ? clamp_i32(fixed, minimum, maximum)
+                                 : weighted ? minimum : clamp_i32(measured, minimum, maximum);
+        sizes[static_cast<size_t>(index)] = base;
+        base_sum += base;
+    }
+
+    const int64_t gap_total = static_cast<int64_t>(gap) * std::max(0, count - 1);
+    const int32_t budget = static_cast<int32_t>(std::max<int64_t>(
+        0, static_cast<int64_t>(nonnegative_available) - gap_total));
+    if (base_sum > budget && base_sum > 0) {
+        int64_t compressed_sum = 0;
+        std::vector<int64_t> remainders(static_cast<size_t>(count), 0);
+        for (int32_t index = 0; index < count; ++index) {
+            const int64_t numerator = static_cast<int64_t>(sizes[static_cast<size_t>(index)]) *
+                                      static_cast<int64_t>(budget);
+            sizes[static_cast<size_t>(index)] = static_cast<int32_t>(numerator / base_sum);
+            remainders[static_cast<size_t>(index)] = numerator % base_sum;
+            compressed_sum += sizes[static_cast<size_t>(index)];
+        }
+        int32_t leftover = budget - static_cast<int32_t>(compressed_sum);
+        while (leftover > 0) {
+            size_t best = 0;
+            for (size_t index = 1; index < remainders.size(); ++index) {
+                if (remainders[index] > remainders[best])
+                    best = index;
+            }
+            ++sizes[best];
+            remainders[best] = -1;
+            --leftover;
+        }
+        return sizes;
+    }
+
+    int32_t remaining = budget - static_cast<int32_t>(base_sum);
+    std::vector<size_t> active;
+    for (size_t index = 0; index < sizes.size(); ++index) {
+        if (weights[index] > 0.0 && sizes[index] < maximums[index])
+            active.push_back(index);
+    }
+    while (remaining > 0 && !active.empty()) {
+        double weight_sum = 0.0;
+        for (const size_t index : active)
+            weight_sum += weights[index];
+        if (!(weight_sum > 0.0))
+            break;
+
+        bool saturated = false;
+        for (auto it = active.begin(); it != active.end();) {
+            const size_t index = *it;
+            const int32_t capacity = maximums[index] - sizes[index];
+            const int32_t share = static_cast<int32_t>(std::floor(
+                static_cast<double>(remaining) * weights[index] / weight_sum));
+            if (capacity <= share && capacity >= 0) {
+                sizes[index] += capacity;
+                remaining -= capacity;
+                it = active.erase(it);
+                saturated = true;
+            } else {
+                ++it;
+            }
+        }
+        if (saturated)
+            continue;
+
+        std::vector<double> remainders(sizes.size(), -1.0);
+        int32_t assigned = 0;
+        for (const size_t index : active) {
+            const double exact = static_cast<double>(remaining) * weights[index] / weight_sum;
+            const int32_t share = static_cast<int32_t>(std::floor(exact));
+            sizes[index] += share;
+            assigned += share;
+            remainders[index] = exact - static_cast<double>(share);
+        }
+        int32_t leftover = remaining - assigned;
+        while (leftover > 0) {
+            size_t best = active.front();
+            for (const size_t index : active) {
+                if (remainders[index] > remainders[best])
+                    best = index;
+            }
+            ++sizes[best];
+            remainders[best] = -1.0;
+            --leftover;
+        }
+        remaining = 0;
+    }
+    return sizes;
 }
 
 // ─── measure recursion ──────────────────────────────────────────────
 
 static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
-    // Leaf.
     if (node->widget != nullptr || node->children.empty()) {
-        SaoUiSize s = widget_size_hint(node);
+        SaoUiSize s = widget_size_hint(node, available);
         if (node->spec.fixed_width_px > 0) s.width_px = node->spec.fixed_width_px;
         if (node->spec.fixed_height_px > 0) s.height_px = node->spec.fixed_height_px;
         s = apply_clamp(node->spec, s);
@@ -176,108 +458,127 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
         node->dirty = false;
         return s;
     }
-    // Container.
-    int32_t ml, mt, mr, mb;
+
+    int64_t ml, mt, mr, mb;
     insets_of(node->spec, ml, mt, mr, mb);
-    const int32_t inner_w = std::max(0, available.width_px - ml - mr);
-    const int32_t inner_h = std::max(0, available.height_px - mt - mb);
-    SaoUiSize child_avail{inner_w, inner_h};
-    int32_t total_w = 0;
-    int32_t total_h = 0;
-    const int32_t gap = node->spec.gap_px;
+    const int64_t inner_w = std::max<int64_t>(
+        0, nonnegative_i64(available.width_px) - ml - mr);
+    const int64_t inner_h = std::max<int64_t>(
+        0, nonnegative_i64(available.height_px) - mt - mb);
+    const SaoUiSize child_avail{clamp_nonnegative_i32(inner_w), clamp_nonnegative_i32(inner_h)};
+    int64_t total_w = 0;
+    int64_t total_h = 0;
+    const int64_t gap = nonnegative_i64(node->spec.gap_px);
+
     switch (node->layout_mode) {
     case SAO_UI_LAYOUT_VERTICAL: {
-        int32_t max_child_w = 0;
-        int32_t sum_h = 0;
-        int32_t count = 0;
+        int64_t max_child_w = 0;
+        int64_t sum_h = 0;
+        size_t count = 0;
         for (auto& c : node->children) {
-            SaoUiSize s = measure_node(c.get(), child_avail);
-            max_child_w = std::max(max_child_w, s.width_px);
-            sum_h += s.height_px;
+            const SaoUiSize s = measure_node(c.get(), child_avail);
+            max_child_w = std::max(max_child_w, static_cast<int64_t>(s.width_px));
+            sum_h = saturating_add_nonnegative(sum_h, s.height_px);
             ++count;
         }
-        if (count > 1) sum_h += gap * (count - 1);
+        if (count > 1) {
+            sum_h = saturating_add_nonnegative(
+                sum_h, saturating_mul_nonnegative(gap, static_cast<int64_t>(count - 1)));
+        }
         total_w = max_child_w;
         total_h = sum_h;
         break;
     }
     case SAO_UI_LAYOUT_HORIZONTAL: {
-        int32_t sum_w = 0;
-        int32_t max_child_h = 0;
-        int32_t count = 0;
+        int64_t sum_w = 0;
+        int64_t max_child_h = 0;
+        size_t count = 0;
         for (auto& c : node->children) {
-            SaoUiSize s = measure_node(c.get(), child_avail);
-            sum_w += s.width_px;
-            max_child_h = std::max(max_child_h, s.height_px);
+            const SaoUiSize s = measure_node(c.get(), child_avail);
+            sum_w = saturating_add_nonnegative(sum_w, s.width_px);
+            max_child_h = std::max(max_child_h, static_cast<int64_t>(s.height_px));
             ++count;
         }
-        if (count > 1) sum_w += gap * (count - 1);
+        if (count > 1) {
+            sum_w = saturating_add_nonnegative(
+                sum_w, saturating_mul_nonnegative(gap, static_cast<int64_t>(count - 1)));
+        }
         total_w = sum_w;
         total_h = max_child_h;
         break;
     }
     case SAO_UI_LAYOUT_GRID: {
-        // Sum fixed track sizes + gaps.  Auto/flex tracks contribute
-        // their nominal min in measure phase; arrange phase distributes
-        // the leftover.
-        int32_t sum_cols = 0;
-        for (const SaoUiTrackSize& t : node->grid_cols_owned) {
-            if (t.kind == SAO_UI_TRACK_FIXED) sum_cols += t.fixed_px;
-            else if (t.kind == SAO_UI_TRACK_MIN) sum_cols += t.fixed_px;
-            else if (t.kind == SAO_UI_TRACK_FLEX) sum_cols += static_cast<int32_t>(t.flex_weight * 20.0f);
-            // AUTO: contribute 40px placeholder.
-            else sum_cols += 40;
+        const auto track_nominal = [](const SaoUiTrackSize& track, int64_t auto_px) {
+            if (track.kind == SAO_UI_TRACK_FIXED || track.kind == SAO_UI_TRACK_MIN)
+                return nonnegative_i64(track.fixed_px);
+            if (track.kind == SAO_UI_TRACK_FLEX) {
+                if (!std::isfinite(track.flex_weight) || track.flex_weight <= 0.0f)
+                    return int64_t{0};
+                const long double scaled = static_cast<long double>(track.flex_weight) * 20.0L;
+                if (scaled >= static_cast<long double>(std::numeric_limits<int64_t>::max()))
+                    return std::numeric_limits<int64_t>::max();
+                return static_cast<int64_t>(scaled);
+            }
+            return auto_px;
+        };
+        int64_t sum_cols = 0;
+        for (const SaoUiTrackSize& track : node->grid_cols_owned)
+            sum_cols = saturating_add_nonnegative(sum_cols, track_nominal(track, 40));
+        int64_t sum_rows = 0;
+        for (const SaoUiTrackSize& track : node->grid_rows_owned)
+            sum_rows = saturating_add_nonnegative(sum_rows, track_nominal(track, 24));
+        const size_t ncols = node->grid_cols_owned.size();
+        const size_t nrows = node->grid_rows_owned.size();
+        if (ncols > 1) {
+            sum_cols = saturating_add_nonnegative(
+                sum_cols, saturating_mul_nonnegative(
+                    nonnegative_i64(node->grid.col_gap_px), static_cast<int64_t>(ncols - 1)));
         }
-        int32_t sum_rows = 0;
-        for (const SaoUiTrackSize& t : node->grid_rows_owned) {
-            if (t.kind == SAO_UI_TRACK_FIXED) sum_rows += t.fixed_px;
-            else if (t.kind == SAO_UI_TRACK_MIN) sum_rows += t.fixed_px;
-            else if (t.kind == SAO_UI_TRACK_FLEX) sum_rows += static_cast<int32_t>(t.flex_weight * 20.0f);
-            else sum_rows += 24;
+        if (nrows > 1) {
+            sum_rows = saturating_add_nonnegative(
+                sum_rows, saturating_mul_nonnegative(
+                    nonnegative_i64(node->grid.row_gap_px), static_cast<int64_t>(nrows - 1)));
         }
-        const int32_t ncols = static_cast<int32_t>(node->grid_cols_owned.size());
-        const int32_t nrows = static_cast<int32_t>(node->grid_rows_owned.size());
-        if (ncols > 1) sum_cols += node->grid.col_gap_px * (ncols - 1);
-        if (nrows > 1) sum_rows += node->grid.row_gap_px * (nrows - 1);
-        // Still probe children so their measure caches populate.
         for (auto& c : node->children) measure_node(c.get(), child_avail);
         total_w = sum_cols;
         total_h = sum_rows;
         break;
     }
     case SAO_UI_LAYOUT_ABSOLUTE: {
-        // Union rect of absolutely positioned children.
-        int32_t max_r = 0;
-        int32_t max_b = 0;
+        int64_t max_r = 0;
+        int64_t max_b = 0;
         for (auto& c : node->children) {
-            SaoUiSize s = measure_node(c.get(), child_avail);
-            max_r = std::max(max_r, c->spec.absolute_x_px + s.width_px);
-            max_b = std::max(max_b, c->spec.absolute_y_px + s.height_px);
+            const SaoUiSize s = measure_node(c.get(), child_avail);
+            max_r = std::max(max_r, saturating_add_i64(c->spec.absolute_x_px, s.width_px));
+            max_b = std::max(max_b, saturating_add_i64(c->spec.absolute_y_px, s.height_px));
         }
         total_w = max_r;
         total_h = max_b;
         break;
     }
     case SAO_UI_LAYOUT_FLEX: {
-        const bool row = (node->flex.direction == SAO_UI_FLEX_ROW ||
-                          node->flex.direction == SAO_UI_FLEX_ROW_REVERSE);
-        int32_t sum_main = 0;
-        int32_t max_cross = 0;
-        int32_t count = 0;
+        const bool row = node->flex.direction == SAO_UI_FLEX_ROW ||
+                         node->flex.direction == SAO_UI_FLEX_ROW_REVERSE;
+        int64_t sum_main = 0;
+        int64_t max_cross = 0;
+        size_t count = 0;
         for (auto& c : node->children) {
-            SaoUiSize s = measure_node(c.get(), child_avail);
+            const SaoUiSize s = measure_node(c.get(), child_avail);
             if (row) {
-                sum_main += s.width_px;
-                max_cross = std::max(max_cross, s.height_px);
+                sum_main = saturating_add_nonnegative(sum_main, s.width_px);
+                max_cross = std::max(max_cross, static_cast<int64_t>(s.height_px));
             } else {
-                sum_main += s.height_px;
-                max_cross = std::max(max_cross, s.width_px);
+                sum_main = saturating_add_nonnegative(sum_main, s.height_px);
+                max_cross = std::max(max_cross, static_cast<int64_t>(s.width_px));
             }
             ++count;
         }
-        const int32_t main_gap = node->flex.gap_main_px > 0
-            ? node->flex.gap_main_px : gap;
-        if (count > 1) sum_main += main_gap * (count - 1);
+        const int64_t main_gap = node->flex.gap_main_px > 0
+            ? nonnegative_i64(node->flex.gap_main_px) : gap;
+        if (count > 1) {
+            sum_main = saturating_add_nonnegative(
+                sum_main, saturating_mul_nonnegative(main_gap, static_cast<int64_t>(count - 1)));
+        }
         if (row) {
             total_w = sum_main;
             total_h = max_cross;
@@ -288,18 +589,16 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
         break;
     }
     case SAO_UI_LAYOUT_DOCK: {
-        // Dock: each child consumes from its side; remaining is the
-        // center.  We approximate preferred size as available.
-        int32_t consumed_w = 0;
-        int32_t consumed_h = 0;
+        int64_t consumed_w = 0;
+        int64_t consumed_h = 0;
         for (auto& c : node->children) {
-            SaoUiSize s = measure_node(c.get(), child_avail);
+            const SaoUiSize s = measure_node(c.get(), child_avail);
             if (c->spec.dock_side == SAO_UI_DOCK_TOP ||
                 c->spec.dock_side == SAO_UI_DOCK_BOTTOM) {
-                consumed_h += s.height_px;
+                consumed_h = saturating_add_nonnegative(consumed_h, s.height_px);
             } else if (c->spec.dock_side == SAO_UI_DOCK_LEFT ||
                        c->spec.dock_side == SAO_UI_DOCK_RIGHT) {
-                consumed_w += s.width_px;
+                consumed_w = saturating_add_nonnegative(consumed_w, s.width_px);
             }
         }
         total_w = consumed_w;
@@ -309,97 +608,109 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
     default:
         break;
     }
-    // Add back insets.
-    total_w += ml + mr;
-    total_h += mt + mb;
-    if (node->spec.fixed_width_px > 0) total_w = node->spec.fixed_width_px;
-    if (node->spec.fixed_height_px > 0) total_h = node->spec.fixed_height_px;
-    SaoUiSize s{total_w, total_h};
+
+    total_w = saturating_add_nonnegative(total_w, ml);
+    total_w = saturating_add_nonnegative(total_w, mr);
+    total_h = saturating_add_nonnegative(total_h, mt);
+    total_h = saturating_add_nonnegative(total_h, mb);
+    if (node->spec.fixed_width_px > 0) total_w = nonnegative_i64(node->spec.fixed_width_px);
+    if (node->spec.fixed_height_px > 0) total_h = nonnegative_i64(node->spec.fixed_height_px);
+    SaoUiSize s{clamp_nonnegative_i32(total_w), clamp_nonnegative_i32(total_h)};
     s = apply_clamp(node->spec, s);
     node->measured = s;
     node->dirty = false;
     return s;
 }
-
 // ─── arrange recursion ─────────────────────────────────────────────
+
+static SaoUiRect make_nonnegative_rect(int64_t x, int64_t y, int64_t width, int64_t height) {
+    return {clamp_nonnegative_i32(x), clamp_nonnegative_i32(y),
+            clamp_nonnegative_i32(width), clamp_nonnegative_i32(height)};
+}
+
+static SaoUiRect make_rect_within(const SaoUiRect& bounds,
+                                  int64_t x, int64_t y,
+                                  int64_t width, int64_t height) {
+    const int64_t bounds_x = nonnegative_i64(bounds.x_px);
+    const int64_t bounds_y = nonnegative_i64(bounds.y_px);
+    const int64_t bounds_w = nonnegative_i64(bounds.width_px);
+    const int64_t bounds_h = nonnegative_i64(bounds.height_px);
+    const int64_t bounds_right = saturating_add_nonnegative(bounds_x, bounds_w);
+    const int64_t bounds_bottom = saturating_add_nonnegative(bounds_y, bounds_h);
+    const int64_t clamped_x = std::min(std::max(x, bounds_x), bounds_right);
+    const int64_t clamped_y = std::min(std::max(y, bounds_y), bounds_bottom);
+    const int64_t clamped_width = std::min(
+        std::max<int64_t>(0, width), bounds_right - clamped_x);
+    const int64_t clamped_height = std::min(
+        std::max<int64_t>(0, height), bounds_bottom - clamped_y);
+    return make_nonnegative_rect(clamped_x, clamped_y, clamped_width, clamped_height);
+}
 
 static void arrange_node(sao_ui_layout_node_s* node, SaoUiRect rect);
 
 static void arrange_vertical(sao_ui_layout_node_s* node, SaoUiRect inner) {
-    // Sum weights and fixed heights.
-    float sum_weight = 0.0f;
-    int32_t fixed_h = 0;
-    int32_t count = 0;
-    for (auto& c : node->children) {
-        if (c->spec.weight > 0.0f) sum_weight += c->spec.weight;
-        else fixed_h += c->measured.height_px;
-        ++count;
-    }
-    const int32_t gap = node->spec.gap_px;
-    if (count > 1) fixed_h += gap * (count - 1);
-    const int32_t flex_h = std::max(0, inner.height_px - fixed_h);
-    int32_t y = inner.y_px;
-    for (auto& c : node->children) {
-        int32_t h = c->measured.height_px;
-        if (c->spec.weight > 0.0f && sum_weight > 0.0f) {
-            h = static_cast<int32_t>(
-                std::lround((c->spec.weight / sum_weight) * flex_h));
-        }
+    int32_t gap = 0;
+    const std::vector<int32_t> sizes =
+        allocate_weighted_main_sizes(node->children, inner.height_px, node->spec.gap_px, true,
+                                     &gap);
+    int64_t y = inner.y_px;
+    for (size_t index = 0; index < node->children.size(); ++index) {
+        auto& c = node->children[index];
+        const int32_t h = clamp_nonnegative_i32(sizes[index]);
         int32_t w = inner.width_px;
         if (c->spec.fixed_width_px > 0) w = c->spec.fixed_width_px;
-        int32_t x = inner.x_px;
-        // Horizontal align inside strip.
+        const int32_t min_width = std::max(0, c->spec.min_width_px);
+        const int32_t max_width = c->spec.max_width_px > 0
+                                      ? std::max(min_width, c->spec.max_width_px)
+                                      : kUnbounded;
+        w = std::min(clamp_i32(w, min_width, max_width), std::max(0, inner.width_px));
+        int64_t x = inner.x_px;
         if (c->spec.fixed_width_px > 0 || c->spec.align_h != SAO_UI_JUSTIFY_START) {
             switch (c->spec.align_h) {
             case SAO_UI_JUSTIFY_CENTER:
-                x = inner.x_px + (inner.width_px - w) / 2;
+                x = saturating_add_i64(inner.x_px, (static_cast<int64_t>(inner.width_px) - w) / 2);
                 break;
             case SAO_UI_JUSTIFY_END:
-                x = inner.x_px + inner.width_px - w;
+                x = saturating_add_i64(inner.x_px, static_cast<int64_t>(inner.width_px) - w);
                 break;
             default:
                 break;
             }
         }
-        arrange_node(c.get(), {x, y, w, h});
-        y += h + gap;
+        arrange_node(c.get(), make_rect_within(inner, x, y, w, h));
+        y = saturating_add_i64(y, saturating_add_nonnegative(h, gap));
     }
 }
 
 static void arrange_horizontal(sao_ui_layout_node_s* node, SaoUiRect inner) {
-    float sum_weight = 0.0f;
-    int32_t fixed_w = 0;
-    int32_t count = 0;
-    for (auto& c : node->children) {
-        if (c->spec.weight > 0.0f) sum_weight += c->spec.weight;
-        else fixed_w += c->measured.width_px;
-        ++count;
-    }
-    const int32_t gap = node->spec.gap_px;
-    if (count > 1) fixed_w += gap * (count - 1);
-    const int32_t flex_w = std::max(0, inner.width_px - fixed_w);
-    int32_t x = inner.x_px;
-    for (auto& c : node->children) {
-        int32_t w = c->measured.width_px;
-        if (c->spec.weight > 0.0f && sum_weight > 0.0f) {
-            w = static_cast<int32_t>(
-                std::lround((c->spec.weight / sum_weight) * flex_w));
-        }
+    int32_t gap = 0;
+    const std::vector<int32_t> sizes =
+        allocate_weighted_main_sizes(node->children, inner.width_px, node->spec.gap_px, false,
+                                     &gap);
+    int64_t x = inner.x_px;
+    for (size_t index = 0; index < node->children.size(); ++index) {
+        auto& c = node->children[index];
+        const int32_t w = clamp_nonnegative_i32(sizes[index]);
         int32_t h = inner.height_px;
         if (c->spec.fixed_height_px > 0) h = c->spec.fixed_height_px;
-        int32_t y = inner.y_px;
+        const int32_t min_height = std::max(0, c->spec.min_height_px);
+        const int32_t max_height = c->spec.max_height_px > 0
+                                       ? std::max(min_height, c->spec.max_height_px)
+                                       : kUnbounded;
+        h = std::min(clamp_i32(h, min_height, max_height), std::max(0, inner.height_px));
+        int64_t y = inner.y_px;
         switch (c->spec.align_v) {
         case SAO_UI_ALIGN_AXIS_CENTER:
-            y = inner.y_px + (inner.height_px - h) / 2;
+            y = saturating_add_i64(inner.y_px, (static_cast<int64_t>(inner.height_px) - h) / 2);
             break;
         case SAO_UI_ALIGN_AXIS_END:
-            y = inner.y_px + inner.height_px - h;
+            y = saturating_add_i64(inner.y_px, static_cast<int64_t>(inner.height_px) - h);
             break;
         default:
             break;
         }
-        arrange_node(c.get(), {x, y, w, h});
-        x += w + gap;
+        arrange_node(c.get(), make_rect_within(inner, x, y, w, h));
+        x = saturating_add_i64(x, saturating_add_nonnegative(w, gap));
     }
 }
 
@@ -407,168 +718,191 @@ static void arrange_grid(sao_ui_layout_node_s* node, SaoUiRect inner) {
     const int32_t nrows = static_cast<int32_t>(node->grid_rows_owned.size());
     const int32_t ncols = static_cast<int32_t>(node->grid_cols_owned.size());
     if (nrows <= 0 || ncols <= 0) return;
-    // Column widths.
     std::vector<int32_t> col_w(ncols, 0);
     std::vector<int32_t> row_h(nrows, 0);
-    const int32_t col_gap = node->grid.col_gap_px;
-    const int32_t row_gap = node->grid.row_gap_px;
-    int32_t fixed_cw = 0;
-    float sum_col_flex = 0.0f;
+    std::vector<double> col_weights(static_cast<size_t>(ncols), 0.0);
+    std::vector<double> row_weights(static_cast<size_t>(nrows), 0.0);
+    const int32_t col_gap = ncols > 1
+                                ? clamp_nonnegative_i32(std::min<int64_t>(
+                                      nonnegative_i64(node->grid.col_gap_px),
+                                      std::max<int64_t>(0, inner.width_px) / (ncols - 1)))
+                                : 0;
+    const int32_t row_gap = nrows > 1
+                                ? clamp_nonnegative_i32(std::min<int64_t>(
+                                      nonnegative_i64(node->grid.row_gap_px),
+                                      std::max<int64_t>(0, inner.height_px) / (nrows - 1)))
+                                : 0;
+    int64_t fixed_cw = 0;
     for (int32_t i = 0; i < ncols; ++i) {
         const SaoUiTrackSize& t = node->grid_cols_owned[static_cast<size_t>(i)];
         if (t.kind == SAO_UI_TRACK_FIXED || t.kind == SAO_UI_TRACK_MIN) {
-            col_w[static_cast<size_t>(i)] = t.fixed_px;
-            fixed_cw += t.fixed_px;
+            col_w[static_cast<size_t>(i)] = clamp_nonnegative_i32(t.fixed_px);
+            fixed_cw = saturating_add_nonnegative(fixed_cw, col_w[static_cast<size_t>(i)]);
         } else if (t.kind == SAO_UI_TRACK_FLEX) {
-            sum_col_flex += t.flex_weight;
+            if (finite_positive_weight(t.flex_weight))
+                col_weights[static_cast<size_t>(i)] = static_cast<double>(t.flex_weight);
         } else {
-            col_w[static_cast<size_t>(i)] = 40;   // AUTO placeholder
-            fixed_cw += 40;
+            col_w[static_cast<size_t>(i)] = 40;
+            fixed_cw = saturating_add_nonnegative(fixed_cw, 40);
         }
     }
-    if (ncols > 1) fixed_cw += col_gap * (ncols - 1);
-    const int32_t flex_cw = std::max(0, inner.width_px - fixed_cw);
-    for (int32_t i = 0; i < ncols; ++i) {
-        const SaoUiTrackSize& t = node->grid_cols_owned[static_cast<size_t>(i)];
-        if (t.kind == SAO_UI_TRACK_FLEX && sum_col_flex > 0.0f) {
-            col_w[static_cast<size_t>(i)] = static_cast<int32_t>(
-                std::lround((t.flex_weight / sum_col_flex) * flex_cw));
-        }
+    const int64_t col_gap_total = saturating_mul_nonnegative(col_gap, ncols - 1);
+    const int32_t col_budget = clamp_nonnegative_i32(std::max<int64_t>(
+        0, static_cast<int64_t>(inner.width_px) - col_gap_total));
+    if (fixed_cw > col_budget) {
+        compress_sizes_to_budget(col_w, col_budget);
+    } else {
+        const int32_t flex_cw = col_budget - static_cast<int32_t>(fixed_cw);
+        const auto flex_col_sizes = allocate_integer_weight_shares(flex_cw, col_weights);
+        for (int32_t i = 0; i < ncols; ++i)
+            if (node->grid_cols_owned[static_cast<size_t>(i)].kind == SAO_UI_TRACK_FLEX)
+                col_w[static_cast<size_t>(i)] = flex_col_sizes[static_cast<size_t>(i)];
     }
-    // Row heights.
-    int32_t fixed_rh = 0;
-    float sum_row_flex = 0.0f;
+    int64_t fixed_rh = 0;
     for (int32_t i = 0; i < nrows; ++i) {
         const SaoUiTrackSize& t = node->grid_rows_owned[static_cast<size_t>(i)];
         if (t.kind == SAO_UI_TRACK_FIXED || t.kind == SAO_UI_TRACK_MIN) {
-            row_h[static_cast<size_t>(i)] = t.fixed_px;
-            fixed_rh += t.fixed_px;
+            row_h[static_cast<size_t>(i)] = clamp_nonnegative_i32(t.fixed_px);
+            fixed_rh = saturating_add_nonnegative(fixed_rh, row_h[static_cast<size_t>(i)]);
         } else if (t.kind == SAO_UI_TRACK_FLEX) {
-            sum_row_flex += t.flex_weight;
+            if (finite_positive_weight(t.flex_weight))
+                row_weights[static_cast<size_t>(i)] = static_cast<double>(t.flex_weight);
         } else {
             row_h[static_cast<size_t>(i)] = 24;
-            fixed_rh += 24;
+            fixed_rh = saturating_add_nonnegative(fixed_rh, 24);
         }
     }
-    if (nrows > 1) fixed_rh += row_gap * (nrows - 1);
-    const int32_t flex_rh = std::max(0, inner.height_px - fixed_rh);
-    for (int32_t i = 0; i < nrows; ++i) {
-        const SaoUiTrackSize& t = node->grid_rows_owned[static_cast<size_t>(i)];
-        if (t.kind == SAO_UI_TRACK_FLEX && sum_row_flex > 0.0f) {
-            row_h[static_cast<size_t>(i)] = static_cast<int32_t>(
-                std::lround((t.flex_weight / sum_row_flex) * flex_rh));
-        }
+    const int64_t row_gap_total = saturating_mul_nonnegative(row_gap, nrows - 1);
+    const int32_t row_budget = clamp_nonnegative_i32(std::max<int64_t>(
+        0, static_cast<int64_t>(inner.height_px) - row_gap_total));
+    if (fixed_rh > row_budget) {
+        compress_sizes_to_budget(row_h, row_budget);
+    } else {
+        const int32_t flex_rh = row_budget - static_cast<int32_t>(fixed_rh);
+        const auto flex_row_sizes = allocate_integer_weight_shares(flex_rh, row_weights);
+        for (int32_t i = 0; i < nrows; ++i)
+            if (node->grid_rows_owned[static_cast<size_t>(i)].kind == SAO_UI_TRACK_FLEX)
+                row_h[static_cast<size_t>(i)] = flex_row_sizes[static_cast<size_t>(i)];
     }
-    // Compute cumulative offsets.
-    std::vector<int32_t> col_x(ncols + 1, 0);
+    std::vector<int64_t> col_x(static_cast<size_t>(ncols) + 1U, 0);
     col_x[0] = inner.x_px;
-    for (int32_t i = 0; i < ncols; ++i) {
-        col_x[static_cast<size_t>(i + 1)] =
-            col_x[static_cast<size_t>(i)] +
-            col_w[static_cast<size_t>(i)] +
-            (i + 1 < ncols ? col_gap : 0);
-    }
-    std::vector<int32_t> row_y(nrows + 1, 0);
+    for (int32_t i = 0; i < ncols; ++i)
+        col_x[static_cast<size_t>(i + 1)] = saturating_add_i64(
+            col_x[static_cast<size_t>(i)], saturating_add_nonnegative(
+                col_w[static_cast<size_t>(i)], i + 1 < ncols ? col_gap : 0));
+    std::vector<int64_t> row_y(static_cast<size_t>(nrows) + 1U, 0);
     row_y[0] = inner.y_px;
-    for (int32_t i = 0; i < nrows; ++i) {
-        row_y[static_cast<size_t>(i + 1)] =
-            row_y[static_cast<size_t>(i)] +
-            row_h[static_cast<size_t>(i)] +
-            (i + 1 < nrows ? row_gap : 0);
-    }
-    // Place children in row-major order.  If the child count exceeds
-    // rows*cols, extras are placed at (0, 0) — matches CSS "grid item
-    // overflow" fallback.
+    for (int32_t i = 0; i < nrows; ++i)
+        row_y[static_cast<size_t>(i + 1)] = saturating_add_i64(
+            row_y[static_cast<size_t>(i)], saturating_add_nonnegative(
+                row_h[static_cast<size_t>(i)], i + 1 < nrows ? row_gap : 0));
     int32_t idx = 0;
     for (auto& c : node->children) {
         const int32_t r = std::min(idx / ncols, nrows - 1);
         const int32_t co = std::min(idx % ncols, ncols - 1);
-        SaoUiRect cell{
-            col_x[static_cast<size_t>(co)],
-            row_y[static_cast<size_t>(r)],
-            col_w[static_cast<size_t>(co)],
-            row_h[static_cast<size_t>(r)],
-        };
-        arrange_node(c.get(), cell);
+        arrange_node(c.get(), make_rect_within(inner,
+            col_x[static_cast<size_t>(co)], row_y[static_cast<size_t>(r)],
+            col_w[static_cast<size_t>(co)], row_h[static_cast<size_t>(r)]));
         ++idx;
     }
 }
 
 static void arrange_absolute(sao_ui_layout_node_s* node, SaoUiRect inner) {
     for (auto& c : node->children) {
-        int32_t w = c->spec.fixed_width_px > 0
-            ? c->spec.fixed_width_px : c->measured.width_px;
-        int32_t h = c->spec.fixed_height_px > 0
-            ? c->spec.fixed_height_px : c->measured.height_px;
-        arrange_node(c.get(), {
-            inner.x_px + c->spec.absolute_x_px,
-            inner.y_px + c->spec.absolute_y_px,
-            w, h,
-        });
+        const int32_t w = c->spec.fixed_width_px > 0 ? c->spec.fixed_width_px : c->measured.width_px;
+        const int32_t h = c->spec.fixed_height_px > 0 ? c->spec.fixed_height_px : c->measured.height_px;
+        arrange_node(c.get(), make_rect_within(inner,
+            saturating_add_i64(inner.x_px, c->spec.absolute_x_px),
+            saturating_add_i64(inner.y_px, c->spec.absolute_y_px), w, h));
     }
 }
 
 static void arrange_flex(sao_ui_layout_node_s* node, SaoUiRect inner) {
-    const bool row = (node->flex.direction == SAO_UI_FLEX_ROW ||
-                      node->flex.direction == SAO_UI_FLEX_ROW_REVERSE);
-    // Compute main-axis sizes: fixed basis first, then distribute
-    // leftover by flex-grow via `spec.weight`.
-    float sum_grow = 0.0f;
-    int32_t fixed_main = 0;
-    int32_t count = 0;
-    for (auto& c : node->children) {
-        const int32_t basis = row ? c->measured.width_px : c->measured.height_px;
-        if (c->spec.weight > 0.0f) sum_grow += c->spec.weight;
-        fixed_main += basis;
-        ++count;
-    }
-    const int32_t main_gap = node->flex.gap_main_px > 0
-        ? node->flex.gap_main_px : node->spec.gap_px;
-    if (count > 1) fixed_main += main_gap * (count - 1);
+    const bool row = node->flex.direction == SAO_UI_FLEX_ROW ||
+                     node->flex.direction == SAO_UI_FLEX_ROW_REVERSE;
     const int32_t avail_main = row ? inner.width_px : inner.height_px;
-    const int32_t leftover = std::max(0, avail_main - fixed_main);
-    int32_t cursor = row ? inner.x_px : inner.y_px;
-    for (auto& c : node->children) {
-        int32_t main_size = row ? c->measured.width_px : c->measured.height_px;
-        if (c->spec.weight > 0.0f && sum_grow > 0.0f) {
-            main_size += static_cast<int32_t>(
-                std::lround((c->spec.weight / sum_grow) * leftover));
-        }
-        int32_t cross_size = row ? inner.height_px : inner.width_px;
-        // Cross-axis alignment.
-        int32_t cross_off = 0;
-        const int32_t measured_cross = row ? c->measured.height_px : c->measured.width_px;
+    const size_t count = node->children.size();
+    const int32_t requested_gap = node->flex.gap_main_px > 0
+                                      ? node->flex.gap_main_px
+                                      : node->spec.gap_px;
+    const int32_t main_gap = count > 1
+                                 ? std::min(std::max(0, requested_gap),
+                                            std::max(0, avail_main) /
+                                                static_cast<int32_t>(count - 1U))
+                                 : 0;
+    const int64_t gap_total = saturating_mul_nonnegative(
+        main_gap, count > 1 ? static_cast<int64_t>(count - 1U) : 0);
+    const int32_t budget = clamp_nonnegative_i32(
+        std::max<int64_t>(0, static_cast<int64_t>(std::max(0, avail_main)) - gap_total));
+
+    std::vector<int32_t> main_sizes(count, 0);
+    std::vector<double> grow_weights(count, 0.0);
+    for (size_t index = 0; index < count; ++index) {
+        const auto& child = node->children[index];
+        main_sizes[index] = std::max(0, row ? child->measured.width_px
+                                            : child->measured.height_px);
+        if (finite_positive_weight(child->spec.weight))
+            grow_weights[index] = static_cast<double>(child->spec.weight);
+    }
+    compress_sizes_to_budget(main_sizes, budget);
+    int64_t base_sum = 0;
+    for (const int32_t size : main_sizes)
+        base_sum = saturating_add_nonnegative(base_sum, size);
+    const int32_t leftover = clamp_nonnegative_i32(
+        std::max<int64_t>(0, static_cast<int64_t>(budget) - base_sum));
+    const auto growth = allocate_integer_weight_shares(leftover, grow_weights);
+    for (size_t index = 0; index < main_sizes.size(); ++index)
+        main_sizes[index] = clamp_nonnegative_i32(
+            saturating_add_nonnegative(main_sizes[index], growth[index]));
+
+    const bool reverse = node->flex.direction == SAO_UI_FLEX_ROW_REVERSE ||
+                         node->flex.direction == SAO_UI_FLEX_COLUMN_REVERSE;
+    int64_t cursor = row ? inner.x_px : inner.y_px;
+    if (reverse)
+        cursor = saturating_add_i64(cursor, std::max(0, avail_main));
+    for (size_t index = 0; index < count; ++index) {
+        auto& c = node->children[index];
+        const int32_t main_size = main_sizes[index];
+        const int32_t available_cross = std::max(0, row ? inner.height_px : inner.width_px);
+        int32_t cross_size = available_cross;
+        int64_t cross_off = 0;
+        const int32_t measured_cross = std::max(0, row ? c->measured.height_px : c->measured.width_px);
         switch (node->flex.align_items) {
         case SAO_UI_ALIGN_AXIS_START:
-            cross_size = measured_cross;
+            cross_size = std::min(measured_cross, available_cross);
             break;
         case SAO_UI_ALIGN_AXIS_END:
-            cross_off = cross_size - measured_cross;
-            cross_size = measured_cross;
+            cross_size = std::min(measured_cross, available_cross);
+            cross_off = static_cast<int64_t>(available_cross) - cross_size;
             break;
         case SAO_UI_ALIGN_AXIS_CENTER:
-            cross_off = (cross_size - measured_cross) / 2;
-            cross_size = measured_cross;
+            cross_size = std::min(measured_cross, available_cross);
+            cross_off = (static_cast<int64_t>(available_cross) - cross_size) / 2;
             break;
         case SAO_UI_ALIGN_AXIS_STRETCH:
-        default:
-            // Keep full cross size.
-            break;
+        default: break;
         }
-        SaoUiRect r;
+        int64_t main_position = cursor;
+        if (reverse) {
+            cursor = saturating_add_i64(cursor, -static_cast<int64_t>(main_size));
+            main_position = cursor;
+        }
         if (row) {
-            r = {cursor, inner.y_px + cross_off, main_size, cross_size};
+            arrange_node(c.get(), make_rect_within(inner,
+                main_position, saturating_add_i64(inner.y_px, cross_off), main_size, cross_size));
         } else {
-            r = {inner.x_px + cross_off, cursor, cross_size, main_size};
+            arrange_node(c.get(), make_rect_within(inner,
+                saturating_add_i64(inner.x_px, cross_off), main_position, cross_size, main_size));
         }
-        arrange_node(c.get(), r);
-        cursor += main_size + main_gap;
+        if (reverse)
+            cursor = saturating_add_i64(cursor, -static_cast<int64_t>(main_gap));
+        else
+            cursor = saturating_add_i64(cursor,
+                                        saturating_add_nonnegative(main_size, main_gap));
     }
 }
 
 static void arrange_dock(sao_ui_layout_node_s* node, SaoUiRect inner) {
-    // Consume from sides in order.  Last child (or explicit CENTER)
-    // fills what's left.  Matches WPF DockPanel.LastChildFill.
     SaoUiRect remaining = inner;
     sao_ui_layout_node_s* center_child = nullptr;
     for (auto& c : node->children) {
@@ -576,61 +910,63 @@ static void arrange_dock(sao_ui_layout_node_s* node, SaoUiRect inner) {
             center_child = c.get();
             continue;
         }
-        const int32_t cw = c->measured.width_px;
-        const int32_t ch = c->measured.height_px;
-        SaoUiRect r;
+        const int32_t cw = clamp_nonnegative_i32(c->measured.width_px);
+        const int32_t ch = clamp_nonnegative_i32(c->measured.height_px);
+        SaoUiRect r{};
         switch (c->spec.dock_side) {
         case SAO_UI_DOCK_TOP:
-            r = {remaining.x_px, remaining.y_px, remaining.width_px, ch};
-            remaining.y_px += ch;
-            remaining.height_px -= ch;
+            r = make_rect_within(remaining, remaining.x_px, remaining.y_px, remaining.width_px, ch);
+            remaining.y_px = clamp_nonnegative_i32(saturating_add_i64(remaining.y_px, ch));
+            remaining.height_px = clamp_nonnegative_i32(
+                std::max<int64_t>(0, static_cast<int64_t>(remaining.height_px) - ch));
             break;
         case SAO_UI_DOCK_BOTTOM:
-            r = {remaining.x_px, remaining.y_px + remaining.height_px - ch,
-                 remaining.width_px, ch};
-            remaining.height_px -= ch;
+            r = make_rect_within(remaining, remaining.x_px,
+                saturating_add_i64(remaining.y_px,
+                                   static_cast<int64_t>(remaining.height_px) - ch),
+                remaining.width_px, ch);
+            remaining.height_px = clamp_nonnegative_i32(
+                std::max<int64_t>(0, static_cast<int64_t>(remaining.height_px) - ch));
             break;
         case SAO_UI_DOCK_LEFT:
-            r = {remaining.x_px, remaining.y_px, cw, remaining.height_px};
-            remaining.x_px += cw;
-            remaining.width_px -= cw;
+            r = make_rect_within(remaining, remaining.x_px, remaining.y_px, cw, remaining.height_px);
+            remaining.x_px = clamp_nonnegative_i32(saturating_add_i64(remaining.x_px, cw));
+            remaining.width_px = clamp_nonnegative_i32(
+                std::max<int64_t>(0, static_cast<int64_t>(remaining.width_px) - cw));
             break;
         case SAO_UI_DOCK_RIGHT:
-            r = {remaining.x_px + remaining.width_px - cw, remaining.y_px,
-                 cw, remaining.height_px};
-            remaining.width_px -= cw;
+            r = make_rect_within(remaining,
+                saturating_add_i64(remaining.x_px,
+                                   static_cast<int64_t>(remaining.width_px) - cw),
+                remaining.y_px, cw, remaining.height_px);
+            remaining.width_px = clamp_nonnegative_i32(
+                std::max<int64_t>(0, static_cast<int64_t>(remaining.width_px) - cw));
             break;
-        default:
-            r = remaining;
-            break;
+        default: r = remaining; break;
         }
-        if (remaining.width_px < 0) remaining.width_px = 0;
-        if (remaining.height_px < 0) remaining.height_px = 0;
         arrange_node(c.get(), r);
     }
-    if (center_child != nullptr) {
-        arrange_node(center_child, remaining);
-    } else if (node->dock.last_child_fills && !node->children.empty()) {
-        // No explicit CENTER — nothing more to arrange (already done above).
-        // The last-child-fills behavior is handled when a child has
-        // no explicit side (defaulting to CENTER via spec default).
-    }
+    if (center_child != nullptr) arrange_node(center_child, remaining);
 }
 
 static void arrange_node(sao_ui_layout_node_s* node, SaoUiRect rect) {
-    // Persist arranged rect.
+    rect = make_nonnegative_rect(rect.x_px, rect.y_px, rect.width_px, rect.height_px);
+    const SaoUiRect previous = node->arranged;
+    const bool changed = !rect_equal(previous, rect);
+    if (node->paint_dirty || node->spec.force_dirty || changed) {
+        if (changed)
+            record_dirty_rect(node, previous);
+        record_dirty_rect(node, rect);
+    }
     node->arranged = rect;
-    // Leaf: done.
+    node->paint_dirty = false;
     if (node->widget != nullptr || node->children.empty()) return;
-    // Compute inner rect after insets.
-    int32_t ml, mt, mr, mb;
+    int64_t ml, mt, mr, mb;
     insets_of(node->spec, ml, mt, mr, mb);
-    SaoUiRect inner{
-        rect.x_px + ml,
-        rect.y_px + mt,
-        std::max(0, rect.width_px - ml - mr),
-        std::max(0, rect.height_px - mt - mb),
-    };
+    const int64_t inner_w = std::max<int64_t>(0, static_cast<int64_t>(rect.width_px) - ml - mr);
+    const int64_t inner_h = std::max<int64_t>(0, static_cast<int64_t>(rect.height_px) - mt - mb);
+    const SaoUiRect inner = make_nonnegative_rect(
+        saturating_add_i64(rect.x_px, ml), saturating_add_i64(rect.y_px, mt), inner_w, inner_h);
     switch (node->layout_mode) {
     case SAO_UI_LAYOUT_VERTICAL:   arrange_vertical(node, inner);   break;
     case SAO_UI_LAYOUT_HORIZONTAL: arrange_horizontal(node, inner); break;
@@ -641,7 +977,6 @@ static void arrange_node(sao_ui_layout_node_s* node, SaoUiRect rect) {
     default: break;
     }
 }
-
 // ─── hit test recursion ────────────────────────────────────────────
 
 static sao_ui_layout_node_s* hit_test_walk(
@@ -649,8 +984,12 @@ static sao_ui_layout_node_s* hit_test_walk(
     if (node == nullptr) return nullptr;
     if (!node->spec.hit_testable) return nullptr;
     const SaoUiRect& r = node->arranged;
-    if (x < r.x_px || x >= r.x_px + r.width_px) return nullptr;
-    if (y < r.y_px || y >= r.y_px + r.height_px) return nullptr;
+    if (static_cast<int64_t>(x) < r.x_px ||
+        static_cast<int64_t>(x) >= static_cast<int64_t>(r.x_px) + r.width_px)
+        return nullptr;
+    if (static_cast<int64_t>(y) < r.y_px ||
+        static_cast<int64_t>(y) >= static_cast<int64_t>(r.y_px) + r.height_px)
+        return nullptr;
     // Test children in reverse (topmost first).
     for (auto it = node->children.rbegin(); it != node->children.rend(); ++it) {
         sao_ui_layout_node_s* hit = hit_test_walk(it->get(), x, y);
@@ -679,10 +1018,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_tree_create(
     sao_ui_layout_tree_handle_t* out_tree) {
     if (out_tree == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_tree = nullptr;
-    auto* t = new (std::nothrow) sao_ui_layout_tree_s;
-    if (t == nullptr) return SAO_STATUS_ERR_UNKNOWN;
-    *out_tree = t;
-    return SAO_STATUS_OK;
+    try {
+        auto* tree = new (std::nothrow) sao_ui_layout_tree_s;
+        if (tree == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+        *out_tree = tree;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" void SAO_UI_CALL sao_ui_layout_tree_destroy(sao_ui_layout_tree_handle_t tree) {
@@ -693,38 +1036,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_tree_set_root(
     sao_ui_layout_tree_handle_t tree,
     int32_t layout_mode, const SaoUiLayoutSpec* spec,
     sao_ui_layout_node_handle_t* out_root) {
-    if (tree == nullptr || spec == nullptr || out_root == nullptr) {
+    if (tree == nullptr || spec == nullptr || out_root == nullptr ||
+        !valid_layout_mode(layout_mode)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_root = nullptr;
-    std::lock_guard<std::mutex> lk(tree->mu);
-    if (tree->root) return SAO_STATUS_ERR_ALREADY_EXISTS;
-    auto node = std::make_unique<sao_ui_layout_node_s>();
-    node->layout_mode = layout_mode;
-    node->spec = *spec;
-    node->dirty = true;
-    *out_root = node.get();
-    tree->root = std::move(node);
-    return SAO_STATUS_OK;
+    try {
+        std::lock_guard<std::mutex> lock(tree->mu);
+        if (tree->root) return SAO_STATUS_ERR_ALREADY_EXISTS;
+        auto node = std::make_unique<sao_ui_layout_node_s>();
+        node->tree = tree;
+        node->layout_mode = layout_mode;
+        node->spec = *spec;
+        sao_ui_layout_node_handle_t root = node.get();
+        tree->root = std::move(node);
+        *out_root = root;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_container(
     sao_ui_layout_node_handle_t parent,
     int32_t layout_mode, const SaoUiLayoutSpec* spec,
     sao_ui_layout_node_handle_t* out_child) {
-    if (parent == nullptr || spec == nullptr || out_child == nullptr) {
+    if (parent == nullptr || spec == nullptr || out_child == nullptr ||
+        !valid_layout_mode(layout_mode)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_child = nullptr;
-    auto node = std::make_unique<sao_ui_layout_node_s>();
-    node->parent = parent;
-    node->layout_mode = layout_mode;
-    node->spec = *spec;
-    node->dirty = true;
-    *out_child = node.get();
-    parent->children.push_back(std::move(node));
-    mark_dirty_up(parent);
-    return SAO_STATUS_OK;
+    try {
+        auto node = std::make_unique<sao_ui_layout_node_s>();
+        node->parent = parent;
+        node->tree = parent->tree;
+        node->layout_mode = layout_mode;
+        node->spec = *spec;
+        sao_ui_layout_node_handle_t child = node.get();
+        parent->children.push_back(std::move(node));
+        *out_child = child;
+        mark_dirty_up(parent);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_widget(
@@ -734,15 +1089,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_widget(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_leaf = nullptr;
-    auto node = std::make_unique<sao_ui_layout_node_s>();
-    node->parent = parent;
-    node->widget = widget;
-    node->spec = *spec;
-    node->dirty = true;
-    *out_leaf = node.get();
-    parent->children.push_back(std::move(node));
-    mark_dirty_up(parent);
-    return SAO_STATUS_OK;
+    try {
+        auto node = std::make_unique<sao_ui_layout_node_s>();
+        node->parent = parent;
+        node->tree = parent->tree;
+        node->widget = widget;
+        node->spec = *spec;
+        sao_ui_layout_node_handle_t leaf = node.get();
+        parent->children.push_back(std::move(node));
+        *out_leaf = leaf;
+        mark_dirty_up(parent);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_remove(
@@ -770,72 +1130,108 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_set_spec(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_set_mode_config(
     sao_ui_layout_node_handle_t container, const void* mode_config) {
-    if (container == nullptr || mode_config == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    switch (container->layout_mode) {
-    case SAO_UI_LAYOUT_VERTICAL:
-        container->vertical = *static_cast<const SaoUiVerticalMode*>(mode_config);
-        break;
-    case SAO_UI_LAYOUT_HORIZONTAL:
-        container->horizontal = *static_cast<const SaoUiHorizontalMode*>(mode_config);
-        break;
-    case SAO_UI_LAYOUT_GRID: {
-        const SaoUiGridMode* gm = static_cast<const SaoUiGridMode*>(mode_config);
-        container->grid = *gm;
-        // Deep-copy the row/col track arrays so the caller's buffer
-        // can go out of scope.
-        container->grid_rows_owned.assign(gm->rows, gm->rows + gm->row_count);
-        container->grid_cols_owned.assign(gm->cols, gm->cols + gm->col_count);
-        // Null out the alias pointers in the owned copy to make
-        // accidental use obvious.
-        container->grid.rows = nullptr;
-        container->grid.cols = nullptr;
-        break;
-    }
-    case SAO_UI_LAYOUT_ABSOLUTE:
-        container->absolute = *static_cast<const SaoUiAbsoluteMode*>(mode_config);
-        break;
-    case SAO_UI_LAYOUT_FLEX:
-        container->flex = *static_cast<const SaoUiFlexMode*>(mode_config);
-        break;
-    case SAO_UI_LAYOUT_DOCK:
-        container->dock = *static_cast<const SaoUiDockMode*>(mode_config);
-        break;
-    default:
+    if (container == nullptr || mode_config == nullptr || container->widget != nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        switch (container->layout_mode) {
+        case SAO_UI_LAYOUT_VERTICAL:
+            container->vertical = *static_cast<const SaoUiVerticalMode*>(mode_config);
+            break;
+        case SAO_UI_LAYOUT_HORIZONTAL:
+            container->horizontal = *static_cast<const SaoUiHorizontalMode*>(mode_config);
+            break;
+        case SAO_UI_LAYOUT_GRID: {
+            const SaoUiGridMode* grid = static_cast<const SaoUiGridMode*>(mode_config);
+            if ((grid->row_count != 0U && grid->rows == nullptr) ||
+                (grid->col_count != 0U && grid->cols == nullptr) ||
+                grid->row_count > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+                grid->col_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            std::vector<SaoUiTrackSize> rows;
+            std::vector<SaoUiTrackSize> cols;
+            if (grid->row_count != 0U)
+                rows.assign(grid->rows, grid->rows + grid->row_count);
+            if (grid->col_count != 0U)
+                cols.assign(grid->cols, grid->cols + grid->col_count);
+            container->grid = *grid;
+            container->grid.rows = nullptr;
+            container->grid.cols = nullptr;
+            container->grid_rows_owned = std::move(rows);
+            container->grid_cols_owned = std::move(cols);
+            break;
+        }
+        case SAO_UI_LAYOUT_ABSOLUTE:
+            container->absolute = *static_cast<const SaoUiAbsoluteMode*>(mode_config);
+            break;
+        case SAO_UI_LAYOUT_FLEX:
+            container->flex = *static_cast<const SaoUiFlexMode*>(mode_config);
+            break;
+        case SAO_UI_LAYOUT_DOCK:
+            container->dock = *static_cast<const SaoUiDockMode*>(mode_config);
+            break;
+        default:
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        mark_dirty_up(container);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    mark_dirty_up(container);
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_reorder(
     sao_ui_layout_node_handle_t child, int32_t new_index) {
     if (child == nullptr || child->parent == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    auto& siblings = child->parent->children;
-    auto it = std::find_if(siblings.begin(), siblings.end(),
-        [child](const std::unique_ptr<sao_ui_layout_node_s>& p) { return p.get() == child; });
-    if (it == siblings.end()) return SAO_STATUS_ERR_NOT_FOUND;
-    // Extract, then insert at clamped index.
-    auto owned = std::move(*it);
-    siblings.erase(it);
-    const int32_t clamped = clamp_i32(new_index, 0, static_cast<int32_t>(siblings.size()));
-    siblings.insert(siblings.begin() + clamped, std::move(owned));
-    mark_dirty_up(child->parent);
-    return SAO_STATUS_OK;
+    try {
+        auto& siblings = child->parent->children;
+        auto it = std::find_if(siblings.begin(), siblings.end(),
+            [child](const std::unique_ptr<sao_ui_layout_node_s>& p) { return p.get() == child; });
+        if (it == siblings.end()) return SAO_STATUS_ERR_NOT_FOUND;
+        // Extract, then insert at clamped index.
+        auto owned = std::move(*it);
+        siblings.erase(it);
+        const int32_t clamped = clamp_i32(new_index, 0, static_cast<int32_t>(siblings.size()));
+        siblings.insert(siblings.begin() + clamped, std::move(owned));
+        mark_dirty_up(child->parent);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_measure(
     sao_ui_layout_node_handle_t root, SaoUiSize available,
     SaoUiSize* out_preferred) {
     if (root == nullptr || out_preferred == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    *out_preferred = measure_node(root, available);
-    return SAO_STATUS_OK;
+    *out_preferred = {};
+    try {
+        if (root->tree != nullptr) {
+            std::lock_guard<std::mutex> lock(root->tree->mu);
+            *out_preferred = measure_node(root, available);
+        } else {
+            *out_preferred = measure_node(root, available);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_arrange(
     sao_ui_layout_node_handle_t root, SaoUiRect rect) {
     if (root == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    arrange_node(root, rect);
-    return SAO_STATUS_OK;
+    try {
+        if (root->tree != nullptr) {
+            std::lock_guard<std::mutex> lock(root->tree->mu);
+            arrange_node(root, rect);
+        } else {
+            arrange_node(root, rect);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_get_rect(
@@ -893,6 +1289,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_invalidate(
 static void mark_subtree_dirty(sao_ui_layout_node_s* node) {
     if (node == nullptr) return;
     node->dirty = true;
+    node->paint_dirty = true;
     for (auto& c : node->children) mark_subtree_dirty(c.get());
 }
 
