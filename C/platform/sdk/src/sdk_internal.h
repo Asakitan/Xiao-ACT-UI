@@ -43,6 +43,12 @@
 namespace sao_sdk_internal {
 
 struct ContextState;
+struct LegacyActionBridge;
+
+struct WidgetToken {
+    uint64_t generation = 0;
+    uint64_t serial = 0;
+};
 
 struct ContextCallbackGate {
     std::mutex mutex;
@@ -60,12 +66,14 @@ struct WidgetEntry {
     sao_ui_script_canvas_handle_t script_canvas = nullptr;
     std::string widget_id; // caller-defined id (unique per panel)
     std::string props_json;
+    std::string degraded_new_props_json;
     int32_t kind = 0;
     bool cleanup_pending = false;
     // A synthetic layout-node handle produced by
     // sao_ui_panel_update_body().  Kept so remove/update mutations know
     // which node to touch.
     sao_ui_layout_node_handle_t layout_node = nullptr;
+    SaoUiLayoutSpec layout_spec{};
 };
 
 // Per-panel entry.
@@ -77,13 +85,20 @@ struct PanelEntry {
     // Widgets in insertion order (also z_order-sorted on add).
     std::vector<WidgetEntry> widgets;
     // Next widget-handle counter for stable synthesis.
-    uint64_t next_widget_id = 1;
     // Redraw request counter — tests inspect via getters.
     uint64_t redraw_count = 0;
     sao_sdk_panel_action_callback_t legacy_action_cb = nullptr;
     void* legacy_action_user_data = nullptr;
+    std::shared_ptr<LegacyActionBridge> legacy_action_bridge;
+    std::string legacy_spec_json;
+    enum class UiMode : uint8_t { unspecified, legacy_spec, typed };
+    UiMode ui_mode = UiMode::unspecified;
+    std::shared_ptr<std::mutex> native_mutation_mutex = std::make_shared<std::mutex>();
+    std::unordered_set<std::string> pending_widget_ids;
     std::vector<sao_ui_script_canvas_handle_t> canvases;
     std::vector<sao_ui_widget_handle_t> canvas_placeholders;
+    std::vector<sao_ui_layout_node_handle_t> canvas_placeholder_nodes;
+    bool cleanup_pending = false;
     bool unregistering = false;
 };
 
@@ -302,6 +317,8 @@ struct ContextState {
     std::unordered_map<sao_sdk_ui_panel_t, PanelEntry> panels;
     std::list<PanelEntry> panel_cleanup_pending;
     std::unordered_map<std::string, sao_sdk_ui_panel_t> overlays;
+    std::vector<std::unique_ptr<WidgetToken>> widget_tokens;
+    uint64_t next_widget_token = 1;
 
     // Render hooks owned by this context.
     std::vector<RenderHookEntry> render_hooks;

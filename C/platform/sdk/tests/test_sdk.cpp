@@ -4,9 +4,13 @@
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
+#include "sao/ui/panel.h"
+#include "sao/ui/panel_sdk.h"
 #include "sao/ui/widget_kit.h"
 
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <condition_variable>
 #include <limits>
@@ -28,6 +32,22 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_runtime_state(
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_reset_runtime(void);
 extern "C" SAO_UI_API void SAO_UI_CALL
 sao_ui_test_fail_next_compositor_destroy_after_preflight(void);
+extern "C" SAO_SDK_API sao_ui_panel_body_handle_t SAO_SDK_CALL
+sao_sdk_test_panel_body(const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
+extern "C" SAO_UI_API size_t SAO_UI_CALL
+sao_ui_panel_body_mutation_count(sao_ui_panel_body_handle_t body);
+extern "C" SAO_UI_API int32_t SAO_UI_CALL
+sao_ui_panel_body_mutation_at(sao_ui_panel_body_handle_t body, size_t idx);
+extern "C" SAO_UI_API void SAO_UI_CALL
+sao_ui_panel_test_set_body_replace_failure_point(int32_t point);
+extern "C" SAO_UI_API bool SAO_UI_CALL
+sao_ui_widget_test_props_state(sao_ui_widget_handle_t handle, const char* color_key,
+                                                                      uint32_t* out_color,
+                                                                      char* out_text,
+                                                                      size_t out_text_capacity);
+extern "C" SAO_SDK_API sao_ui_widget_handle_t SAO_SDK_CALL
+sao_sdk_test_widget_native_handle(const SaoSdkContext* ctx, sao_sdk_ui_panel_t panel,
+                                   sao_sdk_ui_widget_t widget);
 
 namespace {
 
@@ -725,6 +745,8 @@ TEST_CASE("unknown widget kind is rejected without panel side effects",
 TEST_CASE("public UI C ABI contains callback exceptions", "[sdk][ui][abi][exception]") {
     SaoSdkUiTable table{};
     table.register_ui_panel = throwing_register_panel;
+    table.abi_version = SAO_SDK_UI_TABLE_ABI_VERSION;
+    table.struct_size = sizeof(SaoSdkUiTable);
     SaoSdkContext ctx{};
     REQUIRE(sao_sdk_bind_context("ui.throwing.callback", "1.0", &ctx) == SAO_SDK_OK);
     ctx.ui = &table;
@@ -736,4 +758,139 @@ TEST_CASE("public UI C ABI contains callback exceptions", "[sdk][ui][abi][except
     CHECK(status == SAO_SDK_ERR_INTERNAL);
     CHECK(panel == nullptr);
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+namespace {
+sao_sdk_status_t SAO_SDK_CALL legacy_prefix_register(void*, const char*, const char*,
+                                                      const uint8_t*, size_t,
+                                                      sao_sdk_panel_action_callback_t, void*,
+                                                      sao_sdk_ui_panel_t*) {
+    return SAO_SDK_ERR_UNSUPPORTED;
+}
+}
+
+TEST_CASE("seven-slot old context rejects typed slots without reading table metadata",
+          "[sdk][ui][abi][table][old-context][guard-page]") {
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("sdk.ui.short.table", "1.0", &context) == SAO_SDK_OK);
+    const auto* original_ui = context.ui;
+    struct LegacyStorage {
+        alignas(SaoSdkUiTable) std::array<std::byte, SAO_SDK_UI_TABLE_LEGACY_SIZE> bytes{};
+        uint64_t canary = 0x1122334455667788ULL;
+    } storage;
+    const auto legacy_register = &legacy_prefix_register;
+    std::memcpy(storage.bytes.data(), &legacy_register, sizeof(legacy_register));
+    context.abi_version = (SAO_SDK_ABI_VERSION_MAJOR << 16) | 10u;
+    context.ui = reinterpret_cast<const SaoSdkUiTable*>(storage.bytes.data());
+
+    const auto descriptor = test_panel_descriptor("sdk.ui.short.table.panel");
+    SaoSdkWidgetSpec widget{};
+    widget.kind = SAO_SDK_UI_WIDGET_LABEL;
+    widget.widget_id_utf8 = "short";
+    widget.text_utf8 = "short";
+    sao_sdk_ui_panel_t panel = reinterpret_cast<sao_sdk_ui_panel_t>(uintptr_t{1});
+    sao_sdk_ui_widget_t handle = reinterpret_cast<sao_sdk_ui_widget_t>(uintptr_t{2});
+    CHECK(sao_sdk_register_ui_panel(&context, &descriptor, &panel) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_panel_add_widget(&context, panel, &widget, &handle) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_panel_update_widget(&context, panel, handle, &widget) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(sao_sdk_panel_remove_widget(&context, panel, handle) == SAO_SDK_ERR_UNSUPPORTED);
+    CHECK(storage.canary == 0x1122334455667788ULL);
+
+    context.ui = original_ui;
+    context.abi_version = SAO_SDK_ABI_VERSION;
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+}
+
+TEST_CASE("legacy set_panel_spec clears typed widgets and blocks mixed CRUD",
+          "[sdk][ui][typed][legacy][stale]") {
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("sdk.typed.legacy.mode", "1.0", &context) == SAO_SDK_OK);
+    const auto descriptor = test_panel_descriptor("sdk.typed.legacy.mode");
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(&context, &descriptor, &panel) == SAO_SDK_OK);
+    SaoSdkWidgetSpec widget{};
+    widget.kind = SAO_SDK_UI_WIDGET_LABEL;
+    widget.widget_id_utf8 = "typed-label";
+    widget.text_utf8 = "typed";
+    sao_sdk_ui_widget_t handle = nullptr;
+    REQUIRE(sao_sdk_panel_add_widget(&context, panel, &widget, &handle) == SAO_SDK_OK);
+    CHECK(sao_sdk_test_panel_widget_count(&context, panel) == 1);
+    const auto body = sao_sdk_test_panel_body(&context, panel);
+    REQUIRE(body != nullptr);
+    const size_t mutations_before = sao_ui_panel_body_mutation_count(body);
+    constexpr char legacy_spec[] = R"({"kind":"panel","children":[]})";
+    REQUIRE(sao_sdk_ui_set_panel_spec(&context, panel,
+                                      reinterpret_cast<const uint8_t*>(legacy_spec),
+                                      sizeof(legacy_spec) - 1) == SAO_SDK_OK);
+    CHECK(sao_sdk_test_panel_widget_count(&context, panel) == 0);
+    bool removed_native_node = false;
+    const size_t mutations_after = sao_ui_panel_body_mutation_count(body);
+    for (size_t index = mutations_before; index < mutations_after; ++index)
+        removed_native_node = removed_native_node ||
+                              sao_ui_panel_body_mutation_at(body, index) == SAO_UI_BODY_REMOVE_NODE;
+    CHECK(removed_native_node);
+    sao_sdk_ui_widget_t blocked = nullptr;
+    CHECK(sao_sdk_panel_add_widget(&context, panel, &widget, &blocked) == SAO_SDK_ERR_BUSY);
+    REQUIRE(sao_sdk_unregister_ui_panel(&context, panel) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+}
+
+TEST_CASE("typed widget update quarantines native rollback uncertainty and retries cleanup",
+          "[sdk][ui][typed][rollback][quarantine][retry][canary]") {
+    SaoSdkContext context{};
+    REQUIRE(sao_sdk_bind_context("sdk.typed.native.rollback.uncertain", "1.0", &context) ==
+            SAO_SDK_OK);
+    const auto descriptor = test_panel_descriptor("sdk.typed.native.rollback.uncertain.panel");
+    sao_sdk_ui_panel_t panel = nullptr;
+    REQUIRE(sao_sdk_register_ui_panel(&context, &descriptor, &panel) == SAO_SDK_OK);
+
+    constexpr char initial_props[] = R"({"fill":"#112233"})";
+    struct WidgetSpecFixture {
+        SaoSdkWidgetSpec value{};
+        uint64_t canary = 0x13579BDF2468ACE0ULL;
+    } initial;
+    initial.value.kind = SAO_SDK_UI_WIDGET_LABEL;
+    initial.value.widget_id_utf8 = "uncertain-widget";
+    initial.value.text_utf8 = "old";
+    initial.value.props_json_utf8 = reinterpret_cast<const uint8_t*>(initial_props);
+    initial.value.props_len = sizeof(initial_props) - 1;
+    sao_sdk_ui_widget_t widget = nullptr;
+    REQUIRE(sao_sdk_panel_add_widget(&context, panel, &initial.value, &widget) == SAO_SDK_OK);
+    auto* native = sao_sdk_test_widget_native_handle(&context, panel, widget);
+    REQUIRE(native != nullptr);
+
+    constexpr char updated_props[] = R"({"fill":"#AABBCC"})";
+    WidgetSpecFixture updated = initial;
+    updated.value.text_utf8 = "new";
+    updated.value.props_json_utf8 = reinterpret_cast<const uint8_t*>(updated_props);
+    updated.value.props_len = sizeof(updated_props) - 1;
+
+    sao_ui_panel_test_set_body_replace_failure_point(2);
+    CHECK(sao_sdk_panel_update_widget(&context, panel, widget, &updated.value) ==
+          static_cast<sao_sdk_status_t>(SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED));
+    sao_ui_panel_test_set_body_replace_failure_point(0);
+
+    CHECK(initial.canary == 0x13579BDF2468ACE0ULL);
+    CHECK(updated.canary == 0x13579BDF2468ACE0ULL);
+    CHECK(sao_sdk_test_panel_widget_count(&context, panel) == 1);
+    CHECK(sao_sdk_test_widget_native_handle(&context, panel, widget) == native);
+    uint32_t fill = 0;
+    char text[32]{};
+    REQUIRE(sao_ui_widget_test_props_state(native, "fill", &fill, text, sizeof(text)));
+    CHECK(fill == 0xFFAABBCCU);
+
+    SaoSdkWidgetSpec later = updated.value;
+    CHECK(sao_sdk_panel_update_widget(&context, panel, widget, &later) == SAO_SDK_ERR_BUSY);
+    sao_sdk_ui_widget_t replacement = nullptr;
+    CHECK(sao_sdk_panel_add_widget(&context, panel, &later, &replacement) == SAO_SDK_ERR_BUSY);
+    CHECK(replacement == nullptr);
+    CHECK(sao_sdk_panel_remove_widget(&context, panel, widget) == SAO_SDK_ERR_BUSY);
+    CHECK(sao_sdk_unregister_ui_panel(&context, panel) == SAO_SDK_ERR_BUSY);
+
+    sao_sdk_test_fail_next_panel_unregister(SAO_SDK_ERR_INTERNAL);
+    CHECK(sao_sdk_context_try_destroy(&context) == SAO_SDK_ERR_INTERNAL);
+    CHECK(context.ctx_impl != nullptr);
+    CHECK(sao_sdk_test_panel_cleanup_pending_count(&context) == 1);
+    REQUIRE(sao_sdk_context_try_destroy(&context) == SAO_SDK_OK);
+    CHECK(context.ctx_impl == nullptr);
 }

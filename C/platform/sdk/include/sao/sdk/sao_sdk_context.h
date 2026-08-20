@@ -113,8 +113,15 @@ struct SaoSdkPanelDescriptor {
     int32_t z_class;    // 0 normal / 1 topmost / 2 bottom
     int32_t z_within_class;
     float initial_opacity; // 0..1; 0 → default 1.0
-    uint8_t _pad[4];
+    uint32_t struct_size;
 };
+
+#define SAO_SDK_PANEL_DESCRIPTOR_REQUIRED_SIZE \
+    (offsetof(struct SaoSdkPanelDescriptor, struct_size) + \
+     sizeof(((struct SaoSdkPanelDescriptor*)0)->struct_size))
+// struct_size == 0 selects only the old complete layout; the physical
+// buffer supplied by the caller must still be at least required size.
+#define SAO_SDK_PANEL_DESCRIPTOR_LEGACY_SIZE SAO_SDK_PANEL_DESCRIPTOR_REQUIRED_SIZE
 
 // Descriptor for `sao_sdk_panel_add_widget` — one shape covers every
 // widget kind.  Fields not consumed by the target kind are ignored.
@@ -137,8 +144,15 @@ struct SaoSdkWidgetSpec {
     float max_value;
     // Ordering — higher z draws later within the panel body.
     int32_t z_order;
-    uint8_t _pad[4];
+    uint32_t struct_size;
 };
+
+#define SAO_SDK_WIDGET_SPEC_REQUIRED_SIZE \
+    (offsetof(struct SaoSdkWidgetSpec, struct_size) + \
+     sizeof(((struct SaoSdkWidgetSpec*)0)->struct_size))
+// struct_size == 0 selects only the old complete layout; the physical
+// buffer supplied by the caller must still be at least required size.
+#define SAO_SDK_WIDGET_SPEC_LEGACY_SIZE SAO_SDK_WIDGET_SPEC_REQUIRED_SIZE
 
 // Event callback (JSON UTF-8).
 typedef void(SAO_SDK_CALL* sao_sdk_event_callback_t)(const char* topic_utf8,
@@ -253,7 +267,17 @@ struct SaoSdkUiTable {
 
     sao_sdk_status_t(SAO_SDK_CALL* panel_remove_widget)(void* ctx_impl, sao_sdk_ui_panel_t panel,
                                                         sao_sdk_ui_widget_t widget);
+    uint32_t abi_version;
+    uint32_t struct_size;
 };
+
+#define SAO_SDK_UI_TABLE_ABI_VERSION_MAJOR SAO_SDK_ABI_VERSION_MAJOR
+#define SAO_SDK_UI_TABLE_ABI_VERSION_MINOR SAO_SDK_ABI_VERSION_MINOR
+#define SAO_SDK_UI_TABLE_ABI_VERSION ((SAO_SDK_UI_TABLE_ABI_VERSION_MAJOR << 16) | SAO_SDK_UI_TABLE_ABI_VERSION_MINOR)
+#define SAO_SDK_UI_TABLE_LEGACY_SIZE offsetof(struct SaoSdkUiTable, register_ui_panel)
+#define SAO_SDK_UI_TABLE_TYPED_CONTEXT_MINOR SAO_SDK_ABI_VERSION_MINOR
+#define SAO_SDK_UI_TABLE_ABI_PREFIX_SIZE (offsetof(struct SaoSdkUiTable, abi_version) + sizeof(((struct SaoSdkUiTable*)0)->abi_version) + sizeof(((struct SaoSdkUiTable*)0)->struct_size))
+#define SAO_SDK_UI_TABLE_REQUIRED_SIZE (offsetof(struct SaoSdkUiTable, struct_size) + sizeof(((struct SaoSdkUiTable*)0)->struct_size))
 
 // Event capability — subscribe/publish onto the platform event bus.
 struct SaoSdkEventTable {
