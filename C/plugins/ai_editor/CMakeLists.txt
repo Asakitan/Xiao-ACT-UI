@@ -34,6 +34,9 @@ foreach (_candidate IN LISTS _SAO_WEBVIEW2_CANDIDATE_DIRS)
         break()
     endif()
 endforeach()
+if (_SAO_WEBVIEW2_ROOT)
+    file(TO_CMAKE_PATH "${_SAO_WEBVIEW2_ROOT}" _SAO_WEBVIEW2_ROOT)
+endif()
 if (NOT _SAO_WEBVIEW2_ROOT AND SAO_BUILD_WEBVIEW_BRIDGE)
     message(STATUS "sao_ai_editor: WebView2 SDK not located; webview bridge disabled")
     set(SAO_BUILD_WEBVIEW_BRIDGE OFF CACHE BOOL "" FORCE)
@@ -43,8 +46,12 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
     set(_SAO_WEBVIEW2_INCLUDE "${_SAO_WEBVIEW2_ROOT}/include")
     set(_SAO_WEBVIEW2_LIB    "${_SAO_WEBVIEW2_ROOT}/x64/WebView2LoaderStatic.lib")
     set(_SAO_WEBVIEW2_DLL    "${_SAO_WEBVIEW2_ROOT}/x64/WebView2Loader.dll")
-    if (NOT EXISTS "${_SAO_WEBVIEW2_LIB}")
-        message(STATUS "sao_ai_editor: WebView2LoaderStatic.lib missing at ${_SAO_WEBVIEW2_LIB}, disabling webview bridge")
+    if (NOT EXISTS "${_SAO_WEBVIEW2_LIB}" OR
+        NOT EXISTS "${_SAO_WEBVIEW2_DLL}")
+        message(STATUS
+            "sao_ai_editor: WebView2LoaderStatic.lib and WebView2Loader.dll "
+            "are both required (${_SAO_WEBVIEW2_LIB}, ${_SAO_WEBVIEW2_DLL}); "
+            "disabling webview bridge")
         set(SAO_BUILD_WEBVIEW_BRIDGE OFF CACHE BOOL "" FORCE)
     endif()
 endif()
@@ -131,6 +138,11 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
         "${_SAO_WEBVIEW2_LIB}" ole32 oleaut32 advapi32 version)
     target_compile_definitions(sao_plugin_ai_editor PRIVATE
         SAO_AI_EDITOR_HAS_WEBVIEW=1)
+    add_custom_command(TARGET sao_plugin_ai_editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_SAO_WEBVIEW2_DLL}"
+            "$<TARGET_FILE_DIR:sao_plugin_ai_editor>/WebView2Loader.dll"
+        VERBATIM)
 endif()
 add_library(sao::plugin_ai_editor ALIAS sao_plugin_ai_editor)
 
@@ -145,15 +157,21 @@ target_link_libraries(sao_plugin_ai_editor PUBLIC
 )
 target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
+    sao::legacy_core
+    sao::security::anti_screencap
     sao::rt_io
     sao::sdk
     # Phase 10 (SDK dumper) — engine adapter access via mem_probe.
     sao::mem_probe
     bcrypt
     crypt32
+    comdlg32
     shell32
     winhttp
 )
+if (TARGET sao_security_anti_screencap)
+    add_dependencies(sao_plugin_ai_editor sao_security_anti_screencap)
+endif()
 # Link sao::gpu_hunt only when at least one gpu_hunt-consuming source is
 # present; on a clean checkout without gpu_hunt local-only sources the
 # alias resolves to a stub INTERFACE library (see platform/CMakeLists.txt).
@@ -174,10 +192,15 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
 endif()
 target_link_libraries(sao_ai_editor PRIVATE
     sao::plugin_ai_editor
+    sao::legacy_core
+    sao::security::anti_screencap
     comctl32
     shell32
     user32
 )
+if (TARGET sao_security_anti_screencap)
+    add_dependencies(sao_ai_editor sao_security_anti_screencap)
+endif()
 if (TARGET SaoKernelMapMcpServer)
     add_dependencies(sao_ai_editor SaoKernelMapMcpServer)
 endif()
@@ -186,6 +209,13 @@ install(TARGETS sao_ai_editor sao_plugin_ai_editor
     RUNTIME DESTINATION "bin"
     COMPONENT ship
 )
+
+if (SAO_BUILD_WEBVIEW_BRIDGE)
+    install(FILES "${_SAO_WEBVIEW2_DLL}"
+        DESTINATION "bin"
+        RENAME "WebView2Loader.dll"
+        COMPONENT ship)
+endif()
 
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"

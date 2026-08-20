@@ -232,6 +232,8 @@ option(SAO_BUILD_LEGACY_CORE "Build legacy sao_core compat target (required by s
 # vcpkg-provisioned host still takes precedence -- FetchContent only
 # builds when find_package fails.  Must run BEFORE subsystems are added.
 if (SAO_BUILD_TESTS)
+    set(DART_TESTING_TIMEOUT 30 CACHE STRING
+        "Default hard timeout for native CTest entries" FORCE)
     enable_testing()
     # Repo overlay of Catch2 extras must shadow any vcpkg/FetchContent copy so
     # `include(Catch)` picks up the patched CatchAddTests.cmake (multi-value
@@ -924,6 +926,21 @@ endfunction()
 function(sao_assert_no_wave_impl_libraries directory)
     sao_assert_no_iteration_metadata("${directory}")
 endfunction()
+
+if (SAO_BUILD_TESTS)
+    add_test(NAME native_fast_suite
+        COMMAND "${CMAKE_CTEST_COMMAND}"
+            --test-dir "${CMAKE_BINARY_DIR}"
+            --build-config "$<CONFIG>"
+            --output-on-failure
+            --parallel 16
+            --no-tests=error
+            --exclude-regex "^native_fast_suite$")
+    set_tests_properties(native_fast_suite PROPERTIES
+        LABELS "meta;full;fast"
+        RUN_SERIAL TRUE
+        TIMEOUT 90)
+endif()
 
 sao_assert_no_iteration_artifact_paths("${CMAKE_SOURCE_DIR}")
 sao_assert_no_iteration_cmake_source("${CMAKE_SOURCE_DIR}")

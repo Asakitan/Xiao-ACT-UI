@@ -99,6 +99,17 @@ The AI Editor / SaoAiEditor / gpu_hunt stack is written in native C++ (`sao_auto
 - `git diff --check -- <changed files>` for whitespace.
 - For UI/performance: code checks verify correctness, not behavior. Note when live validation is needed.
 
+## Native Test Budget And Hang Policy
+
+- Keep the native suite as short as possible. Register Catch2 with CTest once per test executable by default; `catch_discover_tests()` / one-process-per-case registration requires an explicit isolation defect that cannot be fixed.
+- Target budgets: ordinary test executable <= 15 seconds, subprocess/integration executable <= 30 seconds, complete local native CTest <= 90 seconds. Every test entry needs a hard limit through an explicit `TIMEOUT` or the inherited 30-second CTest default; ordinary tests that must enforce the 15-second budget require an explicit 15-second property. A timeout is a failure, never an invitation to wait indefinitely.
+- Run complete local native validation through the `native_fast_suite` CTest entry (16-way inner CTest, 90-second hard timeout). Do not benchmark or routinely run the VS Code Test Explorer's one-CTest-process-per-entry fan-out; it adds editor orchestration overhead without increasing coverage.
+- Any test sharing a global OS, process, service, device, file, display, or GPU resource with another entry must declare a common `RESOURCE_LOCK` before joining the parallel full suite.
+- Never execute a real `abort()`, CRT `assert()`, deliberate access violation, debugger break, or WER/crash-dialog path in the main test process. Test such behavior through a bounded child process or a return-code/failure-injection seam. Project-owned assertion helpers must exit non-interactively instead of opening a Windows dialog.
+- Preserve high-value tests: concurrency, ownership/lifetime, teardown, rollback/retry, ABI/wire contracts, security boundaries, and real integration paths.
+- Delete or consolidate low-value tests when encountered. Do not add source-string/grep tests, duplicate null/idempotence permutations, field/type/enum self-evidence, trivial getter/setter mirrors, or repeated JSON-shape checks already covered by a stronger lifecycle/integration test.
+- A failed assertion must not strand a joinable thread, child process, lock, event, service, or driver handle. Install cleanup before the first failing assertion; use non-fatal checks until all blocking resources are released.
+
 ## Git — test files never committed
 
 - **Test files MUST NOT be added to git.** This includes all `*selftest*.py`, `*_test*.py`, `test_*.py`, conftest.py, and any file under `tools/` that is a selftest/test harness.

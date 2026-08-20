@@ -202,6 +202,12 @@ endif()
 if (TARGET sao::ui)
     target_link_libraries(SaoAuto PRIVATE sao::ui)
 endif()
+# Anti-screencap facade: the launcher consumes enable_anti_screencap and
+# registers process windows with the threat coordinator at startup.
+# Declared after security/ is configured, mirroring platform/ui.
+if (TARGET sao::security::anti_screencap)
+    target_link_libraries(SaoAuto PRIVATE sao::security::anti_screencap)
+endif()
 if (SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     target_link_libraries(SaoAuto PRIVATE
         sao::ui

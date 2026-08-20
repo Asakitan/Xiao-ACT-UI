@@ -36,7 +36,13 @@ target_compile_features(sao_platform_sdk PUBLIC cxx_std_20)
 # The SDK dispatch DLL forwards into engine/core/ui but does NOT expose
 # their headers to plugins — plugins only see the SDK's public include.
 target_link_libraries(sao_platform_sdk
-    PRIVATE sao::core sao::engine sao::ui sao::net sao::gpu_hunt
+    PRIVATE
+        sao::core
+        sao::engine
+        sao::ui
+        sao::net
+        sao::gpu_hunt
+        nlohmann_json::nlohmann_json
 )
 
 if (SAO_BUILD_TESTS)
