@@ -40,11 +40,13 @@ extern "C" {
 //                    one receive a partial boost.  Default 2.
 // scale_curve_gamma: exponent applied to distance falloff.  1.0 =
 //                    linear falloff; 2.0 = quadratic (default).
+enum { SAO_UI_FISHEYE_DEFAULT_FALLOFF_NEIGHBORS = 2 };
+
 struct SaoUiFisheyeConfig {
     int32_t base_size;             // idle diameter (default 54)
     int32_t max_size;              // fully-focused diameter (default 70)
     int32_t slot_size;             // spacing box (default 70)
-    int32_t falloff_neighbors;     // default 2
+    int32_t falloff_neighbors;     // default SAO_UI_FISHEYE_DEFAULT_FALLOFF_NEIGHBORS
     float   scale_curve_gamma;     // default 2.0
     float   grow_speed_lerp;       // per-tick blend factor (0..1);
                                    //   0.28 default (SIZE_LERP)

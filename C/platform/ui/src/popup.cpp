@@ -125,6 +125,7 @@ constexpr int32_t kEmptyPanelHeight = 24;
 constexpr int32_t kVisualPadding = 6;
 constexpr int32_t kShadowOffset = 3;
 constexpr int32_t kPopupZOrder = 1'000'000;
+enum class PopupPhase : uint8_t { hidden, entering, live, exiting };
 
 std::atomic<uint64_t> g_popup_layer_sequence{0};
 
@@ -148,7 +149,7 @@ PopupPalette make_popup_palette(SaoUiThemeId theme_id) noexcept {
     };
     return {
         capped_alpha(color(SAO_UI_TOKEN_BLACK), 0x66U),
-        capped_alpha(color(SAO_UI_TOKEN_APP_BG), 0xD2U),
+        capped_alpha(color(SAO_UI_TOKEN_TOOLTIP_SURFACE), 0xE8U),
         color(SAO_UI_TOKEN_CORNER_CYAN),
         capped_alpha(color(SAO_UI_TOKEN_ACCENT_CYAN_SOFT), 0xB0U),
         color(SAO_UI_TOKEN_CIRCLE_ACTIVE_BORDER),
@@ -283,6 +284,9 @@ struct sao_ui_popup_s {
     sao_ui_theme_handle_t theme = nullptr;
 
     bool visible = false;
+    PopupPhase phase{PopupPhase::hidden};
+    int32_t phase_elapsed_ms{0};
+    float layer_alpha{0.0F};
     SaoUiPopupSpec spec_snapshot {};
     EntryNode root;
     sao_ui_popup_result_callback_t callback = nullptr;
@@ -745,6 +749,7 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
         VisualSnapshot snapshot;
         sao_ui_layer_handle_t layer = nullptr;
         PopupInputBinding* binding = nullptr;
+        float layer_alpha = 1.0F;
         {
             std::lock_guard lock(popup->mu);
             if (!popup->visible || popup->levels.empty()) return SAO_STATUS_OK;
@@ -752,6 +757,7 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
             if (snapshot_status != SAO_STATUS_OK) return snapshot_status;
             layer = popup->layer;
             binding = popup->input_binding.get();
+            layer_alpha = popup->layer_alpha;
         }
 
         PopupFrame frame;
@@ -785,6 +791,7 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
             }
             if (status == SAO_STATUS_OK)
                 status = sao_ui_layer_set_effects(created, &effects);
+            if (status == SAO_STATUS_OK) status = sao_ui_layer_set_alpha(created, layer_alpha);
             if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(created, false);
             if (status == SAO_STATUS_OK) {
                 status = sao_ui_layer_set_input_callbacks(
@@ -827,6 +834,8 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
                 layer, layer_x, layer_y,
                 static_cast<int32_t>(frame.width), static_cast<int32_t>(frame.height));
         }
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_layer_set_alpha(layer, layer_alpha);
         if (status == SAO_STATUS_OK) {
             status = sao_ui_layer_set_input_rects(
                 layer, frame.input_rects.empty() ? nullptr : frame.input_rects.data(),
@@ -930,6 +939,21 @@ static void SAO_UI_CALL popup_layer_cursor(
     }
 }
 
+static PendingResult begin_exit_locked(
+    sao_ui_popup_s* popup, int32_t entry_id, bool dismissed,
+    int32_t screen_x, int32_t screen_y) noexcept {
+    PendingResult result{
+        popup->callback, popup->user_data, entry_id, dismissed, screen_x, screen_y};
+    popup->visible = false;
+    popup->callback = nullptr;
+    popup->user_data = nullptr;
+    popup->phase = PopupPhase::exiting;
+    popup->phase_elapsed_ms = 0;
+    popup->layer_alpha = 1.0F;
+    popup->levels.clear();
+    popup->layer_bounds_valid = false;
+    return result;
+}
 static void SAO_UI_CALL popup_layer_button(
     int32_t button, int32_t action, int32_t,
     float layer_x, float layer_y, void* user_data) {
@@ -943,7 +967,6 @@ static void SAO_UI_CALL popup_layer_button(
         sao_ui_popup_s* popup = binding->popup;
         if (popup == nullptr) return;
         std::unique_lock layer_lock(popup->layer_mu);
-        sao_ui_layer_handle_t layer_to_destroy = nullptr;
         bool redraw = false;
         {
             std::lock_guard lock(popup->mu);
@@ -967,21 +990,12 @@ static void SAO_UI_CALL popup_layer_button(
             } else if (!entry.children.empty()) {
                 redraw = open_submenu_locked(popup, hit.depth, hit.index) == SAO_STATUS_OK;
             } else {
-                pending = {popup->callback, popup->user_data, entry.entry_id,
-                           false, screen_x, screen_y};
-                popup->visible = false;
-                popup->callback = nullptr;
-                popup->user_data = nullptr;
-                popup->levels.clear();
-                layer_to_destroy = std::exchange(popup->layer, nullptr);
-                popup->layer_bounds_valid = false;
+                pending = begin_exit_locked(popup, entry.entry_id, false, screen_x, screen_y);
+                redraw = true;
             }
         }
-        if (layer_to_destroy != nullptr) {
-            destroy_layer_handle(layer_to_destroy);
-        } else if (redraw) {
+        if (redraw)
             (void)sync_visible_layer_locked(popup);
-        }
         layer_lock.unlock();
         binding_lock.unlock();
     } catch (...) {
@@ -989,7 +1003,6 @@ static void SAO_UI_CALL popup_layer_button(
     }
     invoke_result_noexcept(pending);
 }
-
 }  // namespace
 
 extern "C" const SaoUiPopupLayoutConsts* SAO_UI_CALL
@@ -1081,6 +1094,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
             handle->callback = callback;
             handle->user_data = user_data;
             handle->visible = true;
+            const int32_t fade_in_ms = std::max(0, spec->fade_in_ms);
+            handle->phase = fade_in_ms == 0 ? PopupPhase::live : PopupPhase::entering;
+            handle->phase_elapsed_ms = fade_in_ms == 0 ? 0 : std::min(16, fade_in_ms);
+            handle->layer_alpha = fade_in_ms == 0
+                              ? 1.0F
+                              : static_cast<float>(handle->phase_elapsed_ms) /
+                                  static_cast<float>(fade_in_ms);
             handle->levels.clear();
             handle->levels.push_back(std::move(root_level));
         }
@@ -1092,6 +1112,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
         {
             std::lock_guard lock(handle->mu);
             handle->visible = false;
+            handle->phase = PopupPhase::exiting;
+            handle->phase_elapsed_ms = 0;
+            handle->layer_alpha = 1.0F;
             handle->callback = nullptr;
             handle->user_data = nullptr;
             handle->levels.clear();
@@ -1108,26 +1131,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hide(sao_ui_popup_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     PendingResult pending;
-    sao_ui_layer_handle_t layer = nullptr;
     {
         std::lock_guard layer_lock(handle->layer_mu);
         {
             std::lock_guard lock(handle->mu);
             if (!handle->visible) return SAO_STATUS_OK;
-            pending = {handle->callback, handle->user_data, -1, true, -1, -1};
-            handle->visible = false;
-            handle->callback = nullptr;
-            handle->user_data = nullptr;
-            handle->levels.clear();
-            layer = std::exchange(handle->layer, nullptr);
-            handle->layer_bounds_valid = false;
+            pending = begin_exit_locked(handle, -1, true, -1, -1);
         }
-        destroy_layer_handle(layer);
+        (void)sync_visible_layer_locked(handle);
     }
     invoke_result_noexcept(pending);
     return SAO_STATUS_OK;
 }
-
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_is_visible(
     sao_ui_popup_handle_t handle, bool* out_visible) {
     if (handle == nullptr || out_visible == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1153,6 +1168,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_refresh_entries(
         sao_status_t status = make_root_level(replacement_root.children, spec, &root_level);
         if (status != SAO_STATUS_OK) return status;
         bool visible = false;
+    PopupPhase phase{PopupPhase::hidden};
+    int32_t phase_elapsed_ms{0};
+    float layer_alpha{0.0F};
         {
             std::lock_guard lock(handle->mu);
             handle->root = std::move(replacement_root);
@@ -1202,6 +1220,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_checked(
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard layer_lock(handle->layer_mu);
     bool visible = false;
+    PopupPhase phase{PopupPhase::hidden};
+    int32_t phase_elapsed_ms{0};
+    float layer_alpha{0.0F};
     {
         std::lock_guard lock(handle->mu);
         EntryNode* node = find_by_id_mut(handle->root, entry_id);
@@ -1217,6 +1238,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_enabled(
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard layer_lock(handle->layer_mu);
     bool visible = false;
+    PopupPhase phase{PopupPhase::hidden};
+    int32_t phase_elapsed_ms{0};
+    float layer_alpha{0.0F};
     {
         std::lock_guard lock(handle->mu);
         EntryNode* node = find_by_id_mut(handle->root, entry_id);
@@ -1237,7 +1261,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_key_press(
     sao_status_t status = SAO_STATUS_OK;
     try {
         std::unique_lock layer_lock(handle->layer_mu);
-        sao_ui_layer_handle_t layer_to_destroy = nullptr;
         bool redraw = true;
         {
             std::lock_guard lock(handle->mu);
@@ -1248,7 +1271,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_key_press(
             const int32_t depth = static_cast<int32_t>(handle->levels.size()) - 1;
             OpenLevel& top = handle->levels.back();
             const auto& entries = level_entries(handle, depth);
-
             switch (key) {
             case SAO_UI_POPUP_KEY_UP:
                 top.selected_index = advance_selection(entries, top.selected_index, -1);
@@ -1275,38 +1297,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_key_press(
                         if (!entry.children.empty()) {
                             status = open_submenu_locked(handle, depth, top.selected_index);
                         } else {
-                            pending = {handle->callback, handle->user_data, entry.entry_id,
-                                       false, -1, -1};
-                            handle->visible = false;
-                            handle->callback = nullptr;
-                            handle->user_data = nullptr;
-                            handle->levels.clear();
-                            layer_to_destroy = std::exchange(handle->layer, nullptr);
-                            handle->layer_bounds_valid = false;
-                            redraw = false;
+                            pending = begin_exit_locked(handle, entry.entry_id, false, -1, -1);
                         }
                     }
                 }
                 break;
             case SAO_UI_POPUP_KEY_ESC:
-                pending = {handle->callback, handle->user_data, -1, true, -1, -1};
-                handle->visible = false;
-                handle->callback = nullptr;
-                handle->user_data = nullptr;
-                handle->levels.clear();
-                layer_to_destroy = std::exchange(handle->layer, nullptr);
-                handle->layer_bounds_valid = false;
-                redraw = false;
+                pending = begin_exit_locked(handle, -1, true, -1, -1);
                 break;
             default:
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
         }
-        if (layer_to_destroy != nullptr) {
-            destroy_layer_handle(layer_to_destroy);
-        } else if (redraw && status == SAO_STATUS_OK) {
+        if (redraw && status == SAO_STATUS_OK)
             status = sync_visible_layer_locked(handle);
-        }
         layer_lock.unlock();
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1314,7 +1318,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_key_press(
     invoke_result_noexcept(pending);
     return status;
 }
-
 extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hit_test(
     sao_ui_popup_handle_t handle,
     int32_t x, int32_t y,
@@ -1330,5 +1333,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_hit_test(
     if (out_entry_id != nullptr) *out_entry_id = hit.entry_id;
     if (out_submenu_depth != nullptr && hit.inside_level)
         *out_submenu_depth = hit.depth;
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_tick(sao_ui_popup_handle_t handle, int32_t dt_ms) {
+    if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (dt_ms < 0) dt_ms = 0;
+    std::lock_guard layer_lock(handle->layer_mu);
+    sao_ui_layer_handle_t destroy = nullptr;
+    sao_ui_layer_handle_t layer = nullptr;
+    float alpha = 0.0F;
+    {
+        std::lock_guard lock(handle->mu);
+        if (handle->phase == PopupPhase::hidden) return SAO_STATUS_ERR_NOT_INITIALIZED;
+        handle->phase_elapsed_ms += dt_ms;
+        const bool entering = handle->phase == PopupPhase::entering;
+        const int32_t duration = std::max(
+            1, entering ? handle->spec_snapshot.fade_in_ms : handle->spec_snapshot.fade_out_ms);
+        if (entering) {
+            handle->layer_alpha = std::min(
+                1.0F, static_cast<float>(handle->phase_elapsed_ms) / duration);
+            if (handle->layer_alpha >= 1.0F) {
+                handle->phase = PopupPhase::live;
+                handle->phase_elapsed_ms = 0;
+            }
+        } else if (handle->phase == PopupPhase::exiting) {
+            handle->layer_alpha = std::max(
+                0.0F, 1.0F - static_cast<float>(handle->phase_elapsed_ms) / duration);
+            if (handle->layer_alpha <= 0.0F) {
+                handle->phase = PopupPhase::hidden;
+                handle->levels.clear();
+                handle->layer_bounds_valid = false;
+                destroy = std::exchange(handle->layer, nullptr);
+            }
+        }
+        alpha = handle->layer_alpha;
+        layer = handle->layer;
+    }
+    if (layer != nullptr) {
+        const sao_status_t status = sao_ui_layer_set_alpha(layer, alpha);
+        if (status != SAO_STATUS_OK) return status;
+    }
+    if (destroy != nullptr) {
+        destroy_layer_handle(destroy);
+        return SAO_STATUS_ERR_NOT_FOUND;
+    }
     return SAO_STATUS_OK;
 }

@@ -27,6 +27,7 @@
 #include "sao/core/status.h"
 #include "sao/ui/abi.h"
 #include "sao/ui/compositor.h"
+#include "sao/ui/d2d_widgets.h"
 #include "sao/ui/menu.h"
 #include "sao/ui/theme.h"
 
@@ -203,6 +204,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_popup_hit_test(
     int32_t x, int32_t y,
     int32_t* out_entry_id,
     int32_t* out_submenu_depth);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_popup_tick(sao_ui_popup_handle_t handle, int32_t dt_ms);
 
 #ifdef __cplusplus
 }  // extern "C"

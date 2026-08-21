@@ -25,6 +25,7 @@
 
 #include "sao/core/status.h"
 #include "sao/ui/abi.h"
+#include "sao/ui/d2d_widgets.h"
 #include "sao/ui/theme.h"
 
 #ifdef __cplusplus
@@ -115,6 +116,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_stack_top_text(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_tick(
     sao_ui_toast_handle_t handle,
     int32_t dt_ms);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_paint(
+    sao_ui_toast_handle_t handle, sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y, int32_t width, int32_t height);
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_set_hovered(sao_ui_toast_handle_t handle, bool hovered);
 
 #ifdef __cplusplus
 } // extern "C"

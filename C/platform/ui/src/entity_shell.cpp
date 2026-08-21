@@ -50,6 +50,8 @@ sao_ui_nervegear_on_mouse_down(sao_ui_nervegear_handle_t handle);
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_nervegear_on_mouse_up(sao_ui_nervegear_handle_t handle);
 sao_status_t SAO_UI_CALL sao_ui_compositor_current_input_position(float* out_layer_x,
                                                                   float* out_layer_y);
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_visual_budget(
+    sao_ui_menu_handle_t handle, bool reduced_motion, bool fps_pressure);
 }
 namespace {
 
@@ -69,10 +71,14 @@ constexpr size_t kMaxIconBytes = 256;
 constexpr int32_t kChildOriginX = 135;
 constexpr int32_t kChildOriginY = 40;
 constexpr int32_t kChildLineCenterX = 140;
-constexpr int32_t kChildRowX = 162;
 constexpr int32_t kChildRowHeight = 44;
 constexpr int32_t kChildRowStride = 47;
 constexpr int32_t kChildTargetWidth = 240;
+
+int32_t entity_child_row_x() noexcept {
+    return sao::ui::menu_visual::visual_child_row_x(
+        kMenuColumnCenter, kMenuSlot, sao::ui::menu_visual::kVisualDefaultChildRadius);
+}
 constexpr int32_t kChildPhysicalCapacity =
     (kMenuHeight - kChildOriginY - kChildRowHeight) / kChildRowStride + 1;
 constexpr int32_t kChildIconFontSize = 12;
@@ -685,6 +691,15 @@ bool child_row_disabled(const sao::ui::menu_visual::ChildRowSnapshot& row) {
     return !row.can_activate || row.state == SAO_UI_MENU_BTN_DISABLED;
 }
 
+bool windows_reduced_motion() noexcept {
+#if defined(_WIN32)
+    BOOL animations = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0) != FALSE)
+        return animations == FALSE;
+#endif
+    return false;
+}
+
 int32_t adaptive_corner_radius(int32_t width, int32_t height) {
     const int32_t maximum = std::max(0, std::min(width, height) / 2);
     return std::clamp((height + 3) / 4, 2, std::max(2, maximum));
@@ -720,6 +735,10 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
     text_commands.reserve(static_cast<size_t>(row_count) * 2U);
 #endif
     const double opacity = 1.0 - std::clamp(static_cast<double>(snapshot.fade_t), 0.0, 1.0);
+    const uint8_t rail_glow_alpha = scaled_alpha(110.0, snapshot.child_rail_glow_t * opacity);
+    draw_line(raster, kChildLineCenterX - 2, kChildOriginY + 4,
+              kChildLineCenterX + 2, kChildOriginY + row_count * kChildRowStride - 4, 2,
+              Color{104, 228, 255, rail_glow_alpha}, kChildBlendRounding);
     const int32_t line_height = row_count * kChildRowStride - 3;
     const int32_t line_top = kChildOriginY + 5;
     const uint8_t line_alpha = scaled_alpha(210.0, opacity);
@@ -781,20 +800,20 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                               ? Color{202, 142, 18, scaled_alpha(255.0, opacity)}
                               : lerp_rgb(kChildBackground, kActiveBorder, hover,
                                          scaled_alpha(235.0, opacity));
-        fill_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius,
+        fill_rounded_rect(raster, entity_child_row_x(), row_y, row_width, kChildRowHeight, radius,
                           background, kChildBlendRounding);
-        stroke_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius, 1,
+        stroke_rounded_rect(raster, entity_child_row_x(), row_y, row_width, kChildRowHeight, radius, 1,
                             Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b,
                                   scaled_alpha(pressed ? 190.0 : 72.0 * hover, opacity)},
                             kChildBlendRounding);
-        fill_rounded_rect(raster, kChildRowX, row_y, 2, kChildRowHeight, 2, indicator,
+        fill_rounded_rect(raster, entity_child_row_x(), row_y, 2, kChildRowHeight, 2, indicator,
                           kChildBlendRounding);
 
-        const int32_t icon_x = kChildRowX + 2 + 8;
+        const int32_t icon_x = entity_child_row_x() + 2 + 8;
         const int32_t icon_y = row_y + (kChildRowHeight - kChildIconFontSize) / 2 - 2;
         const int32_t label_x = icon_x + kChildFallbackIconWidth + kChildIconGap;
         const int32_t label_y = row_y + (kChildRowHeight - kChildLabelFontSize) / 2 - 2;
-        const int32_t caret_x = kChildRowX + row_width - kChildRowPadRight - 6;
+        const int32_t caret_x = entity_child_row_x() + row_width - kChildRowPadRight - 6;
         const int32_t label_max_width =
             std::max(0, caret_x - kChildCaretWidth - kChildCaretGap - label_x);
         const std::string_view icon_text(row.icon_utf8.data());
@@ -968,7 +987,14 @@ Raster rasterize_nervegear(SaoUiNerveGearState state) {
         state == SAO_UI_NG_STATE_PRESSED ? SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_PRESSED
         : state == SAO_UI_NG_STATE_HOVER ? SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_HOVER
                                          : SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_IDLE;
-    return load_authority_frame(resource_id, SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE);
+    Raster raster = load_authority_frame(resource_id, SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE);
+    if (state == SAO_UI_NG_STATE_LINKING || state == SAO_UI_NG_STATE_LINKED) {
+        stroke_circle(raster, 36, 36, state == SAO_UI_NG_STATE_LINKING ? 34 : 32, 2,
+                      Color{104, 228, 255, 165});
+        draw_line(raster, 8, 36, 20, 36, 1, Color{212, 156, 23, 145});
+        draw_line(raster, 52, 36, 64, 36, 1, Color{212, 156, 23, 145});
+    }
+    return raster;
 #else
     Raster raster = make_raster(SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE);
     const bool hover = state == SAO_UI_NG_STATE_HOVER;
@@ -999,7 +1025,15 @@ Raster rasterize_generic_menu(int32_t pressed_index,
                               const std::vector<OwnedRootItem>& roots,
                               size_t first_visible_root_index) {
     Raster raster = make_raster(kMenuWidth, kMenuHeight);
-    fill_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30, Color{248, 248, 248, 205});
+    const float lens = std::clamp(snapshot.backdrop_lens_t, 0.0F, 1.0F);
+    for (int32_t radius = 48; radius >= 26; radius -= 6) {
+        const uint8_t alpha = static_cast<uint8_t>(12.0F * lens *
+                                                    (1.0F - radius / 60.0F));
+        fill_circle(raster, kMenuColumnCenter, kMenuPad, radius,
+                    Color{104, 228, 255, alpha});
+    }
+    fill_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30,
+              Color{248, 248, 248, static_cast<uint8_t>(150 + 105 * lens)});
     fill_rect(raster, 34, 34, 2, kMenuHeight - 68, Color{104, 228, 255, 235});
     fill_rect(raster, kMenuWidth - 36, 34, 2, kMenuHeight - 68, Color{212, 156, 23, 240});
     draw_line(raster, 34, 34, 54, 34, 2, Color{104, 228, 255, 240});
@@ -1023,10 +1057,28 @@ Raster rasterize_generic_menu(int32_t pressed_index,
         const bool disabled = has_visual && root_row_disabled(snapshot.roots[slot]);
         const float hover = has_visual ? std::clamp(snapshot.roots[slot].hover_t, 0.0F, 1.0F)
                            : 0.0F;
+        const float stagger = has_visual ? std::clamp(snapshot.roots[slot].stagger_t, 0.0F, 1.0F)
+                             : 0.0F;
+        const float trail = has_visual ? std::clamp(snapshot.roots[slot].selection_trail_t, 0.0F, 1.0F)
+                           : 0.0F;
+        const float pulse = has_visual ? std::clamp(snapshot.roots[slot].pressed_pulse_t, 0.0F, 1.0F)
+                           : 0.0F;
         const bool pressed = !disabled && physical_index == pressed_index;
-        const int32_t size = pressed ? 68 : 54 + static_cast<int32_t>(std::lround(16.0F * hover));
-        const int32_t center_y =
-            kMenuPad + physical_index * kMenuSlot + kMenuSlot / 2 + (pressed ? 2 : 0);
+        const int32_t size = pressed ? 68 : 54 + static_cast<int32_t>(std::lround(16.0F * hover * stagger));
+        const int32_t settled_y = kMenuPad + physical_index * kMenuSlot + kMenuSlot / 2;
+        const int32_t center_y = kMenuPad + kMenuSlot / 2 +
+                                 static_cast<int32_t>(std::lround((settled_y -
+                                                                  (kMenuPad + kMenuSlot / 2)) *
+                                                                 stagger)) +
+                                 (pressed ? 2 : 0);
+        if (trail > 0.01F)
+            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 +
+                          static_cast<int32_t>(std::lround(8.0F * trail)), 2,
+                          Color{104, 228, 255, static_cast<uint8_t>(180.0F * trail)});
+        if (pulse > 0.01F)
+            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 +
+                          static_cast<int32_t>(std::lround(12.0F * (1.0F - pulse))), 2,
+                          Color{212, 156, 23, static_cast<uint8_t>(210.0F * pulse)});
         fill_circle(raster, kMenuColumnCenter, center_y, size / 2,
                 disabled ? Color{224, 226, 228, 185}
                 : pressed ? Color{232, 219, 191, 248}
@@ -1105,6 +1157,32 @@ Raster rasterize_menu(int32_t pressed_index, int32_t pressed_child_index,
     Raster raster =
         rasterize_generic_menu(pressed_index, snapshot, roots, first_visible_root_index);
 #endif
+    if (!snapshot.reduced_motion && !snapshot.fps_pressure) {
+        const float spark_t = std::max(snapshot.open_spark_t, snapshot.selection_spark_t);
+        const uint32_t spark_count = std::min<uint32_t>(24U,
+                                                        snapshot.open_spark_count +
+                                                        snapshot.selection_spark_count);
+        for (uint32_t spark = 0; spark < spark_count; ++spark) {
+            const float angle = static_cast<float>(spark) * 0.78539816339F;
+            const float distance = 42.0F + 24.0F * (1.0F - spark_t);
+            const int32_t x0 = kMenuColumnCenter + static_cast<int32_t>(std::lround(28.0F * std::cos(angle)));
+            const int32_t y0 = kMenuPad + static_cast<int32_t>(std::lround(28.0F * std::sin(angle)));
+            const int32_t x1 = kMenuColumnCenter + static_cast<int32_t>(std::lround(distance * std::cos(angle)));
+            const int32_t y1 = kMenuPad + static_cast<int32_t>(std::lround(distance * std::sin(angle)));
+            draw_line(raster, x0, y0, x1, y1, 1,
+                      Color{104, 228, 255, static_cast<uint8_t>(180.0F * spark_t)});
+        }
+    }
+    const int32_t scanline_y = 38 + static_cast<int32_t>(snapshot.revision % (kMenuHeight - 76));
+    if (!snapshot.reduced_motion)
+        draw_line(raster, 38, scanline_y, kMenuWidth - 38, scanline_y, 1,
+                  Color{104, 228, 255, 82});
+    draw_line(raster, 34, 34, 54, 34, 2, Color{104, 228, 255, 210});
+    draw_line(raster, 34, 34, 34, 54, 2, Color{104, 228, 255, 210});
+    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 54, kMenuHeight - 34, 2,
+              Color{212, 156, 23, 210});
+    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 54, 2,
+              Color{212, 156, 23, 210});
     draw_child_overlay(raster, snapshot, first_visible_child_index, pressed_child_index);
     return raster;
 }
@@ -1169,7 +1247,10 @@ struct sao_ui_entity_shell_s {
     std::atomic_bool suppress_layer_input_callbacks{};
     uint32_t callback_depth{};
     uint64_t frame_count{};
+    uint64_t visual_time_ms{};
     uint64_t action_count{};
+    bool reduced_motion{};
+    bool fps_pressure{};
     uint64_t root_tree_revision{1};
     sao_status_t last_status{SAO_STATUS_OK};
     std::thread::id owner_thread;
@@ -1676,7 +1757,7 @@ sao_status_t build_menu_input_rects_locked(
         if (width <= 1)
             continue;
         next_rects.push_back(
-            {kChildRowX, kChildOriginY + slot * kChildRowStride, width, kChildRowHeight});
+            {entity_child_row_x(), kChildOriginY + slot * kChildRowStride, width, kChildRowHeight});
     }
     *out_rects = std::move(next_rects);
     return SAO_STATUS_OK;
@@ -1685,6 +1766,8 @@ sao_status_t build_menu_input_rects_locked(
 sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
     sao::ui::menu_visual::Snapshot menu_snapshot{};
     sao_status_t status = sao::ui::menu_visual::get_snapshot(shell->menu, &menu_snapshot);
+    menu_snapshot.reduced_motion = shell->reduced_motion;
+    menu_snapshot.fps_pressure = shell->fps_pressure;
     if (status != SAO_STATUS_OK)
         return status;
     status = sync_child_viewport_locked(shell, menu_snapshot);
@@ -1734,6 +1817,18 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
 }
 
 sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
+    if (shell->menu_layer != nullptr && shell->host != nullptr) {
+        SaoUiLayerEffects effects{};
+        if (sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MENU, &effects) == SAO_STATUS_OK) {
+            if (shell->reduced_motion || shell->fps_pressure) {
+                effects.flags &= ~SAO_UI_LAYER_EFFECT_BACKDROP_BLUR;
+                effects.blur_sigma = 0.0F;
+            } else {
+                effects.blur_sigma *= 0.82F;
+            }
+            (void)sao_ui_layer_set_effects(shell->menu_layer, &effects);
+        }
+    }
     if (!shell->visual_dirty) {
         if (!shell->owns_compositor || shell->host == nullptr ||
             !shell->input_region_settle_pending) {
@@ -1891,6 +1986,16 @@ sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
 }
 
 sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms) {
+    shell->visual_time_ms += std::min<uint32_t>(elapsed_ms, 1000U);
+    const bool next_fps_pressure = elapsed_ms > 34U;
+    const bool next_reduced_motion = windows_reduced_motion();
+    const bool visual_budget_changed = shell->fps_pressure != next_fps_pressure ||
+                                       shell->reduced_motion != next_reduced_motion;
+    shell->fps_pressure = next_fps_pressure;
+    shell->reduced_motion = next_reduced_motion;
+    (void)sao_ui_menu_set_visual_budget(shell->menu, shell->reduced_motion, shell->fps_pressure);
+    if (visual_budget_changed)
+        shell->visual_dirty = true;
     SaoUiNerveGearState previous_state = SAO_UI_NG_STATE_IDLE;
     SaoUiMenuPhase previous_menu_phase = SAO_UI_MENU_PHASE_CLOSED;
     float previous_menu_progress = 0.0F;
@@ -1975,7 +2080,7 @@ bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
         std::clamp(snapshot.rows[logical_index].visible_width_px, 0, kChildTargetWidth);
     if (width <= 1)
         return false;
-    if (local_x < kChildRowX || local_x >= kChildRowX + width)
+    if (local_x < entity_child_row_x() || local_x >= entity_child_row_x() + width)
         return false;
     if (out_hit != nullptr) {
         out_hit->parent = snapshot.displayed_parent_idx;

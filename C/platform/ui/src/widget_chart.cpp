@@ -1518,19 +1518,36 @@ sao_status_t sao::ui::detail::widget_chart_paint(
     sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
     int32_t width, int32_t height) noexcept {
     try {
+        float plot_origin_x = static_cast<float>(x + 2);
+        float plot_origin_y = static_cast<float>(y + 2);
+        float plot_size_w = static_cast<float>(std::max(0, width - 4));
+        float plot_size_h = static_cast<float>(std::max(0, height - 4));
+        const auto configure_plot = [&](int32_t left, int32_t right,
+                                        int32_t top, int32_t bottom) {
+            const int32_t bounded_width = std::max(0, width);
+            const int32_t bounded_height = std::max(0, height);
+            const int32_t bounded_left = std::max(0, left);
+            const int32_t bounded_right = std::max(0, right);
+            const int32_t bounded_top = std::max(0, top);
+            const int32_t bounded_bottom = std::max(0, bottom);
+            plot_origin_x = static_cast<float>(x + bounded_left);
+            plot_origin_y = static_cast<float>(y + bounded_top);
+            plot_size_w = static_cast<float>(std::max(0, bounded_width - bounded_left - bounded_right));
+            plot_size_h = static_cast<float>(std::max(0, bounded_height - bounded_top - bounded_bottom));
+        };
         const auto paint_polyline = [&](const std::vector<std::pair<double, double>>& points,
                                         uint32_t color, float line_width,
                                         double min_x, double max_x,
                                         double min_y, double max_y) -> sao_status_t {
-            if (points.empty())
+            if (points.empty() || plot_size_w <= 0.0F || plot_size_h <= 0.0F)
                 return SAO_STATUS_OK;
             const double x_span = max_x > min_x ? max_x - min_x : 1.0;
             const double y_span = max_y > min_y ? max_y - min_y : 1.0;
             const auto screen = [&](const auto& point) {
                 const float px = static_cast<float>(
-                    x + 2 + (width - 4) * ((point.first - min_x) / x_span));
+                    plot_origin_x + plot_size_w * static_cast<float>((point.first - min_x) / x_span));
                 const float py = static_cast<float>(
-                    y + height - 2 - (height - 4) * ((point.second - min_y) / y_span));
+                    plot_origin_y + plot_size_h * (1.0F - static_cast<float>((point.second - min_y) / y_span)));
                 return std::pair{px, py};
             };
             if (points.size() == 1) {
@@ -1589,6 +1606,19 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             }
             if (!std::isfinite(min_x))
                 return SAO_STATUS_OK;
+            configure_plot(spec.left_pad_px, spec.right_pad_px, spec.top_pad_px, spec.bottom_pad_px);
+            for (int32_t tick = 1; tick < 5; ++tick) {
+                const float gx = plot_origin_x + plot_size_w * tick / 5.0F;
+                const float gy = plot_origin_y + plot_size_h * tick / 5.0F;
+                status = sao_ui_paint_ctx_stroke_line(context, gx, plot_origin_y, gx,
+                                                       plot_origin_y + plot_size_h, 1.0F,
+                                                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+                if (status != SAO_STATUS_OK) return status;
+                status = sao_ui_paint_ctx_stroke_line(context, plot_origin_x, gy,
+                                                       plot_origin_x + plot_size_w, gy, 1.0F,
+                                                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+                if (status != SAO_STATUS_OK) return status;
+            }
             for (size_t index = 0; index < lanes.size(); ++index) {
                 status = paint_polyline(
                     samples[index],
@@ -1694,6 +1724,19 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             }
             if (!std::isfinite(min_x))
                 return SAO_STATUS_OK;
+            configure_plot(spec.left_pad_px, spec.right_pad_px, spec.top_pad_px, spec.bottom_pad_px);
+            for (int32_t tick = 1; tick < 5; ++tick) {
+                const float gx = plot_origin_x + plot_size_w * tick / 5.0F;
+                const float gy = plot_origin_y + plot_size_h * tick / 5.0F;
+                status = sao_ui_paint_ctx_stroke_line(context, gx, plot_origin_y, gx,
+                                                       plot_origin_y + plot_size_h, 1.0F,
+                                                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+                if (status != SAO_STATUS_OK) return status;
+                status = sao_ui_paint_ctx_stroke_line(context, plot_origin_x, gy,
+                                                       plot_origin_x + plot_size_w, gy, 1.0F,
+                                                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+                if (status != SAO_STATUS_OK) return status;
+            }
             for (const auto& item : series) {
                 std::vector<std::pair<double, double>> points;
                 points.reserve(item.points.size());
@@ -1725,7 +1768,7 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             points.reserve(values.size());
             for (size_t index = 0; index < values.size(); ++index)
                 points.emplace_back(static_cast<double>(index), values[index]);
-            if (points.empty())
+            if (points.empty() || plot_size_w <= 0.0F || plot_size_h <= 0.0F)
                 return SAO_STATUS_OK;
             const auto range = std::minmax_element(values.begin(), values.end());
             return paint_polyline(

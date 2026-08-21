@@ -161,6 +161,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_animator_tick(
 SAO_UI_API bool SAO_UI_CALL sao_ui_animator_has_active(
     sao_ui_animator_handle_t handle);
 
+// Continuous spring evaluator used by the Entity/Menu visual compositor.
+SAO_UI_API float SAO_UI_CALL sao_ui_curve_evaluate_spring_continuous(float t);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

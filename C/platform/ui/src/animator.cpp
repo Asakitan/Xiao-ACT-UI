@@ -19,12 +19,10 @@
 
 namespace {
 
-constexpr float kPI = 3.14159265358979323846f;
-
 // Clamp helper (std::clamp requires <algorithm>; keep local for clarity).
 inline float clamp01(float t) {
-    if (t < 0.0f) return 0.0f;
-    if (t > 1.0f) return 1.0f;
+    if (std::isnan(t) || t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
     return t;
 }
 
@@ -98,21 +96,8 @@ extern "C" float SAO_UI_CALL sao_ui_curve_evaluate(
         const float u = 1.0f - t;
         return 1.0f - u * u * u;
     }
-    case SAO_UI_CURVE_SPRING: {
-        // Damped-sine spring pop.  Formula:
-        //   sin((t*13*PI)/2) * pow(2, -10*t) + 1
-        // when t == 0 returns 1 (bad for animation start), so we invert
-        // for a proper "starts at 0" progression:
-        //   1 - (sin((1-t)*13*PI/2) * pow(2, -10*(1-t)))
-        // which starts at 0 (t=0 → 1 - sin(13π/2)*2^-10 ≈ 1 - ε) — close
-        // to but not exactly 0.  Force endpoints for safety.
-        if (t <= 0.0f) return 0.0f;
-        if (t >= 1.0f) return 1.0f;
-        const float u = 1.0f - t;
-        const float envelope = std::pow(2.0f, -10.0f * u);
-        const float wave = std::sin((u * 13.0f * kPI) / 2.0f);
-        return 1.0f - wave * envelope;
-    }
+    case SAO_UI_CURVE_SPRING:
+        return sao_ui_curve_evaluate_spring_continuous(t);
     case SAO_UI_CURVE_BOUNCE: {
         // Classic CSS "bounce-out" — 4 segments, all quadratic.  Matches
         // Robert Penner's easeOutBounce and Chrome's default keyframe
@@ -145,19 +130,26 @@ extern "C" float SAO_UI_CALL sao_ui_curve_evaluate(
 
 extern "C" float SAO_UI_CALL sao_ui_curve_evaluate_bezier(
     const SaoUiBezierParams* params, float t) {
-    if (params == nullptr) return clamp01(t);
     t = clamp01(t);
-    return bezier_solve_y(t, params->p1x, params->p1y, params->p2x, params->p2y);
+    if (params == nullptr)
+        return t;
+    const float p1x = std::isfinite(params->p1x) ? params->p1x : 0.0F;
+    const float p1y = std::isfinite(params->p1y) ? params->p1y : 0.0F;
+    const float p2x = std::isfinite(params->p2x) ? params->p2x : 1.0F;
+    const float p2y = std::isfinite(params->p2y) ? params->p2y : 1.0F;
+    return bezier_solve_y(t, p1x, p1y, p2x, p2y);
 }
 
 // ── linear interp ─────────────────────────────────────────────────
 extern "C" float SAO_UI_CALL sao_ui_lerp_f32(float a, float b, float t) {
-    return a + (b - a) * t;
+    if (!std::isfinite(a)) a = 0.0F;
+    if (!std::isfinite(b)) b = 0.0F;
+    return a + (b - a) * clamp01(t);
 }
 
 extern "C" int32_t SAO_UI_CALL sao_ui_lerp_i32(int32_t a, int32_t b, float t) {
     return static_cast<int32_t>(std::lround(
-        static_cast<float>(a) + (static_cast<float>(b - a)) * t));
+        static_cast<float>(a) + (static_cast<float>(b - a)) * clamp01(t)));
 }
 
 extern "C" uint32_t SAO_UI_CALL sao_ui_lerp_argb(
@@ -370,6 +362,7 @@ struct DoneCall {
 extern "C" sao_status_t SAO_UI_CALL sao_ui_animator_tick(
     sao_ui_animator_handle_t handle, double now_seconds) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!std::isfinite(now_seconds)) now_seconds = 0.0;
     std::vector<TickCall> ticks;
     std::vector<DoneCall> dones;
     {
@@ -420,6 +413,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animator_tick(
         d.on_done(d.cancelled, d.user_data);
     }
     return SAO_STATUS_OK;
+}
+
+extern "C" float SAO_UI_CALL sao_ui_curve_evaluate_spring_continuous(float t) {
+    t = clamp01(t);
+    if (t <= 0.0F)
+        return 0.0F;
+    if (t >= 1.0F)
+        return 1.0F;
+    const float envelope = std::exp(-8.5F * t);
+    const float oscillation = std::cos(11.5F * t) + 0.62F * std::sin(11.5F * t);
+    return clamp01(1.0F - envelope * oscillation);
 }
 
 extern "C" bool SAO_UI_CALL sao_ui_animator_has_active(

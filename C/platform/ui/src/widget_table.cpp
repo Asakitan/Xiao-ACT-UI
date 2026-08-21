@@ -176,6 +176,62 @@ template <typename Callback> struct CallbackSlot {
     std::mutex transition_mtx;
 };
 
+
+size_t table_utf8_glyphs(const std::string& text) { size_t count = 0; for (unsigned char byte : text) if ((byte & 0xC0U) != 0x80U) ++count; return count; }
+std::string table_ellipsize(const std::string& text, int32_t width_px, float font_size_px) { const size_t max_glyphs = std::max<size_t>(1, static_cast<size_t>(width_px / std::max(5.0F, font_size_px * 0.56F))); if (table_utf8_glyphs(text) <= max_glyphs) return text; std::string result; size_t count = 0; for (size_t i = 0; i < text.size() and count + 1 < max_glyphs; ++i) { result.push_back(text[i]); if ((static_cast<unsigned char>(text[i]) & 0xC0U) != 0x80U) ++count; } return result + "…"; }
+
+sao_status_t paint_table_tree_focus_ring(sao_ui_paint_ctx_handle_t context, float x, float y,
+                                          float width, float height, uint32_t argb) noexcept {
+    const auto finite_bounds = [](float left, float top, float bounds_width,
+                                  float bounds_height) {
+        return std::isfinite(left) && std::isfinite(top) && std::isfinite(bounds_width) &&
+               std::isfinite(bounds_height) && bounds_width > 0.0F && bounds_height > 0.0F;
+    };
+    if (context == nullptr || !finite_bounds(x, y, width, height))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    constexpr float kHaloSpread = 3.0F;
+    constexpr float kRingSpread = 2.0F;
+    const float halo_x = x - kHaloSpread;
+    const float halo_y = y - kHaloSpread;
+    const float halo_width = width + kHaloSpread * 2.0F;
+    const float halo_height = height + kHaloSpread * 2.0F;
+    const float ring_x = x - kRingSpread;
+    const float ring_y = y - kRingSpread;
+    const float ring_width = width + kRingSpread * 2.0F;
+    const float ring_height = height + kRingSpread * 2.0F;
+    if (!finite_bounds(halo_x, halo_y, halo_width, halo_height) ||
+        !finite_bounds(ring_x, ring_y, ring_width, ring_height))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    const uint32_t alpha = (argb >> 24U) & 0xffU;
+    const uint32_t halo = (argb & 0x00ffffffU) | ((alpha / 3U) << 24U);
+    const auto stroke_rect = [context](float left, float top, float bounds_width,
+                                       float bounds_height, float stroke_width,
+                                       uint32_t color) {
+        sao_status_t status = sao_ui_paint_ctx_stroke_line(
+            context, left, top, left + bounds_width, top, stroke_width, color);
+        if (status != SAO_STATUS_OK)
+            return status;
+        status = sao_ui_paint_ctx_stroke_line(context, left + bounds_width, top,
+                                              left + bounds_width, top + bounds_height,
+                                              stroke_width, color);
+        if (status != SAO_STATUS_OK)
+            return status;
+        status = sao_ui_paint_ctx_stroke_line(
+            context, left + bounds_width, top + bounds_height, left, top + bounds_height,
+            stroke_width, color);
+        if (status != SAO_STATUS_OK)
+            return status;
+        return sao_ui_paint_ctx_stroke_line(context, left, top + bounds_height, left, top,
+                                            stroke_width, color);
+    };
+
+    sao_status_t status = stroke_rect(halo_x, halo_y, halo_width, halo_height, 1.0F, halo);
+    if (status != SAO_STATUS_OK)
+        return status;
+    return stroke_rect(ring_x, ring_y, ring_width, ring_height, 2.0F, argb);
+}
 // Default heights (Python action table uses row_height=22 for
 // the DPS panel).
 constexpr int32_t kDefaultRowHeight = 22;
@@ -201,6 +257,7 @@ struct TableState {
     int32_t pressed_header_column{-1};
     int32_t scroll_offset_px{0};
     bool resize_cursor_hint{false};
+    bool focused{false};
     std::vector<int32_t> column_width_overrides;
     size_t last_paint_first_row{0};
     size_t last_paint_last_row{0};
@@ -237,6 +294,7 @@ struct TreeState {
     std::vector<VisibleTreeNode> visible;
     CallbackSlot<sao_ui_tree_select_cb_t> select;
     int64_t selected_node_id{0};
+    bool focused{false};
     bool callbacks_retired{false};
     std::condition_variable callback_cv;
     mutable std::mutex mtx;
@@ -260,6 +318,7 @@ struct TablePropsSnapshot {
     std::vector<OwnedTreeNode> nodes;
     std::vector<VisibleTreeNode> visible;
     int64_t selected_node_id{};
+    bool focused{};
 };
 
 thread_local std::vector<const void*> current_table_callback_states;
@@ -1142,6 +1201,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_tree_view_select_node(sao_ui_widget_h
             if (!visible)
                 return SAO_STATUS_ERR_NOT_FOUND;
             tree->selected_node_id = node_id;
+            tree->focused = true;
             callback = tree->select.callback;
             user_data = tree->select.user_data;
             if (callback != nullptr) {
@@ -1391,8 +1451,10 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_update_pointe
                 state->hovered_row_index = state->spec.row_hover_highlight
                                                ? row_index
                                                : std::numeric_limits<size_t>::max();
-                if (pressed)
+                if (pressed) {
                     state->selected_row_id = state->rows_all[state->rows_view[row_index]].row_id;
+                    state->focused = true;
+                }
                 if (out_row_view_index)
                     *out_row_view_index = row_index;
             } else {
@@ -1761,6 +1823,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(sao_ui_widget_handle_t ha
                 snapshot->scroll_offset_px = state->scroll_offset_px;
                 snapshot->resize_cursor_hint = state->resize_cursor_hint;
                 snapshot->column_width_overrides = state->column_width_overrides;
+                snapshot->focused = state->focused;
                 if (column_widths_property != props.end() &&
                     column_widths.size() != state->columns.size()) {
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1838,6 +1901,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(sao_ui_widget_handle_t ha
                 state->scroll_offset_px = snapshot->scroll_offset_px;
                 state->resize_cursor_hint = snapshot->resize_cursor_hint;
                 state->column_width_overrides = snapshot->column_width_overrides;
+                state->focused = snapshot->focused;
                 return status;
             }
         } else if (kind == kTreeTag) {
@@ -1912,6 +1976,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(sao_ui_widget_handle_t ha
                 snapshot->nodes = state->nodes;
                 snapshot->visible = state->visible;
                 snapshot->selected_node_id = state->selected_node_id;
+                snapshot->focused = state->focused;
             }
             sao_status_t status = SAO_STATUS_OK;
             if (nodes_property != props.end())
@@ -1924,6 +1989,7 @@ sao_status_t sao::ui::detail::widget_table_apply_props(sao_ui_widget_handle_t ha
                 state->nodes = snapshot->nodes;
                 state->visible = snapshot->visible;
                 state->selected_node_id = snapshot->selected_node_id;
+                state->focused = snapshot->focused;
                 return status;
             }
         } else {
@@ -1962,6 +2028,7 @@ sao::ui::detail::widget_table_restore_props(sao_ui_widget_handle_t handle, int32
             state->scroll_offset_px = previous->scroll_offset_px;
             state->resize_cursor_hint = previous->resize_cursor_hint;
             state->column_width_overrides = previous->column_width_overrides;
+            state->focused = previous->focused;
             return SAO_STATUS_OK;
         }
         if (kind == kTreeTag) {
@@ -1972,6 +2039,7 @@ sao::ui::detail::widget_table_restore_props(sao_ui_widget_handle_t handle, int32
             state->nodes = previous->nodes;
             state->visible = previous->visible;
             state->selected_node_id = previous->selected_node_id;
+            state->focused = previous->focused;
             return SAO_STATUS_OK;
         }
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
@@ -2003,6 +2071,7 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
             int32_t hovered_header_column = -1;
             int32_t pressed_header_column = -1;
             int32_t scroll_offset_px = 0;
+            bool focused = false;
             auto state = as_table(handle);
             if (state == nullptr)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -2017,6 +2086,7 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                 zebra_stripes = state->zebra_stripes;
                 hovered_row_index = state->hovered_row_index;
                 selected_row_id = state->selected_row_id;
+                focused = state->focused;
                 hovered_header_column = state->hovered_header_column;
                 pressed_header_column = state->pressed_header_column;
                 scroll_offset_px = state->scroll_offset_px;
@@ -2046,6 +2116,14 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                 static_cast<float>(height), body_background);
             if (status != SAO_STATUS_OK)
                 return status;
+            if (focused) {
+                status = paint_table_tree_focus_ring(
+                    context, static_cast<float>(x),
+                    static_cast<float>(y), static_cast<float>(width), static_cast<float>(height),
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
             int32_t body_y = y;
             if (spec.show_header) {
                 const int32_t header_height = std::max(1, spec.header_height_px);
@@ -2190,9 +2268,8 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                                                      ? sao::ui::detail::panel_theme_color(
                                                            SAO_UI_TOKEN_APP_TEXT)
                                                      : columns[cell_index].cell_fg_argb)));
-                    status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(cell_x + 3),
-                                                        static_cast<float>(row_y + 2), text.c_str(),
-                                                        10.0F, foreground);
+                    text = table_ellipsize(text, cell_width - 8, 10.0F);
+                    status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(cell_x + 3), static_cast<float>(row_y + 2), text.c_str(), 10.0F, foreground);
                     if (status != SAO_STATUS_OK)
                         return status;
                     cell_x += cell_width;
@@ -2212,6 +2289,7 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
             std::vector<OwnedTreeNode> nodes;
             std::vector<VisibleTreeNode> visible;
             int64_t selected = 0;
+            bool focused = false;
             auto state = as_tree(handle);
             if (state == nullptr)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -2221,6 +2299,7 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                 nodes = state->nodes;
                 visible = state->visible;
                 selected = state->selected_node_id;
+                focused = state->focused;
             }
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
@@ -2229,6 +2308,14 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                                        : spec.body_bg_argb);
             if (status != SAO_STATUS_OK)
                 return status;
+            if (focused) {
+                status = paint_table_tree_focus_ring(
+                    context, static_cast<float>(x),
+                    static_cast<float>(y), static_cast<float>(width), static_cast<float>(height),
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
             const int32_t row_height = std::max(1, spec.row_height_px);
             const size_t count = std::min(visible.size(), static_cast<size_t>(height / row_height));
             for (size_t index = 0; index < count; ++index) {
@@ -2252,15 +2339,20 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                         return candidate.parent_id == node.node_id;
                     });
                 if (has_children) {
-                    status = sao_ui_paint_ctx_fill_rect(
-                        context, static_cast<float>(x + indent + 2),
-                        static_cast<float>(row_y + row_height / 2 - 1), static_cast<float>(caret),
-                        2.0F,
-                        spec.caret_argb == 0
-                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)
-                            : spec.caret_argb);
-                    if (status != SAO_STATUS_OK)
-                        return status;
+                    const int32_t cx = x + indent + caret / 2 + 2;
+                    const int32_t cy = row_y + row_height / 2;
+                    int32_t points[6]{};
+                    if (node.expanded) {
+                        points[0] = cx - 3; points[1] = cy - 3;
+                        points[2] = cx + 3; points[3] = cy - 3;
+                        points[4] = cx; points[5] = cy + 3;
+                    } else {
+                        points[0] = cx - 3; points[1] = cy - 3;
+                        points[2] = cx + 3; points[3] = cy;
+                        points[4] = cx - 3; points[5] = cy + 3;
+                    }
+                    status = sao_ui_paint_ctx_fill_polygon(context, points, 3, spec.caret_argb == 0 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER) : spec.caret_argb);
+                    if (status != SAO_STATUS_OK) return status;
                 }
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(x + indent + caret + 5),

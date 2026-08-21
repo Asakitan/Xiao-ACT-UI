@@ -19,6 +19,7 @@
 //      and blends via dt_ms.  Preferred for unit tests + script bindings.
 
 #include "sao/ui/fisheye.h"
+#include "menu_visual_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,10 +35,10 @@ constexpr float kPI = 3.14159265358979323846f;
 // Default config — matches sao_theme constants in menu_bar_layout.py +
 // circle_button.py.  Kept in one place so tests + code agree.
 constexpr SaoUiFisheyeConfig kDefaultConfig = {
-    /*base_size=*/54,
-    /*max_size=*/70,
+    /*base_size=*/sao::ui::menu_visual::kVisualButtonBaseSize,
+    /*max_size=*/sao::ui::menu_visual::kVisualButtonMaxSize,
     /*slot_size=*/70,
-    /*falloff_neighbors=*/2,
+    /*falloff_neighbors=*/SAO_UI_FISHEYE_DEFAULT_FALLOFF_NEIGHBORS,
     /*scale_curve_gamma=*/2.0f,
     /*grow_speed_lerp=*/0.28f,
     /*grow_epsilon=*/0.18f,
@@ -50,6 +51,30 @@ inline float clampf(float x, float lo, float hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
+}
+
+SaoUiFisheyeConfig sanitize_config(const SaoUiFisheyeConfig* input) {
+    SaoUiFisheyeConfig out = kDefaultConfig;
+    if (input == nullptr)
+        return out;
+    if (input->base_size > 0)
+        out.base_size = input->base_size;
+    if (input->max_size > 0)
+        out.max_size = input->max_size;
+    if (input->slot_size > 0)
+        out.slot_size = input->slot_size;
+    if (input->falloff_neighbors > 0)
+        out.falloff_neighbors = input->falloff_neighbors;
+    if (std::isfinite(input->scale_curve_gamma) && input->scale_curve_gamma > 0.0F)
+        out.scale_curve_gamma = input->scale_curve_gamma;
+    if (std::isfinite(input->grow_speed_lerp) && input->grow_speed_lerp >= 0.0F)
+        out.grow_speed_lerp = clampf(input->grow_speed_lerp, 0.0F, 1.0F);
+    if (std::isfinite(input->grow_epsilon) && input->grow_epsilon > 0.0F)
+        out.grow_epsilon = input->grow_epsilon;
+    if (std::isfinite(input->hover_ease_ms) && input->hover_ease_ms > 0.0F)
+        out.hover_ease_ms = input->hover_ease_ms;
+    out.subpixel_snap = input->subpixel_snap;
+    return out;
 }
 
 // Falloff formula:
@@ -87,8 +112,12 @@ void compute_targets_column(
     const SaoUiFisheyeConfig& cfg,
     SaoUiFisheyeButton* buttons, size_t count,
     int32_t hover_target_index) {
-    const float base_f = static_cast<float>(cfg.base_size);
-    const float max_f  = static_cast<float>(cfg.max_size);
+    const float base_f = static_cast<float>(cfg.base_size > 0
+                                               ? cfg.base_size
+                                               : sao::ui::menu_visual::kVisualButtonBaseSize);
+    const float max_f = static_cast<float>(cfg.max_size > 0
+                                              ? cfg.max_size
+                                              : sao::ui::menu_visual::kVisualButtonMaxSize);
     for (size_t i = 0; i < count; ++i) {
         SaoUiFisheyeButton& b = buttons[i];
         b.index = static_cast<int32_t>(i);
@@ -127,6 +156,8 @@ void step_toward_targets(
     k = clampf(k, 0.0f, 1.0f);
     for (size_t i = 0; i < count; ++i) {
         SaoUiFisheyeButton& b = buttons[i];
+        if (!std::isfinite(b.current_size))
+            b.current_size = b.target_size;
         const float delta = b.target_size - b.current_size;
         if (std::fabs(delta) < cfg.grow_epsilon) {
             b.current_size = b.target_size;
@@ -162,12 +193,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_apply(
     size_t button_count,
     int32_t hover_target_idx,
     double now_seconds) {
-    (void)now_seconds;   // unused in pure static apply — reserved for
-                         // future hover_t easing.
+    if (!std::isfinite(now_seconds))
+        now_seconds = 0.0;
+    (void)now_seconds;   // reserved for future hover_t easing.
     if (buttons == nullptr || button_count == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    const SaoUiFisheyeConfig& cfg = (config != nullptr) ? *config : kDefaultConfig;
+    const SaoUiFisheyeConfig cfg = sanitize_config(config);
     compute_targets_column(cfg, buttons, button_count, hover_target_idx);
     // Snap current == target so the pure API returns settled sizes
     // in one call (matches menu_bar's per-frame call that already
@@ -176,7 +208,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_apply(
         SaoUiFisheyeButton& b = buttons[i];
         // On first ever call, current_size is zero — jump to target
         // so hit test sees the right hitbox from frame 1.
-        if (b.current_size <= 0.0f) {
+        if (!std::isfinite(b.current_size) || b.current_size <= 0.0f) {
             b.current_size = b.target_size;
         } else {
             // Follow same per-tick lerp path as the stateful animator.
@@ -215,7 +247,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_ring_layout(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     for (size_t i = 0; i < button_count; ++i) {
-        const float theta = start_angle_rad +
+        const float theta = (std::isfinite(start_angle_rad) ? start_angle_rad : 0.0F) +
             2.0f * kPI * static_cast<float>(i) / static_cast<float>(button_count);
         buttons[i].index = static_cast<int32_t>(i);
         buttons[i].slot_center_x = center_x +
@@ -261,7 +293,7 @@ extern "C" int32_t SAO_UI_CALL sao_ui_fisheye_hit_test(
     for (size_t i = 0; i < button_count; ++i) {
         const SaoUiFisheyeButton& b = buttons[i];
         const float half = b.current_size * 0.5f;
-        if (half <= 0.0f) continue;
+        if (!std::isfinite(b.current_size) || half <= 0.0f) continue;
         const float dx = static_cast<float>(x - b.sprite_center_x);
         const float dy = static_cast<float>(y - b.sprite_center_y);
         // Circular hit test (SAOCircleButton sprites are round icons).
@@ -289,9 +321,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_create(
     *out_handle = nullptr;
     auto* h = new (std::nothrow) sao_ui_fisheye_s;
     if (h == nullptr) return SAO_STATUS_ERR_UNKNOWN;
-    if (config != nullptr) {
-        h->cfg = *config;
-    }
+    h->cfg = sanitize_config(config);
     *out_handle = h;
     return SAO_STATUS_OK;
 }
@@ -312,7 +342,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_apply_column_layout(
     SaoUiFisheyeConfig cfg;
     {
         std::lock_guard<std::mutex> lk(handle->mu);
-        cfg = handle->cfg;
+        cfg = sanitize_config(&handle->cfg);
         handle->last_hover = hover_target_index;
     }
     compute_targets_column(cfg, buttons, button_count, hover_target_index);
@@ -342,7 +372,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_animate(
     SaoUiFisheyeConfig cfg;
     {
         std::lock_guard<std::mutex> lk(handle->mu);
-        cfg = handle->cfg;
+        cfg = sanitize_config(&handle->cfg);
         handle->last_hover = to_hover;
     }
     (void)from_hover;   // from_hover is implicit in the buttons'

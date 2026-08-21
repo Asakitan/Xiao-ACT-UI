@@ -375,6 +375,8 @@ TEST_CASE("popup compositor renders expands and dispatches leaf click",
     REQUIRE_FALSE(ctx.was_dismissed.load());
     REQUIRE(ctx.callback_x.load() == 400);
     REQUIRE(ctx.callback_y.load() == 210);
+    REQUIRE(layer_count(compositor) == 1);
+    REQUIRE(sao_ui_popup_tick(popup, ctx.spec.fade_out_ms) == SAO_STATUS_ERR_NOT_FOUND);
     REQUIRE(layer_count(compositor) == 0);
 
     sao_ui_popup_destroy(popup);

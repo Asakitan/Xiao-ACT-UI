@@ -1956,6 +1956,7 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
         case kIconButtonTag: {
             SaoUiIconButtonSpec spec{};
             std::vector<uint8_t> pixels;
+            bool focused = false;
             auto lease = acquire_input_lease<IconButtonState>(handle, kIconButtonTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1963,11 +1964,21 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 pixels = lease->icon_pixels;
+                focused = lease->focused;
             }
             SaoUiButtonSpec button{};
             button.kind = spec.kind;
             button.radius_px = spec.radius_px;
             button.colors = spec.colors;
+            if (focused) {
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
+                    context, static_cast<float>(x), static_cast<float>(y),
+                    static_cast<float>(width), static_cast<float>(height),
+                    static_cast<float>(std::max(0, spec.radius_px)), true,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+            }
             sao_status_t status =
                 paint_button_box(context, x, y, width, height, resolve_button_fill(button),
                                  resolve_button_border(button), button.radius_px);
@@ -1983,6 +1994,7 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
         case kDropdownButtonTag: {
             SaoUiDropdownButtonSpec spec{};
             std::string text;
+            bool focused = false;
             auto lease = acquire_input_lease<DropdownButtonState>(handle, kDropdownButtonTag);
             if (!lease)
                 return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1990,6 +2002,7 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 std::lock_guard<std::mutex> lock(lease->mtx);
                 spec = lease->spec;
                 text = lease->text;
+                focused = lease->focused;
                 if (lease->has_selection) {
                     const auto selected = std::find_if(
                         lease->entries.begin(), lease->entries.end(), [&](const auto& entry) {
@@ -2002,10 +2015,20 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
             SaoUiButtonSpec button{};
             button.kind = spec.kind;
             button.colors = spec.button_colors;
+            const int32_t radius =
+                sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM);
+            if (focused) {
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
+                    context, static_cast<float>(x), static_cast<float>(y),
+                    static_cast<float>(width), static_cast<float>(height),
+                    static_cast<float>(radius), true,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+            }
             sao_status_t status = paint_button_box(
                 context, x, y, width, height, resolve_button_fill(button),
-                resolve_button_border(button),
-                sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
+                resolve_button_border(button), radius);
             if (status != SAO_STATUS_OK)
                 return status;
             sao_status_t text_status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 4), static_cast<float>(y + 3), text.c_str(), static_cast<float>(std::clamp(height - 7, 5, 15)), resolve_button_foreground(button));
@@ -2053,9 +2076,10 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 check = scale_alpha(check, 0.4F);
             }
             if (focused && !spec.disabled) {
-                const sao_status_t focus_status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(x - 1), static_cast<float>(top - 1),
-                    static_cast<float>(box + 2), static_cast<float>(box + 2), check);
+                const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
+                    context, static_cast<float>(x), static_cast<float>(top),
+                    static_cast<float>(box), static_cast<float>(box), 0.0F, false,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
                 if (focus_status != SAO_STATUS_OK)
                     return focus_status;
             }
