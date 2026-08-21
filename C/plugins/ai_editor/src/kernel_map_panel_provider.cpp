@@ -128,7 +128,7 @@ Json KernelMapDefaultBridge::enumerate() {
     const int32_t rc = sao::ai_editor::kernel_map::shared_bridge().enumerate(bases);
     Json values = Json::array();
     for (const uint64_t base : bases) values.push_back(format_hex_address(base));
-    return Json{{"bases", std::move(values)}, {"rc", rc}};
+    return Json{{"bases", std::move(values)}, {"rc", rc}, {"compile_capability", true}, {"runtime_bridge", rc == SAO_AI_EDITOR_OK}};
 }
 
 Json KernelMapDefaultBridge::activate(const ActivateConfig& config) {
@@ -163,8 +163,8 @@ Json KernelMapDefaultBridge::unmap(uint64_t target_base) {
                 {"target_base", format_hex_address(target_base)}, {"rc", rc}};
 }
 #else
-Json KernelMapDefaultBridge::status() { return Json{{"active", false}, {"mapped_count", 0}}; }
-Json KernelMapDefaultBridge::enumerate() { return Json{{"bases", Json::array()}}; }
+Json KernelMapDefaultBridge::status() { return Json{{"active", false}, {"mapped_count", 0}, {"rc", SAO_AI_EDITOR_ERR_NOT_INITIALIZED}, {"compile_capability", false}, {"runtime_bridge", false}}; }
+Json KernelMapDefaultBridge::enumerate() { return Json{{"bases", Json::array()}, {"rc", SAO_AI_EDITOR_ERR_NOT_INITIALIZED}, {"compile_capability", false}, {"runtime_bridge", false}}; }
 Json KernelMapDefaultBridge::activate(const ActivateConfig&) { return Json{{"ok", false}}; }
 Json KernelMapDefaultBridge::deactivate() { return Json{{"ok", false}}; }
 Json KernelMapDefaultBridge::map(const std::vector<uint8_t>&) {
@@ -314,14 +314,24 @@ int32_t KernelMapPanelProvider::handle_message(const Json& message,
         if (cmd == "status") out_reply = handle_status(bridge);
         else if (cmd == "enumerate") out_reply = handle_enumerate(bridge);
         else if (cmd == "activate") out_reply = handle_activate(bridge, args);
-        else if (cmd == "deactivate") out_reply = handle_deactivate(bridge);
+        else if (cmd == "deactivate") {
+            if (!args.contains("confirmed") || !args["confirmed"].is_boolean() || !args["confirmed"].get<bool>()) out_reply = build_error(cmd, "confirmation required", request_id);
+            else out_reply = handle_deactivate(bridge);
+        }
         else if (cmd == "unmap") out_reply = handle_unmap(bridge, args);
         else if (cmd == "refresh") out_reply = handle_refresh();
-        else if (cmd == "load_driver") out_reply = handle_load_driver(bridge, picker);
+        else if (cmd == "load_driver") {
+            if (!args.contains("confirmed") || !args["confirmed"].is_boolean() ||
+                !args["confirmed"].get<bool>())
+                out_reply = build_error(cmd, "confirmation required", request_id);
+            else
+                out_reply = handle_load_driver(bridge, picker);
+        }
         else out_reply = build_error(cmd, "unknown command", request_id);
 
         out_reply["cmd"] = cmd;
         if (!request_id.is_null()) out_reply["requestId"] = request_id;
+        if (message.contains("generation")) out_reply["generation"] = message["generation"];
         static thread_local bool post_in_progress = false;
         if (post && !post_in_progress) {
             post_in_progress = true;
@@ -355,20 +365,28 @@ Json KernelMapPanelProvider::handle_status(
     const std::shared_ptr<IKernelMapBridge>& bridge) {
     if (bridge == nullptr || !bridge->is_available()) {
         Json reply = build_error("status", "bridge unavailable", Json());
-        reply["payload"] = Json{{"active", false}, {"mapped_count", 0}};
+        reply["payload"] = Json{{"active", false}, {"mapped_count", 0}, {"bridge", Json{{"available", false}, {"compile_capability", false}, {"runtime_bridge", false}}}};
         return reply;
     }
-    return build_reply("status", "ok", bridge->status(), Json());
+    Json payload = bridge->status();
+    const int32_t rc = payload.value("rc", SAO_AI_EDITOR_OK);
+    payload["bridge"] = Json{{"available", rc == SAO_AI_EDITOR_OK}, {"compile_capability", true}, {"runtime_bridge", rc == SAO_AI_EDITOR_OK}};
+    if (rc != SAO_AI_EDITOR_OK) return Json{{"status", "error"}, {"reason", "kernel map status failed"}, {"payload", std::move(payload)}};
+    return build_reply("status", "ok", payload, Json());
 }
 
 Json KernelMapPanelProvider::handle_enumerate(
     const std::shared_ptr<IKernelMapBridge>& bridge) {
     if (bridge == nullptr || !bridge->is_available()) {
         Json reply = build_error("enumerate", "bridge unavailable", Json());
-        reply["payload"] = Json{{"bases", Json::array()}};
+        reply["payload"] = Json{{"bases", Json::array()}, {"bridge", Json{{"available", false}, {"compile_capability", false}, {"runtime_bridge", false}}}};
         return reply;
     }
-    return build_reply("enumerate", "ok", bridge->enumerate(), Json());
+    Json payload = bridge->enumerate();
+    const int32_t rc = payload.value("rc", SAO_AI_EDITOR_OK);
+    payload["bridge"] = Json{{"available", rc == SAO_AI_EDITOR_OK}, {"compile_capability", true}, {"runtime_bridge", rc == SAO_AI_EDITOR_OK}};
+    if (rc != SAO_AI_EDITOR_OK) return Json{{"status", "error"}, {"reason", "kernel map enumerate failed"}, {"payload", std::move(payload)}};
+    return build_reply("enumerate", "ok", payload, Json());
 }
 
 Json KernelMapPanelProvider::handle_activate(
@@ -376,11 +394,12 @@ Json KernelMapPanelProvider::handle_activate(
     if (bridge == nullptr || !bridge->is_available())
         return build_error("activate", "bridge unavailable", Json());
     IKernelMapBridge::ActivateConfig config{};
-    if (args.contains("invoke_result_slot_va") &&
+    if (!args.contains("invoke_result_slot_va") ||
         !sao::ai_editor::kernel_map::parse_kernel_map_uint64(
             args["invoke_result_slot_va"], config.invoke_result_slot_va)) {
         return build_error("activate", "invalid invoke_result_slot_va", Json());
     }
+    if (config.invoke_result_slot_va == 0) return build_error("activate", "invoke_result_slot_va must be non-zero", Json());
     if (args.contains("pool_tag_seed") &&
         !sao::ai_editor::kernel_map::parse_kernel_map_uint64(
             args["pool_tag_seed"], config.pool_tag_seed)) {
@@ -391,6 +410,7 @@ Json KernelMapPanelProvider::handle_activate(
                 args["idle_timeout_ms"], config.idle_timeout_ms)) {
             return build_error("activate", "invalid idle_timeout_ms", Json());
         }
+        if (config.idle_timeout_ms < 100U || config.idle_timeout_ms > 600000U) return build_error("activate", "idle_timeout_ms must be between 100 and 600000", Json());
     }
     const Json payload = bridge->activate(config);
     return build_reply("activate", payload.value("ok", false) ? "ok" : "error",
@@ -410,6 +430,7 @@ Json KernelMapPanelProvider::handle_unmap(
     const std::shared_ptr<IKernelMapBridge>& bridge, const Json& args) {
     if (bridge == nullptr || !bridge->is_available())
         return build_error("unmap", "bridge unavailable", Json());
+    if (!args.contains("confirmed") || !args["confirmed"].is_boolean() || !args["confirmed"].get<bool>()) return build_error("unmap", "confirmation required", Json());
     uint64_t base = 0;
     if (!args.contains("target_base") ||
         !sao::ai_editor::kernel_map::parse_kernel_map_uint64(

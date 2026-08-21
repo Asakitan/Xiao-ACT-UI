@@ -39,6 +39,21 @@
             data-cmd="deactivate">Deactivate</button>
   </section>
 
+  <section class="panel-config" aria-label="Activate configuration">
+    <div class="config-title">Activate configuration</div>
+    <label class="config-field">
+      <span>Invoke result slot VA</span>
+      <input data-role="activate-slot" type="text" inputmode="text" autocomplete="off" placeholder="0x...">
+    </label>
+    <label class="config-field">
+      <span>Pool tag seed</span>
+      <input data-role="activate-seed" type="text" inputmode="text" autocomplete="off" placeholder="0x...">
+    </label>
+    <label class="config-field">
+      <span>Idle timeout (ms)</span>
+      <input data-role="activate-timeout" type="number" min="100" max="600000" step="1" inputmode="numeric" placeholder="100-600000">
+    </label>
+  </section>
   <section class="panel-list" aria-label="Mapped images">
     <div class="list-header">
       <span class="list-title">Mapped images</span>

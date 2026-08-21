@@ -256,3 +256,37 @@ html, body {
 .log-entries li.log--warn { color: var(--km-warn); }
 .log-entries li.log--error { color: var(--km-danger-hover); }
 .log-entries li.log--ok { color: var(--km-active); }
+.panel-config {
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--km-border);
+  background: var(--km-bg);
+}
+
+.config-title {
+  font-weight: 600;
+  color: var(--km-fg);
+}
+
+.config-field {
+  display: grid;
+  gap: 4px;
+  color: var(--km-fg-muted);
+}
+
+.config-field input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--km-border-strong);
+  border-radius: var(--km-radius);
+  background: var(--km-surface);
+  color: var(--km-fg);
+  font: var(--km-mono);
+}
+
+.config-field input:focus {
+  outline: 1px solid var(--km-accent);
+  border-color: var(--km-accent);
+}

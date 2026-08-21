@@ -1,20 +1,12 @@
-// Kernel Map Bridge panel — front-end controller.
-// Contract with the native provider (see kernel_map_panel_provider.cpp):
-//   * Outbound: postMessage({ cmd, args?, requestId? }).
-//   * Inbound: window "message" event with data shape:
-//       { status: "ok" | "error" | "not_implemented", cmd, requestId?,
-//         payload?: {...}, reason?: "..." }.
-// The panel never invokes native APIs directly; every action is a cmd.
-
+// Kernel Map Bridge panel front-end controller.
+// Outbound messages carry requestId + generation; inbound replies must match
+// both values and the configured test bridge source/origin when applicable.
 (function () {
   "use strict";
 
   const REFRESH_INTERVAL_MS = 5000;
   const LOG_LIMIT = 60;
-
-  const vscode = (typeof acquireVsCodeApi === "function")
-    ? acquireVsCodeApi()
-    : null;
+  const vscode = (typeof acquireVsCodeApi === "function") ? acquireVsCodeApi() : null;
 
   const el = {
     availability: document.querySelector('[data-role="bridge-availability"]'),
@@ -28,71 +20,93 @@
     btnDeactivate: document.querySelector('[data-role="btn-deactivate"]'),
     btnRefresh: document.querySelector('[data-role="btn-refresh"]'),
     btnLoadDriver: document.querySelector('[data-role="btn-load-driver"]'),
+    slot: document.querySelector('[data-role="activate-slot"]'),
+    seed: document.querySelector('[data-role="activate-seed"]'),
+    timeout: document.querySelector('[data-role="activate-timeout"]'),
     rowTemplate: document.getElementById("image-row-template"),
   };
 
   let requestSeq = 1;
   let refreshTimer = null;
   let bridgeAvailable = null;
+  let bridgeActive = false;
+  let generation = 1;
+  const pending = new Map();
 
   function send(cmd, args) {
     const requestId = "km-" + (requestSeq++);
-    const payload = { cmd, requestId };
-    if (args !== undefined) {
-      payload.args = args;
-    }
+    const requestGeneration = generation;
+    const payload = { cmd, requestId, generation: requestGeneration };
+    pending.set(requestId, { generation: requestGeneration, timer: window.setTimeout(function () {
+      if (!pending.has(requestId)) return;
+      pending.delete(requestId);
+      generation += 1;
+      pushLog("error", cmd + " timed out");
+    }, 10000) });
+    if (args !== undefined) payload.args = args;
     if (vscode) {
       vscode.postMessage(payload);
-    } else if (window.parent && window.parent !== window) {
-      // Fallback for smoke fixtures.
-      window.parent.postMessage(payload, "*");
+    } else if (window.__SAO_TEST_BRIDGE__ === true && window.parent && window.parent !== window) {
+      window.parent.postMessage(payload, window.__SAO_TEST_BRIDGE_ORIGIN__ || window.location.origin);
     }
     return requestId;
   }
 
   function pushLog(level, message) {
-    if (!el.logEntries) { return; }
+    if (!el.logEntries) return;
     const item = document.createElement("li");
     item.className = "log--" + (level || "info");
-    const now = new Date();
-    const stamp = now.toISOString().slice(11, 19);
-    item.textContent = stamp + "  " + message;
+    item.textContent = new Date().toISOString().slice(11, 19) + "  " + message;
     el.logEntries.appendChild(item);
-    while (el.logEntries.childElementCount > LOG_LIMIT) {
-      el.logEntries.removeChild(el.logEntries.firstElementChild);
-    }
+    while (el.logEntries.childElementCount > LOG_LIMIT) el.logEntries.removeChild(el.logEntries.firstElementChild);
     el.logEntries.scrollTop = el.logEntries.scrollHeight;
   }
 
   function formatHexAddress(value) {
-    if (typeof value === "string") {
-      if (value.startsWith("0x") || value.startsWith("0X")) { return value; }
-      return "0x" + value;
-    }
-    if (typeof value === "number") {
-      return "0x" + value.toString(16).toUpperCase().padStart(16, "0");
-    }
+    if (typeof value === "string") return (value.startsWith("0x") || value.startsWith("0X")) ? value : "0x" + value;
+    if (typeof value === "number") return "0x" + value.toString(16).toUpperCase().padStart(16, "0");
     return String(value);
+  }
+
+  function nonZeroUnsignedText(value) {
+    const text = value ? value.trim() : "";
+    if (!/^(?:0[xX][0-9a-fA-F]+|[0-9]+)$/.test(text)) return false;
+    try { return BigInt(text) > 0n; } catch (_) { return false; }
+  }
+
+  function activateConfig() {
+    const slot = el.slot ? el.slot.value.trim() : "";
+    const seed = el.seed ? el.seed.value.trim() : "";
+    const timeoutText = el.timeout ? el.timeout.value.trim() : "";
+    const timeout = Number(timeoutText);
+    if (!nonZeroUnsignedText(slot) || !nonZeroUnsignedText(seed) || !Number.isInteger(timeout) || timeout < 100 || timeout > 600000) return null;
+    return { invoke_result_slot_va: slot, idle_timeout_ms: timeout, pool_tag_seed: seed };
+  }
+
+  function updateActionButtons() {
+    const configReady = activateConfig() !== null;
+    el.btnActivate.disabled = bridgeAvailable !== true || bridgeActive || !configReady;
+    el.btnDeactivate.disabled = bridgeAvailable !== true || !bridgeActive;
   }
 
   function renderStatus(payload) {
     if (!payload || typeof payload !== "object") {
+      bridgeActive = false;
       el.statusBadge.textContent = "Unknown";
       el.statusBadge.className = "status-badge status-badge--unknown";
       el.mappedCount.textContent = "0";
+      updateActionButtons();
       return;
     }
-    const active = Boolean(payload.active);
-    el.statusBadge.textContent = active ? "Active" : "Inactive";
-    el.statusBadge.className =
-      "status-badge " + (active ? "status-badge--active" : "status-badge--inactive");
-    const count = (typeof payload.mapped_count === "number")
-      ? payload.mapped_count
-      : (Array.isArray(payload.bases) ? payload.bases.length : 0);
+    if (payload.bridge && typeof payload.bridge.available === "boolean") bridgeAvailable = payload.bridge.available;
+    else if (bridgeAvailable === null) bridgeAvailable = true;
+    bridgeActive = Boolean(payload.active);
+    el.statusBadge.textContent = bridgeActive ? "Active" : "Inactive";
+    el.statusBadge.className = "status-badge " + (bridgeActive ? "status-badge--active" : "status-badge--inactive");
+    const count = (typeof payload.mapped_count === "number") ? payload.mapped_count : (Array.isArray(payload.bases) ? payload.bases.length : 0);
     el.mappedCount.textContent = String(count);
     el.lastRefresh.textContent = new Date().toISOString().slice(11, 19);
-    el.btnActivate.disabled = active;
-    el.btnDeactivate.disabled = !active;
+    updateActionButtons();
   }
 
   function renderImages(payload) {
@@ -108,8 +122,7 @@
       const node = el.rowTemplate.content.cloneNode(true);
       const li = node.querySelector("li");
       li.querySelector(".image-address").textContent = addr;
-      const btn = li.querySelector('button[data-cmd="unmap"]');
-      btn.dataset.targetBase = addr;
+      li.querySelector('button[data-cmd="unmap"]').dataset.targetBase = addr;
       el.imageList.appendChild(node);
     }
   }
@@ -119,18 +132,14 @@
     if (bridgeAvailable) {
       el.availability.textContent = "bridge: ready";
       el.availability.style.color = "";
-      el.btnActivate.disabled = false;
-      el.btnDeactivate.disabled = false;
       el.btnRefresh.disabled = false;
     } else {
-      el.availability.textContent =
-        "bridge: unavailable" + (reason ? " (" + reason + ")" : "");
+      el.availability.textContent = "bridge: unavailable" + (reason ? " (" + reason + ")" : "");
       el.availability.style.color = "var(--km-warn)";
-      el.btnActivate.disabled = true;
-      el.btnDeactivate.disabled = true;
-      // Refresh stays enabled — the user may want to re-probe.
+      el.btnRefresh.disabled = false;
     }
     el.btnLoadDriver.disabled = !bridgeAvailable;
+    updateActionButtons();
   }
 
   function requestRefresh() {
@@ -139,44 +148,48 @@
   }
 
   function bindClicks() {
-    el.btnActivate.addEventListener("click", () => {
-      // Slot VA / pool tag seed are 64-bit kernel-side values and must
-      // travel as hex strings — JSON numbers cannot represent them
-      // faithfully.  A 0x0 slot causes the peer to reply NOT_INITIALIZED,
-      // which the operator sees as an error entry in the log.
-      send("activate", {
-        invoke_result_slot_va: "0x0000000000000000",
-        idle_timeout_ms: 60000,
-        pool_tag_seed: "0x00000000",
-      });
+    [el.slot, el.seed, el.timeout].forEach(function (input) {
+      if (input) input.addEventListener("input", updateActionButtons);
+    });
+    el.btnActivate.addEventListener("click", function () {
+      const config = activateConfig();
+      if (!config) return;
+      send("activate", config);
       pushLog("info", "activate requested");
     });
-    el.btnDeactivate.addEventListener("click", () => {
-      send("deactivate");
+    el.btnDeactivate.addEventListener("click", function () {
+      if (!window.confirm("Deactivate the kernel map bridge?")) return;
+      send("deactivate", { confirmed: true });
       pushLog("info", "deactivate requested");
     });
-    el.btnRefresh.addEventListener("click", () => {
+    el.btnRefresh.addEventListener("click", function () {
       send("refresh");
       requestRefresh();
       pushLog("info", "manual refresh");
     });
-    el.btnLoadDriver.addEventListener("click", () => {
-      send("load_driver", {});
+    el.btnLoadDriver.addEventListener("click", function () {
+      if (!window.confirm("Open the file picker and load the selected driver image?")) return;
+      send("load_driver", { confirmed: true });
       pushLog("info", "load driver requested");
     });
-    el.imageList.addEventListener("click", (event) => {
+    el.imageList.addEventListener("click", function (event) {
       const btn = event.target.closest('button[data-cmd="unmap"]');
-      if (!btn) { return; }
+      if (!btn) return;
       const target = btn.dataset.targetBase;
-      send("unmap", { target_base: target });
+      if (!window.confirm("Unload mapped image " + target + "?")) return;
+      send("unmap", { target_base: target, confirmed: true });
       pushLog("info", "unmap requested for " + target);
     });
   }
 
   function handleInbound(event) {
     const data = event && event.data;
-    if (!data || typeof data !== "object") { return; }
-    // Native side sends {status, cmd, payload, reason?}
+    if (!data || typeof data !== "object") return;
+    if (!vscode && !(window.__SAO_TEST_BRIDGE__ === true && event.source === window.parent && event.origin === (window.__SAO_TEST_BRIDGE_ORIGIN__ || window.location.origin))) return;
+    const request = pending.get(data.requestId);
+    if (!request || request.generation !== generation || data.generation !== request.generation) return;
+    window.clearTimeout(request.timer);
+    pending.delete(data.requestId);
     const status = data.status;
     const cmd = data.cmd || data.command || "";
     const payload = data.payload || data.result || null;
@@ -185,8 +198,7 @@
       return;
     }
     if (status === "not_implemented") {
-      pushLog("warn", cmd + ": not implemented" +
-              (data.reason ? " — " + data.reason : ""));
+      pushLog("warn", cmd + ": not implemented" + (data.reason ? " - " + data.reason : ""));
       return;
     }
     if (status === "error") {
@@ -194,7 +206,6 @@
       return;
     }
     if (status !== "ok") {
-      // Non-status payloads (e.g. host push events) are logged verbatim.
       pushLog("info", cmd + ": " + JSON.stringify(data));
       return;
     }
@@ -212,8 +223,7 @@
       pushLog("ok", "deactivated");
       requestRefresh();
     } else if (cmd === "unmap") {
-      pushLog("ok", "unloaded " + (payload && payload.target_base
-        ? formatHexAddress(payload.target_base) : ""));
+      pushLog("ok", "unloaded " + (payload && payload.target_base ? formatHexAddress(payload.target_base) : ""));
       requestRefresh();
     } else if (cmd === "refresh") {
       requestRefresh();
@@ -225,14 +235,11 @@
   function start() {
     bindClicks();
     window.addEventListener("message", handleInbound);
-    // First bootstrap sequence.
+    updateActionButtons();
     requestRefresh();
     refreshTimer = window.setInterval(requestRefresh, REFRESH_INTERVAL_MS);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start, { once: true });
-  } else {
-    start();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
 })();

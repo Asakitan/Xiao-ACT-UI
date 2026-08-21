@@ -99,12 +99,44 @@ enum class DialogIntent {
     EditComposer,
     SearchHistory,
     ConfirmDelete,
+    CopyText,
+    ControlPalette,
+    ControlInput,
+    ControlConfirm,
 };
 
 struct ChoiceItem {
     std::string id;
     std::string label;
     std::string system_prompt;
+};
+
+struct ControlActionSpec {
+    const char* group;
+    const char* id;
+    const char* label;
+    const char* method;
+    const char* defaults;
+    bool read_only;
+    bool destructive;
+    bool advanced;
+};
+
+struct ControlToolItem {
+    std::string name;
+    std::string description;
+    std::string permission;
+    std::string permission_source;
+    std::string category;
+    bool confirmation_required{};
+    bool read_only{true};
+    json schema{json::object()};
+};
+
+struct ControlPromptItem {
+    std::string id;
+    std::string name;
+    bool pinned{};
 };
 
 struct HistoryEntry {
@@ -117,6 +149,7 @@ struct HistoryEntry {
     std::vector<std::string> matched_fields;
     size_t match_count{};
     bool search_result{};
+    bool content_available{};
     json messages{json::array()};
 };
 
@@ -127,6 +160,9 @@ struct RpcResponse {
     std::string raw;
     std::string error;
     int32_t status{SAO_AI_EDITOR_OK};
+    uint64_t request_id{};
+    int64_t elapsed_ms{};
+    bool truncated{};
 };
 
 struct RpcTask {
@@ -149,6 +185,9 @@ struct RpcTask {
     std::string approval;
     std::string workflow_id;
     std::string context_mode;
+    std::string control_group;
+    std::string control_label;
+    bool control_action{};
     json messages{json::array()};
     HistoryEntry restore_entry;
     bool canonical_reload{};
@@ -216,6 +255,47 @@ struct AiEditorMainPanelState {
     std::string usage_status;
     std::string run_error;
     std::string last_status_update;
+    std::string control_palette_query;
+    std::string control_group_filter{"all"};
+    std::string control_status{"Idle"};
+    std::string control_request_id;
+    std::string control_last_method;
+    std::string control_last_label;
+    std::string control_last_group;
+    json control_last_params{json::object()};
+    json control_last_execution_params{json::object()};
+    std::string control_last_tool_name;
+    json control_last_tool_arguments{json::object()};
+    std::string control_last_result;
+    std::string control_last_error;
+    std::string control_permission;
+    std::string control_permission_source;
+    std::string control_permission_category;
+    bool control_confirmation_required{};
+    std::string control_elapsed;
+    bool control_cache_hit{};
+    bool control_truncated{};
+    bool control_last_read_only{};
+    bool control_last_destructive{};
+    bool control_last_advanced{};
+    bool control_developer_advanced{};
+    std::string pending_control_method;
+    std::string pending_control_label;
+    std::string pending_control_group;
+    bool pending_control_read_only{};
+    bool pending_control_destructive{};
+    bool pending_control_advanced{};
+    json pending_control_params{json::object()};
+    json pending_control_execution_params{json::object()};
+    std::string pending_control_tool_name;
+    json pending_control_tool_arguments{json::object()};
+    std::string pending_control_permission;
+    std::string pending_control_permission_source;
+    std::string pending_control_permission_category;
+    bool pending_control_confirmation_required{};
+    std::string pending_copy_text;
+    std::vector<ControlToolItem> control_tools;
+    std::vector<ControlPromptItem> control_prompts;
     std::string diagnostic_filter{"all"};
     bool diagnostics_auto_scroll{true};
     std::string terminal_reload_run_id;
@@ -453,7 +533,10 @@ std::string trim_copy(std::string_view value) {
     return std::string(value.substr(begin, end - begin));
 }
 
+std::string redact_control_text(std::string text);
+
 std::string compact_text(std::string value, size_t maximum = 180U) {
+    value = redact_control_text(std::move(value));
     std::replace(value.begin(), value.end(), '\r', ' ');
     std::replace(value.begin(), value.end(), '\n', ' ');
     if (value.size() > maximum) {
@@ -559,7 +642,13 @@ void trim_output(std::string& output) noexcept {
         output.erase(0, newline + 1);
 }
 
+std::string redact_control_text(std::string text);
+void redact_control_json(json& value);
+void clear_pending_control_locked(AiEditorMainPanelState& state);
+std::string control_redacted_result(const RpcResponse& response);
+
 void append_output_line(AiEditorMainPanelState& state, std::string line) {
+    line = redact_control_text(std::move(line));
     std::lock_guard lock(state.mutex);
     if (!state.output_text.empty() && state.output_text.back() != '\n')
         state.output_text.push_back('\n');
@@ -677,12 +766,23 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
                             std::string_view method,
                             const json& params = json::object()) {
     RpcResponse response;
+    const auto request_started = std::chrono::steady_clock::now();
+    struct ResponseMetrics {
+        RpcResponse& response;
+        std::chrono::steady_clock::time_point started;
+        ~ResponseMetrics() {
+            response.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - started)
+                                      .count();
+        }
+    } response_metrics{response, request_started};
     if (launcher == nullptr) {
         response.status = SAO_AI_EDITOR_ERR_NOT_RUNNING;
         response.error = "backend not attached";
         return response;
     }
     const uint64_t id = request_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    response.request_id = id;
     const json request{
         {"jsonrpc", "2.0"}, {"id", id}, {"method", std::string(method)}, {"params", params}};
     const std::string request_body = request.dump();
@@ -723,6 +823,7 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
         return response;
     }
     response.connected = true;
+    response.truncated = response_buffer.size() >= kMaximumResponseBytes;
     response.raw.assign(response_buffer.data(), response_buffer.data() + response_len);
     const json document = json::parse(response_buffer.data(), response_buffer.data() + response_len,
                                       nullptr, false, false);
@@ -856,6 +957,20 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
         (void)append("conversation.get", {{"id", completion.task.conversation_id}});
         break;
     case RpcTaskKind::DeleteConversation:
+        if (append("conversation.get", {{"id", completion.task.conversation_id}})) {
+            const json& document = completion.steps.back().response.result;
+            if (document.is_object()) {
+                const auto messages = document.find("messages");
+                if (messages != document.end() && messages->is_array()) {
+                    completion.task.restore_entry.messages = *messages;
+                    completion.task.restore_entry.content_available = true;
+                }
+                completion.task.restore_entry.message_count = document.value(
+                    "messageCount", completion.task.restore_entry.messages.is_array()
+                                          ? completion.task.restore_entry.messages.size()
+                                          : completion.task.restore_entry.message_count);
+            }
+        }
         if (append("conversation.delete", {{"id", completion.task.conversation_id}})) {
             if (completion.task.query.empty()) {
             (void)append("conversation.list",
@@ -887,6 +1002,13 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
     }
     case RpcTaskKind::RestoreConversation: {
         const HistoryEntry& entry = completion.task.restore_entry;
+        if (!entry.content_available || !entry.messages.is_array()) {
+            RpcResponse response;
+            response.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            response.error = "Undo content is unavailable; no empty conversation was created.";
+            completion.steps.push_back({"conversation.restore", std::move(response)});
+            break;
+        }
         if (!append("conversation.create",
                     {{"title", entry.title},
                      {"model", entry.model},
@@ -1321,13 +1443,112 @@ void record_completion_output(AiEditorMainPanelState& state, const RpcStepResult
                               bool include_success_payload = false) {
     if (!step.response.ok) {
         append_output_line(state, "[" + format_iso_timestamp() + "] " + step.method +
-                                      " -> error: " + step.response.error);
+                                      " -> error: " + redact_control_text(step.response.error));
     } else if (include_success_payload) {
         append_output_line(state, "[" + format_iso_timestamp() + "] " + step.method + " -> " +
-                                      compact_text(step.response.raw, 1200U));
+                                      compact_text(redact_control_text(step.response.raw), 1200U));
     }
 }
 
+void apply_control_completion(AiEditorMainPanelState& state, const RpcCompletion& completion) {
+    if (completion.steps.empty()) {
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+        return;
+    }
+    const RpcStepResult& step = completion.steps.back();
+    const RpcResponse& response = step.response;
+    const std::string result_text = response.ok ? control_redacted_result(response) : std::string{};
+    {
+        std::lock_guard lock(state.mutex);
+        state.control_status = response.ok ? "Success" : "Failed";
+        state.control_request_id = response.request_id == 0 ? std::string{} :
+                                    std::to_string(response.request_id);
+        state.control_last_method = completion.task.method;
+        state.control_last_label = completion.task.control_label.empty()
+                                       ? completion.task.method
+                                       : completion.task.control_label;
+        state.control_last_params = completion.task.params;
+        redact_control_json(state.control_last_params);
+        state.control_last_execution_params = completion.task.params;
+        state.control_last_result = result_text;
+        state.control_last_error = response.ok ? std::string{}
+                                                : redact_control_text(compact_text(response.error, 1600U));
+        if (completion.task.method == "tools.call" && completion.task.params.is_object()) {
+            state.control_last_tool_name = completion.task.params.value("name", std::string{});
+            state.control_last_tool_arguments = completion.task.params.value("arguments", json::object());
+        }
+        state.control_elapsed = std::to_string(response.elapsed_ms) + " ms";
+        state.control_truncated = response.truncated ||
+                                  (response.result.is_object() && response.result.value("truncated", false));
+        state.control_cache_hit = response.result.is_object() && response.result.value("cacheHit", false);
+        state.control_permission = response.result.is_object()
+                                       ? response.result.value("permission", std::string{"-"})
+                                       : "-";
+        state.control_permission_source = response.result.is_object()
+                                              ? response.result.value("permissionSource", response.result.value("source", std::string{"-"}))
+                                              : state.control_permission_source.empty() ? "-" : state.control_permission_source;
+        state.control_permission_category = response.result.is_object()
+                                                ? response.result.value("category", state.control_permission_category)
+                                                : state.control_permission_category;
+        state.control_confirmation_required = response.result.is_object()
+                                                  ? response.result.value("confirmationRequired", state.control_confirmation_required)
+                                                  : state.control_confirmation_required;
+        if (response.ok && step.method == "tools.list" && response.result.is_object()) {
+            state.control_tools.clear();
+            const json tools = response.result.value("tools", json::array());
+            if (tools.is_array()) {
+                for (const auto& item : tools) {
+                    if (!item.is_object())
+                        continue;
+                    ControlToolItem tool;
+                    tool.name = item.value("name", std::string{});
+                    if (tool.name.empty())
+                        continue;
+                    tool.description = item.value("description", std::string{});
+                    tool.permission = item.value("permission", std::string{"unknown"});
+                    tool.permission_source = item.value("permissionSource", item.value("source", std::string{"unknown"}));
+                    tool.category = item.value("category", item.value("permissionCategory", std::string{}));
+                    tool.confirmation_required = item.value("confirmationRequired", false);
+                    tool.read_only = item.value("readOnly", true);
+                    tool.schema = item.value("parameters", item.value("inputSchema", json::object()));
+                    state.control_tools.push_back(std::move(tool));
+                }
+            }
+        }
+        if (response.ok && step.method == "prompts.list_defs" && response.result.is_object()) {
+            state.control_prompts.clear();
+            const json items = response.result.value("items", json::array());
+            if (items.is_array()) {
+                for (const auto& item : items) {
+                    if (!item.is_object())
+                        continue;
+                    ControlPromptItem prompt;
+                    prompt.id = item.value("id", std::string{});
+                    prompt.name = item.value("name", prompt.id);
+                    prompt.pinned = item.value("pinned", false);
+                    if (!prompt.id.empty())
+                        state.control_prompts.push_back(std::move(prompt));
+                }
+            }
+        }
+    }
+    if (response.ok) {
+        append_output_line(state, "[" + format_iso_timestamp() + "] control " + step.method +
+                                      " -> Success · request " +
+                                      (response.request_id == 0 ? std::string{"-"} : std::to_string(response.request_id)) +
+                                      " · " + std::to_string(response.elapsed_ms) + " ms");
+    } else {
+        append_output_line(state, "[" + format_iso_timestamp() + "] control " + step.method +
+                                      " -> Failed · request " +
+                                      (response.request_id == 0 ? std::string{"-"} : std::to_string(response.request_id)) +
+                                      " · " + redact_control_text(response.error));
+    }
+    {
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+    }
+}
 void finish_run_from_status(AiEditorMainPanelState& state, const json& status) {
     const std::string run_status = status.value("status", std::string{"failed"});
     state.run_status = compact_text(run_status, 128U);
@@ -1693,7 +1914,10 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         break;
     }
     case RpcTaskKind::Generic:
-        record_completion_output(state, last, true);
+        if (completion.task.control_action)
+            apply_control_completion(state, completion);
+        else
+            record_completion_output(state, last, true);
         break;
     case RpcTaskKind::NewConversation:
         if (!last.response.ok || !last.response.result.is_object() ||
@@ -1785,11 +2009,16 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         for (const auto& step : completion.steps)
             if (!step.response.ok)
                 record_completion_output(state, step);
+        const auto delete_step = std::find_if(
+            completion.steps.begin(), completion.steps.end(),
+            [](const auto& step) { return step.method == "conversation.delete"; });
+        const bool deleted = delete_step != completion.steps.end() && delete_step->response.ok;
+        const std::string delete_error = delete_step == completion.steps.end()
+                                             ? "missing conversation.delete response"
+                                             : compact_text(delete_step->response.error, 1100U);
         std::lock_guard lock(state.mutex);
-        const bool deleted = completion.steps.front().response.ok;
         if (!deleted) {
-            state.run_error = "Conversation delete failed: " +
-                              compact_text(completion.steps.front().response.error, 1100U);
+            state.run_error = "Conversation delete failed: " + delete_error;
             break;
         }
         state.undo_entry = completion.task.restore_entry;
@@ -1939,7 +2168,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         }
         HistoryEntry restored = completion.task.restore_entry;
         restored.id = created->response.result.value("id", std::string{});
-        restored.message_count = restored.messages.is_array() ? restored.messages.size() : 0U;
+        if (restored.content_available)
+            restored.message_count = restored.messages.is_array() ? restored.messages.size() : 0U;
         restored.saved_at = created->response.result.value("savedAt", int64_t{0});
         {
             std::lock_guard lock(state.mutex);
@@ -1954,7 +2184,9 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             state.conversation_id = restored.id;
             state.conversation_title = restored.title;
             state.conversation_messages = restored.messages;
-            state.conversation_messages_total = restored.message_count;
+            state.conversation_messages_total = restored.content_available
+                                                   ? restored.messages.size()
+                                                   : restored.message_count;
             state.run_error.clear();
         }
         break;
@@ -2176,6 +2408,454 @@ void drain_completions(AiEditorMainPanelState& state) {
     }
 }
 
+const std::vector<ControlActionSpec>& control_action_catalog() {
+    static const std::vector<ControlActionSpec> actions{
+        {"Conversations", "conversation.list", "List", "conversation.list", R"({"scope":"all","limit":50})", true, false, false},
+        {"Conversations", "conversation.get", "Get", "conversation.get", R"({"id":""})", true, false, false},
+        {"Conversations", "conversation.search", "Search", "conversation.search", R"({"query":"","scope":"all","limit":50})", true, false, false},
+        {"Conversations", "conversation.pin", "Pin", "conversation.pin", R"({"id":""})", false, false, false},
+        {"Conversations", "conversation.unpin", "Unpin", "conversation.unpin", R"({"id":""})", false, false, false},
+        {"Conversations", "conversation.tag", "Tag", "conversation.tag", R"({"id":"","tags":[]})", false, false, false},
+        {"Conversations", "conversation.untag", "Untag", "conversation.untag", R"({"id":"","tags":[]})", false, false, false},
+        {"Conversations", "conversation.find_by_tag", "Find by tag", "conversation.find_by_tag", R"({"tags":[],"scope":"all","limit":50,"matchAll":false})", true, false, false},
+        {"Conversations", "conversation.list_tags", "List tags", "conversation.list_tags", R"({"scope":"all"})", true, false, false},
+        {"Conversations", "conversation.branch", "Branch", "conversation.branch", R"({"sourceId":"","messageIndex":0,"title":"","scope":"workspace"})", false, true, false},
+        {"Conversations", "conversation.merge", "Merge", "conversation.merge", R"({"sourceIds":[],"title":"","scope":"workspace","orderBy":"explicit"})", false, true, false},
+        {"Conversations", "conversation.split", "Split", "conversation.split", R"({"sourceId":"","messageIndex":0,"scope":"workspace","keepOriginal":false})", false, true, false},
+        {"Conversations", "conversation.compact", "Compact", "conversation.compact", R"({"id":"","keepLast":6,"compactStrategy":"replace"})", false, true, false},
+        {"Conversations", "conversation.export", "Export", "conversation.export", R"({"scope":"all"})", true, false, false},
+        {"Conversations", "conversation.import", "Import", "conversation.import", R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
+        {"Conversations", "conversation.delete", "Delete", "conversation.delete", R"({"id":""})", false, true, false},
+        {"Workflows", "workflows.reload", "Reload", "workflows.reload", R"({})", true, false, false},
+        {"Workflows", "workflows.list_defs", "List", "workflows.list_defs", R"({"scope":"all"})", true, false, false},
+        {"Workflows", "workflows.get_def", "Get", "workflows.get_def", R"({"id":"","scope":"all"})", true, false, false},
+        {"Workflows", "workflows.save_def", "Save", "workflows.save_def", R"({"scope":"workspace","workflow":{}})", false, true, false},
+        {"Workflows", "workflows.delete_def", "Delete", "workflows.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Workflows", "workflow.dry_run", "Dry run", "workflow.dry_run", R"({"id":"","input":{}})", true, false, false},
+        {"Workflows", "workflows.run", "Run", "workflows.run", R"({"id":"","input":{}})", false, true, false},
+        {"Workflows", "workflows.status", "Status", "workflows.status", R"({"executionId":""})", true, false, false},
+        {"Workflows", "workflows.pause", "Pause", "workflows.pause", R"({"executionId":""})", false, true, false},
+        {"Workflows", "workflows.resume", "Resume", "workflows.resume", R"({"executionId":""})", false, true, false},
+        {"Workflows", "workflows.cancel", "Cancel", "workflows.cancel", R"({"executionId":""})", false, true, false},
+        {"Workflows", "workflow.retry", "Retry", "workflow.retry", R"({"id":"","scope":"all"})", false, true, false},
+        {"Workflows", "workflow.list_executions", "Execution list", "workflow.list_executions", R"({"scope":"all","limit":50})", true, false, false},
+        {"Workflows", "workflow.get_execution", "Execution get", "workflow.get_execution", R"({"id":"","scope":"all"})", true, false, false},
+        {"Workflows", "workflow.delete_execution", "Execution delete", "workflow.delete_execution", R"({"id":"","scope":"all"})", false, true, false},
+        {"Workflows", "workflow.skip_step", "Skip step", "workflow.skip_step", R"({"executionId":"","reason":""})", false, true, false},
+        {"Workflows", "workflow.replace_variable", "Replace variable", "workflow.replace_variable", R"({"executionId":"","name":"","value":""})", false, true, false},
+        {"Workflows", "workflow.snapshot_variables", "Snapshot variables", "workflow.snapshot_variables", R"({"executionId":""})", true, false, false},
+        {"Agents & Prompts", "agents.list_defs", "Agents list", "agents.list_defs", R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.get_def", "Agent get", "agents.get_def", R"({"id":"","scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.save_def", "Agent save", "agents.save_def", R"({"scope":"workspace","agent":{}})", false, true, false},
+        {"Agents & Prompts", "agents.delete_def", "Agent delete", "agents.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Agents & Prompts", "agents.invoke", "Invoke agent", "agents.invoke", R"({"id":"","message":""})", false, true, false},
+        {"Agents & Prompts", "agents.recommend", "Recommend", "agents.recommend", R"({"query":"","topK":3})", true, false, false},
+        {"Agents & Prompts", "agents.import", "Import agents", "agents.import", R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
+        {"Agents & Prompts", "agents.export", "Export agents", "agents.export", R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.invoke_with_mcp", "Invoke with MCP", "agents.invoke_with_mcp", R"({"id":"","message":"","mcpServers":[],"extraTools":[]})", false, true, false},
+        {"Agents & Prompts", "agents.batch_invoke", "Batch invoke (Developer Advanced)", "agents.batch_invoke", R"({"agents":[]})", false, true, true},
+        {"Agents & Prompts", "prompts.list_defs", "Prompts list", "prompts.list_defs", R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompts.get_def", "Prompt get", "prompts.get_def", R"({"id":"","scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompts.save_def", "Prompt save", "prompts.save_def", R"({"scope":"workspace","prompt":{}})", false, true, false},
+        {"Agents & Prompts", "prompts.delete_def", "Prompt delete", "prompts.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Agents & Prompts", "prompts.render", "Render prompt", "prompts.render", R"({"id":"","arguments":{}})", true, false, false},
+        {"Agents & Prompts", "prompts.render_batch", "Render batch", "prompts.render_batch", R"({"items":[]})", true, false, false},
+        {"Agents & Prompts", "prompts.list_tags", "Prompt tags", "prompts.list_tags", R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompt.pin", "Pin prompt", "prompt.pin", R"({"id":"","scope":"workspace"})", false, false, false},
+        {"Agents & Prompts", "prompt.unpin", "Unpin prompt", "prompt.unpin", R"({"id":"","scope":"workspace"})", false, false, false},
+        {"Tools", "tools.list", "List tools", "tools.list", R"({})", true, false, false},
+        {"Tools", "tools.call", "Call tool", "tools.call", R"({"mode":"agent","name":"","arguments":{}})", false, true, false},
+        {"Tools", "tools.register", "Register tool (Developer Advanced)", "tools.register", R"({"name":"","description":"","parameters":{"type":"object","properties":{}},"readOnly":true})", false, true, true},
+        {"Tools", "tools.unregister", "Unregister tool (Developer Advanced)", "tools.unregister", R"({"name":""})", false, true, true},
+        {"Tools", "tools.register_alias", "Register alias (Developer Advanced)", "tools.register_alias", R"({"alias":"","target":""})", false, true, true},
+        {"Tools", "tools.unregister_alias", "Unregister alias (Developer Advanced)", "tools.unregister_alias", R"({"alias":""})", false, true, true},
+        {"Tools", "tools.register_hook", "Register hook (Developer Advanced)", "tools.register_hook", R"({"id":"","phase":"before","emitEvent":""})", false, true, true},
+        {"Tools", "tools.unregister_hook", "Unregister hook (Developer Advanced)", "tools.unregister_hook", R"({"id":""})", false, true, true},
+        {"Tools", "tools.cache_stats", "Cache stats (Developer Advanced)", "tools.cache_stats", R"({})", true, false, true},
+        {"Tools", "tools.cache_clear", "Clear cache (Developer Advanced)", "tools.cache_clear", R"({})", false, true, true},
+        {"Tools", "tools.telemetry_stats", "Telemetry stats (Developer Advanced)", "tools.telemetry_stats", R"({})", true, false, true},
+        {"Tools", "tools.telemetry_clear", "Clear telemetry (Developer Advanced)", "tools.telemetry_clear", R"({})", false, true, true},
+        {"Providers & Usage", "providers.list", "Providers list", "providers.list", R"({"scope":"all"})", true, false, false},
+        {"Providers & Usage", "providers.configure", "Configure provider (API key uses Settings)", "providers.configure", R"({"scope":"workspace","provider":{"id":""}})", false, true, false},
+        {"Providers & Usage", "models.list", "Models list", "models.list", R"({"providerId":""})", true, false, false},
+        {"Providers & Usage", "chat.set_pricing", "Set pricing", "chat.set_pricing", R"({"providerId":"","model":"","pricing":{}})", false, true, false},
+        {"Providers & Usage", "chat.get_pricing", "Get pricing", "chat.get_pricing", R"({"providerId":"","model":""})", true, false, false},
+        {"Providers & Usage", "chat.list_pricing", "List pricing", "chat.list_pricing", R"({})", true, false, false},
+        {"Providers & Usage", "chat.cost_stats", "Cost stats", "chat.cost_stats", R"({})", true, false, false},
+        {"Runtime & Extensions", "runtime.initialize", "Runtime status", "runtime.initialize", R"({})", true, false, false},
+        {"Runtime & Extensions", "config.load", "Runtime config", "config.load", R"({})", true, false, false},
+        {"Runtime & Extensions", "scopes.list", "Scopes", "scopes.list", R"({})", true, false, false},
+        {"Runtime & Extensions", "permission.get", "Permission policy", "permission.get", R"({})", true, false, false},
+        {"Runtime & Extensions", "extensions.list", "Extensions list", "extensions.list", R"({})", true, false, false},
+        {"Runtime & Extensions", "extensions.activate", "Activate extension", "extensions.activate", R"({"extensionId":""})", false, true, false},
+        {"Runtime & Extensions", "extensions.deactivate", "Deactivate extension", "extensions.deactivate", R"({"extensionId":""})", false, true, false},
+        {"Runtime & Extensions", "extensions.execute_command", "Execute extension command", "extensions.execute_command", R"({"command":"","arguments":[]})", false, true, false},
+        {"Runtime & Extensions", "commands.execute", "Execute command", "vscode.commands.executeCommand", R"({"command":"","arguments":[]})", false, true, false},
+    };
+    return actions;
+}
+
+const ControlActionSpec* find_control_action(std::string_view id_or_method) {
+    const auto& actions = control_action_catalog();
+    const auto found = std::ranges::find_if(actions, [&](const ControlActionSpec& action) {
+        return id_or_method == action.id || id_or_method == action.method;
+    });
+    return found == actions.end() ? nullptr : &*found;
+}
+
+const ControlToolItem* find_control_tool(const AiEditorMainPanelState& state,
+                                         std::string_view name) {
+    const auto found = std::ranges::find(state.control_tools, name, &ControlToolItem::name);
+    return found == state.control_tools.end() ? nullptr : &*found;
+}
+
+std::string normalized_control_key(std::string_view key) {
+    std::string normalized;
+    normalized.reserve(key.size());
+    for (const unsigned char character : key) {
+        if (std::isalnum(character) != 0)
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+    }
+    return normalized;
+}
+
+bool is_sensitive_control_key(std::string_view key) {
+    const std::string normalized = normalized_control_key(key);
+    return normalized.find("apikey") != std::string::npos ||
+           normalized.find("token") != std::string::npos ||
+           normalized.find("secret") != std::string::npos ||
+           normalized.find("password") != std::string::npos ||
+           normalized.find("authorization") != std::string::npos ||
+           normalized.find("credential") != std::string::npos;
+}
+
+void redact_control_json(json& value) {
+    if (value.is_array()) {
+        for (auto& item : value)
+            redact_control_json(item);
+        return;
+    }
+    if (!value.is_object())
+        return;
+    for (auto it = value.begin(); it != value.end(); ++it) {
+        if (is_sensitive_control_key(it.key())) {
+            it.value() = "[redacted]";
+        } else {
+            redact_control_json(it.value());
+        }
+    }
+}
+
+std::string redact_control_text(std::string text) {
+    const json parsed = json::parse(text, nullptr, false, false);
+    if (!parsed.is_discarded() && (parsed.is_object() || parsed.is_array())) {
+        json redacted = parsed;
+        redact_control_json(redacted);
+        return redacted.dump();
+    }
+
+    std::string lowered = text;
+    std::ranges::transform(lowered, lowered.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    for (const std::string_view marker : {"apikey", "api_key", "api-key", "token", "secret",
+                                          "password", "authorization", "credential"}) {
+        size_t search_from = 0;
+        while ((search_from = lowered.find(marker, search_from)) != std::string::npos) {
+            const size_t colon = lowered.find(':', search_from + marker.size());
+            if (colon == std::string::npos)
+                break;
+            size_t value_begin = colon + 1;
+            while (value_begin < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[value_begin])) != 0)
+                ++value_begin;
+            if (value_begin >= text.size())
+                break;
+            size_t value_end = value_begin;
+            if (text[value_begin] == '"') {
+                value_end = value_begin + 1;
+                while (value_end < text.size()) {
+                    if (text[value_end] == '"' && text[value_end - 1] != '\\') {
+                        ++value_end;
+                        break;
+                    }
+                    ++value_end;
+                }
+            } else {
+                while (value_end < text.size() && text[value_end] != ',' &&
+                       text[value_end] != '}' && text[value_end] != ']' &&
+                       text[value_end] != '\n' && text[value_end] != '\r')
+                    ++value_end;
+            }
+            if (value_end <= value_begin)
+                break;
+            text.replace(value_begin, value_end - value_begin, "\"[redacted]\"");
+            lowered = text;
+            std::ranges::transform(lowered, lowered.begin(), [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            search_from = value_begin + 12U;
+        }
+    }
+    return text;
+}
+
+std::string control_default_json_text(const json& value) {
+    json display = value;
+    redact_control_json(display);
+    return clamp_utf8_bytes(display.dump(), kMaximumActionPayloadBytes);
+}
+
+void clear_pending_control_locked(AiEditorMainPanelState& state) {
+    state.pending_control_method.clear();
+    state.pending_control_label.clear();
+    state.pending_control_group.clear();
+    state.pending_control_read_only = false;
+    state.pending_control_destructive = false;
+    state.pending_control_advanced = false;
+    state.pending_control_params = json::object();
+    state.pending_control_execution_params = json::object();
+    state.pending_control_tool_name.clear();
+    state.pending_control_tool_arguments = json::object();
+    state.pending_control_permission.clear();
+    state.pending_control_permission_source.clear();
+    state.pending_control_permission_category.clear();
+    state.pending_control_confirmation_required = false;
+    if (state.pending_dialog == DialogIntent::ControlInput ||
+        state.pending_dialog == DialogIntent::ControlConfirm)
+        state.pending_dialog = DialogIntent::None;
+}
+
+bool control_requires_confirmation(std::string_view permission, std::string_view category,
+                                   bool confirmation_required, bool read_only,
+                                   bool destructive, bool advanced) {
+    std::string normalized_permission(permission);
+    std::string normalized_category(category);
+    std::ranges::transform(normalized_permission, normalized_permission.begin(),
+                           [](unsigned char character) {
+                               return static_cast<char>(std::tolower(character));
+                           });
+    std::ranges::transform(normalized_category, normalized_category.begin(),
+                           [](unsigned char character) {
+                               return static_cast<char>(std::tolower(character));
+                           });
+    return confirmation_required || destructive || advanced || !read_only ||
+           normalized_permission == "write" || normalized_permission == "execute" ||
+           normalized_category == "write" || normalized_category == "execute";
+}
+
+json control_minimal_schema_value(const json& schema) {
+    if (!schema.is_object())
+        return json::object();
+    if (schema.contains("default"))
+        return schema["default"];
+    const std::string type = schema.value("type", std::string{"string"});
+    if (type == "boolean")
+        return false;
+    if (type == "integer" || type == "number")
+        return 0;
+    if (type == "array")
+        return json::array();
+    if (type == "object")
+        return json::object();
+    return "";
+}
+
+json control_tool_arguments(const json& schema) {
+    json arguments = json::object();
+    if (!schema.is_object())
+        return arguments;
+    const auto properties = schema.find("properties");
+    if (properties == schema.end() || !properties->is_object())
+        return arguments;
+    for (auto it = properties->begin(); it != properties->end(); ++it)
+        arguments[it.key()] = control_minimal_schema_value(it.value());
+    return arguments;
+}
+
+std::string control_redacted_result(const RpcResponse& response) {
+    json value = response.result;
+    redact_control_json(value);
+    return clamp_utf8_bytes(value.dump(2), 48U * 1024U);
+}
+
+bool control_matches(const AiEditorMainPanelState& state, const ControlActionSpec& action) {
+    if (action.advanced && !state.control_developer_advanced)
+        return false;
+    if (state.control_group_filter != "all" && state.control_group_filter != action.group)
+        return false;
+    if (state.control_palette_query.empty())
+        return true;
+    std::string haystack = std::string(action.group) + " " + action.label + " " + action.method;
+    std::string query = state.control_palette_query;
+    std::ranges::transform(haystack, haystack.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    std::ranges::transform(query, query.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return haystack.find(query) != std::string::npos;
+}
+
+std::string control_group_key(std::string_view group) {
+    std::string key(group);
+    std::ranges::transform(key, key.begin(), [](unsigned char character) {
+        if (std::isalnum(character) != 0)
+            return static_cast<char>(std::tolower(character));
+        return '-';
+    });
+    return key;
+}
+json control_center_section(const AiEditorMainPanelState& state, bool launcher_bound) {
+    json children = json::array();
+    children.push_back(text_node(
+        "Discover and run supported user-facing APIs. Internal codec/IPC/create/destroy/test seams are intentionally omitted.",
+        "muted", 42));
+    json toolbar = json::array();
+    toolbar.push_back(button_node("control.palette.open", "Search API / action", "control.palette",
+                                  {}, "primary", !launcher_bound));
+    toolbar.push_back(button_node(
+        "control.advanced.toggle",
+        state.control_developer_advanced ? "Developer Advanced: ON" : "Developer Advanced: OFF",
+        "control.advanced.toggle", {}, state.control_developer_advanced ? "warn" : "ghost"));
+    toolbar.push_back(button_node("control.retry", "Retry", "control.retry", {}, "default",
+                                  state.control_last_method.empty() || !launcher_bound));
+    toolbar.push_back(button_node("control.copy", "Copy result", "control.copy", {}, "ghost",
+                                  state.control_last_result.empty()));
+    children.push_back(row_node(std::move(toolbar)));
+    children.push_back(row_node(json::array({
+        badge_node("Status: " + state.control_status,
+                   state.control_status == "Success" ? "ok" : state.control_status == "Failed" ? "bad" : "warn"),
+        badge_node(state.control_request_id.empty() ? "Request: -" : "Request: " + state.control_request_id,
+                   state.control_request_id.empty() ? "muted" : "accent"),
+        badge_node("Group: " + state.control_group_filter, "muted"),
+        badge_node(state.control_developer_advanced ? "Advanced enabled" : "User surface",
+                   state.control_developer_advanced ? "warn" : "muted"),
+    })));
+    json groups = json::array();
+    groups.push_back(button_node("control.group.all", "All", "control.group", {{"group", "all"}},
+                                 state.control_group_filter == "all" ? "primary" : "ghost"));
+    for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
+                              "Providers & Usage", "Runtime & Extensions"}) {
+        groups.push_back(button_node("control.group." + control_group_key(group), group,
+                                     "control.group", {{"group", group}},
+                                     state.control_group_filter == group ? "primary" : "ghost"));
+    }
+    children.push_back(row_node(std::move(groups)));
+    if (!state.control_palette_query.empty())
+        children.push_back(text_node("Search: " + state.control_palette_query, "accent", 28));
+    for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
+                              "Providers & Usage", "Runtime & Extensions"}) {
+        json buttons = json::array();
+        size_t visible = 0;
+        for (const auto& action : control_action_catalog()) {
+            if (std::string_view(action.group) != group || !control_matches(state, action))
+                continue;
+            buttons.push_back(button_node(
+                "control.invoke." + std::string(action.id), action.label, "control.open",
+                {{"id", action.id}, {"method", action.method}, {"label", action.label}, {"group", action.group},
+                 {"default", action.defaults}, {"readOnly", action.read_only},
+                 {"destructive", action.destructive}, {"advanced", action.advanced}},
+                action.destructive ? "danger" : action.read_only ? "default" : "primary", !launcher_bound));
+            ++visible;
+        }
+        if (visible != 0U) {
+            buttons.push_back(text_node(std::to_string(visible) + " available actions", "muted", 24));
+            children.push_back(card_node(group, json::array({row_node(std::move(buttons))}),
+                                         std::string_view(group) == "Tools" ? "gold" : "cyan"));
+        }
+    }
+    if (!state.control_tools.empty() &&
+        (state.control_group_filter == "all" || state.control_group_filter == "Tools")) {
+        json tools = json::array();
+        for (const auto& tool : state.control_tools) {
+            const json defaults = control_tool_arguments(tool.schema);
+            tools.push_back(card_node(
+                compact_text(tool.name, 180U),
+                json::array({text_node(compact_text(tool.description, 500U), "muted", 30),
+                             row_node(json::array({
+                                 badge_node(tool.read_only ? "readOnly" : "write/execute",
+                                            tool.read_only ? "ok" : "warn"),
+                                 badge_node("permission: " + tool.permission,
+                                            tool.permission == "allowed" ? "ok" : "warn"),
+                                 badge_node("category: " + (tool.category.empty() ? "unknown" : tool.category),
+                                            tool.category == "read" ? "ok" : "warn"),
+                                 badge_node("source: " + tool.permission_source, "muted"),
+                                 badge_node(tool.confirmation_required ? "confirmation required" : "confirmation: policy",
+                                            tool.confirmation_required ? "warn" : "muted"),
+                                 button_node("control.tool." + tool.name, "Call", "control.tool.call",
+                                             {{"name", tool.name}, {"readOnly", tool.read_only},
+                                              {"permission", tool.permission},
+                                              {"permissionSource", tool.permission_source},
+                                              {"category", tool.category},
+                                              {"confirmationRequired", tool.confirmation_required},
+                                              {"schema", tool.schema}, {"arguments", defaults}},
+                                             tool.read_only ? "default" : "danger", !launcher_bound),
+                             }))}),
+                tool.read_only ? "cyan" : "gold"));
+        }
+        children.push_back(section_node("Discovered Tools", std::move(tools)));
+    }
+    if (!state.agents.empty() &&
+        (state.control_group_filter == "all" || state.control_group_filter == "Agents & Prompts")) {
+        json agents = json::array();
+        for (const auto& agent : state.agents) {
+            if (agent.id.empty())
+                continue;
+            agents.push_back(row_node(json::array({
+                badge_node(compact_text(agent.label, 180U), "accent"),
+                button_node("control.use.agent." + agent.id, "Use in Composer", "control.use_agent",
+                            {{"id", agent.id}}, "default"),
+            })));
+        }
+        children.push_back(card_node("Agents available in Composer", std::move(agents), "cyan"));
+    }
+    if (!state.control_prompts.empty() &&
+        (state.control_group_filter == "all" || state.control_group_filter == "Agents & Prompts")) {
+        json prompts = json::array();
+        for (const auto& prompt : state.control_prompts) {
+            prompts.push_back(row_node(json::array({
+                badge_node(compact_text(prompt.name.empty() ? prompt.id : prompt.name, 180U),
+                           prompt.pinned ? "accent" : "muted"),
+                button_node("control.use.prompt." + prompt.id, "Use in Composer", "control.use_prompt",
+                            {{"id", prompt.id}}, "default"),
+            })));
+        }
+        children.push_back(card_node("Prompts available in Composer", std::move(prompts), "gold"));
+    }
+    if (state.control_group_filter == "all" || state.control_group_filter == "Runtime & Extensions") {
+        children.push_back(card_node(
+            "Runtime lifecycle",
+            json::array({text_node("Runtime config/status use runtime.initialize and config.load. Restart/stop remain launcher-owned lifecycle controls and are shown without a dangerous RPC call.", "muted", 44),
+                         row_node(json::array({
+                             button_node("control.runtime.restart", "Restart (launcher-owned)", "control.unavailable", {}, "ghost", true),
+                             button_node("control.runtime.stop", "Stop (launcher-owned)", "control.unavailable", {}, "ghost", true),
+                         }))}),
+            "gold"));
+    }
+    json feedback = json::array();
+    if (state.control_last_method.empty()) {
+        feedback.push_back(text_node("Run an action to see request id, permission, cache, timing, and result details.",
+                                     "muted", 38));
+    } else {
+        feedback.push_back(text_node(state.control_last_label + " · " + state.control_last_method, "title", 28));
+        feedback.push_back(text_node(
+            "permission=" + state.control_permission + " · category=" +
+                (state.control_permission_category.empty() ? "-" : state.control_permission_category) +
+                " · source=" + state.control_permission_source +
+                " · confirmationRequired=" + (state.control_confirmation_required ? "true" : "false") +
+                " · cacheHit=" + (state.control_cache_hit ? "true" : "false") +
+                " · elapsed=" + state.control_elapsed + " · truncated=" + (state.control_truncated ? "true" : "false"),
+            "muted", 30));
+        if (!state.control_last_error.empty())
+            feedback.push_back(text_node(state.control_last_error, "bad", 42));
+        if (!state.control_last_result.empty())
+            append_text_chunks(feedback, state.control_last_result, "mono", 80, 8);
+    }
+    children.push_back(card_node("Control Center feedback", std::move(feedback),
+                                 state.control_status == "Failed" ? "bad" : "cyan"));
+    return section_node("Control Center / API Explorer", std::move(children));
+}
 json choice_card(std::string title, std::string action, const std::vector<ChoiceItem>& choices,
                  std::string_view selected, std::string prefix, bool disabled) {
     json children = json::array();
@@ -2463,9 +3143,13 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                           json::object(), "default", history_actions_disabled));
     const bool undo_available = state.undo_entry.has_value() &&
                                 std::chrono::steady_clock::now() < state.undo_deadline;
-    if (undo_available)
-        history_actions.push_back(button_node("history.undo", "Undo", "history.undo",
-                                              json::object(), "primary", history_actions_disabled));
+    if (undo_available) {
+        const bool undo_content_available = state.undo_entry->content_available;
+        history_actions.push_back(button_node(
+            "history.undo", undo_content_available ? "Undo" : "Undo (content unavailable)",
+            "history.undo", json::object(), "primary",
+            history_actions_disabled || !undo_content_available));
+    }
     json history_status = json::array();
     const size_t visible_begin = state.history.empty() ? 0U : 1U;
     const size_t visible_end = state.history.size();
@@ -2485,8 +3169,15 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     }
     if (state.history_task_pending)
         history_status.push_back(badge_node("History request in progress", "warn"));
+    if (state.history_limit >= 500U)
+        history_status.push_back(badge_node("History limit: 500", "warn"));
+    if (undo_available && !state.undo_entry->content_available)
+        history_status.push_back(badge_node("Undo: content unavailable", "warn"));
     if (state.history.size() < state.history_total)
-        history_actions.push_back(button_node("history.load_more", "Load more", "history.load_more", json::object(), "ghost", history_actions_disabled));
+        history_actions.push_back(button_node(
+            "history.load_more", state.history_limit >= 500U ? "Load more (limit 500)" : "Load more",
+            "history.load_more", json::object(), "ghost",
+            history_actions_disabled || state.history_limit >= 500U));
     history.push_back(row_node(std::move(history_actions)));
     history.push_back(row_node(std::move(history_status)));
     if (state.history.empty()) {
@@ -2578,6 +3269,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
 
     json secondary_children = json::array();
     secondary_children.push_back(std::move(inspector_panel));
+    secondary_children.push_back(control_center_section(state, launcher_bound));
     secondary_children.push_back(std::move(history_drawer));
     secondary_children.push_back(std::move(diagnostics_section));
     secondary_children.push_back(std::move(platform_section));
@@ -2800,59 +3492,406 @@ bool dialog_visible(AiEditorMainPanelState& state) {
 
 void search_history(AiEditorMainPanelState& state, std::string query);
 void delete_history_conversation(AiEditorMainPanelState& state, std::string id);
-
+int32_t hide_active_dialog(AiEditorMainPanelState& state);
+std::string payload_string(const json& payload, std::string_view key);
+bool enqueue_or_report(AiEditorMainPanelState& state, RpcTask task, std::string_view method);
+void queue_generic_action(AiEditorMainPanelState& state, std::string method,
+                          json params = json::object());
+void show_control_action_dialog(AiEditorMainPanelState& state, const json& payload);
+void show_control_palette_dialog(AiEditorMainPanelState& state);
+void show_control_confirm_dialog(AiEditorMainPanelState& state);
+void queue_control_request(AiEditorMainPanelState& state, std::string method,
+                           std::string label, std::string group, json params,
+                           bool read_only, bool destructive, bool advanced);
 void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* input_text_utf8,
-                                        size_t input_text_len, void* user_data) {
-    auto* state = static_cast<AiEditorMainPanelState*>(user_data);
-    if (state == nullptr || require_owner_thread(state->compositor) != SAO_AI_EDITOR_OK)
+                                        size_t input_text_len, void* user_data);
+void show_control_confirm_dialog(AiEditorMainPanelState& state) {
+    if (dialog_visible(state)) {
+        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
         return;
-    DialogIntent intent = DialogIntent::None;
-    std::string input;
-    std::string delete_id;
+    }
+    if (ensure_dialog(state) != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+        return;
+    }
+    std::string message;
     {
-        std::lock_guard lock(state->mutex);
-        intent = state->pending_dialog;
-        state->pending_dialog = DialogIntent::None;
-        if (intent == DialogIntent::ConfirmDelete &&
-            (pressed == SAO_UI_DIALOG_BTN_OK || pressed == SAO_UI_DIALOG_BTN_YES) &&
-            state->pending_delete.has_value()) {
-            delete_id = state->pending_delete->id;
-            state->pending_delete.reset();
+        std::lock_guard lock(state.mutex);
+        message = "Confirm " + state.pending_control_method +
+                  "? This action can change persisted state or execute code.";
+        state.pending_dialog = DialogIntent::ControlConfirm;
+    }
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_ASK;
+    spec.title_utf8 = "Control Center confirmation";
+    spec.message_utf8 = message.c_str();
+    spec.width = 680;
+    spec.height = 300;
+    spec.draggable = true;
+    spec.dismiss_on_esc = true;
+    if (sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state) != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+    }
+}
+
+void show_control_action_dialog(AiEditorMainPanelState& state, const json& payload) {
+    const std::string requested_id = payload_string(payload, "id");
+    const std::string requested_method = payload_string(payload, "method");
+    const ControlActionSpec* canonical_by_id =
+        requested_id.empty() ? nullptr : find_control_action(requested_id);
+    const ControlActionSpec* canonical_by_method =
+        requested_method.empty() ? nullptr : find_control_action(requested_method);
+    if ((!requested_id.empty() && canonical_by_id == nullptr) ||
+        (!requested_method.empty() && canonical_by_method == nullptr) ||
+        (canonical_by_id != nullptr && canonical_by_method != nullptr &&
+         canonical_by_id != canonical_by_method)) {
+        append_output_line(state, "[error] Control Center rejected a non-canonical action.");
+        return;
+    }
+    const ControlActionSpec* canonical =
+        canonical_by_id != nullptr ? canonical_by_id : canonical_by_method;
+    if (canonical == nullptr) {
+        append_output_line(state, "[error] Control Center rejected a non-canonical action.");
+        return;
+    }
+    {
+        std::lock_guard lock(state.mutex);
+        if (canonical->advanced && !state.control_developer_advanced) {
+            state.run_error = "Developer Advanced is required for this Control Center action.";
+            return;
         }
-        if (!state->accepting ||
-            (pressed != SAO_UI_DIALOG_BTN_OK && pressed != SAO_UI_DIALOG_BTN_YES))
-            return;
-        if (intent == DialogIntent::ConfirmDelete)
-            return;
-        if (input_text_utf8 == nullptr && input_text_len != 0) {
-            state->run_error = "Input dialog returned an invalid buffer.";
-            return;
-        }
-        input = input_text_utf8 == nullptr
-                    ? std::string{}
-                    : std::string(input_text_utf8, input_text_len);
-        if (intent == DialogIntent::EditComposer) {
-            if (input_text_len > kMaximumComposerBytes) {
-                state->run_error = "Composer text exceeds the 48 KiB limit.";
+    }
+    if (dialog_visible(state)) {
+        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
+        return;
+    }
+    if (canonical->method == std::string_view{"providers.configure"}) {
+        append_output_line(state, "[control] provider secrets remain in Settings / secret dialog");
+        show_settings_panel(state);
+        return;
+    }
+    if (ensure_dialog(state) != SAO_STATUS_OK) {
+        append_output_line(state, "[error] Control Center dialog create failed");
+        return;
+    }
+
+    json display_params = json::parse(canonical->defaults, nullptr, false, false);
+    if (display_params.is_discarded() || !display_params.is_object())
+        display_params = json::object();
+    json execution_params = display_params;
+    const bool retry_payload = payload.contains("executionParams");
+    if (retry_payload) {
+        const json retry_display = json::parse(payload.value("default", std::string{"{}"}),
+                                               nullptr, false, false);
+        if (!retry_display.is_discarded() && retry_display.is_object())
+            display_params = retry_display;
+        if (payload["executionParams"].is_object())
+            execution_params = payload["executionParams"];
+    }
+
+    bool read_only = canonical->read_only;
+    bool destructive = canonical->destructive;
+    const bool advanced = canonical->advanced;
+    std::string tool_name;
+    ControlToolItem tool;
+    bool has_tool = false;
+    {
+        std::lock_guard lock(state.mutex);
+        if (canonical->method == std::string_view{"tools.call"}) {
+            tool_name = payload_string(payload, "name");
+            if (tool_name.empty() && execution_params.is_object())
+                tool_name = execution_params.value("name", std::string{});
+            const auto found = find_control_tool(state, tool_name);
+            if (found == nullptr) {
+                state.run_error = "Control Center rejected an unknown tool.";
                 return;
             }
-            state->composer_text = std::move(input);
-            state->run_error.clear();
-            return;
-        }
-        if (intent != DialogIntent::SearchHistory)
-            return;
-        if (input_text_len > kMaximumHistoryQueryBytes) {
-            state->run_error = "History search query exceeds the 1 KiB limit.";
-            return;
+            tool = *found;
+            has_tool = true;
         }
     }
-    if (!delete_id.empty()) {
-        delete_history_conversation(*state, std::move(delete_id));
+    if (has_tool) {
+        json arguments = display_params.value("arguments", json::object());
+        if (!retry_payload)
+            arguments = payload.value("arguments", arguments);
+        if (!arguments.is_object())
+            arguments = json::object();
+        display_params = {{"mode", "agent"}, {"name", tool.name}, {"arguments", arguments}};
+        if (!execution_params.is_object())
+            execution_params = display_params;
+        execution_params["mode"] = "agent";
+        execution_params["name"] = tool.name;
+        if (!execution_params.contains("arguments") || !execution_params["arguments"].is_object())
+            execution_params["arguments"] = arguments;
+        read_only = tool.read_only;
+        destructive = !tool.read_only;
+    }
+
+    const std::string default_text = control_default_json_text(display_params);
+    {
+        std::lock_guard lock(state.mutex);
+        state.pending_control_method = canonical->method;
+        state.pending_control_label = canonical->label;
+        state.pending_control_group = canonical->group;
+        state.pending_control_params = display_params;
+        state.pending_control_execution_params = execution_params;
+        state.pending_control_read_only = read_only;
+        state.pending_control_destructive = destructive;
+        state.pending_control_advanced = advanced;
+        state.pending_control_tool_name = tool_name;
+        state.pending_control_tool_arguments = execution_params.value("arguments", json::object());
+        state.pending_control_permission = has_tool ? tool.permission : std::string{};
+        state.pending_control_permission_source = has_tool ? tool.permission_source : std::string{};
+        state.pending_control_permission_category = has_tool ? tool.category : std::string{};
+        state.pending_control_confirmation_required = has_tool && tool.confirmation_required;
+        state.pending_dialog = DialogIntent::ControlInput;
+    }
+    const std::string dialog_title = canonical->label;
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_INPUT;
+    spec.title_utf8 = dialog_title.c_str();
+    spec.message_utf8 = "Edit the compact JSON parameters. Sensitive fields are redacted in display and logs.";
+    spec.input_prompt_utf8 = "Parameters JSON";
+    spec.input_default_utf8 = default_text.c_str();
+    spec.input_max_length = static_cast<int32_t>(kMaximumActionPayloadBytes);
+    spec.width = 760;
+    spec.height = 480;
+    spec.draggable = true;
+    spec.dismiss_on_esc = true;
+    if (sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state) != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+    }
+}
+
+void show_copy_text_dialog(AiEditorMainPanelState& state, std::string title, std::string text) {
+    if (dialog_visible(state)) {
+        append_output_line(state, "[warn] finish or dismiss the current dialog first");
         return;
     }
-    search_history(*state, std::move(input));
+    if (ensure_dialog(state) != SAO_STATUS_OK) {
+        append_output_line(state, "[warn] clipboard bridge unavailable; select text manually from the panel");
+        return;
+    }
+    text = clamp_utf8_bytes(std::move(text), kOutputTrimBytes);
+    {
+        std::lock_guard lock(state.mutex);
+        state.pending_copy_text = text;
+        state.pending_dialog = DialogIntent::CopyText;
+    }
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_INPUT;
+    spec.title_utf8 = title.c_str();
+    spec.message_utf8 = "Clipboard bridge unavailable. Select the text below and copy it manually.";
+    spec.input_prompt_utf8 = "Text";
+    spec.input_default_utf8 = text.c_str();
+    spec.input_max_length = static_cast<int32_t>(kOutputTrimBytes);
+    spec.width = 760;
+    spec.height = 520;
+    spec.draggable = true;
+    spec.dismiss_on_esc = true;
+    if (sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state) != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        state.pending_copy_text.clear();
+        state.pending_dialog = DialogIntent::None;
+    }
 }
+
+void show_control_palette_dialog(AiEditorMainPanelState& state) {
+    if (dialog_visible(state)) {
+        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
+        return;
+    }
+    if (ensure_dialog(state) != SAO_STATUS_OK)
+        return;
+    std::string query;
+    {
+        std::lock_guard lock(state.mutex);
+        query = state.control_palette_query;
+        state.pending_dialog = DialogIntent::ControlPalette;
+    }
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_INPUT;
+    spec.title_utf8 = "Search API / action";
+    spec.message_utf8 = "Enter a method, label, or group. Results stay filtered in Control Center.";
+    spec.input_prompt_utf8 = "Query";
+    spec.input_default_utf8 = query.c_str();
+    spec.input_max_length = 512;
+    spec.width = 640;
+    spec.height = 280;
+    spec.draggable = true;
+    spec.dismiss_on_esc = true;
+    if (sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state) != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        state.pending_dialog = DialogIntent::None;
+    }
+}
+
+int32_t hide_active_dialog(AiEditorMainPanelState& state) {
+    sao_ui_dialog_handle_t dialog = nullptr;
+    {
+        std::lock_guard lock(state.mutex);
+        dialog = state.dialog;
+    }
+    if (dialog == nullptr)
+        return SAO_AI_EDITOR_OK;
+    bool visible = false;
+    const sao_status_t visible_status = sao_ui_dialog_is_visible(dialog, &visible);
+    if (visible_status != SAO_STATUS_OK)
+        return map_ui_status(visible_status);
+    if (!visible)
+        return SAO_AI_EDITOR_OK;
+    const sao_status_t hide_status = sao_ui_dialog_hide(dialog);
+    if (hide_status != SAO_STATUS_OK && hide_status != SAO_STATUS_ERR_NOT_INITIALIZED)
+        return map_ui_status(hide_status);
+    const sao_status_t tick_status = sao_ui_dialog_tick(dialog, kDialogCloseAdvanceMs);
+    if (tick_status != SAO_STATUS_OK && tick_status != SAO_STATUS_ERR_NOT_INITIALIZED)
+        return map_ui_status(tick_status);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::string payload_string(const json& payload, std::string_view key) {
+    const auto found = payload.find(std::string(key));
+    if (found == payload.end() || !found->is_string())
+        return {};
+    return found->get<std::string>();
+}
+
+bool enqueue_or_report(AiEditorMainPanelState& state, RpcTask task, std::string_view method) {
+    std::string error;
+    if (queue_rpc_task(state, std::move(task), &error))
+        return true;
+    append_output_line(state, "[error] " + error + "; cannot send \"" + std::string(method) +
+                                  "\"");
+    return false;
+}
+
+void queue_generic_action(AiEditorMainPanelState& state, std::string method, json params) {
+    RpcTask task;
+    task.kind = RpcTaskKind::Generic;
+    task.method = method;
+    task.params = std::move(params);
+    (void)enqueue_or_report(state, std::move(task), method);
+}
+
+void queue_control_request(AiEditorMainPanelState& state, std::string method,
+                           std::string label, std::string group, json params,
+                           bool read_only, bool destructive, bool advanced) {
+    (void)label;
+    (void)group;
+    (void)read_only;
+    (void)destructive;
+    (void)advanced;
+    const ControlActionSpec* canonical = find_control_action(method);
+    if (canonical == nullptr) {
+        append_output_line(state, "[error] Control Center rejected non-canonical method: " + method);
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+        return;
+    }
+
+    ControlToolItem tool;
+    bool has_tool = false;
+    {
+        std::lock_guard lock(state.mutex);
+        if (canonical->advanced && !state.control_developer_advanced) {
+            state.run_error = "Developer Advanced is required for this Control Center action.";
+            clear_pending_control_locked(state);
+            return;
+        }
+        if (canonical->method == std::string_view{"tools.call"}) {
+            const std::string name = params.is_object() ? params.value("name", std::string{}) : std::string{};
+            const auto found = find_control_tool(state, name);
+            if (found == nullptr) {
+                state.run_error = "Control Center rejected an unknown tool.";
+                clear_pending_control_locked(state);
+                return;
+            }
+            tool = *found;
+            has_tool = true;
+        }
+    }
+
+    json execution_params = params.is_object() ? std::move(params) : json::object();
+    bool effective_read_only = canonical->read_only;
+    bool effective_destructive = canonical->destructive;
+    const bool effective_advanced = canonical->advanced;
+    std::string permission;
+    std::string permission_source;
+    std::string permission_category;
+    bool confirmation_required = false;
+    std::string tool_name;
+    json tool_arguments = json::object();
+    if (has_tool) {
+        effective_read_only = tool.read_only;
+        effective_destructive = !tool.read_only;
+        permission = tool.permission;
+        permission_source = tool.permission_source;
+        permission_category = tool.category;
+        confirmation_required = tool.confirmation_required;
+        tool_name = tool.name;
+        tool_arguments = execution_params.value("arguments", json::object());
+        if (!tool_arguments.is_object())
+            tool_arguments = json::object();
+        execution_params["mode"] = "agent";
+        execution_params["name"] = tool.name;
+        execution_params["arguments"] = tool_arguments;
+    }
+    const bool requires_confirmation = control_requires_confirmation(
+        permission, permission_category, confirmation_required, effective_read_only,
+        effective_destructive, effective_advanced);
+    if (has_tool && requires_confirmation && !tool_arguments.value("confirmed", false)) {
+        append_output_line(state, "[warn] tool call requires confirmation before execution");
+        std::lock_guard lock(state.mutex);
+        clear_pending_control_locked(state);
+        return;
+    }
+
+    RpcTask task;
+    task.kind = RpcTaskKind::Generic;
+    task.method = canonical->method;
+    task.params = execution_params;
+    task.control_action = true;
+    task.control_group = canonical->group;
+    task.control_label = canonical->label;
+    {
+        std::lock_guard lock(state.mutex);
+        state.control_status = "Pending";
+        state.control_last_method = task.method;
+        state.control_last_label = task.control_label;
+        state.control_last_group = task.control_group;
+        state.control_last_params = execution_params;
+        redact_control_json(state.control_last_params);
+        state.control_last_execution_params = execution_params;
+        state.control_last_tool_name = std::move(tool_name);
+        state.control_last_tool_arguments = std::move(tool_arguments);
+        state.control_last_read_only = effective_read_only;
+        state.control_last_destructive = effective_destructive;
+        state.control_last_advanced = effective_advanced;
+        state.control_permission = std::move(permission);
+        state.control_permission_source = std::move(permission_source);
+        state.control_permission_category = std::move(permission_category);
+        state.control_confirmation_required = confirmation_required;
+        state.control_last_result.clear();
+        state.control_last_error.clear();
+        state.control_elapsed.clear();
+        state.control_cache_hit = false;
+        state.control_truncated = false;
+    }
+    std::string error;
+    if (!queue_rpc_task(state, std::move(task), &error)) {
+        {
+            std::lock_guard lock(state.mutex);
+            state.control_status = "Failed";
+            state.control_last_error = redact_control_text(error);
+            clear_pending_control_locked(state);
+        }
+        append_output_line(state, "[error] control request not queued: " + error);
+    }
+}
+
 
 void show_history_delete_dialog(AiEditorMainPanelState& state, HistoryEntry entry) {
     if (dialog_visible(state)) {
@@ -2866,9 +3905,12 @@ void show_history_delete_dialog(AiEditorMainPanelState& state, HistoryEntry entr
         return;
     }
     const std::string title = "Delete conversation? / 删除会话？";
-    const std::string message = "Delete \"" + compact_text(entry.title, 180U) +
-                                "\" with " + std::to_string(entry.message_count) +
-                                " messages? You can Undo for 5 seconds.";
+    const std::string message = entry.search_result
+                                    ? "Delete \"" + compact_text(entry.title, 180U) +
+                                          "\"? The canonical conversation will be checked before deletion. You can Undo for 5 seconds."
+                                    : "Delete \"" + compact_text(entry.title, 180U) +
+                                          "\" with " + std::to_string(entry.message_count) +
+                                          " messages? You can Undo for 5 seconds.";
     {
         std::lock_guard lock(state.mutex);
         state.pending_delete = std::move(entry);
@@ -2882,33 +3924,11 @@ void show_history_delete_dialog(AiEditorMainPanelState& state, HistoryEntry entr
     spec.height = 300;
     spec.draggable = true;
     spec.dismiss_on_esc = true;
-    const sao_status_t status =
-        sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state);
-    if (status != SAO_STATUS_OK) {
+    if (sao_ui_dialog_show(state.dialog, &spec, &composer_dialog_result, &state) != SAO_STATUS_OK) {
         std::lock_guard lock(state.mutex);
         state.pending_dialog = DialogIntent::None;
         state.pending_delete.reset();
     }
-}
-
-void request_delete_history_conversation(AiEditorMainPanelState& state, std::string id) {
-    if (id.empty()) {
-        append_output_line(state, "[error] history.delete requires a conversation id");
-        return;
-    }
-    HistoryEntry entry;
-    {
-        std::lock_guard lock(state.mutex);
-        const auto found = std::ranges::find(state.history, id, &HistoryEntry::id);
-        if (found == state.history.end()) {
-            state.run_error = "Conversation is no longer present in History.";
-            return;
-        }
-        entry = *found;
-        if (entry.id == state.conversation_id)
-            entry.messages = state.conversation_messages;
-    }
-    show_history_delete_dialog(state, std::move(entry));
 }
 
 void show_composer_dialog(AiEditorMainPanelState& state) {
@@ -2946,7 +3966,8 @@ void show_composer_dialog(AiEditorMainPanelState& state) {
             std::lock_guard lock(state.mutex);
             state.pending_dialog = DialogIntent::None;
         }
-        append_output_line(state, "[error] composer dialog show failed: " + std::to_string(show_status));
+        append_output_line(state, "[error] composer dialog show failed: " +
+                                      std::to_string(show_status));
     }
 }
 
@@ -3026,52 +4047,152 @@ int32_t tick_dialog(AiEditorMainPanelState& state) {
     return map_ui_status(status);
 }
 
-int32_t hide_active_dialog(AiEditorMainPanelState& state) {
-    sao_ui_dialog_handle_t dialog = nullptr;
+void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* input_text_utf8,
+                                        size_t input_text_len, void* user_data) {
+    auto* state = static_cast<AiEditorMainPanelState*>(user_data);
+    if (state == nullptr || require_owner_thread(state->compositor) != SAO_AI_EDITOR_OK)
+        return;
+    DialogIntent intent = DialogIntent::None;
+    std::string input;
+    std::string delete_id;
+    std::string control_method;
+    std::string control_label;
+    std::string control_group;
+    json control_params = json::object();
+    json control_execution_params = json::object();
+    bool control_read_only = false;
+    bool control_destructive = false;
+    bool control_advanced = false;
+    bool ask_control_confirmation = false;
+    bool execute_control = false;
+    const bool accepted = pressed == SAO_UI_DIALOG_BTN_OK || pressed == SAO_UI_DIALOG_BTN_YES;
     {
-        std::lock_guard lock(state.mutex);
-        dialog = state.dialog;
+        std::lock_guard lock(state->mutex);
+        intent = state->pending_dialog;
+        state->pending_dialog = DialogIntent::None;
+        if (intent == DialogIntent::CopyText) {
+            state->pending_copy_text.clear();
+            return;
+        }
+        if (intent == DialogIntent::ControlPalette) {
+            if (!accepted || !state->accepting)
+                return;
+            if (input_text_utf8 == nullptr && input_text_len != 0) {
+                state->run_error = "Control Center search returned an invalid buffer.";
+                return;
+            }
+            state->control_palette_query = trim_copy(
+                input_text_utf8 == nullptr ? std::string_view{} :
+                                             std::string_view(input_text_utf8, input_text_len));
+            return;
+        }
+        if (intent == DialogIntent::ControlInput || intent == DialogIntent::ControlConfirm) {
+            if (!accepted || !state->accepting) {
+                clear_pending_control_locked(*state);
+                return;
+            }
+            if (input_text_utf8 == nullptr && input_text_len != 0) {
+                state->run_error = "Control Center dialog returned an invalid buffer.";
+                clear_pending_control_locked(*state);
+                return;
+            }
+            if (intent == DialogIntent::ControlInput) {
+                input = input_text_utf8 == nullptr ? std::string{} :
+                                                     std::string(input_text_utf8, input_text_len);
+                control_params = json::parse(input, nullptr, false, false);
+                if (control_params.is_discarded() || !control_params.is_object()) {
+                    state->run_error = "Control Center parameters must be a JSON object.";
+                    clear_pending_control_locked(*state);
+                    return;
+                }
+                const bool preserve_protected_execution =
+                    input == control_default_json_text(state->pending_control_params);
+                state->pending_control_params = control_params;
+                if (!preserve_protected_execution)
+                    state->pending_control_execution_params = control_params;
+                ask_control_confirmation = control_requires_confirmation(
+                    state->pending_control_permission, state->pending_control_permission_category,
+                    state->pending_control_confirmation_required, state->pending_control_read_only,
+                    state->pending_control_destructive, state->pending_control_advanced);
+            }
+            control_method = state->pending_control_method;
+            control_label = state->pending_control_label;
+            control_group = state->pending_control_group;
+            control_execution_params = state->pending_control_execution_params;
+            control_read_only = state->pending_control_read_only;
+            control_destructive = state->pending_control_destructive;
+            control_advanced = state->pending_control_advanced;
+            if (intent == DialogIntent::ControlConfirm && control_method == "tools.call") {
+                if (!control_execution_params.is_object())
+                    control_execution_params = json::object();
+                json arguments = control_execution_params.value("arguments", json::object());
+                if (!arguments.is_object())
+                    arguments = json::object();
+                arguments["confirmed"] = true;
+                control_execution_params["arguments"] = std::move(arguments);
+            }
+            if (control_method.empty()) {
+                state->run_error = "Control Center request is missing a canonical method.";
+                clear_pending_control_locked(*state);
+                return;
+            }
+            ask_control_confirmation = intent == DialogIntent::ControlInput && ask_control_confirmation;
+            execute_control = !ask_control_confirmation;
+            if (execute_control)
+                clear_pending_control_locked(*state);
+            else
+                state->pending_dialog = DialogIntent::ControlConfirm;
+        } else {
+            if (intent == DialogIntent::ConfirmDelete) {
+                if (accepted && state->accepting && state->pending_delete.has_value())
+                    delete_id = state->pending_delete->id;
+                state->pending_delete.reset();
+                if (delete_id.empty())
+                    return;
+            } else {
+                state->pending_delete.reset();
+                if (!state->accepting || !accepted)
+                    return;
+            }
+            if (input_text_utf8 == nullptr && input_text_len != 0) {
+                state->run_error = "Input dialog returned an invalid buffer.";
+                return;
+            }
+            input = input_text_utf8 == nullptr ? std::string{} :
+                                                 std::string(input_text_utf8, input_text_len);
+            if (intent == DialogIntent::EditComposer) {
+                if (input_text_len > kMaximumComposerBytes) {
+                    state->run_error = "Composer text exceeds the 48 KiB limit.";
+                    return;
+                }
+                state->composer_text = std::move(input);
+                state->run_error.clear();
+                return;
+            }
+            if (intent != DialogIntent::SearchHistory)
+                return;
+            if (input_text_len > kMaximumHistoryQueryBytes) {
+                state->run_error = "History search query exceeds the 1 KiB limit.";
+                return;
+            }
+        }
     }
-    if (dialog == nullptr)
-        return SAO_AI_EDITOR_OK;
-    bool visible = false;
-    const sao_status_t visible_status = sao_ui_dialog_is_visible(dialog, &visible);
-    if (visible_status != SAO_STATUS_OK)
-        return map_ui_status(visible_status);
-    if (!visible)
-        return SAO_AI_EDITOR_OK;
-    const sao_status_t hide_status = sao_ui_dialog_hide(dialog);
-    if (hide_status != SAO_STATUS_OK && hide_status != SAO_STATUS_ERR_NOT_INITIALIZED)
-        return map_ui_status(hide_status);
-    const sao_status_t tick_status = sao_ui_dialog_tick(dialog, kDialogCloseAdvanceMs);
-    if (tick_status != SAO_STATUS_OK && tick_status != SAO_STATUS_ERR_NOT_INITIALIZED)
-        return map_ui_status(tick_status);
-    return SAO_AI_EDITOR_OK;
-}
-
-std::string payload_string(const json& payload, std::string_view key) {
-    const auto found = payload.find(std::string(key));
-    if (found == payload.end() || !found->is_string())
-        return {};
-    return found->get<std::string>();
-}
-
-bool enqueue_or_report(AiEditorMainPanelState& state, RpcTask task, std::string_view method) {
-    std::string error;
-    if (queue_rpc_task(state, std::move(task), &error))
-        return true;
-    append_output_line(state, "[error] " + error + "; cannot send \"" + std::string(method) +
-                                  "\"");
-    return false;
-}
-
-void queue_generic_action(AiEditorMainPanelState& state, std::string method,
-                          json params = json::object()) {
-    RpcTask task;
-    task.kind = RpcTaskKind::Generic;
-    task.method = method;
-    task.params = std::move(params);
-    (void)enqueue_or_report(state, std::move(task), method);
+    if (ask_control_confirmation) {
+        (void)hide_active_dialog(*state);
+        show_control_confirm_dialog(*state);
+        return;
+    }
+    if (execute_control) {
+        queue_control_request(*state, std::move(control_method), std::move(control_label),
+                              std::move(control_group), std::move(control_execution_params),
+                              control_read_only, control_destructive, control_advanced);
+        return;
+    }
+    if (!delete_id.empty()) {
+        delete_history_conversation(*state, std::move(delete_id));
+        return;
+    }
+    search_history(*state, std::move(input));
 }
 
 uint64_t cancel_starting_generation_locked(AiEditorMainPanelState& state,
@@ -3276,8 +4397,6 @@ void load_history_conversation(AiEditorMainPanelState& state, std::string id) {
     }
 }
 
-void request_delete_history_conversation(AiEditorMainPanelState& state, std::string id);
-
 void delete_history_conversation(AiEditorMainPanelState& state, std::string id) {
     if (id.empty()) {
         append_output_line(state, "[error] history.delete requires a conversation id");
@@ -3295,8 +4414,6 @@ void delete_history_conversation(AiEditorMainPanelState& state, std::string id) 
         const auto found = std::ranges::find(state.history, id, &HistoryEntry::id);
         if (found != state.history.end())
             task.restore_entry = *found;
-        if (task.restore_entry.id == state.conversation_id)
-            task.restore_entry.messages = state.conversation_messages;
     }
     (void)enqueue_history_operation(state, std::move(task), "conversation.delete");
 }
@@ -3552,7 +4669,101 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     }
 
     const std::string_view action = action_id_utf8;
-    if (action == "output.clear") {
+    if (action == "control.palette") {
+        show_control_palette_dialog(*state);
+    } else if (action == "control.advanced.toggle") {
+        std::lock_guard lock(state->mutex);
+        state->control_developer_advanced = !state->control_developer_advanced;
+    } else if (action == "control.group") {
+        const std::string group = payload_string(payload, "group");
+        std::lock_guard lock(state->mutex);
+        state->control_group_filter = group.empty() ? "all" : group;
+    } else if (action == "control.open") {
+        const ControlActionSpec* canonical = find_control_action(
+            payload_string(payload, "id").empty() ? payload_string(payload, "method")
+                                                  : payload_string(payload, "id"));
+        bool developer_allowed = canonical != nullptr;
+        if (canonical == nullptr) {
+            append_output_line(*state, "[error] Control Center rejected a non-canonical action.");
+        } else {
+            {
+                std::lock_guard lock(state->mutex);
+                developer_allowed = !canonical->advanced || state->control_developer_advanced;
+                if (!developer_allowed)
+                    state->run_error = "Developer Advanced is required for this Control Center action.";
+            }
+            if (developer_allowed)
+                show_control_action_dialog(*state, payload);
+        }
+    } else if (action == "control.tool.call") {
+        const ControlActionSpec* canonical = find_control_action("tools.call");
+        bool allowed = canonical != nullptr;
+        if (!allowed)
+            append_output_line(*state, "[error] Control Center catalog is missing tools.call.");
+        else
+            show_control_action_dialog(*state, json{{"id", canonical->id}, {"method", canonical->method},
+                                                    {"name", payload_string(payload, "name")},
+                                                    {"arguments", payload.value("arguments", json::object())}});
+    } else if (action == "control.retry") {
+        std::string method;
+        std::string tool_name;
+        json display_params = json::object();
+        json execution_params = json::object();
+        json tool_arguments = json::object();
+        {
+            std::lock_guard lock(state->mutex);
+            method = state->control_last_method;
+            tool_name = state->control_last_tool_name;
+            display_params = state->control_last_params;
+            execution_params = state->control_last_execution_params;
+            tool_arguments = state->control_last_tool_arguments;
+        }
+        const ControlActionSpec* canonical = find_control_action(method);
+        if (canonical == nullptr) {
+            append_output_line(*state, "[error] Control Center retry rejected a non-canonical method.");
+        } else {
+            bool developer_allowed = true;
+            {
+                std::lock_guard lock(state->mutex);
+                developer_allowed = !canonical->advanced || state->control_developer_advanced;
+            }
+            if (!developer_allowed) {
+                append_output_line(*state, "[error] Developer Advanced is required for this retry.");
+            } else {
+                show_control_action_dialog(*state, json{{"id", canonical->id},
+                                                        {"method", canonical->method},
+                                                        {"default", control_default_json_text(display_params)},
+                                                        {"executionParams", execution_params},
+                                                        {"name", tool_name},
+                                                        {"arguments", tool_arguments}});
+            }
+        }
+    } else if (action == "control.copy") {
+        std::string result;
+        {
+            std::lock_guard lock(state->mutex);
+            result = state->control_last_result;
+        }
+        show_copy_text_dialog(*state, "Copy Control Center result", std::move(result));
+    } else if (action == "control.use_agent") {
+        const std::string id = payload_string(payload, "id");
+        {
+            std::lock_guard lock(state->mutex);
+            state->selected_agent = id;
+            state->run_error.clear();
+        }
+        append_output_line(*state, "[control] agent selected for Composer: " + id);
+    } else if (action == "control.use_prompt") {
+        const std::string id = payload_string(payload, "id");
+        {
+            std::lock_guard lock(state->mutex);
+            state->composer_text = "Use prompt " + id + " in the next Composer request.";
+            state->run_error.clear();
+        }
+        append_output_line(*state, "[control] prompt selected for Composer: " + id);
+    } else if (action == "control.unavailable") {
+        append_output_line(*state, "[warn] lifecycle control is owned by the launcher and is not an RPC action");
+    } else if (action == "output.clear") {
         std::lock_guard lock(state->mutex);
         state->output_text.clear();
     } else if (action == "diagnostics.copy") {
@@ -3561,7 +4772,7 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
             std::lock_guard lock(state->mutex);
             output = state->output_text;
         }
-        queue_generic_action(*state, "vscode.env.clipboard.writeText", {{"text", output}});
+        show_copy_text_dialog(*state, "Copy diagnostics", std::move(output));
     } else if (action == "diagnostics.filter") {
         const std::string value = payload_string(payload, "value");
         std::lock_guard lock(state->mutex);
@@ -3609,22 +4820,29 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else if (action == "history.load") {
         load_history_conversation(*state, payload_string(payload, "id"));
     } else if (action == "history.delete") {
-        request_delete_history_conversation(*state, payload_string(payload, "id"));
+        delete_history_conversation(*state, payload_string(payload, "id"));
     } else if (action == "history.load_more") {
+        bool can_load_more = false;
         {
             std::lock_guard lock(state->mutex);
-            state->history_limit = std::min<size_t>(state->history_limit + kMaximumHistoryEntries, 500U);
+            can_load_more = state->history_limit < 500U;
+            if (can_load_more)
+                state->history_limit = std::min<size_t>(state->history_limit + kMaximumHistoryEntries, 500U);
         }
-        queue_history_refresh(*state);
+        if (can_load_more)
+            queue_history_refresh(*state);
     } else if (action == "history.undo") {
         HistoryEntry entry;
         bool restore = false;
         {
             std::lock_guard lock(state->mutex);
-            if (state->undo_entry.has_value() && std::chrono::steady_clock::now() < state->undo_deadline) {
+            if (state->undo_entry.has_value() && state->undo_entry->content_available &&
+                std::chrono::steady_clock::now() < state->undo_deadline) {
                 entry = *state->undo_entry;
                 state->undo_entry.reset();
                 restore = true;
+            } else if (state->undo_entry.has_value() && !state->undo_entry->content_available) {
+                state->run_error = "Undo content is unavailable; no empty conversation was created.";
             }
         }
         if (restore) {

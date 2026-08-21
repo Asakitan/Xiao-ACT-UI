@@ -2,6 +2,8 @@
 
 #include "kernel_map_panel_provider.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -23,6 +25,19 @@ std::string read_asset(const std::filesystem::path& path) {
 
 std::string fallback_html() {
     return R"HTML(<!DOCTYPE html><html><head><meta charset="utf-8"><title>MCP Management</title></head><body><h1>MCP Management</h1><p>MCP panel assets are unavailable.</p></body></html>)HTML";
+}
+
+std::string trim_copy(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }).base();
+    if (first >= last) {
+        return {};
+    }
+    return std::string(first, last);
 }
 
 }
@@ -156,6 +171,9 @@ int32_t McpManagementPanelProvider::handle_message(const Json& message,
     if (!request_id.is_null()) {
         out_reply["requestId"] = request_id;
     }
+    if (message.contains("generation")) {
+        out_reply["generation"] = message["generation"];
+    }
     if (command == "snapshot" || command == "refresh") {
         if (!snapshot) {
             out_reply["status"] = "error";
@@ -176,7 +194,54 @@ int32_t McpManagementPanelProvider::handle_message(const Json& message,
         }
         return SAO_AI_EDITOR_OK;
     }
-    out_reply["status"] = "error";
+    const Json args = message.value("args", Json::object());
+    if (!args.is_object()) {
+        out_reply["status"] = "error";
+        out_reply["reason"] = "args must be an object";
+        return SAO_AI_EDITOR_OK;
+    }
+    std::string method;
+    Json params = args;
+    if (command == "list_servers" || command == "mcp.list_servers") {
+        method = "mcp.list_servers";
+        params = Json::object();
+    } else if (command == "list_tools" || command == "mcp.list_tools") {
+        method = "mcp.list_tools";
+        params = Json::object();
+    } else if (command == "list_prompts" || command == "mcp.list_prompts") {
+        method = "mcp.list_prompts";
+        params = Json::object();
+    } else if (command == "list_resources" || command == "mcp.list_resources") {
+        method = "mcp.list_resources";
+        params = Json::object();
+    } else if (command == "add_server" || command == "enable" || command == "reconnect" || command == "mcp.register_server") {
+        method = "mcp.register_server";
+    } else if (command == "disable" || command == "close_server" || command == "mcp.close_server") {
+        if (!args.contains("name") || !args["name"].is_string()) {
+            out_reply["status"] = "error";
+            out_reply["reason"] = "close_server requires a non-empty name";
+            return SAO_AI_EDITOR_OK;
+        }
+        params["name"] = trim_copy(args["name"].get<std::string>());
+        if (params["name"].get<std::string>().empty()) {
+            out_reply["status"] = "error";
+            out_reply["reason"] = "close_server requires a non-empty name";
+            return SAO_AI_EDITOR_OK;
+        }
+        method = "mcp.close_server";
+    } else if (command == "call_tool" || command == "mcp.call_tool") {
+        method = "mcp.call_tool";
+    } else if (command == "preview_prompt" || command == "get_prompt" || command == "mcp.get_prompt") {
+        method = "mcp.get_prompt";
+    } else if (command == "read_resource" || command == "mcp.read_resource") {
+        method = "mcp.read_resource";
+    }
+    if (!method.empty()) {
+        out_reply["status"] = "forward";
+        out_reply["method"] = method;
+        out_reply["params"] = std::move(params);
+        return SAO_AI_EDITOR_OK;
+    }    out_reply["status"] = "error";
     out_reply["reason"] = "unknown command";
     return SAO_AI_EDITOR_OK;
 }

@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cwctype>
 #include <filesystem>
 #include <functional>
@@ -32,6 +33,12 @@ namespace {
 constexpr uint32_t kDefaultEventDrainLimit = 32U;
 constexpr uint32_t kMaximumEventDrainLimit = 64U;
 constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
+
+struct McpNotificationGate final { std::mutex mutex; std::condition_variable ready; bool accepting = true; uint32_t inflight = 0; };
+std::mutex mcp_notification_gates_mutex;
+std::unordered_map<NativeRuntime*, std::shared_ptr<McpNotificationGate>> mcp_notification_gates;
+std::shared_ptr<McpNotificationGate> get_mcp_gate(NativeRuntime* runtime) { std::lock_guard<std::mutex> lock(mcp_notification_gates_mutex); const auto found=mcp_notification_gates.find(runtime); return found==mcp_notification_gates.end()?nullptr:found->second; }
+void stop_mcp_notifications(NativeRuntime* runtime,SaoAiEditorMcpClient* client) { const auto gate=get_mcp_gate(runtime); if(gate){std::lock_guard<std::mutex> lock(gate->mutex);gate->accepting=false;} if(client)(void)sao_ai_editor_mcp_client_set_notification_forwarder(client,nullptr,nullptr); if(gate){std::unique_lock<std::mutex> lock(gate->mutex);gate->ready.wait(lock,[&]{return gate->inflight==0;});} std::lock_guard<std::mutex> lock(mcp_notification_gates_mutex);mcp_notification_gates.erase(runtime); }
 
 bool valid_sha256_hex(std::string_view value) noexcept {
     if (value.size() != 64U)
@@ -141,6 +148,40 @@ std::string status_message(int32_t status) {
             return "operation failed";
     }
 }
+std::string trim_copy(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }).base();
+    if (first >= last) {
+        return {};
+    }
+    return std::string(first, last);
+}
+
+std::string normalized_secret_key(std::string_view key) {
+    std::string normalized;
+    normalized.reserve(key.size());
+    for (const unsigned char character : key) {
+        if (std::isalnum(character) != 0) {
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+        }
+    }
+    return normalized;
+}
+
+bool secret_field(std::string_view key) {
+    const std::string normalized = normalized_secret_key(key);
+    return normalized.find("secret") != std::string::npos ||
+           normalized.find("token") != std::string::npos ||
+           normalized.find("password") != std::string::npos ||
+           normalized.find("apikey") != std::string::npos ||
+           normalized.find("authorization") != std::string::npos ||
+           normalized.find("cookie") != std::string::npos;
+}
+Json redact_secret_fields(const Json& value) { if (value.is_array()) { Json out=Json::array(); for (const auto& item:value) out.push_back(redact_secret_fields(item)); return out; } if (!value.is_object()) return value; Json out=Json::object(); for (const auto& [key,item]:value.items()) out[key]=secret_field(key)?Json{"<redacted>"}:redact_secret_fields(item); return out; }
 
 // Locate the on-disk workflow history directory for a scope.  Anchored to
 // ScopeStore::history_root("<scope>") so we stay in sync with the
@@ -920,7 +961,8 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 }
 
 NativeRuntime::~NativeRuntime() {
-    set_webview_post_message_handler({});
+    stop_mcp_notifications(this, mcp_client_.get());
+    if (mcp_client_ != nullptr) (void)sao_ai_editor_mcp_client_close(mcp_client_.get(), nullptr);
     int32_t first_panel_error = SAO_AI_EDITOR_OK;
     auto unregister_panel = [&](auto& panel) {
         if (panel == nullptr) {
@@ -937,10 +979,6 @@ NativeRuntime::~NativeRuntime() {
             panel.reset();
         }
     };
-    unregister_panel(mcp_management_panel_);
-    unregister_panel(kernel_map_panel_);
-    (void)first_panel_error;
-
     std::vector<std::shared_ptr<WorkflowExecution>> workflows;
     {
         std::lock_guard<std::mutex> lock(workflow_mutex_);
@@ -963,12 +1001,6 @@ NativeRuntime::~NativeRuntime() {
             runs.push_back(run);
             run->cancellation->cancel();
         }
-    }
-
-    if (mcp_client_ != nullptr) {
-        (void)sao_ai_editor_mcp_client_set_notification_forwarder(
-            mcp_client_.get(), nullptr, nullptr);
-        (void)sao_ai_editor_mcp_client_close(mcp_client_.get(), nullptr);
     }
 
     for (const auto& execution : workflows) {
@@ -1013,6 +1045,11 @@ NativeRuntime::~NativeRuntime() {
                       {"residualBases", residual_kernel_maps.size()}});
         }
     }
+
+    set_webview_post_message_handler({});
+    unregister_panel(mcp_management_panel_);
+    unregister_panel(kernel_map_panel_);
+    (void)first_panel_error;
 
     {
         std::lock_guard<std::mutex> lock(event_mutex_);
@@ -1095,6 +1132,7 @@ int32_t NativeRuntime::initialize() {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     mcp_client_.reset(mcp_raw);
+    mcp_notification_gates[this] = std::make_shared<McpNotificationGate>();
     // Forward every MCP notification (tools/list_changed, prompts/list_changed,
     // resources/list_changed, resources/updated, notifications/message, ...)
     // straight into the runtime event queue so the UI can observe changes as
@@ -1214,26 +1252,22 @@ int32_t NativeRuntime::register_builtin_mcp_server() {
 Json NativeRuntime::mcp_management_snapshot() {
     Json servers;
     Json tools;
-    const int32_t servers_status =
-        dispatch_mcp("mcp.list_servers", Json::object(), servers);
-    const int32_t tools_status =
-        dispatch_mcp("mcp.list_tools", Json::object(), tools);
-    const Json server_items = servers.is_object()
-        ? servers.value("items", Json::array())
-        : Json::array();
-    const Json tool_items = tools.is_object()
-        ? tools.value("items", Json::array())
-        : Json::array();
-    return Json{{"registration",
-                 {{"name", "kernel_map"},
-                  {"status", builtin_mcp_registration_status_},
-                  {"path", builtin_mcp_server_path_}}},
-                {"servers_status", servers_status},
-                {"tools_status", tools_status},
-                {"servers", server_items},
-                {"tools", tool_items}};
+    Json prompts;
+    Json resources;
+    const int32_t servers_status = dispatch_mcp("mcp.list_servers", Json::object(), servers);
+    const int32_t tools_status = dispatch_mcp("mcp.list_tools", Json::object(), tools);
+    const int32_t prompts_status = dispatch_mcp("mcp.list_prompts", Json::object(), prompts);
+    const int32_t resources_status = dispatch_mcp("mcp.list_resources", Json::object(), resources);
+    const Json server_items = servers.is_object() ? servers.value("items", Json::array()) : Json::array();
+    const Json tool_items = tools.is_object() ? tools.value("items", Json::array()) : Json::array();
+    const Json prompt_items = prompts.is_object() ? prompts.value("items", Json::array()) : Json::array();
+    const Json resource_items = resources.is_object() ? resources.value("items", Json::array()) : Json::array();
+    return Json{{"registration", {{"name", "kernel_map"}, {"status", builtin_mcp_registration_status_}, {"path", builtin_mcp_server_path_}}},
+                {"servers_status", servers_status}, {"tools_status", tools_status},
+                {"prompts_status", prompts_status}, {"resources_status", resources_status},
+                {"servers", server_items}, {"tools", tool_items},
+                {"prompts", prompt_items}, {"resources", resource_items}};
 }
-
 void SAO_AI_EDITOR_CALL NativeRuntime::mcp_notification_trampoline(
     void* user, const char* json_utf8, uint32_t json_len) {
     if (user == nullptr || json_utf8 == nullptr || json_len == 0) {
@@ -1241,6 +1275,14 @@ void SAO_AI_EDITOR_CALL NativeRuntime::mcp_notification_trampoline(
     }
     try {
         auto* self = static_cast<NativeRuntime*>(user);
+        const auto gate = get_mcp_gate(self);
+        if (gate == nullptr) return;
+        {
+            std::lock_guard<std::mutex> lock(gate->mutex);
+            if (!gate->accepting) return;
+            ++gate->inflight;
+        }
+        struct GateRelease final { std::shared_ptr<McpNotificationGate> gate; ~GateRelease() { std::lock_guard<std::mutex> lock(gate->mutex); if (gate->inflight > 0) --gate->inflight; if (!gate->accepting && gate->inflight == 0) gate->ready.notify_all(); } } release{gate};
         Json envelope = Json::parse(json_utf8, json_utf8 + json_len, nullptr,
                                     false);
         if (envelope.is_discarded() || !envelope.is_object()) {
@@ -1252,11 +1294,23 @@ void SAO_AI_EDITOR_CALL NativeRuntime::mcp_notification_trampoline(
         if (method.empty()) {
             return;
         }
-        Json payload{{"server", server_name},
-                     {"method", std::move(method)},
-                     {"params", notification.value("params", Json::object())}};
+        Json payload = redact_secret_fields(Json{{"server", server_name},
+                                                  {"method", std::move(method)},
+                                                  {"params", notification.value("params", Json::object())}});
         self->emit("mcp.notification", payload);
-    } catch (...) {
+        static std::atomic<uint64_t> panel_notification_sequence{1};
+        if (self->mcp_management_panel_ != nullptr && self->mcp_management_panel_->is_registered()) {
+            WebviewPanelState state;
+            if (self->webview_panels_.note_post_message(std::string{kMcpManagementPanelId}, state) == SAO_AI_EDITOR_OK) {
+                const uint64_t sequence = panel_notification_sequence.fetch_add(1, std::memory_order_relaxed);
+                Json page_message{{"status", "event"}, {"cmd", "notification"},
+                                  {"requestId", "mcp-notification-" + std::to_string(sequence)}, {"payload", payload}};
+                Json page_result;
+                (void)self->dispatch_webview_message_to_page(Json{{"panelId", kMcpManagementPanelId},
+                                                                    {"messageSeq", static_cast<int64_t>(state.message_seq)},
+                                                                    {"message", std::move(page_message)}}, page_result);
+            }
+        }    } catch (...) {
         // Never propagate exceptions across the C API boundary.
     }
 }
@@ -1340,7 +1394,10 @@ int32_t NativeRuntime::dispatch(const Json& request, Json& response) {
         response = rpc_error(id, -32601, "method or item not found",
                              Json{{"status", status}});
     } else if (status != SAO_AI_EDITOR_OK) {
-        response = rpc_error(id, rpc_code(status), status_message(status),
+        const std::string message = result.is_object() && result.contains("reason") && result["reason"].is_string()
+            ? result["reason"].get<std::string>()
+            : status_message(status);
+        response = rpc_error(id, rpc_code(status), message,
                              Json{{"status", status}, {"details", result}});
     } else {
         response = rpc_result(id, std::move(result));
@@ -4840,6 +4897,25 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
                               {"status", provider_status}};
                 return provider_status;
             }
+            if (provider_reply.value("status", std::string{}) == "forward") {
+                const std::string method = provider_reply.value("method", std::string{});
+                const Json routed_params = provider_reply.value("params", Json::object());
+                Json routed_result;
+                const int32_t routed_status = dispatch_mcp(method, routed_params, routed_result);
+                Json routed_reply{{"cmd", payload.value("cmd", payload.value("command", std::string{}))},
+                                  {"status", routed_status == SAO_AI_EDITOR_OK ? "ok" : "error"}};
+                if (payload.contains("requestId")) routed_reply["requestId"] = payload["requestId"];
+                if (payload.contains("generation")) routed_reply["generation"] = payload["generation"];
+                if (routed_status == SAO_AI_EDITOR_OK) {
+                    routed_reply["payload"] = std::move(routed_result);
+                } else {
+                    routed_reply["reason"] = routed_result.is_object() && routed_result.contains("reason") && routed_result["reason"].is_string()
+                        ? routed_result["reason"].get<std::string>()
+                        : status_message(routed_status);
+                    if (!routed_result.is_null() && !routed_result.empty()) routed_reply["payload"] = std::move(routed_result);
+                }
+                provider_reply = std::move(routed_reply);
+            }
             Json page_result;
             const int32_t page_status = dispatch_webview_message_to_page(
                 Json{{"panelId", panel_id},
@@ -6187,6 +6263,27 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
     }
     auto* raw = mcp_client_.get();
     if (method == "mcp.register_server") {
+        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        const std::string transport = params.value("transport", std::string{"stdio"});
+        if (transport != "stdio" && transport != "http") return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (transport == "stdio" && (!params.contains("command") || !params["command"].is_string() || params["command"].get<std::string>().empty())) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (params.contains("args") && !params["args"].is_array()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (!params.value("builtin", false)) {
+            Json settings; { std::lock_guard<std::mutex> lock(store_mutex_); if (scopes_.load_merged_config(settings) != SAO_AI_EDITOR_OK) return SAO_AI_EDITOR_ERR_CONFIG_MISSING; }
+            const Json mcp = settings.value("mcp", Json::object());
+            const bool confirmed = params.contains("confirmed") && params["confirmed"].is_boolean() && params["confirmed"].get<bool>();
+            const bool workspace_trusted = mcp.value("workspace_trusted", false);
+            if (!workspace_trusted) {
+                result = Json{{"error", "trust-required"},
+                              {"trustRequired", true},
+                              {"reason", "workspace trust required"},
+                              {"name", params["name"]},
+                              {"transport", transport},
+                              {"workspaceTrusted", false}};
+                return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+            }
+            if (!confirmed || !mcp.value("enabled", true) || mcp.value("access", std::string{"prompt"}) == "disabled") { result = Json{{"confirmationRequired", true}, {"name", params["name"]}, {"transport", transport}, {"workspaceTrusted", true}}; return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED; }
+        }
         const std::string config = dump_json(params);
         const int32_t status = sao_ai_editor_mcp_client_register(
             raw, config.data(), static_cast<uint32_t>(config.size()));
@@ -6212,7 +6309,7 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
-        result = Json{{"items", items.is_array() ? items : Json::array()}};
+        result = redact_secret_fields(Json{{"items", items.is_array() ? items : Json::array()}});
         result["total"] = result["items"].size();
         return SAO_AI_EDITOR_OK;
     }
@@ -6236,7 +6333,7 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
-        result = Json{{"items", items.is_array() ? items : Json::array()}};
+        result = redact_secret_fields(Json{{"items", items.is_array() ? items : Json::array()}});
         result["total"] = result["items"].size();
         return SAO_AI_EDITOR_OK;
     }
@@ -6277,6 +6374,7 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
                 return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
             }
         }
+        if (params.contains("arguments") && !params["arguments"].is_object()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         const std::string request = dump_json(params);
         auto invoker = method == "mcp.call_tool"
             ? &sao_ai_editor_mcp_client_call_tool
@@ -6308,10 +6406,13 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         if (result.is_discarded()) {
             return SAO_AI_EDITOR_ERR_PROTOCOL;
         }
+        result = redact_secret_fields(result);
         return SAO_AI_EDITOR_OK;
     }
     if (method == "mcp.close_server") {
-        const std::string name = params.value("name", "");
+        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        const std::string name = trim_copy(params["name"].get<std::string>());
+        if (name.empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         const int32_t status = sao_ai_editor_mcp_client_close(
             raw, name.empty() ? nullptr : name.c_str());
         if (status != SAO_AI_EDITOR_OK) {
@@ -6427,7 +6528,8 @@ int32_t NativeRuntime::apply_system_prompt_source(Json& params) {
         return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
     }
     Json request{{"server", source["server"]}, {"name", source["name"]}};
-    if (source.contains("arguments") && source["arguments"].is_object()) {
+    if (source.contains("arguments") && !source["arguments"].is_object()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (source.contains("arguments")) {
         request["arguments"] = source["arguments"];
     } else {
         request["arguments"] = Json::object();

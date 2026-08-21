@@ -8,36 +8,54 @@
 </head>
 <body>
   <header>
-    <div>
-      <h1>MCP Management</h1>
-      <p data-role="summary">Loading registry...</p>
-    </div>
-    <button type="button" data-role="refresh">Refresh</button>
+    <div><h1>MCP Management</h1><p data-role="summary">Loading registry...</p></div>
+    <div class="header-actions"><span class="status-pill" data-role="connection-status">Connecting</span><button type="button" data-role="refresh">Refresh</button></div>
   </header>
-
-  <section>
-    <h2>Servers</h2>
-    <div class="grid" data-role="servers"></div>
-  </section>
-
-  <section>
-    <h2>Tools</h2>
-    <div class="grid" data-role="tools"></div>
-  </section>
-
-  <section>
-    <h2>Platform tools</h2>
-    <dl>
-      <dt>helperStatus</dt><dd>Helper liveness, loaded engines, and driver readiness.</dd>
-      <dt>engineSelect</dt><dd>Switch the active engine after confirmation.</dd>
-      <dt>memoryRead</dt><dd>Read a PID and bounded virtual-address range without confirmation.</dd>
-      <dt>driverList</dt><dd>List driver assets, state, and availability.</dd>
-      <dt>hidSend</dt><dd>Send one mouse or keyboard event after confirmation.</dd>
-      <dt>vtStatus</dt><dd>Returns VT_ABSENT until driver_vt is installed.</dd>
-    </dl>
-    <button type="button" data-role="open-kernel-map">Open Kernel Map panel</button>
-  </section>
-
+  <section class="error-banner" data-role="error" hidden><strong data-role="error-text"></strong><button type="button" class="button-secondary" data-role="retry">Retry</button></section>
+  <nav class="tabs" role="tablist" aria-label="MCP management sections">
+    <button type="button" role="tab" aria-selected="true" aria-controls="panel-servers" data-tab="servers">Servers</button>
+    <button type="button" role="tab" aria-selected="false" aria-controls="panel-tools" data-tab="tools">Tools</button>
+    <button type="button" role="tab" aria-selected="false" aria-controls="panel-prompts" data-tab="prompts">Prompts</button>
+    <button type="button" role="tab" aria-selected="false" aria-controls="panel-resources" data-tab="resources">Resources</button>
+    <button type="button" role="tab" aria-selected="false" aria-controls="panel-notifications" data-tab="notifications">Notifications</button>
+  </nav>
+  <main>
+    <section id="panel-servers" role="tabpanel" data-panel="servers">
+      <div class="section-heading"><div><h2>Servers</h2><p class="muted">Manage trusted MCP connections and their lifecycle.</p></div><span class="count-pill" data-role="server-count">0</span></div>
+      <form class="glass-form" data-role="server-form">
+        <div class="form-heading"><h3>Add server</h3><span class="muted">Credentials are sent only with the submitted request.</span></div>
+        <div class="form-grid">
+          <label>Name<input name="name" required autocomplete="off" placeholder="my-server"></label>
+          <label>Transport<select name="transport"><option value="stdio">stdio</option><option value="http">http</option></select></label>
+          <label>Command<input name="command" autocomplete="off" placeholder="C:\\Tools\\server.exe"></label>
+          <label>URL<input name="url" autocomplete="off" placeholder="https://localhost:PORT/mcp"></label>
+          <label class="wide">Args (JSON array)<textarea name="args" rows="2" spellcheck="false">[]</textarea></label>
+          <label class="wide">Env (JSON object)<textarea name="env" rows="2" spellcheck="false">{}</textarea></label>
+        </div>
+        <div class="form-actions"><button type="submit">Add server</button><span class="muted">Workspace trust and confirmation are required by Native.</span></div>
+      </form>
+      <div class="grid" data-role="servers"></div>
+      <div class="subsection-heading"><h3>Platform Tools</h3><span class="muted">Dynamic runtime status</span></div>
+      <div class="platform-grid" data-role="platform-tools"></div>
+      <button type="button" class="button-secondary" data-role="open-kernel-map">Open Kernel Map panel</button>
+    </section>
+    <section id="panel-tools" role="tabpanel" data-panel="tools" hidden>
+      <div class="section-heading"><div><h2>Tools</h2><p class="muted">Inspect schemas and call tools with an explicit confirmation.</p></div><span class="count-pill" data-role="tool-count">0</span></div>
+      <div class="grid" data-role="tools"></div><section class="result-panel" data-role="tool-result" hidden></section>
+    </section>
+    <section id="panel-prompts" role="tabpanel" data-panel="prompts" hidden>
+      <div class="section-heading"><div><h2>Prompts</h2><p class="muted">List prompts, provide an arguments object, and preview the result.</p></div><span class="count-pill" data-role="prompt-count">0</span></div>
+      <div class="grid" data-role="prompts"></div><section class="result-panel" data-role="prompt-result" hidden></section>
+    </section>
+    <section id="panel-resources" role="tabpanel" data-panel="resources" hidden>
+      <div class="section-heading"><div><h2>Resources</h2><p class="muted">Browse resource metadata and read a URI into the viewer.</p></div><span class="count-pill" data-role="resource-count">0</span></div>
+      <div class="grid" data-role="resources"></div><section class="result-panel" data-role="resource-viewer" hidden></section>
+    </section>
+    <section id="panel-notifications" role="tabpanel" data-panel="notifications" hidden>
+      <div class="section-heading"><div><h2>Notifications</h2><p class="muted">Live MCP status events from trusted Native sources.</p></div><span class="count-pill" data-role="notification-count">0</span></div>
+      <div class="feed" data-role="notifications"></div>
+    </section>
+  </main>
   <script src="panel.js"></script>
 </body>
 </html>
