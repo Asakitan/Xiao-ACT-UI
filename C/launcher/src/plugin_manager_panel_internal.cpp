@@ -18,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 #if (defined(SAO_LINKED_PLUGINS) || defined(SAO_LAUNCHER_PLUGIN_MANAGER_WITH_LOADER)) &&           \
@@ -188,8 +189,7 @@ ManagerState manager_state(const Snapshot& snapshot) {
             return ManagerState::loading;
         return ManagerState::unavailable;
     }
-    const bool has_operation_error = !snapshot.error_message.empty() &&
-                                     snapshot.error_message.rfind("__active_plugin__:", 0) != 0;
+    const bool has_operation_error = !snapshot.error_message.empty();
     if (has_operation_error)
         return ManagerState::error;
     return snapshot.plugins.empty() ? ManagerState::empty : ManagerState::ready;
@@ -451,7 +451,8 @@ Json section_node(std::string title, Json children) {
                 {"title", clamp_utf8(std::move(title), 512U)},
                 {"children", std::move(children)}};
 }
-std::string build_spec_for_testing(const Snapshot& snapshot) {
+std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
+                       const std::unordered_set<std::string>& busy_plugins) {
     const ManagerState manager = manager_state(snapshot);
     Json nodes = Json::array();
     Json overview = Json::array();
@@ -485,8 +486,7 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                      std::string(kActionRefresh), Json(), "primary",
                                      snapshot.busy));
         nodes.push_back(section_node("Loader", std::move(loader)));
-    } else if (!snapshot.error_message.empty() &&
-               snapshot.error_message.rfind("__active_plugin__:", 0) != 0) {
+    } else if (!snapshot.error_message.empty()) {
         Json errors = Json::array();
         errors.push_back(text_node(snapshot.error_message, "bad", 42));
         errors.push_back(button_node("plugin-manager.error-retry", "Retry / 重试",
@@ -506,8 +506,8 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
-            const bool row_busy = snapshot.busy && (snapshot.error_message.rfind("__active_plugin__:", 0) != 0 ||
-                                                    snapshot.error_message.find("__active_plugin__:" + plugin.plugin_id) != std::string::npos);
+            const bool row_busy = reload_all_busy ||
+                                  busy_plugins.find(plugin.plugin_id) != busy_plugins.end();
             Json details = Json::array();
             Json metadata = Json::array();
             metadata.push_back(badge_node("v" + plugin.version, "accent"));
@@ -550,6 +550,11 @@ std::string build_spec_for_testing(const Snapshot& snapshot) {
                                   std::string(kActionRefresh), Json(), "primary", snapshot.busy));
     return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
+
+std::string build_spec_for_testing(const Snapshot& snapshot) {
+    return build_spec(snapshot, snapshot.busy, {});
+}
+
 struct Owner::Impl {
     static std::mutex deferred_mutex;
     static std::vector<std::unique_ptr<Impl>> deferred_cleanup;
@@ -762,29 +767,27 @@ struct Owner::Impl {
         try {
             sao_ui_panel_body_handle_t target_body = nullptr;
             std::string pending_error;
-            std::string active_plugin;
+            std::unordered_set<std::string> busy_plugins;
+            bool reload_all_busy = false;
             bool reload_all_available = false;
             {
                 std::lock_guard lock(mutex);
                 target_body = body;
                 reload_all_available = static_cast<bool>(operations.reload_all);
                 pending_error = operation_error;
-                active_plugin = active_plugin_id;
+                busy_plugins = busy_plugin_ids;
+                reload_all_busy = reload_all_pending;
                 snapshot.busy = worker_active || !tasks.empty();
             }
             if (target_body == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
             snapshot.reload_all_available = reload_all_available;
-            if (!active_plugin.empty())
-                snapshot.error_message = snapshot.error_message.empty()
-                    ? "__active_plugin__:" + active_plugin
-                    : snapshot.error_message + " __active_plugin__:" + active_plugin;
             if (!pending_error.empty()) {
                 if (!snapshot.error_message.empty())
                     snapshot.error_message.append(" ");
                 snapshot.error_message.append(pending_error);
             }
-            const std::string spec = build_spec_for_testing(snapshot);
+            const std::string spec = build_spec(snapshot, reload_all_busy, busy_plugins);
             return sao_ui_panel_body_set_spec(
                 target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
         } catch (...) {
@@ -835,6 +838,8 @@ struct Owner::Impl {
             }
             return SAO_STATUS_OK;
         } catch (...) {
+            std::lock_guard lock(mutex);
+            cache_dirty = true;
             return SAO_STATUS_ERR_UNKNOWN;
         }
     }
@@ -848,9 +853,18 @@ struct Owner::Impl {
             }
             if (tasks.size() >= kMaximumTaskQueue)
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            if (task.kind == TaskKind::reload_all) {
+                if (reload_all_pending || !busy_plugin_ids.empty())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+                reload_all_pending = true;
+            } else if (task.kind != TaskKind::refresh) {
+                if (reload_all_pending ||
+                    busy_plugin_ids.find(task.plugin_id) != busy_plugin_ids.end())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+                busy_plugin_ids.insert(task.plugin_id);
+            }
             if (task.kind != TaskKind::refresh)
                 operation_error.clear();
-            active_plugin_id = task.plugin_id;
             tasks.push_back(std::move(task));
             owner_publishing = true;
         }
@@ -891,8 +905,13 @@ struct Owner::Impl {
                 }
             } catch (...) {
                 std::lock_guard lock(mutex);
+                if (task.kind == TaskKind::reload_all)
+                    reload_all_pending = false;
+                else if (task.kind != TaskKind::refresh)
+                    busy_plugin_ids.erase(task.plugin_id);
                 worker_active = false;
                 operation_error = "Plugin operation handler copy failed.";
+                cache_dirty = true;
                 continue;
             }
 
@@ -926,14 +945,20 @@ struct Owner::Impl {
                             " for " + task.plugin_id,
                         operation_status);
                 }
-                active_plugin_id.clear();
+                if (task.kind == TaskKind::reload_all)
+                    reload_all_pending = false;
+                else if (task.kind != TaskKind::refresh)
+                    busy_plugin_ids.erase(task.plugin_id);
                 worker_active = false;
             }
             const sao_status_t refresh_status = refresh_now();
             {
                 std::lock_guard lock(mutex);
-                if (refresh_status != SAO_STATUS_OK && operation_error.empty())
-                    operation_error = status_message("Plugin Manager refresh", refresh_status);
+                if (refresh_status != SAO_STATUS_OK) {
+                    if (operation_error.empty())
+                        operation_error = status_message("Plugin Manager refresh", refresh_status);
+                    cache_dirty = true;
+                }
             }
         }
     }
@@ -1148,6 +1173,8 @@ struct Owner::Impl {
         worker_active = false;
         worker_publishing = false;
         owner_publishing = false;
+        busy_plugin_ids.clear();
+        reload_all_pending = false;
         worker_online = false;
     }
 
@@ -1177,7 +1204,8 @@ struct Owner::Impl {
     Operations operations;
     Snapshot last_snapshot;
     std::string operation_error;
-    std::string active_plugin_id;
+    std::unordered_set<std::string> busy_plugin_ids;
+    bool reload_all_pending{};
     sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
     sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
     sao_status_t fail_next_event_restore_status{SAO_STATUS_OK};

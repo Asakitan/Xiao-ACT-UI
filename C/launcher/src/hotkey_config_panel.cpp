@@ -239,6 +239,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                 return;
             pending_capture = std::move(result);
             capture_running = false;
+            capturing_binding_id.clear();
             hooks = capture_hooks;
             wake_window = owner_wake_window;
         }
@@ -496,17 +497,21 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         sao_ui_panel_body_handle_t target_body = nullptr;
         std::unordered_map<std::string, PanelStatus> statuses;
         std::string message;
+        bool capture_running_local = false;
+        std::string capturing_binding_id_local;
         {
             std::lock_guard lock(mutex);
             target_body = body;
             statuses = row_status;
             message = status_message;
+            capture_running_local = capture_running;
+            capturing_binding_id_local = capturing_binding_id;
         }
         if (target_body == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
         Json nodes = Json::array();
         if (!message.empty()) {
             Json status_nodes = Json::array({text_node(message, "accent", 28)});
-            if (capture_running)
+            if (capture_running_local)
                 status_nodes.push_back(button_node("capture.cancel", "Cancel capture", "hotkey.capture.cancel", Json::object(), "ghost"));
             nodes.push_back(card_node("Status", std::move(status_nodes)));
         }
@@ -520,8 +525,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                 text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 28),
                 Json{{"type", "badge"}, {"text", status_label(status)}, {"style", status_style(status)}, {"height", 22}},
                 button_node("capture." + binding.id, "Capture", kCaptureAction, Json(binding.id), "primary",
-                             capture_running && capturing_binding_id != binding.id),
-                button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost", capture_running),
+                             capture_running_local && capturing_binding_id_local != binding.id),
+                button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost", capture_running_local),
             })));
         }
         nodes.push_back(card_node("Bindings", std::move(rows)));
@@ -530,8 +535,6 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     }
 
     sao_status_t dispatch(std::string_view action, std::string_view payload_json) noexcept {
-        const std::string id = payload_id(payload_json);
-        if (id.empty()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (action == "hotkey.capture.cancel") {
             std::string old_id;
             { std::lock_guard lock(mutex); old_id = capturing_binding_id; }
@@ -539,6 +542,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             if (!old_id.empty()) set_status(old_id, PanelStatus::cancelled, "Capture cancelled");
             return refresh_now();
         }
+        const std::string id = payload_id(payload_json);
+        if (id.empty()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (action == kCaptureAction) return start_capture(id);
         if (action == kResetAction) {
             stop_capture();

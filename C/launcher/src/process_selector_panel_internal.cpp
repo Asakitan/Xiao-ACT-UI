@@ -615,6 +615,7 @@ struct Owner::State {
     bool loading{};
     bool worker_active{};
     bool dirty{true};
+    bool refresh_authoritative{};
     std::uint64_t requested_generation{};
     FilterMode filter{FilterMode::all};
     sao_status_t last_status{SAO_STATUS_OK};
@@ -1007,6 +1008,7 @@ sao_status_t Owner::service_ui() noexcept {
                 state_->loading = false;
                 state_->last_status = completion.status;
                 if (completion.kind == State::WorkKind::refresh) {
+                    state_->refresh_authoritative = completion.status == SAO_STATUS_OK;
                     if (completion.status == SAO_STATUS_OK) {
                         state_->processes = std::move(completion.processes);
                         state_->status_text =
@@ -1097,6 +1099,7 @@ sao_status_t Owner::take_offline() noexcept {
         ++state_->requested_generation;
         state_->work_items.clear();
         state_->loading = false;
+        state_->refresh_authoritative = false;
         state_->completions.clear();
         panel = state_->panel;
         had_action_handler = state_->action_handler_attached;
@@ -1199,6 +1202,7 @@ sao_status_t Owner::enqueue_refresh() noexcept {
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (!state_->operations.enumerate_snapshot) {
             state_->loading = false;
+            state_->refresh_authoritative = false;
             state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
             state_->status_text = "Process enumeration operation is not configured.";
             enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
@@ -1207,6 +1211,7 @@ sao_status_t Owner::enqueue_refresh() noexcept {
             state_->work_items.push_back(
                 State::WorkItem{State::WorkKind::refresh, state_->requested_generation, {}});
             state_->loading = true;
+            state_->refresh_authoritative = false;
             state_->last_status = SAO_STATUS_OK;
             state_->status_text = "Scanning running processes...";
         }
@@ -1229,7 +1234,6 @@ sao_status_t Owner::set_filter(FilterMode filter) noexcept {
     {
         std::lock_guard lock(state_->mutex);
         state_->filter = filter;
-        state_->last_status = SAO_STATUS_OK;
         state_->status_text = filter == FilterMode::all
                                   ? "Filter changed: showing all queryable processes."
                                   : "Filter changed: showing likely game processes.";
@@ -1253,30 +1257,38 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
         std::lock_guard lock(state_->mutex);
         if (state_->loading || state_->worker_active || !state_->work_items.empty())
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
-        const bool selected_identity_exists =
-            std::ranges::any_of(state_->processes, [&](const ProcessRecord& process) {
-                return process.identity() == identity;
-            });
-        if (!selected_identity_exists) {
-            state_->last_status = SAO_STATUS_ERR_NOT_FOUND;
-            state_->status_text =
-                "Attach rejected: selection is no longer in the current snapshot.";
-            state_->dirty = true;
-            enqueue_status = SAO_STATUS_ERR_NOT_FOUND;
-        } else if (!state_->operations.query_process || !state_->operations.attach) {
+        if (!state_->refresh_authoritative) {
             state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
-            state_->status_text = "Attach operations are not configured.";
+            state_->status_text =
+                "Attach rejected: stale snapshot; refresh before attaching.";
             state_->dirty = true;
             enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
         } else {
-            ++state_->requested_generation;
-            state_->work_items.push_back(State::WorkItem{
-                State::WorkKind::attach, state_->requested_generation, identity});
-            state_->loading = true;
-            state_->last_status = SAO_STATUS_OK;
-            state_->status_text =
-                "Verifying identity and attaching PID " + std::to_string(identity.pid) + ".";
-            state_->dirty = true;
+            const bool selected_identity_exists =
+                std::ranges::any_of(state_->processes, [&](const ProcessRecord& process) {
+                    return process.identity() == identity;
+                });
+            if (!selected_identity_exists) {
+                state_->last_status = SAO_STATUS_ERR_NOT_FOUND;
+                state_->status_text =
+                    "Attach rejected: selection is no longer in the current snapshot.";
+                state_->dirty = true;
+                enqueue_status = SAO_STATUS_ERR_NOT_FOUND;
+            } else if (!state_->operations.query_process || !state_->operations.attach) {
+                state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+                state_->status_text = "Attach operations are not configured.";
+                state_->dirty = true;
+                enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+            } else {
+                ++state_->requested_generation;
+                state_->work_items.push_back(State::WorkItem{
+                    State::WorkKind::attach, state_->requested_generation, identity});
+                state_->loading = true;
+                state_->last_status = SAO_STATUS_OK;
+                state_->status_text =
+                    "Verifying identity and attaching PID " + std::to_string(identity.pid) + ".";
+                state_->dirty = true;
+            }
         }
     }
     if (enqueue_status == SAO_STATUS_OK)
