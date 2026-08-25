@@ -4,8 +4,10 @@
 #include <objbase.h>
 #include <combaseapi.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -40,6 +42,11 @@ namespace {
 constexpr wchar_t kWindowClassName[] = L"{C82E4A03-9F16-4B7D-A5E8-2C6F1B4D8E93}";
 constexpr UINT kPostWebMessage = WM_APP + 3U;
 constexpr UINT_PTR kPanelMaterializeTimerId = 0xA03u;
+constexpr uint32_t kMaximumReportedInputDrops = 4096u;
+constexpr uint32_t kMaximumPackedImeUnits = 14u;
+constexpr uint32_t kMouseButtonLeft = 1u << 0;
+constexpr uint32_t kMouseButtonRight = 1u << 1;
+constexpr uint32_t kMouseButtonMiddle = 1u << 2;
 
 struct WebviewPostRequest final {
     std::string panel_id;
@@ -121,10 +128,19 @@ struct WebViewSession {
                        std::shared_ptr<WebviewPostRequest>> pending_posts;
     std::string active_panel_id;
     std::string materialized_html;
+    int32_t applied_theme{-1};
     // Off-screen frame capture and compositor input bridge state.
     std::unique_ptr<sao::ai_editor::WindowCaptureToMmf> mmf_capture;
     std::unique_ptr<sao::ai_editor::InputEventRingReader> input_reader;
     bool off_screen = false;
+    std::array<uint8_t, 256> input_keys_down{};
+    uint32_t input_mouse_buttons_down = 0u;
+    int32_t input_mouse_x = 0;
+    int32_t input_mouse_y = 0;
+    bool input_focus = false;
+    bool ime_composition_notice_emitted = false;
+    int32_t pending_resize_width = 0;
+    int32_t pending_resize_height = 0;
     bool capture_registered = false;
     enum class CaptureUnregisterState : uint8_t { pending, succeeded, retryable_failed };
     CaptureUnregisterState capture_unregister_state = CaptureUnregisterState::pending;
@@ -300,6 +316,259 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
     return request->accepted;
 }
 
+void publish_bridge_diagnostic(const std::shared_ptr<WebViewSession>& session,
+                               std::string_view code,
+                               nlohmann::json details) {
+    if (session == nullptr || code.empty()) {
+        return;
+    }
+    if (!details.is_object()) {
+        details = nlohmann::json::object();
+    }
+    details["source"] = "webview_bridge";
+    details["code"] = std::string(code);
+    details["event"] = "webview.input.diagnostic";
+
+    RuntimeLease runtime_lease(session->runtime_handle);
+    if (NativeRuntime* runtime = runtime_lease.get(); runtime != nullptr) {
+        Json response;
+        (void)runtime->dispatch(
+            Json{{"jsonrpc", "2.0"},
+                 {"method", "sao.host.log"},
+                 {"params", std::move(details)}},
+            response);
+    }
+}
+
+bool append_unicode_scalar(uint32_t scalar, std::wstring& out) {
+    if (scalar > 0x10FFFFu ||
+        (scalar >= 0xD800u && scalar <= 0xDFFFu)) {
+        return false;
+    }
+    if (scalar <= 0xFFFFu) {
+        out.push_back(static_cast<wchar_t>(scalar));
+        return true;
+    }
+    scalar -= 0x10000u;
+    out.push_back(static_cast<wchar_t>(0xD800u + (scalar >> 10)));
+    out.push_back(static_cast<wchar_t>(0xDC00u + (scalar & 0x3FFu)));
+    return true;
+}
+
+bool decode_ime_text(const sao::ai_editor::InputEvent& event,
+                     bool allow_empty, std::wstring& out) {
+    out.clear();
+    const uint32_t unit_count = event.reserved[0];
+    if (unit_count != 0u) {
+        if (unit_count > kMaximumPackedImeUnits) {
+            return false;
+        }
+        out.reserve(unit_count);
+        for (uint32_t i = 0u; i < unit_count; ++i) {
+            const uint32_t packed = event.reserved[1u + i / 2u];
+            const uint16_t unit = static_cast<uint16_t>(
+                (i & 1u) == 0u ? packed & 0xFFFFu : packed >> 16u);
+            out.push_back(static_cast<wchar_t>(unit));
+        }
+        for (size_t i = 0; i < out.size(); ++i) {
+            const uint16_t unit = static_cast<uint16_t>(out[i]);
+            if (unit >= 0xD800u && unit <= 0xDBFFu) {
+                if (++i >= out.size())
+                    return false;
+                const uint16_t low = static_cast<uint16_t>(out[i]);
+                if (low < 0xDC00u || low > 0xDFFFu)
+                    return false;
+            } else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (event.code == 0u) {
+        return allow_empty;
+    }
+    return append_unicode_scalar(event.code, out);
+}
+
+bool focus_webview_target(
+    HWND target,
+    const Microsoft::WRL::ComPtr<ICoreWebView2Controller>& controller,
+    bool focused) {
+    if (target == nullptr || controller == nullptr) {
+        return false;
+    }
+    if (focused) {
+        (void)::SetFocus(target);
+        if (::GetFocus() != target) {
+            return false;
+        }
+        return SUCCEEDED(controller->MoveFocus(
+            COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC));
+    }
+    const HWND current = ::GetFocus();
+    if (current == target || ::IsChild(target, current)) {
+        (void)::SetFocus(nullptr);
+    }
+    const HWND after = ::GetFocus();
+    return after != target && (after == nullptr || !::IsChild(target, after));
+}
+
+bool send_ime_commit_text(HWND target, const std::wstring& text) {
+    if (target == nullptr) {
+        return false;
+    }
+    for (const wchar_t unit : text) {
+        (void)::SendMessageW(target, WM_CHAR,
+                             static_cast<WPARAM>(unit), 0);
+    }
+    return true;
+}
+
+uint32_t mouse_button_bit(uint32_t button) {
+    if (button == VK_LBUTTON) return kMouseButtonLeft;
+    if (button == VK_RBUTTON) return kMouseButtonRight;
+    if (button == VK_MBUTTON) return kMouseButtonMiddle;
+    return 0u;
+}
+
+WPARAM mouse_key_state(uint32_t buttons, uint32_t modifiers) noexcept {
+    WPARAM state = 0;
+    if ((buttons & kMouseButtonLeft) != 0u) state |= MK_LBUTTON;
+    if ((buttons & kMouseButtonRight) != 0u) state |= MK_RBUTTON;
+    if ((buttons & kMouseButtonMiddle) != 0u) state |= MK_MBUTTON;
+    if ((modifiers & sao::ai_editor::INPUT_MOD_SHIFT) != 0u) state |= MK_SHIFT;
+    if ((modifiers & sao::ai_editor::INPUT_MOD_CTRL) != 0u) state |= MK_CONTROL;
+    return state;
+}
+
+void release_sticky_input(const std::shared_ptr<WebViewSession>& session,
+                          HWND target) {
+    if (session == nullptr || target == nullptr) {
+        return;
+    }
+    for (uint32_t key = 0u; key < session->input_keys_down.size(); ++key) {
+        if (session->input_keys_down[key] == 0u) {
+            continue;
+        }
+        (void)::SendMessageW(target, WM_KEYUP, key, 0);
+        session->input_keys_down[key] = 0u;
+    }
+    if ((session->input_mouse_buttons_down & kMouseButtonLeft) != 0u) {
+        (void)::SendMessageW(target, WM_LBUTTONUP, 0,
+                             MAKELPARAM(session->input_mouse_x,
+                                        session->input_mouse_y));
+    }
+    if ((session->input_mouse_buttons_down & kMouseButtonRight) != 0u) {
+        (void)::SendMessageW(target, WM_RBUTTONUP, 0,
+                             MAKELPARAM(session->input_mouse_x,
+                                        session->input_mouse_y));
+    }
+    if ((session->input_mouse_buttons_down & kMouseButtonMiddle) != 0u) {
+        (void)::SendMessageW(target, WM_MBUTTONUP, 0,
+                             MAKELPARAM(session->input_mouse_x,
+                                        session->input_mouse_y));
+    }
+    session->input_mouse_buttons_down = 0u;
+    if (::GetCapture() == target)
+        (void)::ReleaseCapture();
+}
+
+void resync_input_state(
+    const std::shared_ptr<WebViewSession>& session, HWND target,
+    const Microsoft::WRL::ComPtr<ICoreWebView2Controller>& controller,
+    uint32_t dropped) {
+    release_sticky_input(session, target);
+    const bool focus_requested = session->input_focus;
+    const bool focus_ok = focus_webview_target(target, controller,
+                                               focus_requested);
+    if (!focus_ok) {
+        session->input_focus = false;
+    }
+    publish_bridge_diagnostic(
+        session, "input_ring_overflow_resync",
+        nlohmann::json{{"dropped", std::min(dropped,
+                                              kMaximumReportedInputDrops)},
+                       {"focusRequested", focus_requested},
+                       {"focusRestored", focus_ok},
+                       {"captureRestored", false}});
+}
+
+bool resize_surface_on_owner_thread(
+    const std::shared_ptr<WebViewSession>& session, HWND target,
+    const Microsoft::WRL::ComPtr<ICoreWebView2Controller>& controller,
+    int32_t width, int32_t height) {
+    if (session == nullptr || target == nullptr || controller == nullptr) {
+        return false;
+    }
+    if (!sao::ai_editor::WindowCaptureToMmf::dimensions_within_budget(width,
+                                                                       height)) {
+        publish_bridge_diagnostic(
+            session, "resize_rejected", nlohmann::json{{"width", width},
+                                                        {"height", height},
+                                                        {"reason", "budget"},
+                                                        {"retryable", true}});
+        return false;
+    }
+    sao::ai_editor::WindowCaptureToMmf* capture = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        if (!session->teardown_started && session->mmf_capture) {
+            capture = session->mmf_capture.get();
+        }
+    }
+    if (capture == nullptr || !capture->is_initialized()) {
+        publish_bridge_diagnostic(
+            session, "resize_rejected",
+            nlohmann::json{{"width", width}, {"height", height},
+                           {"reason", "capture_unavailable"},
+                           {"retryable", true}});
+        return false;
+    }
+    const int old_width = capture->width();
+    const int old_height = capture->height();
+    const RECT old_rect{0, 0, old_width, old_height};
+    const RECT new_rect{0, 0, width, height};
+    if (!::SetWindowPos(target, nullptr, -32000, -32000, width, height,
+                        SWP_NOACTIVATE | SWP_NOZORDER)) {
+        publish_bridge_diagnostic(
+            session, "resize_failed",
+            nlohmann::json{{"width", width}, {"height", height},
+                           {"reason", "window"},
+                           {"status", static_cast<int32_t>(::GetLastError())},
+                           {"retryable", true}});
+        return false;
+    }
+    const HRESULT bounds_hr = controller->put_Bounds(new_rect);
+    if (FAILED(bounds_hr)) {
+        (void)::SetWindowPos(target, nullptr, -32000, -32000, old_width,
+                             old_height, SWP_NOACTIVATE | SWP_NOZORDER);
+        (void)controller->put_Bounds(old_rect);
+        publish_bridge_diagnostic(
+            session, "resize_failed",
+            nlohmann::json{{"width", width}, {"height", height},
+                           {"reason", "controller"},
+                           {"status", static_cast<int32_t>(bounds_hr)},
+                           {"retryable", true}});
+        return false;
+    }
+    if (!capture->resize(width, height)) {
+        const bool rolled_back =
+            capture->width() == old_width && capture->height() == old_height;
+        (void)::SetWindowPos(target, nullptr, -32000, -32000, old_width,
+                             old_height, SWP_NOACTIVATE | SWP_NOZORDER);
+        (void)controller->put_Bounds(old_rect);
+        publish_bridge_diagnostic(
+            session, "resize_failed",
+            nlohmann::json{{"width", width}, {"height", height},
+                           {"reason", "capture"}, {"retryable", true},
+                           {"rolledBack", rolled_back}});
+        return false;
+    }
+    session->pending_resize_width = 0;
+    session->pending_resize_height = 0;
+    return true;
+}
+
 class ScopedWebviewHandler final {
 public:
     explicit ScopedWebviewHandler(NativeRuntime* runtime) noexcept
@@ -351,8 +620,42 @@ bool clear_materialized_registry_panel(
         std::lock_guard<std::mutex> guard(session->mutex);
         session->active_panel_id.clear();
         session->materialized_html.clear();
+        session->applied_theme = -1;
     }
     return succeeded;
+}
+
+SaoUiThemeId current_webview_theme() noexcept {
+    SaoUiThemeId theme = SAO_UI_THEME_DARK;
+    if (sao_ui_theme_get_active_id(&theme) != SAO_STATUS_OK ||
+        (theme != SAO_UI_THEME_DARK && theme != SAO_UI_THEME_LIGHT)) {
+        return SAO_UI_THEME_DARK;
+    }
+    return theme;
+}
+
+bool apply_webview_theme(const std::shared_ptr<WebViewSession>& session,
+                         const Microsoft::WRL::ComPtr<ICoreWebView2>& view,
+                         SaoUiThemeId theme) {
+    if (session == nullptr || view == nullptr) {
+        return false;
+    }
+    int32_t applied_theme = -1;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        applied_theme = session->applied_theme;
+    }
+    const std::wstring script = utf8_to_wide(detail::webview_theme_script(theme));
+    if (script.empty()) {
+        return false;
+    }
+    return detail::sync_webview_theme(
+        applied_theme, theme,
+        [&]() { return SUCCEEDED(view->ExecuteScript(script.c_str(), nullptr)); },
+        [&](int32_t committed_theme) {
+            std::lock_guard<std::mutex> guard(session->mutex);
+            session->applied_theme = committed_theme;
+        });
 }
 
 bool materialize_registry_panel(
@@ -372,23 +675,38 @@ bool materialize_registry_panel(
     const std::string html = active->html.empty()
         ? std::string{"<html><body></body></html>"}
         : active->html;
-    const bool html_changed = session->materialized_html != html;
-    const bool changed = force || session->active_panel_id != active->panel_id ||
-                         html_changed;
-    if (!changed) return true;
+    const SaoUiThemeId theme = current_webview_theme();
+    int32_t applied_theme = -1;
+    std::string materialized_html;
+    std::string active_panel_id;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        applied_theme = session->applied_theme;
+        materialized_html = session->materialized_html;
+        active_panel_id = session->active_panel_id;
+    }
+    const bool html_changed = materialized_html != html;
+    const bool panel_changed = force || active_panel_id != active->panel_id;
+    const bool changed = panel_changed || html_changed;
+    if (!changed) {
+        return apply_webview_theme(session, view, theme);
+    }
     const std::string script = "window.__saoSetActivePanel(" +
                                nlohmann::json(active->panel_id).dump() +
-                               ");";
+                               ");" +
+                               (applied_theme == static_cast<int32_t>(theme)
+                                    ? std::string{}
+                                    : detail::webview_theme_script(theme));
     const std::wstring wide_script = utf8_to_wide(script);
-    const std::wstring wide_html = utf8_to_wide(html);
-    if (wide_script.empty() || wide_html.empty() ||
-        FAILED(view->AddScriptToExecuteOnDocumentCreated(
-            wide_script.c_str(), nullptr))) {
+    const std::wstring wide_html = utf8_to_wide(
+        detail::materialized_html_for_theme(html, theme, active->panel_id));
+    if (wide_html.empty() || (!html_changed && wide_script.empty())) {
         return false;
     }
-    if (html_changed) {
-        if (FAILED(view->NavigateToString(wide_html.c_str()))) return false;
-    } else if (FAILED(view->ExecuteScript(wide_script.c_str(), nullptr))) {
+    if (!detail::apply_webview_document_update(
+            html_changed,
+            [&]() { return SUCCEEDED(view->NavigateToString(wide_html.c_str())); },
+            [&]() { return SUCCEEDED(view->ExecuteScript(wide_script.c_str(), nullptr)); })) {
         return false;
     }
     Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
@@ -399,8 +717,14 @@ bool materialize_registry_panel(
     if (controller != nullptr && FAILED(controller->put_IsVisible(TRUE))) {
         return false;
     }
-    session->active_panel_id = active->panel_id;
-    session->materialized_html = html;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        session->active_panel_id = active->panel_id;
+        session->materialized_html = html;
+        if (applied_theme != static_cast<int32_t>(theme)) {
+            session->applied_theme = static_cast<int32_t>(theme);
+        }
+    }
     return true;
 }
 class EnvironmentReadyHandler
@@ -617,15 +941,19 @@ HRESULT ControllerReadyHandler::Invoke(
     // acquireVsCodeApi shim — matches the ambient global the VSCode
     // extension host injects.  Panels get postMessage() + setState() +
     // getState() with state persisted in sessionStorage keyed by the
-    // active panelId (which the runtime sets on window before Navigate).
+    // active panelId (root data attribute on navigation, window override for
+    // same-document panel switches).
     static const wchar_t kAcquireShim[] =
         L"(function(){\n"
         L"  if (window.__saoVscodeApiRegistered) { return; }\n"
         L"  window.__saoVscodeApiRegistered = true;\n"
         L"  let nextRequestId = 1;\n"
         L"  const pending = new Map();\n"
+        L"  const activePanelId = () => window.__saoActivePanelId ||\n"
+        L"      (document.documentElement &&\n"
+        L"       document.documentElement.dataset.saoPanelId) || null;\n"
         L"  const stateKey = () => 'sao.webviewPanel.state.' +\n"
-        L"      (window.__saoActivePanelId || 'default');\n"
+        L"      (activePanelId() || 'default');\n"
         L"  const bag = () => {\n"
         L"    try {\n"
         L"      const raw = window.sessionStorage.getItem(stateKey());\n"
@@ -657,7 +985,7 @@ HRESULT ControllerReadyHandler::Invoke(
         L"        const envelope = {\n"
         L"          method: 'webviewPanel.postMessage',\n"
         L"          id,\n"
-        L"          panelId: window.__saoActivePanelId || null,\n"
+        L"          panelId: activePanelId(),\n"
         L"          message,\n"
         L"        };\n"
         L"        return new Promise((resolve, reject) => {\n"
@@ -707,8 +1035,11 @@ HRESULT ControllerReadyHandler::Invoke(
     if (materialize_registry_panel(session_, view_snapshot, true)) { } else if (!session_->navigate_url.empty()) {
         setup_hr = view_snapshot->Navigate(session_->navigate_url.c_str());
     } else {
-        setup_hr = view_snapshot->NavigateToString(
-            L"<html><body><h1>SAO AI Editor</h1></body></html>");
+        const std::wstring fallback_html = utf8_to_wide(
+            detail::materialized_html_for_theme("<h1>SAO AI Editor</h1>", current_webview_theme()));
+        setup_hr = fallback_html.empty()
+            ? E_FAIL
+            : view_snapshot->NavigateToString(fallback_html.c_str());
     }
     if (FAILED(setup_hr)) {
         session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
@@ -858,7 +1189,15 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         if (controller != nullptr) {
             RECT rect{};
             GetClientRect(window, &rect);
-            controller->put_Bounds(rect);
+            const HRESULT hr = controller->put_Bounds(rect);
+            if (FAILED(hr)) {
+                const auto shared_session = session->self.lock();
+                publish_bridge_diagnostic(
+                    shared_session, "resize_controller_failed",
+                    nlohmann::json{{"reason", "window_size"},
+                                   {"status", static_cast<int32_t>(hr)},
+                                   {"retryable", true}});
+            }
         }
         return 0;
     }
@@ -887,31 +1226,42 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         if (wparam == kInputTimerId) {
             sao::ai_editor::InputEventRingReader* reader = nullptr;
             HWND target = nullptr;
+            Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
+            const auto shared_session = session->self.lock();
             {
                 std::lock_guard<std::mutex> guard(session->mutex);
                 if (!session->teardown_started && session->input_reader) {
                     reader = session->input_reader.get();
                     target = session->window;
+                    controller = session->controller;
                 }
             }
-            if (reader != nullptr && target != nullptr) {
+            if (reader != nullptr && target != nullptr &&
+                shared_session != nullptr) {
                 std::array<sao::ai_editor::InputEvent, 32> events{};
                 uint32_t dropped = 0u;
                 const uint32_t got = reader->try_read_batch(
                     events.data(),
                     static_cast<uint32_t>(events.size()), dropped);
+                if (dropped != 0u) {
+                    resync_input_state(shared_session, target, controller,
+                                       dropped);
+                }
                 for (uint32_t i = 0; i < got; ++i) {
                     const auto& ev = events[i];
                     switch (ev.type) {
                     case sao::ai_editor::INPUT_EVENT_MOUSE_MOVE:
-                        (void)SendMessageW(target, WM_MOUSEMOVE, 0,
-                                            MAKELPARAM(ev.x, ev.y));
+                        session->input_mouse_x = ev.x;
+                        session->input_mouse_y = ev.y;
+                        (void)SendMessageW(
+                            target, WM_MOUSEMOVE,
+                            mouse_key_state(session->input_mouse_buttons_down,
+                                            ev.modifiers),
+                            MAKELPARAM(ev.x, ev.y));
                         break;
                     case sao::ai_editor::INPUT_EVENT_MOUSE_BUTTON: {
-                        // Convention: ev.code == 1 → down, 0 → up.  ev.button
-                        // is one of INPUT_MOD_* -like flags mapped to VK_LBUTTON /
-                        // VK_RBUTTON / VK_MBUTTON.
                         const bool down = ev.code != 0u;
+                        const uint32_t button_bit = mouse_button_bit(ev.button);
                         UINT msg = 0u;
                         if (ev.button == VK_LBUTTON)
                             msg = down ? WM_LBUTTONDOWN : WM_LBUTTONUP;
@@ -919,42 +1269,142 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
                             msg = down ? WM_RBUTTONDOWN : WM_RBUTTONUP;
                         else if (ev.button == VK_MBUTTON)
                             msg = down ? WM_MBUTTONDOWN : WM_MBUTTONUP;
-                        if (msg != 0u)
+                        session->input_mouse_x = ev.x;
+                        session->input_mouse_y = ev.y;
+                        if (msg != 0u) {
+                            if (down) {
+                                const bool focused = focus_webview_target(
+                                    target, controller, true);
+                                session->input_focus = focused;
+                                if (!focused) {
+                                    publish_bridge_diagnostic(
+                                        shared_session, "mouse_focus_failed",
+                                        nlohmann::json{{"retryable", true}});
+                                }
+                            }
+                            const uint32_t next_buttons = down
+                                ? session->input_mouse_buttons_down | button_bit
+                                : session->input_mouse_buttons_down & ~button_bit;
                             (void)SendMessageW(
-                                target, msg, 0,
+                                target, msg,
+                                mouse_key_state(next_buttons, ev.modifiers),
                                 MAKELPARAM(ev.x, ev.y));
+                            session->input_mouse_buttons_down = next_buttons;
+                            if (down) {
+                                (void)::SetCapture(target);
+                            } else if (next_buttons == 0u &&
+                                       ::GetCapture() == target) {
+                                (void)::ReleaseCapture();
+                            }
+                        }
                         break;
                     }
-                    case sao::ai_editor::INPUT_EVENT_MOUSE_WHEEL:
+                    case sao::ai_editor::INPUT_EVENT_MOUSE_WHEEL: {
+                        session->input_mouse_x = ev.x;
+                        session->input_mouse_y = ev.y;
+                        POINT wheel_point{ev.x, ev.y};
+                        (void)::ClientToScreen(target, &wheel_point);
                         (void)SendMessageW(
                             target, WM_MOUSEWHEEL,
-                            MAKEWPARAM(0, ev.wheel_delta),
-                            MAKELPARAM(ev.x, ev.y));
+                            MAKEWPARAM(
+                                mouse_key_state(session->input_mouse_buttons_down,
+                                                ev.modifiers),
+                                static_cast<WORD>(ev.wheel_delta)),
+                            MAKELPARAM(wheel_point.x, wheel_point.y));
                         break;
+                    }
                     case sao::ai_editor::INPUT_EVENT_KEY_DOWN:
-                        (void)SendMessageW(target, WM_KEYDOWN, ev.code, 0);
+                    case sao::ai_editor::INPUT_EVENT_KEY_UP: {
+                        const bool down =
+                            ev.type == sao::ai_editor::INPUT_EVENT_KEY_DOWN;
+                        const bool system_key =
+                            (ev.modifiers & sao::ai_editor::INPUT_MOD_ALT) != 0u;
+                        const UINT msg = down
+                            ? (system_key ? WM_SYSKEYDOWN : WM_KEYDOWN)
+                            : (system_key ? WM_SYSKEYUP : WM_KEYUP);
+                        const LPARAM key_lparam =
+                            static_cast<LPARAM>(ev.reserved[0]);
+                        (void)SendMessageW(target, msg, ev.code, key_lparam);
+                        if (ev.code < session->input_keys_down.size())
+                            session->input_keys_down[ev.code] = down ? 1u : 0u;
                         break;
-                    case sao::ai_editor::INPUT_EVENT_KEY_UP:
-                        (void)SendMessageW(target, WM_KEYUP, ev.code, 0);
+                    }
+                    case sao::ai_editor::INPUT_EVENT_CHAR: {
+                        std::wstring text;
+                        if (append_unicode_scalar(ev.code, text))
+                            (void)send_ime_commit_text(target, text);
+                        else
+                            publish_bridge_diagnostic(
+                                shared_session, "char_rejected",
+                                nlohmann::json{{"reason", "invalid_scalar"}});
                         break;
-                    case sao::ai_editor::INPUT_EVENT_CHAR:
-                        (void)SendMessageW(target, WM_CHAR, ev.code, 0);
-                        break;
-                    case sao::ai_editor::INPUT_EVENT_RESIZE: {
-                        Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
-                        {
-                            std::lock_guard<std::mutex> guard(
-                                session->mutex);
-                            if (!session->teardown_started)
-                                controller = session->controller;
+                    }
+                    case sao::ai_editor::INPUT_EVENT_FOCUS: {
+                        const bool requested = ev.code != 0u;
+                        const bool focused = focus_webview_target(
+                            target, controller, requested);
+                        session->input_focus = requested && focused;
+                        if (!requested) {
+                            session->ime_composition_notice_emitted = false;
+                            release_sticky_input(shared_session, target);
                         }
-                        if (controller != nullptr && ev.x > 0 &&
-                            ev.y > 0) {
-                            RECT rect{0, 0, ev.x, ev.y};
-                            controller->put_Bounds(rect);
+                        if (!focused) {
+                            publish_bridge_diagnostic(
+                                shared_session, "focus_projection_failed",
+                                nlohmann::json{{"requested", requested},
+                                               {"retryable", true}});
                         }
                         break;
                     }
+                    case sao::ai_editor::INPUT_EVENT_IME_COMPOSITION:
+                    case sao::ai_editor::INPUT_EVENT_IME_COMMIT: {
+                        const bool composition =
+                            ev.type == sao::ai_editor::INPUT_EVENT_IME_COMPOSITION;
+                        std::wstring text;
+                        if (!decode_ime_text(ev, composition, text)) {
+                            publish_bridge_diagnostic(
+                                shared_session,
+                                composition ? "ime_composition_rejected"
+                                            : "ime_commit_rejected",
+                                nlohmann::json{{"reason", "invalid_text"},
+                                               {"retryable", true}});
+                            break;
+                        }
+                        const bool focused = focus_webview_target(
+                            target, controller, true);
+                        session->input_focus = focused;
+                        if (!focused) {
+                            publish_bridge_diagnostic(
+                                shared_session, "ime_focus_failed",
+                                nlohmann::json{{"retryable", true}});
+                            break;
+                        }
+                        if (composition) {
+                            if (!session->ime_composition_notice_emitted) {
+                                session->ime_composition_notice_emitted = true;
+                                publish_bridge_diagnostic(
+                                    shared_session,
+                                    "ime_composition_deferred",
+                                    nlohmann::json{{"complete", false},
+                                                   {"reason", "awaiting_commit"}});
+                            }
+                            break;
+                        }
+                        session->ime_composition_notice_emitted = false;
+                        const bool committed = send_ime_commit_text(target, text);
+                        if (!committed) {
+                            publish_bridge_diagnostic(
+                                shared_session, "ime_commit_failed",
+                                nlohmann::json{{"retryable", true}});
+                        }
+                        break;
+                    }
+                    case sao::ai_editor::INPUT_EVENT_RESIZE:
+                        session->pending_resize_width = ev.x;
+                        session->pending_resize_height = ev.y;
+                        (void)resize_surface_on_owner_thread(
+                            shared_session, target, controller, ev.x, ev.y);
+                        break;
                     case sao::ai_editor::INPUT_EVENT_CLOSE:
                         (void)PostMessageW(target, WM_CLOSE, 0, 0);
                         break;

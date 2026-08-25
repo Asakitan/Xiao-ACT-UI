@@ -108,6 +108,7 @@ private:
                          const Json& params,
                          Json& result);
     int32_t register_builtin_mcp_server();
+    void register_plugin_manifest_contributions();
     Json mcp_management_snapshot();
     // Aggregate MCP tools filtered by `mcp_server_filter` (JSON array of names;
     // if empty/absent -> all registered servers) and emit them as OpenAI-shape
@@ -250,6 +251,13 @@ private:
     std::unique_ptr<McpManagementPanelProvider> mcp_management_panel_;
     int32_t builtin_mcp_registration_status_ = SAO_AI_EDITOR_ERR_NOT_FOUND;
     std::string builtin_mcp_server_path_;
+    // Plugin manifest contributions (see plugin_contributions.h).  Scanned
+    // once during initialize(); the MCP servers are registered under the
+    // Python-parity autostart gate and the chat providers stay available
+    // for the settings / UI surface.
+    Json manifest_chat_providers_ = Json::array();
+    std::vector<std::string> plugin_mcp_diagnostics_;
+    int32_t plugin_mcp_registered_count_ = 0;
     mutable std::mutex webview_bridge_mutex_;
     WebviewPostMessageHandler webview_post_message_handler_;
     uint32_t maximum_event_queue_;

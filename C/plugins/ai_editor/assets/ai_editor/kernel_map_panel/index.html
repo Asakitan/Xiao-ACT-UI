@@ -2,90 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
   <title>Kernel Map Bridge</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body data-panel="kernel-map">
   <header class="panel-header">
-    <h1 class="panel-title">Kernel Map Bridge</h1>
-    <span class="panel-subtitle" data-role="bridge-availability">bridge: probing...</span>
+    <div>
+      <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SAO / RUNTIME BRIDGE</p>
+      <h1 class="panel-title">Kernel Map Bridge</h1>
+      <p class="panel-subtitle" data-role="bridge-availability" role="status" aria-live="polite">bridge: probing...</p>
+    </div>
+    <span class="status-pill" data-role="status-pill" role="status">Probing</span>
   </header>
-
+  <section class="error-banner" data-role="error" role="alert" aria-live="assertive" hidden>
+    <span class="status-dot status-dot--error" aria-hidden="true"></span>
+    <strong data-role="error-text"></strong>
+    <button class="panel-button panel-button--secondary" type="button" data-role="btn-retry">Retry</button>
+  </section>
   <section class="panel-status" aria-label="Status summary">
-    <div class="status-row">
-      <span class="status-label">Status</span>
-      <span class="status-badge status-badge--unknown" data-role="status-badge">Unknown</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Mapped drivers</span>
-      <span class="status-value" data-role="mapped-count">0</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Last refresh</span>
-      <span class="status-value" data-role="last-refresh">never</span>
-    </div>
+    <div class="status-row"><span class="status-label">Status</span><span class="status-badge status-badge--unknown" data-role="status-badge">Unknown</span></div>
+    <div class="status-row"><span class="status-label">Mapped drivers</span><span class="status-value" data-role="mapped-count">0</span></div>
+    <div class="status-row"><span class="status-label">Last refresh</span><span class="status-value" data-role="last-refresh">never</span></div>
   </section>
-
+  <div class="loading-skeleton" data-role="loading-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
   <section class="panel-actions" aria-label="Bridge control">
-    <button class="panel-button panel-button--primary"
-            type="button"
-            data-role="btn-activate"
-            data-cmd="activate">Activate</button>
-    <button class="panel-button panel-button--danger"
-            type="button"
-            data-role="btn-deactivate"
-            data-cmd="deactivate">Deactivate</button>
+    <button class="panel-button panel-button--primary" type="button" data-role="btn-activate" data-cmd="activate">Activate</button>
+    <button class="panel-button panel-button--danger" type="button" data-role="btn-deactivate" data-cmd="deactivate">Deactivate</button>
   </section>
-
   <section class="panel-config" aria-label="Activate configuration">
     <div class="config-title">Activate configuration</div>
-    <label class="config-field">
-      <span>Invoke result slot VA</span>
-      <input data-role="activate-slot" type="text" inputmode="text" autocomplete="off" placeholder="0x...">
-    </label>
-    <label class="config-field">
-      <span>Pool tag seed</span>
-      <input data-role="activate-seed" type="text" inputmode="text" autocomplete="off" placeholder="0x...">
-    </label>
-    <label class="config-field">
-      <span>Idle timeout (ms)</span>
-      <input data-role="activate-timeout" type="number" min="100" max="600000" step="1" inputmode="numeric" placeholder="100-600000">
-    </label>
+    <label class="config-field" for="activate-slot"><span>Invoke result slot VA</span><input id="activate-slot" data-role="activate-slot" type="text" inputmode="text" autocomplete="off" placeholder="0x..."></label>
+    <label class="config-field" for="activate-seed"><span>Pool tag seed</span><input id="activate-seed" data-role="activate-seed" type="text" inputmode="text" autocomplete="off" placeholder="0x..."></label>
+    <label class="config-field" for="activate-timeout"><span>Idle timeout (ms)</span><input id="activate-timeout" data-role="activate-timeout" type="number" min="100" max="600000" step="1" inputmode="numeric" placeholder="100-600000"></label>
   </section>
   <section class="panel-list" aria-label="Mapped images">
-    <div class="list-header">
-      <span class="list-title">Mapped images</span>
-      <span class="list-hint" data-role="images-hint">no images loaded</span>
-    </div>
-    <ul class="image-list" data-role="image-list"></ul>
-    <template id="image-row-template">
-      <li class="image-row">
-        <code class="image-address"></code>
-        <button class="panel-button panel-button--secondary"
-                type="button"
-                data-cmd="unmap">Unload</button>
-      </li>
-    </template>
+    <div class="list-header"><div><p class="eyebrow">MEMORY SURFACE</p><span class="list-title">Mapped images</span></div><span class="list-hint" data-role="images-hint">no images loaded</span></div>
+    <ul class="image-list" data-role="image-list" aria-live="polite"></ul>
+    <template id="image-row-template"><li class="image-row"><code class="image-address"></code><button class="panel-button panel-button--secondary" type="button" data-cmd="unmap">Unload</button></li></template>
   </section>
-
-  <section class="panel-footer">
-    <button class="panel-button panel-button--secondary"
-            type="button"
-            data-role="btn-refresh"
-            data-cmd="refresh">Refresh</button>
-    <button class="panel-button panel-button--secondary"
-            type="button"
-            data-role="btn-load-driver"
-            data-cmd="load_driver">Load driver...</button>
+  <section class="panel-footer" aria-label="Bridge actions">
+    <button class="panel-button panel-button--secondary" type="button" data-role="btn-refresh" data-cmd="refresh">Refresh</button>
+    <button class="panel-button panel-button--secondary" type="button" data-role="btn-load-driver" data-cmd="load_driver">Load driver...</button>
   </section>
-
-  <section class="panel-log" aria-label="Bridge activity log">
-    <div class="log-title">Recent activity</div>
-    <ol class="log-entries" data-role="log-entries"></ol>
-  </section>
-
+  <section class="panel-log" aria-label="Bridge activity log"><div class="log-title">Recent activity</div><ol class="log-entries" data-role="log-entries" aria-live="polite"></ol></section>
   <script src="panel.js"></script>
 </body>
 </html>

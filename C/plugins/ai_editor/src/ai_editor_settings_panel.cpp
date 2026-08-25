@@ -3,6 +3,7 @@
 #include "sao/ui/dialog.h"
 #include "sao/ui/panel.h"
 #include "sao/ui/panel_sdk.h"
+#include "sao/ui/theme.h"
 
 #include <nlohmann/json.hpp>
 
@@ -609,8 +610,13 @@ std::vector<FieldMeta> field_hints() {
                             option("agent", "Agent", "代理")},
                            {}, {}, "Assistant"));
 
-    fields.push_back(field("workbench.colorTheme", "appearance", "Color Theme", "颜色主题",
-                           "Active workbench color theme.", FieldKind::String, "SAO Dark"));
+    fields.push_back(field("theme", "appearance", "Theme", "主题",
+                           "Built-in process theme used by the native UI and WebView surfaces.",
+                           FieldKind::Enum, "dark",
+                           {option("dark", "Dark", "深色"), option("light", "Light", "浅色")}));
+    fields.push_back(field("workbench.colorTheme", "appearance", "Extension Color Theme",
+                           "扩展颜色主题", "Optional extension-contributed color theme text.",
+                           FieldKind::String, ""));
     fields.push_back(field("workbench.iconTheme", "appearance", "File Icon Theme", "文件图标主题",
                            "Icon theme used by Explorer and extension views.", FieldKind::String,
                            ""));
@@ -1153,6 +1159,8 @@ void apply_field_hint(FieldMeta& item, const FieldMeta& hint) {
         item.advanced = true;
     if (item.kind == FieldKind::String && hint.kind == FieldKind::Enum && !hint.options.empty())
         item.kind = FieldKind::Enum;
+    if (hint.key == "theme")
+        item.advanced = false;
 }
 
 void append_object_leaf_fields(const FieldMeta& parent, const json& value,
@@ -1722,6 +1730,52 @@ const json* effective_value(const AiEditorSettingsPanelState& state, const Field
     return field.default_value.is_null() ? nullptr : &field.default_value;
 }
 
+std::optional<SaoUiThemeId> theme_id_from_value(const json* value) {
+    if (value == nullptr || !value->is_string())
+        return std::nullopt;
+    const std::string normalized = ascii_lower(trim_copy(value->get<std::string>()));
+    if (normalized == "dark")
+        return SAO_UI_THEME_DARK;
+    if (normalized == "light")
+        return SAO_UI_THEME_LIGHT;
+    return std::nullopt;
+}
+
+std::optional<SaoUiThemeId> process_theme_for_state(
+    const AiEditorSettingsPanelState& state) {
+    if (const FieldMeta* field = find_field(state, "theme"); field != nullptr) {
+        if (const auto theme = theme_id_from_value(effective_value(state, *field));
+            theme.has_value()) {
+            return theme;
+        }
+    }
+    for (const json* root : {&state.draft, &state.effective, &state.inherited, &state.defaults}) {
+        if (const auto theme = theme_id_from_value(lookup_value(*root, "theme"));
+            theme.has_value()) {
+            return theme;
+        }
+    }
+    return std::nullopt;
+}
+
+void reconcile_process_theme(AiEditorSettingsPanelState& state) {
+    std::optional<SaoUiThemeId> theme;
+    {
+        std::lock_guard lock(state.mutex);
+        theme = process_theme_for_state(state);
+    }
+    if (theme.has_value())
+        (void)sao_ui_theme_set_active_id(*theme);
+}
+
+struct ThemeReconcileAfterUnlock final {
+    AiEditorSettingsPanelState* state{};
+
+    ~ThemeReconcileAfterUnlock() {
+        if (state != nullptr)
+            reconcile_process_theme(*state);
+    }
+};
 const json* dependency_value(const AiEditorSettingsPanelState& state,
                              std::string_view key) {
     if (const FieldMeta* dependency = find_field(state, key); dependency != nullptr)
@@ -2652,6 +2706,7 @@ void apply_scope_load_result(AiEditorSettingsPanelState& state, const RpcJob& jo
     json inherited = inherited_values_from(response.result);
     json sources = sources_from(response.result);
 
+    ThemeReconcileAfterUnlock theme_reconcile{&state};
     std::lock_guard lock(state.mutex);
     if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
         return;
@@ -2717,6 +2772,7 @@ void apply_raw_scope_load_result(AiEditorSettingsPanelState& state, const RpcJob
 
     json raw_root = response.result.is_object() ? response.result : json::object();
     json overrides = object_from(raw_root, {"ai_editor"});
+    ThemeReconcileAfterUnlock theme_reconcile{&state};
     std::lock_guard lock(state.mutex);
     if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
         return;
@@ -2747,6 +2803,7 @@ void apply_effective_load_result(AiEditorSettingsPanelState& state, const RpcJob
         effective = settings_values_from(response.result);
     json inherited = inherited_values_from(response.result);
     json sources = sources_from(response.result);
+    ThemeReconcileAfterUnlock theme_reconcile{&state};
     std::lock_guard lock(state.mutex);
     if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
         return;
@@ -3111,10 +3168,10 @@ void apply_save_success(AiEditorSettingsPanelState& state, const RpcJob& job, co
 
 void apply_save_result(AiEditorSettingsPanelState& state, const RpcJob& job,
                        const RpcResponse& response) {
-    std::lock_guard lock(state.mutex);
-    if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
-        return;
     if (!response.ok) {
+        std::lock_guard lock(state.mutex);
+        if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
+            return;
         state.backend_connected = false;
         state.backend_message = "Offline / 离线: " + response.error;
         state.save_phase = SavePhase::Failed;
@@ -3123,11 +3180,14 @@ void apply_save_result(AiEditorSettingsPanelState& state, const RpcJob& job,
             "Save failed; draft retained and can be retried. / 保存失败，草稿已保留。";
         return;
     }
+    ThemeReconcileAfterUnlock theme_reconcile{&state};
+    std::lock_guard lock(state.mutex);
+    if (job.scope != state.selected_scope || job.plugin_id != state.selected_plugin_id)
+        return;
     state.backend_connected = true;
     state.backend_message = "Connected · last save succeeded";
     apply_save_success(state, job, response.result);
 }
-
 void queue_save(AiEditorSettingsPanelState& state) {
     std::lock_guard lock(state.mutex);
     if (state.save_phase == SavePhase::Saving || state.save_pending)
@@ -3390,6 +3450,7 @@ void SAO_UI_CALL dialog_result_callback(SaoUiDialogButton pressed, const char* i
     ActionLease lease(state);
     if (!lease)
         return;
+    ThemeReconcileAfterUnlock theme_reconcile{state};
     state = &lease.state();
     std::lock_guard lock(state->mutex);
     const PendingDialog pending = state->pending_dialog;
@@ -3628,6 +3689,7 @@ struct ApiLease final {
 
 void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
                      const uint8_t* payload_bytes, size_t payload_len) {
+    ThemeReconcileAfterUnlock theme_reconcile{&state};
     json payload;
     std::string payload_error;
     if (!read_payload(payload_bytes, payload_len, payload, payload_error)) {

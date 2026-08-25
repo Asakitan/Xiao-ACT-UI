@@ -57,7 +57,10 @@ int32_t read_driver_file_bounded(std::string_view path,
                                  std::vector<uint8_t>& out) {
     constexpr uint64_t kMaxBytes = 32ull * 1024ull * 1024ull;
     out.clear();
-    const std::wstring wide_path = std::filesystem::u8path(std::string(path)).wstring();
+    const std::wstring wide_path = utf8_to_wide(path);
+    if (wide_path.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
     HANDLE handle = CreateFileW(wide_path.c_str(), GENERIC_READ,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE |
                                     FILE_SHARE_DELETE,

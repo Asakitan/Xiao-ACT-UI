@@ -129,22 +129,41 @@ public:
         return static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u;
     }
 
-    // Publish the slot that current_slot_pixels() points at.  Bumps
-    // published_generation atomically and rotates to the next slot.
+    // Complete the slot that current_slot_pixels() points at.  SOPF V1
+    // publishes the next write slot; readers consume its predecessor.
     void commit_frame() {
         if (header_ == nullptr) {
             return;
         }
         write_seq_ += 1ull;
+        const uint32_t next_write_slot = (write_slot_ + 1u) % slot_count_;
         std::atomic_ref<uint32_t> published_slot_ref(header_->published_slot);
         std::atomic_ref<uint64_t> published_gen_ref(
             header_->published_generation);
         // Slot pointer must land before generation bumps -- readers that see
         // the new generation must be able to compute (slot + N - 1) % N and
         // land on the freshly written payload.
-        published_slot_ref.store(write_slot_, std::memory_order_release);
+        published_slot_ref.store(next_write_slot, std::memory_order_release);
         published_gen_ref.store(write_seq_, std::memory_order_release);
-        write_slot_ = (write_slot_ + 1u) % slot_count_;
+        write_slot_ = next_write_slot;
+    }
+
+    bool restore_frame(const uint8_t* pixels, size_t bytes,
+                       uint64_t generation) {
+        if (header_ == nullptr || pixels == nullptr ||
+            bytes != current_slot_bytes()) {
+            return false;
+        }
+        ::memcpy(current_slot_pixels(), pixels, bytes);
+        write_seq_ = generation;
+        const uint32_t next_write_slot = (write_slot_ + 1u) % slot_count_;
+        std::atomic_ref<uint32_t> published_slot_ref(header_->published_slot);
+        std::atomic_ref<uint64_t> published_gen_ref(
+            header_->published_generation);
+        published_slot_ref.store(next_write_slot, std::memory_order_release);
+        published_gen_ref.store(generation, std::memory_order_release);
+        write_slot_ = next_write_slot;
+        return true;
     }
 
     // Destroy the MMF and re-create with new dimensions.  Consumers

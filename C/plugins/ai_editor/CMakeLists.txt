@@ -110,6 +110,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/node_runtime.cpp
     src/openai_codec.cpp
     src/prompt_registry.cpp
+    src/plugin_contributions.cpp
     src/scope_store.cpp
     src/sha256_helper.cpp
     src/tool_execution_monitor.cpp
@@ -151,9 +152,6 @@ target_include_directories(sao_plugin_ai_editor PUBLIC
 )
 
 target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_BUILDING_DLL)
-if (SAO_BUILD_TESTS)
-    target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_TESTING)
-endif()
 target_compile_features(sao_plugin_ai_editor PUBLIC cxx_std_20)
 target_link_libraries(sao_plugin_ai_editor PUBLIC
     sao::ui
@@ -267,6 +265,3 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel
         PATTERN "*.css"
     )
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

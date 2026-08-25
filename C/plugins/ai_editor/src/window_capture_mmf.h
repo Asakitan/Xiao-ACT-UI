@@ -28,6 +28,8 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <limits>
+#include <vector>
 
 #include "mmf_frame_writer.h"
 #include "self_render.h"
@@ -51,7 +53,7 @@ public:
     bool init(const wchar_t* mmf_name, HWND target, int width, int height) {
         shutdown();
         if (mmf_name == nullptr || target == nullptr || !::IsWindow(target) ||
-            width <= 0 || height <= 0) {
+            !dimensions_within_budget(width, height)) {
             return false;
         }
         if (!fb_.init(width, height)) {
@@ -101,13 +103,68 @@ public:
     // for resizing the target HWND itself (e.g. via SetWindowPos and
     // WebView2 put_Bounds).
     bool resize(int new_width, int new_height) {
-        if (mmf_name_ == nullptr || target_ == nullptr) {
+        if (mmf_name_ == nullptr || target_ == nullptr ||
+            !dimensions_within_budget(new_width, new_height)) {
             return false;
+        }
+        GdiFramebuffer preflight;
+        if (!preflight.init(new_width, new_height)) {
+            return false;
+        }
+        const int old_width = fb_.width();
+        const int old_height = fb_.height();
+        const uint64_t old_generation = writer_.last_committed_generation();
+        std::vector<uint8_t> old_pixels;
+        if (fb_.pixels() != nullptr && writer_.current_slot_bytes() != 0u) {
+            try {
+                old_pixels.assign(fb_.pixels(),
+                                  fb_.pixels() + writer_.current_slot_bytes());
+            } catch (...) {
+                return false;
+            }
         }
         const wchar_t* name = mmf_name_;
         HWND t = target_;
         shutdown();
-        return init(name, t, new_width, new_height);
+        if (init(name, t, new_width, new_height)) {
+            return true;
+        }
+        if (!init(name, t, old_width, old_height) || old_pixels.empty() ||
+            !fb_.is_initialized() ||
+            !writer_.restore_frame(old_pixels.data(), old_pixels.size(),
+                                   old_generation)) {
+            return false;
+        }
+        ::memcpy(fb_.pixels_mutable(), old_pixels.data(), old_pixels.size());
+        return false;
+    }
+
+    static bool dimensions_within_budget(int width, int height) {
+        if (width <= 0 || height <= 0 ||
+            width > std::numeric_limits<int>::max() / 4) {
+            return false;
+        }
+        const uint64_t pixels = static_cast<uint64_t>(width) *
+                                static_cast<uint64_t>(height);
+        if (pixels > std::numeric_limits<uint64_t>::max() / 4ull) {
+            return false;
+        }
+        const uint64_t pixel_bytes = pixels * 4ull;
+        if (pixel_bytes > std::numeric_limits<uint64_t>::max() - 4095ull) {
+            return false;
+        }
+        const uint64_t slot_stride = ((pixel_bytes + 4095ull) / 4096ull) *
+                                     4096ull;
+        if (slot_stride >
+            (std::numeric_limits<uint64_t>::max() -
+             static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES)) / 3ull) {
+            return false;
+        }
+        const uint64_t total =
+            static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES) +
+            3ull * slot_stride;
+        return total <= SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES &&
+               total <= static_cast<uint64_t>(std::numeric_limits<size_t>::max());
     }
 
     bool is_initialized() const { return writer_.is_initialized(); }

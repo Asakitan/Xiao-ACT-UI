@@ -64,7 +64,7 @@ struct WebviewPanelState final {
     Json initial_state = Json::object();
 };
 
-class SAO_AI_EDITOR_API WebviewPanelRegistry final {
+class WebviewPanelRegistry final {
 public:
     WebviewPanelRegistry() = default;
 

@@ -5,7 +5,9 @@
 #include "sao/ai_editor/ai_editor_settings_panel.h"
 #include "sao/ai_editor/gpu_hunt_central_panel.h"
 #include "sao/ui/dialog.h"
+#include "sao/ui/overlay_host.h"
 #include "sao/ui/panel_sdk.h"
+#include "sao/ui/theme.h"
 
 #include <nlohmann/json.hpp>
 
@@ -65,6 +67,12 @@ constexpr std::chrono::milliseconds kEventDrainInterval{75};
 constexpr std::chrono::milliseconds kRunPollInterval{250};
 constexpr std::chrono::milliseconds kBootstrapRetryInterval{2000};
 constexpr int32_t kDialogCloseAdvanceMs = 1000;
+constexpr int32_t kDefaultPanelWidth = 1120;
+constexpr int32_t kDefaultPanelMinWidth = 720;
+constexpr int32_t kWorkbenchHorizontalThreshold = 1024;
+constexpr int32_t kMainMinimumWidth = 620;
+constexpr int32_t kWorkbenchWidth = 340;
+constexpr int32_t kWorkbenchMinimumWidth = 300;
 
 enum class RpcTaskKind {
     Bootstrap,
@@ -246,6 +254,7 @@ struct AiEditorMainPanelState {
     std::string selected_approval{"default"};
     std::string selected_workflow;
     std::string selected_context{"conversation"};
+    std::string selected_view{"inspector"};
     std::string active_run_id;
     std::string run_status{"idle"};
     std::string streamed_assistant_text;
@@ -551,6 +560,35 @@ std::string compact_text(std::string value, size_t maximum = 180U) {
     return value;
 }
 
+bool valid_view(std::string_view value) {
+    return value == "inspector" || value == "control" || value == "history" ||
+           value == "diagnostics" || value == "platform";
+}
+
+std::string view_label(std::string_view value) {
+    if (value == "control")
+        return "Control Center";
+    if (value == "history")
+        return "History";
+    if (value == "diagnostics")
+        return "Diagnostics";
+    if (value == "platform")
+        return "Platform Tools";
+    return "Inspector";
+}
+
+json host_status_badge(const AiEditorMainPanelState& state) {
+    const sao_ui_overlay_host_handle_t host = sao_ui_compositor_host(state.compositor);
+    if (host == nullptr)
+        return badge_node("Headless", "muted");
+
+    SaoOverlayHostState host_state{};
+    if (sao_ui_overlay_host_get_state(host, &host_state) != SAO_STATUS_OK)
+        return badge_node("Host state unavailable", "warn");
+    if (host_state.capture_excluded)
+        return badge_node("Capture protected", "ok");
+    return badge_node("Capture visible / monitor fallback", "warn");
+}
 void append_bounded_text(std::string& destination, std::string_view text, size_t maximum) {
     if (text.empty() || maximum == 0U)
         return;
@@ -2891,6 +2929,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     const bool history_actions_disabled =
         !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
     const bool selectors_disabled = run_is_active(state.run_phase);
+    const std::string current_view = valid_view(state.selected_view) ? state.selected_view : "inspector";
 
     json app_bar = json::array();
     app_bar.push_back(text_node("AI Editor", "title", 30));
@@ -2903,6 +2942,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     app_badges.push_back(badge_node(
         state.conversation_id.empty() ? "Unsaved conversation" : "Conversation persisted",
         state.conversation_id.empty() ? "muted" : "accent"));
+    app_badges.push_back(host_status_badge(state));
     app_bar.push_back(row_node(std::move(app_badges)));
     app_bar.push_back(text_node(state.conversation_title, "value", 24));
     app_bar.push_back(text_node(
@@ -2922,6 +2962,9 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     if (run_is_active(state.run_phase))
         status_actions.push_back(button_node("status.cancel", "Cancel", "chat.stop", json::object(), "danger"));
     app_bar.push_back(row_node(std::move(status_actions)));
+    SaoUiThemeId active_ui_theme = SAO_UI_THEME_DARK;
+    if (sao_ui_theme_get_active_id(&active_ui_theme) != SAO_STATUS_OK)
+        active_ui_theme = SAO_UI_THEME_DARK;
     json app_actions = json::array();
     app_actions.push_back(button_node(
         "chat.new", "New Chat", "chat.new", json::object(), "primary",
@@ -2935,7 +2978,16 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
                                       "diagnostics.refresh", json::object(), "ghost",
                                       !launcher_bound));
     app_bar.push_back(row_node(std::move(app_actions)));
-    json app_bar_node = card_node("AI Editor", std::move(app_bar), "gold");
+    json theme_actions = json::array();
+    theme_actions.push_back(text_node("Color Theme · session", "muted", 22));
+    theme_actions.push_back(button_node(
+        "theme.dark", "Dark", "theme.select", {{"value", "dark"}},
+        active_ui_theme == SAO_UI_THEME_DARK ? "primary" : "ghost"));
+    theme_actions.push_back(button_node(
+        "theme.light", "Light", "theme.select", {{"value", "light"}},
+        active_ui_theme == SAO_UI_THEME_LIGHT ? "primary" : "ghost"));
+    app_bar.push_back(row_node(std::move(theme_actions)));
+    json app_bar_node = card_node("AI Editor", std::move(app_bar), "muted");
     nodes.push_back(std::move(app_bar_node));
 
     json transcript = json::array();
@@ -3264,23 +3316,57 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     json main_section = section_node(
         "Main", json::array({std::move(transcript_panel), std::move(composer_panel)}));
     main_section["width"] = 0;
-    main_section["min_width"] = 620;
+    main_section["min_width"] = kMainMinimumWidth;
     main_section["weight"] = 1.0;
 
+    const std::pair<std::string_view, std::string_view> sidebar_views[] = {
+        {"inspector", "Inspector"},
+        {"control", "Control"},
+        {"history", "History"},
+        {"diagnostics", "Logs"},
+        {"platform", "Tools"},
+    };
+    json primary_view_buttons = json::array();
+    json secondary_view_buttons = json::array();
+    size_t view_index = 0;
+    for (const auto& view : sidebar_views) {
+        json button = button_node(
+            "view.select." + std::string(view.first), std::string(view.second), "view.select",
+            {{"view", view.first}}, current_view == view.first ? "primary" : "ghost");
+        (view_index++ < 3U ? primary_view_buttons : secondary_view_buttons)
+            .push_back(std::move(button));
+    }
+    json view_navigation = json::array();
+    view_navigation.push_back(text_node("Sidebar", "title", 24));
+    view_navigation.push_back(row_node(std::move(primary_view_buttons)));
+    view_navigation.push_back(row_node(std::move(secondary_view_buttons)));
+    view_navigation.push_back(text_node("View: " + view_label(current_view), "muted", 24));
+
+    json active_secondary_view;
+    if (current_view == "control")
+        active_secondary_view = control_center_section(state, launcher_bound);
+    else if (current_view == "history")
+        active_secondary_view = std::move(history_drawer);
+    else if (current_view == "diagnostics")
+        active_secondary_view = std::move(diagnostics_section);
+    else if (current_view == "platform")
+        active_secondary_view = std::move(platform_section);
+    else
+        active_secondary_view = std::move(inspector_panel);
+
     json secondary_children = json::array();
-    secondary_children.push_back(std::move(inspector_panel));
-    secondary_children.push_back(control_center_section(state, launcher_bound));
-    secondary_children.push_back(std::move(history_drawer));
-    secondary_children.push_back(std::move(diagnostics_section));
-    secondary_children.push_back(std::move(platform_section));
+    secondary_children.push_back(card_node("Workbench", std::move(view_navigation), "gold"));
+    secondary_children.push_back(std::move(active_secondary_view));
     json secondary_section = section_node("Secondary", std::move(secondary_children));
-    secondary_section["width"] = 360;
-    secondary_section["min_width"] = 300;
+    secondary_section["width"] = kWorkbenchWidth;
+    secondary_section["min_width"] = kWorkbenchMinimumWidth;
     secondary_section["weight"] = 0.0;
-    nodes.push_back(container_node(
+    json columns = container_node(
         "ai-editor-columns",
         json::array({std::move(main_section), std::move(secondary_section)}),
-        "horizontal", 0, 960, 1.0F, 960));
+        "horizontal", 0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    columns["fallback"]["threshold_width"] = kWorkbenchHorizontalThreshold;
+    nodes.push_back(std::move(columns));
 
     std::string serialized =
         json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
@@ -3324,6 +3410,51 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         compact_status.push_back(text_node("Error: " + state.run_error, "bad", 42));
     compact_nodes.push_back(card_node("Status", std::move(compact_status),
                                       state.run_phase == RunPhase::Failed ? "bad" : "cyan"));
+
+    json compact_primary_view_buttons = json::array();
+    json compact_secondary_view_buttons = json::array();
+    view_index = 0;
+    for (const auto& view : sidebar_views) {
+        json button = button_node(
+            "compact.view.select." + std::string(view.first), std::string(view.second),
+            "view.select", {{"view", view.first}}, current_view == view.first ? "primary" : "ghost");
+        (view_index++ < 3U ? compact_primary_view_buttons : compact_secondary_view_buttons)
+            .push_back(std::move(button));
+    }
+    compact_nodes.push_back(card_node(
+        "Sidebar: " + view_label(current_view),
+        json::array({row_node(std::move(compact_primary_view_buttons)),
+                     row_node(std::move(compact_secondary_view_buttons))}),
+        "gold"));
+
+    json compact_transcript = json::array();
+    compact_transcript.push_back(text_node("Transcript", "title", 26));
+    const size_t compact_transcript_total = state.conversation_messages_total == 0
+                                                ? state.conversation_messages.size()
+                                                : state.conversation_messages_total;
+    compact_transcript.push_back(text_node(
+        "Showing last " + std::to_string(std::min<size_t>(4U, state.conversation_messages.size())) +
+            " of " + std::to_string(compact_transcript_total) + " messages", "muted", 24));
+    if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
+        state.streamed_assistant_text.empty()) {
+        compact_transcript.push_back(text_node("No messages yet. Start with a prompt in Composer.",
+                                               "muted", 42));
+    } else {
+        const size_t begin = state.conversation_messages.size() > 4U
+                                 ? state.conversation_messages.size() - 4U
+                                 : 0U;
+        for (size_t index = begin; index < state.conversation_messages.size(); ++index) {
+            const auto& message = state.conversation_messages[index];
+            const std::string role = compact_text(message.value("role", std::string{"message"}), 64U);
+            append_text_chunks(compact_transcript, message_content(message),
+                               role == "assistant" ? "value" : "mono", 76, 2);
+        }
+        if (!state.pending_user_text.empty())
+            append_text_chunks(compact_transcript, state.pending_user_text, "mono", 76, 2);
+        if (!state.streamed_assistant_text.empty())
+            append_text_chunks(compact_transcript, state.streamed_assistant_text, "value", 76, 2);
+    }
+    compact_nodes.push_back(card_node("Transcript", std::move(compact_transcript), "cyan"));
 
     json compact_composer = json::array();
     json compact_shortcuts = json::array();
@@ -4864,6 +4995,20 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         duplicate_history_conversation(*state, payload_string(payload, "id"),
                                        payload_string(payload, "title"),
                                        payload_string(payload, "scope"));
+    } else if (action == "theme.select") {
+        const std::string value = payload_string(payload, "value");
+        if (payload.size() != 1U || (value != "dark" && value != "light")) {
+            append_output_line(*state,
+                               "[error] theme.select requires dark or light.");
+        } else {
+            const SaoUiThemeId theme =
+                value == "light" ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK;
+            const sao_status_t theme_status = sao_ui_theme_set_active_id(theme);
+            if (theme_status != SAO_STATUS_OK) {
+                append_output_line(*state, "[error] theme.select failed: " +
+                                               std::to_string(theme_status));
+            }
+        }
     } else if (action == "settings.open") {
         show_settings_panel(*state);
     } else if (action == "gpu.hunt") {
@@ -4902,6 +5047,19 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
             state->bootstrap_pending = false;
             state->next_bootstrap_attempt =
                 std::chrono::steady_clock::now() + kBootstrapRetryInterval;
+        }
+    } else if (action == "view.select") {
+        const auto view_field = payload.find("view");
+        if (payload.size() != 1U || view_field == payload.end() || !view_field->is_string()) {
+            append_output_line(*state, "[error] view.select rejected payload: expected exactly one string field named view.");
+        } else {
+            const std::string requested_view = view_field->get<std::string>();
+            if (!valid_view(requested_view)) {
+                append_output_line(*state, "[error] view.select rejected unknown sidebar view: " + requested_view);
+            } else {
+                std::lock_guard lock(state->mutex);
+                state->selected_view = requested_view;
+            }
         }
     } else if (action.starts_with("select.")) {
         select_value(*state, action, payload_string(payload, "value"));
@@ -5216,9 +5374,9 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         descriptor.panel_id_utf8 = SAO_AI_EDITOR_MAIN_PANEL_ID;
         descriptor.title_utf8 = "AI Editor";
         descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
-        descriptor.default_width_px = 960;
+        descriptor.default_width_px = kDefaultPanelWidth;
         descriptor.default_height_px = 760;
-        descriptor.min_width_px = 720;
+        descriptor.min_width_px = kDefaultPanelMinWidth;
         descriptor.min_height_px = 520;
         descriptor.movable = true;
         descriptor.resizable = true;
@@ -5551,6 +5709,7 @@ extern "C" int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_snapshot_json_for
                     {"conversationTitle", lease.state().conversation_title},
                     {"conversationMessages", lease.state().conversation_messages},
                     {"historyQuery", lease.state().history_query},
+                    {"selectedView", lease.state().selected_view},
                     {"historyTotal", lease.state().history_total},
                     {"historyTaskPending", lease.state().history_task_pending},
                     {"visible", lease.state().visible},

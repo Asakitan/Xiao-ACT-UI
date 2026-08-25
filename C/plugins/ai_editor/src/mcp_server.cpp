@@ -50,6 +50,9 @@ int32_t forward_dispatch(sao_ai_editor_runtime_t runtime, const Json& request,
     if (query != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
         return query;
     }
+    if (required == 0 || required > kMaxMessageBytes) {
+        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+    }
     std::vector<char> buffer(static_cast<size_t>(required) + 1U, '\0');
     uint32_t written = 0;
     const int32_t drain = sao_ai_editor_runtime_dispatch(
@@ -64,49 +67,31 @@ int32_t forward_dispatch(sao_ai_editor_runtime_t runtime, const Json& request,
                                    : SAO_AI_EDITOR_OK;
 }
 
-Json tools_schema() {
-    return Json::array({
-        Json{{"name", "readFile"},
-             {"description", "Read a UTF-8 file in the SAO workspace"},
-             {"inputSchema",
-              {{"type", "object"},
-               {"properties",
-                {{"path", {{"type", "string"}}},
-                 {"startLine", {{"type", "integer"}}},
-                 {"endLine", {{"type", "integer"}}}}},
-               {"required", {"path"}}}}},
-        Json{{"name", "listFiles"},
-             {"description", "List SAO workspace files and directories"},
-             {"inputSchema",
-              {{"type", "object"},
-               {"properties",
-                {{"path", {{"type", "string"}}},
-                 {"pattern", {{"type", "string"}}},
-                 {"recursive", {{"type", "boolean"}}},
-                 {"limit", {{"type", "integer"}}}}}}}},
-        Json{{"name", "searchFiles"},
-             {"description", "Search UTF-8 SAO workspace files"},
-             {"inputSchema",
-              {{"type", "object"},
-               {"properties",
-                {{"query", {{"type", "string"}}},
-                 {"path", {{"type", "string"}}},
-                 {"pattern", {{"type", "string"}}},
-                 {"regex", {{"type", "boolean"}}},
-                 {"caseSensitive", {{"type", "boolean"}}},
-                 {"limit", {{"type", "integer"}}}}},
-               {"required", {"query"}}}}},
-        Json{{"name", "editFile"},
-             {"description", "Create or replace a UTF-8 SAO workspace file"},
-             {"inputSchema",
-              {{"type", "object"},
-               {"properties",
-                {{"path", {{"type", "string"}}},
-                 {"content", {{"type", "string"}}},
-                 {"startLine", {{"type", "integer"}}},
-                 {"endLine", {{"type", "integer"}}}}},
-               {"required", {"path", "content"}}}}},
-    });
+int32_t tools_schema(sao_ai_editor_runtime_t runtime, Json& out) {
+    Json request{{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools.list"},
+                 {"params", {{"mode", "agent"}}}};
+    Json inner;
+    const int32_t status = forward_dispatch(runtime, request, inner);
+    if (status != SAO_AI_EDITOR_OK || inner.contains("error")) return SAO_AI_EDITOR_ERR_PROTOCOL;
+    const Json runtime_result = inner.value("result", Json::object());
+    const Json descriptors = runtime_result.value("tools", Json());
+    if (!descriptors.is_array()) return SAO_AI_EDITOR_ERR_PROTOCOL;
+    out = Json::array();
+    for (const auto& descriptor : descriptors) {
+        if (!descriptor.is_object() || !descriptor.contains("name") || !descriptor["name"].is_string()) {
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        Json input_schema = descriptor.value("parameters", Json::object());
+        if (!input_schema.is_object()) {
+            input_schema = Json{{"type", "object"}, {"properties", Json::object()}};
+        }
+        const bool read_only = descriptor.value("readOnly", false);
+        out.push_back(Json{{"name", descriptor["name"]},
+                           {"description", descriptor.value("description", std::string{})},
+                           {"inputSchema", std::move(input_schema)},
+                           {"annotations", {{"readOnlyHint", read_only}}}});
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 Json error_envelope(const Json& id, int code, std::string_view message) {
@@ -151,7 +136,12 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
         return SAO_AI_EDITOR_OK;
     }
     if (method == "tools/list") {
-        response = result_envelope(id, Json{{"tools", tools_schema()}});
+        Json tools;
+        if (tools_schema(runtime, tools) != SAO_AI_EDITOR_OK) {
+            response = error_envelope(id, -32000, "runtime tools discovery failed");
+            return SAO_AI_EDITOR_OK;
+        }
+        response = result_envelope(id, Json{{"tools", std::move(tools)}});
         return SAO_AI_EDITOR_OK;
     }
     if (method == "tools/call") {
@@ -282,6 +272,9 @@ bool send_response(HANDLE stdout_handle, const Json& response) {
         return true;
     }
     const std::string payload = response.dump();
+    if (payload.size() > kMaxMessageBytes) {
+        return false;
+    }
     const std::string header =
         "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n";
     return write_all(stdout_handle, header.data(), header.size()) &&
@@ -379,6 +372,9 @@ bool send_extension_host_frame(HANDLE stdout_handle,
                                std::string_view payload) {
     if (payload.empty()) {
         return true;
+    }
+    if (payload.size() > kMaxMessageBytes) {
+        return false;
     }
     const std::string header =
         "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n";

@@ -7,53 +7,64 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <header>
-    <div><h1>MCP Management</h1><p data-role="summary">Loading registry...</p></div>
-    <div class="header-actions"><span class="status-pill" data-role="connection-status">Connecting</span><button type="button" data-role="refresh">Refresh</button></div>
+  <header class="panel-header">
+    <div class="title-block">
+      <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SAO / AI EDITOR</p>
+      <h1>MCP Management</h1>
+      <p class="panel-summary" data-role="summary" aria-live="polite">Loading registry...</p>
+    </div>
+    <div class="header-actions">
+      <span class="status-pill" data-role="connection-status" role="status">Connecting</span>
+      <button type="button" class="button-secondary" data-role="refresh" data-pending-key="refresh">Refresh</button>
+    </div>
   </header>
-  <section class="error-banner" data-role="error" hidden><strong data-role="error-text"></strong><button type="button" class="button-secondary" data-role="retry">Retry</button></section>
+  <section class="error-banner" data-role="error" role="alert" aria-live="assertive" hidden>
+    <span class="status-dot status-dot--error" aria-hidden="true"></span>
+    <strong data-role="error-text"></strong>
+    <button type="button" class="button-secondary" data-role="retry">Retry</button>
+  </section>
   <nav class="tabs" role="tablist" aria-label="MCP management sections">
-    <button type="button" role="tab" aria-selected="true" aria-controls="panel-servers" data-tab="servers">Servers</button>
-    <button type="button" role="tab" aria-selected="false" aria-controls="panel-tools" data-tab="tools">Tools</button>
-    <button type="button" role="tab" aria-selected="false" aria-controls="panel-prompts" data-tab="prompts">Prompts</button>
-    <button type="button" role="tab" aria-selected="false" aria-controls="panel-resources" data-tab="resources">Resources</button>
-    <button type="button" role="tab" aria-selected="false" aria-controls="panel-notifications" data-tab="notifications">Notifications</button>
+    <button type="button" id="tab-servers" role="tab" aria-selected="true" aria-controls="panel-servers" tabindex="0" data-tab="servers"><span>Servers</span><span class="tab-count" data-role="tab-count-servers">0</span></button>
+    <button type="button" id="tab-tools" role="tab" aria-selected="false" aria-controls="panel-tools" tabindex="-1" data-tab="tools"><span>Tools</span><span class="tab-count" data-role="tab-count-tools">0</span></button>
+    <button type="button" id="tab-prompts" role="tab" aria-selected="false" aria-controls="panel-prompts" tabindex="-1" data-tab="prompts"><span>Prompts</span><span class="tab-count" data-role="tab-count-prompts">0</span></button>
+    <button type="button" id="tab-resources" role="tab" aria-selected="false" aria-controls="panel-resources" tabindex="-1" data-tab="resources"><span>Resources</span><span class="tab-count" data-role="tab-count-resources">0</span></button>
+    <button type="button" id="tab-notifications" role="tab" aria-selected="false" aria-controls="panel-notifications" tabindex="-1" data-tab="notifications"><span>Notifications</span><span class="tab-count" data-role="tab-count-notifications">0</span></button>
   </nav>
   <main>
-    <section id="panel-servers" role="tabpanel" data-panel="servers">
-      <div class="section-heading"><div><h2>Servers</h2><p class="muted">Manage trusted MCP connections and their lifecycle.</p></div><span class="count-pill" data-role="server-count">0</span></div>
-      <form class="glass-form" data-role="server-form">
-        <div class="form-heading"><h3>Add server</h3><span class="muted">Credentials are sent only with the submitted request.</span></div>
+    <section id="panel-servers" class="tab-panel" role="tabpanel" aria-labelledby="tab-servers" data-panel="servers">
+      <div class="section-heading"><div><p class="eyebrow">CONNECTIONS</p><h2>Servers</h2><p class="muted">Manage trusted MCP connections and their lifecycle.</p></div><span class="count-pill" data-role="server-count">0</span></div>
+      <form class="glass-card glass-form" data-role="server-form">
+        <div class="form-heading"><div><p class="eyebrow">NEW LINK</p><h3>Add server</h3></div><span class="muted">Submitted credentials stay in this request.</span></div>
         <div class="form-grid">
-          <label>Name<input name="name" required autocomplete="off" placeholder="my-server"></label>
-          <label>Transport<select name="transport"><option value="stdio">stdio</option><option value="http">http</option></select></label>
-          <label>Command<input name="command" autocomplete="off" placeholder="C:\\Tools\\server.exe"></label>
-          <label>URL<input name="url" autocomplete="off" placeholder="https://localhost:PORT/mcp"></label>
-          <label class="wide">Args (JSON array)<textarea name="args" rows="2" spellcheck="false">[]</textarea></label>
-          <label class="wide">Env (JSON object)<textarea name="env" rows="2" spellcheck="false">{}</textarea></label>
+          <label for="server-name">Name<input id="server-name" name="name" required autocomplete="off" placeholder="my-server"></label>
+          <label for="server-transport">Transport<select id="server-transport" name="transport"><option value="stdio">stdio</option><option value="http">http</option></select></label>
+          <label for="server-command">Command<input id="server-command" name="command" autocomplete="off" placeholder="C:\\Tools\\server.exe"></label>
+          <label for="server-url">URL<input id="server-url" name="url" autocomplete="off" placeholder="https://localhost:PORT/mcp"></label>
+          <label class="wide" for="server-args">Args (JSON array)<textarea id="server-args" name="args" rows="2" spellcheck="false">[]</textarea></label>
+          <label class="wide" for="server-env">Env (JSON object)<textarea id="server-env" name="env" rows="2" spellcheck="false">{}</textarea></label>
         </div>
-        <div class="form-actions"><button type="submit">Add server</button><span class="muted">Workspace trust and confirmation are required by Native.</span></div>
+        <div class="form-actions"><button type="submit" data-pending-key="add-server">Add server</button><span class="muted">Workspace trust and confirmation are required by Native.</span></div>
       </form>
       <div class="grid" data-role="servers"></div>
-      <div class="subsection-heading"><h3>Platform Tools</h3><span class="muted">Dynamic runtime status</span></div>
+      <div class="subsection-heading"><div><p class="eyebrow">RUNTIME</p><h3>Platform Tools</h3></div><span class="muted">Dynamic runtime status</span></div>
       <div class="platform-grid" data-role="platform-tools"></div>
-      <button type="button" class="button-secondary" data-role="open-kernel-map">Open Kernel Map panel</button>
+      <button type="button" class="button-secondary wide-action" data-role="open-kernel-map" data-pending-key="open-kernel-map">Open Kernel Map panel</button>
     </section>
-    <section id="panel-tools" role="tabpanel" data-panel="tools" hidden>
-      <div class="section-heading"><div><h2>Tools</h2><p class="muted">Inspect schemas and call tools with an explicit confirmation.</p></div><span class="count-pill" data-role="tool-count">0</span></div>
-      <div class="grid" data-role="tools"></div><section class="result-panel" data-role="tool-result" hidden></section>
+    <section id="panel-tools" class="tab-panel" role="tabpanel" aria-labelledby="tab-tools" data-panel="tools" hidden>
+      <div class="section-heading"><div><p class="eyebrow">CAPABILITIES</p><h2>Tools</h2><p class="muted">Inspect schemas and call tools with explicit confirmation.</p></div><span class="count-pill" data-role="tool-count">0</span></div>
+      <div class="grid" data-role="tools"></div><section class="result-panel" data-role="tool-result" aria-live="polite" hidden></section>
     </section>
-    <section id="panel-prompts" role="tabpanel" data-panel="prompts" hidden>
-      <div class="section-heading"><div><h2>Prompts</h2><p class="muted">List prompts, provide an arguments object, and preview the result.</p></div><span class="count-pill" data-role="prompt-count">0</span></div>
-      <div class="grid" data-role="prompts"></div><section class="result-panel" data-role="prompt-result" hidden></section>
+    <section id="panel-prompts" class="tab-panel" role="tabpanel" aria-labelledby="tab-prompts" data-panel="prompts" hidden>
+      <div class="section-heading"><div><p class="eyebrow">CONTEXT</p><h2>Prompts</h2><p class="muted">Provide an arguments object and preview the result.</p></div><span class="count-pill" data-role="prompt-count">0</span></div>
+      <div class="grid" data-role="prompts"></div><section class="result-panel" data-role="prompt-result" aria-live="polite" hidden></section>
     </section>
-    <section id="panel-resources" role="tabpanel" data-panel="resources" hidden>
-      <div class="section-heading"><div><h2>Resources</h2><p class="muted">Browse resource metadata and read a URI into the viewer.</p></div><span class="count-pill" data-role="resource-count">0</span></div>
-      <div class="grid" data-role="resources"></div><section class="result-panel" data-role="resource-viewer" hidden></section>
+    <section id="panel-resources" class="tab-panel" role="tabpanel" aria-labelledby="tab-resources" data-panel="resources" hidden>
+      <div class="section-heading"><div><p class="eyebrow">DATA</p><h2>Resources</h2><p class="muted">Browse metadata and read a URI into the viewer.</p></div><span class="count-pill" data-role="resource-count">0</span></div>
+      <div class="grid" data-role="resources"></div><section class="result-panel" data-role="resource-viewer" aria-live="polite" hidden></section>
     </section>
-    <section id="panel-notifications" role="tabpanel" data-panel="notifications" hidden>
-      <div class="section-heading"><div><h2>Notifications</h2><p class="muted">Live MCP status events from trusted Native sources.</p></div><span class="count-pill" data-role="notification-count">0</span></div>
-      <div class="feed" data-role="notifications"></div>
+    <section id="panel-notifications" class="tab-panel" role="tabpanel" aria-labelledby="tab-notifications" data-panel="notifications" hidden>
+      <div class="section-heading"><div><p class="eyebrow">TELEMETRY</p><h2>Notifications</h2><p class="muted">Live status events from trusted Native sources.</p></div><span class="count-pill" data-role="notification-count">0</span></div>
+      <div class="feed" data-role="notifications" aria-live="polite"></div>
     </section>
   </main>
   <script src="panel.js"></script>

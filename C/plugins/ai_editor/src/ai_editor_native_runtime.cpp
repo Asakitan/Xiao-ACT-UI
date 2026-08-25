@@ -7,6 +7,7 @@
 #include "kernel_map_tools.h"
 #include "mcp_management_panel_provider.h"
 #include "native_runtime_internal.h"
+#include "plugin_contributions.h"
 #include "sao/ai_editor/kernel_map_bridge.h"
 #include "sha256_helper.h"
 
@@ -1140,6 +1141,7 @@ int32_t NativeRuntime::initialize() {
     sao_ai_editor_mcp_client_set_notification_forwarder(
         mcp_client_.get(), this, &NativeRuntime::mcp_notification_trampoline);
     builtin_mcp_registration_status_ = register_builtin_mcp_server();
+    register_plugin_manifest_contributions();
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
     if (!kernel_map_bridge_owner_) {
@@ -1219,6 +1221,46 @@ int32_t NativeRuntime::initialize() {
     return SAO_AI_EDITOR_OK;
 }
 
+void NativeRuntime::register_plugin_manifest_contributions() {
+    if (mcp_client_ == nullptr) {
+        return;
+    }
+    manifest_chat_providers_ = Json::array();
+    plugin_mcp_diagnostics_.clear();
+    plugin_mcp_registered_count_ = 0;
+    Json roots = Json::object();
+    if (!options_.plugin_roots_json.empty()) {
+        try {
+            roots = Json::parse(options_.plugin_roots_json, nullptr, false);
+        } catch (...) {
+            roots = Json::object();
+        }
+    }
+    PluginContributions contributions;
+    scan_plugin_contributions(roots, contributions);
+    plugin_mcp_diagnostics_ = std::move(contributions.diagnostics);
+    manifest_chat_providers_ = std::move(contributions.chat_providers);
+    Json settings;
+    const int32_t settings_status = [&] {
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return scopes_.load_merged_config(settings);
+    }();
+    if (settings_status != SAO_AI_EDITOR_OK) {
+        if (plugin_mcp_diagnostics_.size() <
+            kMaximumPluginContributionDiagnostics) {
+            plugin_mcp_diagnostics_.push_back(
+                "skipped plugin MCP autostart: settings unavailable (status " +
+                std::to_string(settings_status) + ")");
+        }
+        return;
+    }
+    if (!plugin_mcp_autostart_enabled(settings.value("mcp", Json::object()))) {
+        return;
+    }
+    plugin_mcp_registered_count_ = register_plugin_mcp_servers(
+        mcp_client_.get(), contributions.mcp_servers, plugin_mcp_diagnostics_);
+}
+
 int32_t NativeRuntime::register_builtin_mcp_server() {
     builtin_mcp_server_path_.clear();
     if (mcp_client_ == nullptr) {
@@ -1263,6 +1305,9 @@ Json NativeRuntime::mcp_management_snapshot() {
     const Json prompt_items = prompts.is_object() ? prompts.value("items", Json::array()) : Json::array();
     const Json resource_items = resources.is_object() ? resources.value("items", Json::array()) : Json::array();
     return Json{{"registration", {{"name", "kernel_map"}, {"status", builtin_mcp_registration_status_}, {"path", builtin_mcp_server_path_}}},
+                {"plugin", {{"mcp_registered", plugin_mcp_registered_count_},
+                            {"chat_providers", manifest_chat_providers_},
+                            {"diagnostics", plugin_mcp_diagnostics_}}},
                 {"servers_status", servers_status}, {"tools_status", tools_status},
                 {"prompts_status", prompts_status}, {"resources_status", resources_status},
                 {"servers", server_items}, {"tools", tool_items},
@@ -4898,10 +4943,12 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
                 return provider_status;
             }
             if (provider_reply.value("status", std::string{}) == "forward") {
-                const std::string method = provider_reply.value("method", std::string{});
+                const std::string forward_method =
+                    provider_reply.value("method", std::string{});
                 const Json routed_params = provider_reply.value("params", Json::object());
                 Json routed_result;
-                const int32_t routed_status = dispatch_mcp(method, routed_params, routed_result);
+                const int32_t routed_status =
+                    dispatch_mcp(forward_method, routed_params, routed_result);
                 Json routed_reply{{"cmd", payload.value("cmd", payload.value("command", std::string{}))},
                                   {"status", routed_status == SAO_AI_EDITOR_OK ? "ok" : "error"}};
                 if (payload.contains("requestId")) routed_reply["requestId"] = payload["requestId"];

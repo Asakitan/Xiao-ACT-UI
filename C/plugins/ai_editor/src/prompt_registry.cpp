@@ -285,16 +285,16 @@ std::string PromptDefinition::render(const Json& arguments) const {
         }
         const std::string_view raw_name(content.data() + open + 2,
                                          close - open - 2);
-        const std::string name = trim_ascii(raw_name);
-        if (name.empty()) {
+        const std::string placeholder_name = trim_ascii(raw_name);
+        if (placeholder_name.empty()) {
             // Empty placeholder — behave like an unknown variable and emit
             // nothing.  Advance past `}}` so we don't loop forever.
             cursor = close + 2;
             continue;
         }
         bool substituted = false;
-        if (arguments.is_object() && arguments.contains(name)) {
-            const Json& value = arguments[name];
+        if (arguments.is_object() && arguments.contains(placeholder_name)) {
+            const Json& value = arguments[placeholder_name];
             if (value.is_string()) {
                 output.append(value.get<std::string>());
             } else if (value.is_null()) {
@@ -311,7 +311,7 @@ std::string PromptDefinition::render(const Json& arguments) const {
                 if (!variable.is_object()) {
                     continue;
                 }
-                if (variable.value("name", std::string{}) != name) {
+                if (variable.value("name", std::string{}) != placeholder_name) {
                     continue;
                 }
                 if (variable.contains("default")) {

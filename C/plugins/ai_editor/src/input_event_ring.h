@@ -79,6 +79,10 @@ struct InputEvent {
     uint32_t button;         // mouse button flag (VK_LBUTTON etc.)
     int32_t wheel_delta;     // WHEEL_DELTA units
     uint32_t sequence;       // producer-side sequence for debugging
+    // For IME_COMPOSITION / IME_COMMIT, reserved[0] is an optional UTF-16
+    // code-unit count (0..14), and reserved[1..7] pack two UTF-16 units per
+    // word, low unit first. When the count is zero, `code` carries one
+    // Unicode scalar value; zero means an empty composition update.
     uint32_t reserved[8];
 };
 static_assert(sizeof(InputEvent) == kInputEventBytes, "InputEvent must be 64 bytes");

@@ -110,7 +110,7 @@ private:
     bool available_ = false;
 };
 
-class SAO_AI_EDITOR_API KernelMapPanelProvider final : public NativePanelProvider {
+class KernelMapPanelProvider final : public NativePanelProvider {
 public:
     // Delegate signature used to push messages back to the webview.
     // The runtime hook injects a lambda that runs the same

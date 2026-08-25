@@ -13,7 +13,7 @@ inline constexpr const char kMcpManagementPanelId[] = "mcp-management-builtin";
 inline constexpr const char kMcpManagementViewType[] = "sao.mcp_management";
 inline constexpr const char kMcpManagementPanelTitle[] = "MCP Management";
 
-class SAO_AI_EDITOR_API McpManagementPanelProvider final : public NativePanelProvider {
+class McpManagementPanelProvider final : public NativePanelProvider {
 public:
     using SnapshotProvider = std::function<Json()>;
     using KernelMapNavigator = std::function<bool()>;
