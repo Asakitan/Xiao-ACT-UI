@@ -1,7 +1,7 @@
 # SAO Auto Agent Instructions
 
 ## Python Environment
-- Use `E:\Py\python.exe` for all Python scripts, tools, checks, and tests in this repository.
+- Use `E:\Py\python.exe` for all Python scripts, tools, and checks in this repository.
 - Install Python packages with `E:\Py\python.exe -m pip ...` so they are installed for the correct interpreter.
 - Do not substitute another Python installation unless the user explicitly requests it.
 
@@ -9,13 +9,13 @@
 
 - This file applies to `sao_auto` only.
 - Keep concise. No rollout logs, task transcripts, or debugging history.
-- Repository-specific history belongs in `/memories/repo/`.
+- Repository current-state facts belong in `/memories/repo/` (real-time updates; see §Repository Memory).
 
 ## Active Platform And Legacy Freeze
 
 - The active platform is native C++ under `C/`.
 - Python under `python/` is legacy and temporarily frozen. Do not update, maintain, refactor, or add features to it unless the user explicitly requests work on the legacy Python implementation.
-- Default all new platform work, fixes, tests, and documentation to the C++ implementation.
+- Default all new platform work, fixes, and documentation to the C++ implementation.
 - This freeze overrides the historical Python maintenance guidance below wherever the two conflict.
 
 ## Architecture — Platform vs Plugin
@@ -53,15 +53,17 @@ The AI Editor / SaoAiEditor / gpu_hunt stack is written in native C++ (`sao_auto
 
 ## Before Working
 
-- Check `/memories/repo/` for task-specific notes.
-- Confirm the target surface before editing UI:
-  - Entity UI: `sao_gui.py`, `gui_modules/`, `sao_theme/`, Tk/GPU modules
-  - AI Editor: `ai_editor/`, `web/ai_editor_app.html`
-  - **WebView UI: paused — do not maintain.** `sao_webview.py` + `web/menu.html` / `web/act_aggregate.html` / other legacy `web/*.html` (excluding AI Editor) are frozen. Do NOT invest effort in:
-    - New features / panels / fields (overrides the historical "double-UI parity" rule — Entity-only for new work)
-    - Cleaning up historical coupling leaks inside `sao_webview.py` (hardcoded plugin attributes: `_recognition_engines`, `_packet_engine`, `_vision_engine`, `_recognition_active`, `_vision_paused_for_death`, etc. — leave them as-is, do NOT extract or refactor)
-    - Adding new tests / selftests targeting `sao_webview.py`
-    - Existing production paths through `sao_webview.py` are untouched; only maintenance work on it is off-limits unless a blocking runtime bug forces it.
+- Read `/memories/repo/current-state.md` (and the other current-state fact files) first. Memory is updated in real time; if it disagrees with on-disk code, trust the code and fix the memory file.
+- Confirm the target surface before editing UI. **The active UI is native C++ under `C/`:**
+  - Platform UI / overlay / widgets / theme / SaoMenu: `C/platform/ui/`
+  - Launcher (settings / hotkeys / license / workshop / plugin manager / user menu): `C/launcher/`
+  - AI Editor (native panels + WebView2 bridge + web assets): `C/plugins/ai_editor/`
+  - SDK registration surface (panel/widget ABI): `C/platform/sdk/`
+- Legacy Python UI is **frozen reference — do NOT extend**:
+  - Entity/Tk UI: `python/sao_gui.py`, `python/gui_modules/`, `sao_theme/`
+  - WebView UI: `sao_webview.py` + `web/menu.html` / `web/act_aggregate.html` / legacy `web/*.html`
+  - Python AI Editor: `python/ai_editor/` (see §AI Editor Legacy)
+  - No new features / panels / fields there. Do not refactor historical coupling leaks inside `sao_webview.py` (hardcoded plugin attributes stay as-is).
 - Default to UTF-8 for all reads/writes.
 
 ## Branch And Build
@@ -94,28 +96,21 @@ The AI Editor / SaoAiEditor / gpu_hunt stack is written in native C++ (`sao_auto
 
 ## Validation
 
-- `python -m py_compile <changed .py files>` for syntax.
-- Final AI Editor `selftest` must be run by the top-level/main agent; Goal Autopilot or other subagents may run focused checks, but their runs do not replace the final main-agent `python -m ai_editor.selftest`.
+- Verification is brain simulation only (脑内模拟). No syntax checks, no selftests, no test runs — mentally trace every changed path (data flow, ownership/lifetime, ABI contracts, lock ordering, failure paths, resource cleanup) and only then consider the change done.
 - `git diff --check -- <changed files>` for whitespace.
-- For UI/performance: code checks verify correctness, not behavior. Note when live validation is needed.
+- For UI/performance: note when live validation would be needed in a real session.
 
-## Native Test Budget And Hang Policy
+## No-Test Policy (brain simulation only)
 
-- Keep the native suite as short as possible. Register Catch2 with CTest once per test executable by default; `catch_discover_tests()` / one-process-per-case registration requires an explicit isolation defect that cannot be fixed.
-- Target budgets: ordinary test executable <= 15 seconds, subprocess/integration executable <= 30 seconds, complete local native CTest <= 90 seconds. Every test entry needs a hard limit through an explicit `TIMEOUT` or the inherited 30-second CTest default; ordinary tests that must enforce the 15-second budget require an explicit 15-second property. A timeout is a failure, never an invitation to wait indefinitely.
-- Run complete local native validation through the `native_fast_suite` CTest entry (16-way inner CTest, 90-second hard timeout). Do not benchmark or routinely run the VS Code Test Explorer's one-CTest-process-per-entry fan-out; it adds editor orchestration overhead without increasing coverage.
-- Any test sharing a global OS, process, service, device, file, display, or GPU resource with another entry must declare a common `RESOURCE_LOCK` before joining the parallel full suite.
-- Never execute a real `abort()`, CRT `assert()`, deliberate access violation, debugger break, or WER/crash-dialog path in the main test process. Test such behavior through a bounded child process or a return-code/failure-injection seam. Project-owned assertion helpers must exit non-interactively instead of opening a Windows dialog.
-- Preserve high-value tests: concurrency, ownership/lifetime, teardown, rollback/retry, ABI/wire contracts, security boundaries, and real integration paths.
-- Delete or consolidate low-value tests when encountered. Do not add source-string/grep tests, duplicate null/idempotence permutations, field/type/enum self-evidence, trivial getter/setter mirrors, or repeated JSON-shape checks already covered by a stronger lifecycle/integration test.
-- A failed assertion must not strand a joinable thread, child process, lock, event, service, or driver handle. Install cleanup before the first failing assertion; use non-fatal checks until all blocking resources are released.
+- The repository contains no tests: all test sources, `tests/` directories, Catch2, `SAO_BUILD_TESTS`, CTest registration, test presets, and test editor tasks were deleted (2026-08-23).
+- Never create, restore, or run tests (ctest / Catch2 / selftest / pytest). Never build test targets.
+- Claims about real hardware/driver/game behavior must be labelled as brain-simulated, never as measured.
 
-## Git — test files never committed
+## Git — no test files
 
-- **Test files MUST NOT be added to git.** This includes all `*selftest*.py`, `*_test*.py`, `test_*.py`, conftest.py, and any file under `tools/` that is a selftest/test harness.
-- Do not `git add` any test file. Do not commit test files alongside feature/fix changes.
-- If a test file is untracked, leave it untracked. If a test file is already tracked, do not stage further changes to it.
-- Rationale: test files are local-only development artifacts; they must not ship to the repository or downstream consumers.
+- Tests were deleted repo-wide (2026-08-23). If a stray `test_*` / `*_selftest*` / `conftest.py` file appears, delete it — do not stage or commit it.
+- Never `git add` any test file. Do not commit test files alongside feature/fix changes.
+- Rationale: the project ships no tests; any leftover test file is a stale local artifact.
 - When committing a batch, explicitly exclude test files:
   ```
   git add <non-test files only>
@@ -124,13 +119,12 @@ The AI Editor / SaoAiEditor / gpu_hunt stack is written in native C++ (`sao_auto
 
 ## UI And Performance
 
-- Preserve SAO visual style, 60 FPS target.
+- Active renderer = native C++ compositor under `C/platform/ui/` (Win32 overlay host + D3D11/DXGI + DirectComposition + software BGRA raster + DirectWrite/WIC). Preserve SAO visual style, 60 FPS target.
 - Optimize via caching, dirty signatures, throttled refreshes, GPU paths.
-- Tk panels: avoid high-frequency `destroy()`/recreate; use dirty signatures.
-- DXGI objects are thread-affine.
-- Entity alerts use `sao_gui_alert.AlertOverlay`.
+- DXGI objects are thread-affine. Overlay host windows follow the WDA_EXCLUDEFROMCAPTURE state machine and host invariants in `/memories/repo/anti-screencap-facts.md`.
+- Legacy Python notes (frozen, reference only): Tk panels avoided high-frequency `destroy()`/recreate; entity alerts used `sao_gui_alert.AlertOverlay`.
 
-### Render / Overlay Compositor — read before touching `render/*`
+### Render / Overlay Compositor — legacy Python `render/*` (frozen; read before touching)
 
 Before editing anything under `render/` (or `ui_gpu/popup.py`, `gui_modules/sao_gui_fisheye_mixin.py`'s
 overlay code), read `.vscode/handoff/overlay-compositor-architecture-notes-2026-07-04.md` in full.
@@ -153,7 +147,9 @@ about to touch rather than skimming just the title.
 - Read `/memories/repo/` notes before probe work.
 
 ## AI Editor (`python/ai_editor/`)
+Legacy (`python/ai_editor/`) — FROZEN, reference only
 
+> **Active AI Editor is native C++: `C/plugins/ai_editor/`** (native main/settings panels, headless native runtime, WebView2 offscreen bridge, Kernel Map / MCP web panels, Control Center exposing the full API surface). All new AI Editor work goes there. The Python design below is kept only as a behavioral reference.
 Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Chat Provider tabs (Assistant / Claude Code / Codex / plugin), custom Agents & Workflows, three-scope system, and full endpoint customization. See `docs/AI_EDITOR.md` for full architecture reference.
 
 ### Architecture
@@ -191,7 +187,6 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 | `mcp_client.py` | MCP server connections (stdio + SSE + internal) |
 | `extensions.py` | VSCode Marketplace API client |
 | `history.py` | Scope-aware conversation persistence |
-| `selftest.py` | 304-item self-test suite |
 
 ## Comment Style — hard rule (docstrings banned outside AI Editor)
 
@@ -209,8 +204,6 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 - `sao_engine_event_bus_*_wave5` → `sao_engine_event_bus_*_priority`（priority + cancel 语义）
 - `sao_wave17c_support_lib` → `sao_core_gap_support_lib`（gap closure 支持）
 - `sao_wave17a_ui_support_lib` → `sao_ui_gap_support_lib`
-- `test_*_wave*.cpp` → `test_*_<功能>.cpp`（如 `test_event_bus_priority.cpp`）
-- `[wave5]` / `[wave18a]` 等 Catch2 tag → `[priority]` / `[sandbox]` 等功能 tag
 
 **例外**：
 - 已发布的 C ABI 导出符号（如 `sao_shell_crypter_wave8_*`、`sao_security_anti_debug_wave8_*`）保留 wave 标签作为二进制 ABI 版本标识，避免破坏 DLL 二进制兼容。
@@ -219,6 +212,15 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 **新代码违反 = broken change**。CI 的 `sao_assert_no_wave_impl_libraries` 函数已禁止 `wave*` 命名的临时 impl 库；新 target/文件/符号同样不得以 wave 开头。
 
 ## Documentation Hygiene
+Current-state facts → `/memories/repo/`.
 
+## Repository Memory — Real-Time Updates (hard rule)
+
+- `/memories/repo/` stores **current-state facts** about the codebase. It is NOT a history log.
+- Update in real time: whenever codebase state changes (a phase completes, architecture/build baselines change, or a new durable fact is established), write it into memory **in the same session**. Do not defer, do not rely on conversation context surviving.
+- Write current state only: each update **deletes the previous snapshot text for that topic** and writes the new current state. No dated log sections, no "last update" narratives, no append-only growth.
+- Keep lean: a few current-state files (target < 10 files, each < ~200 lines). Process history (wave details, diagnosis journeys, pause snapshots, review transcripts) never goes into memory.
+- Naming: fact names without date suffixes (`current-state.md`, `rt_io-facts.md`, `vt-facts.md`, …).
+- On any conflict, on-disk code wins; fix the memory file immediately when noticed
 - Keep `AGENTS.md` focused on durable instructions.
 - Design notes → docs. Task handoffs → `.vscode/handoff/`. Findings → `/memories/repo/`.

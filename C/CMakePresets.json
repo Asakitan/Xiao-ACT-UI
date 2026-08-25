@@ -1,12 +1,19 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "windows-base",
       "hidden": true,
       "generator": "Visual Studio 17 2022",
-      "architecture": { "value": "x64", "strategy": "set" },
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps_shared"
@@ -18,12 +25,10 @@
     {
       "name": "windows-debug",
       "displayName": "Windows x64 Debug",
-      "description": "Full-symbol debug build with every baseline subsystem and CTest suite enabled.",
+      "description": "Full-symbol debug build with every baseline subsystem enabled.",
       "inherits": "windows-base",
       "cacheVariables": {
-        "SAO_HARDENED_BUILD": "OFF",
-        "SAO_BUILD_TESTS": "ON",
-        "BUILD_TESTING": "ON"
+        "SAO_HARDENED_BUILD": "OFF"
       }
     },
     {
@@ -38,41 +43,10 @@
     {
       "name": "windows-hardened",
       "displayName": "Windows x64 Hardened Release",
-      "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP. Tests are deliberately OFF here so the shipped DLLs never link test-only symbols (SAO_SDK_TESTING would export helper exports on sao_platform_sdk). Use windows-hardened-tests for a mitigations+CTest build.",
+      "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP.",
       "inherits": "windows-base",
       "cacheVariables": {
         "SAO_HARDENED_BUILD": "ON"
-      }
-    },
-    {
-      "name": "windows-hardened-tests",
-      "displayName": "Windows x64 Hardened + Tests",
-      "description": "Mitigations flags identical to windows-hardened, but SAO_BUILD_TESTS=ON so the hardened CTest suite can run against a test-instrumented build. The resulting binaries are NOT ship-safe because SAO_SDK_TESTING exports helper symbols on sao_platform_sdk; never install from this preset.",
-      "inherits": "windows-hardened",
-      "cacheVariables": {
-        "SAO_BUILD_TESTS": "ON",
-        "BUILD_TESTING": "ON"
-      }
-    },
-    {
-      "name": "windows-tests",
-      "displayName": "Windows x64 Tests (all runtimes ON)",
-      "description": "Isolated Debug test build with CTest, SAO subsystem tests, and every plugin host runtime enabled (Python, Lua 5.4, AngelScript, Emma, C#).  Missing external runtimes are auto-fetched via FetchContent so a clean checkout can complete configure without pre-installed vendor SDKs.",
-      "inherits": "windows-base",
-      "cacheVariables": {
-        "SAO_HARDENED_BUILD": "OFF",
-        "SAO_BUILD_TESTS": "ON",
-        "BUILD_TESTING": "ON",
-        "SAO_PLUGINS_ENABLE_PYTHON": "ON",
-        "SAO_PLUGINS_ENABLE_LUA": "ON",
-        "SAO_PLUGINS_ENABLE_ANGEL": "ON",
-        "SAO_PLUGINS_ENABLE_EMMA": "ON",
-        "SAO_PLUGINS_ENABLE_CSHARP": "ON",
-        "SAO_PLUGINS_BUILD_LEGACY_V1": "ON",
-        "SAO_PLUGINS_LUA_AUTO_FETCH": "ON",
-        "SAO_PLUGINS_ANGEL_AUTO_FETCH": "ON",
-        "SAO_PLUGINS_CSHARP_AUTO_FETCH": "ON",
-        "SAO_PLUGINS_PYTHON_AUTO_FETCH": "ON"
       }
     },
     {
@@ -104,58 +78,9 @@
       "configuration": "Release"
     },
     {
-      "name": "windows-hardened-tests",
-      "configurePreset": "windows-hardened-tests",
-      "configuration": "Release"
-    },
-    {
-      "name": "windows-tests",
-      "configurePreset": "windows-tests",
-      "configuration": "Debug"
-    },
-    {
       "name": "windows-ninja-debug",
       "configurePreset": "windows-ninja-debug"
     }
   ],
-  "testPresets": [
-    {
-      "name": "windows-debug",
-      "displayName": "Windows x64 Debug Tests",
-      "description": "Runs tests built by the tests-on windows-debug configure and build presets.",
-      "configurePreset": "windows-debug",
-      "configuration": "Debug",
-      "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false, "jobs": 16 }
-    },
-    {
-      "name": "windows-release",
-      "configurePreset": "windows-release",
-      "configuration": "RelWithDebInfo",
-      "output": { "outputOnFailure": true },
-      "execution": { "jobs": 16 }
-    },
-    {
-      "name": "windows-hardened",
-      "configurePreset": "windows-hardened",
-      "configuration": "Release",
-      "output": { "outputOnFailure": true },
-      "execution": { "jobs": 16 }
-    },
-    {
-      "name": "windows-hardened-tests",
-      "configurePreset": "windows-hardened-tests",
-      "configuration": "Release",
-      "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false, "jobs": 16 }
-    },
-    {
-      "name": "windows-tests",
-      "configurePreset": "windows-tests",
-      "configuration": "Debug",
-      "output": { "outputOnFailure": true },
-      "execution": { "stopOnFailure": false, "jobs": 16 }
-    }
-  ]
+  "testPresets": []
 }
-

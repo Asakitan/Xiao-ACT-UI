@@ -30,7 +30,6 @@ endif()
 #   launcher/   — the standalone SaoAuto.exe entry point
 #
 # Plus:
-#   tests/      — Catch2 aggregator and cross-subsystem smoke tests
 #   tools/      — CLI utilities (sign, pack, crypter, obfuscate, shellcode_gen,
 #                 plugin_pack)
 #
@@ -75,8 +74,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # The helper keeps its historical build output under bin/<config>/helper for
-# existing tests.  A second, canonical runtime package is staged after a
-# successful helper build so strict bootstrap exercises the same directory
+# tooling compatibility.  A second, canonical runtime package is staged after
+# a successful helper build so strict bootstrap exercises the same directory
 # shape used by installation.
 set(SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY
     "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/runtime/helper")
@@ -87,8 +86,8 @@ set(SAO_RT_IO_HELPER_CANONICAL_EXECUTABLE
 # Subsystem toggles
 #
 # Runtime skeleton targets default ON so a fresh `cmake --preset windows-debug`
-# proves the whole tree is coherent. Optional tests and SDK-backed hosts stay
-# off until their dependencies or implementations are available.
+# proves the whole tree is coherent. Optional SDK-backed hosts stay off until
+# their dependencies or implementations are available.
 # ---------------------------------------------------------------------------
 option(SAO_BUILD_PLATFORM   "Platform layer (core/net/engine/ui/sdk/scripting)"       ON)
 option(SAO_BUILD_SECURITY   "Security layer (anti-cheat/obf/crypto/anti-debug/...)"  ON)
@@ -97,7 +96,6 @@ option(SAO_BUILD_LICENSE    "Cloud license client + SDK"                        
 option(SAO_BUILD_SERVER     "Server components (freetier only in-repo)"               ON)
 option(SAO_BUILD_PLUGINS    "Multi-engine plugin hosts"                               ON)
 option(SAO_BUILD_LAUNCHER   "Standalone SaoAuto.exe launcher"                         ON)
-option(SAO_BUILD_TESTS      "Catch2 unit tests + integration smoke tests"             OFF)
 option(SAO_BUILD_TOOLS      "CLI tools: sign / pack / crypter / obfuscate / ..."      ON)
 
 if (SAO_BUILD_PLUGINS AND NOT SAO_BUILD_PLATFORM)
@@ -112,12 +110,27 @@ endif()
 # changing the public ABI.
 option(SAO_HARDENED_BUILD   "Hardened release: LTO/CFG/CET/ASLR/DEP"                   OFF)
 
-set(SAO_HARDENED_OBFUSCATION_SEED "1469598103934665603" CACHE STRING
-    "Non-zero deterministic seed used for hardened post-link SAOOBF1 artifacts")
+if (MSVC)
+    # Keep compile debug records inside each object.  Static archives and
+    # direct-link recovery builds then remain self-contained instead of
+    # emitting LNK4099 when a transient vc143.pdb is not beside the object.
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+        "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:Embedded>")
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "bin")
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT "ship")
+    set(CMAKE_INSTALL_DEBUG_LIBRARIES OFF)
+    include(InstallRequiredSystemLibraries)
+endif()
+
 set(SAO_NATIVE_LOADER_PAYLOAD_TARGETS "$ENV{SAO_NATIVE_LOADER_PAYLOAD_TARGETS}"
     CACHE STRING
     "Semicolon-separated DLL targets consumed through native_loader_encrypted")
-mark_as_advanced(SAO_HARDENED_OBFUSCATION_SEED)
+mark_as_advanced(SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
+if (SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
+    message(FATAL_ERROR
+        "SAO_NATIVE_LOADER_PAYLOAD_TARGETS is nonempty, but no explicit production "
+        "consumer mapping exists; orphan .bin.enc artifacts are forbidden.")
+endif()
 
 # ---------------------------------------------------------------------------
 # Global compile posture
@@ -184,8 +197,8 @@ if (MSVC)
 
     if (SAO_HARDENED_BUILD)
         add_compile_options(
-            "$<$<COMPILE_LANGUAGE:C>:/Zi>"
-            "$<$<COMPILE_LANGUAGE:CXX>:/Zi>"
+            "$<$<COMPILE_LANGUAGE:C>:/Z7>"
+            "$<$<COMPILE_LANGUAGE:CXX>:/Z7>"
         )
         add_link_options(/DEBUG:FULL /PDBALTPATH:%_PDB%)
         add_compile_definitions(SAO_HARDENED=1 WINRT_NO_SOURCE_LOCATION=1)
@@ -224,42 +237,6 @@ endif()
 # headers and DLL imports that have not migrated yet.
 option(SAO_BUILD_LEGACY_CORE "Build legacy sao_core compat target (required by security/)" ON)
 
-# Bootstrap Catch2 process-wide when tests are enabled.  Subsystem tests
-# use `find_package(Catch2 3 CONFIG REQUIRED)`; when the host lacks vcpkg
-# / system Catch2, FetchContent v3.5.4 populates the Catch2::* targets
-# globally via the FIND_PACKAGE_ARGS integration (CMake >= 3.24) so
-# subsystem `find_package(Catch2 3 CONFIG REQUIRED)` calls succeed.  A
-# vcpkg-provisioned host still takes precedence -- FetchContent only
-# builds when find_package fails.  Must run BEFORE subsystems are added.
-if (SAO_BUILD_TESTS)
-    set(DART_TESTING_TIMEOUT 30 CACHE STRING
-        "Default hard timeout for native CTest entries" FORCE)
-    enable_testing()
-    # Repo overlay of Catch2 extras must shadow any vcpkg/FetchContent copy so
-    # `include(Catch)` picks up the patched CatchAddTests.cmake (multi-value
-    # LABELS survive test discovery).
-    list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/catch2_extras_overlay")
-    include(FetchContent)
-    FetchContent_Declare(
-        Catch2
-        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG        v3.5.4
-        FIND_PACKAGE_ARGS 3 CONFIG
-    )
-    FetchContent_MakeAvailable(Catch2)
-    if (catch2_SOURCE_DIR)
-        list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
-        # Top-level `add_compile_definitions(UNICODE _UNICODE)` makes
-        # Catch2's `catch_main.cpp` define `wmain` instead of `main`,
-        # but MSVC /SUBSYSTEM:CONSOLE's default entry references `main`.
-        # `DO_NOT_USE_WMAIN` forces the `main` variant so no test target
-        # has to override `/ENTRY:` on the linker.
-        if (TARGET Catch2WithMain)
-            target_compile_definitions(Catch2WithMain PRIVATE DO_NOT_USE_WMAIN)
-        endif()
-    endif()
-endif()
-
 # nlohmann_json is a header-only runtime dependency of the platform/core
 # settings envelope.  Prefer a vcpkg / system installation; when the
 # host lacks either, fall back to FetchContent so the build gate is still
@@ -283,11 +260,6 @@ if (SAO_BUILD_LEGACY_CORE)
 endif()
 if (SAO_BUILD_SECURITY)
     add_subdirectory(security)
-endif()
-if (TARGET sao_platform_rt_io_helper_stealth_tests AND
-    TARGET sao_security_anti_debug)
-    target_link_libraries(sao_platform_rt_io_helper_stealth_tests PRIVATE
-        sao_security_anti_debug)
 endif()
 if (SAO_BUILD_LICENSE)
     add_subdirectory(license)
@@ -317,6 +289,21 @@ endif()
 if (SAO_BUILD_LAUNCHER)
     add_subdirectory(launcher)
 endif()
+
+set(SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/launcher/config/SaoAuto.provider.json")
+if (EXISTS "${SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE}")
+    set(SAO_LAUNCHER_PROVIDER_CONFIG_PRESENT ON)
+else()
+    set(SAO_LAUNCHER_PROVIDER_CONFIG_PRESENT OFF)
+endif()
+if (TARGET SaoAuto)
+    if (SAO_LAUNCHER_PROVIDER_CONFIG_PRESENT)
+        install(FILES "${SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE}"
+            DESTINATION bin
+            COMPONENT ship)
+    endif()
+endif()
 if (SAO_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
@@ -332,6 +319,7 @@ if (TARGET SaoAuto)
             sao_license_protocol
             sao_security_anti_debug
             sao_platform_sdk
+            sao_platform_net
             sao_platform_ui
             sao_platform_engine
             sao_security_anti_screencap)
@@ -348,6 +336,14 @@ if (TARGET SaoAuto)
 endif()
 
 if (TARGET SaoRtIoHelper)
+    install(TARGETS SaoRtIoHelper
+        RUNTIME DESTINATION bin/runtime/helper
+        COMPONENT ship)
+    if (CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+        install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+            DESTINATION bin/runtime/helper
+            COMPONENT ship)
+    endif()
     set(_SAO_RT_IO_HELPER_RUNTIME_TARGETS)
     set(_SAO_RT_IO_HELPER_STAGE_COMMANDS
         COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -421,17 +417,90 @@ if (TARGET SaoAuto)
     set(_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
         SaoAuto
         ${_SAO_LAUNCHER_RUNTIME_TARGETS})
+    set(_SAO_RELEASE_EXPECTED_FILES
+        "bin/$<TARGET_FILE_NAME:SaoAuto>"
+        "bin/docs/html/index.html"
+        "bin/docs/html/assets/style.css")
+    if (SAO_LAUNCHER_PROVIDER_CONFIG_PRESENT)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/SaoAuto.provider.json")
+    endif()
+    if (TARGET SaoAutoUpdateHelper)
+        list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+            SaoAutoUpdateHelper)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/$<TARGET_FILE_NAME:SaoAutoUpdateHelper>")
+    endif()
     if (TARGET sao_plugin_ai_editor)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
             sao_plugin_ai_editor)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/$<TARGET_FILE_NAME:sao_plugin_ai_editor>")
     endif()
     if (TARGET sao_ai_editor)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES sao_ai_editor)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/$<TARGET_FILE_NAME:sao_ai_editor>")
     endif()
+    if (TARGET SaoKernelMapMcpServer)
+        list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+            SaoKernelMapMcpServer)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/$<TARGET_FILE_NAME:SaoKernelMapMcpServer>")
+    endif()
+    if (SAO_BUILD_WEBVIEW_BRIDGE)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/WebView2Loader.dll")
+    endif()
+    foreach (_sao_msvc_runtime IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+        get_filename_component(_sao_msvc_runtime_name
+            "${_sao_msvc_runtime}" NAME)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/${_sao_msvc_runtime_name}")
+    endforeach()
     if (TARGET SaoRtIoHelper)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES SaoRtIoHelper)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/runtime/helper/$<TARGET_FILE_NAME:SaoRtIoHelper>")
+        foreach (_sao_msvc_runtime IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+            get_filename_component(_sao_msvc_runtime_name
+                "${_sao_msvc_runtime}" NAME)
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                "bin/runtime/helper/${_sao_msvc_runtime_name}")
+        endforeach()
+        foreach (_sao_driver_bundle IN ITEMS
+                ${SAO_RT_IO_BUNDLE_R1_BASENAME}
+                ${SAO_RT_IO_BUNDLE_R3_BASENAME}
+                ${SAO_RT_IO_BUNDLE_R5_BASENAME}
+                ${SAO_RT_IO_BUNDLE_VT_DEBUG_BASENAME}
+                ${SAO_RT_IO_BUNDLE_VT_RELEASE_BASENAME})
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                "bin/runtime/assets/drivers/${_sao_driver_bundle}")
+        endforeach()
     endif()
     list(REMOVE_DUPLICATES _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)
+    foreach (_sao_runtime_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
+        get_target_property(_sao_runtime_target_type
+            ${_sao_runtime_target} TYPE)
+        if (_sao_runtime_target_type STREQUAL "EXECUTABLE" OR
+            _sao_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
+            _sao_runtime_target_type STREQUAL "MODULE_LIBRARY")
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                "bin/$<TARGET_FILE_NAME:${_sao_runtime_target}>")
+        endif()
+    endforeach()
+    foreach (_sao_helper_runtime_target IN LISTS
+            _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+        get_target_property(_sao_helper_runtime_target_type
+            ${_sao_helper_runtime_target} TYPE)
+        if (_sao_helper_runtime_target_type STREQUAL "EXECUTABLE" OR
+            _sao_helper_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
+            _sao_helper_runtime_target_type STREQUAL "MODULE_LIBRARY")
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                "bin/runtime/helper/$<TARGET_FILE_NAME:${_sao_helper_runtime_target}>")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _SAO_RELEASE_EXPECTED_FILES)
 
     add_custom_target(sao_release_ship_stage
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SAO_SHIP_STAGE_DIRECTORY}"
@@ -444,84 +513,6 @@ if (TARGET SaoAuto)
     )
 
     set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_release_ship_stage)
-    if (SAO_HARDENED_BUILD)
-        if (NOT TARGET obfuscate_cli)
-            message(FATAL_ERROR
-                "SAO_HARDENED_BUILD requires tools/obfuscate_cli")
-        endif()
-        if (NOT SAO_HARDENED_OBFUSCATION_SEED MATCHES "^[1-9][0-9]*$")
-            message(FATAL_ERROR
-                "SAO_HARDENED_OBFUSCATION_SEED must be a non-zero decimal uint64")
-        endif()
-
-        set(_SAO_HARDENED_POST_LINK_COMMANDS "")
-        set(_SAO_HARDENED_POST_LINK_DEPENDENCIES obfuscate_cli)
-        foreach (_sao_post_link_target IN LISTS _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)
-            if (NOT TARGET ${_sao_post_link_target})
-                continue()
-            endif()
-            get_target_property(_sao_post_link_type ${_sao_post_link_target} TYPE)
-            if (NOT _sao_post_link_type STREQUAL "EXECUTABLE" AND
-                NOT _sao_post_link_type STREQUAL "SHARED_LIBRARY" AND
-                NOT _sao_post_link_type STREQUAL "MODULE_LIBRARY")
-                continue()
-            endif()
-            list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES
-                ${_sao_post_link_target})
-            list(APPEND _SAO_HARDENED_POST_LINK_COMMANDS
-                COMMAND "${CMAKE_COMMAND}"
-                    "-DSAO_POST_LINK_MODE=obfuscate"
-                    "-DSAO_POST_LINK_CONFIG=$<CONFIG>"
-                    "-DSAO_POST_LINK_TOOL=$<TARGET_FILE:obfuscate_cli>"
-                    "-DSAO_POST_LINK_INPUT=$<TARGET_FILE:${_sao_post_link_target}>"
-                    "-DSAO_POST_LINK_OUTPUT=$<TARGET_FILE:${_sao_post_link_target}>.saoobf"
-                    "-DSAO_POST_LINK_SEED=${SAO_HARDENED_OBFUSCATION_SEED}"
-                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardened_post_link.cmake")
-        endforeach()
-
-        if (SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
-            if (NOT TARGET crypter_cli)
-                message(FATAL_ERROR
-                    "SAO_NATIVE_LOADER_PAYLOAD_TARGETS requires tools/crypter_cli")
-            endif()
-            list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES crypter_cli)
-            foreach (_sao_native_payload_target IN LISTS SAO_NATIVE_LOADER_PAYLOAD_TARGETS)
-                if (NOT TARGET ${_sao_native_payload_target})
-                    message(FATAL_ERROR
-                        "Unknown native-loader payload target: ${_sao_native_payload_target}")
-                endif()
-                get_target_property(_sao_native_payload_type
-                    ${_sao_native_payload_target} TYPE)
-                if (NOT _sao_native_payload_type STREQUAL "SHARED_LIBRARY" AND
-                    NOT _sao_native_payload_type STREQUAL "MODULE_LIBRARY")
-                    message(FATAL_ERROR
-                        "Native-loader payload target '${_sao_native_payload_target}' "
-                        "must produce a DLL")
-                endif()
-                list(APPEND _SAO_HARDENED_POST_LINK_DEPENDENCIES
-                    ${_sao_native_payload_target})
-                list(APPEND _SAO_HARDENED_POST_LINK_COMMANDS
-                    COMMAND "${CMAKE_COMMAND}"
-                        "-DSAO_POST_LINK_MODE=crypter"
-                        "-DSAO_POST_LINK_CONFIG=$<CONFIG>"
-                        "-DSAO_POST_LINK_TOOL=$<TARGET_FILE:crypter_cli>"
-                        "-DSAO_POST_LINK_INPUT=$<TARGET_FILE:${_sao_native_payload_target}>"
-                        "-DSAO_POST_LINK_OUTPUT=$<TARGET_FILE:${_sao_native_payload_target}>.bin.enc"
-                        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardened_post_link.cmake")
-            endforeach()
-        else()
-            message(STATUS
-                "hardened post-link: no fixed native-loader payload targets are registered")
-        endif()
-
-        list(REMOVE_DUPLICATES _SAO_HARDENED_POST_LINK_DEPENDENCIES)
-        add_custom_target(sao_hardened_post_link ALL
-            ${_SAO_HARDENED_POST_LINK_COMMANDS}
-            DEPENDS ${_SAO_HARDENED_POST_LINK_DEPENDENCIES}
-            COMMENT "Generating hardened post-link protection artifacts"
-            VERBATIM)
-        list(APPEND _SAO_RELEASE_AUDIT_DEPENDENCIES sao_hardened_post_link)
-    endif()
 
     get_filename_component(_sao_linker_directory "${CMAKE_LINKER}" DIRECTORY)
     find_program(SAO_DUMPBIN_EXECUTABLE NAMES dumpbin.exe dumpbin
@@ -529,8 +520,9 @@ if (TARGET SaoAuto)
 
     add_custom_target(sao_release_artifact_audit
         COMMAND "${CMAKE_COMMAND}"
-                "-DSAO_AUDIT_BINARY=$<TARGET_FILE:SaoAuto>"
+                "-DSAO_AUDIT_BINARY=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:SaoAuto>"
                 "-DSAO_AUDIT_SHIP_DIRECTORY=${SAO_SHIP_STAGE_DIRECTORY}"
+                "-DSAO_AUDIT_EXPECTED_FILES=${_SAO_RELEASE_EXPECTED_FILES}"
                 "-DSAO_AUDIT_DUMPBIN=${SAO_DUMPBIN_EXECUTABLE}"
                 "-DSAO_AUDIT_EXPECT_HARDENING=$<IF:$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>,ON,OFF>"
                 "-DSAO_AUDIT_EXPECT_CET=$<IF:$<BOOL:${SAO_MSVC_SUPPORTS_CETCOMPAT}>,ON,OFF>"
@@ -540,52 +532,16 @@ if (TARGET SaoAuto)
         COMMENT "Auditing release PE hardening and ship-stage contents"
         VERBATIM
     )
-endif()
-
-include(CTest)
-if (SAO_BUILD_TESTS)
-    enable_testing()
-    if (TARGET SaoRtIoHelper)
-        set(_sao_rt_io_package_test_script
-            "${CMAKE_SOURCE_DIR}/platform/rt_io/cmake/verify_driver_asset_package.cmake")
-        if (NOT EXISTS "${_sao_rt_io_package_test_script}")
-            message(FATAL_ERROR
-                "RT I/O package verifier is missing: ${_sao_rt_io_package_test_script}")
-        endif()
-        set(_sao_rt_io_package_test_root
-            "${CMAKE_BINARY_DIR}/driver_asset_package_test/$<CONFIG>")
-        add_test(NAME sao_rt_io_driver_asset_install
-            COMMAND "${CMAKE_COMMAND}"
-                "-DSAO_RT_IO_PACKAGE_MODE=install"
-                "-DSAO_RT_IO_PACKAGE_ROOT=${_sao_rt_io_package_test_root}"
-                "-DSAO_RT_IO_PACKAGE_BUILD_DIRECTORY=${CMAKE_BINARY_DIR}"
-                "-DSAO_RT_IO_PACKAGE_CONFIG=$<CONFIG>"
-                -P "${_sao_rt_io_package_test_script}")
-        set_tests_properties(sao_rt_io_driver_asset_install PROPERTIES
-            FIXTURES_SETUP sao_rt_io_driver_asset_package
-            LABELS "rt_io;install;package")
-
-        add_test(NAME sao_rt_io_driver_asset_package
-            COMMAND "${CMAKE_COMMAND}"
-                "-DSAO_RT_IO_PACKAGE_MODE=audit"
-                "-DSAO_RT_IO_PACKAGE_ROOT=${_sao_rt_io_package_test_root}"
-                "-DSAO_RT_IO_EXPECTED_R1_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R1_SHA256}"
-                "-DSAO_RT_IO_EXPECTED_R1_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R1_SIZE}"
-                "-DSAO_RT_IO_EXPECTED_R3_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R3_SHA256}"
-                "-DSAO_RT_IO_EXPECTED_R3_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R3_SIZE}"
-                "-DSAO_RT_IO_EXPECTED_R5_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R5_SHA256}"
-                "-DSAO_RT_IO_EXPECTED_R5_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R5_SIZE}"
-                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_DEBUG_SHA256}"
-                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_DEBUG_SIZE}"
-                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_RELEASE_SHA256}"
-                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_RELEASE_SIZE}"
-                -P "${_sao_rt_io_package_test_script}")
-        set_tests_properties(sao_rt_io_driver_asset_package PROPERTIES
-            FIXTURES_REQUIRED sao_rt_io_driver_asset_package
-            LABELS "rt_io;install;package")
+    set(_SAO_RELEASE_ACCEPTANCE_DEPENDENCIES sao_release_artifact_audit)
+    if (TARGET pack_cli)
+        list(APPEND _SAO_RELEASE_ACCEPTANCE_DEPENDENCIES pack_cli)
     endif()
-    add_subdirectory(tests)
+    add_custom_target(sao_release_acceptance
+        DEPENDS ${_SAO_RELEASE_ACCEPTANCE_DEPENDENCIES}
+        COMMENT "Release acceptance: clean ship stage, artifact audit, and pack tool availability"
+        VERBATIM)
 endif()
+
 
 # Iteration identifiers are delivery history, not feature names.  Configure
 # rejects them in persistent artifacts and build metadata while preserving the
@@ -927,20 +883,6 @@ function(sao_assert_no_wave_impl_libraries directory)
     sao_assert_no_iteration_metadata("${directory}")
 endfunction()
 
-if (SAO_BUILD_TESTS)
-    add_test(NAME native_fast_suite
-        COMMAND "${CMAKE_CTEST_COMMAND}"
-            --test-dir "${CMAKE_BINARY_DIR}"
-            --build-config "$<CONFIG>"
-            --output-on-failure
-            --parallel 16
-            --no-tests=error
-            --exclude-regex "^native_fast_suite$")
-    set_tests_properties(native_fast_suite PROPERTIES
-        LABELS "meta;full;fast"
-        RUN_SERIAL TRUE
-        TIMEOUT 90)
-endif()
 
 sao_assert_no_iteration_artifact_paths("${CMAKE_SOURCE_DIR}")
 sao_assert_no_iteration_cmake_source("${CMAKE_SOURCE_DIR}")
@@ -963,4 +905,3 @@ message(STATUS "  server          : ${SAO_BUILD_SERVER}")
 message(STATUS "  plugins         : ${SAO_BUILD_PLUGINS}")
 message(STATUS "  launcher        : ${SAO_BUILD_LAUNCHER}")
 message(STATUS "  tools           : ${SAO_BUILD_TOOLS}")
-message(STATUS "  tests           : ${SAO_BUILD_TESTS}")

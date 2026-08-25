@@ -1,6 +1,35 @@
-if (NOT DEFINED SAO_AUDIT_BINARY OR NOT EXISTS "${SAO_AUDIT_BINARY}")
-    message(FATAL_ERROR "SAO_AUDIT_BINARY must name an existing PE artifact")
+if (NOT DEFINED SAO_AUDIT_SHIP_DIRECTORY OR
+    NOT IS_DIRECTORY "${SAO_AUDIT_SHIP_DIRECTORY}")
+    message(FATAL_ERROR
+        "SAO_AUDIT_SHIP_DIRECTORY must name an existing clean install tree")
 endif()
+
+if (NOT DEFINED SAO_AUDIT_BINARY OR NOT EXISTS "${SAO_AUDIT_BINARY}")
+    message(FATAL_ERROR "SAO_AUDIT_BINARY must name the staged SaoAuto PE")
+endif()
+
+if (NOT DEFINED SAO_AUDIT_EXPECTED_FILES OR
+    "${SAO_AUDIT_EXPECTED_FILES}" STREQUAL "")
+    message(FATAL_ERROR
+        "SAO_AUDIT_EXPECTED_FILES must provide the canonical staged inventory")
+endif()
+
+set(_sao_ship_bin_directory "${SAO_AUDIT_SHIP_DIRECTORY}/bin")
+if (NOT IS_DIRECTORY "${_sao_ship_bin_directory}")
+    message(FATAL_ERROR "Staged install tree is missing bin/: ${_sao_ship_bin_directory}")
+endif()
+
+foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
+    if (IS_ABSOLUTE "${_sao_expected_file}" OR
+        "${_sao_expected_file}" MATCHES "(^|/)\\.\\.?(/|$)")
+        message(FATAL_ERROR
+            "Release inventory entry is not relative to the ship tree: ${_sao_expected_file}")
+    endif()
+    if (NOT EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_expected_file}")
+        message(FATAL_ERROR
+            "Required staged release inventory entry is missing: ${_sao_expected_file}")
+    endif()
+endforeach()
 
 if (NOT DEFINED SAO_AUDIT_DUMPBIN OR NOT EXISTS "${SAO_AUDIT_DUMPBIN}")
     message(FATAL_ERROR "dumpbin.exe is required for the release artifact audit")
@@ -89,6 +118,9 @@ set(_sao_forbidden_ship_patterns
     "*.map"
     "*.dmp"
     "*.tlog"
+    "*.saoobf"
+    "*.bin.enc"
+    "*.wrapped.*"
 )
 
 function(sao_audit_pe binary_path)
@@ -199,13 +231,77 @@ function(sao_audit_pe binary_path)
     message(STATUS "  strings audited : no denylisted plaintext")
 endfunction()
 
+set(_SAO_WINDOWS_SYSTEM_DLLS
+    advapi32.dll bcrypt.dll bcryptprimitives.dll cfgmgr32.dll combase.dll comctl32.dll
+    comdlg32.dll crypt32.dll d2d1.dll d3d11.dll dcomp.dll dbghelp.dll dwrite.dll
+    dwmapi.dll dxgi.dll gdi32.dll hid.dll imagehlp.dll imm32.dll iphlpapi.dll
+    kernel32.dll kernelbase.dll msvcrt.dll ntdll.dll
+    ole32.dll oleaut32.dll psapi.dll rpcrt4.dll sechost.dll setupapi.dll shell32.dll
+    shcore.dll shlwapi.dll user32.dll userenv.dll uxtheme.dll version.dll winhttp.dll
+    wininet.dll winmm.dll wintrust.dll windowsapp.dll ws2_32.dll wtsapi32.dll
+    normaliz.dll mswsock.dll nsi.dll ucrtbase.dll)
+
+function(sao_audit_is_system_dependency dependency out_is_system)
+    string(TOLOWER "${dependency}" _sao_dependency)
+    list(FIND _SAO_WINDOWS_SYSTEM_DLLS "${_sao_dependency}" _sao_system_index)
+    if (NOT _sao_system_index EQUAL -1 OR
+        _sao_dependency MATCHES "^(api-ms-win|ext-ms-win)-[a-z0-9-]+\\.dll$")
+        set(${out_is_system} TRUE PARENT_SCOPE)
+    else()
+        set(${out_is_system} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(sao_audit_find_staged_dependency binary_path dependency out_path)
+    get_filename_component(_sao_binary_directory "${binary_path}" DIRECTORY)
+    set(_sao_match "")
+    set(_sao_candidate "${_sao_binary_directory}/${dependency}")
+    if (EXISTS "${_sao_candidate}" AND NOT IS_DIRECTORY "${_sao_candidate}")
+        set(_sao_match "${_sao_candidate}")
+    endif()
+    set(${out_path} "${_sao_match}" PARENT_SCOPE)
+endfunction()
+
+function(sao_audit_dependency_closure binary_path parent_chain)
+    string(TOLOWER "${binary_path}" _sao_binary_key)
+    list(FIND _SAO_AUDIT_DEPENDENCY_VISITED "${_sao_binary_key}" _sao_seen)
+    if (NOT _sao_seen EQUAL -1)
+        return()
+    endif()
+    list(APPEND _SAO_AUDIT_DEPENDENCY_VISITED "${_sao_binary_key}")
+    set(_SAO_AUDIT_DEPENDENCY_VISITED
+        "${_SAO_AUDIT_DEPENDENCY_VISITED}" PARENT_SCOPE)
+
+    set(SAO_AUDIT_BINARY "${binary_path}")
+    sao_audit_dumpbin(/DEPENDENTS SAO_AUDIT_DEPENDENTS)
+    string(REGEX MATCHALL "[ \\t]+[A-Za-z0-9_.+\\-]+\\.dll" _sao_dependency_rows
+        "${SAO_AUDIT_DEPENDENTS}")
+    foreach (_sao_dependency_row IN LISTS _sao_dependency_rows)
+        string(STRIP "${_sao_dependency_row}" _sao_dependency)
+        string(TOLOWER "${_sao_dependency}" _sao_dependency_lower)
+        sao_audit_find_staged_dependency(
+            "${binary_path}" "${_sao_dependency_lower}"
+            _sao_staged_dependency)
+        if (_sao_staged_dependency)
+            sao_audit_dependency_closure(
+                "${_sao_staged_dependency}"
+                "${parent_chain} -> ${_sao_dependency}")
+            continue()
+        endif()
+        sao_audit_is_system_dependency(
+            "${_sao_dependency_lower}" _sao_is_system_dependency)
+        if (_sao_is_system_dependency)
+            continue()
+        endif()
+        message(FATAL_ERROR
+            "Unresolved non-system app dependency: ${parent_chain} -> ${_sao_dependency}")
+    endforeach()
+endfunction()
 # ---------------------------------------------------------------------------
 # Ship-directory sweep
 #
-# Discover every PE binary in the ship stage and audit each one.  When the
-# ship stage is absent (e.g. an operator invoked the audit target without
-# running install first) fall back to the historical single-binary path so
-# CI still catches the SaoAuto.exe hardening regression.
+# Discover every PE binary in the clean ship stage and audit each one.  The
+# build tree is deliberately never consulted as a fallback.
 # ---------------------------------------------------------------------------
 set(_sao_ship_pe_binaries "")
 if (DEFINED SAO_AUDIT_SHIP_DIRECTORY AND EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}")
@@ -227,13 +323,33 @@ if (DEFINED SAO_AUDIT_SHIP_DIRECTORY AND EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}")
 endif()
 
 if (NOT _sao_ship_pe_binaries)
-    # Fallback: audit at least the top-level SaoAuto artifact so the target
-    # never silently succeeds on an empty ship stage.
-    list(APPEND _sao_ship_pe_binaries "${SAO_AUDIT_BINARY}")
+    message(FATAL_ERROR
+        "Clean ship directory contains no staged PE artifacts: ${SAO_AUDIT_SHIP_DIRECTORY}")
+endif()
+
+list(FIND _sao_ship_pe_binaries "${SAO_AUDIT_BINARY}" _sao_launcher_index)
+if (_sao_launcher_index EQUAL -1)
+    message(FATAL_ERROR
+        "Canonical SaoAuto artifact is not present in the staged PE inventory: "
+        "${SAO_AUDIT_BINARY}")
 endif()
 
 list(REMOVE_DUPLICATES _sao_ship_pe_binaries)
 list(SORT _sao_ship_pe_binaries)
+
+foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
+    file(RELATIVE_PATH _sao_ship_pe_relative
+        "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_ship_pe}")
+    cmake_path(CONVERT "${_sao_ship_pe_relative}" TO_CMAKE_PATH_LIST
+        _sao_ship_pe_relative NORMALIZE)
+    list(FIND SAO_AUDIT_EXPECTED_FILES
+        "${_sao_ship_pe_relative}" _sao_expected_pe_index)
+    if (_sao_expected_pe_index EQUAL -1)
+        message(FATAL_ERROR
+            "Ship directory contains an unexpected PE artifact: "
+            "${_sao_ship_pe_relative}")
+    endif()
+endforeach()
 
 set(_sao_pe_index 0)
 list(LENGTH _sao_ship_pe_binaries _sao_pe_total)
@@ -244,5 +360,9 @@ foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
     sao_audit_pe("${_sao_ship_pe}")
 endforeach()
 
+set(_SAO_AUDIT_DEPENDENCY_VISITED "")
+foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
+    sao_audit_dependency_closure("${_sao_ship_pe}" "${_sao_ship_pe}")
+endforeach()
 message(STATUS "Release audit passed for all ${_sao_pe_total} ship PE(s)")
 message(STATUS "  ship diagnostics: absent")

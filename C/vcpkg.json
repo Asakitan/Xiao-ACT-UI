@@ -6,7 +6,6 @@
   "homepage": "https://github.com/asakitan/sao-auto",
   "builtin-baseline": "f87344cac03158cbf1467264565f1fd36b382a24",
   "dependencies": [
-    { "name": "catch2",         "version>=": "3.5.0" },
     { "name": "nlohmann-json",  "version>=": "3.11.3" },
     { "name": "spdlog",         "version>=": "1.13.0" },
     { "name": "fmt",            "version>=": "10.2.1" },

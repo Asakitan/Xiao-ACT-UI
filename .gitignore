@@ -237,6 +237,9 @@ python/runtime/node/node.exe
 !/C/platform/rt_io/assets/drivers/iconcache.dat
 !/C/platform/rt_io/assets/drivers/README.md
 
+# ── Launcher provider config: real credentials stay local, example is tracked ──
+/C/launcher/config/SaoAuto.provider.json
+
 # ── Public end-user documentation remains trackable ──
 !/python/docs/html/index.html
 !/python/docs/html/assets/style.css

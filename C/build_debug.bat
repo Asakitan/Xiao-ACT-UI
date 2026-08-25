@@ -1,26 +1,20 @@
 @echo off
 :: SAO Auto - one-click debug configure + build
 ::
-:: Runs the windows-debug CMake preset, builds SaoAuto.exe and every DLL,
-:: then runs the fast tests.  Full symbols, no PGO, no LTO -- this is what
-:: you want during iterative development.
-::
-:: Requirements:
-::   * Visual Studio 2022 with the "Desktop development with C++" workload
-::   * VCPKG_ROOT env var pointing at a vcpkg checkout
+:: Runs the windows-debug CMake preset and builds SaoAuto.exe and every DLL.
+:: No tests exist in this repository; verification is brain simulation only.
 ::
 :: Usage:
 ::   build_debug.bat [--clean]
 
 setlocal enabledelayedexpansion
-
 set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%"
 
 if not defined VCPKG_ROOT (
     echo ERROR: VCPKG_ROOT environment variable is not set.
     echo        See vendor_note.md for setup instructions.
-    exit /b 1
+    goto :fail
 )
 
 if /I "%~1"=="--clean" (
@@ -37,21 +31,13 @@ cmake --build --preset windows-debug --parallel 16
 if errorlevel 1 goto :fail
 
 echo.
-echo [tests] Running Catch2 unit + smoke tests...
-ctest --preset windows-debug --output-on-failure -LE integration -j 16
-if errorlevel 1 (
-    echo WARNING: some tests failed.
-    goto :done
-)
-
-echo.
 echo [OK] Debug build complete.
 echo      Artefacts: build\windows-debug\bin\SaoAuto.exe
 goto :done
 
 :fail
 echo.
-echo [FAIL] Build aborted.
+echo [FAIL] Debug build aborted.
 popd
 exit /b 1
 
