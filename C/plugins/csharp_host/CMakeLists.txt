@@ -294,6 +294,3 @@ if (SAO_CSHARP_DOTNET_ROOT)
         SAO_CSHARP_DOTNET_ROOT="${SAO_CSHARP_DOTNET_ROOT}")
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

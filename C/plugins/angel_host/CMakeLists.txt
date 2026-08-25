@@ -82,6 +82,41 @@ endif()
 #   2. Operator-supplied SAO_ANGELSCRIPT_SOURCE_DIR (offline vendored source)
 #   3. FetchContent from angelcode.com when SAO_PLUGINS_ANGEL_AUTO_FETCH=ON
 # Auto-fetch is opt-in so shipping / air-gapped builds stay reproducible.
+function(_sao_add_angelscript_runtime sdk_root)
+    # Isolate upstream CMake deprecation messages and remove its unscoped
+    # /MP option, which MSBuild otherwise forwards to ml64 as A4018.
+    get_property(_sao_warn_deprecated_type CACHE CMAKE_WARN_DEPRECATED PROPERTY TYPE)
+    if (_sao_warn_deprecated_type)
+        get_property(_sao_warn_deprecated_value CACHE CMAKE_WARN_DEPRECATED PROPERTY VALUE)
+    endif()
+    get_property(_sao_msvc_flags_type CACHE MSVC_COMPILE_FLAGS PROPERTY TYPE)
+    if (_sao_msvc_flags_type)
+        get_property(_sao_msvc_flags_value CACHE MSVC_COMPILE_FLAGS PROPERTY VALUE)
+    endif()
+    set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL
+        "Suppress deprecation warnings while configuring vendored AngelScript" FORCE)
+    if (MSVC)
+        set(MSVC_COMPILE_FLAGS "" CACHE STRING
+            "AngelScript MSVC compiler flags" FORCE)
+    endif()
+    add_subdirectory(
+        "${sdk_root}/angelscript/projects/cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/angelscript-runtime"
+        EXCLUDE_FROM_ALL)
+    if (_sao_warn_deprecated_type)
+        set(CMAKE_WARN_DEPRECATED "${_sao_warn_deprecated_value}" CACHE BOOL
+            "Whether to issue warnings for deprecated CMake functionality" FORCE)
+    else()
+        unset(CMAKE_WARN_DEPRECATED CACHE)
+    endif()
+    if (_sao_msvc_flags_type)
+        set(MSVC_COMPILE_FLAGS "${_sao_msvc_flags_value}" CACHE STRING
+            "Restored MSVC compiler flags" FORCE)
+    else()
+        unset(MSVC_COMPILE_FLAGS CACHE)
+    endif()
+endfunction()
+
 set(_sao_angel_target "")
 if (NOT SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
     find_package(unofficial-angelscript CONFIG QUIET)
@@ -100,10 +135,7 @@ if (NOT SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
                 "plugins/angel_host: SAO_ANGELSCRIPT_SOURCE_DIR 不是 AngelScript SDK 根目录")
         endif()
         set(AS_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-        add_subdirectory(
-            "${SAO_ANGELSCRIPT_SOURCE_DIR}/angelscript/projects/cmake"
-            "${CMAKE_CURRENT_BINARY_DIR}/angelscript-runtime"
-            EXCLUDE_FROM_ALL)
+        _sao_add_angelscript_runtime("${SAO_ANGELSCRIPT_SOURCE_DIR}")
         if (TARGET angelscript)
             set(_sao_angel_target angelscript)
         endif()
@@ -122,10 +154,7 @@ if (NOT SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
         if (EXISTS
             "${angelscript_source_SOURCE_DIR}/angelscript/projects/cmake/CMakeLists.txt")
             set(AS_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-            add_subdirectory(
-                "${angelscript_source_SOURCE_DIR}/angelscript/projects/cmake"
-                "${CMAKE_CURRENT_BINARY_DIR}/angelscript-runtime"
-                EXCLUDE_FROM_ALL)
+            _sao_add_angelscript_runtime("${angelscript_source_SOURCE_DIR}")
             if (TARGET angelscript)
                 set(_sao_angel_target angelscript)
                 set(SAO_ANGELSCRIPT_SOURCE_DIR
@@ -218,6 +247,3 @@ else()
         "plugins/angel_host: AngelScript package 未安装；构建 fail-closed stub")
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

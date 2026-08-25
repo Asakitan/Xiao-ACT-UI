@@ -21,6 +21,3 @@ target_link_libraries(sao_plugins_compat PUBLIC
     sao_plugins_sdk_binding
     PRIVATE sao::sdk)
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

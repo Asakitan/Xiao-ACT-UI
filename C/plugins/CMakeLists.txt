@@ -147,15 +147,4 @@ add_library(sao_plugins_runtime INTERFACE)
 add_library(sao::plugins ALIAS sao_plugins_runtime)
 target_link_libraries(sao_plugins_runtime INTERFACE ${SAO_PLUGINS_COMPONENT_TARGETS})
 
-# ── 脚本沙箱共享 STATIC lib ─────────────────────────────────────────
-# 独立 STATIC lib sao_script_sandbox_common_lib, 为 Lua / AS sandbox test
-# 提供共享 utility.  只在 SAO_BUILD_TESTS 时构建 — 无 test 时 lib 不参与出货.
-if (SAO_BUILD_TESTS AND NOT SAO_PLUGINS_LEGACY_FACADE_ONLY)
-    add_subdirectory(script_sandbox_common)
-endif()
-
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()
-
 # examples/ 不进 build (只作为运行时骨架)

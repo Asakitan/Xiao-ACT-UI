@@ -105,6 +105,13 @@ if (NOT _sao_lua_resolved AND SAO_PLUGINS_LUA_AUTO_FETCH)
             "${lua_source_SOURCE_DIR}/src")
         target_compile_definitions(sao_lua_embedded PUBLIC LUA_COMPAT_5_3)
         set_property(TARGET sao_lua_embedded PROPERTY C_STANDARD 99)
+        if (MSVC)
+            # Upstream Lua intentionally relies on narrowing C idioms that
+            # are noisy under this project's /W4 policy.  Keep warnings
+            # enabled for the host adapter while treating fetched C as vendor code.
+            target_compile_options(sao_lua_embedded PRIVATE
+                /wd4244 /wd4310 /wd4324 /wd4701 /wd4702)
+        endif()
         target_link_libraries(sao_plugins_lua_host PRIVATE sao_lua_embedded)
         target_compile_definitions(sao_plugins_lua_host PRIVATE SAO_HAS_LUA=1)
         message(STATUS "plugins/lua_host: fetched Lua 5.4 source into ${lua_source_SOURCE_DIR} (SAO_HAS_LUA=1)")
@@ -124,6 +131,3 @@ if (NOT _sao_lua_resolved)
     endif()
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

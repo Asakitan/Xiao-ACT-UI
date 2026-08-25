@@ -544,8 +544,8 @@ void interpreter::impl::exec_node(node_id id, const std::shared_ptr<scope>& scp)
 }
 
 emma_value interpreter::impl::eval_node(node_id id, const std::shared_ptr<scope>& scp) {
-    node_kind k = pool->kinds[id];
-    switch (k) {
+    node_kind kind = pool->kinds[id];
+    switch (kind) {
     case node_kind::literal_nil:
         return nullptr;
     case node_kind::literal_bool:

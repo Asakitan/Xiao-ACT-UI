@@ -199,8 +199,12 @@ bool extension_module_present(const fs::path& root, const std::string& import_na
     size_t start = 0;
     while (start < import_name.size()) {
         const auto dot = import_name.find('.', start);
-        relative /= fs::u8path(
-            import_name.substr(start, dot == std::string::npos ? std::string::npos : dot - start));
+        const auto component =
+            import_name.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        std::wstring wide_component;
+        if (!utf8_to_wide(component, wide_component))
+            return false;
+        relative /= wide_component;
         if (dot == std::string::npos)
             break;
         start = dot + 1;

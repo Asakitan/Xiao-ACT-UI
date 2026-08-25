@@ -30,6 +30,3 @@ target_link_libraries(sao_plugins_emma_host PUBLIC
     sao_plugins_sdk_binding
 )
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

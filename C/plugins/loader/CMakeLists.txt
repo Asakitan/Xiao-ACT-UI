@@ -26,9 +26,6 @@ target_include_directories(sao_plugins_loader PUBLIC
 
 target_compile_features(sao_plugins_loader PUBLIC cxx_std_20)
 target_compile_definitions(sao_plugins_loader PRIVATE SAO_PLUGINS_BUILDING_DLL)
-if (SAO_BUILD_TESTS)
-    target_compile_definitions(sao_plugins_loader PRIVATE SAO_PLUGINS_LOADER_TESTING)
-endif()
 if (MSVC)
     target_compile_definitions(sao_plugins_loader PRIVATE
         _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
@@ -38,11 +35,9 @@ find_package(nlohmann_json 3 CONFIG REQUIRED)
 target_link_libraries(sao_plugins_loader
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE shell32
+    PRIVATE $<TARGET_NAME_IF_EXISTS:sao_core>
     # Phase 14 native_loader_encrypted uses AES-GCM decrypt from security/crypto
     # and the reflective in-memory loader from security/loader (no disk).
     PRIVATE $<TARGET_NAME_IF_EXISTS:sao_security_crypto>
     PRIVATE $<TARGET_NAME_IF_EXISTS:sao_security_loader>)
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

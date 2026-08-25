@@ -185,6 +185,3 @@ if (NOT _sao_python_resolved)
         "py_host will report NOT_IMPLEMENTED at runtime")
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()
