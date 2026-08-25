@@ -5,20 +5,16 @@
 ## 启动
 
 ```powershell
-cd sao_auto/update_host
+cd sao_auto/python/update_host
 pip install fastapi uvicorn
 $env:UPDATE_HOST_RELEASE_DIR = "$pwd\releases"
-uvicorn app:app --host 0.0.0.0 --port 9973
+python update_host_main.py
 ```
 
-或使用打包后的 exe:
+生产服务器由 `server_service.py` 以 Windows SCM 服务托管本源码入口；
+`build_server_deploy_zip.bat` 生成纯源码部署包，不包含冻结 EXE。
 
-```powershell
-cd update_host
-.\UpdateHost.exe
-```
-
-客户端默认访问 `http://doi.sakisense.top:15018` (见 `config.DEFAULT_UPDATE_HOST`).
+客户端默认访问 `http://x2.sjcmc.cn:15018`；服务端仍只监听内部 `9973`，由端口映射提供外部 `15018`。
 可在 `settings.json` 中设置 `update_host` 覆盖.
 
 ## 发布新版本
@@ -79,48 +75,52 @@ XiaoACTUI/
 ```
 update_host/
   app.py
-  publish_release.py
   releases/
-    stable/
-      windows-x64/
-        manifest.json
-        update-2.1.1-runtime-delta.zip
-    beta/
-      windows-x64/
-        manifest.json
-        ...
+    update/
+      stable/
+        windows-x64/
+          latest.json
+          anchor.json
+          artifacts/
+            update-2.1.1.zip
+    workshop/
+      _catalog.json
+      <plugin-id>/
+        meta.json
+        versions/
 ```
 
 ## 端点
 
-- `GET /api/health` — 健康检查
-- `GET /api/update/latest?channel=stable&target=windows-x64&current=2.1.0` — 拉取 manifest
-- `GET /api/update/summary` — 列出所有 channel/target
-- `GET /api/update/anchor?channel=stable&target=windows-x64` — 读取当前服务端锚点
-- `POST /api/update/anchor` — 手动同步锚点到服务端 (需要 `X-API-Key`)
-- `POST /api/update/publish` — 上传更新包并自动把服务端锚点推进到本次发布 commit
-- `GET /downloads/<channel>/<target>/<file>` — 下载更新包
+- `GET /health` — 健康检查
+- `GET /update/<channel>/<target>/latest.json` — C++ 客户端读取 5 字段 manifest
+- `GET /update/<channel>/<target>/anchor` — 读取当前服务端 git 锚点
+- `POST /update/<channel>/<target>/anchor` — 手动同步锚点（需要 `X-API-Key`）
+- `POST /update/<channel>/<target>/publish` — 单流上传更新包并推进锚点
+- `GET /update/<channel>/<target>/artifacts/<file>` — 下载更新包
+- `GET /update/<channel>/<target>/history` — 列出已发布 artifacts
+- `GET /api/v1/workshop/plugins`、`GET /api/v1/workshop/plugins/<id>`、`GET /api/v1/workshop/plugins/<id>/download` — Workshop 浏览/详情/下载
+- `POST /api/v1/workshop/plugins/<id>/publish` — Workshop 单流发布（需要 `X-API-Key`）
+- `GET /api/v1/workshop/admin` — Workshop 网页管理界面；API key 仅保存在当前浏览器 tab
+- `GET /api/v1/workshop/admin/plugins` — 管理目录与版本列表（需要 `X-API-Key`）
+- `PATCH /api/v1/workshop/plugins/<id>` — 编辑名称、标签、作者、说明、游戏与最低版本（需要 `X-API-Key`）
+- `DELETE /api/v1/workshop/plugins/<id>[?version=<old>]` — 删除整插件或非 active 旧版本（需要 `X-API-Key`）
 
 ## Manifest schema
 
 | 字段              | 类型    | 说明                                                |
 |-------------------|---------|-----------------------------------------------------|
 | version           | string  | 新版本号                                            |
-| minimum_version   | string  | 低于该版本的客户端必须升级                          |
-| force_update      | bool    | 强制升级 (覆盖用户跳过)                             |
-| package_type      | string  | `runtime-delta` 或 `full-package`                   |
-| target            | string  | 例如 `windows-x64`                                  |
-| channel           | string  | `stable` / `beta`                                   |
-| download_url      | string  | 下载地址 (相对 `/downloads/...` 或绝对 URL)         |
+| url               | string  | artifact 相对路径；响应时按固定 public base URL 展开 |
 | sha256            | string  | 下载完成后客户端校验                                |
 | size              | int     | 字节数                                              |
 | notes             | string  | 发布说明                                            |
-| published_at      | string  | ISO8601                                             |
 
-发布工具还会额外写入 `commit` / `commit_short` 与 `anchor_commit*` 字段，便于追踪本次 delta 是从哪个 git 锚点生成的；客户端更新逻辑仍然只依赖标准 manifest 字段。
+服务端内部 manifest 还保存 channel/target、force/minimum、commit/anchor 与发布时间；客户端响应严格只返回 `version/url/sha256/size/notes`。
 
 ## 安全
 
-- 客户端使用 HTTPS + SHA256 校验包完整性 (manifest 信任远端 host)
-- v1 不做包签名; 建议 host 启用 HTTPS, 由网关层做证书认证
+- 当前公网契约为 `http://x2.sjcmc.cn:15018` + SHA256；manifest 的绝对 URL 只由受控 `UPDATE_HOST_PUBLIC_BASE_URL` 生成，不信任请求的 Host/Forwarded 头
+- v1 不做包签名；发布 key 缺失返回 503，错误 key 返回 403
 - 服务器侧的 `force_update` / `minimum_version` 是强制升级控制点
+- 管理页不把 key 写进 HTML、URL 或持久化配置，只通过 `X-API-Key` header 提交；页面启用 no-store、CSP nonce 与防 iframe 响应头。公网仍是 HTTP，管理时的 key 传输不具备 TLS 保密性

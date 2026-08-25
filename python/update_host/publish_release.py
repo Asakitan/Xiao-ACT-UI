@@ -5,9 +5,9 @@
 # python publish_release.py --version 2.1.0       --package path/to/update-2.1.0.zip       --type runtime-delta       [--minimum 2.0.1] [--force] [--notes "修复..."]       [--channel stable] [--target windows-x64]       [--release-dir releases]
 #
 # 会:
-# 1. 把 zip 复制到 <release-dir>/<channel>/<target>/update-<version>-<type>.zip
+# 1. 把 zip 复制到 <release-dir>/update/<channel>/<target>/artifacts/update-<version>.zip
 # 2. 计算 SHA256
-# 3. 写入 <release-dir>/<channel>/<target>/manifest.json
+# 3. 写入 <release-dir>/update/<channel>/<target>/latest.json
 
 from __future__ import annotations
 
@@ -51,27 +51,28 @@ def main():
         print(f"[publish] 包不存在: {pkg}", file=sys.stderr)
         return 1
 
-    target_dir = os.path.join(args.release_dir, args.channel, args.target)
-    os.makedirs(target_dir, exist_ok=True)
-    fname = f"update-{args.version}-{args.type}{os.path.splitext(pkg)[1] or '.zip'}"
-    dst = os.path.join(target_dir, fname)
+    target_dir = os.path.join(args.release_dir, "update", args.channel, args.target)
+    artifacts_dir = os.path.join(target_dir, "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+    fname = f"update-{args.version}.zip"
+    dst = os.path.join(artifacts_dir, fname)
     shutil.copy2(pkg, dst)
     digest, size = sha256_file(dst)
 
     manifest = {
         "version": args.version,
-        "minimum_version": args.minimum,
-        "force_update": bool(args.force),
-        "package_type": args.type,
-        "target": args.target,
-        "channel": args.channel,
-        "download_url": f"/downloads/{args.channel}/{args.target}/{fname}",
+        "url": f"/update/{args.channel}/{args.target}/artifacts/{fname}",
         "sha256": digest,
         "size": size,
         "notes": args.notes,
+        "channel": args.channel,
+        "target": args.target,
+        "force_update": bool(args.force),
+        "minimum_version": args.minimum,
+        "package_type": args.type,
         "published_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    manifest_path = os.path.join(target_dir, "manifest.json")
+    manifest_path = os.path.join(target_dir, "latest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     print(f"[publish] 已发布 v{args.version} -> {dst}")

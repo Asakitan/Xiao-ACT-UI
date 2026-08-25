@@ -6,8 +6,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
-import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
@@ -15,7 +13,6 @@ from typing import Any, Callable, Optional
 _UA = "SAO-Workshop/1.0"
 _TIMEOUT = 30
 _DL_TIMEOUT = 300
-_CHUNK_SIZE = 4 * 1024 * 1024
 
 
 def _get_json(url: str, timeout: float = _TIMEOUT) -> dict:
@@ -24,41 +21,21 @@ def _get_json(url: str, timeout: float = _TIMEOUT) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _get_json_auth(url: str, api_key: str, is_paid: bool = False, timeout: float = _TIMEOUT) -> dict:
-    headers = {"User-Agent": _UA, "Accept": "application/json", "X-API-Key": api_key}
-    if is_paid:
-        headers["X-Paid-User"] = "true"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
 def _post_json(url: str, api_key: str, body: bytes = b"",
                content_type: str = "application/octet-stream",
-               timeout: float = _TIMEOUT) -> dict:
-    req = urllib.request.Request(url, data=body, method="POST", headers={
+               timeout: float = _TIMEOUT,
+               extra_headers: Optional[dict[str, str]] = None) -> dict:
+    headers = {
         "User-Agent": _UA,
         "Accept": "application/json",
         "Content-Type": content_type,
         "X-API-Key": api_key,
-    })
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
-
-
-def _delete_json(url: str, api_key: str, timeout: float = _TIMEOUT) -> dict:
-    req = urllib.request.Request(url, method="DELETE", headers={
-        "User-Agent": _UA, "Accept": "application/json", "X-API-Key": api_key,
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = json.loads(exc.read().decode("utf-8")).get("detail", str(exc))
-        except Exception:
-            detail = str(exc)
-        raise RuntimeError(f"delete failed ({exc.code}): {detail}") from exc
 
 
 class WorkshopClient:
@@ -70,25 +47,31 @@ class WorkshopClient:
 
     def catalog(self, game_id: str = "", search: str = "", tag: str = "",
                 page: int = 1, per_page: int = 40, sort: str = "updated_at") -> dict:
-        params = {"page": str(page), "per_page": str(per_page), "sort": sort}
+        params = {"page": str(page), "size": str(per_page), "sort": sort}
+        if tag:
+            params["tag"] = tag
         if game_id:
             params["game_id"] = game_id
         if search:
             params["search"] = search
-        if tag:
-            params["tag"] = tag
         qs = urllib.parse.urlencode(params)
-        url = f"{self.base}/api/workshop/catalog?{qs}"
-        token = self.workshop_token or self.api_key
-        # 带上 token 是为了让每个条目的 is_mine 能算出来(方便 GUI 只在自己
-        # 上传的插件卡片上显示删除按钮)；catalog 本身不要求登录，不带 token
-        # 一样能拿到完整列表，只是 is_mine 全是 False。
-        if token:
-            return _get_json_auth(url, token, is_paid=self.is_paid)
-        return _get_json(url)
+        data = _get_json(f"{self.base}/api/v1/workshop/plugins?{qs}")
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return {
+            "ok": True,
+            "plugins": items,
+            "items": items,
+            "total": int(data.get("total", len(items))),
+            "page": int(data.get("page", page)),
+            "per_page": int(data.get("size", per_page)),
+            "game_ids": data.get("game_ids", {}),
+        }
 
     def detail(self, plugin_id: str) -> dict:
-        return _get_json(f"{self.base}/api/workshop/detail/{urllib.parse.quote(plugin_id)}")
+        plugin = _get_json(
+            f"{self.base}/api/v1/workshop/plugins/{urllib.parse.quote(plugin_id)}"
+        )
+        return {"ok": True, "plugin": plugin, **plugin}
 
     def download(
         self,
@@ -98,13 +81,12 @@ class WorkshopClient:
         expected_sha256: str = "",
         progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> str:
-        params = {}
+        url = (
+            f"{self.base}/api/v1/workshop/plugins/"
+            f"{urllib.parse.quote(plugin_id)}/download"
+        )
         if version:
-            params["version"] = version
-        qs = urllib.parse.urlencode(params) if params else ""
-        url = f"{self.base}/api/workshop/download/{urllib.parse.quote(plugin_id)}"
-        if qs:
-            url += f"?{qs}"
+            url += "?" + urllib.parse.urlencode({"version": version})
 
         os.makedirs(dest_dir, exist_ok=True)
         safe_id = "".join(c for c in plugin_id if c.isalnum() or c in "-_") or "plugin"
@@ -146,79 +128,59 @@ class WorkshopClient:
         progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> dict:
         file_size = os.path.getsize(zip_path)
-        init_params = {
-            "plugin_id": metadata.get("plugin_id", ""),
+        plugin_id = str(metadata.get("plugin_id", ""))
+        if not plugin_id:
+            raise ValueError("plugin_id is required")
+        tags = metadata.get("tags", [])
+        tag = str(metadata.get("tag", "") or (tags[0] if tags else ""))
+        minimum = str(metadata.get("minimum_app_version", ""))
+        version_parts = minimum.split(".") if minimum else []
+        minimum_parts = []
+        for part in version_parts[:3]:
+            try:
+                minimum_parts.append(max(0, int(part)))
+            except ValueError:
+                minimum_parts.append(0)
+        while len(minimum_parts) < 3:
+            minimum_parts.append(0)
+
+        params = {
             "version": metadata.get("version", "0.0.0"),
-            "file_size": str(file_size),
-            "chunk_size": str(_CHUNK_SIZE),
             "name": metadata.get("name", ""),
             "author": metadata.get("author", ""),
-            "description": metadata.get("description", ""),
-            "long_description": metadata.get("long_description", ""),
+            "tag": tag,
             "game_ids": json.dumps(metadata.get("game_ids", [])),
-            "tags": json.dumps(metadata.get("tags", [])),
-            "language": metadata.get("language", "python"),
-            "access_level": metadata.get("access_level", "free"),
-            "minimum_app_version": metadata.get("minimum_app_version", ""),
-            "requires": json.dumps(metadata.get("requires", [])),
-            "permissions": json.dumps(metadata.get("permissions", [])),
-            "open_source": "true" if metadata.get("open_source", True) else "false",
+            "signature_alg": metadata.get("signature_alg", "ed25519"),
+            "min_major": minimum_parts[0],
+            "min_minor": minimum_parts[1],
+            "min_patch": minimum_parts[2],
         }
-
-        token = self.workshop_token or self.api_key
-        qs = urllib.parse.urlencode(init_params)
-        init_resp = _post_json(f"{self.base}/api/workshop/publish/init?{qs}", token)
-        upload_id = init_resp["upload_id"]
-        chunk_size = int(init_resp["chunk_size"])
-        total_chunks = int(init_resp["total_chunks"])
-
-        sent = 0
-        with open(zip_path, "rb") as f:
-            for idx in range(total_chunks):
-                data = f.read(chunk_size)
-                chunk_qs = urllib.parse.urlencode({"upload_id": upload_id, "index": str(idx)})
-                _post_json(
-                    f"{self.base}/api/workshop/publish/chunk?{chunk_qs}",
-                    token,
-                    body=data,
-                    timeout=_DL_TIMEOUT,
-                )
-                sent += len(data)
-                if progress_cb:
-                    progress_cb(sent, file_size)
-
-        complete_qs = urllib.parse.urlencode({"upload_id": upload_id})
-        return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", token)
+        token = self.api_key or self.workshop_token
+        if not token:
+            raise RuntimeError("workshop publish token is unavailable")
+        with open(zip_path, "rb") as stream:
+            body = stream.read()
+        if progress_cb:
+            progress_cb(file_size, file_size)
+        qs = urllib.parse.urlencode(params)
+        description = str(
+            metadata.get("description", "") or metadata.get("long_description", "")
+        )
+        return _post_json(
+            f"{self.base}/api/v1/workshop/plugins/"
+            f"{urllib.parse.quote(plugin_id)}/publish?{qs}",
+            token,
+            body=body,
+            timeout=_DL_TIMEOUT,
+            extra_headers={"X-SaoAuto-Description": description},
+        )
 
     def delete(self, plugin_id: str, version: str = "") -> dict:
-        # 删除自己上传的插件(或某一个版本)。服务端只认 X-API-Key 是否等于
-        # 发布时记录的 uploader_token，跟自己上传时用的是同一个 workshop_token
-        # 就行，不需要另外的账号系统。``version`` 留空删整个插件。
-        token = self.workshop_token or self.api_key
-        qs = urllib.parse.urlencode({"version": version}) if version else ""
-        url = f"{self.base}/api/workshop/plugin/{urllib.parse.quote(plugin_id)}"
-        if qs:
-            url += f"?{qs}"
-        return _delete_json(url, token)
+        raise RuntimeError("workshop delete is unavailable on the v1 host")
 
     def fetch_content_key(self, plugin_id: str, version: str = "") -> bytes:
         # Fetch the AES-256 content key for a closed-source (protected) plugin
         # build. Requires network + a valid workshop token every call — no local
         # caching by design: a protected plugin is only ever decryptable while
         # the app is live and talking to the server.
-        import base64
-        params = {}
-        if version:
-            params["version"] = version
-        qs = urllib.parse.urlencode(params) if params else ""
-        url = f"{self.base}/api/workshop/key/{urllib.parse.quote(plugin_id)}"
-        if qs:
-            url += f"?{qs}"
-        token = self.workshop_token or self.api_key
-        resp = _get_json_auth(url, token, is_paid=self.is_paid)
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("detail") or "key fetch failed")
-        key = base64.b64decode(resp["key_b64"])
-        if len(key) != 32:
-            raise ValueError(f"unexpected content key length: {len(key)}")
-        return key
+        raise RuntimeError("protected Workshop content keys are unavailable on the v1 host")

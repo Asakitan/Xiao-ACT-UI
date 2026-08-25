@@ -25,6 +25,7 @@ call :copyfile build_service.py
 call :copyfile toolchain_bootstrap.py
 call :copyfile native_crypto.py
 call :copyfile update_host_main.py
+call :copyfile publish_release.py
 call :copyfile requirements.txt
 call :copyfile start_server.bat
 call :copyfile run_update_host.bat
@@ -58,7 +59,7 @@ echo   2. 服务器上运行 update_host\start_server.bat (双击或命令行)
 echo      第一次运行会自动装 Python venv 依赖 (fastapi/uvicorn)
 echo      第一次有人上传"非开源"插件时，会自动把 Cython/MSVC BuildTools
 echo      静默装到 D:\Xiaoworkshop (可能耗时较久，属于一次性成本)
-echo   3. 确认服务器 9973 端口 (或你设的 UPDATE_HOST_PORT) 对外开放
+echo   3. 确认服务端监听 9973，且端口映射已将 x2.sjcmc.cn:15018 转发到 9973
 
 popd
 exit /b 0

@@ -77,7 +77,7 @@ def _get_server_url() -> str:
         return WORKSHOP_SERVER_URL
     except Exception:
         pass
-    return "http://doi.sakisense.top:15018"
+    return "http://x2.sjcmc.cn:15018"
 
 
 class WorkshopAPI:
@@ -111,11 +111,12 @@ class WorkshopAPI:
         }
 
     def browse(self, game_id: str = "", tag: str = "", search: str = "",
-               page: int = 1, per_page: int = 40) -> Dict:
+               page: int = 1, per_page: int = 40,
+               sort: str = "updated_at") -> Dict:
         try:
             return self._ensure_client().catalog(
                 game_id=game_id, search=search, tag=tag,
-                page=page, per_page=per_page,
+                page=page, per_page=per_page, sort=sort,
             )
         except Exception as e:
             return {"ok": False, "error": str(e), "plugins": [], "total": 0}
@@ -197,8 +198,8 @@ class WorkshopAPI:
     def upload(self, zip_path: str, metadata: Dict) -> Dict:
         try:
             client = self._ensure_client()
-            if not client.workshop_token:
-                return {"ok": False, "error": "无法生成上传凭证"}
+            if not client.api_key:
+                return {"ok": False, "error": "未配置 Workshop 发布 API key"}
             return client.publish(zip_path, metadata)
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -275,14 +276,6 @@ def get_workshop_token() -> str:
 
 
 def _get_api_key() -> str:
-    try:
-        cfg_path = os.path.join(_ROOT, "dev_publish_config.json")
-        if os.path.isfile(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return str(data.get("publish_api_key", "")).strip()
-    except Exception:
-        pass
     return os.environ.get("SAO_UPDATE_API_KEY", "").strip()
 
 
