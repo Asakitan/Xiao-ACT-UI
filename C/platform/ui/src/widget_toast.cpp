@@ -127,13 +127,17 @@ struct ToastEntry {
 };
 
 uint32_t theme_color(SaoUiThemeId theme_override, SaoUiColorToken token) {
-    return theme_override == SAO_UI_THEME_COUNT
-        ? sao::ui::detail::panel_theme_color(token)
-        : sao_ui_theme_resolve_color(theme_override, token);
+    if (theme_override == SAO_UI_THEME_COUNT)
+        return sao::ui::detail::panel_theme_color(token);
+    const auto theme = sao::ui::detail::resolve_theme(
+        theme_override, sao::ui::detail::process_theme_generation());
+    return theme.colors[static_cast<size_t>(token)];
 }
 
 uint32_t resolve_or(const ToastEntry& entry, uint32_t override_value, SaoUiColorToken token) {
-    return override_value != 0 ? override_value : theme_color(entry.theme_override, token);
+    return override_value != 0 && !sao::ui::detail::panel_theme_high_contrast()
+               ? override_value
+               : theme_color(entry.theme_override, token);
 }
 
 }  // namespace
@@ -423,6 +427,45 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_dismiss(sao_ui_toast_handle_t h
     }
     if (has_dismissed)
         fire_dismissed_callback(handle, dismissed, true);
+    return SAO_STATUS_OK;
+}
+extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_click_at(
+    sao_ui_toast_handle_t handle, int32_t x, int32_t y, int32_t width, int32_t height,
+    bool* out_dismissed) {
+    if (out_dismissed == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_dismissed = false;
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    ToastOperation operation(handle);
+    if (!operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    // Mirror paint geometry for the newest (top) entry: same item box,
+    // same 10×10 × glyph centered at the right edge.
+    bool hit = false;
+    ToastEntry dismissed;
+    {
+        std::lock_guard lock(handle->mu);
+        if (!handle->stack.empty()) {
+            const int32_t item_width = std::max(1, std::min(std::max(1, width - 12), 360));
+            const int32_t item_height = 42;
+            const int32_t item_x = x + width - item_width - 6;
+            const int32_t item_y = y + height - 8 - item_height;
+            const int32_t cx = item_x + item_width - 13;
+            const int32_t cy = item_y + 17;
+            hit = x >= cx - 14 && x <= cx + 14 && y >= cy - 14 && y <= cy + 14;
+            if (hit) {
+                dismissed = std::move(handle->stack.back());
+                handle->stack.pop_back();
+                if (handle->total_count > 0)
+                    --handle->total_count;
+                recompute_toast_overflow_locked(handle);
+            }
+        }
+    }
+    if (hit)
+        fire_dismissed_callback(handle, dismissed, true);
+    *out_dismissed = hit;
     return SAO_STATUS_OK;
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_apply_props(

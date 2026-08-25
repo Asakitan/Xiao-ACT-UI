@@ -187,6 +187,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_streaming_flow_teardown(
 
 extern "C" uint64_t SAO_UI_CALL sao_streaming_flow_set_mode(bool exclude) {
     auto& s = state();
+    bool caller_owns_mode_lock = false;
+    {
+        std::lock_guard<std::mutex> owner_lock(s.mode_lock_owner_mutex);
+        caller_owns_mode_lock = s.mode_lock_owner.has_value() &&
+            *s.mode_lock_owner == std::this_thread::get_id();
+    }
+    std::unique_lock<std::timed_mutex> mode_guard(s.mode_lock,
+                                                  std::defer_lock);
+    if (!caller_owns_mode_lock) mode_guard.lock();
     SaoAntiScreencapStreamingSnapshot before{};
     if (sao_anti_screencap_streaming_snapshot(&before) != SAO_STATUS_OK ||
         !before.accepting) {

@@ -167,6 +167,16 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tooltip_set_text(
     sao_ui_widget_handle_t tooltip,
     const char* text_utf8);
 
+// Hover state driver.  Call with hovering=true when the pointer enters
+// the attached target (cursor_x/cursor_y in host coords), and false on
+// exit.  The bubble appears after `delay_ms` and, when follow_cursor is
+// set, re-anchors to the latest cursor position.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tooltip_notify_hover(
+    sao_ui_widget_handle_t target,
+    bool hovering,
+    int32_t cursor_x,
+    int32_t cursor_y);
+
 // ─── More indicator — '… 还有 N 条' truncation hint ──────────────────
 struct SaoUiMoreIndicatorSpec {
     int32_t     hidden_count;               // shown as N in the label

@@ -91,6 +91,8 @@ constexpr int32_t kChildCaretGap = 3;
 constexpr uint32_t kMouseMove = 0x0200;
 constexpr uint32_t kLeftButtonDown = 0x0201;
 constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr uint32_t kRightButtonDown = 0x0204;
+constexpr uint32_t kRightButtonUp = 0x0205;
 constexpr uint32_t kMouseWheel = 0x020A;
 constexpr uint32_t kMouseLeave = 0x02A3;
 constexpr int32_t kWheelDeltaPerNotch = 120;
@@ -808,6 +810,20 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                             kChildBlendRounding);
         fill_rounded_rect(raster, entity_child_row_x(), row_y, 2, kChildRowHeight, 2, indicator,
                           kChildBlendRounding);
+        if (!disabled && row_width > 20) {
+            const uint8_t glass_alpha = scaled_alpha(22.0 + 26.0 * hover, opacity);
+            draw_line(raster, entity_child_row_x() + 8, row_y + 1,
+                      entity_child_row_x() + row_width - 8, row_y + 1, 1,
+                      Color{255, 255, 255, glass_alpha}, kChildBlendRounding);
+        }
+        if (!disabled && (hover > 0.05F || pressed)) {
+            const uint8_t spine_alpha = scaled_alpha(30.0 + 48.0 * hover +
+                                                         (pressed ? 24.0 : 0.0),
+                                                     opacity);
+            draw_line(raster, kChildLineCenterX + 3, row_y + kChildRowHeight / 2,
+                      entity_child_row_x(), row_y + kChildRowHeight / 2, 1,
+                      Color{104, 228, 255, spine_alpha}, kChildBlendRounding);
+        }
 
         const int32_t icon_x = entity_child_row_x() + 2 + 8;
         const int32_t icon_y = row_y + (kChildRowHeight - kChildIconFontSize) / 2 - 2;
@@ -956,6 +972,49 @@ Raster load_authority_frame(int32_t resource_id, uint32_t width, uint32_t height
     return raster;
 }
 
+struct ImmutableAuthorityFrame {
+    uint32_t width{};
+    uint32_t height{};
+    std::shared_ptr<const std::vector<Pixel>> pixels;
+};
+
+struct AuthorityFrameCache {
+    std::array<ImmutableAuthorityFrame, 9> frames{};
+};
+
+const AuthorityFrameCache& authority_frame_cache() {
+    static const AuthorityFrameCache cache = [] {
+        AuthorityFrameCache result{};
+        const auto load = [&result](size_t index, int32_t resource_id, uint32_t width,
+                                    uint32_t height) {
+            Raster raster = load_authority_frame(resource_id, width, height);
+            result.frames[index] = {
+                width, height,
+                std::make_shared<const std::vector<Pixel>>(std::move(raster.pixels))};
+        };
+        load(0, SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_IDLE, SAO_UI_NERVEGEAR_SIZE,
+             SAO_UI_NERVEGEAR_SIZE);
+        load(1, SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_HOVER, SAO_UI_NERVEGEAR_SIZE,
+             SAO_UI_NERVEGEAR_SIZE);
+        load(2, SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_PRESSED, SAO_UI_NERVEGEAR_SIZE,
+             SAO_UI_NERVEGEAR_SIZE);
+        load(3, SAO_UI_ENTITY_AUTHORITY_MENU_IDLE, kMenuWidth, kMenuHeight);
+        load(4, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_0, kMenuWidth, kMenuHeight);
+        load(5, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_1, kMenuWidth, kMenuHeight);
+        load(6, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_2, kMenuWidth, kMenuHeight);
+        load(7, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_3, kMenuWidth, kMenuHeight);
+        load(8, SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_4, kMenuWidth, kMenuHeight);
+        return result;
+    }();
+    return cache;
+}
+
+Raster copy_authority_frame(const ImmutableAuthorityFrame& frame) {
+    if (frame.pixels == nullptr)
+        throw std::runtime_error("Entity authority frame cache unavailable");
+    return {frame.width, frame.height, *frame.pixels};
+}
+
 Raster blend_authority_menu(const sao::ui::menu_visual::Snapshot& snapshot,
                             int32_t pressed_index) {
     constexpr std::array<int32_t, 5> kHoverResources{
@@ -977,17 +1036,19 @@ Raster blend_authority_menu(const sao::ui::menu_visual::Snapshot& snapshot,
         selected_index >= 0 && selected_index < static_cast<int32_t>(kHoverResources.size())
             ? kHoverResources[static_cast<size_t>(selected_index)]
             : SAO_UI_ENTITY_AUTHORITY_MENU_IDLE;
-    return load_authority_frame(resource_id, kMenuWidth, kMenuHeight);
+    const auto& cache = authority_frame_cache();
+    const size_t cache_index = resource_id == SAO_UI_ENTITY_AUTHORITY_MENU_IDLE
+                                   ? 3U
+                                   : 4U + static_cast<size_t>(resource_id -
+                                                              SAO_UI_ENTITY_AUTHORITY_MENU_HOVER_0);
+    return copy_authority_frame(cache.frames[cache_index]);
 }
 #endif
 
 Raster rasterize_nervegear(SaoUiNerveGearState state) {
 #if defined(_WIN32)
-    const int32_t resource_id =
-        state == SAO_UI_NG_STATE_PRESSED ? SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_PRESSED
-        : state == SAO_UI_NG_STATE_HOVER ? SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_HOVER
-                                         : SAO_UI_ENTITY_AUTHORITY_NERVEGEAR_IDLE;
-    Raster raster = load_authority_frame(resource_id, SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE);
+    Raster raster = copy_authority_frame(authority_frame_cache().frames[
+        state == SAO_UI_NG_STATE_PRESSED ? 2U : state == SAO_UI_NG_STATE_HOVER ? 1U : 0U]);
     if (state == SAO_UI_NG_STATE_LINKING || state == SAO_UI_NG_STATE_LINKED) {
         stroke_circle(raster, 36, 36, state == SAO_UI_NG_STATE_LINKING ? 34 : 32, 2,
                       Color{104, 228, 255, 165});
@@ -1057,6 +1118,9 @@ Raster rasterize_generic_menu(int32_t pressed_index,
         const bool disabled = has_visual && root_row_disabled(snapshot.roots[slot]);
         const float hover = has_visual ? std::clamp(snapshot.roots[slot].hover_t, 0.0F, 1.0F)
                            : 0.0F;
+        const float fisheye = has_visual
+                                  ? std::clamp(snapshot.roots[slot].fisheye_t, 0.0F, 1.0F)
+                                  : 0.0F;
         const float stagger = has_visual ? std::clamp(snapshot.roots[slot].stagger_t, 0.0F, 1.0F)
                              : 0.0F;
         const float trail = has_visual ? std::clamp(snapshot.roots[slot].selection_trail_t, 0.0F, 1.0F)
@@ -1064,7 +1128,11 @@ Raster rasterize_generic_menu(int32_t pressed_index,
         const float pulse = has_visual ? std::clamp(snapshot.roots[slot].pressed_pulse_t, 0.0F, 1.0F)
                            : 0.0F;
         const bool pressed = !disabled && physical_index == pressed_index;
-        const int32_t size = pressed ? 68 : 54 + static_cast<int32_t>(std::lround(16.0F * hover * stagger));
+        SaoUiMenuLayout visual_layout{};
+        visual_layout.button_size = sao::ui::menu_visual::kVisualButtonBaseSize;
+        visual_layout.button_max_size = sao::ui::menu_visual::kVisualButtonMaxSize;
+        const int32_t size = sao::ui::menu_visual::visual_button_diameter(
+            visual_layout, fisheye * stagger);
         const int32_t settled_y = kMenuPad + physical_index * kMenuSlot + kMenuSlot / 2;
         const int32_t center_y = kMenuPad + kMenuSlot / 2 +
                                  static_cast<int32_t>(std::lround((settled_y -
@@ -1173,10 +1241,28 @@ Raster rasterize_menu(int32_t pressed_index, int32_t pressed_child_index,
                       Color{104, 228, 255, static_cast<uint8_t>(180.0F * spark_t)});
         }
     }
-    const int32_t scanline_y = 38 + static_cast<int32_t>(snapshot.revision % (kMenuHeight - 76));
-    if (!snapshot.reduced_motion)
+    if (!snapshot.reduced_motion && !snapshot.fps_pressure) {
+        const float ambient_phase = std::clamp(snapshot.ambient_phase_t, 0.0F, 1.0F);
+        const int32_t scanline_y =
+            38 + static_cast<int32_t>(std::lround(ambient_phase * (kMenuHeight - 76)));
         draw_line(raster, 38, scanline_y, kMenuWidth - 38, scanline_y, 1,
-                  Color{104, 228, 255, 82});
+                  Color{104, 228, 255, 78});
+        if (scanline_y > 45)
+            draw_line(raster, 38, scanline_y - 7, kMenuWidth - 38, scanline_y - 7, 1,
+                      Color{104, 228, 255, 22});
+        if (scanline_y < kMenuHeight - 45)
+            draw_line(raster, 38, scanline_y + 7, kMenuWidth - 38, scanline_y + 7, 1,
+                      Color{104, 228, 255, 16});
+        const int32_t cyan_marker_y =
+            34 + static_cast<int32_t>(std::lround(ambient_phase * (kMenuHeight - 68)));
+        const float gold_phase = std::fmod(ambient_phase + 0.5F, 1.0F);
+        const int32_t gold_marker_y =
+            34 + static_cast<int32_t>(std::lround(gold_phase * (kMenuHeight - 68)));
+        draw_line(raster, 31, cyan_marker_y, 38, cyan_marker_y, 1,
+                  Color{104, 228, 255, 76});
+        draw_line(raster, kMenuWidth - 38, gold_marker_y, kMenuWidth - 31, gold_marker_y, 1,
+                  Color{212, 156, 23, 70});
+    }
     draw_line(raster, 34, 34, 54, 34, 2, Color{104, 228, 255, 210});
     draw_line(raster, 34, 34, 34, 54, 2, Color{104, 228, 255, 210});
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 54, kMenuHeight - 34, 2,
@@ -1749,7 +1835,10 @@ sao_status_t build_menu_input_rects_locked(
     const size_t visible_child_count =
         std::min(available_child_count, static_cast<size_t>(kChildPhysicalCapacity));
     const int32_t child_count = static_cast<int32_t>(visible_child_count);
+    const bool child_fade_visible = snapshot.fade_t < 0.50F;
     for (int32_t slot = 0; slot < child_count; ++slot) {
+        if (!child_fade_visible)
+            break;
         const size_t logical_index =
             shell->first_visible_child_index + static_cast<size_t>(slot);
         const int32_t width =
@@ -2053,7 +2142,7 @@ bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
                                int32_t screen_x, int32_t screen_y, bool include_disabled,
                                MenuHit* out_hit) {
     if (!shell->menu_visible || !is_child_phase(snapshot.phase) ||
-        snapshot.displayed_parent_idx < 0 || snapshot.rows.empty()) {
+        snapshot.displayed_parent_idx < 0 || snapshot.rows.empty() || snapshot.fade_t >= 0.50F) {
         return false;
     }
     const uint32_t host_dpi = host_dpi_snapshot(shell);
@@ -2220,6 +2309,19 @@ sao_status_t dispatch_entity_action(sao_ui_entity_shell_s* shell,
     if (should_destroy)
         (void)sao_ui_entity_shell_try_destroy(shell);
     return action_status;
+}
+
+bool menu_surface_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x,
+                             int32_t screen_y) {
+    if (!shell->menu_visible)
+        return false;
+    const uint32_t host_dpi = host_dpi_snapshot(shell);
+    const int64_t host_x = screen_to_host_dpi(screen_x, shell->origin_x, host_dpi);
+    const int64_t host_y = screen_to_host_dpi(screen_y, shell->origin_y, host_dpi);
+    const int64_t local_x = host_x - shell->menu_x;
+    const int64_t local_y = host_y - shell->menu_y;
+    return local_x >= 0 && local_y >= 0 && local_x < kMenuWidth &&
+        local_y < kMenuHeight;
 }
 
 MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
@@ -2770,10 +2872,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
             status = first_failure(status, sao_ui_menu_set_hover(handle->menu, -1));
             status = first_failure(
                 status, sao::ui::menu_visual::set_child_hover(handle->menu, -1, -1));
+        } else if (message == kRightButtonUp && button == 1) {
+            // Right-click dismisses the open menu overlay from anywhere.
+            if (handle->menu_visible) {
+                status = first_failure(status, set_menu_visibility_locked(handle, false));
+            }
         } else if (message == kLeftButtonDown && button == 0) {
             if (nervegear_hit) {
                 status = sao_ui_nervegear_on_mouse_enter(handle->nervegear);
                 status = first_failure(status, sao_ui_nervegear_on_mouse_down(handle->nervegear));
+            }
+            // Background click dismiss: only a click outside the complete
+            // menu surface closes it. Disabled rows remain fail-closed
+            // without collapsing the current navigation state.
+            if (!nervegear_hit && handle->menu_visible &&
+                !menu_surface_hit_locked(handle, screen_x, screen_y)) {
+                status = first_failure(status, set_menu_visibility_locked(handle, false));
             }
             handle->menu_pressed_index = menu_index;
             handle->menu_pressed_child_parent =
@@ -2848,6 +2962,94 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                                previous_child_hover != handle->menu_hover_child_index ||
                                previous_child_pressed != handle->menu_pressed_child_index ||
                                previous_menu_visible != handle->menu_visible;
+        status = first_failure(status, commit_visual_state_locked(handle));
+        if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
+            ++handle->action_count;
+            ++handle->callback_depth;
+        }
+        handle->last_status = status;
+    }
+    if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
+        return dispatch_entity_action(handle, pending_action);
+    }
+    return status;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
+    sao_ui_entity_shell_handle_t handle, uint32_t virtual_key, uint32_t modifiers) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != handle->owner_thread) {
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    }
+    (void)modifiers;
+    PendingEntityAction pending_action{};
+    sao_status_t status = SAO_STATUS_OK;
+    {
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        if (!handle->online || !handle->overlay_visible) {
+            return SAO_STATUS_OK;
+        }
+        const int32_t count = static_cast<int32_t>(visible_root_count(handle));
+        const int32_t current = handle->menu_hover_index;
+        switch (virtual_key) {
+        case 0x25U:  // Left — previous root
+        case 0x26U: { // Up — previous root
+            if (count <= 0)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            int32_t target = current < 0 ? 0 : current - 1;
+            if (target < 0)
+                target = count - 1;
+            handle->menu_hover_index = target;
+            status = sao_ui_menu_set_hover(handle->menu, target);
+            break;
+        }
+        case 0x27U:  // Right — next root
+        case 0x28U: { // Down — next root
+            if (count <= 0)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            int32_t target = current < 0 ? 0 : current + 1;
+            if (target >= count)
+                target = 0;
+            handle->menu_hover_index = target;
+            status = sao_ui_menu_set_hover(handle->menu, target);
+            break;
+        }
+        case 0x0dU:  // Enter
+        case 0x20U: { // Space — activate the hovered root
+            if (count <= 0)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            const int32_t menu_index = handle->menu_hover_index < 0 ? 0
+                                                                   : handle->menu_hover_index;
+            const int32_t logical_index = physical_to_logical_root_locked(handle, menu_index);
+            if (logical_index >= 0) {
+                const auto& root = handle->roots[static_cast<size_t>(logical_index)];
+                status = sao_ui_menu_activate(handle->menu, menu_index);
+                if (status == SAO_STATUS_OK && root.can_activate &&
+                    root.children.empty() && root.action_id >= 0) {
+                    const auto action = static_cast<SaoUiEntityAction>(root.action_id);
+                    if (action == SAO_UI_ENTITY_ACTION_OPEN_ABOUT ||
+                        action == SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR) {
+                        status = first_failure(status,
+                                               set_menu_visibility_locked(handle, false));
+                    }
+                    if (status == SAO_STATUS_OK && handle->config.action_fn != nullptr) {
+                        pending_action.callback = handle->config.action_fn;
+                        pending_action.user_data = handle->config.action_user_data;
+                        pending_action.action = action;
+                    }
+                }
+            }
+            break;
+        }
+        case 0x1bU:  // Escape — close the menu overlay
+            if (handle->menu_visible) {
+                status = first_failure(status, set_menu_visibility_locked(handle, false));
+            }
+            break;
+        default:
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
         status = first_failure(status, commit_visual_state_locked(handle));
         if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
             ++handle->action_count;

@@ -86,6 +86,7 @@ enum class MutationKind : uint8_t {
     kSetBounds,
     kHideExstyle,
     kHideWindowRect,
+    kUnlinkZOrder,
 };
 
 struct MutationPayload {
@@ -244,6 +245,8 @@ sao_status_t parse_mutation(std::string_view operation, std::string_view method,
     } else if ((operation == "host-exstyle" || operation == "proxy-exstyle") &&
                method == "hide_exstyle") {
         kind = MutationKind::kHideExstyle;
+    } else if (operation == "host-z-order" && method == "hide_z_order") {
+        kind = MutationKind::kUnlinkZOrder;
     } else {
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     }
@@ -273,6 +276,17 @@ sao_status_t parse_mutation(std::string_view operation, std::string_view method,
                 bottom < std::numeric_limits<int32_t>::min() ||
                 bottom > std::numeric_limits<int32_t>::max()) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+        } else if (kind == MutationKind::kUnlinkZOrder) {
+            // Optional {"timeout_ms":N}; empty object keeps the default
+            // physical transaction budget.  No other keys are meaningful.
+            payload.timeout_ms = kPhysicalExStyleTimeoutMs;
+            for (const auto& item : document.items()) {
+                if (item.key() != "timeout_ms" ||
+                    !json_uint32(item.value(), &payload.timeout_ms) ||
+                    payload.timeout_ms == 0) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
             }
         } else {
             if (document.size() != 1 || !document.contains("mask") ||
@@ -335,8 +349,11 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     bool stop_requested = false;
 
     // Copied provider table. user_data remains borrowed until shutdown joins
-    // the worker and destroy() returns.
+    // the worker and destroy() returns.  unlink_z_order is only populated
+    // when the caller supplied a V3 table; V2-era callers leave it null and
+    // z-order unlink submissions fail closed NOT_INITIALIZED.
     SaoUiDcMutationProviderV2 mutation_provider{};
+    sao_ui_dc_mutation_unlink_z_order_fn_t unlink_z_order = nullptr;
 
     // ── Diagnostic dispatch log (for tests) ────────────────────
     std::mutex dispatch_mu;
@@ -349,10 +366,12 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     // ── Worker thread ──────────────────────────────────────────
     std::thread worker;
 
-    explicit Coordinator(const SaoUiDcMutationProviderV2* provider) {
+    explicit Coordinator(const SaoUiDcMutationProviderV2* provider,
+                         sao_ui_dc_mutation_unlink_z_order_fn_t unlink = nullptr) {
         if (provider != nullptr) {
             mutation_provider = *provider;
         }
+        unlink_z_order = unlink;
         worker = std::thread([this] { this->run(); });
     }
 
@@ -508,6 +527,9 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             mutation_provider.hide_exstyle == nullptr) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
+        if (payload.kind == MutationKind::kUnlinkZOrder && unlink_z_order == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
         const Token token = tok_it->second;
         const uint64_t generation = token.generation;
         MutationKey key{hwnd, generation, op};
@@ -593,6 +615,23 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         }
     }
 
+    sao_status_t execute_unlink_z_order_on_worker(const Mutation& task) {
+        // The unlink is a physical tagWND transaction exactly like the
+        // ExStyle/rect scrubs: it runs on the mutation worker, never on the
+        // owner thread, and revalidates the token before borrowed code.
+        if (!token_current(task.token))
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const auto callback = unlink_z_order;
+        if (callback == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        try {
+            return callback(mutation_provider.user_data, reinterpret_cast<void*>(task.key.hwnd),
+                            task.payload.timeout_ms);
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
     sao_status_t execute_on_owner_thread(const Mutation& task) {
 #if defined(_WIN32)
         if (::GetCurrentThreadId() != task.token.thread_id)
@@ -607,6 +646,8 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         case MutationKind::kHideWindowRect:
             return SAO_STATUS_ERR_ACCESS_DENIED;
+        case MutationKind::kUnlinkZOrder:
+            return SAO_STATUS_ERR_ACCESS_DENIED;
         }
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     }
@@ -616,6 +657,9 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             return execute_hide_window_rect_on_worker(task);
         if (task.payload.kind == MutationKind::kHideExstyle) {
             return execute_hide_exstyle_on_worker(task);
+        }
+        if (task.payload.kind == MutationKind::kUnlinkZOrder) {
+            return execute_unlink_z_order_on_worker(task);
         }
 #if !defined(_WIN32)
         return execute_on_owner_thread(task);
@@ -854,16 +898,49 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_create_ex_v2(const SaoUiDcMutationProviderV2* provider,
                                             sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
+    if (provider != nullptr &&
+        (provider->struct_size != sizeof(SaoUiDcMutationProviderV2) || provider->reserved != 0)) {
+        if (out_handle != nullptr)
+            *out_handle = nullptr;
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    SaoUiDcMutationProviderV3 provider_v3{};
+    const SaoUiDcMutationProviderV3* selected_provider = nullptr;
+    if (provider != nullptr) {
+        provider_v3.struct_size = sizeof(provider_v3);
+        provider_v3.hide_window_rect = provider->hide_window_rect;
+        provider_v3.hide_exstyle = provider->hide_exstyle;
+        provider_v3.user_data = provider->user_data;
+        provider_v3.unlink_z_order = nullptr;
+        selected_provider = &provider_v3;
+    }
+    return sao_ui_dc_mutation_coordinator_create_ex_v3(selected_provider, out_handle);
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_coordinator_create_ex_v3(const SaoUiDcMutationProviderV3* provider,
+                                            sao_ui_dc_mutation_coordinator_handle_t* out_handle) {
     if (out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_handle = nullptr;
     if (provider != nullptr &&
-        (provider->struct_size != sizeof(SaoUiDcMutationProviderV2) || provider->reserved != 0)) {
+        (provider->struct_size != sizeof(SaoUiDcMutationProviderV3) || provider->reserved != 0)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        auto coordinator = std::make_shared<Coordinator>(provider);
+        SaoUiDcMutationProviderV2 provider_v2{};
+        const SaoUiDcMutationProviderV2* selected_v2 = nullptr;
+        sao_ui_dc_mutation_unlink_z_order_fn_t unlink = nullptr;
+        if (provider != nullptr) {
+            provider_v2.struct_size = sizeof(provider_v2);
+            provider_v2.hide_window_rect = provider->hide_window_rect;
+            provider_v2.hide_exstyle = provider->hide_exstyle;
+            provider_v2.user_data = provider->user_data;
+            selected_v2 = &provider_v2;
+            unlink = provider->unlink_z_order;
+        }
+        auto coordinator = std::make_shared<Coordinator>(selected_v2, unlink);
         auto handle = std::make_unique<CoordinatorHandle>();
         handle->coord = std::move(coordinator);
         *out_handle = reinterpret_cast<sao_ui_dc_mutation_coordinator_handle_t>(handle.release());
@@ -968,6 +1045,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_w
         auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
         return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), "host-rect-scrub",
                                    "hide_window_rect", args_json, payload, true);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_unlink_z_order(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, uint32_t timeout_ms) {
+    if (handle == nullptr || hwnd == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        MutationPayload payload{};
+        payload.kind = MutationKind::kUnlinkZOrder;
+        payload.timeout_ms = timeout_ms != 0 ? timeout_ms : kPhysicalExStyleTimeoutMs;
+        const std::string args_json =
+            "{\"timeout_ms\":" + std::to_string(payload.timeout_ms) + "}";
+        auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
+        return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), "host-z-order",
+                                   "hide_z_order", args_json, payload, false);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

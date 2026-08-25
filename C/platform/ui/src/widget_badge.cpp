@@ -37,8 +37,9 @@ constexpr int32_t kDefaultRadius = 8;
 constexpr float kPulsePeak = 1.18F;
 
 uint32_t resolve_or(uint32_t override_value, SaoUiColorToken token) {
-    return override_value != 0 ? override_value
-                               : sao::ui::detail::panel_theme_color(token);
+    return override_value != 0 && !sao::ui::detail::panel_theme_high_contrast()
+               ? override_value
+               : sao::ui::detail::panel_theme_color(token);
 }
 
 uint32_t lighten(uint32_t color, float amount) {
@@ -366,6 +367,7 @@ sao_status_t widget_animated_badge_paint(sao_ui_widget_handle_t handle,
                                          int32_t x, int32_t y,
                                          int32_t width, int32_t height) noexcept {
     try {
+        (void)width;
         auto state = as_badge(handle);
         if (state == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -383,7 +385,12 @@ sao_status_t widget_animated_badge_paint(sao_ui_widget_handle_t handle,
         const uint32_t fill = resolve_or(spec.fill_argb, SAO_UI_TOKEN_APP_ACCENT);
         const uint32_t fg = resolve_or(spec.fg_argb, SAO_UI_TOKEN_WHITE);
         const uint32_t border = resolve_or(spec.border_argb, SAO_UI_TOKEN_APP_BORDER);
-        const uint32_t pulse_color = spec.pulse_argb != 0 ? spec.pulse_argb : lighten(fill, 0.30F);
+        const uint32_t pulse_color = sao::ui::detail::panel_theme_high_contrast()
+                                         ? sao::ui::detail::panel_theme_color(
+                                               SAO_UI_TOKEN_FOCUS_RING)
+                                     : spec.pulse_argb != 0
+                                         ? spec.pulse_argb
+                                         : lighten(fill, 0.30F);
         const float dot_r = static_cast<float>(spec.dot_radius_px) * scale;
         const float cx = static_cast<float>(x) + std::max(2, spec.pad_x_px) + dot_r;
         const float cy = static_cast<float>(y) + static_cast<float>(height) * 0.5F;

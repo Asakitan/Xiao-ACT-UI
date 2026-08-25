@@ -1,6 +1,8 @@
 #include "sao/ui/d2d_effects.h"
+#include "sao/ui/theme.h"
 
 #include "d2d_effects_internal.h"
+#include "panel_theme_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +41,16 @@ struct Image {
 
 uint8_t clamp_byte(float value) {
     return static_cast<uint8_t>(std::clamp(std::lround(value), 0L, 255L));
+}
+
+uint32_t shadow_argb_for_elevation(size_t elevation) noexcept {
+    if (sao::ui::detail::panel_theme_high_contrast())
+        return 0x00000000U;
+    SaoUiThemeId theme_id = SAO_UI_THEME_DARK;
+    (void)sao_ui_theme_get_active_id(&theme_id);
+    const uint32_t shadow = sao_ui_theme_resolve_color(theme_id, SAO_UI_TOKEN_ALERT_SHADOW);
+    const auto& preset = sao::ui::kSaoThemeElevationPresets[std::min(elevation, size_t{3})];
+    return (static_cast<uint32_t>(preset.alpha) << 24u) | (shadow & 0x00ffffffu);
 }
 
 uint8_t scale_byte(uint8_t value, uint8_t alpha) {
@@ -574,7 +586,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_effects_init(SaoUiLayerEffectPr
         effects.blur_sigma = 6.0F;
         effects.shadow_sigma = 8.0F;
         effects.shadow_offset_y = 3.0F;
-        effects.shadow_argb = 0x70000000u;
+        effects.shadow_argb = shadow_argb_for_elevation(2);
         effects.color_matrix[0] = 0.94F;
         effects.color_matrix[5] = 0.98F;
         effects.color_matrix[10] = 1.02F;
@@ -583,7 +595,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_effects_init(SaoUiLayerEffectPr
         effects.blur_sigma = 5.0F;
         effects.shadow_sigma = 7.0F;
         effects.shadow_offset_y = 4.0F;
-        effects.shadow_argb = 0x78000000u;
+        effects.shadow_argb = shadow_argb_for_elevation(2);
         effects.color_matrix[0] = 0.95F;
         effects.color_matrix[5] = 0.99F;
         effects.color_matrix[10] = 1.01F;
@@ -593,7 +605,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_effects_init(SaoUiLayerEffectPr
         effects.blur_sigma = 10.0F;
         effects.shadow_sigma = 12.0F;
         effects.shadow_offset_y = 6.0F;
-        effects.shadow_argb = 0x90000000u;
+        effects.shadow_argb = shadow_argb_for_elevation(3);
         effects.color_matrix[0] = 0.55F;
         effects.color_matrix[5] = 0.55F;
         effects.color_matrix[10] = 0.55F;

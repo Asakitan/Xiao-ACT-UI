@@ -22,4 +22,9 @@ sao_status_t paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x, 
                                     float width, float height, float radius,
                                     int32_t elevation, uint32_t argb) noexcept;
 
+// True-font measurement (widget_text_render_win.cpp).  Returns false when
+// DirectWrite is unavailable so callers keep their codepoint fallback.
+bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
+                         float* out_height) noexcept;
+
 } // namespace sao::ui::detail

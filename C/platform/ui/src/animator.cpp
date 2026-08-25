@@ -10,16 +10,33 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
 // Clamp helper (std::clamp requires <algorithm>; keep local for clarity).
+bool parse_reduced_motion_override(const char* value, bool* out_value) noexcept {
+    if (value == nullptr || out_value == nullptr || value[0] == static_cast<char>(0)) return false;
+    std::string normalized(value);
+    for (char& character : normalized) character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") { *out_value = true; return true; }
+    if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") { *out_value = false; return true; }
+    return false;
+}
+
 inline float clamp01(float t) {
     if (std::isnan(t) || t <= 0.0f) return 0.0f;
     if (t >= 1.0f) return 1.0f;
@@ -38,7 +55,6 @@ inline BezierPoint bezier_eval(
     float p1x, float p1y, float p2x, float p2y) {
     // P0=(0,0), P3=(1,1) implicit.
     const float mu = 1.0f - u;
-    const float b0 = mu * mu * mu;
     const float b1 = 3.0f * mu * mu * u;
     const float b2 = 3.0f * mu * u * u;
     const float b3 = u * u * u;
@@ -268,8 +284,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animator_animate(
         }
         Animation a;
         a.id = handle->next_id.fetch_add(1);
-        a.duration_ms = spec->duration_ms > 0 ? spec->duration_ms : 1;
-        a.delay_ms = spec->delay_ms > 0 ? spec->delay_ms : 0;
+        a.duration_ms = sao_ui_animation_duration_ms(spec->duration_ms);
+        a.delay_ms = sao_ui_reduced_motion_enabled() ? 0 : (spec->delay_ms > 0 ? spec->delay_ms : 0);
         a.curve = spec->curve;
         if (spec->curve == SAO_UI_CURVE_CUBIC_BEZIER && spec->bezier != nullptr) {
             a.bezier = *spec->bezier;
@@ -434,4 +450,19 @@ extern "C" bool SAO_UI_CALL sao_ui_animator_has_active(
         if (!a.completed) return true;
     }
     return false;
+}
+
+
+extern "C" bool SAO_UI_CALL sao_ui_reduced_motion_enabled(void) {
+    bool override_value = false;
+    if (parse_reduced_motion_override(std::getenv("SAO_UI_REDUCED_MOTION"), &override_value)) return override_value;
+#if defined(_WIN32)
+    BOOL enabled = TRUE;
+    if (::SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0) != FALSE) return enabled == FALSE;
+#endif
+    return false;
+}
+
+extern "C" int32_t SAO_UI_CALL sao_ui_animation_duration_ms(int32_t duration_ms) {
+    return sao_ui_reduced_motion_enabled() ? 0 : std::max(1, duration_ms);
 }

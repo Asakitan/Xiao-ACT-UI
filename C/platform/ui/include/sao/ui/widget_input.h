@@ -169,6 +169,63 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dropdown_button_set_pick_handler(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dropdown_button_select(sao_ui_widget_handle_t handle,
                                                                   int32_t item_id);
 
+// ─── Dropdown popup state (append-only API) ─────────────────────────
+// The open list is painted below the control by the widget's own paint
+// pass and consumes hit tests through the panel input path.  Opening one
+// dropdown closes any other open dropdown.
+
+// Toggle the popup list.  Returns SAO_STATUS_OK when the state changed.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_toggle_popup(sao_ui_widget_handle_t handle);
+
+// Close the popup and clear hover/entry state.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_close_popup(sao_ui_widget_handle_t handle);
+
+// Query the open state.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_popup_is_open(sao_ui_widget_handle_t handle, bool* out_open);
+
+// Cached popup geometry from the last paint (viewport coordinates of the
+// owning panel content area).
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_popup_geometry(sao_ui_widget_handle_t handle, int32_t* out_x,
+                                      int32_t* out_y, int32_t* out_w, int32_t* out_h);
+
+// Hit test a point against the open popup.  Updates the hovered entry;
+// *out_consumed is true when the point lies inside the popup (the caller
+// must route the event to this widget).  *out_entry receives the hovered
+// entry index, or -1 when outside.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_popup_hit(sao_ui_widget_handle_t handle, int32_t x, int32_t y,
+                                 int32_t* out_entry, bool* out_consumed);
+
+// Apply a click that was routed to this widget while its popup was open:
+// selects the hovered entry when present; otherwise closes the popup.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_popup_click(sao_ui_widget_handle_t handle);
+
+// Keyboard handling for the open popup: Up/Down/Home/End move the hover,
+// Enter/Space select, Escape closes.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dropdown_button_popup_key(sao_ui_widget_handle_t handle, uint32_t virtual_key);
+
+// Global single-open popup probe: returns the open dropdown handle (when
+// one exists) and, when the point hits its popup rect, the entry index
+// with *out_consumed = true.  Coordinates are viewport-local of the
+// owning panel content area.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_dropdown_popup_hit_global(int32_t x, int32_t y,
+                                        sao_ui_widget_handle_t* out_owner,
+                                        int32_t* out_entry, bool* out_consumed);
+
+// Returns true when any dropdown popup is currently open.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_widget_dropdown_any_open(bool* out_open);
+
+// Close whatever dropdown popup is globally open.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_dropdown_close_popup_global(void);
+
 // ─── Checkbox / radio ────────────────────────────────────────────────
 struct SaoUiCheckboxSpec {
     const char* label_utf8;

@@ -83,6 +83,22 @@ sao_status_t submit_physical_rect_scrub(sao_ui_z_order_manager_s* manager, void*
     return status == SAO_STATUS_ERR_NOT_INITIALIZED ? SAO_STATUS_OK : status;
 }
 
+// Physical z-order sibling-chain unlink.  Mirrors the Python authority's
+// final `submit_dc(comp_hwnd, 'host-z-order', 'hide_z_order')` after every
+// enforce.  Two outcomes are benign no-ops by design: NOT_INITIALIZED (no
+// physical provider registered) and CANCELLED (the expected-old compare
+// failed because the chain is already spliced — the goal state).
+sao_status_t submit_z_order_unlink(sao_ui_z_order_manager_s* manager, void* hwnd) {
+    if (manager->dc_mutation == nullptr)
+        return SAO_STATUS_OK;
+    const sao_status_t status =
+        sao_ui_dc_mutation_coordinator_submit_unlink_z_order(manager->dc_mutation, hwnd,
+                                                             kPhysicalRectScrubTimeoutMs);
+    return status == SAO_STATUS_ERR_NOT_INITIALIZED || status == SAO_STATUS_ERR_CANCELLED
+               ? SAO_STATUS_OK
+               : status;
+}
+
 } // namespace
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_manager_create(
@@ -170,7 +186,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(sao_ui_z_order_manage
                            handle->status.game_topmost_snapshot == game_is_topmost &&
                            handle->status.game_present_snapshot == game_present;
     if (unchanged && now_ns >= handle->status.last_enforce_ns &&
-        now_ns - handle->status.last_enforce_ns < interval_ns) {
+        now_ns - handle->status.last_enforce_ns < interval_ns &&
+        !sao_ui_z_order_stale(handle, game, game_present)) {
         return SAO_STATUS_OK;
     }
 
@@ -182,7 +199,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(sao_ui_z_order_manage
         if (!restored)
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         (void)::DwmFlush();
-        return submit_physical_rect_scrub(handle, host_hwnd);
+        const sao_status_t scrub_status = submit_physical_rect_scrub(handle, host_hwnd);
+        const sao_status_t unlink_status = submit_z_order_unlink(handle, host_hwnd);
+        return scrub_status != SAO_STATUS_OK ? scrub_status : unlink_status;
     }
 
     BOOL succeeded = FALSE;
@@ -208,7 +227,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(sao_ui_z_order_manage
     if (!succeeded)
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     (void)::DwmFlush();
-    return submit_physical_rect_scrub(handle, host_hwnd);
+    const sao_status_t scrub_status = submit_physical_rect_scrub(handle, host_hwnd);
+    const sao_status_t unlink_status = submit_z_order_unlink(handle, host_hwnd);
+    return scrub_status != SAO_STATUS_OK ? scrub_status : unlink_status;
 #endif
 }
 
@@ -249,4 +270,66 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_check_leak_patterns(
     // observable combination associated with a stale layered/topmost host.
     return (current_exstyle & SAO_UI_WS_EX_LAYERED) == 0 ? SAO_STATUS_OK
                                                          : SAO_STATUS_ERR_INVALID_ARGUMENT;
+}
+
+extern "C" bool SAO_UI_CALL sao_ui_z_order_stale(sao_ui_z_order_manager_handle_t handle,
+                                                 void* game_hwnd, bool game_present) {
+#if defined(_WIN32)
+    if (handle == nullptr)
+        return false;
+    void* host_value = sao_ui_overlay_host_hwnd(handle->host);
+    if (host_value == nullptr)
+        return false;
+    const HWND comp = reinterpret_cast<HWND>(host_value);
+    HWND game = reinterpret_cast<HWND>(game_hwnd);
+    if (game != nullptr && !::IsWindow(game)) {
+        game = nullptr;
+        game_present = false;
+    }
+    if (game_present && game != nullptr) {
+        // Attached branch: stale unless the game appears within the 8-slot
+        // window directly above the host.
+        if (::GetWindow(comp, GW_HWNDPREV) == game)
+            return false;
+        HWND above = comp;
+        for (int slot = 0; slot < 8; ++slot) {
+            above = ::GetWindow(above, GW_HWNDPREV);
+            if (above == nullptr)
+                return false;
+            if (above == game)
+                return false;
+        }
+        return true;
+    }
+    // No-game branch: the host is healthy while it stays inside the topmost
+    // band; the first non-TOPMOST window above it means it fell out.
+    HWND current = ::GetWindow(comp, GW_HWNDPREV);
+    if (current == nullptr)
+        return false;
+    for (int slot = 0; slot < 16; ++slot) {
+        if (current == nullptr)
+            return false;
+        const LONG_PTR exstyle = ::GetWindowLongPtrW(current, GWL_EXSTYLE);
+        if ((exstyle & WS_EX_TOPMOST) == 0)
+            return true;
+        current = ::GetWindow(current, GW_HWNDPREV);
+    }
+    return false;
+#else
+    (void)handle;
+    (void)game_hwnd;
+    (void)game_present;
+    return false;
+#endif
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_unlink_chain(
+    sao_ui_z_order_manager_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::lock_guard<std::mutex> lock(handle->mu);
+    void* host_value = sao_ui_overlay_host_hwnd(handle->host);
+    if (host_value == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    return submit_z_order_unlink(handle, host_value);
 }

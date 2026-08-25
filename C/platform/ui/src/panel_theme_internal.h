@@ -27,6 +27,7 @@ inline ControlVisualState resolve_control_visual_state(bool enabled, bool hovere
 struct PanelResolvedTheme {
     SaoUiThemeId theme_id{SAO_UI_THEME_DARK};
     uint64_t generation{};
+    bool high_contrast{};
     std::array<uint32_t, SAO_UI_COLOR_TOKEN_COUNT> colors{};
     std::array<int32_t, SAO_UI_METRIC_TOKEN_COUNT> metrics{};
 };
@@ -68,5 +69,6 @@ class ScopedPanelPaintTheme final {
 uint32_t panel_theme_color(SaoUiColorToken token) noexcept;
 uint32_t panel_theme_color(PanelSemanticColorToken token) noexcept;
 int32_t panel_theme_metric(SaoUiMetricToken metric) noexcept;
+bool panel_theme_high_contrast() noexcept;
 
 } // namespace sao::ui::detail

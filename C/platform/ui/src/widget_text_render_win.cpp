@@ -22,7 +22,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace sao::ui::detail {
@@ -75,27 +77,90 @@ bool utf8_to_utf16(const char* text, std::wstring* output) noexcept {
     output->clear();
     if (text == nullptr || *text == '\0')
         return false;
+    // MB_ERR_INVALID_CHARS fails the conversion for malformed UTF-8 so the
+    // caller can use the procedural fallback instead of rendering garbage.
     const int length =
-        MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
     if (length <= 0)
         return false;
     std::wstring converted(static_cast<size_t>(length), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, 0, text, -1, converted.data(), length) != length)
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1,
+                            converted.data(), length) != length)
         return false;
     converted.resize(static_cast<size_t>(length - 1));
     *output = std::move(converted);
     return true;
 }
 
-// Render `text` at `size_px` into a tight WIC bitmap (premultiplied BGRA),
-// drawn in `argb`.  On success returns true and fills out pixels/w/h.
+// Bounded glyph-mask cache.  Entries store a white (alpha-only) bitmap so
+// the tint color and opacity can change per frame without re-rasterizing.
+struct GlyphMaskEntry {
+    std::wstring text;
+    float size_px{0.0F};
+    std::vector<uint8_t> pixels;
+    uint32_t width{0};
+    uint32_t height{0};
+    uint64_t last_used{0};
+};
+
+struct GlyphMaskCache {
+    static constexpr size_t kMaxEntries = 256;
+    std::mutex mtx;
+    std::unordered_map<std::wstring, GlyphMaskEntry> entries;
+    uint64_t tick{0};
+
+    // Copies the entry out under the lock so the caller never touches
+    // map-owned storage after release (eviction-safe).
+    bool find(const std::wstring& text, float size_px, GlyphMaskEntry* out) {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = entries.find(text);
+        if (it == entries.end() ||
+            std::abs(it->second.size_px - size_px) > 0.25F)
+            return false;
+        it->second.last_used = ++tick;
+        *out = it->second;
+        return true;
+    }
+
+    void store(std::wstring text, float size_px,
+               const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
+        if (size_px < 4.0F || size_px > 512.0F || width == 0 || height == 0)
+            return;   // transient one-off sizes pollute the cache
+        if (text.size() > 64)
+            return;   // long labels are near-unique; don't cache them
+        std::lock_guard<std::mutex> lock(mtx);
+        if (entries.size() >= kMaxEntries) {
+            // Evict everything in one pass; simple and bounded.
+            entries.clear();
+            tick = 0;
+        }
+        GlyphMaskEntry entry;
+        entry.text = text;
+        entry.size_px = size_px;
+        entry.pixels = pixels;
+        entry.width = width;
+        entry.height = height;
+        entry.last_used = ++tick;
+        entries[std::move(text)] = std::move(entry);
+    }
+};
+
+GlyphMaskCache& glyph_mask_cache() noexcept {
+    static GlyphMaskCache cache;
+    return cache;
+}
+
+// Render `text` at `size_px` into a tight WIC bitmap (premultiplied BGRA)
+// filled with a white mask: every channel equals the coverage alpha.
+// Tinting happens at blend time.  On success returns true + pixels/w/h.
 bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
-                        float size_px, uint32_t argb, std::vector<uint8_t>* out_pixels,
+                        float size_px, std::vector<uint8_t>* out_pixels,
                         uint32_t* out_w, uint32_t* out_h) noexcept {
     if (out_pixels == nullptr || out_w == nullptr || out_h == nullptr || text.empty() ||
         !std::isfinite(size_px) || size_px <= 0.0F ||
         text.size() > std::numeric_limits<UINT32>::max())
         return false;
+    const uint32_t kMaskColor = 0xFFFFFFFFu;
     try {
         ComPtr<IDWriteTextFormat> format;
         if (FAILED(backend.dwrite->CreateTextFormat(
@@ -141,12 +206,8 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
             return false;
         target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
 
-        const float a = static_cast<float>((argb >> 24U) & 0xffU) / 255.0F;
-        const float r = static_cast<float>((argb >> 16U) & 0xffU) / 255.0F;
-        const float g = static_cast<float>((argb >> 8U) & 0xffU) / 255.0F;
-        const float b = static_cast<float>(argb & 0xffU) / 255.0F;
         ComPtr<ID2D1SolidColorBrush> brush;
-        if (FAILED(target->CreateSolidColorBrush(D2D1::ColorF(r, g, b, a), &brush)))
+        if (FAILED(target->CreateSolidColorBrush(D2D1::ColorF(1.0F, 1.0F, 1.0F, 1.0F), &brush)))
             return false;
 
         target->BeginDraw();
@@ -163,6 +224,7 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
             return false;
         *out_w = width;
         *out_h = height;
+        (void)kMaskColor;
         return true;
     } catch (...) {
         return false;
@@ -187,19 +249,37 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
     if (!utf8_to_utf16(text_utf8, &wide))
         return false;
 
-    // Apply the current opacity to the requested color before rendering.
+    // Shared raster per-pixel premultiplied blending.
     const uint32_t effective = apply_opacity(argb, current_opacity(context));
 
-    std::vector<uint8_t> pixels;
+    // Reuse cached white masks when possible; the tint multiplies per
+    // channel so color/opacity changes stay cheap.
+    GlyphMaskCache& cache = glyph_mask_cache();
     uint32_t width = 0;
     uint32_t height = 0;
-    if (!render_text_bitmap(backend, wide, size_px, effective, &pixels, &width, &height))
-        return false;
+    std::vector<uint8_t> local_pixels;
+    GlyphMaskEntry cached{};
+    if (!cache.find(wide, size_px, &cached)) {
+        if (!render_text_bitmap(backend, wide, size_px,
+                                &local_pixels, &width, &height))
+            return false;
+        cache.store(std::move(wide), size_px, local_pixels, width, height);
+    } else {
+        width = cached.width;
+        height = cached.height;
+        local_pixels = std::move(cached.pixels);
+    }
+    const uint8_t* pixels = local_pixels.data();
 
     const Rect destination = intersect({x, y, static_cast<float>(width), static_cast<float>(height)},
                                        clip_bounds(context));
     if (!valid_rect(destination.width, destination.height))
         return true; // Fully clipped — nothing to do, but the render succeeded.
+
+    const uint32_t tr = (effective >> 16U) & 0xffU;
+    const uint32_t tg = (effective >> 8U) & 0xffU;
+    const uint32_t tb = effective & 0xffU;
+    const uint32_t ta = (effective >> 24U) & 0xffU;
 
     const int32_t left = static_cast<int32_t>(std::floor(destination.x));
     const int32_t top = static_cast<int32_t>(std::floor(destination.y));
@@ -214,13 +294,63 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
                 continue;
             BgraPixel source{};
             std::memcpy(&source,
-                        pixels.data() + static_cast<size_t>(sy) * width * 4U +
+                        pixels + static_cast<size_t>(sy) * width * 4U +
                             static_cast<size_t>(sx) * 4U,
                         sizeof(source));
+            // Mask channel = coverage; tint with the effective color.
+            const uint32_t m = source.b;
+            source.b = static_cast<uint8_t>((m * tb) / 255u);
+            source.g = static_cast<uint8_t>((m * tg) / 255u);
+            source.r = static_cast<uint8_t>((m * tr) / 255u);
+            source.a = static_cast<uint8_t>((m * ta) / 255u);
             blend_pixel(*context.raster, px, py, source);
         }
     }
     return true;
+}
+
+// DirectWrite text measurement without rasterization.  Mirrors the
+// render path's format/layout setup so popup and menu metrics agree
+// with the glyphs that actually get drawn.  Returns false when the
+// backend is unavailable (callers keep their codepoint fallback).
+bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
+                         float* out_height) noexcept {
+    if (out_width == nullptr || out_height == nullptr || text_utf8 == nullptr ||
+        *text_utf8 == '\0' || !std::isfinite(size_px) || size_px <= 0.0F)
+        return false;
+    DwriteBackend& backend = DwriteBackend::instance();
+    if (!backend.ready())
+        return false;
+    std::wstring wide;
+    if (!utf8_to_utf16(text_utf8, &wide) || wide.size() > std::numeric_limits<UINT32>::max())
+        return false;
+    try {
+        ComPtr<IDWriteTextFormat> format;
+        if (FAILED(backend.dwrite->CreateTextFormat(
+                L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size_px, L"",
+                &format)))
+            return false;
+        if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
+            return false;
+        ComPtr<IDWriteTextLayout> layout;
+        if (FAILED(backend.dwrite->CreateTextLayout(
+                wide.data(), static_cast<UINT32>(wide.size()), format.Get(),
+                std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                &layout)))
+            return false;
+        DWRITE_TEXT_METRICS metrics{};
+        if (FAILED(layout->GetMetrics(&metrics)) || !std::isfinite(metrics.width) ||
+            !std::isfinite(metrics.height) || metrics.width < 0.0F || metrics.height < 0.0F)
+            return false;
+        if (metrics.width > 65536.0F || metrics.height > 65536.0F)
+            return false;
+        *out_width = metrics.width;
+        *out_height = metrics.height;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace sao::ui::detail

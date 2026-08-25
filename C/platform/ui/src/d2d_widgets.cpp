@@ -32,6 +32,10 @@ namespace sao::ui::detail {
 // when unavailable so draw_text below keeps the procedural fallback.
 bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y, const char* text_utf8,
                       float size_px, uint32_t argb) noexcept;
+// Pure measurement via the same format/layout setup as the render path.
+// Callers fall back to codepoint estimates when this returns false.
+bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
+                         float* out_height) noexcept;
 } // namespace sao::ui::detail
 
 struct sao_ui_widget_s {
@@ -689,10 +693,18 @@ void draw_text(sao_ui_paint_ctx_s& context, float x, float y, const char* text, 
     const int32_t scale = std::max(1, static_cast<int32_t>(std::floor(size / 5.0F)));
     float cursor = x;
     for (const unsigned char* character = reinterpret_cast<const unsigned char*>(text);
-         *character != 0U; ++character) {
+         *character != 0U;) {
         if (*character == '\n') {
             cursor = x;
             y += static_cast<float>(scale * 7);
+            ++character;
+            continue;
+        }
+        // Multi-byte UTF-8 continuation bytes belong to the previous
+        // code point; skip them so sequences render as one placeholder
+        // instead of a glyph per byte.
+        if ((*character & 0xC0U) == 0x80U) {
+            ++character;
             continue;
         }
         const uint8_t bits = static_cast<uint8_t>((*character * 73U) ^ (*character >> 1U) ^ 0x5AU);
@@ -708,10 +720,94 @@ void draw_text(sao_ui_paint_ctx_s& context, float x, float y, const char* text, 
             }
         }
         cursor += static_cast<float>(scale * 6);
+        ++character;
     }
 }
 
+bool is_utf8_continuation(unsigned char value) noexcept {
+    return (value & 0xC0U) == 0x80U;
+}
+
+size_t utf8_codepoint_bytes(std::string_view text, size_t offset) noexcept {
+    const unsigned char lead = static_cast<unsigned char>(text[offset]);
+    const size_t remaining = text.size() - offset;
+    if (lead < 0x80U)
+        return 1U;
+    if (lead >= 0xC2U && lead <= 0xDFU && remaining >= 2U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])))
+        return 2U;
+    if (lead >= 0xE0U && lead <= 0xEFU && remaining >= 3U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 2U])))
+        return 3U;
+    if (lead >= 0xF0U && lead <= 0xF4U && remaining >= 4U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 2U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 3U])))
+        return 4U;
+    return 1U;
+}
+
+float fallback_text_width(std::string_view text, float size) noexcept {
+    const float glyph_width = static_cast<float>(
+        std::max(1, static_cast<int32_t>(std::floor(size / 5.0F))) * 6);
+    size_t codepoints = 0U;
+    for (size_t offset = 0U; offset < text.size();) {
+        offset += utf8_codepoint_bytes(text, offset);
+        ++codepoints;
+    }
+    return static_cast<float>(codepoints) * glyph_width;
+}
+
+float measured_text_width(std::string_view text, float size) {
+    if (text.empty())
+        return 0.0F;
+    const std::string owned(text);
+    float width = 0.0F;
+    float height = 0.0F;
+    if (sao::ui::detail::measure_text_dwrite(owned.c_str(), size, &width, &height))
+        return width;
+    return fallback_text_width(text, size);
+}
+
+std::string ellipsize_utf8(std::string_view text, float size, float available_width) {
+    if (text.empty() || !std::isfinite(available_width) || available_width <= 0.0F)
+        return {};
+    if (measured_text_width(text, size) <= available_width)
+        return std::string(text);
+
+    constexpr std::string_view ellipsis = "\xE2\x80\xA6";
+    if (measured_text_width(ellipsis, size) > available_width)
+        return {};
+
+    std::string result(ellipsis);
+    for (size_t offset = 0U; offset < text.size();) {
+        const size_t next = offset + utf8_codepoint_bytes(text, offset);
+        std::string candidate(text.substr(0U, next));
+        candidate.append(ellipsis);
+        if (measured_text_width(candidate, size) > available_width)
+            break;
+        result = std::move(candidate);
+        offset = next;
+    }
+    return result;
+}
+
+void draw_widget_text(sao_ui_paint_ctx_s& context, Rect widget_bounds, float x, float y,
+                      std::string_view text, float size, uint32_t argb) {
+    if (text.empty() || x >= widget_bounds.x + widget_bounds.width)
+        return;
+    const float available_width = widget_bounds.x + widget_bounds.width - x;
+    const std::string display = ellipsize_utf8(text, size, available_width);
+    if (display.empty())
+        return;
+    context.clips.push_back(widget_bounds);
+    draw_text(context, x, y, display.c_str(), size, argb);
+    context.clips.pop_back();
+}
 uint32_t widget_color(const sao_ui_widget_s& widget, const char* name, uint32_t fallback) {
+    if (sao::ui::detail::panel_theme_high_contrast())
+        return fallback;
     const auto theme_override = widget.theme_overrides.find(name);
     if (theme_override != widget.theme_overrides.end())
         return theme_override->second;
@@ -756,6 +852,51 @@ uint32_t style_color(std::string_view style, const char* role, uint32_t fallback
     return resolved ? sao::ui::detail::panel_theme_color(token) : fallback;
 }
 
+bool is_filled_semantic_control(const sao_ui_widget_s& widget) noexcept {
+    if (widget.kind != SAO_UI_WIDGET_ACTION_BUTTON &&
+        widget.kind != SAO_UI_WIDGET_DROPDOWN_BUTTON &&
+        widget.kind != SAO_UI_WIDGET_STATUS_BADGE)
+        return false;
+    return widget.style == "primary" || widget.style == "accent" || widget.style == "ok" ||
+           widget.style == "warn" || widget.style == "bad" || widget.style == "danger";
+}
+
+float relative_luminance(uint32_t argb) noexcept {
+    const auto channel = [](uint32_t value) {
+        const float normalized = static_cast<float>(value) / 255.0F;
+        return normalized <= 0.04045F
+                   ? normalized / 12.92F
+                   : std::pow((normalized + 0.055F) / 1.055F, 2.4F);
+    };
+    return 0.2126F * channel((argb >> 16U) & 0xffU) +
+           0.7152F * channel((argb >> 8U) & 0xffU) + 0.0722F * channel(argb & 0xffU);
+}
+
+uint32_t contrast_foreground(uint32_t fill) noexcept {
+    const uint32_t surface = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD);
+    const float amount = static_cast<float>((fill >> 24U) & 0xffU) / 255.0F;
+    const auto composite = [amount](uint32_t foreground, uint32_t background) {
+        const auto channel = [amount](uint32_t first, uint32_t second) {
+            return static_cast<uint32_t>(std::lround(
+                static_cast<float>(first) * amount + static_cast<float>(second) * (1.0F - amount)));
+        };
+        return 0xff000000U |
+               (channel((foreground >> 16U) & 0xffU, (background >> 16U) & 0xffU) << 16U) |
+               (channel((foreground >> 8U) & 0xffU, (background >> 8U) & 0xffU) << 8U) |
+               channel(foreground & 0xffU, background & 0xffU);
+    };
+    const uint32_t visible_fill = composite(fill, surface);
+    const uint32_t black = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK);
+    const uint32_t white = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE);
+    const auto contrast = [visible_fill](uint32_t foreground) {
+        const float light = std::max(relative_luminance(visible_fill),
+                                     relative_luminance(foreground));
+        const float dark = std::min(relative_luminance(visible_fill),
+                                    relative_luminance(foreground));
+        return (light + 0.05F) / (dark + 0.05F);
+    };
+    return contrast(black) >= contrast(white) ? black : white;
+}
 std::string_view semantic_color_key(std::string_view key) noexcept {
     if (key == "APP_BG")
         return "canvas_bg";
@@ -785,6 +926,7 @@ std::string_view semantic_color_key(std::string_view key) noexcept {
 void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bounds) {
     widget.bounds = bounds;
     const std::string_view style = widget.style;
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     uint32_t accent = widget_color(
         widget, "accent", style_color(style, "accent",
                                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)));
@@ -816,6 +958,20 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     } else if (visual_state == sao::ui::detail::ControlVisualState::Hover) {
         fill = widget_color(widget, "hover", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE));
     }
+    const bool has_foreground_override =
+        !high_contrast && (widget.theme_overrides.contains("fg") ||
+                           widget.prop_colors.contains("fg"));
+    const bool active_highlight_control =
+        high_contrast && widget.active &&
+        (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+         widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
+         widget.kind == SAO_UI_WIDGET_STATUS_BADGE);
+    if (visual_state != sao::ui::detail::ControlVisualState::Disabled &&
+        (is_filled_semantic_control(widget) || active_highlight_control) &&
+        !has_foreground_override)
+        foreground = high_contrast
+                         ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)
+                         : contrast_foreground(fill);
     const bool rounded = widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL ||
                          widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
                          widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
@@ -830,10 +986,12 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
     const auto canvas_override = widget.theme_overrides.find("canvas_bg");
     const auto canvas_prop = widget.prop_colors.find("canvas_bg");
-    if (canvas_override != widget.theme_overrides.end())
-        fill_rect(context, bounds, canvas_override->second);
-    else if (canvas_prop != widget.prop_colors.end())
-        fill_rect(context, bounds, canvas_prop->second);
+    if (!high_contrast) {
+        if (canvas_override != widget.theme_overrides.end())
+            fill_rect(context, bounds, canvas_override->second);
+        else if (canvas_prop != widget.prop_colors.end())
+            fill_rect(context, bounds, canvas_prop->second);
+    }
     if (widget.kind == SAO_UI_WIDGET_SCROLLBAR) {
         const ScrollbarGeometry geometry = scrollbar_geometry(widget, bounds);
         const uint32_t track = widget_color(widget, "track", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_TRACK));
@@ -873,10 +1031,10 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             stroke_line(context, x2, y2, x3, y3, std::max(1.0F, box * 0.12F), accent);
         }
         if (!widget.text.empty()) {
-            draw_text(context, box_bounds.x + box + 4.0F,
-                      bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
-                      widget.text.c_str(), std::max(5.0F, std::min(15.0F, bounds.height - 4.0F)),
-                      foreground);
+            const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
+            draw_widget_text(context, bounds, box_bounds.x + box + 4.0F,
+                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
+                             widget.text, text_size, foreground);
         }
         return;
     }
@@ -897,10 +1055,10 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                          accent);
         }
         if (!widget.text.empty()) {
-            draw_text(context, ring_bounds.x + ring + 4.0F,
-                      bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
-                      widget.text.c_str(), std::max(5.0F, std::min(15.0F, bounds.height - 4.0F)),
-                      foreground);
+            const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
+            draw_widget_text(context, bounds, ring_bounds.x + ring + 4.0F,
+                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
+                             widget.text, text_size, foreground);
         }
         return;
     }
@@ -956,15 +1114,6 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (valid_rect(inner.width, inner.height))
             fill_rounded_rect(context, inner, std::max(0.0F, widget.radius - line), fill);
     }
-    if (pressed && rounded && bounds.width > 4.0F && bounds.height > 4.0F) {
-        const Rect inner_border{bounds.x + 2.0F, bounds.y + 2.0F, bounds.width - 4.0F,
-                                bounds.height - 4.0F};
-        fill_rounded_rect(context, inner_border, std::max(0.0F, widget.radius - 2.0F), border);
-        const Rect inner_fill{bounds.x + 3.0F, bounds.y + 3.0F, bounds.width - 6.0F,
-                              bounds.height - 6.0F};
-        if (valid_rect(inner_fill.width, inner_fill.height))
-            fill_rounded_rect(context, inner_fill, std::max(0.0F, widget.radius - 3.0F), fill);
-    }
     if (widget.kind == SAO_UI_WIDGET_BAR)
         fill_rect(context,
                   {bounds.x, bounds.y, bounds.width * std::clamp(widget.value, 0.0F, 1.0F),
@@ -976,8 +1125,12 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                    std::max(1.0F, widget.border_width)},
                   border);
     if (widget.kind == SAO_UI_WIDGET_TABLE) {
-        fill_rect(context, {bounds.x, bounds.y, bounds.width, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_HEADER_HEIGHT))},
-                  accent);
+        const float header_height =
+            static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_HEADER_HEIGHT));
+        fill_rect(context, {bounds.x, bounds.y, bounds.width, header_height},
+                  sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD));
+        fill_rect(context, {bounds.x, bounds.y + header_height - 1.0F, bounds.width, 1.0F},
+                  border);
         for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height; row += static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT)))
             fill_rect(context, {bounds.x, row, bounds.width, 1.0F}, border);
     }
@@ -988,9 +1141,9 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                                                  widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON)
                                          ? 1.0F
                                          : 0.0F;
-        draw_text(context, bounds.x + padding, bounds.y + padding + pressed_offset,
-                  widget.text.c_str(), std::max(5.0F, std::min(15.0F, bounds.height - padding)),
-                  foreground);
+        const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - padding));
+        draw_widget_text(context, bounds, bounds.x + padding,
+                         bounds.y + padding + pressed_offset, widget.text, text_size, foreground);
     }
 }
 
@@ -1322,20 +1475,25 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(sao_ui_widget_hand
     if (backing_status == SAO_STATUS_ERR_SUBSCRIPTION_GONE)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (backing_status != SAO_STATUS_OK)
-        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
-
-    GenericWidgetPropsState candidate;
+        return backing_status;
+    GenericWidgetPropsState candidate{};
     const sao_status_t parse_status =
         parse_widget_props(props_json_utf8, props_len, widget_kind, &candidate);
     if (parse_status != SAO_STATUS_OK)
         return parse_status;
 
     std::scoped_lock lock(handle->mutex);
+    // Preserve transient interaction snapshots across ordinary property
+    // updates; they reset only when enabled/active semantics change.
+    const bool state_change = handle->active != candidate.active ||
+                              handle->enabled != candidate.enabled;
     handle->active = candidate.active;
     handle->enabled = candidate.enabled;
-    handle->hovered = false;
-    handle->pressed = false;
-    handle->focused = false;
+    if (state_change) {
+        handle->hovered = false;
+        handle->pressed = false;
+        handle->focused = false;
+    }
     handle->show_arrows = candidate.show_arrows;
     handle->keyboard_nudge = candidate.keyboard_nudge;
     handle->value = candidate.value;
@@ -1503,6 +1661,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_set_enabled(sao_ui_widget_hand
                                                               bool enabled) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    {
+        sao::ui::detail::WidgetHandleMetadata metadata{};
+        if (sao::ui::detail::inspect_widget_handle(handle, &metadata) &&
+            metadata.family == sao::ui::detail::WidgetHandleFamily::input) {
+            const sao_status_t typed_status =
+                sao::ui::detail::widget_input_set_enabled(handle, enabled);
+            if (typed_status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
+                return typed_status;
+        }
+    }
     GenericLifecycleLease lifecycle(handle);
     if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1967,6 +2135,7 @@ sao_status_t sao::ui::detail::paint_focus_ring(
 
 sao_status_t sao::ui::detail::paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius, int32_t elevation, uint32_t argb) noexcept {
     if (context == nullptr || context->raster == nullptr || !finite_float_rect(x, y, width, height) || elevation < 0 || elevation > 3) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (sao::ui::detail::panel_theme_high_contrast() || (argb & 0xff000000U) == 0U) return SAO_STATUS_OK;
     const SaoUiShadowPreset preset = sao::ui::kSaoThemeElevationPresets[elevation]; if (preset.alpha == 0) return SAO_STATUS_OK;
     try { std::scoped_lock lock(context->raster->mutex); for (int32_t layer = 0; layer < 3; ++layer) { const float spread = static_cast<float>(preset.spread + layer); const uint32_t alpha = static_cast<uint32_t>(preset.alpha) / static_cast<uint32_t>(layer + 1); const uint32_t shadow = (argb & 0x00ffffffU) | (alpha << 24U); fill_rounded_rect(*context, {x + static_cast<float>(preset.offset_x) - spread, y + static_cast<float>(preset.offset_y) - spread, width + spread * 2.0F, height + spread * 2.0F}, radius + spread, shadow); } return SAO_STATUS_OK; } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
 }

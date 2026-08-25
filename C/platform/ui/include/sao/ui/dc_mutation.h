@@ -64,6 +64,12 @@ typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_hide_exstyle_fn_t)(void* us
                                                                         uint32_t mask,
                                                                         uint32_t timeout_ms);
 
+// Physical z-order sibling-chain unlink (hide_z_order).  The provider removes
+// the window from the win32k z-order sibling chain so external EnumWindows /
+// z-order walks no longer observe it; the DWM composition tree is untouched.
+typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_unlink_z_order_fn_t)(
+    void* user_data, void* hwnd, uint32_t timeout_ms);
+
 typedef struct SaoUiDcMutationProvider {
     sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
     void* user_data;
@@ -80,6 +86,19 @@ typedef struct SaoUiDcMutationProviderV2 {
     void* user_data;
 } SaoUiDcMutationProviderV2;
 
+// V3 appends the physical z-order unlink provider.  The V2 prefix layout is
+// identical; struct_size must be sizeof(SaoUiDcMutationProviderV3) and
+// reserved must be 0.  create_ex_v2() callers keep the exact V2 contract and
+// simply get a coordinator whose z-order unlink fails closed NOT_INITIALIZED.
+typedef struct SaoUiDcMutationProviderV3 {
+    uint32_t struct_size;
+    uint32_t reserved;
+    sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
+    sao_ui_dc_mutation_hide_exstyle_fn_t hide_exstyle;
+    void* user_data;
+    sao_ui_dc_mutation_unlink_z_order_fn_t unlink_z_order;
+} SaoUiDcMutationProviderV3;
+
 // Copies the provider table by value. provider->user_data remains borrowed and
 // must stay valid until destroy() returns. NULL installs no rect-scrub provider.
 // A provider callback must not re-enter or destroy the same coordinator.
@@ -93,6 +112,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex(
 // coordinator.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex_v2(
     const SaoUiDcMutationProviderV2* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle);
+
+// Copies the complete V3 provider table by value, including the optional
+// z-order unlink provider.  Same lifetime and fail-closed rules as
+// create_ex_v2(); a NULL unlink_z_order makes z-order unlink submissions
+// fail closed with NOT_INITIALIZED.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_create_ex_v3(
+    const SaoUiDcMutationProviderV3* provider, sao_ui_dc_mutation_coordinator_handle_t* out_handle);
 
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_create(sao_ui_dc_mutation_coordinator_handle_t* out_handle);
@@ -116,11 +142,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_register(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, void** out_token);
 
 // Submit a display-context mutation.  operation is a short symbolic
-// key ("host-exstyle", "host-rect", "proxy-exstyle") used for
+// key ("host-exstyle", "host-rect", "host-z-order", "proxy-exstyle") used for
 // coalescing. Supported production methods are:
 //   host-rect + set_window_rect/set_bounds, with x/y/width/height JSON;
 //   host-exstyle/proxy-exstyle + hide_exstyle, with mask JSON and a mandatory
-//   V2 physical ExStyle provider.
+//   V2 physical ExStyle provider;
+//   host-z-order + hide_z_order, with optional {"timeout_ms":N} JSON and a
+//   mandatory V3 physical z-order unlink provider.
 // Unknown pairs return SAO_STATUS_ERR_NOT_IMPLEMENTED and are never queued.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
@@ -135,6 +163,14 @@ sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
     const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms);
+
+// Typed physical z-order sibling-chain unlink. The lane is fixed to operation
+// "host-z-order" and method "hide_z_order" and does not parse JSON. timeout_ms
+// bounds the provider's physical transaction. A registered HWND with no V3
+// unlink provider returns NOT_INITIALIZED; revoked generations remain
+// ACCESS_DENIED.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_unlink_z_order(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, uint32_t timeout_ms);
 
 // Invalidate an HWND — teardown barrier.  Marks the HWND as
 // invalidating, drains any inflight mutation on the HWND, and

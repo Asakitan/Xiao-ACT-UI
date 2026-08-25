@@ -177,6 +177,7 @@ sao_status_t widget_input_paint(sao_ui_widget_handle_t handle, int32_t kind,
 sao_status_t widget_input_set_interaction_state(sao_ui_widget_handle_t handle, int32_t state,
                                                 bool value) noexcept;
 sao_status_t widget_input_nudge_value(sao_ui_widget_handle_t handle, int32_t direction) noexcept;
+sao_status_t widget_input_set_enabled(sao_ui_widget_handle_t handle, bool enabled) noexcept;
 
 sao_status_t widget_data_apply_props(sao_ui_widget_handle_t handle, int32_t kind,
                                      const WidgetPropsJson& props,

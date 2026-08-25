@@ -160,6 +160,29 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_z_order_check_leak_patterns(
     sao_ui_z_order_manager_handle_t handle,
     uint32_t current_exstyle);
 
+// Chain-walk staleness probe (Python authority:
+// `render/overlay_compositor.py::_z_order_stale`).  Returns true when the
+// host has been bumped below its target z-position and enforce() should run
+// even inside the quiet interval:
+//   game attached  → walk up to 8 siblings above the host; stale unless the
+//                    game appears within that window.
+//   no game        → walk up to 16 siblings; stale the moment a
+//                    non-TOPMOST window sits above the host (the host fell
+//                    out of the topmost band).
+// Non-Windows / null handles return false (no signal, never a forced churn).
+SAO_UI_API bool SAO_UI_CALL sao_ui_z_order_stale(
+    sao_ui_z_order_manager_handle_t handle,
+    void* game_hwnd,
+    bool game_present);
+
+// Physical z-order sibling-chain unlink (hide_z_order).  Submits one
+// coalesced dc_mutation that splices the host out of the win32k z-order
+// sibling chain so external EnumWindows / z-order walks no longer observe
+// it; the DWM composition tree is untouched.  Requires a V3 dc_mutation
+// provider; without one this fails closed NOT_INITIALIZED.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_z_order_unlink_chain(
+    sao_ui_z_order_manager_handle_t handle);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

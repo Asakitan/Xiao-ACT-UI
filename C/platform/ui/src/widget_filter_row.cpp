@@ -38,8 +38,9 @@ constexpr int32_t kDefaultRadius = 8;
 constexpr size_t kMaxFilterChips = 4096;
 
 uint32_t resolve_or(uint32_t override_value, SaoUiColorToken token) {
-    return override_value != 0 ? override_value
-                               : sao::ui::detail::panel_theme_color(token);
+    return override_value != 0 && !sao::ui::detail::panel_theme_high_contrast()
+               ? override_value
+               : sao::ui::detail::panel_theme_color(token);
 }
 
 struct OwnedChip {
@@ -565,22 +566,51 @@ sao_status_t widget_filter_row_paint(sao_ui_widget_handle_t handle,
         const float gap = static_cast<float>(spec.chip_gap_px);
         float chip_x = xf + search_w + gap;
         const float chip_y = yf + (hf - chip_h) * 0.5F;
+        size_t visible = 0;
+        size_t dropped = 0;
+        const float row_right = xf + wf - gap;
         for (const auto& chip : chips) {
             const uint32_t fill = chip.selected ? chip_sel : chip_bg;
             const uint32_t c_fg = chip.selected ? chip_sel_fg : chip_fg;
             // Estimate chip width from label length (rough: 6px/char + padding).
             const float chip_w = static_cast<float>(chip.label.size()) * 6.0F +
                                   static_cast<float>(spec.pad_x_px) * 2.0F;
+            if (chip_x + chip_w > row_right)
+                break;
             status = paint_rounded_rect(context, chip_x, chip_y, chip_w, chip_h,
                                          std::min(radius, chip_h * 0.5F), fill);
             if (status != SAO_STATUS_OK)
                 return status;
+            // Clip label to the chip's interior so long UTF-8 labels
+            // never overpaint the next chip.
+            const float label_space = std::max(0.0F, chip_w - static_cast<float>(spec.pad_x_px) * 2.0F);
+            const std::string clipped_label = label_space >=
+                    static_cast<float>(chip.label.size()) * 6.0F
+                ? chip.label
+                : chip.label.substr(0, static_cast<size_t>(std::max(0.0F, label_space / 6.0F)));
             status = sao_ui_paint_ctx_draw_utf8(
                 context, chip_x + static_cast<float>(spec.pad_x_px),
-                chip_y + (chip_h - font_size) * 0.5F, chip.label.c_str(), font_size, c_fg);
+                chip_y + (chip_h - font_size) * 0.5F, clipped_label.c_str(), font_size, c_fg);
             if (status != SAO_STATUS_OK)
                 return status;
             chip_x += chip_w + gap;
+            ++visible;
+        }
+        dropped = chips.size() - visible;
+        if (dropped > 0) {
+            const std::string folded = "+" + std::to_string(dropped);
+            const float fold_w = static_cast<float>(folded.size()) * 6.0F + 16.0F;
+            if (chip_x + fold_w <= row_right) {
+                status = paint_rounded_rect(context, chip_x, chip_y, fold_w, chip_h,
+                                             std::min(radius, chip_h * 0.5F), chip_bg);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                status = sao_ui_paint_ctx_draw_utf8(
+                    context, chip_x + 8.0F, chip_y + (chip_h - font_size) * 0.5F,
+                    folded.c_str(), font_size, chip_fg);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
         }
         return SAO_STATUS_OK;
     } catch (...) {

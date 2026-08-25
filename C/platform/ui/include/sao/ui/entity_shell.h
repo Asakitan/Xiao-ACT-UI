@@ -169,6 +169,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
     int32_t button,
     int32_t wheel_delta);
 
+// Keyboard navigation: Left/Up previous root, Right/Down next root,
+// Enter/Space activate the hovered root (fires the action callback for
+// leaf roots), Escape closes the open menu overlay.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
+    sao_ui_entity_shell_handle_t handle,
+    uint32_t virtual_key,
+    uint32_t modifiers);
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_hit_test(
     sao_ui_entity_shell_handle_t handle,
     int32_t screen_x,

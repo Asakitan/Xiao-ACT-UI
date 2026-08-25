@@ -3,6 +3,7 @@
 #include "sao/ui/fisheye_backdrop.h"
 
 #include "sao/ui/dxgi_dup.h"
+#include "sao/ui/theme.h"
 
 #include <algorithm>
 #include <atomic>
@@ -25,6 +26,15 @@ constexpr size_t kMaxFrameBytes = static_cast<size_t>(SAO_UI_SOPF_MMF_MAX_MAPPIN
 constexpr uint32_t kLiveAcquireTimeoutMs = 16;
 constexpr auto kLiveRetryDelay = std::chrono::milliseconds(120);
 constexpr auto kLiveCreateRetryDelay = std::chrono::milliseconds(300);
+
+constexpr auto kGlassBackground =
+    sao::ui::kSaoThemeGlassColors[SAO_UI_TOKEN_APP_BG];
+constexpr auto kGlassBorder =
+    sao::ui::kSaoThemeGlassColors[SAO_UI_TOKEN_APP_BORDER];
+constexpr auto kGlassCyan =
+    sao::ui::kSaoThemeGlassColors[SAO_UI_TOKEN_CORNER_CYAN];
+constexpr auto kGlassGold =
+    sao::ui::kSaoThemeGlassColors[SAO_UI_TOKEN_CORNER_GOLD];
 
 std::atomic<uint64_t> g_backdrop_name_sequence{0};
 
@@ -101,6 +111,23 @@ float distance_to_grid_line(float coordinate, float spacing) {
     return std::min(value, spacing - value);
 }
 
+float elliptical_falloff(float nx, float ny, float center_x, float center_y,
+                         float radius_x, float radius_y) {
+    const float dx = (nx - center_x) / radius_x;
+    const float dy = (ny - center_y) / radius_y;
+    float value = std::clamp(1.0F - dx * dx - dy * dy, 0.0F, 1.0F);
+    value *= value;
+    return value * (3.0F - 2.0F * value);
+}
+
+uint32_t atmosphere_hash(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+    uint32_t value = x * 0x9e3779b9U ^ y * 0x85ebca6bU ^ width * 0xc2b2ae35U ^ height;
+    value ^= value >> 16U;
+    value *= 0x7feb352dU;
+    value ^= value >> 15U;
+    return value;
+}
+
 struct GlassPixel {
     float b{};
     float g{};
@@ -120,10 +147,20 @@ void apply_sao_glass_details(uint32_t x, uint32_t y, uint32_t width, uint32_t he
     const float vignette = std::clamp((radius - 0.48F) / 0.78F, 0.0F, 1.0F);
     const float lens_ring = std::clamp(1.0F - std::fabs(radius - 0.72F) / 0.028F, 0.0F, 1.0F);
 
-    pixel->b += center * 26.0F + lens_ring * 38.0F;
-    pixel->g += center * 15.0F + lens_ring * 54.0F;
-    pixel->r += center * 4.0F + lens_ring * 8.0F;
-    pixel->a += center * 15.0F - vignette * 18.0F + lens_ring * 10.0F;
+    const float cyan_glow = elliptical_falloff(nx, ny, -0.58F, -0.34F, 1.05F, 0.92F);
+    const float gold_glow = elliptical_falloff(nx, ny, 0.72F, 0.52F, 0.90F, 0.84F);
+    pixel->b += cyan_glow * static_cast<float>(kGlassCyan.b) * 0.052F +
+                gold_glow * static_cast<float>(kGlassGold.b) * 0.024F;
+    pixel->g += cyan_glow * static_cast<float>(kGlassCyan.g) * 0.038F +
+                gold_glow * static_cast<float>(kGlassGold.g) * 0.032F;
+    pixel->r += cyan_glow * static_cast<float>(kGlassCyan.r) * 0.012F +
+                gold_glow * static_cast<float>(kGlassGold.r) * 0.038F;
+    pixel->a += cyan_glow * 4.0F + gold_glow * 3.0F;
+
+    pixel->b += center * 13.0F + lens_ring * 18.0F;
+    pixel->g += center * 8.0F + lens_ring * 24.0F;
+    pixel->r += center * 2.0F + lens_ring * 4.0F;
+    pixel->a += center * 8.0F - vignette * 18.0F + lens_ring * 5.0F;
 
     const float barrel = 1.0F + 0.30F * radius_sq;
     const float warped_x = (nx * barrel * 0.5F + 0.5F) * static_cast<float>(width);
@@ -133,10 +170,31 @@ void apply_sao_glass_details(uint32_t x, uint32_t y, uint32_t width, uint32_t he
     const bool grid_line = distance_to_grid_line(warped_x, grid_spacing) < 0.65F ||
                            distance_to_grid_line(warped_y, grid_spacing) < 0.65F;
     if (grid_line) {
-        pixel->b += 16.0F;
-        pixel->g += 22.0F;
-        pixel->r += 4.0F;
-        pixel->a += 4.0F;
+        const float horizon_fade = std::clamp(1.0F - std::fabs(ny + 0.10F) * 0.72F,
+                                              0.18F, 1.0F);
+        pixel->b += 5.0F * horizon_fade;
+        pixel->g += 6.0F * horizon_fade;
+        pixel->r += 1.0F * horizon_fade;
+        pixel->a += 2.0F;
+    }
+
+    const float lane_distance = std::fabs(ny - (0.34F * nx + 0.18F));
+    if (lane_distance < 0.006F) {
+        const float lane_fade = std::clamp(1.0F - radius * 0.58F, 0.0F, 1.0F);
+        pixel->b += 7.0F * lane_fade;
+        pixel->g += 6.0F * lane_fade;
+        pixel->r += 2.0F * lane_fade;
+        pixel->a += 2.0F * lane_fade;
+    }
+
+    const uint32_t node_hash = atmosphere_hash(x, y, width, height);
+    if ((node_hash & 0x7ffU) == 0U && radius_sq < 1.58F) {
+        const bool warm = (node_hash & 0x800U) != 0U;
+        const auto color = warm ? kGlassGold : kGlassCyan;
+        pixel->b += static_cast<float>(color.b) * 0.18F;
+        pixel->g += static_cast<float>(color.g) * 0.18F;
+        pixel->r += static_cast<float>(color.r) * 0.18F;
+        pixel->a += 16.0F;
     }
 
     if ((y + ((x / 13U) & 1U)) % 4U == 0U) {
@@ -149,9 +207,9 @@ void apply_sao_glass_details(uint32_t x, uint32_t y, uint32_t width, uint32_t he
     const uint32_t border = std::max<uint32_t>(1U, std::min(width, height) / 96U);
     const bool on_border = x < border || y < border || x >= width - border || y >= height - border;
     if (on_border) {
-        pixel->b = std::max(pixel->b, 188.0F);
-        pixel->g = std::max(pixel->g, 146.0F);
-        pixel->r = std::max(pixel->r, 22.0F);
+        pixel->b = std::max(pixel->b, static_cast<float>(kGlassBorder.b));
+        pixel->g = std::max(pixel->g, static_cast<float>(kGlassBorder.g));
+        pixel->r = std::max(pixel->r, static_cast<float>(kGlassBorder.r));
         pixel->a = std::max(pixel->a, 232.0F);
     }
 
@@ -170,14 +228,14 @@ void apply_sao_glass_details(uint32_t x, uint32_t y, uint32_t width, uint32_t he
                                   (x < accent_thickness && y >= height - accent_height);
 
     if (cyan_top_left || cyan_bottom_right) {
-        pixel->b = 238.0F;
-        pixel->g = 218.0F;
-        pixel->r = 32.0F;
+        pixel->b = static_cast<float>(kGlassCyan.b);
+        pixel->g = static_cast<float>(kGlassCyan.g);
+        pixel->r = static_cast<float>(kGlassCyan.r);
         pixel->a = 246.0F;
     } else if (gold_top_right || gold_bottom_left) {
-        pixel->b = 54.0F;
-        pixel->g = 196.0F;
-        pixel->r = 244.0F;
+        pixel->b = static_cast<float>(kGlassGold.b);
+        pixel->g = static_cast<float>(kGlassGold.g);
+        pixel->r = static_cast<float>(kGlassGold.r);
         pixel->a = 248.0F;
     }
 }
@@ -218,10 +276,11 @@ sao_status_t render_procedural_impl(uint32_t width, uint32_t height, uint32_t st
             const float horizontal =
                 static_cast<float>(x) / static_cast<float>(std::max<uint32_t>(width - 1U, 1U));
             GlassPixel pixel{
-                22.0F + 18.0F * (1.0F - vertical) + 6.0F * horizontal,
-                9.0F + 15.0F * (1.0F - vertical),
-                4.0F + 5.0F * horizontal,
-                184.0F + 16.0F * (1.0F - vertical),
+                static_cast<float>(kGlassBackground.b) + 15.0F * (1.0F - vertical) +
+                    4.0F * horizontal,
+                static_cast<float>(kGlassBackground.g) + 10.0F * (1.0F - vertical),
+                static_cast<float>(kGlassBackground.r) + 3.0F * horizontal,
+                static_cast<float>(kGlassBackground.a) + 9.0F * (1.0F - vertical),
             };
             apply_sao_glass_details(x, y, width, height, &pixel);
             write_premultiplied_pixel(row + static_cast<size_t>(x) * kBytesPerPixel, pixel);

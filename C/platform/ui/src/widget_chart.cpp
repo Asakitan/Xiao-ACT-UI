@@ -1518,6 +1518,7 @@ sao_status_t sao::ui::detail::widget_chart_paint(
     sao_ui_paint_ctx_handle_t context, int32_t x, int32_t y,
     int32_t width, int32_t height) noexcept {
     try {
+        const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
         float plot_origin_x = static_cast<float>(x + 2);
         float plot_origin_y = static_cast<float>(y + 2);
         float plot_size_w = static_cast<float>(std::max(0, width - 4));
@@ -1541,6 +1542,13 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                                         double min_y, double max_y) -> sao_status_t {
             if (points.empty() || plot_size_w <= 0.0F || plot_size_h <= 0.0F)
                 return SAO_STATUS_OK;
+            // Decimate dense series to a bounded vertex count; the
+            // stride keeps min/max extrema visible.
+            const size_t kMaxPaintPoints = 600;
+            const size_t stride =
+                points.size() > kMaxPaintPoints
+                    ? (points.size() + kMaxPaintPoints - 1U) / kMaxPaintPoints
+                    : 1U;
             const double x_span = max_x > min_x ? max_x - min_x : 1.0;
             const double y_span = max_y > min_y ? max_y - min_y : 1.0;
             const auto screen = [&](const auto& point) {
@@ -1555,9 +1563,19 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                 return sao_ui_paint_ctx_fill_ellipse(context, px - 2.0F, py - 2.0F, 4.0F,
                                                      4.0F, color);
             }
-            for (size_t index = 1; index < points.size(); ++index) {
-                const auto [x1, y1] = screen(points[index - 1]);
+            size_t previous = 0;
+            for (size_t index = stride; index < points.size(); index += stride) {
+                const auto [x1, y1] = screen(points[previous]);
                 const auto [x2, y2] = screen(points[index]);
+                const sao_status_t status = sao_ui_paint_ctx_stroke_line(
+                    context, x1, y1, x2, y2, std::max(1.0F, line_width), color);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                previous = index;
+            }
+            if (previous + 1U < points.size()) {
+                const auto [x1, y1] = screen(points[previous]);
+                const auto [x2, y2] = screen(points.back());
                 const sao_status_t status = sao_ui_paint_ctx_stroke_line(
                     context, x1, y1, x2, y2, std::max(1.0F, line_width), color);
                 if (status != SAO_STATUS_OK)
@@ -1580,7 +1598,7 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0
+                high_contrast || spec.bg_argb == 0
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
                     : spec.bg_argb);
             if (status != SAO_STATUS_OK)
@@ -1604,8 +1622,13 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                     max_y = std::max(max_y, point.value);
                 }
             }
-            if (!std::isfinite(min_x))
-                return SAO_STATUS_OK;
+            if (!std::isfinite(min_x)) {
+                constexpr const char* kEmptyHint = "暂无数据";
+                return sao_ui_paint_ctx_draw_utf8(
+                    context, static_cast<float>(x + (width - 44) / 2),
+                    static_cast<float>(y + (height - 11) / 2), kEmptyHint, 11.0F,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2));
+            }
             configure_plot(spec.left_pad_px, spec.right_pad_px, spec.top_pad_px, spec.bottom_pad_px);
             for (int32_t tick = 1; tick < 5; ++tick) {
                 const float gx = plot_origin_x + plot_size_w * tick / 5.0F;
@@ -1618,6 +1641,106 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                                                        plot_origin_x + plot_size_w, gy, 1.0F,
                                                        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
                 if (status != SAO_STATUS_OK) return status;
+            }
+            // Summary stats top-left: latest value / peak.
+            if (!lanes.empty() && !samples[0].empty() &&
+                (spec.show_latest_value || spec.show_peak)) {
+                const uint32_t stat_color = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT);
+                int32_t stat_row = 0;
+                if (spec.show_latest_value) {
+                    const double latest = samples[0].back().second;
+                    const std::string label = "最新 " + std::to_string(static_cast<int64_t>(latest));
+                    status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 6),
+                                                        static_cast<float>(y + 5 + stat_row * 13),
+                                                        label.c_str(), 10.0F, stat_color);
+                    if (status != SAO_STATUS_OK) return status;
+                    ++stat_row;
+                }
+                if (spec.show_peak) {
+                    const std::string label = "峰值 " + std::to_string(static_cast<int64_t>(max_y));
+                    status = sao_ui_paint_ctx_draw_utf8(context, static_cast<float>(x + 6),
+                                                        static_cast<float>(y + 5 + stat_row * 13),
+                                                        label.c_str(), 10.0F, stat_color);
+                    if (status != SAO_STATUS_OK) return status;
+                }
+            }
+            // Legend top-right: colour swatch + lane label.
+            if (spec.show_legend && !lanes.empty()) {
+                const float legend_x = static_cast<float>(x + width - 92);
+                for (size_t legend_row = 0; legend_row < lanes.size(); ++legend_row) {
+                    const float row_y = static_cast<float>(y + 4) +
+                                        static_cast<float>(legend_row) * 13.0F;
+                    const uint32_t legend_color =
+                        lanes[legend_row].fill_argb == 0
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                            : lanes[legend_row].fill_argb;
+                    status = sao_ui_paint_ctx_fill_rect(context, legend_x, row_y, 8.0F, 8.0F,
+                                                        legend_color);
+                    if (status != SAO_STATUS_OK) return status;
+                    const std::string legend_label =
+                        !lanes[legend_row].label.empty() ? lanes[legend_row].label
+                                                        : lanes[legend_row].lane_id;
+                    status = sao_ui_paint_ctx_draw_utf8(
+                        context, legend_x + 12.0F, row_y - 1.0F, legend_label.c_str(), 9.0F,
+                        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT));
+                    if (status != SAO_STATUS_OK) return status;
+                }
+            }
+            // Lane overlays: area shading and dot markers first, then the
+            // line on top.
+            const double x_span = max_x > min_x ? max_x - min_x : 1.0;
+            const double y_span = max_y > min_y ? max_y - min_y : 1.0;
+            const float baseline_y = plot_origin_y + plot_size_h;
+            for (size_t overlay_lane = 0; overlay_lane < lanes.size(); ++overlay_lane) {
+                const auto& pts = samples[overlay_lane];
+                if (pts.size() < 2U)
+                    continue;
+                const uint32_t lane_color =
+                    lanes[overlay_lane].fill_argb == 0
+                        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                        : lanes[overlay_lane].fill_argb;
+                const size_t stride =
+                    pts.size() > 600U ? (pts.size() + 599U) / 600U : 1U;
+                if (!high_contrast && lanes[overlay_lane].area_fill_argb != 0) {
+                    for (size_t i = stride; ; i += stride) {
+                        const size_t end = std::min(i, pts.size() - 1U);
+                        const float sx0 = static_cast<float>(
+                            plot_origin_x +
+                            plot_size_w * static_cast<float>((pts[i - stride].first - min_x) / x_span));
+                        const float sy0 = static_cast<float>(
+                            plot_origin_y +
+                            plot_size_h *
+                                (1.0F -
+                                 static_cast<float>((pts[i - stride].second - min_y) / y_span)));
+                        const float sx1 = static_cast<float>(
+                            plot_origin_x +
+                            plot_size_w * static_cast<float>((pts[end].first - min_x) / x_span));
+                        const float left = std::min(sx0, sx1);
+                        const float right = std::max(sx0, sx1);
+                        status = sao_ui_paint_ctx_fill_rect(
+                            context, left, std::min(sy0, baseline_y),
+                            std::max(1.0F, right - left), std::max(1.0F, baseline_y - sy0),
+                            lanes[overlay_lane].area_fill_argb);
+                        if (status != SAO_STATUS_OK) return status;
+                        if (end == pts.size() - 1U)
+                            break;
+                    }
+                }
+                if (lanes[overlay_lane].show_points) {
+                    for (size_t i = 0; i < pts.size(); i += stride) {
+                        const float px = static_cast<float>(
+                            plot_origin_x +
+                            plot_size_w * static_cast<float>((pts[i].first - min_x) / x_span));
+                        const float py = static_cast<float>(
+                            plot_origin_y +
+                            plot_size_h *
+                                (1.0F -
+                                 static_cast<float>((pts[i].second - min_y) / y_span)));
+                        status = sao_ui_paint_ctx_fill_ellipse(context, px - 1.5F, py - 1.5F,
+                                                               3.0F, 3.0F, lane_color);
+                        if (status != SAO_STATUS_OK) return status;
+                    }
+                }
             }
             for (size_t index = 0; index < lanes.size(); ++index) {
                 status = paint_polyline(
@@ -1645,11 +1768,18 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0
+                high_contrast || spec.bg_argb == 0
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
                     : spec.bg_argb);
-            if (status != SAO_STATUS_OK || bars.empty())
+            if (status != SAO_STATUS_OK)
                 return status;
+            if (bars.empty()) {
+                constexpr const char* kEmptyHint = "暂无数据";
+                return sao_ui_paint_ctx_draw_utf8(
+                    context, static_cast<float>(x + (width - 44) / 2),
+                    static_cast<float>(y + (height - 11) / 2), kEmptyHint, 11.0F,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2));
+            }
             const size_t visible = spec.max_visible_bars <= 0
                                        ? bars.size()
                                        : std::min(bars.size(),
@@ -1705,7 +1835,7 @@ sao_status_t sao::ui::detail::widget_chart_paint(
             sao_status_t status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height),
-                spec.bg_argb == 0
+                high_contrast || spec.bg_argb == 0
                     ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)
                     : spec.bg_argb);
             if (status != SAO_STATUS_OK)
@@ -1722,8 +1852,13 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                     max_y = std::max(max_y, point.y);
                 }
             }
-            if (!std::isfinite(min_x))
-                return SAO_STATUS_OK;
+            if (!std::isfinite(min_x)) {
+                constexpr const char* kEmptyHint = "暂无数据";
+                return sao_ui_paint_ctx_draw_utf8(
+                    context, static_cast<float>(x + (width - 44) / 2),
+                    static_cast<float>(y + (height - 11) / 2), kEmptyHint, 11.0F,
+                    sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT_2));
+            }
             configure_plot(spec.left_pad_px, spec.right_pad_px, spec.top_pad_px, spec.bottom_pad_px);
             for (int32_t tick = 1; tick < 5; ++tick) {
                 const float gx = plot_origin_x + plot_size_w * tick / 5.0F;
@@ -1736,6 +1871,56 @@ sao_status_t sao::ui::detail::widget_chart_paint(
                                                        plot_origin_x + plot_size_w, gy, 1.0F,
                                                        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
                 if (status != SAO_STATUS_OK) return status;
+            }
+            // Legend top-right for multi-series line charts.
+            if (spec.show_legend && !series.empty()) {
+                const float legend_x = static_cast<float>(x + width - 92);
+                for (size_t legend_row = 0; legend_row < series.size(); ++legend_row) {
+                    const float row_y = static_cast<float>(y + 4) +
+                                        static_cast<float>(legend_row) * 13.0F;
+                    const uint32_t legend_color =
+                        series[legend_row].line_argb == 0
+                            ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                            : series[legend_row].line_argb;
+                    status = sao_ui_paint_ctx_fill_rect(context, legend_x, row_y, 8.0F, 8.0F,
+                                                        legend_color);
+                    if (status != SAO_STATUS_OK) return status;
+                    status = sao_ui_paint_ctx_draw_utf8(
+                        context, legend_x + 12.0F, row_y - 1.0F,
+                        series[legend_row].label.c_str(), 9.0F,
+                        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT));
+                    if (status != SAO_STATUS_OK) return status;
+                }
+            }
+            // Markers under the lines.
+            if (std::any_of(series.begin(), series.end(),
+                            [](const OwnedLineSeries& item) { return item.show_markers; })) {
+                const double mx_span = max_x > min_x ? max_x - min_x : 1.0;
+                const double my_span = max_y > min_y ? max_y - min_y : 1.0;
+                for (const auto& item : series) {
+                    if (!item.show_markers)
+                        continue;
+                    const uint32_t marker_color =
+                        item.marker_argb == 0
+                            ? (item.line_argb == 0
+                                   ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)
+                                   : item.line_argb)
+                            : item.marker_argb;
+                    const size_t stride =
+                        item.points.size() > 600U ? (item.points.size() + 599U) / 600U : 1U;
+                    for (size_t i = 0; i < item.points.size(); i += stride) {
+                        const float px = static_cast<float>(
+                            plot_origin_x +
+                            plot_size_w * static_cast<float>((item.points[i].x - min_x) / mx_span));
+                        const float py = static_cast<float>(
+                            plot_origin_y +
+                            plot_size_h *
+                                (1.0F - static_cast<float>((item.points[i].y - min_y) / my_span)));
+                        status = sao_ui_paint_ctx_fill_ellipse(context, px - 2.0F, py - 2.0F,
+                                                               4.0F, 4.0F, marker_color);
+                        if (status != SAO_STATUS_OK) return status;
+                    }
+                }
             }
             for (const auto& item : series) {
                 std::vector<std::pair<double, double>> points;

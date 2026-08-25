@@ -1,19 +1,29 @@
 // SAO Auto — generic compositor-backed popup menu.
 
 #include "sao/ui/popup.h"
+#include "sao/ui/animator.h"
 #include "sao/ui/d2d_effects.h"
 #include "sao/ui/d2d_widgets.h"
+#include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -79,15 +89,16 @@ struct VisualLevel {
 struct PopupPalette {
     uint32_t shadow = 0;
     uint32_t surface = 0;
-    uint32_t cyan = 0;
-    uint32_t cyan_soft = 0;
+    uint32_t accent = 0;
+    uint32_t accent_soft = 0;
     uint32_t gold = 0;
-    uint32_t gold_soft = 0;
     uint32_t text = 0;
     uint32_t text_secondary = 0;
     uint32_t text_disabled = 0;
     uint32_t selected = 0;
+    uint32_t selected_text = 0;
     uint32_t selected_disabled = 0;
+    uint32_t border = 0;
     uint32_t row_divider = 0;
 };
 
@@ -119,11 +130,24 @@ struct PendingResult {
     int32_t screen_y = -1;
 };
 
-constexpr int32_t kRowHeight = 28;
-constexpr int32_t kSeparatorHeight = 8;
-constexpr int32_t kEmptyPanelHeight = 24;
-constexpr int32_t kVisualPadding = 6;
-constexpr int32_t kShadowOffset = 3;
+constexpr size_t kMaxPopupEntryCount = 4096;
+constexpr size_t kMaxPopupDepth = 16;
+constexpr size_t kMaxPopupRowsPerLevel = 64;
+constexpr size_t kMaxPopupLabelBytes = 4096;
+constexpr size_t kMaxPopupIconBytes = 128;
+constexpr size_t kMaxPopupAcceleratorBytes = 256;
+constexpr size_t kMaxPopupTextBytes = 1024U * 1024U;
+constexpr uint64_t kMaxPopupRasterPixels = 16ULL * 1024ULL * 1024ULL;
+int32_t active_popup_metric(SaoUiMetricToken token, int32_t fallback) noexcept {
+    SaoUiThemeId theme = SAO_UI_THEME_DARK;
+    (void)sao_ui_theme_get_active_id(&theme);
+    const int32_t value = sao_ui_theme_resolve_metric(theme, token);
+    return value > 0 ? value : fallback;
+}
+int32_t popup_row_height() noexcept { return active_popup_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT, 24) + 2 * active_popup_metric(SAO_UI_METRIC_PADDING_XS, 2); }
+int32_t popup_separator_height() noexcept { return 2 * active_popup_metric(SAO_UI_METRIC_PADDING_S, 4); }
+int32_t popup_visual_padding() noexcept { return active_popup_metric(SAO_UI_METRIC_PADDING_S, 4) + active_popup_metric(SAO_UI_METRIC_PADDING_XS, 2); }
+int32_t popup_shadow_offset() noexcept { return std::max(1, active_popup_metric(SAO_UI_METRIC_GAP_S, 4) - active_popup_metric(SAO_UI_METRIC_PADDING_XS, 2) + 1); }
 constexpr int32_t kPopupZOrder = 1'000'000;
 enum class PopupPhase : uint8_t { hidden, entering, live, exiting };
 
@@ -144,21 +168,41 @@ constexpr uint32_t capped_alpha(uint32_t argb, uint8_t maximum) noexcept {
 }
 
 PopupPalette make_popup_palette(SaoUiThemeId theme_id) noexcept {
-    const auto color = [theme_id](SaoUiColorToken token) {
-        return sao_ui_theme_resolve_color(theme_id, token);
+    const auto theme = sao::ui::detail::resolve_theme(
+        theme_id, sao::ui::detail::process_theme_generation());
+    const auto color = [&theme](SaoUiColorToken token) {
+        return theme.colors[static_cast<size_t>(token)];
     };
+    if (theme.high_contrast) {
+        return {
+            0x00000000U,
+            color(SAO_UI_TOKEN_APP_BG),
+            color(SAO_UI_TOKEN_WHITE),
+            color(SAO_UI_TOKEN_APP_BORDER),
+            color(SAO_UI_TOKEN_WHITE),
+            color(SAO_UI_TOKEN_APP_TEXT),
+            color(SAO_UI_TOKEN_APP_TEXT_2),
+            color(SAO_UI_TOKEN_DISABLED_FG),
+            color(SAO_UI_TOKEN_SELECTION),
+            color(SAO_UI_TOKEN_WHITE),
+            color(SAO_UI_TOKEN_DISABLED_BG),
+            color(SAO_UI_TOKEN_APP_BORDER),
+            color(SAO_UI_TOKEN_APP_BORDER),
+        };
+    }
     return {
         capped_alpha(color(SAO_UI_TOKEN_BLACK), 0x66U),
         capped_alpha(color(SAO_UI_TOKEN_TOOLTIP_SURFACE), 0xE8U),
-        color(SAO_UI_TOKEN_CORNER_CYAN),
+        color(SAO_UI_TOKEN_APP_ACCENT),
         capped_alpha(color(SAO_UI_TOKEN_ACCENT_CYAN_SOFT), 0xB0U),
-        color(SAO_UI_TOKEN_CIRCLE_ACTIVE_BORDER),
-        capped_alpha(color(SAO_UI_TOKEN_ACCENT_GOLD_WARM), 0xA0U),
+        color(SAO_UI_TOKEN_APP_GOLD),
         color(SAO_UI_TOKEN_APP_TEXT),
         capped_alpha(color(SAO_UI_TOKEN_APP_TEXT_2), 0xCCU),
         capped_alpha(color(SAO_UI_TOKEN_APP_TEXT_DIM), 0x88U),
         color(SAO_UI_TOKEN_SELECTION),
+        color(SAO_UI_TOKEN_APP_TEXT),
         capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0x30U),
+        capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0xCCU),
         capped_alpha(color(SAO_UI_TOKEN_APP_BORDER), 0x30U),
     };
 }
@@ -233,11 +277,6 @@ class Painter {
         merge(sao_ui_paint_ctx_fill_polygon(context_, points, count, color));
     }
 
-    void text(float x, float y, const std::string& value, float size, uint32_t color) {
-        if (!value.empty())
-            merge(sao_ui_paint_ctx_draw_utf8(context_, x, y, value.c_str(), size, color));
-    }
-
     void clipped_text(float x, float y, float width, float height,
                       const std::string& value, float size, uint32_t color) {
         if (value.empty() || width <= 0.0F || height <= 0.0F || status_ != SAO_STATUS_OK) return;
@@ -301,35 +340,196 @@ struct sao_ui_popup_s {
 
 namespace {
 
-static void deep_copy_entries(
-    const SaoUiPopupEntry* entries, size_t count,
-    std::vector<EntryNode>* out) {
+struct PopupCopyBudget {
+    size_t remaining_entries = kMaxPopupEntryCount;
+    size_t remaining_text_bytes = kMaxPopupTextBytes;
+};
+
+bool valid_popup_utf8(std::string_view value) noexcept {
+    size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7FU) {
+            ++offset;
+            continue;
+        }
+        size_t continuation_count = 0;
+        uint32_t code_point = 0;
+        if ((first & 0xE0U) == 0xC0U) {
+            continuation_count = 1;
+            code_point = first & 0x1FU;
+        } else if ((first & 0xF0U) == 0xE0U) {
+            continuation_count = 2;
+            code_point = first & 0x0FU;
+        } else if ((first & 0xF8U) == 0xF0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xC0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3FU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10FFFFU ||
+            (code_point >= 0xD800U && code_point <= 0xDFFFU)) {
+            return false;
+        }
+        offset += continuation_count + 1U;
+    }
+    return true;
+}
+
+bool copy_popup_text(const char* source, size_t maximum_bytes,
+                     PopupCopyBudget* budget, std::string* out) {
+    if (budget == nullptr || out == nullptr)
+        return false;
     out->clear();
-    if (entries == nullptr || count == 0) return;
+    if (source == nullptr)
+        return true;
+    size_t length = 0;
+    while (length <= maximum_bytes && source[length] != '\0')
+        ++length;
+    if (length > maximum_bytes || length > budget->remaining_text_bytes)
+        return false;
+    const std::string_view value(source, length);
+    if (!valid_popup_utf8(value))
+        return false;
+    out->assign(value);
+    budget->remaining_text_bytes -= length;
+    return true;
+}
+
+static bool deep_copy_entries(const SaoUiPopupEntry* entries, size_t count,
+                              std::vector<EntryNode>* out, PopupCopyBudget* budget,
+                              size_t depth) {
+    if (out == nullptr || budget == nullptr || depth > kMaxPopupDepth ||
+        count > kMaxPopupRowsPerLevel) {
+        return false;
+    }
+    out->clear();
+    if (count == 0)
+        return true;
+    if (entries == nullptr || count > budget->remaining_entries)
+        return false;
+    budget->remaining_entries -= count;
     out->reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        const SaoUiPopupEntry& src = entries[i];
+    for (size_t index = 0; index < count; ++index) {
+        const SaoUiPopupEntry& source = entries[index];
         EntryNode node;
-        node.label = (src.label_utf8 != nullptr) ? src.label_utf8 : "";
-        node.icon = (src.icon_utf8 != nullptr) ? src.icon_utf8 : "";
-        node.accelerator = (src.accelerator_utf8 != nullptr) ? src.accelerator_utf8 : "";
-        node.entry_id = src.entry_id;
-        node.enabled = src.enabled;
-        node.checked = src.checked;
-        node.is_separator = src.is_separator;
-        if (src.submenu_entries != nullptr && src.submenu_count > 0) {
-            deep_copy_entries(src.submenu_entries, src.submenu_count, &node.children);
+        if (!copy_popup_text(source.label_utf8, kMaxPopupLabelBytes, budget, &node.label) ||
+            !copy_popup_text(source.icon_utf8, kMaxPopupIconBytes, budget, &node.icon) ||
+            !copy_popup_text(source.accelerator_utf8, kMaxPopupAcceleratorBytes, budget,
+                             &node.accelerator) ||
+            (source.submenu_count > 0 && source.submenu_entries == nullptr)) {
+            return false;
+        }
+        node.entry_id = source.entry_id;
+        node.enabled = source.enabled;
+        node.checked = source.checked;
+        node.is_separator = source.is_separator;
+        if (source.submenu_count > 0 &&
+            !deep_copy_entries(source.submenu_entries, source.submenu_count, &node.children,
+                               budget, depth + 1)) {
+            return false;
         }
         out->push_back(std::move(node));
     }
+    return true;
 }
+
+static float text_width(const std::string& text, float size) {
+    float measured_width = 0.0F;
+    float measured_height = 0.0F;
+    if (sao::ui::detail::measure_text_dwrite(text.c_str(), size, &measured_width,
+                                             &measured_height))
+        return measured_width;
+    float width = 0.0F;
+    size_t index = 0;
+    while (index < text.size()) {
+        const unsigned char c = static_cast<unsigned char>(text[index]);
+        const size_t step = c < 0x80 ? 1 : (c < 0xE0 ? 2 : (c < 0xF0 ? 3 : 4));
+        width += c < 0x80 ? size * 0.58F : size;
+        index += std::min(step, text.size() - index);
+    }
+    return width;
+}
+
+static size_t utf8_next_index(const std::string& text, size_t index) noexcept {
+    if (index >= text.size()) return index;
+    const unsigned char c = static_cast<unsigned char>(text[index]);
+    const size_t step = c < 0x80 ? 1 : (c < 0xE0 ? 2 : (c < 0xF0 ? 3 : 4));
+    return std::min(text.size(), index + step);
+}
+
+static std::string ellipsize_utf8(
+    const std::string& text, float available_width, float size) {
+    if (text.empty() || available_width <= 0.0F) return {};
+    if (text_width(text, size) <= available_width) return text;
+    const std::string ellipsis = "\xE2\x80\xA6";
+    if (text_width(ellipsis, size) > available_width) return {};
+
+    std::string result = ellipsis;
+    size_t index = 0;
+    while (index < text.size()) {
+        const size_t next = utf8_next_index(text, index);
+        std::string candidate = text.substr(0, next);
+        candidate += ellipsis;
+        if (text_width(candidate, size) > available_width) break;
+        result = std::move(candidate);
+        index = next;
+    }
+    return result;
+}
+
+static int32_t popup_content_width(
+    const std::vector<EntryNode>& entries, int32_t default_width,
+    int32_t max_width) {
+    int64_t required_width = std::max<int32_t>(1, default_width);
+    for (const EntryNode& entry : entries) {
+        if (entry.is_separator) continue;
+        const int64_t accelerator_width = entry.accelerator.empty()
+            ? 0
+            : static_cast<int64_t>(std::ceil(text_width(entry.accelerator, 10.0F))) + 9;
+        const int64_t arrow_space = entry.children.empty() ? 0 : 20;
+        const int64_t row_width = 31 +
+            static_cast<int64_t>(std::ceil(text_width(entry.label, 10.0F))) +
+            10 + accelerator_width + arrow_space;
+        required_width = std::max(required_width, row_width);
+    }
+    const int64_t bounded_width = std::min<int64_t>(
+        required_width, std::max<int32_t>(1, max_width));
+    return static_cast<int32_t>(std::min<int64_t>(
+        bounded_width, std::numeric_limits<int32_t>::max()));
+}
+
+static int32_t popup_work_content_width(int32_t work_left, int32_t work_right) noexcept {
+    const int64_t work_width = static_cast<int64_t>(work_right) - work_left;
+    const int64_t visual_insets = static_cast<int64_t>(2 * popup_visual_padding()) +
+        popup_shadow_offset();
+    const int64_t bounded_width = std::clamp<int64_t>(
+        work_width - visual_insets, 1, std::numeric_limits<int32_t>::max());
+    return static_cast<int32_t>(bounded_width);
+}
+
+static bool popup_level_height(const std::vector<EntryNode>& entries,
+                               int32_t* out_height) noexcept;
 
 static bool compute_level_rect(
     const std::vector<EntryNode>& entries,
     int32_t anchor_x, int32_t anchor_y,
     int32_t width,
     LevelRect* out) {
-    if (out == nullptr || width <= 0) return false;
+    int32_t expected_height = 0;
+    if (out == nullptr || width <= 0 ||
+        !popup_level_height(entries, &expected_height)) return false;
     out->x = anchor_x;
     out->y = anchor_y;
     out->width = width;
@@ -339,7 +539,7 @@ static bool compute_level_rect(
     out->row_bottom.reserve(entries.size());
     int64_t cursor_y = anchor_y;
     for (const EntryNode& e : entries) {
-        const int32_t height = e.is_separator ? kSeparatorHeight : kRowHeight;
+        const int32_t height = e.is_separator ? popup_separator_height() : popup_row_height();
         const int64_t bottom = cursor_y + height;
         if (cursor_y < std::numeric_limits<int32_t>::min() ||
             bottom > std::numeric_limits<int32_t>::max()) {
@@ -350,8 +550,22 @@ static bool compute_level_rect(
         cursor_y = bottom;
     }
     const int64_t total_height = cursor_y - anchor_y;
-    if (total_height < 0 || total_height > std::numeric_limits<int32_t>::max()) return false;
-    out->height = static_cast<int32_t>(total_height);
+    if (total_height != expected_height) return false;
+    out->height = expected_height;
+    return true;
+}
+
+static bool popup_level_height(const std::vector<EntryNode>& entries,
+                               int32_t* out_height) noexcept {
+    if (out_height == nullptr)
+        return false;
+    int64_t total = 0;
+    for (const EntryNode& entry : entries) {
+        total += entry.is_separator ? popup_separator_height() : popup_row_height();
+        if (total > std::numeric_limits<int32_t>::max())
+            return false;
+    }
+    *out_height = static_cast<int32_t>(total);
     return true;
 }
 
@@ -392,10 +606,65 @@ static sao_status_t make_root_level(
     OpenLevel* out_level) {
     if (out_level == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     const auto* constants = sao_ui_popup_layout_constants();
-    const int32_t width = spec.anchor_w > 0 ? spec.anchor_w : constants->child_width;
+#if defined(_WIN32)
+    RECT work_rect{};
+    if (::SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_rect, 0) == FALSE)
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    const int32_t work_left = work_rect.left;
+    const int32_t work_top = work_rect.top;
+    const int32_t work_right = work_rect.right;
+    const int32_t work_bottom = work_rect.bottom;
+    const int32_t width = popup_content_width(
+        entries, constants->child_width, popup_work_content_width(work_left, work_right));
+#else
+    const int32_t width = popup_content_width(
+        entries, constants->child_width, std::numeric_limits<int32_t>::max());
+#endif
     OpenLevel level;
     if (!compute_level_rect(entries, spec.anchor_x, spec.anchor_y, width, &level.rect))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+#if defined(_WIN32)
+    int32_t target_x = level.rect.x;
+    int32_t target_y = level.rect.y;
+    const int32_t visual_padding = popup_visual_padding();
+    const int32_t visual_trailing = visual_padding + popup_shadow_offset();
+    const int64_t available_width = static_cast<int64_t>(work_right) - work_left -
+        visual_padding - visual_trailing;
+    const int64_t available_height = static_cast<int64_t>(work_bottom) - work_top -
+        visual_padding - visual_trailing;
+    if (available_width <= 0 || width > available_width || available_height <= 0 ||
+        level.rect.height > available_height)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (static_cast<int64_t>(target_x) + width + visual_trailing > work_right) {
+        const int64_t flipped_x = static_cast<int64_t>(spec.anchor_x) +
+            std::max(0, spec.anchor_w) - width;
+        if (flipped_x < std::numeric_limits<int32_t>::min() ||
+            flipped_x > std::numeric_limits<int32_t>::max())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        target_x = static_cast<int32_t>(flipped_x);
+    }
+    if (static_cast<int64_t>(target_y) + level.rect.height + visual_trailing > work_bottom) {
+        const int64_t flipped_y = static_cast<int64_t>(spec.anchor_y) +
+            std::max(0, spec.anchor_h) - level.rect.height;
+        if (flipped_y < std::numeric_limits<int32_t>::min() ||
+            flipped_y > std::numeric_limits<int32_t>::max())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        target_y = static_cast<int32_t>(flipped_y);
+    }
+    const int32_t minimum_x = work_left + visual_padding;
+    const int32_t maximum_x = std::max(
+        minimum_x, work_right - visual_trailing - width);
+    target_x = std::clamp(target_x, minimum_x, maximum_x);
+    const int32_t minimum_y = work_top + visual_padding;
+    const int32_t maximum_y = std::max(
+        minimum_y, work_bottom - visual_trailing - level.rect.height);
+    target_y = std::clamp(target_y, minimum_y, maximum_y);
+    const int32_t dy = target_y - level.rect.y;
+    level.rect.x = target_x;
+    level.rect.y = target_y;
+    for (int32_t& row : level.rect.row_top) row += dy;
+    for (int32_t& row : level.rect.row_bottom) row += dy;
+#endif
     level.parent_entry_index = -1;
     level.selected_index = spec.allow_keyboard_nav
         ? advance_selection(entries, -1, +1) : -1;
@@ -422,18 +691,59 @@ static sao_status_t open_submenu_locked(
 
     const OpenLevel& parent = popup->levels[static_cast<size_t>(depth)];
     const auto* constants = sao_ui_popup_layout_constants();
-    const int64_t child_x = static_cast<int64_t>(parent.rect.x) +
-        parent.rect.width + constants->gap_menu_child;
-    if (child_x < std::numeric_limits<int32_t>::min() ||
-        child_x > std::numeric_limits<int32_t>::max()) {
+    const int32_t gap = constants->gap_menu_child;
+#if defined(_WIN32)
+    RECT work_rect{};
+    if (::SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_rect, 0) == FALSE)
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    const int32_t work_left = work_rect.left;
+    const int32_t work_top = work_rect.top;
+    const int32_t work_right = work_rect.right;
+    const int32_t work_bottom = work_rect.bottom;
+    const int32_t child_width = popup_content_width(
+        entry.children, constants->child_width,
+        popup_work_content_width(work_left, work_right));
+#else
+    const int32_t child_width = popup_content_width(
+        entry.children, constants->child_width, std::numeric_limits<int32_t>::max());
+#endif
+    int64_t child_x = static_cast<int64_t>(parent.rect.x) + parent.rect.width + gap;
+#if defined(_WIN32)
+    const int32_t visual_padding = popup_visual_padding();
+    const int32_t visual_trailing = visual_padding + popup_shadow_offset();
+    const int64_t available_width = static_cast<int64_t>(work_right) - work_left -
+        visual_padding - visual_trailing;
+    if (available_width <= 0 || child_width > available_width)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
+    if (child_x + child_width + visual_trailing > work_right)
+        child_x = static_cast<int64_t>(parent.rect.x) - gap - child_width;
+    const int64_t minimum_x = static_cast<int64_t>(work_left) + visual_padding;
+    const int64_t maximum_x = std::max<int64_t>(
+        minimum_x, static_cast<int64_t>(work_right) - visual_trailing - child_width);
+    child_x = std::clamp(child_x, minimum_x, maximum_x);
+#endif
+    if (child_x < std::numeric_limits<int32_t>::min() ||
+        child_x > std::numeric_limits<int32_t>::max())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
     OpenLevel child;
     child.parent_entry_index = entry_index;
-    const int32_t child_y = parent.rect.row_top[static_cast<size_t>(entry_index)];
+    int32_t child_y = parent.rect.row_top[static_cast<size_t>(entry_index)];
+#if defined(_WIN32)
+    int32_t child_height = 0;
+    if (!popup_level_height(entry.children, &child_height))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const int64_t available_height = static_cast<int64_t>(work_bottom) - work_top -
+        visual_padding - visual_trailing;
+    if (available_height <= 0 || child_height > available_height)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (static_cast<int64_t>(child_y) + child_height + visual_trailing > work_bottom)
+        child_y = std::max(work_top + visual_padding,
+                           work_bottom - visual_trailing - child_height);
+    if (child_y < work_top + visual_padding) child_y = work_top + visual_padding;
+#endif
     if (!compute_level_rect(entry.children, static_cast<int32_t>(child_x), child_y,
-                            constants->child_width, &child.rect)) {
+                            child_width, &child.rect)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     child.selected_index = popup->spec_snapshot.allow_keyboard_nav
@@ -516,16 +826,16 @@ static bool compute_screen_bounds(
     int64_t right = std::numeric_limits<int64_t>::min();
     int64_t bottom = std::numeric_limits<int64_t>::min();
     for (const VisualLevel& level : snapshot.levels) {
-        const int32_t panel_height = std::max(level.rect.height, kEmptyPanelHeight);
+        const int32_t panel_height = std::max(level.rect.height, active_popup_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT, 24));
         left = std::min(left, static_cast<int64_t>(level.rect.x));
         top = std::min(top, static_cast<int64_t>(level.rect.y));
         right = std::max(right, static_cast<int64_t>(level.rect.x) + level.rect.width);
         bottom = std::max(bottom, static_cast<int64_t>(level.rect.y) + panel_height);
     }
-    left -= kVisualPadding;
-    top -= kVisualPadding;
-    right += kVisualPadding + kShadowOffset;
-    bottom += kVisualPadding + kShadowOffset;
+    left -= popup_visual_padding();
+    top -= popup_visual_padding();
+    right += popup_visual_padding() + popup_shadow_offset();
+    bottom += popup_visual_padding() + popup_shadow_offset();
     const int64_t width = right - left;
     const int64_t height = bottom - top;
     if (left < std::numeric_limits<int32_t>::min() ||
@@ -542,24 +852,18 @@ static bool compute_screen_bounds(
     return true;
 }
 
-static float text_width(const std::string& text, float size) {
-    const int32_t scale = std::max(1, static_cast<int32_t>(std::floor(size / 5.0F)));
-    return static_cast<float>(text.size() * static_cast<size_t>(scale * 6));
-}
-
 static void draw_level_border(Painter* painter, const PopupPalette& palette, float x, float y, float width, float height) {
-    painter->shadow(x, y, width, height, 8.0F, 2, palette.shadow);
-    painter->rounded(x, y, width, height, 8.0F, palette.surface);
-    painter->rounded_stroke(x, y, width, height, 8.0F, 1.0F, palette.cyan);
+    painter->shadow(x, y, width, height, 4.0F, 1, palette.shadow);
+    painter->rounded(x, y, width, height, 4.0F, palette.surface);
+    painter->rounded_stroke(x, y, width, height, 4.0F, 1.0F, palette.border);
 }
 
 static void draw_separator(
     Painter* painter, const PopupPalette& palette,
     float x, float y, float width, float height) {
     const float center = y + height * 0.5F;
-    const float half = std::max(1.0F, (width - 20.0F) * 0.5F);
-    painter->fill(x + 10.0F, center, half, 1.0F, palette.cyan_soft);
-    painter->fill(x + 10.0F + half, center, half, 1.0F, palette.gold_soft);
+    painter->fill(x + 10.0F, center, std::max(1.0F, width - 20.0F), 1.0F,
+                  palette.row_divider);
 }
 
 static void draw_check(Painter* painter, float x, float y, uint32_t color) {
@@ -579,37 +883,41 @@ static void draw_row(
         painter->fill(x + 2.0F, y, width - 4.0F, height,
                       row.enabled ? palette.selected : palette.selected_disabled);
         painter->fill(x + 2.0F, y, 3.0F, height,
-                      row.enabled ? palette.cyan : palette.cyan_soft);
-        painter->fill(x + width - 3.0F, y, 1.0F, height, palette.gold_soft);
+                      row.enabled ? palette.accent : palette.accent_soft);
     }
-    painter->fill(x + 8.0F, y + height - 1.0F, width - 16.0F, 1.0F,
-                  palette.row_divider);
 
     const uint32_t primary = row.enabled
-        ? (selected ? palette.text : palette.text_secondary) : palette.text_disabled;
+        ? (selected ? palette.selected_text : palette.text_secondary) : palette.text_disabled;
     const uint32_t accent = row.enabled
-        ? (selected ? palette.gold : palette.cyan_soft) : palette.text_disabled;
+        ? (selected ? palette.gold : palette.accent_soft) : palette.text_disabled;
     float icon_x = x + 9.0F;
     if (row.checked) {
         draw_check(painter, icon_x, y + (height - 11.0F) * 0.5F, accent);
         icon_x += 15.0F;
     }
-    if (!row.icon.empty()) painter->text(icon_x, y + 8.0F, row.icon, 10.0F, accent);
-
     const float label_x = x + 31.0F;
+    const float icon_width = std::max(0.0F, label_x - icon_x - 4.0F);
+    const std::string icon = ellipsize_utf8(row.icon, icon_width, 10.0F);
+    painter->clipped_text(icon_x, y + 8.0F, icon_width, height - 8.0F,
+                          icon, 10.0F, accent);
+
     const float arrow_space = row.has_submenu ? 20.0F : 0.0F;
-    const float accelerator_width = row.accelerator.empty()
-        ? 0.0F : text_width(row.accelerator, 10.0F) + 9.0F;
+    const float text_right = x + width - 9.0F - arrow_space;
+    const float row_text_width = std::max(0.0F, text_right - label_x);
+    const float accelerator_limit = std::min(
+        {120.0F, width * 0.35F, std::max(0.0F, row_text_width - 36.0F)});
+    const std::string accelerator = ellipsize_utf8(
+        row.accelerator, accelerator_limit, 10.0F);
+    const float accelerator_width = text_width(accelerator, 10.0F);
+    const float accelerator_gap = accelerator.empty() ? 0.0F : 9.0F;
     const float label_width = std::max(
-        1.0F, width - (label_x - x) - 10.0F - arrow_space - accelerator_width);
+        0.0F, row_text_width - accelerator_gap - accelerator_width);
+    const std::string label = ellipsize_utf8(row.label, label_width, 10.0F);
     painter->clipped_text(label_x, y + 8.0F, label_width, height - 8.0F,
-                          row.label, 10.0F, primary);
-    if (!row.accelerator.empty()) {
-        painter->text(x + width - 9.0F - arrow_space -
-                          text_width(row.accelerator, 10.0F),
-                      y + 8.0F, row.accelerator, 10.0F,
-                      row.enabled ? palette.text_secondary : palette.text_disabled);
-    }
+                          label, 10.0F, primary);
+    painter->clipped_text(text_right - accelerator_width, y + 8.0F,
+                          accelerator_width, height - 8.0F, accelerator, 10.0F,
+                          row.enabled ? palette.text_secondary : palette.text_disabled);
     if (row.has_submenu) {
         const int32_t arrow_x = static_cast<int32_t>(std::lround(x + width - 12.0F));
         const int32_t arrow_y = static_cast<int32_t>(std::lround(y + height * 0.5F));
@@ -628,6 +936,15 @@ static sao_status_t render_popup_frame(
     try {
         ScreenBounds bounds;
         if (!compute_screen_bounds(snapshot, &bounds)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const uint64_t raster_width = static_cast<uint64_t>(bounds.width);
+        const uint64_t raster_height = static_cast<uint64_t>(bounds.height);
+        const uint64_t pixels = raster_width * raster_height;
+        if (bounds.width <= 0 || bounds.height <= 0 ||
+            raster_width > std::numeric_limits<uint32_t>::max() / 4ULL ||
+            pixels > kMaxPopupRasterPixels ||
+            pixels > std::numeric_limits<size_t>::max() / 4ULL) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
         SaoUiOffscreenRasterDesc descriptor{};
         descriptor.width_px = static_cast<uint32_t>(bounds.width);
         descriptor.height_px = static_cast<uint32_t>(bounds.height);
@@ -649,7 +966,7 @@ static sao_status_t render_popup_frame(
             const float x = static_cast<float>(level.rect.x - bounds.x);
             const float y = static_cast<float>(level.rect.y - bounds.y);
             const float width = static_cast<float>(level.rect.width);
-            const float height = static_cast<float>(std::max(level.rect.height, kEmptyPanelHeight));
+            const float height = static_cast<float>(std::max(level.rect.height, active_popup_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT, 24)));
             draw_level_border(&painter, snapshot.palette, x, y, width, height);
             for (size_t index = 0; index < level.rows.size(); ++index) {
                 const float row_y = static_cast<float>(level.rect.row_top[index] - bounds.y);
@@ -752,7 +1069,8 @@ static sao_status_t sync_visible_layer_locked(sao_ui_popup_s* popup) {
         float layer_alpha = 1.0F;
         {
             std::lock_guard lock(popup->mu);
-            if (!popup->visible || popup->levels.empty()) return SAO_STATUS_OK;
+            if (!popup->visible) { if (popup->layer != nullptr) return sao_ui_layer_set_input_enabled(popup->layer, false); return SAO_STATUS_OK; }
+            if (popup->levels.empty()) return SAO_STATUS_OK;
             const sao_status_t snapshot_status = build_visual_snapshot_locked(popup, &snapshot);
             if (snapshot_status != SAO_STATUS_OK) return snapshot_status;
             layer = popup->layer;
@@ -1076,7 +1394,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
     if (!valid_theme_override(spec->theme_override)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         EntryNode replacement_root;
-        deep_copy_entries(spec->entries, spec->entry_count, &replacement_root.children);
+        PopupCopyBudget budget;
+        if (!deep_copy_entries(spec->entries, spec->entry_count, &replacement_root.children, &budget, 0)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         OpenLevel root_level;
         sao_status_t status = make_root_level(replacement_root.children, *spec, &root_level);
         if (status != SAO_STATUS_OK) return status;
@@ -1094,7 +1413,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
             handle->callback = callback;
             handle->user_data = user_data;
             handle->visible = true;
-            const int32_t fade_in_ms = std::max(0, spec->fade_in_ms);
+            const int32_t fade_in_ms = sao_ui_animation_duration_ms(spec->fade_in_ms);
             handle->phase = fade_in_ms == 0 ? PopupPhase::live : PopupPhase::entering;
             handle->phase_elapsed_ms = fade_in_ms == 0 ? 0 : std::min(16, fade_in_ms);
             handle->layer_alpha = fade_in_ms == 0
@@ -1163,14 +1482,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_refresh_entries(
             spec = handle->spec_snapshot;
         }
         EntryNode replacement_root;
-        deep_copy_entries(entries, count, &replacement_root.children);
+        PopupCopyBudget budget;
+        if (!deep_copy_entries(entries, count, &replacement_root.children, &budget, 0)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         OpenLevel root_level;
         sao_status_t status = make_root_level(replacement_root.children, spec, &root_level);
         if (status != SAO_STATUS_OK) return status;
         bool visible = false;
-    PopupPhase phase{PopupPhase::hidden};
-    int32_t phase_elapsed_ms{0};
-    float layer_alpha{0.0F};
         {
             std::lock_guard lock(handle->mu);
             handle->root = std::move(replacement_root);
@@ -1220,9 +1537,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_checked(
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard layer_lock(handle->layer_mu);
     bool visible = false;
-    PopupPhase phase{PopupPhase::hidden};
-    int32_t phase_elapsed_ms{0};
-    float layer_alpha{0.0F};
     {
         std::lock_guard lock(handle->mu);
         EntryNode* node = find_by_id_mut(handle->root, entry_id);
@@ -1238,9 +1552,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_set_entry_enabled(
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard layer_lock(handle->layer_mu);
     bool visible = false;
-    PopupPhase phase{PopupPhase::hidden};
-    int32_t phase_elapsed_ms{0};
-    float layer_alpha{0.0F};
     {
         std::lock_guard lock(handle->mu);
         EntryNode* node = find_by_id_mut(handle->root, entry_id);
@@ -1348,8 +1659,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_tick(sao_ui_popup_handle_t hand
         if (handle->phase == PopupPhase::hidden) return SAO_STATUS_ERR_NOT_INITIALIZED;
         handle->phase_elapsed_ms += dt_ms;
         const bool entering = handle->phase == PopupPhase::entering;
-        const int32_t duration = std::max(
-            1, entering ? handle->spec_snapshot.fade_in_ms : handle->spec_snapshot.fade_out_ms);
+        const int32_t duration = std::max(1, entering ? sao_ui_animation_duration_ms(handle->spec_snapshot.fade_in_ms) : sao_ui_animation_duration_ms(handle->spec_snapshot.fade_out_ms));
         if (entering) {
             handle->layer_alpha = std::min(
                 1.0F, static_cast<float>(handle->phase_elapsed_ms) / duration);

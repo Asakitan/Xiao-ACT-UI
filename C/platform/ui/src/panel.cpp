@@ -4,6 +4,7 @@
 
 #include "sao/engine/ui_spec.h"
 #include "sao/ui/theme.h"
+#include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
 #include "panel_theme_internal.h"
@@ -54,6 +55,9 @@ using json = nlohmann::json;
 std::atomic<int32_t> g_body_replace_failure_point{0};
 std::atomic<int32_t> g_theme_upload_failure_count{0};
 std::atomic<int32_t> g_create_theme_switch{-1};
+constexpr size_t kMaximumPanelSpecBytes = 1U << 20U;
+constexpr int32_t kMaximumPanelSpecDepth = 8;
+constexpr size_t kMaximumPanelSpecNodes = 400U;
 
 int64_t saturating_add_i64(int64_t left, int64_t right) noexcept {
     if (right > 0 && left > std::numeric_limits<int64_t>::max() - right)
@@ -198,6 +202,8 @@ std::optional<SaoUiColorToken> semantic_accent_token(std::string_view value) noe
         return SAO_UI_TOKEN_APP_GREEN;
     if (value == "bad" || value == "danger" || value == "error")
         return SAO_UI_TOKEN_APP_RED;
+    if (value == "muted" || value == "dim")
+        return SAO_UI_TOKEN_APP_TEXT_DIM;
     return std::nullopt;
 }
 
@@ -368,6 +374,14 @@ int32_t parse_container_layout_mode(std::string_view value, int32_t fallback) no
         return SAO_UI_LAYOUT_HORIZONTAL;
     if (value == "vertical")
         return SAO_UI_LAYOUT_VERTICAL;
+    if (value == "grid")
+        return SAO_UI_LAYOUT_GRID;
+    if (value == "absolute")
+        return SAO_UI_LAYOUT_ABSOLUTE;
+    if (value == "flex")
+        return SAO_UI_LAYOUT_FLEX;
+    if (value == "dock")
+        return SAO_UI_LAYOUT_DOCK;
     return fallback;
 }
 
@@ -394,9 +408,9 @@ bool parse_container_responsive_layout(const json& node, int32_t primary_mode,
                        [](unsigned char character) {
                            return static_cast<char>(std::tolower(character));
                        });
-        if (normalized != "horizontal" && normalized != "vertical")
+        parsed.fallback_mode = parse_container_layout_mode(normalized, -1);
+        if (parsed.fallback_mode < 0)
             return false;
-        parsed.fallback_mode = parse_container_layout_mode(normalized, parsed.fallback_mode);
     }
     if (!parse_nonnegative_int(*fallback, "threshold_width", &parsed.threshold_width) ||
         !parse_nonnegative_int(*fallback, "min_width", &parsed.min_width))
@@ -420,7 +434,9 @@ struct OwnedWidget {
     sao_ui_widget_handle_t handle{};
     sao_ui_layout_node_handle_t node{};
     int32_t kind{};
+    std::string type;
     std::string id;
+    std::string path;
     std::string action;
     std::string action_args{"{}"};
     json props{json::object()};
@@ -508,6 +524,9 @@ struct sao_ui_panel_s {
     SaoPanelState interaction_start_state{};
     sao_ui_widget_handle_t hovered_widget{};
     sao_ui_widget_handle_t pressed_widget{};
+    sao_ui_widget_handle_t focused_widget{};
+    std::string responsive_focus_id;
+    std::string responsive_focus_path;
     bool close_armed{};
     bool scrollbar_hovered{};
     bool scrollbar_pressed{};
@@ -846,30 +865,154 @@ int32_t clamp_dimension(int32_t value, int32_t minimum, int32_t maximum) {
 }
 
 std::string normalized_type(const json& node) {
-    if (!node.is_object() || !node.contains("type"))
-        return "text";
-    std::string type;
-    if (node["type"].is_string())
-        type = node["type"].get<std::string>();
+    if (!node.is_object())
+        return {};
+    const char* key = node.contains("type") && node["type"].is_string()
+                          ? "type"
+                          : (node.contains("kind") && node["kind"].is_string()
+                                 ? "kind"
+                                 : nullptr);
+    if (key == nullptr)
+        return {};
+    std::string type = node[key].get<std::string>();
+    size_t first = 0;
+    size_t last = type.size();
+    while (first < last && std::isspace(static_cast<unsigned char>(type[first])) != 0)
+        ++first;
+    while (last > first && std::isspace(static_cast<unsigned char>(type[last - 1])) != 0)
+        --last;
+    type = type.substr(first, last - first);
     std::transform(type.begin(), type.end(), type.begin(),
                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     return type;
 }
 
+bool is_container_type(std::string_view type) noexcept {
+    return type == "panel" || type == "section" || type == "card" || type == "row" ||
+           type == "group";
+}
+
+bool is_leaf_type(std::string_view type) noexcept {
+    return type == "text" || type == "kv" || type == "bar" || type == "badge" ||
+           type == "divider" || type == "spacer" || type == "button" || type == "input" ||
+           type == "slider" || type == "table" || type == "canvas" || type == "rgba_frame";
+}
+
+bool validate_spec_node(const json& node, int32_t depth, size_t* node_count,
+                        bool require_normalized_children) {
+    if (node_count == nullptr || !node.is_object() || depth > kMaximumPanelSpecDepth ||
+        *node_count >= kMaximumPanelSpecNodes)
+        return false;
+    ++*node_count;
+    const std::string type = normalized_type(node);
+    if (!is_container_type(type) && !is_leaf_type(type))
+        return false;
+    const auto children = node.find("children");
+    const bool has_children = children != node.end();
+    if (has_children && !children->is_array())
+        return false;
+    if (is_container_type(type)) {
+        if (require_normalized_children && !has_children)
+            return false;
+        if (has_children) {
+            for (const auto& child : *children) {
+                if (!validate_spec_node(child, depth + 1, node_count,
+                                        require_normalized_children))
+                    return false;
+            }
+        }
+    } else if (has_children) {
+        return false;
+    }
+    return true;
+}
+
+bool validate_spec_document(const json& input) {
+    size_t node_count = 0;
+    const bool versioned =
+        input.is_object() && input.contains("version") && input["version"].is_number_integer() &&
+        input["version"].get<int64_t>() == SAO_UI_SPEC_VERSION;
+    if (versioned) {
+        const auto nodes = input.find("nodes");
+        if (nodes == input.end() || !nodes->is_array())
+            return false;
+        for (const auto& node : *nodes) {
+            if (!validate_spec_node(node, 0, &node_count, true))
+                return false;
+        }
+        return true;
+    }
+    if (input.is_array()) {
+        for (const auto& node : input) {
+            if (!validate_spec_node(node, 0, &node_count, false))
+                return false;
+        }
+        return true;
+    }
+    if (!input.is_object())
+        return false;
+    if (const auto nodes = input.find("nodes"); nodes != input.end()) {
+        if (!nodes->is_array())
+            return false;
+        for (const auto& node : *nodes) {
+            if (!validate_spec_node(node, 0, &node_count, false))
+                return false;
+        }
+        return true;
+    }
+    if (const auto children = input.find("children"); children != input.end()) {
+        if (!children->is_array())
+            return false;
+        for (const auto& node : *children) {
+            if (!validate_spec_node(node, 0, &node_count, false))
+                return false;
+        }
+        return true;
+    }
+    if (input.contains("type"))
+        return validate_spec_node(input, 0, &node_count, false);
+    return true;
+}
+
 void restore_node_ids(const json& source_nodes, json& normalized_nodes) {
     if (!source_nodes.is_array() || !normalized_nodes.is_array())
         return;
-    size_t source_index = 0;
-    for (auto& normalized : normalized_nodes) {
+    std::vector<bool> used(source_nodes.size(), false);
+    const auto source_id = [](const json& node) -> std::string {
+        return node.is_object() && node.contains("id") && node["id"].is_string()
+                   ? node["id"].get<std::string>()
+                   : std::string();
+    };
+    for (size_t normalized_index = 0; normalized_index < normalized_nodes.size();
+         ++normalized_index) {
+        auto& normalized = normalized_nodes[normalized_index];
         if (!normalized.is_object())
             continue;
         const std::string target_type = normalized_type(normalized);
+        const std::string target_id = source_id(normalized);
         const json* source = nullptr;
-        while (source_index < source_nodes.size()) {
-            const json& candidate = source_nodes[source_index++];
-            if (normalized_type(candidate) == target_type) {
-                source = &candidate;
-                break;
+        if (!target_id.empty()) {
+            for (size_t source_index = 0; source_index < source_nodes.size(); ++source_index) {
+                if (!used[source_index] && normalized_type(source_nodes[source_index]) == target_type &&
+                    source_id(source_nodes[source_index]) == target_id) {
+                    source = &source_nodes[source_index];
+                    used[source_index] = true;
+                    break;
+                }
+            }
+        }
+        if (source == nullptr && normalized_index < source_nodes.size() &&
+            !used[normalized_index] && normalized_type(source_nodes[normalized_index]) == target_type) {
+            source = &source_nodes[normalized_index];
+            used[normalized_index] = true;
+        }
+        if (source == nullptr) {
+            for (size_t source_index = 0; source_index < source_nodes.size(); ++source_index) {
+                if (!used[source_index] && normalized_type(source_nodes[source_index]) == target_type) {
+                    source = &source_nodes[source_index];
+                    used[source_index] = true;
+                    break;
+                }
             }
         }
         if (source == nullptr || !source->is_object())
@@ -896,9 +1039,8 @@ void restore_node_ids(const json& source_nodes, json& normalized_nodes) {
                 id.resize(byte);
             normalized["id"] = std::move(id);
         }
-        if (source->contains("children") && normalized.contains("children")) {
+        if (source->contains("children") && normalized.contains("children"))
             restore_node_ids((*source)["children"], normalized["children"]);
-        }
     }
 }
 
@@ -941,7 +1083,7 @@ json source_nodes_for(const json& input) {
 
 sao_status_t normalize_spec(const uint8_t* bytes, size_t length, json* out_spec,
                             std::string* out_serialized) {
-    if (out_spec == nullptr || out_serialized == nullptr)
+    if (out_spec == nullptr || out_serialized == nullptr || length > kMaximumPanelSpecBytes)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     json input;
     try {
@@ -949,7 +1091,10 @@ sao_status_t normalize_spec(const uint8_t* bytes, size_t length, json* out_spec,
     } catch (...) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (input.is_object() && input.value("version", 0) == SAO_UI_SPEC_VERSION &&
+    if (!validate_spec_document(input))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (input.is_object() && input.contains("version") && input["version"].is_number_integer() &&
+        input["version"].get<int64_t>() == SAO_UI_SPEC_VERSION &&
         input.contains("nodes") && input["nodes"].is_array()) {
         *out_spec = std::move(input);
         *out_serialized = out_spec->dump();
@@ -1047,18 +1192,61 @@ SaoUiLayoutSpec container_spec_for_theme(
     return spec;
 }
 
+size_t utf8_codepoint_count(std::string_view text) noexcept;
+
+std::string ellipsize_utf8(std::string_view text, size_t max_codepoints) {
+    if (max_codepoints == 0U)
+        return {};
+    if (utf8_codepoint_count(text) <= max_codepoints)
+        return std::string(text);
+    if (max_codepoints == 1U)
+        return "\xE2\x80\xA6";
+    std::string result;
+    size_t codepoints = 0;
+    for (size_t index = 0; index < text.size() && codepoints < max_codepoints - 1U;) {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        size_t width = 1;
+        if ((lead & 0xe0U) == 0xc0U) width = 2;
+        else if ((lead & 0xf0U) == 0xe0U) width = 3;
+        else if ((lead & 0xf8U) == 0xf0U) width = 4;
+        if (index + width > text.size()) width = 1;
+        result.append(text.substr(index, width));
+        index += width;
+        ++codepoints;
+    }
+    result += "\xE2\x80\xA6";
+    return result;
+}
+
+size_t utf8_codepoint_count(std::string_view text) noexcept {
+    size_t count = 0;
+    for (size_t index = 0; index < text.size(); ++index) {
+        if ((static_cast<unsigned char>(text[index]) & 0xc0U) != 0x80U)
+            ++count;
+    }
+    return count;
+}
+
 sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t parent,
                           const json & nodes,
                           const sao::ui::detail::PanelResolvedTheme & theme,
                           int32_t viewport_width, std::string_view parent_type = {},
-                          int32_t depth = 0) {
+                          int32_t depth = 0, std::string_view parent_path = {}) {
     const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
     if (not nodes.is_array())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    for (const auto node : nodes) {
+    for (size_t index = 0; index < nodes.size(); ++index) {
+        const auto& node = nodes[index];
+        const std::string node_path = parent_path.empty()
+                                               ? std::to_string(index)
+                                               : std::string(parent_path) + "/" + std::to_string(index);
         if (not node.is_object())
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         const std::string type = normalized_type(node);
+        if ((!is_container_type(type) && !is_leaf_type(type)) ||
+            (node.contains("children") && !node["children"].is_array()) ||
+            (node.contains("children") && is_leaf_type(type)))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (node.contains("children") and node["children"].is_array()) {
             std::string container_title = node.value("title", std::string());
             if (container_title.empty())
@@ -1079,11 +1267,13 @@ sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t pa
                            [](unsigned char character) {
                                return static_cast<char>(std::tolower(character));
                            });
-            if (!layout.empty() && layout != "horizontal" && layout != "vertical")
-                return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            const int32_t primary_mode = type == "row" || layout == "horizontal"
-                                              ? SAO_UI_LAYOUT_HORIZONTAL
-                                              : SAO_UI_LAYOUT_VERTICAL;
+            int32_t primary_mode = type == "row" ? SAO_UI_LAYOUT_HORIZONTAL
+                                                   : SAO_UI_LAYOUT_VERTICAL;
+            if (!layout.empty()) {
+                primary_mode = parse_container_layout_mode(layout, -1);
+                if (primary_mode < 0)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
             ContainerResponsiveLayout responsive{};
             if (!parse_container_responsive_layout(node, primary_mode, &responsive))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1125,13 +1315,17 @@ sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t pa
                 type == "row" && mode != SAO_UI_LAYOUT_HORIZONTAL ? std::string_view{} :
                                                                         std::string_view(type);
             status = append_nodes(content, child, node["children"], theme, viewport_width,
-                                  child_parent_type, depth + 1);
+                                  child_parent_type, depth + 1, node_path);
             if (status != SAO_STATUS_OK)
                 return status;
             continue;
         }
+        if (!is_leaf_type(type))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         auto owned = std::make_unique<OwnedWidget>();
         owned->kind = widget_kind(type);
+        owned->type = type;
+        owned->path = node_path;
         owned->id = node.value("id", std::string());
         owned->action = node.value("action", std::string());
         const auto disabled_property = node.find("disabled");
@@ -1175,9 +1369,17 @@ sao_status_t append_nodes(PanelContent & content, sao_ui_layout_node_handle_t pa
             text_value = node["label"].get<std::string>();
         else if (node.contains("value") and node["value"].is_string())
             text_value = node["value"].get<std::string>();
-        if (not text_value.empty() and (type == "text" or type == "kv" or type == "input"))
+        if (not text_value.empty() and (type == "text" or type == "kv" or type == "input")) {
+            SaoUiWidgetSizeHint hint{};
+            if (sao_ui_widget_get_size_hint(owned->handle, std::max(0, viewport_width),
+                                             1 << 30, &hint) == SAO_STATUS_OK)
+                spec.min_height_px = std::max(spec.min_height_px, hint.min_height_px);
+            const size_t glyphs = utf8_codepoint_count(text_value);
+            const size_t glyphs_per_line = 48U;
+            const size_t lines = (glyphs + glyphs_per_line - 1U) / glyphs_per_line;
             spec.min_height_px = std::max(spec.min_height_px,
-                                          18 + static_cast<int32_t>(text_value.size() / 64U) * 16);
+                                          18 + static_cast<int32_t>(std::max<size_t>(1U, lines) - 1U) * 16);
+        }
         status = sao_ui_layout_node_add_widget(parent, owned->handle, & spec, & owned->node);
         if (status != SAO_STATUS_OK)
             return status;
@@ -1196,6 +1398,7 @@ sao_status_t arrange_content(PanelContent & content, int32_t width, int32_t heig
     SaoUiLayoutSpec natural_spec = content.root_spec;
     natural_spec.fixed_width_px = 0;
     natural_spec.fixed_height_px = 0;
+    int32_t layout_width = std::max(1, width);
     sao_status_t status = sao_ui_layout_node_set_spec(content.root, & natural_spec);
     if (status != SAO_STATUS_OK)
         return status;
@@ -1204,17 +1407,25 @@ sao_status_t arrange_content(PanelContent & content, int32_t width, int32_t heig
     if (status != SAO_STATUS_OK)
         return status;
     content.content_extent_px = std::max(viewport_height, preferred.height_px);
+    const int32_t scrollbar_width = std::max(0, content.layout_theme.metrics[SAO_UI_METRIC_SCROLLBAR_WIDTH]);
+    if (preferred.height_px > viewport_height && scrollbar_width > 0) {
+        layout_width = std::max(1, width - scrollbar_width);
+        status = sao_ui_layout_measure(content.root, {layout_width, 1 << 30}, &preferred);
+        if (status != SAO_STATUS_OK)
+            return status;
+        content.content_extent_px = std::max(viewport_height, preferred.height_px);
+    }
     content.scroll_offset_px = std::clamp(content.scroll_offset_px, 0,
                                            std::max(0, content.content_extent_px - viewport_height));
-    content.root_spec.fixed_width_px = width;
+    content.root_spec.fixed_width_px = layout_width;
     content.root_spec.fixed_height_px = viewport_height;
     status = sao_ui_layout_node_set_spec(content.root, & content.root_spec);
     if (status != SAO_STATUS_OK)
         return status;
-    status = sao_ui_layout_measure(content.root, {width, viewport_height}, & preferred);
+    status = sao_ui_layout_measure(content.root, {layout_width, viewport_height}, & preferred);
     if (status != SAO_STATUS_OK)
         return status;
-    return sao_ui_layout_arrange(content.root, {0, top, width, content.content_extent_px});
+    return sao_ui_layout_arrange(content.root, {0, top, layout_width, content.content_extent_px});
 }
 
 sao_status_t build_content(const json& normalized, int32_t width, int32_t height, int32_t top,
@@ -1258,26 +1469,50 @@ sao_status_t migrate_responsive_content_state(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     sao_ui_widget_handle_t hovered_widget = nullptr;
     sao_ui_widget_handle_t pressed_widget = nullptr;
+    sao_ui_widget_handle_t focused_widget = nullptr;
+    std::string focused_id;
+    std::string focused_path;
     {
         std::lock_guard lock(panel->mutex);
         hovered_widget = panel->hovered_widget;
         pressed_widget = panel->pressed_widget;
+        focused_widget = panel->focused_widget;
+        focused_id = panel->responsive_focus_id;
+        focused_path = panel->responsive_focus_path;
     }
     std::scoped_lock lock(current->mutex, replacement->mutex);
+    for (const auto& previous : current->widgets) {
+        if (previous->handle == focused_widget || previous->props.value("focused", false)) {
+            focused_id = previous->id;
+            focused_path = previous->path;
+            break;
+        }
+    }
     replacement->scroll_offset_px = std::clamp(
         current->scroll_offset_px, 0,
         std::max(0, replacement->content_extent_px - replacement->viewport_height_px));
     for (auto& replacement_entry : replacement->widgets) {
-        if (replacement_entry->id.empty())
+        OwnedWidget* previous = nullptr;
+        if (!replacement_entry->id.empty()) {
+            const auto found = current->by_id.find(replacement_entry->id);
+            if (found != current->by_id.end())
+                previous = found->second;
+        }
+        if (previous == nullptr) {
+            for (const auto& candidate : current->widgets) {
+                if (candidate->path == replacement_entry->path &&
+                    candidate->type == replacement_entry->type) {
+                    previous = candidate.get();
+                    break;
+                }
+            }
+        }
+        if (previous == nullptr)
             continue;
-        const auto found = current->by_id.find(replacement_entry->id);
-        if (found == current->by_id.end() || found->second == nullptr)
-            continue;
-        const OwnedWidget& previous = *found->second;
-        replacement_entry->props = previous.props;
-        replacement_entry->action = previous.action;
-        replacement_entry->action_args = previous.action_args;
-        replacement_entry->enabled = previous.enabled;
+        replacement_entry->props = previous->props;
+        replacement_entry->action = previous->action;
+        replacement_entry->action_args = previous->action_args;
+        replacement_entry->enabled = previous->enabled;
         const std::string props = replacement_entry->props.dump();
         sao_status_t status = sao_ui_widget_apply_props(
             replacement_entry->handle,
@@ -1287,24 +1522,32 @@ sao_status_t migrate_responsive_content_state(
         status = sao_ui_widget_set_enabled(replacement_entry->handle, replacement_entry->enabled);
         if (status != SAO_STATUS_OK)
             return status;
-        if (previous.handle == hovered_widget) {
+        if (previous->handle == hovered_widget) {
             status = sao_ui_widget_set_hovered(replacement_entry->handle, true);
             if (status != SAO_STATUS_OK)
                 return status;
         }
-        if (previous.handle == pressed_widget) {
+        if (previous->handle == pressed_widget) {
             status = sao_ui_widget_set_pressed(replacement_entry->handle, true);
             if (status != SAO_STATUS_OK)
                 return status;
         }
-        if (previous.props.value("focused", false)) {
+        const bool restore_focus =
+            (!focused_id.empty() && replacement_entry->id == focused_id) ||
+            (focused_id.empty() && !focused_path.empty() && replacement_entry->path == focused_path);
+        if (restore_focus) {
             status = sao_ui_widget_set_focused(replacement_entry->handle, true);
             if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
                 return status;
+            std::lock_guard panel_lock(panel->mutex);
+            panel->focused_widget = replacement_entry->handle;
+            panel->responsive_focus_id = replacement_entry->id;
+            panel->responsive_focus_path = replacement_entry->path;
         }
     }
     return SAO_STATUS_OK;
 }
+
 bool responsive_layout_needs_rebuild(const PanelContent& content, int32_t viewport_width) {
     for (const auto& layout_node : content.theme_layout_nodes) {
         if (layout_node.active_mode !=
@@ -1511,6 +1754,12 @@ PanelScrollbarGeometry panel_scrollbar_geometry(
     return geometry;
 }
 
+uint32_t theme_color_with_alpha(uint32_t argb, uint8_t alpha) noexcept {
+    const uint32_t source_alpha = (argb >> 24U) & 0xffU;
+    const uint32_t effective_alpha = std::min(source_alpha, static_cast<uint32_t>(alpha));
+    return (argb & 0x00ffffffU) | (effective_alpha << 24U);
+}
+
 sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const SaoPanelState & state,
                          bool show_titlebar, const std::string & title, bool show_close_button,
                          const sao::ui::detail::PanelResolvedTheme & theme,
@@ -1524,38 +1773,53 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const Sa
     const int32_t top = show_titlebar ? titlebar_height(theme) : 0;
     bool scrollbar_hovered = false;
     bool scrollbar_pressed = false;
+    bool close_armed = false;
     if (panel != nullptr) {
         std::lock_guard lock(panel->mutex);
         scrollbar_hovered = panel->scrollbar_hovered;
         scrollbar_pressed = panel->scrollbar_pressed;
+        close_armed = panel->close_armed;
     }
     if (status == SAO_STATUS_OK)
         status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                             static_cast<float>(state.height),
                                             theme.colors[SAO_UI_TOKEN_APP_BG]);
     if (status == SAO_STATUS_OK and show_titlebar) {
-        status = sao_ui_paint_ctx_fill_rounded_rect(
-            context, 1.0F, 1.0F, static_cast<float>(std::max(1, state.width - 2)),
-            static_cast<float>(std::max(1, top - 1)),
-            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]),
-            theme.colors[SAO_UI_TOKEN_APP_CARD]);
-        if (status == SAO_STATUS_OK and not title.empty())
+        status = sao_ui_paint_ctx_fill_rect(
+            context, 0.0F, 0.0F, static_cast<float>(state.width),
+            static_cast<float>(std::max(1, top)), theme.colors[SAO_UI_TOKEN_APP_CARD]);
+        if (status == SAO_STATUS_OK and not title.empty()) {
+            const int32_t title_padding = theme.metrics[SAO_UI_METRIC_PADDING_M];
+            const int32_t close_space = show_close_button ? top : 24;
+            const int32_t title_width = std::max(0, state.width - title_padding * 2 - close_space);
+            const std::string visible_title = ellipsize_utf8(title,
+                static_cast<size_t>(title_width / 7));
             status = sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_M]),
-                static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]), title.c_str(), 12.0F,
-                theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+                context, static_cast<float>(title_padding),
+                static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]), visible_title.c_str(),
+                12.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+        }
         if (status == SAO_STATUS_OK and show_close_button) {
             const float close_x = static_cast<float>(state.width - top + theme.metrics[SAO_UI_METRIC_PADDING_S]);
             const float close_y = static_cast<float>(top / 2);
             const float arm = 5.0F;
             status = sao_ui_paint_ctx_stroke_line(context, close_x - arm, close_y - arm,
                                                    close_x + arm, close_y + arm, 1.5F,
-                                                   theme.colors[SAO_UI_TOKEN_CLOSE_RED]);
+                                                   theme.colors[close_armed
+                                                                    ? SAO_UI_TOKEN_CLOSE_RED
+                                                                    : SAO_UI_TOKEN_APP_TEXT_DIM]);
             if (status == SAO_STATUS_OK)
                 status = sao_ui_paint_ctx_stroke_line(context, close_x + arm, close_y - arm,
                                                        close_x - arm, close_y + arm, 1.5F,
-                                                       theme.colors[SAO_UI_TOKEN_CLOSE_RED]);
+                                                       theme.colors[close_armed
+                                                                        ? SAO_UI_TOKEN_CLOSE_RED
+                                                                        : SAO_UI_TOKEN_APP_TEXT_DIM]);
         }
+        if (status == SAO_STATUS_OK && top > 0)
+            status = sao_ui_paint_ctx_stroke_line(
+                context, 0.0F, static_cast<float>(top - 1), static_cast<float>(state.width),
+                static_cast<float>(top - 1), 1.0F,
+                theme.colors[SAO_UI_TOKEN_APP_BORDER]);
     }
     if (status == SAO_STATUS_OK and content != nullptr) {
         std::scoped_lock lock(content->mutex);
@@ -1580,51 +1844,64 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const Sa
                     continue;
                 const bool panel_role = visual.semantic_type == "panel";
                 const bool section_role = visual.semantic_type == "section";
+                const bool card_role = visual.semantic_type == "card";
                 const bool group_role = visual.semantic_type == "group";
                 const uint32_t fill = panel_role
                                           ? theme.colors[SAO_UI_TOKEN_APP_BG]
                                           : theme.colors[SAO_UI_TOKEN_APP_CARD];
-                const uint32_t border = panel_role || section_role || group_role
-                                            ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
-                                            : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM];
+                const uint32_t border = theme_color_with_alpha(
+                    panel_role || section_role || group_role || card_role
+                        ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
+                        : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM],
+                    panel_role ? 0xd0U : 0xa8U);
                 const float radius = static_cast<float>(
-                    panel_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]
-                                : section_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]
-                                                : theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_SMALL]);
-                status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, height,
-                                                            radius, fill);
+                    panel_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]
+                               : theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_SMALL]);
+                const float paint_inset = static_cast<float>(std::max(
+                    1, theme.metrics[SAO_UI_METRIC_PADDING_XS]));
+                constexpr float stroke_width = 1.0F;
+                if (!section_role)
+                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, height,
+                                                                radius, fill);
                 if (status != SAO_STATUS_OK)
                     break;
-                const float rail_width = section_role ? 3.0F : group_role ? 2.0F : 0.0F;
-                if (rail_width > 0.0F) {
-                    status = sao_ui_paint_ctx_fill_rect(context, x, y, rail_width, height,
-                                                        visual.accent);
+                const float rail_width = section_role ? 1.0F : 0.0F;
+                if (rail_width > 0.0F && width > paint_inset * 2.0F &&
+                    height > paint_inset * 2.0F) {
+                    const uint32_t rail_color = theme.high_contrast
+                                                    ? theme.colors[SAO_UI_TOKEN_FOCUS_RING]
+                                                    : visual.accent;
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, x, y + paint_inset, x, y + height - paint_inset,
+                        rail_width, rail_color);
                     if (status != SAO_STATUS_OK)
                         break;
                 }
-                status = sao_ui_paint_ctx_stroke_line(context, x, y, x + width, y, 1.0F, border);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(context, x, y + height - 1.0F,
-                                                           x + width, y + height - 1.0F, 1.0F,
-                                                           border);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(context, x, y, x,
-                                                           y + height, 1.0F, border);
-                if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(context, x + width - 1.0F, y,
-                                                           x + width - 1.0F, y + height, 1.0F,
-                                                           border);
+                if (section_role)
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, x, y + height - 1.0F, x + width, y + height - 1.0F,
+                        1.0F, border);
+                else
+                    status = sao::ui::detail::paint_rounded_rect_stroke(
+                        context, x, y, width, height, radius, stroke_width, border);
                 if (status != SAO_STATUS_OK)
                     break;
                 if (!visual.title.empty()) {
                     const uint32_t title_color = section_role
-                                                      ? theme.colors[SAO_UI_TOKEN_APP_GOLD]
+                                                      ? theme.colors[SAO_UI_TOKEN_APP_TEXT_2]
                                                       : theme.colors[SAO_UI_TOKEN_APP_TEXT];
+                    const float title_leading = section_role ? rail_width
+                                                             : group_role ? paint_inset : 0.0F;
+                    const float title_x = x + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) +
+                                          title_leading;
+                    const float title_width = std::max(0.0F,
+                        width - static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) * 2.0F -
+                        title_leading);
+                    const std::string visible_title = ellipsize_utf8(visual.title,
+                        static_cast<size_t>(title_width / 6.5F));
                     status = sao_ui_paint_ctx_draw_utf8(
-                        context, x + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) +
-                                     rail_width,
-                        y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
-                        visual.title.c_str(), 11.0F, title_color);
+                        context, title_x, y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
+                        visible_title.c_str(), 11.0F, title_color);
                     if (status != SAO_STATUS_OK)
                         break;
                 }
@@ -1678,13 +1955,11 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent> & content, const Sa
         }
     }
     if (status == SAO_STATUS_OK) {
-        status = sao_ui_paint_ctx_stroke_line(context, 0.0F, 0.0F,
-                                               static_cast<float>(std::max(0, state.width - 1)), 0.0F,
-                                               1.0F, theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_stroke_line(context, 0.0F, 0.0F, 0.0F,
-                                                   static_cast<float>(std::max(0, state.height - 1)),
-                                                   1.0F, theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+        status = sao::ui::detail::paint_rounded_rect_stroke(
+            context, 0.5F, 0.5F, static_cast<float>(std::max(1, state.width - 1)),
+            static_cast<float>(std::max(1, state.height - 1)),
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]), 1.0F,
+            theme_color_with_alpha(theme.colors[SAO_UI_TOKEN_APP_BORDER], 0xd0U));
     }
     const sao_status_t end_status = sao_ui_paint_ctx_end_frame(context);
     sao_ui_paint_ctx_destroy(context);
@@ -1742,9 +2017,11 @@ sao::ui::detail::PanelResolvedTheme resolve_panel_theme(sao_ui_panel_s* panel) {
         page_theme = SAO_UI_THEME_GLASS;
     if (page_theme != theme.theme_id)
         theme = sao::ui::detail::resolve_theme(page_theme, theme.generation);
-    for (size_t index = 0; index < overrides.has_color.size(); ++index) {
-        if (overrides.has_color[index])
-            theme.colors[index] = overrides.colors[index];
+    if (!theme.high_contrast) {
+        for (size_t index = 0; index < overrides.has_color.size(); ++index) {
+            if (overrides.has_color[index])
+                theme.colors[index] = overrides.colors[index];
+        }
     }
     return theme;
 }
@@ -2012,19 +2289,50 @@ sao_status_t widget_at(sao_ui_panel_s* panel, int32_t x, int32_t y,
     *out_widget = nullptr;
     std::shared_ptr<PanelContent> content;
     bool titlebar = false;
+    SaoPanelState state{};
     {
         std::scoped_lock lock(panel->mutex);
         content = panel->content;
         titlebar = panel->show_titlebar;
+        state = panel->state;
     }
     if (content == nullptr) {
         return SAO_STATUS_OK;
+    }
+    // A globally open dropdown popup floats above sibling widgets: probe
+    // it first so hover/click over the list resolves to the dropdown
+    // instead of the widgets painted underneath.
+    {
+        sao_ui_widget_handle_t popup_owner = nullptr;
+        int32_t popup_entry = -1;
+        bool popup_consumed = false;
+        const sao_status_t popup_status = sao_ui_widget_dropdown_popup_hit_global(
+            x, y, &popup_owner, &popup_entry, &popup_consumed);
+        (void)popup_entry;
+        if (popup_status == SAO_STATUS_OK && popup_consumed &&
+            popup_owner != nullptr) {
+            bool belongs = false;
+            {
+                std::lock_guard content_lock(content->mutex);
+                belongs = content->by_handle.contains(popup_owner);
+            }
+            if (belongs) {
+                *out_widget = popup_owner;
+                return SAO_STATUS_OK;
+            }
+        }
     }
     const auto theme = resolve_panel_theme(panel);
     const int32_t top = titlebar ? titlebar_height(theme) : 0;
     std::scoped_lock lock(content->mutex);
     const int64_t bottom = static_cast<int64_t>(top) + content->viewport_height_px;
     if (static_cast<int64_t>(y) < top || static_cast<int64_t>(y) >= bottom)
+        return SAO_STATUS_OK;
+    const PanelScrollbarGeometry geometry = panel_scrollbar_geometry(
+        state.width, state.height, top, content->viewport_height_px, content->content_extent_px,
+        content->scroll_offset_px, theme);
+    if (geometry.visible && point_in_rect(x, y, geometry.hit_x, geometry.hit_y,
+                          geometry.hit_width, geometry.hit_height))
         return SAO_STATUS_OK;
     const int64_t content_y = static_cast<int64_t>(y) + content->scroll_offset_px;
     if (content_y < std::numeric_limits<int32_t>::min() ||
@@ -2443,6 +2751,48 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
                 panel->pressed_widget = pressed;
             }
             if (pressed != nullptr) {
+                bool focusable = false;
+                if (sao_ui_widget_is_focusable(pressed, &focusable) == SAO_STATUS_OK && focusable) {
+                    std::shared_ptr<PanelContent> focus_content;
+                    sao_ui_widget_handle_t previous_focus = nullptr;
+                    {
+                        std::lock_guard focus_lock(panel->mutex);
+                        focus_content = panel->content;
+                        previous_focus = panel->focused_widget;
+                    }
+                    bool previous_focus_is_current = false;
+                    std::string focus_id;
+                    std::string focus_path;
+                    if (focus_content != nullptr) {
+                        std::lock_guard content_lock(focus_content->mutex);
+                        previous_focus_is_current = previous_focus != nullptr &&
+                            focus_content->by_handle.contains(previous_focus);
+                        if (const auto found = focus_content->by_handle.find(pressed);
+                            found != focus_content->by_handle.end() && found->second != nullptr) {
+                            focus_id = found->second->id;
+                            focus_path = found->second->path;
+                        }
+                    }
+                    sao_status_t focus_status = SAO_STATUS_OK;
+                    if (previous_focus_is_current && previous_focus != pressed)
+                        focus_status = sao_ui_widget_set_focused(previous_focus, false);
+                    if (focus_status == SAO_STATUS_OK)
+                        focus_status = sao_ui_widget_set_focused(pressed, true);
+                    if (focus_status != SAO_STATUS_OK && previous_focus_is_current &&
+                        previous_focus != pressed) {
+                        (void)sao_ui_widget_set_focused(previous_focus, true);
+                    }
+                    if (focus_status == SAO_STATUS_OK) {
+                        std::lock_guard focus_lock(panel->mutex);
+                        if (panel->content == focus_content) {
+                            panel->focused_widget = pressed;
+                            panel->responsive_focus_id = std::move(focus_id);
+                            panel->responsive_focus_path = std::move(focus_path);
+                        }
+                    } else if (status == SAO_STATUS_OK) {
+                        status = focus_status;
+                    }
+                }
                 const sao_status_t pressed_status = sao_ui_widget_set_pressed(pressed, true);
                 if (status == SAO_STATUS_OK && pressed_status != SAO_STATUS_OK)
                     status = pressed_status;
@@ -2879,7 +3229,8 @@ extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_spec(sao_ui_panel_handle_t panel,
                                                           const uint8_t* spec_json_utf8,
                                                           size_t spec_len) {
-    if (panel == nullptr || (spec_json_utf8 == nullptr && spec_len != 0U)) {
+    if (panel == nullptr || (spec_json_utf8 == nullptr && spec_len != 0U) ||
+        spec_len > kMaximumPanelSpecBytes) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     PanelOperation operation(panel);

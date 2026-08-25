@@ -63,7 +63,7 @@ SaoUiFisheyeConfig sanitize_config(const SaoUiFisheyeConfig* input) {
         out.max_size = input->max_size;
     if (input->slot_size > 0)
         out.slot_size = input->slot_size;
-    if (input->falloff_neighbors > 0)
+    if (input->falloff_neighbors >= 0)
         out.falloff_neighbors = input->falloff_neighbors;
     if (std::isfinite(input->scale_curve_gamma) && input->scale_curve_gamma > 0.0F)
         out.scale_curve_gamma = input->scale_curve_gamma;
@@ -73,6 +73,10 @@ SaoUiFisheyeConfig sanitize_config(const SaoUiFisheyeConfig* input) {
         out.grow_epsilon = input->grow_epsilon;
     if (std::isfinite(input->hover_ease_ms) && input->hover_ease_ms > 0.0F)
         out.hover_ease_ms = input->hover_ease_ms;
+    out.base_size = std::max(1, out.base_size);
+    out.max_size = std::max(out.base_size, out.max_size);
+    out.slot_size = std::max(out.max_size, out.slot_size);
+    out.falloff_neighbors = std::clamp(out.falloff_neighbors, 0, 4096);
     out.subpixel_snap = input->subpixel_snap;
     return out;
 }
@@ -90,7 +94,7 @@ SaoUiFisheyeConfig sanitize_config(const SaoUiFisheyeConfig* input) {
 inline float target_size_for_distance(
     int32_t distance, int32_t falloff_neighbors,
     float base_size, float max_size, float gamma) {
-    const int32_t abs_dist = distance < 0 ? -distance : distance;
+    const int64_t abs_dist = distance < 0 ? -static_cast<int64_t>(distance) : distance;
     if (falloff_neighbors <= 0) {
         return (abs_dist == 0) ? max_size : base_size;
     }
@@ -164,7 +168,7 @@ void step_toward_targets(
             b.is_animating = false;
         } else {
             b.current_size = b.current_size + delta * k;
-            b.is_animating = std::fabs(b.target_size - b.current_size) >= cfg.grow_epsilon;
+        b.is_animating = std::fabs(b.target_size - b.current_size) >= cfg.grow_epsilon;
         }
         if (cfg.subpixel_snap) {
             // Quantize to 0.25 px like the Python side.
@@ -195,11 +199,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_apply(
     double now_seconds) {
     if (!std::isfinite(now_seconds))
         now_seconds = 0.0;
-    (void)now_seconds;   // reserved for future hover_t easing.
+    if (!std::isfinite(now_seconds)) now_seconds = 0.0;
     if (buttons == nullptr || button_count == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const SaoUiFisheyeConfig cfg = sanitize_config(config);
+    std::vector<float> previous_hover(button_count);
+    for (size_t i = 0; i < button_count; ++i) previous_hover[i] = std::isfinite(buttons[i].hover_t) ? buttons[i].hover_t : 0.0F;
+    static thread_local double previous_now = -1.0;
+    const bool first_call = previous_now < 0.0 || now_seconds < previous_now;
+    const float elapsed_ms = first_call ? cfg.hover_ease_ms : static_cast<float>((now_seconds - previous_now) * 1000.0);
+    const float hover_k = cfg.hover_ease_ms <= 0.0F ? 1.0F : clampf(elapsed_ms / cfg.hover_ease_ms, 0.0F, 1.0F);
+    previous_now = now_seconds;
     compute_targets_column(cfg, buttons, button_count, hover_target_idx);
     // Snap current == target so the pure API returns settled sizes
     // in one call (matches menu_bar's per-frame call that already
@@ -218,6 +229,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_apply(
                              ? b.target_size
                              : b.current_size + delta * k;
         }
+        b.hover_t = first_call ? b.hover_t : previous_hover[i] + (b.hover_t - previous_hover[i]) * hover_k;
         b.is_animating = std::fabs(b.target_size - b.current_size) >= cfg.grow_epsilon;
         if (cfg.subpixel_snap) {
             b.current_size = std::round(b.current_size * 4.0f) / 4.0f;

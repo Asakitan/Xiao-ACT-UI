@@ -32,6 +32,7 @@ struct RootRowSnapshot {
     bool can_activate{};
     SaoUiMenuBtnState state{SAO_UI_MENU_BTN_IDLE};
     float hover_t{};
+    float fisheye_t{};
     float stagger_t{};
     float radial_t{};
     float selection_trail_t{};
@@ -81,6 +82,7 @@ struct Snapshot {
     float pressed_pulse_t{};
     float child_rail_glow_t{};
     float backdrop_lens_t{};
+    float ambient_phase_t{};
     float open_spark_t{};
     float selection_spark_t{};
     uint32_t open_spark_count{};
@@ -152,6 +154,14 @@ inline float unified_fisheye_focus(int32_t distance) noexcept {
                              static_cast<float>(kVisualFisheyeNeighbors + 1);
     const float focus = 1.0F - normalized * normalized;
     return focus < 0.0F ? 0.0F : focus;
+}
+
+inline float root_fisheye_focus(int32_t root_index, int32_t hovered_root_index,
+                                float hover_t) noexcept {
+    if (hovered_root_index < 0 || hover_t <= 0.0F)
+        return 0.0F;
+    const float envelope = std::clamp(hover_t, 0.0F, 1.0F);
+    return unified_fisheye_focus(root_index - hovered_root_index) * envelope;
 }
 
 } // namespace sao::ui::menu_visual

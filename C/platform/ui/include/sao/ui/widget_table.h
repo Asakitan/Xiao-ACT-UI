@@ -152,6 +152,25 @@ sao_ui_table_set_sort(sao_ui_widget_handle_t handle,
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_table_set_filter(sao_ui_widget_handle_t handle,
                                                             const char* filter_utf8);
 
+// Multi-select toggle set (spec.multi_select).  The anchor row remains
+// updated by pointer presses.  Row IDs not present in the current row
+// set are dropped on the next set_rows/rebuild.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_table_set_row_selected(
+    sao_ui_widget_handle_t handle, int64_t row_id, bool selected);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_table_clear_selection(
+    sao_ui_widget_handle_t handle);
+
+// Column resize entry point for host-side drag resizing.  Width is
+// clamped to [1, max_width_px] and never below min_width_px.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_table_set_column_width(
+    sao_ui_widget_handle_t handle, int32_t column_index, int32_t width_px);
+
+// Keyboard navigation: Up/Down/Home/End move the anchor within the
+// filtered view; Enter/Space refire the row-click callback.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_widget_table_key_navigate(
+    sao_ui_widget_handle_t handle, uint32_t virtual_key);
+
 // Updates Table hover/press state from root-local coordinates. Header release
 // applies sortable-column feedback; body press selects the row. A point within
 // 4 px of a resizable column boundary sets out_resize_cursor_hint.
@@ -225,6 +244,15 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tree_view_get_visible_node(sao_ui_wid
                                                                       size_t visible_index,
                                                                       int64_t* out_node_id,
                                                                       int32_t* out_depth);
+
+// Keyboard navigation: Up/Down/Home/End move selection through the
+// visible list; Enter toggles expansion on parent nodes, Space selects.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tree_view_key_navigate(
+    sao_ui_widget_handle_t handle, uint32_t virtual_key);
+
+// Virtual scroll offset for the tree's visible list.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tree_view_set_scroll(
+    sao_ui_widget_handle_t handle, int32_t scroll_offset_px);
 
 #ifdef __cplusplus
 } // extern "C"

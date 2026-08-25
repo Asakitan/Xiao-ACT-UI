@@ -495,6 +495,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_snapshot_bgra(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_enforce_z_order(
     sao_ui_compositor_handle_t compositor);
 
+// Attach the game window the z-order pulse anchors above (Python authority:
+// `overlay_compositor.py::set_game_hwnd`).  Any thread; consumed by the
+// render-thread enforce path.  0 detaches.  A destroyed game HWND is
+// detected at enforce time and treated as detached.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_set_game_hwnd(
+    sao_ui_compositor_handle_t compositor,
+    void* game_hwnd);
+
 // Rebuild the host SetWindowRgn from the current layer set + input-
 // proxy shapes.  Called every frame after the layer composition
 // pass — never mid-composition (would race).  Bug §5 of handoff:

@@ -101,6 +101,8 @@ struct sao_ui_overlay_host_s {
     void* activate_user = nullptr;
     sao_ui_dpi_changed_fn_t dpi_changed_fn = nullptr;
     void* dpi_changed_user = nullptr;
+    sao_ui_dpi_reflow_fn_t dpi_reflow_fn = nullptr;
+    void* dpi_reflow_user = nullptr;
     sao_ui_display_change_fn_t display_change_fn = nullptr;
     void* display_change_user = nullptr;
 };
@@ -561,8 +563,8 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
         if (externally_destroyed) {
-            (void)unregister_host_threat_windows(host);
             (void)unbind_host_capture_pair(host);
+            (void)unregister_host_threat_windows(host);
         }
 #endif
         return ::DefWindowProcW(hwnd, message, wparam, lparam);
@@ -741,15 +743,30 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         }
         sao_ui_dpi_changed_fn_t callback = nullptr;
         void* user_data = nullptr;
+        sao_ui_dpi_reflow_fn_t reflow = nullptr;
+        void* reflow_user = nullptr;
+        uint32_t old_dpi = 96u;
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
-            host->current_dpi = dpi == 0 ? 96 : dpi;
+            old_dpi = host->current_dpi == 0 ? 96u : host->current_dpi;
+            host->current_dpi = dpi == 0 ? 96u : dpi;
             ++host->wm_counters.dpichanged_events;
             callback = host->dpi_changed_fn;
             user_data = host->dpi_changed_user;
+            reflow = host->dpi_reflow_fn;
+            reflow_user = host->dpi_reflow_user;
+        }
+        if (reflow != nullptr) {
+            sao_status_t reflow_status = SAO_STATUS_OK;
+            try { reflow_status = reflow(old_dpi, dpi == 0 ? 96u : dpi, static_cast<float>(dpi == 0 ? 96u : dpi) / 96.0F, reflow_user); } catch (...) { reflow_status = SAO_STATUS_ERR_UNKNOWN; }
+            if (reflow_status != SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(host->state_mu);
+                host->current_dpi = old_dpi;
+                return 0;
+            }
         }
         if (callback != nullptr)
-            callback(dpi, x, y, width, height, user_data);
+            callback(dpi == 0 ? 96u : dpi, x, y, width, height, user_data);
         return 0;
     }
     case WM_DISPLAYCHANGE: {
@@ -834,8 +851,17 @@ sao_status_t unbind_host_capture_pair(sao_ui_overlay_host_s* host) noexcept {
     }
     const int32_t status =
         sao_security_anti_screencap_overlay_host_unbind_if_matches(&pair);
-    if (status != SAO_STATUS_OK)
-        return static_cast<sao_status_t>(status);
+    if (status != SAO_STATUS_OK) {
+        const bool window_destroyed =
+            (pair.primary_hwnd == nullptr ||
+             !::IsWindow(static_cast<HWND>(pair.primary_hwnd))) ||
+            (pair.decoy_hwnd == nullptr ||
+             !::IsWindow(static_cast<HWND>(pair.decoy_hwnd))) ||
+            (pair.owner_hwnd == nullptr ||
+             !::IsWindow(static_cast<HWND>(pair.owner_hwnd)));
+        if (!window_destroyed)
+            return static_cast<sao_status_t>(status);
+    }
     std::lock_guard<std::mutex> lock(host->state_mu);
     if (host->capture_pair_bound &&
         host->bound_capture_pair.primary_hwnd == pair.primary_hwnd &&
@@ -998,15 +1024,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
                 }
             }
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
-            const sao_status_t unregister_status = unregister_host_threat_windows(host);
-            if (unregister_status != SAO_STATUS_OK) {
-                *out_handle = host;
-                return unregister_status;
-            }
             const sao_status_t unbind_status = unbind_host_capture_pair(host);
             if (unbind_status != SAO_STATUS_OK) {
                 *out_handle = host;
                 return unbind_status;
+            }
+            const sao_status_t unregister_status = unregister_host_threat_windows(host);
+            if (unregister_status != SAO_STATUS_OK) {
+                *out_handle = host;
+                return unregister_status;
             }
 #endif
             rollback_created_host(host);
@@ -1066,12 +1092,12 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
         set_capture_mode_impl(handle, false) != SAO_STATUS_OK) {
         success = false;
     }
-    if (success && unregister_host_threat_windows(handle) != SAO_STATUS_OK)
-        success = false;
     if (success && capture_pair_bound &&
         unbind_host_capture_pair(handle) != SAO_STATUS_OK) {
         success = false;
     }
+    if (success && unregister_host_threat_windows(handle) != SAO_STATUS_OK)
+        success = false;
 #else
     // Without the security provider there is no authoritative affinity
     // owner.  Keep the state explicitly unprotected rather than claiming a
@@ -1611,6 +1637,13 @@ sao_ui_overlay_host_current_dpi(sao_ui_overlay_host_handle_t handle) {
     return handle->current_dpi;
 }
 
+extern "C" float SAO_UI_CALL sao_ui_overlay_host_scale_factor(sao_ui_overlay_host_handle_t handle) {
+    HostLease lease(handle);
+    if (!lease) return 0.0F;
+    std::lock_guard<std::mutex> lock(handle->state_mu);
+    return static_cast<float>(handle->current_dpi == 0 ? 96u : handle->current_dpi) / 96.0F;
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_wm_counters(
     sao_ui_overlay_host_handle_t handle, SaoOverlayHostWMCounters* out_counters) {
     if (out_counters != nullptr)
@@ -1665,6 +1698,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_changed_fn(
     handle->dpi_changed_user = user_data;
     return SAO_STATUS_OK;
 }
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_reflow_fn(sao_ui_overlay_host_handle_t handle, sao_ui_dpi_reflow_fn_t fn, void* user_data) {
+    HostLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::lock_guard<std::mutex> lock(handle->state_mu);
+    handle->dpi_reflow_fn = fn;
+    handle->dpi_reflow_user = user_data;
+    return SAO_STATUS_OK;
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_display_change_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_display_change_fn_t fn, void* user_data) {
     HostLease lease(handle);

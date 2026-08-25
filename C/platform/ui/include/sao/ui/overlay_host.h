@@ -368,6 +368,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_client_rect(
 SAO_UI_API uint32_t SAO_UI_CALL
 sao_ui_overlay_host_current_dpi(sao_ui_overlay_host_handle_t handle);
 
+SAO_UI_API float SAO_UI_CALL
+sao_ui_overlay_host_scale_factor(sao_ui_overlay_host_handle_t handle);
+
 // Counters exposed for tests: how many times each WM_ handler fired
 // during the host's lifetime.  Monotonic; wraps at UINT32_MAX.
 struct SaoOverlayHostWMCounters {
@@ -395,6 +398,8 @@ typedef void(SAO_UI_CALL* sao_ui_dpi_changed_fn_t)(uint32_t new_dpi, int32_t sug
                                                    int32_t suggested_y, int32_t suggested_w,
                                                    int32_t suggested_h, void* user_data);
 
+typedef sao_status_t(SAO_UI_CALL* sao_ui_dpi_reflow_fn_t)(uint32_t old_dpi, uint32_t new_dpi, float scale_factor, void* user_data);
+
 typedef void(SAO_UI_CALL* sao_ui_display_change_fn_t)(uint32_t bit_depth, uint32_t width,
                                                       uint32_t height, void* user_data);
 
@@ -409,6 +414,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activate_fn(
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_changed_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_dpi_changed_fn_t fn, void* user_data);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_reflow_fn(
+    sao_ui_overlay_host_handle_t handle, sao_ui_dpi_reflow_fn_t fn, void* user_data);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_display_change_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_display_change_fn_t fn, void* user_data);

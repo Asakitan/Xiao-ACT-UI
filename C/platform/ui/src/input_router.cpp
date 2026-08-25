@@ -31,6 +31,7 @@
 #include "sao/ui/panel.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
+#include "sao/ui/widget_table.h"
 
 #include "input_router_internal.h"
 
@@ -828,9 +829,15 @@ sao_status_t activate_widget(sao_ui_widget_handle_t widget) {
     case SAO_UI_WIDGET_CHECKBOX:
     case SAO_UI_WIDGET_CHECKBOX_EXT:
         return sao_ui_checkbox_toggle(widget);
+    case SAO_UI_WIDGET_RADIO_EXT:
+        return sao_ui_radio_set_selected(widget, true);
     case SAO_UI_WIDGET_DROPDOWN_BUTTON:
-    case SAO_UI_WIDGET_DROPDOWN_BUTTON_EXT:
-        return sao_ui_widget_dispatch_event(widget, SAO_UI_EVT_CLICK, nullptr, 0);
+    case SAO_UI_WIDGET_DROPDOWN_BUTTON_EXT: {
+        bool open = false;
+        if (sao_ui_dropdown_button_popup_is_open(widget, &open) == SAO_STATUS_OK && open)
+            return sao_ui_dropdown_button_popup_click(widget);
+        return sao_ui_dropdown_button_toggle_popup(widget);
+    }
     default:
         return SAO_STATUS_ERR_NOT_FOUND;
     }
@@ -1341,6 +1348,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                 }
             }
         }
+        // Outside-click dismissal for the dropdown popup layer: a press
+        // that resolves anywhere other than the open popup closes it.
+        if (event->kind == SAO_UI_INPUT_MOUSE_DOWN) {
+            bool any_popup_open = false;
+            if (sao_ui_widget_dropdown_any_open(&any_popup_open) == SAO_STATUS_OK &&
+                any_popup_open) {
+                bool target_owns_open_popup = false;
+                const sao_status_t own_status =
+                    sao_ui_dropdown_button_popup_is_open(target, &target_owns_open_popup);
+                if (own_status != SAO_STATUS_OK || !target_owns_open_popup)
+                    (void)sao_ui_widget_dropdown_close_popup_global();
+            }
+        }
         const bool targetless_modal_navigation = target == nullptr &&
             event->kind == SAO_UI_INPUT_KEY_DOWN &&
             (event->virtual_key == 0x09U || event->virtual_key == 0x1bU);
@@ -1455,20 +1475,57 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                 consumed = keyboard_status == SAO_STATUS_OK;
             } else if (key_is_activation(event->virtual_key)) {
                 RouterCallbackScope callback_scope(handle);
-                keyboard_status = activate_widget(target);
+                int32_t activate_kind = -1;
+                if (target != nullptr &&
+                    sao_ui_widget_get_kind(target, &activate_kind) == SAO_STATUS_OK &&
+                    (activate_kind == SAO_UI_WIDGET_TABLE_EXT ||
+                     activate_kind == SAO_UI_WIDGET_TREE_VIEW)) {
+                    keyboard_status =
+                        activate_kind == SAO_UI_WIDGET_TABLE_EXT
+                            ? sao_ui_widget_table_key_navigate(target, event->virtual_key)
+                            : sao_ui_tree_view_key_navigate(target, event->virtual_key);
+                } else {
+                    keyboard_status = activate_widget(target);
+                }
                 if (keyboard_status == SAO_STATUS_OK && !lease.transition_is_current(transition))
                     return SAO_UI_STATUS_ERR_BUSY;
                 consumed = keyboard_status == SAO_STATUS_OK;
             } else if (target != nullptr &&
                        (event->virtual_key == 0x25U || event->virtual_key == 0x26U ||
                         event->virtual_key == 0x27U || event->virtual_key == 0x28U)) {
-                const int32_t direction =
-                    event->virtual_key == 0x25U || event->virtual_key == 0x28U ? -1 : 1;
-                keyboard_status = sao_ui_widget_nudge_value(target, direction);
-                consumed = keyboard_status == SAO_STATUS_OK;
-            } else if (event->virtual_key == 0x1bU && modal_active) {
-                keyboard_status = sao_ui_input_router_pop_modal(handle);
-                consumed = keyboard_status == SAO_STATUS_OK;
+                bool popup_open = false;
+                if (sao_ui_dropdown_button_popup_is_open(target, &popup_open) == SAO_STATUS_OK &&
+                    popup_open) {
+                    keyboard_status =
+                        sao_ui_dropdown_button_popup_key(target, event->virtual_key);
+                    consumed = keyboard_status == SAO_STATUS_OK;
+                } else {
+                    int32_t arrow_kind = -1;
+                    if (sao_ui_widget_get_kind(target, &arrow_kind) == SAO_STATUS_OK &&
+                        (arrow_kind == SAO_UI_WIDGET_TABLE_EXT ||
+                         arrow_kind == SAO_UI_WIDGET_TREE_VIEW)) {
+                        keyboard_status =
+                            arrow_kind == SAO_UI_WIDGET_TABLE_EXT
+                                ? sao_ui_widget_table_key_navigate(target, event->virtual_key)
+                                : sao_ui_tree_view_key_navigate(target, event->virtual_key);
+                        consumed = keyboard_status == SAO_STATUS_OK;
+                    } else {
+                        const int32_t direction =
+                            event->virtual_key == 0x25U || event->virtual_key == 0x28U ? -1 : 1;
+                        keyboard_status = sao_ui_widget_nudge_value(target, direction);
+                        consumed = keyboard_status == SAO_STATUS_OK;
+                    }
+                }
+            } else if (event->virtual_key == 0x1bU) {
+                bool popup_open = false;
+                if (sao_ui_dropdown_button_popup_is_open(target, &popup_open) == SAO_STATUS_OK &&
+                    popup_open) {
+                    keyboard_status = sao_ui_dropdown_button_popup_key(target, 0x1bU);
+                    consumed = keyboard_status == SAO_STATUS_OK;
+                } else if (modal_active) {
+                    keyboard_status = sao_ui_input_router_pop_modal(handle);
+                    consumed = keyboard_status == SAO_STATUS_OK;
+                }
             }
             if (keyboard_status != SAO_STATUS_OK && keyboard_status != SAO_STATUS_ERR_NOT_FOUND &&
                 keyboard_status != SAO_STATUS_ERR_ACCESS_DENIED &&

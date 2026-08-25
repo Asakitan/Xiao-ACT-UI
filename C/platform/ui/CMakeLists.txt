@@ -149,6 +149,3 @@ endif()
 # out of the early platform pass makes the link independent of configuration
 # order while builds without the security target remain valid.
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

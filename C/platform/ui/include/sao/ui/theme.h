@@ -428,18 +428,18 @@ constexpr SaoColorRgba rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) {
 inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     // Overlay / background — dark uses APP_BG-based backdrop, not white
     /* [ 0] OVERLAY_BG          */ rgba(0x00, 0x00, 0x00, 0xB3),  // OVERLAY_ALPHA 0.70 × 255
-    /* [ 1] APP_BG              */ rgba(0x0A, 0x0E, 0x14),         // #0a0e14
-    /* [ 2] APP_CARD            */ rgba(0x11, 0x18, 0x20),         // #111820
-    /* [ 3] APP_BORDER          */ rgba(0x1A, 0x3A, 0x4E),         // #1a3a4e
-    /* [ 4] APP_TEXT            */ rgba(0xE8, 0xF4, 0xF8),         // #e8f4f8
-    /* [ 5] APP_TEXT_2          */ rgba(0x7E, 0xB8, 0xC9),         // #7eb8c9
-    /* [ 6] APP_TEXT_DIM        */ rgba(0x3D, 0x60, 0x70),         // #3d6070
-    /* [ 7] APP_ACCENT          */ rgba(0x4D, 0xE8, 0xF4),         // #4de8f4
-    /* [ 8] APP_BLUE            */ rgba(0x21, 0x96, 0xF3),         // #2196f3
-    /* [ 9] APP_GREEN           */ rgba(0x4C, 0xAF, 0x50),         // #4caf50
-    /* [10] APP_RED             */ rgba(0xFF, 0x44, 0x44),         // #ff4444
-    /* [11] APP_ORANGE          */ rgba(0xFF, 0x98, 0x00),         // #ff9800
-    /* [12] APP_GOLD            */ rgba(0xFF, 0xD7, 0x00),         // #ffd700
+    /* [ 1] APP_BG              */ rgba(0x1E, 0x1E, 0x1E),         // VS Code editor background
+    /* [ 2] APP_CARD            */ rgba(0x25, 0x25, 0x26),         // VS Code secondary surface
+    /* [ 3] APP_BORDER          */ rgba(0x3C, 0x3C, 0x3C),         // 1px workbench separator
+    /* [ 4] APP_TEXT            */ rgba(0xCC, 0xCC, 0xCC),         // primary editor text
+    /* [ 5] APP_TEXT_2          */ rgba(0xA8, 0xB4, 0xC0),         // readable secondary text
+    /* [ 6] APP_TEXT_DIM        */ rgba(0x7F, 0x7F, 0x7F),         // inactive chrome text
+    /* [ 7] APP_ACCENT          */ rgba(0x58, 0x98, 0xBE),         // restrained SAO cyan
+    /* [ 8] APP_BLUE            */ rgba(0x00, 0x7A, 0xCC),         // VS Code focus blue
+    /* [ 9] APP_GREEN           */ rgba(0x4E, 0xC9, 0xB0),         // editor success
+    /* [10] APP_RED             */ rgba(0xF1, 0x4C, 0x4C),         // editor error
+    /* [11] APP_ORANGE          */ rgba(0xCC, 0xA7, 0x00),         // editor warning
+    /* [12] APP_GOLD            */ rgba(0xD4, 0x9C, 0x17),         // warm SAO active accent
     // Circle button — SAOCircleButton (verbatim from SAOColors)
     /* [13] CIRCLE_BORDER       */ rgba(0xBC, 0xC4, 0xCA),         // #bcc4ca
     /* [14] CIRCLE_BG           */ rgba(0xF7, 0xF8, 0xF8),         // #f7f8f8
@@ -462,11 +462,11 @@ inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [29] INFO_TITLE_BORDER   */ rgba(0xC7, 0xCC, 0xD0),         // #c7ccd0
     /* [30] INFO_TRIANGLE       */ rgba(0xF4, 0xF4, 0xF4),         // #f4f4f4
     // Alert / dialog (Python explicit alpha preserved)
-    /* [31] ALERT_BG            */ rgba(0xFF, 0xFF, 0xFF, 0xE6),   // #ffffffe6
-    /* [32] ALERT_PANEL         */ rgba(0xEC, 0xEB, 0xEA, 0xC9),   // #ecebeac9
-    /* [33] ALERT_TITLE_FG      */ rgba(0x64, 0x63, 0x64),         // #646364
-    /* [34] ALERT_CONTENT_FG    */ rgba(0x64, 0x60, 0x60),         // #646060
-    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x22),   // #00000022
+    /* [31] ALERT_BG            */ rgba(0x1E, 0x1E, 0x1E, 0xF0),   // dark modal canvas
+    /* [32] ALERT_PANEL         */ rgba(0x25, 0x25, 0x26, 0xF4),   // dark modal surface
+    /* [33] ALERT_TITLE_FG      */ rgba(0xCC, 0xCC, 0xCC),         // primary editor text
+    /* [34] ALERT_CONTENT_FG    */ rgba(0xA8, 0xB4, 0xC0),         // secondary editor text
+    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x30),   // restrained elevation
     /* [36] CLOSE_RED           */ rgba(0xD1, 0x3D, 0x4F),         // #d13d4f
     /* [37] OK_BLUE             */ rgba(0x42, 0x8C, 0xE6),         // #428ce6
     // HP bar (SAOColors HP_* — explicit alpha suffix preserved)
@@ -513,23 +513,23 @@ inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),         // #9B6BD6 (id 8)
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),         // #B0B8C4 (id 0)
 
-    /* [75] DISABLED_FG         */ rgba(0x5E, 0x70, 0x78, 0xCC),
-    /* [76] DISABLED_BG         */ rgba(0x17, 0x20, 0x28),
-    /* [77] DISABLED_BORDER     */ rgba(0x31, 0x45, 0x4D),
-    /* [78] HOVER_SURFACE       */ rgba(0x18, 0x2A, 0x34),
-    /* [79] FOCUS_RING          */ rgba(0x68, 0xE4, 0xFF),
-    /* [80] PRESSED_SURFACE     */ rgba(0x0A, 0x16, 0x1E),
-    /* [81] PLACEHOLDER         */ rgba(0x7E, 0xB8, 0xC9, 0xB0),
-    /* [82] SELECTION           */ rgba(0x4D, 0xE8, 0xF4, 0x40),
-    /* [83] SCROLLBAR_TRACK     */ rgba(0x1A, 0x3A, 0x4E, 0x90),
-    /* [84] SCROLLBAR_THUMB     */ rgba(0x4D, 0xE8, 0xF4, 0xB8),
-    /* [85] SCROLLBAR_HOVER     */ rgba(0x72, 0xF2, 0xFA, 0xD0),
-    /* [86] SCROLLBAR_PRESSED   */ rgba(0xB4, 0xFA, 0xFF, 0xF0),
-    /* [87] TOOLTIP_SURFACE     */ rgba(0x11, 0x18, 0x20, 0xE8),
-    /* [88] LOADING             */ rgba(0x4D, 0xE8, 0xF4, 0x30),
-    /* [89] SKELETON            */ rgba(0x18, 0x2A, 0x34),
-    /* [90] ERROR_SURFACE       */ rgba(0xFF, 0x44, 0x44, 0x24),
-    /* [91] ERROR_ICON          */ rgba(0xFF, 0x44, 0x44),};
+    /* [75] DISABLED_FG         */ rgba(0x6B, 0x73, 0x7B, 0xCC),
+    /* [76] DISABLED_BG         */ rgba(0x1B, 0x1B, 0x1C),
+    /* [77] DISABLED_BORDER     */ rgba(0x3C, 0x3C, 0x3C),
+    /* [78] HOVER_SURFACE       */ rgba(0x2A, 0x2D, 0x2E),
+    /* [79] FOCUS_RING          */ rgba(0x00, 0x7A, 0xCC),
+    /* [80] PRESSED_SURFACE     */ rgba(0x20, 0x20, 0x20),
+    /* [81] PLACEHOLDER         */ rgba(0x9B, 0x9B, 0x9B, 0xB0),
+    /* [82] SELECTION           */ rgba(0x26, 0x4F, 0x78),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0x3C, 0x3C, 0x3C, 0x60),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0x79, 0x79, 0x79, 0xB8),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x8F, 0x8F, 0x8F, 0xD0),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xA8, 0xA8, 0xA8, 0xF0),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0x25, 0x25, 0x26, 0xF2),
+    /* [88] LOADING             */ rgba(0x58, 0x98, 0xBE, 0x30),
+    /* [89] SKELETON            */ rgba(0x2A, 0x2D, 0x2E),
+    /* [90] ERROR_SURFACE       */ rgba(0xF1, 0x4C, 0x4C, 0x24),
+    /* [91] ERROR_ICON          */ rgba(0xF1, 0x4C, 0x4C),};
 
 // ── Light theme (SAOColors canonical CSS palette) ─────────────────
 // The Python SAOColors class is already a light-mode design; the
@@ -538,18 +538,18 @@ inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
 // text on light background.
 inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [ 0] OVERLAY_BG          */ rgba(0x00, 0x00, 0x00, 0xB3),
-    /* [ 1] APP_BG              */ rgba(0xFB, 0xFB, 0xFB),         // INFO_BG re-used as page bg
+    /* [ 1] APP_BG              */ rgba(0xF5, 0xF5, 0xF5),         // VS Code light workbench
     /* [ 2] APP_CARD            */ rgba(0xFF, 0xFF, 0xFF),         // WHITE card surface
-    /* [ 3] APP_BORDER          */ rgba(0xC7, 0xCC, 0xD0),         // INFO_TITLE_BORDER
-    /* [ 4] APP_TEXT            */ rgba(0x64, 0x63, 0x64),         // TEXT_PRIMARY on light
-    /* [ 5] APP_TEXT_2          */ rgba(0x8C, 0x87, 0x8A),         // TEXT_SECONDARY
-    /* [ 6] APP_TEXT_DIM        */ rgba(0xBC, 0xC4, 0xCA),         // CIRCLE_BORDER neutral
-    /* [ 7] APP_ACCENT          */ rgba(0x42, 0x8C, 0xE6),         // OK_BLUE accent on light
-    /* [ 8] APP_BLUE            */ rgba(0x42, 0x8C, 0xE6),
-    /* [ 9] APP_GREEN           */ rgba(0x9A, 0xD3, 0x34),         // HP_GREEN_R
-    /* [10] APP_RED             */ rgba(0xD1, 0x3D, 0x4F),         // CLOSE_RED
-    /* [11] APP_ORANGE          */ rgba(0xF3, 0xAF, 0x12),         // ACTIVE_BORDER
-    /* [12] APP_GOLD            */ rgba(0xD4, 0x9C, 0x17),         // ACCENT_GOLD_WARM
+    /* [ 3] APP_BORDER          */ rgba(0xD0, 0xD0, 0xD0),         // 1px workbench separator
+    /* [ 4] APP_TEXT            */ rgba(0x3B, 0x3A, 0x3C),         // primary editor text
+    /* [ 5] APP_TEXT_2          */ rgba(0x66, 0x61, 0x66),         // readable secondary text
+    /* [ 6] APP_TEXT_DIM        */ rgba(0x66, 0x61, 0x66),         // inactive chrome text
+    /* [ 7] APP_ACCENT          */ rgba(0x00, 0x7A, 0xCC),         // VS Code focus blue
+    /* [ 8] APP_BLUE            */ rgba(0x00, 0x7A, 0xCC),
+    /* [ 9] APP_GREEN           */ rgba(0x2E, 0x7D, 0x32),         // readable success
+    /* [10] APP_RED             */ rgba(0xC7, 0x2E, 0x2E),         // readable error
+    /* [11] APP_ORANGE          */ rgba(0x9D, 0x6D, 0x00),         // readable warning
+    /* [12] APP_GOLD            */ rgba(0x79, 0x5E, 0x26),         // warm SAO text accent
     /* [13] CIRCLE_BORDER       */ rgba(0xBC, 0xC4, 0xCA),
     /* [14] CIRCLE_BG           */ rgba(0xF7, 0xF8, 0xF8),
     /* [15] CIRCLE_ICON         */ rgba(0x95, 0x9A, 0xA0),
@@ -735,9 +735,9 @@ inline constexpr SaoColorRgba kSaoThemeGlassColors[SAO_UI_COLOR_TOKEN_COUNT] = {
 // `SAOMenuBar._SLOT` constant, and the widget-kit spacing scale used
 // across Entity / Web parity panels.
 inline constexpr int32_t kSaoThemeMetrics[SAO_UI_METRIC_TOKEN_COUNT] = {
-    /* [ 0] BORDER_RADIUS_SMALL   */  4,
-    /* [ 1] BORDER_RADIUS_MEDIUM  */  8,
-    /* [ 2] BORDER_RADIUS_LARGE   */ 14,
+    /* [ 0] BORDER_RADIUS_SMALL   */  2,
+    /* [ 1] BORDER_RADIUS_MEDIUM  */  4,
+    /* [ 2] BORDER_RADIUS_LARGE   */  6,
     /* [ 3] PADDING_XS            */  2,
     /* [ 4] PADDING_S             */  4,
     /* [ 5] PADDING_M             */  8,
@@ -745,8 +745,8 @@ inline constexpr int32_t kSaoThemeMetrics[SAO_UI_METRIC_TOKEN_COUNT] = {
     /* [ 7] GAP_S                 */  4,
     /* [ 8] GAP_M                 */  8,
     /* [ 9] GAP_L                 */ 12,
-    /* [10] MENU_BTN_SIZE         */ 46,   // SAOCircleButton.SIZE
-    /* [11] MENU_BTN_MAX_SIZE     */ 62,   // SAOCircleButton.MAX_SIZE
+    /* [10] MENU_BTN_SIZE         */ 54,   // SAOCircleButton.SIZE
+    /* [11] MENU_BTN_MAX_SIZE     */ 70,   // SAOCircleButton.MAX_SIZE
     /* [12] MENU_SLOT             */ 70,   // SAOMenuBar._SLOT
     /* [13] HUD_MARGIN            */ 18,   // HUD bracket inset
     /* [14] HUD_PAD               */  8,   // HUD sprite margin
@@ -765,9 +765,9 @@ inline constexpr int32_t kSaoThemeMetrics[SAO_UI_METRIC_TOKEN_COUNT] = {
 
 inline constexpr SaoUiShadowPreset kSaoThemeElevationPresets[4] = {
     /* elevation_0 */ {0, 0, 0, 0, 0x00, {0, 0, 0}},
-    /* elevation_1 */ {0, 2, 3, 1, 0x30, {0, 0, 0}},
-    /* elevation_2 */ {0, 4, 6, 2, 0x48, {0, 0, 0}},
-    /* elevation_3 */ {0, 8, 12, 3, 0x68, {0, 0, 0}},
+    /* elevation_1 */ {0, 2, 3, 1, 0x20, {0, 0, 0}},
+    /* elevation_2 */ {0, 4, 6, 2, 0x30, {0, 0, 0}},
+    /* elevation_3 */ {0, 8, 12, 3, 0x40, {0, 0, 0}},
 };
 
 // ── Compile-time size correctness (G3.1 gate) ─────────────────────

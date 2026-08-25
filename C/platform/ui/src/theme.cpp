@@ -9,6 +9,13 @@
 
 #include "panel_theme_internal.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -17,6 +24,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -57,6 +65,8 @@ namespace {
 // own calling thread.
 std::atomic<int32_t> g_active_theme_id{SAO_UI_THEME_DARK};
 std::atomic<uint64_t> g_active_theme_generation{1};
+std::atomic<uint64_t> g_native_contrast_generation{};
+std::atomic<uint64_t> g_native_contrast_signature{};
 
 struct ThemeCallbackSlot {
     sao_ui_theme_callback_handle_t handle{};
@@ -170,9 +180,9 @@ constexpr uint32_t kPanelSemanticColorTable[SAO_UI_THEME_COUNT]
                                                 [static_cast<size_t>(
                                                     sao::ui::detail::PanelSemanticColorToken::
                                                         Count)] = {
-    {0xff808080U},
-    {0xff808080U},
-    {0xff808080U},
+    {kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_APP_TEXT_2]},
+    {kColorTables[SAO_UI_THEME_LIGHT].argb[SAO_UI_TOKEN_APP_TEXT_2]},
+    {kColorTables[SAO_UI_THEME_GLASS].argb[SAO_UI_TOKEN_APP_TEXT_2]},
 };
 
 // ── Token name table (parallel to SaoUiColorToken order) ──────────
@@ -227,6 +237,177 @@ inline bool is_valid_color_token(int32_t token) {
 
 inline bool is_valid_metric_token(int32_t metric) {
     return metric >= 0 && metric < SAO_UI_METRIC_COUNT;
+}
+
+struct NativeContrastPalette {
+    bool active{};
+    uint32_t background{0xff000000U};
+    uint32_t foreground{0xffffffffU};
+    uint32_t disabled{0xff808080U};
+    uint32_t border{0xffffffffU};
+    uint32_t highlight{0xffffffffU};
+    uint32_t highlight_text{0xff000000U};
+};
+
+#if defined(_WIN32)
+uint32_t system_color_argb(int32_t index) noexcept {
+    const COLORREF color = ::GetSysColor(index);
+    return 0xff000000U | (static_cast<uint32_t>(GetRValue(color)) << 16U) |
+           (static_cast<uint32_t>(GetGValue(color)) << 8U) |
+           static_cast<uint32_t>(GetBValue(color));
+}
+#endif
+
+NativeContrastPalette native_contrast_palette() noexcept {
+#if defined(_WIN32)
+    thread_local uint64_t sampled_at{};
+    thread_local NativeContrastPalette cached{};
+    const uint64_t now = ::GetTickCount64();
+    if (sampled_at == 0U || now - sampled_at >= 250U) {
+        HIGHCONTRASTW contrast{};
+        contrast.cbSize = sizeof(contrast);
+        cached.active = ::SystemParametersInfoW(
+                            SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) != FALSE &&
+                        (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0U;
+        if (cached.active) {
+            cached.background = system_color_argb(COLOR_WINDOW);
+            cached.foreground = system_color_argb(COLOR_WINDOWTEXT);
+            cached.disabled = system_color_argb(COLOR_GRAYTEXT);
+            cached.border = system_color_argb(COLOR_WINDOWTEXT);
+            cached.highlight = system_color_argb(COLOR_HIGHLIGHT);
+            cached.highlight_text = system_color_argb(COLOR_HIGHLIGHTTEXT);
+        }
+        uint64_t signature = cached.active ? 1469598103934665603ULL : 0ULL;
+        if (cached.active) {
+            for (const uint32_t color : {cached.background, cached.foreground,
+                                         cached.disabled, cached.border,
+                                         cached.highlight, cached.highlight_text}) {
+                signature ^= color;
+                signature *= 1099511628211ULL;
+            }
+        }
+        uint64_t previous =
+            g_native_contrast_signature.load(std::memory_order_acquire);
+        while (previous != signature &&
+               !g_native_contrast_signature.compare_exchange_weak(
+                   previous, signature, std::memory_order_acq_rel)) {
+        }
+        if (previous != signature)
+            g_native_contrast_generation.fetch_add(1U, std::memory_order_acq_rel);
+        sampled_at = now == 0U ? 1U : now;
+    }
+    return cached;
+#else
+    return {};
+#endif
+}
+
+uint32_t native_contrast_color(SaoUiColorToken token,
+                               const NativeContrastPalette& palette,
+                               uint32_t fallback) noexcept {
+    if (!palette.active)
+        return fallback;
+    switch (token) {
+    case SAO_UI_TOKEN_OVERLAY_BG:
+    case SAO_UI_TOKEN_APP_BG:
+    case SAO_UI_TOKEN_APP_CARD:
+    case SAO_UI_TOKEN_CIRCLE_BG:
+    case SAO_UI_TOKEN_CIRCLE_ACTIVE_BG:
+    case SAO_UI_TOKEN_CIRCLE_HOVER_BG:
+    case SAO_UI_TOKEN_CHILD_BG:
+    case SAO_UI_TOKEN_CHILD_HOVER:
+    case SAO_UI_TOKEN_INFO_BG:
+    case SAO_UI_TOKEN_INFO_BOTTOM:
+    case SAO_UI_TOKEN_ALERT_BG:
+    case SAO_UI_TOKEN_ALERT_PANEL:
+    case SAO_UI_TOKEN_ALERT_SHADOW:
+    case SAO_UI_TOKEN_HP_BG:
+    case SAO_UI_TOKEN_HP_HOVER:
+    case SAO_UI_TOKEN_SURFACE_LIGHT:
+    case SAO_UI_TOKEN_DPS_ROW_ALT:
+    case SAO_UI_TOKEN_DPS_ROW_SELF:
+    case SAO_UI_TOKEN_DPS_ROW_HOVER:
+    case SAO_UI_TOKEN_DISABLED_BG:
+    case SAO_UI_TOKEN_HOVER_SURFACE:
+    case SAO_UI_TOKEN_PRESSED_SURFACE:
+    case SAO_UI_TOKEN_SCROLLBAR_TRACK:
+    case SAO_UI_TOKEN_TOOLTIP_SURFACE:
+    case SAO_UI_TOKEN_LOADING:
+    case SAO_UI_TOKEN_SKELETON:
+    case SAO_UI_TOKEN_ERROR_SURFACE:
+        return palette.background;
+    case SAO_UI_TOKEN_APP_BORDER:
+    case SAO_UI_TOKEN_CIRCLE_BORDER:
+    case SAO_UI_TOKEN_CIRCLE_ACTIVE_BORDER:
+    case SAO_UI_TOKEN_CHILD_LINE:
+    case SAO_UI_TOKEN_INFO_TITLE_BORDER:
+    case SAO_UI_TOKEN_HP_BORDER:
+    case SAO_UI_TOKEN_DISABLED_BORDER:
+    case SAO_UI_TOKEN_SCROLLBAR_THUMB:
+    case SAO_UI_TOKEN_SCROLLBAR_HOVER:
+    case SAO_UI_TOKEN_SCROLLBAR_PRESSED:
+        return palette.border;
+    case SAO_UI_TOKEN_DISABLED_FG:
+    case SAO_UI_TOKEN_PLACEHOLDER:
+        return palette.disabled;
+    case SAO_UI_TOKEN_APP_TEXT:
+    case SAO_UI_TOKEN_APP_TEXT_2:
+    case SAO_UI_TOKEN_APP_TEXT_DIM:
+    case SAO_UI_TOKEN_CIRCLE_ICON:
+    case SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON:
+    case SAO_UI_TOKEN_CIRCLE_HOVER_ICON:
+    case SAO_UI_TOKEN_CHILD_HOVER_FG:
+    case SAO_UI_TOKEN_CHILD_TEXT:
+    case SAO_UI_TOKEN_CHILD_ICON:
+    case SAO_UI_TOKEN_ALERT_TITLE_FG:
+    case SAO_UI_TOKEN_ALERT_CONTENT_FG:
+    case SAO_UI_TOKEN_HP_FONT_COLOR:
+    case SAO_UI_TOKEN_TEXT_PRIMARY:
+    case SAO_UI_TOKEN_TEXT_SECONDARY:
+    case SAO_UI_TOKEN_BLACK:
+        return palette.foreground;
+    case SAO_UI_TOKEN_WHITE:
+    case SAO_UI_TOKEN_WHITE_85:
+        return palette.highlight_text;
+    case SAO_UI_TOKEN_APP_ACCENT:
+    case SAO_UI_TOKEN_APP_BLUE:
+    case SAO_UI_TOKEN_APP_GREEN:
+    case SAO_UI_TOKEN_APP_RED:
+    case SAO_UI_TOKEN_APP_ORANGE:
+    case SAO_UI_TOKEN_APP_GOLD:
+    case SAO_UI_TOKEN_INFO_TRIANGLE:
+    case SAO_UI_TOKEN_CLOSE_RED:
+    case SAO_UI_TOKEN_OK_BLUE:
+    case SAO_UI_TOKEN_HP_GREEN_L:
+    case SAO_UI_TOKEN_HP_GREEN_R:
+    case SAO_UI_TOKEN_HP_YELLOW_L:
+    case SAO_UI_TOKEN_HP_YELLOW_R:
+    case SAO_UI_TOKEN_HP_RED_L:
+    case SAO_UI_TOKEN_HP_RED_R:
+    case SAO_UI_TOKEN_BOSS_HP_RED:
+    case SAO_UI_TOKEN_BOSS_HP_BREAK:
+    case SAO_UI_TOKEN_BOSS_HP_SHIELD:
+    case SAO_UI_TOKEN_ACCENT_GOLD_WARM:
+    case SAO_UI_TOKEN_ACCENT_CYAN_SOFT:
+    case SAO_UI_TOKEN_CORNER_CYAN:
+    case SAO_UI_TOKEN_CORNER_GOLD:
+    case SAO_UI_TOKEN_DPS_GOLD:
+    case SAO_UI_TOKEN_ELEM_FIRE:
+    case SAO_UI_TOKEN_ELEM_WATER:
+    case SAO_UI_TOKEN_ELEM_ELECTRIC:
+    case SAO_UI_TOKEN_ELEM_WOOD:
+    case SAO_UI_TOKEN_ELEM_WIND:
+    case SAO_UI_TOKEN_ELEM_ROCK:
+    case SAO_UI_TOKEN_ELEM_LIGHT:
+    case SAO_UI_TOKEN_ELEM_DARK:
+    case SAO_UI_TOKEN_ELEM_GENERIC:
+    case SAO_UI_TOKEN_FOCUS_RING:
+    case SAO_UI_TOKEN_SELECTION:
+    case SAO_UI_TOKEN_ERROR_ICON:
+        return palette.highlight;
+    default:
+        return fallback;
+    }
 }
 
 std::optional<SaoUiThemeId> theme_id_from_json(const json& value) {
@@ -399,7 +580,9 @@ std::array<std::atomic<int32_t>, SAO_UI_METRIC_TOKEN_COUNT>
 thread_local const PanelResolvedTheme* g_panel_paint_theme = nullptr;
 
 uint64_t process_theme_generation() noexcept {
-    return g_active_theme_generation.load(std::memory_order_acquire);
+    (void)native_contrast_palette();
+    return g_active_theme_generation.load(std::memory_order_acquire) +
+           g_native_contrast_generation.load(std::memory_order_acquire);
 }
 
 int32_t resolve_panel_metric(SaoUiThemeId theme_id, SaoUiMetricToken metric) noexcept {
@@ -420,8 +603,12 @@ PanelResolvedTheme resolve_theme(SaoUiThemeId theme_id, uint64_t generation) noe
     PanelResolvedTheme resolved{};
     resolved.theme_id = resolved_theme;
     resolved.generation = generation;
+    const NativeContrastPalette contrast = native_contrast_palette();
+    resolved.high_contrast = contrast.active;
     for (int32_t token = 0; token < SAO_UI_COLOR_TOKEN_COUNT; ++token) {
-        resolved.colors[static_cast<size_t>(token)] = kColorTables[resolved_theme].argb[token];
+        resolved.colors[static_cast<size_t>(token)] = native_contrast_color(
+            static_cast<SaoUiColorToken>(token), contrast,
+            kColorTables[resolved_theme].argb[token]);
     }
     for (int32_t metric = 0; metric < SAO_UI_METRIC_TOKEN_COUNT; ++metric) {
         resolved.metrics[static_cast<size_t>(metric)] = resolve_panel_metric(
@@ -449,13 +636,21 @@ uint32_t panel_theme_color(SaoUiColorToken token) noexcept {
         return g_panel_paint_theme->colors[static_cast<size_t>(token)];
     const SaoUiThemeId theme_id =
         static_cast<SaoUiThemeId>(g_active_theme_id.load(std::memory_order_acquire));
-    return kColorTables[is_valid_theme_id(theme_id) ? theme_id : SAO_UI_THEME_DARK].argb[token];
+    const SaoUiThemeId resolved_theme =
+        is_valid_theme_id(theme_id) ? theme_id : SAO_UI_THEME_DARK;
+    return native_contrast_color(
+        token, native_contrast_palette(), kColorTables[resolved_theme].argb[token]);
 }
 
 uint32_t panel_theme_color(PanelSemanticColorToken token) noexcept {
     const int32_t token_index = static_cast<int32_t>(token);
     if (token_index < 0 || token_index >= static_cast<int32_t>(PanelSemanticColorToken::Count))
         return panel_theme_color(SAO_UI_TOKEN_BLACK);
+    if (g_panel_paint_theme != nullptr && g_panel_paint_theme->high_contrast)
+        return g_panel_paint_theme->colors[SAO_UI_TOKEN_APP_TEXT];
+    const NativeContrastPalette contrast = native_contrast_palette();
+    if (contrast.active)
+        return contrast.foreground;
     SaoUiThemeId theme_id = SAO_UI_THEME_DARK;
     if (g_panel_paint_theme != nullptr) {
         theme_id = g_panel_paint_theme->theme_id;
@@ -476,6 +671,12 @@ int32_t panel_theme_metric(SaoUiMetricToken metric) noexcept {
     const SaoUiThemeId theme_id =
         static_cast<SaoUiThemeId>(g_active_theme_id.load(std::memory_order_acquire));
     return resolve_panel_metric(theme_id, metric);
+}
+
+bool panel_theme_high_contrast() noexcept {
+    if (g_panel_paint_theme != nullptr)
+        return g_panel_paint_theme->high_contrast;
+    return native_contrast_palette().active;
 }
 
 } // namespace sao::ui::detail
@@ -704,7 +905,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_set_active(
         listeners = handle->listeners;
     }
     for (const ThemeListener& listener : listeners) {
-        if (listener.callback != nullptr) listener.callback(theme_id, listener.user_data);
+        if (listener.callback == nullptr) continue;
+        try {
+            listener.callback(theme_id, listener.user_data);
+        } catch (...) {
+        }
     }
     return SAO_STATUS_OK;
 }

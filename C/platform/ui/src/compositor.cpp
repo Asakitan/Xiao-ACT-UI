@@ -171,6 +171,17 @@ struct sao_ui_layer_s {
     uint32_t    bgra_stride{0};
     bool        bgra_dirty{false};
     uint64_t    visual_revision{0};
+    // ── RGN sync state (Python authority: overlay_compositor.py
+    // _rgn_cache_key/_rgn_cached_spans/_rgn_union_prev/_rgn_emit_spans/
+    // _rgn_static_ticks).  Cached spans are LAYER-LOCAL and keyed only on
+    // visual_revision so a pure translation never forces a rescan.
+    uint64_t    rgn_cache_revision{UINT64_MAX};
+    std::vector<SaoOverlayHostInputRect> rgn_cached_spans;
+    std::vector<SaoOverlayHostInputRect> rgn_union_prev;
+    std::vector<SaoOverlayHostInputRect> rgn_emit_spans;
+    uint32_t    rgn_static_ticks{0};
+    int32_t     rgn_prev_x{std::numeric_limits<int32_t>::min()};
+    int32_t     rgn_prev_y{std::numeric_limits<int32_t>::min()};
     std::string mmf_name;
     uint64_t    mmf_last_generation{0};
     bool        mmf_has_last_generation{false};
@@ -239,6 +250,7 @@ struct sao_ui_compositor_s {
     sao_ui_d3d11_device_handle_t d3d11_device{nullptr};
     sao_ui_dcomp_bridge_handle_t dcomp_bridge{nullptr};
     sao_ui_z_order_manager_handle_t z_order{nullptr};
+    void*                         game_hwnd{nullptr};
     std::thread::id               render_thread{};
     bool                          presented_visible_content{false};
     uint32_t                      last_present_width{0};
@@ -254,7 +266,68 @@ namespace {
 
 std::mutex g_compositor_registry_mutex;
 sao_ui_compositor_s* g_compositor_registry_head = nullptr;
+std::unordered_map<sao_ui_overlay_host_handle_t, sao_ui_compositor_s*>
+    g_host_compositor_claims;
 std::atomic_bool g_fail_next_compositor_destroy_after_preflight{};
+
+sao_status_t claim_compositor_host(sao_ui_overlay_host_handle_t host,
+                                   sao_ui_compositor_s* owner) noexcept {
+    if (host == nullptr || owner == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard lock(g_compositor_registry_mutex);
+        const auto [_, inserted] = g_host_compositor_claims.emplace(host, owner);
+        return inserted ? SAO_STATUS_OK : SAO_STATUS_ERR_ALREADY_EXISTS;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+void release_compositor_host_claim(sao_ui_overlay_host_handle_t host,
+                                   const sao_ui_compositor_s* owner) noexcept {
+    if (host == nullptr || owner == nullptr)
+        return;
+    try {
+        std::lock_guard lock(g_compositor_registry_mutex);
+        const auto found = g_host_compositor_claims.find(host);
+        if (found != g_host_compositor_claims.end() && found->second == owner)
+            g_host_compositor_claims.erase(found);
+    } catch (...) {
+    }
+}
+
+class HostCompositorClaimGuard final {
+  public:
+        HostCompositorClaimGuard() = default;
+
+    ~HostCompositorClaimGuard() {
+        if (armed_)
+            release_compositor_host_claim(host_, owner_);
+    }
+
+    sao_status_t acquire(sao_ui_overlay_host_handle_t host,
+                         sao_ui_compositor_s* owner) noexcept {
+        const sao_status_t status = claim_compositor_host(host, owner);
+        if (status == SAO_STATUS_OK) {
+            host_ = host;
+            owner_ = owner;
+            armed_ = true;
+        }
+        return status;
+    }
+
+    void commit() noexcept {
+        armed_ = false;
+    }
+
+    HostCompositorClaimGuard(const HostCompositorClaimGuard&) = delete;
+    HostCompositorClaimGuard& operator=(const HostCompositorClaimGuard&) = delete;
+
+  private:
+    sao_ui_overlay_host_handle_t host_{};
+    sao_ui_compositor_s* owner_{};
+    bool armed_{};
+};
 
 bool compositor_registered_locked(const sao_ui_compositor_s* compositor) noexcept {
     for (auto* current = g_compositor_registry_head; current != nullptr;
@@ -1523,6 +1596,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
         }
 
         comp->render_thread = std::this_thread::get_id();
+        HostCompositorClaimGuard host_claim;
         if (host != nullptr) {
             sao_status_t status = sao_ui_overlay_host_require_owner_thread(host);
             if (status != SAO_STATUS_OK)
@@ -1530,6 +1604,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
             void* const hwnd = sao_ui_overlay_host_hwnd(host);
             if (hwnd == nullptr)
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
+
+            status = host_claim.acquire(host, comp.get());
+            if (status != SAO_STATUS_OK)
+                return status;
 
             SaoD3d11DeviceConfig d3d_config{};
             status = sao_ui_d3d11_device_create(&d3d_config, &comp->d3d11_device);
@@ -1570,7 +1648,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_create(
 
         register_compositor(comp.get());
         *out_handle = comp.release();
-    input_state.release();
+        input_state.release();
+        host_claim.commit();
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1651,7 +1730,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
     }
     sao::ui::input_router_detail::destroy_layer_input_state(handle->input_state);
     handle->input_state = nullptr;
+    const sao_ui_overlay_host_handle_t claimed_host = handle->host;
     unregister_compositor(handle);
+    release_compositor_host_claim(claimed_host, handle);
     delete handle;
     return SAO_STATUS_OK;
 }
@@ -2672,7 +2753,32 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_enforce_z_order(
         return SAO_STATUS_ERR_ACCESS_DENIED;
     }
     if (compositor->z_order == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
-    return sao_ui_z_order_enforce(compositor->z_order, nullptr, false, false);
+    void* game = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(compositor->mtx);
+        game = compositor->game_hwnd;
+    }
+    bool game_present = false;
+    bool game_is_topmost = false;
+#if defined(_WIN32)
+    const HWND game_hwnd = reinterpret_cast<HWND>(game);
+    if (game_hwnd != nullptr && ::IsWindow(game_hwnd)) {
+        game_present = true;
+        game_is_topmost =
+            (::GetWindowLongPtrW(game_hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+    }
+#else
+    (void)game;
+#endif
+    return sao_ui_z_order_enforce(compositor->z_order, game, game_is_topmost, game_present);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_set_game_hwnd(
+    sao_ui_compositor_handle_t compositor, void* game_hwnd) {
+    if (compositor == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::lock_guard<std::mutex> lock(compositor->mtx);
+    compositor->game_hwnd = game_hwnd;
+    return SAO_STATUS_OK;
 }
 
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL
@@ -2704,6 +2810,248 @@ sao_ui_compositor_test_input_writer_revision(sao_ui_compositor_handle_t composit
     }
 }
 
+namespace {
+
+// RGN pad/settle constants (Python authority: overlay_compositor.py
+// _RGN_PAD_STILL/_RGN_PAD_MOVE/_RGN_PAD_ANIM_MIN/_RGN_PAD_ANIM_CAP/
+// _RGN_STATIC_SETTLE, tightened revamp values kept verbatim).
+constexpr int32_t kRgnPadMove = 24;
+constexpr int32_t kRgnPadMoveCap = 256;
+constexpr int32_t kRgnPadAnimMin = 6;
+constexpr int32_t kRgnPadAnimCap = 96;
+constexpr uint32_t kRgnStaticSettleTicks = 3;
+constexpr size_t kMaxMergedRegionRects = 4096;
+
+using RgnRect = SaoOverlayHostInputRect;
+
+void translate_rgn_rects(const std::vector<RgnRect>& source, int64_t dx, int64_t dy,
+                         std::vector<RgnRect>* out) {
+    for (const auto& rect : source) {
+        out->push_back(RgnRect{static_cast<int32_t>(static_cast<int64_t>(rect.x) + dx),
+                               static_cast<int32_t>(static_cast<int64_t>(rect.y) + dy),
+                               rect.width, rect.height});
+    }
+}
+
+// Lossless 2D rect merge: vertical merge only for identical x-ranges,
+// horizontal merge only for identical y-ranges — the GDI union is exactly
+// preserved in both cases (Python merges same-row touching spans; identical
+// reasoning applied to the taller merged rects this port produces).
+void merge_rgn_rects_lossless(std::vector<RgnRect>* rects) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t a = 0; a < rects->size() && !changed; ++a) {
+            for (size_t b = a + 1; b < rects->size(); ++b) {
+                RgnRect& r0 = (*rects)[a];
+                const RgnRect& r1 = (*rects)[b];
+                const int64_t r0_right = static_cast<int64_t>(r0.x) + r0.width;
+                const int64_t r1_right = static_cast<int64_t>(r1.x) + r1.width;
+                const int64_t r0_bottom = static_cast<int64_t>(r0.y) + r0.height;
+                const int64_t r1_bottom = static_cast<int64_t>(r1.y) + r1.height;
+                if (r0.x == r1.x && r0.width == r1.width && r0.y <= r1_bottom &&
+                    r1.y <= r0_bottom) {
+                    r0.y = static_cast<int32_t>(std::min<int64_t>(r0.y, r1.y));
+                    r0.height = static_cast<int32_t>(std::max(r0_bottom, r1_bottom) - r0.y);
+                } else if (r0.y == r1.y && r0.height == r1.height && r0.x <= r1_right &&
+                           r1.x <= r0_right) {
+                    r0.x = static_cast<int32_t>(std::min<int64_t>(r0.x, r1.x));
+                    r0.width = static_cast<int32_t>(std::max(r0_right, r1_right) - r0.x);
+                } else {
+                    continue;
+                }
+                rects->erase(rects->begin() + static_cast<ptrdiff_t>(b));
+                changed = true;
+                break;
+            }
+        }
+    }
+}
+
+// Pad every rect by `pad` on all sides, then lossless-merge.  Python
+// authority: _pad_and_merge_row_spans — the pad halo is intentional
+// predictive cover, the merge keeps the region data bounded.
+void pad_merge_rgn_rects(const std::vector<RgnRect>& source, int32_t pad,
+                         std::vector<RgnRect>* out) {
+    const size_t begin = out->size();
+    for (const auto& rect : source) {
+        const int64_t left = static_cast<int64_t>(rect.x) - pad;
+        const int64_t top = static_cast<int64_t>(rect.y) - pad;
+        const int64_t right = static_cast<int64_t>(rect.x) + rect.width + pad;
+        const int64_t bottom = static_cast<int64_t>(rect.y) + rect.height + pad;
+        constexpr int64_t kMin = std::numeric_limits<int32_t>::min();
+        constexpr int64_t kMax = std::numeric_limits<int32_t>::max();
+        if (left < kMin || top < kMin || right > kMax || bottom > kMax ||
+            right - left > kMax || bottom - top > kMax) {
+            out->push_back(rect);
+            continue;
+        }
+        out->push_back(RgnRect{static_cast<int32_t>(left), static_cast<int32_t>(top),
+                               static_cast<int32_t>(right - left),
+                               static_cast<int32_t>(bottom - top)});
+    }
+    std::vector<RgnRect> work(out->begin() + static_cast<ptrdiff_t>(begin), out->end());
+    merge_rgn_rects_lossless(&work);
+    out->resize(begin);
+    out->insert(out->end(), work.begin(), work.end());
+}
+
+// Max silhouette-motion step between two rect sets (Python authority:
+// _span_row_extent_step).  Exact per-y-boundary evaluation: rows where only
+// one side has coverage are skipped (Python's dict.get → None → continue),
+// plus the vertical row-range delta.
+int32_t rgn_row_extent_step(const std::vector<RgnRect>& cur,
+                            const std::vector<RgnRect>& prev) {
+    if (cur.empty() || prev.empty())
+        return 0;
+    std::vector<int64_t> bounds;
+    bounds.reserve((cur.size() + prev.size()) * 2);
+    for (const auto& rect : cur) {
+        bounds.push_back(rect.y);
+        bounds.push_back(static_cast<int64_t>(rect.y) + rect.height);
+    }
+    for (const auto& rect : prev) {
+        bounds.push_back(rect.y);
+        bounds.push_back(static_cast<int64_t>(rect.y) + rect.height);
+    }
+    std::sort(bounds.begin(), bounds.end());
+    bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+    const auto extent_at = [](const std::vector<RgnRect>& rects, int64_t y,
+                              int64_t* out_min_x, int64_t* out_max_x) {
+        bool found = false;
+        int64_t min_x = 0;
+        int64_t max_x = 0;
+        for (const auto& rect : rects) {
+            if (y < rect.y || y >= static_cast<int64_t>(rect.y) + rect.height)
+                continue;
+            const int64_t right = static_cast<int64_t>(rect.x) + rect.width;
+            if (!found) {
+                min_x = rect.x;
+                max_x = right;
+                found = true;
+            } else {
+                min_x = std::min<int64_t>(min_x, rect.x);
+                max_x = std::max<int64_t>(max_x, right);
+            }
+        }
+        if (found) {
+            *out_min_x = min_x;
+            *out_max_x = max_x;
+        }
+        return found;
+    };
+    int64_t step = 0;
+    for (size_t index = 0; index + 1 < bounds.size(); ++index) {
+        const int64_t y = bounds[index];
+        int64_t cur_min = 0;
+        int64_t cur_max = 0;
+        int64_t prev_min = 0;
+        int64_t prev_max = 0;
+        if (!extent_at(cur, y, &cur_min, &cur_max) ||
+            !extent_at(prev, y, &prev_min, &prev_max)) {
+            continue;
+        }
+        step = std::max(step, cur_min >= prev_min ? cur_min - prev_min
+                                                  : prev_min - cur_min);
+        step = std::max(step, cur_max >= prev_max ? cur_max - prev_max
+                                                  : prev_max - cur_max);
+    }
+    const auto y_range = [](const std::vector<RgnRect>& rects, int64_t* out_min,
+                            int64_t* out_max) {
+        int64_t min_y = rects.front().y;
+        int64_t max_y = static_cast<int64_t>(rects.front().y) + rects.front().height;
+        for (const auto& rect : rects) {
+            min_y = std::min<int64_t>(min_y, rect.y);
+            max_y = std::max<int64_t>(max_y, static_cast<int64_t>(rect.y) + rect.height);
+        }
+        *out_min = min_y;
+        *out_max = max_y;
+    };
+    int64_t cur_min_y = 0;
+    int64_t cur_max_y = 0;
+    int64_t prev_min_y = 0;
+    int64_t prev_max_y = 0;
+    y_range(cur, &cur_min_y, &cur_max_y);
+    y_range(prev, &prev_min_y, &prev_max_y);
+    step = std::max(step, cur_min_y >= prev_min_y ? cur_min_y - prev_min_y
+                                                  : prev_min_y - cur_min_y);
+    step = std::max(step, cur_max_y >= prev_max_y ? cur_max_y - prev_max_y
+                                                  : prev_max_y - cur_max_y);
+    return static_cast<int32_t>(std::min<int64_t>(step, 0x7FFFFFFF));
+}
+
+// Scan a layer's BGRA alpha into LAYER-LOCAL merged spans (exact-match row
+// merge; pathological layouts degrade to the full layer rect past the
+// bounded budget rather than stalling SetWindowRgn).
+void scan_layer_spans_local(const sao_ui_layer_s* layer, std::vector<RgnRect>* out) {
+    out->clear();
+    const uint32_t scan_width =
+        std::min(layer->bgra_width, static_cast<uint32_t>(layer->width));
+    const uint32_t scan_height =
+        std::min(layer->bgra_height, static_cast<uint32_t>(layer->height));
+    struct SpanRun {
+        uint32_t start;
+        uint32_t end;
+        uint32_t y_begin;
+        uint32_t y_end;
+    };
+    std::vector<SpanRun> active;
+    active.reserve(64);
+    bool budget_exceeded = false;
+    const auto flush_run = [&](const SpanRun& run) {
+        if (out->size() >= kMaxMergedRegionRects) {
+            budget_exceeded = true;
+            return;
+        }
+        out->push_back(RgnRect{static_cast<int32_t>(run.start),
+                               static_cast<int32_t>(run.y_begin),
+                               static_cast<int32_t>(run.end - run.start),
+                               static_cast<int32_t>(run.y_end - run.y_begin)});
+    };
+    for (uint32_t y = 0; y < scan_height && !budget_exceeded; ++y) {
+        const uint8_t* row =
+            layer->bgra_pixels.data() + static_cast<size_t>(y) * layer->bgra_stride;
+        std::vector<SpanRun> next;
+        size_t run_index = 0;
+        uint32_t x = 0;
+        while (x < scan_width) {
+            while (x < scan_width && row[x * 4u + 3u] == 0) ++x;
+            const uint32_t start = x;
+            while (x < scan_width && row[x * 4u + 3u] != 0) ++x;
+            if (start >= x) continue;
+            while (run_index < active.size() &&
+                   (active[run_index].start < start ||
+                    (active[run_index].start == start && active[run_index].end < x))) {
+                flush_run(active[run_index++]);
+                if (budget_exceeded) break;
+            }
+            if (budget_exceeded) break;
+            if (run_index < active.size() && active[run_index].start == start &&
+                active[run_index].end == x) {
+                active[run_index].y_end = y + 1;
+                next.push_back(active[run_index]);
+                ++run_index;
+            } else {
+                next.push_back(SpanRun{start, x, y, y + 1});
+            }
+        }
+        while (!budget_exceeded && run_index < active.size()) {
+            flush_run(active[run_index++]);
+        }
+        active = std::move(next);
+    }
+    for (const auto& run : active) {
+        if (budget_exceeded) break;
+        flush_run(run);
+    }
+    if (budget_exceeded) {
+        out->clear();
+        out->push_back(RgnRect{0, 0, layer->width, layer->height});
+    }
+}
+
+} // namespace
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
     sao_ui_compositor_handle_t compositor) {
     if (compositor == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -2718,48 +3066,150 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_sync_host_rgn(
             if (!layer->visible || !layer->input_enabled || layer->click_through ||
                 layer->input_proxy_enabled || layer->width <= 0 || layer->height <= 0 ||
                 layer->alpha <= 0.0f) continue;
+
+            // Motion pad (Python authority: _RGN_PAD_STILL/_RGN_PAD_MOVE with
+            // the velocity-scaled cap).  The DWM applies SetWindowRgn up to a
+            // frame out of step with the presented pixels, so a moving layer
+            // gets a pad sized to its per-tick translation; a settled layer
+            // keeps pixel-exact edges.
+            const bool has_prev_geometry =
+                layer->rgn_prev_x != std::numeric_limits<int32_t>::min();
+            const bool layer_moving =
+                has_prev_geometry &&
+                (layer->rgn_prev_x != layer->x || layer->rgn_prev_y != layer->y);
+            int32_t pad = 0;
+            if (layer_moving) {
+                const int64_t dx =
+                    static_cast<int64_t>(layer->x) - layer->rgn_prev_x;
+                const int64_t dy =
+                    static_cast<int64_t>(layer->y) - layer->rgn_prev_y;
+                const int64_t step =
+                    std::max(dx < 0 ? -dx : dx, dy < 0 ? -dy : dy);
+                pad = static_cast<int32_t>(std::min<int64_t>(
+                    kRgnPadMoveCap, std::max<int64_t>(kRgnPadMove, step * 2)));
+            }
+            const auto reset_rgn_motion_state = [&] {
+                layer->rgn_union_prev.clear();
+                layer->rgn_emit_spans.clear();
+                layer->rgn_static_ticks = 0;
+                layer->rgn_cache_revision = UINT64_MAX;
+            };
+            const auto finish_geometry = [&] {
+                layer->rgn_prev_x = layer->x;
+                layer->rgn_prev_y = layer->y;
+            };
+
             if (!layer->input_rects.empty()) {
+                // Logical input rects override alpha scanning; they move
+                // rigidly with the layer, so the motion pad alone keeps
+                // drag-time hit coverage in step with the presented pixels.
+                reset_rgn_motion_state();
                 for (const auto& rect : layer->input_rects) {
                     if (!append_host_input_rect(
-                            &rects, static_cast<int64_t>(layer->x) + rect.x,
-                            static_cast<int64_t>(layer->y) + rect.y,
-                            rect.width, rect.height)) {
+                            &rects,
+                            static_cast<int64_t>(layer->x) + rect.x - pad,
+                            static_cast<int64_t>(layer->y) + rect.y - pad,
+                            rect.width + 2 * pad, rect.height + 2 * pad)) {
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
                     }
                 }
+                finish_geometry();
                 continue;
             }
             if (layer->rect_hit || layer->bgra_pixels.empty() ||
                 layer->bgra_width == 0 || layer->bgra_height == 0) {
-                if (!append_host_input_rect(&rects, layer->x, layer->y,
-                                            layer->width, layer->height)) {
+                reset_rgn_motion_state();
+                if (!append_host_input_rect(&rects,
+                                            static_cast<int64_t>(layer->x) - pad,
+                                            static_cast<int64_t>(layer->y) - pad,
+                                            layer->width + 2 * pad,
+                                            layer->height + 2 * pad)) {
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 }
+                finish_geometry();
                 continue;
             }
-            const uint32_t scan_width = std::min(
-                layer->bgra_width, static_cast<uint32_t>(layer->width));
-            const uint32_t scan_height = std::min(
-                layer->bgra_height, static_cast<uint32_t>(layer->height));
-            for (uint32_t y = 0; y < scan_height; ++y) {
-                const uint8_t* row = layer->bgra_pixels.data() +
-                    static_cast<size_t>(y) * layer->bgra_stride;
-                uint32_t x = 0;
-                while (x < scan_width) {
-                    while (x < scan_width && row[x * 4u + 3u] == 0) ++x;
-                    const uint32_t start = x;
-                    while (x < scan_width && row[x * 4u + 3u] != 0) ++x;
-                    if (start < x) {
-                        if (!append_host_input_rect(
-                                &rects,
-                                static_cast<int64_t>(layer->x) + start,
-                                static_cast<int64_t>(layer->y) + y,
-                                x - start, 1)) {
-                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                        }
+
+            // Content-addressed span cache: keyed only on visual_revision so
+            // a pure translation never forces a rescan (Python keys spans on
+            // content too; the C++ port caches LAYER-LOCAL spans and
+            // translates at emit time instead).
+            bool content_changed = false;
+            if (!compositor->config.enable_rgn_cache ||
+                layer->rgn_cache_revision != layer->visual_revision) {
+                scan_layer_spans_local(layer.get(), &layer->rgn_cached_spans);
+                layer->rgn_cache_revision = layer->visual_revision;
+                content_changed = true;
+            }
+            std::vector<SaoOverlayHostInputRect> current_host;
+            current_host.reserve(layer->rgn_cached_spans.size());
+            translate_rgn_rects(layer->rgn_cached_spans, layer->x, layer->y,
+                                &current_host);
+
+            std::vector<SaoOverlayHostInputRect> emit;
+            const bool union_enabled = compositor->config.enable_temporal_union;
+            if (content_changed || layer_moving) {
+                // Dirty tick (Python authority): the clip region and the
+                // presented pixels travel two unsynchronized pipelines, so
+                // an exact-fit region built from THIS frame can be paired on
+                // screen with the PREVIOUS frame's pixels.  Emit the
+                // predictive pad + the temporal union so both pairings stay
+                // covered; the pad scales to the MEASURED silhouette motion
+                // (x2 headroom) and never sits at a fixed worst-case width.
+                if (union_enabled && !layer->rgn_union_prev.empty()) {
+                    const int32_t cstep =
+                        rgn_row_extent_step(current_host, layer->rgn_union_prev);
+                    pad = std::max(pad, std::min(kRgnPadAnimCap,
+                                                 std::max(kRgnPadAnimMin, cstep * 2)));
+                } else if (union_enabled) {
+                    pad = std::max(pad, kRgnPadMove);
+                }
+                if (pad > 0) {
+                    pad_merge_rgn_rects(current_host, pad, &emit);
+                    if (union_enabled && !layer->rgn_union_prev.empty()) {
+                        pad_merge_rgn_rects(layer->rgn_union_prev, pad, &emit);
+                    }
+                } else {
+                    emit = current_host;
+                    if (union_enabled && !layer->rgn_union_prev.empty()) {
+                        emit.insert(emit.end(), layer->rgn_union_prev.begin(),
+                                    layer->rgn_union_prev.end());
                     }
                 }
+                if (union_enabled) {
+                    layer->rgn_union_prev = current_host;
+                    layer->rgn_emit_spans = emit;
+                    layer->rgn_static_ticks = 0;
+                }
+            } else if (union_enabled &&
+                       layer->rgn_static_ticks < kRgnStaticSettleTicks &&
+                       !layer->rgn_emit_spans.empty()) {
+                // Unchanged this tick, but the last change is still within
+                // the pairing-skew window — hold the padded union so a
+                // late-applying region can't clip the final frame.  Reusing
+                // the emitted list verbatim also keeps the SetWindowRgn key
+                // stable instead of oscillating union->exact->union.
+                ++layer->rgn_static_ticks;
+                emit = layer->rgn_emit_spans;
+            } else {
+                // Quiescent past the skew window: settle back to the
+                // exact-fit spans so idle click-through stays per-pixel
+                // precise (no permanent pad halo).
+                emit = std::move(current_host);
             }
+            if (emit.size() > kMaxMergedRegionRects) {
+                emit.assign(1, SaoOverlayHostInputRect{layer->x, layer->y,
+                                                       layer->width, layer->height});
+                if (union_enabled)
+                    layer->rgn_emit_spans = emit;
+            }
+            for (const auto& rect : emit) {
+                if (!append_host_input_rect(&rects, rect.x, rect.y, rect.width,
+                                            rect.height)) {
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                }
+            }
+            finish_geometry();
         }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;

@@ -28,6 +28,7 @@
 #include "widget_typed_internal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -35,6 +36,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -129,7 +131,7 @@ int32_t glyph_advance_for_slot(int32_t font_slot) {
 // UTF-8 → glyph count (naive: counts non-continuation bytes; good
 // enough for the 8-px measurement grid).  '\n' still counts as one
 // glyph but is stripped by the line-break pass separately.
-size_t utf8_glyph_count(const std::string& text) {
+size_t utf8_glyph_count(std::string_view text) {
     size_t n = 0;
     for (unsigned char c : text) {
         if ((c & 0xC0) != 0x80) ++n;   // count leading bytes only
@@ -163,13 +165,15 @@ std::vector<std::string> wrap_line(const std::string& line,
         out.push_back(line);
         return out;
     }
-    const int32_t effective_advance = advance_px +
-        static_cast<int32_t>(letter_spacing_px < 0 ? 0 : letter_spacing_px);
-    if (effective_advance <= 0) { out.push_back(line); return out; }
-    const size_t max_glyphs_per_line =
-        static_cast<size_t>(std::max(int32_t{1}, available_w / effective_advance));
+    const float spacing = std::max(0.0F, letter_spacing_px);
+    const float effective_advance = static_cast<float>(advance_px) + spacing;
+    if (effective_advance <= 0.0F) { out.push_back(line); return out; }
+    const size_t max_glyphs_per_line = static_cast<size_t>(std::max(
+        1.0F, std::floor((static_cast<float>(available_w) + spacing) /
+                         effective_advance)));
     // Word-wrap: split on ASCII space; if a token is longer than the
-    // line budget, hard-break it.
+    // line budget, hard-break it on code-point boundaries (a multi-byte
+    // UTF-8 sequence always stays together in one line).
     std::string cur;
     size_t cur_glyphs = 0;
     auto flush_line = [&]() { out.push_back(cur); cur.clear(); cur_glyphs = 0; };
@@ -180,12 +184,23 @@ std::vector<std::string> wrap_line(const std::string& line,
             flush_line();
         }
         if (tglyphs > max_glyphs_per_line) {
-            // Hard-break: split by glyph count (naive by byte).
-            for (char c : t) {
-                if (cur_glyphs >= max_glyphs_per_line) flush_line();
-                cur.push_back(c);
-                if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++cur_glyphs;
+            // Hard-break: walk decoded code points and cut only between
+            // them, so continuation bytes never end up on their own line.
+            size_t pos = 0;
+            size_t line_glyphs = cur_glyphs;
+            while (pos < t.size()) {
+                const unsigned char lead = static_cast<unsigned char>(t[pos]);
+                size_t cp_len = 1;
+                if ((lead & 0xE0) == 0xC0) cp_len = 2;
+                else if ((lead & 0xF0) == 0xE0) cp_len = 3;
+                else if ((lead & 0xF8) == 0xF0) cp_len = 4;
+                if (pos + cp_len > t.size()) cp_len = t.size() - pos;
+                if (line_glyphs >= max_glyphs_per_line) { flush_line(); line_glyphs = 0; }
+                cur.append(t, pos, cp_len);
+                ++line_glyphs;
+                pos += cp_len;
             }
+            cur_glyphs = line_glyphs;
             return;
         }
         if (cur_glyphs > 0) { cur.push_back(' '); ++cur_glyphs; }
@@ -204,10 +219,70 @@ std::vector<std::string> wrap_line(const std::string& line,
     return out;
 }
 
-// Compute measured (width, height) for a label.  `available_w<=0` →
-// unconstrained (single logical line width).
-void measure_label_locked(LabelState& s, int32_t available_w,
-                          int32_t* out_w, int32_t* out_h) {
+float label_letter_spacing(const SaoUiLabelSpec& spec) noexcept {
+    return std::max(0.0F, spec.letter_spacing_px);
+}
+
+int32_t label_line_width(const SaoUiLabelSpec& spec,
+                         std::string_view line) noexcept {
+    const size_t glyphs = utf8_glyph_count(line);
+    if (glyphs == 0)
+        return 0;
+    const int32_t advance = glyph_advance_for_slot(spec.font_slot);
+    const float width = static_cast<float>(glyphs) * static_cast<float>(advance) +
+                        label_letter_spacing(spec) *
+                            static_cast<float>(glyphs - 1U);
+    return static_cast<int32_t>(std::ceil(width));
+}
+
+std::string utf8_prefix_glyphs(std::string_view text, size_t glyph_limit) {
+    size_t offset = 0;
+    size_t glyphs = 0;
+    while (offset < text.size() && glyphs < glyph_limit) {
+        const unsigned char lead = static_cast<unsigned char>(text[offset]);
+        size_t bytes = 1;
+        if ((lead & 0xE0U) == 0xC0U)
+            bytes = 2;
+        else if ((lead & 0xF0U) == 0xE0U)
+            bytes = 3;
+        else if ((lead & 0xF8U) == 0xF0U)
+            bytes = 4;
+        offset += std::min(bytes, text.size() - offset);
+        ++glyphs;
+    }
+    return std::string(text.substr(0, offset));
+}
+
+std::string ellipsize_label_line(std::string_view text, int32_t max_width,
+                                 const SaoUiLabelSpec& spec) {
+    constexpr std::string_view ellipsis = "\xE2\x80\xA6";
+    if (max_width <= 0)
+        return std::string(text) + std::string(ellipsis);
+    const int32_t advance = glyph_advance_for_slot(spec.font_slot);
+    const float effective_advance = static_cast<float>(advance) +
+                                    label_letter_spacing(spec);
+    if (effective_advance <= 0.0F)
+        return {};
+    const size_t capacity = static_cast<size_t>(std::max(
+        0.0F, std::floor((static_cast<float>(max_width) +
+                          label_letter_spacing(spec)) /
+                         effective_advance)));
+    if (capacity == 0)
+        return {};
+    std::string result = utf8_prefix_glyphs(text, capacity - 1U);
+    result.append(ellipsis);
+    return result;
+}
+
+// Build the final visual line set for a label given an available width:
+// splits on '\n', word-wraps when spec.wrap, truncates to max_lines with
+// an ellipsis, and (single-line no-wrap case) ellipsizes the whole
+// result when it cannot fit the available width.  Returns the measured
+// width/height for the produced lines.
+std::vector<std::string> label_visual_lines_locked(LabelState& s,
+                                                   int32_t available_w,
+                                                   int32_t* out_w,
+                                                   int32_t* out_h) {
     const int32_t advance = glyph_advance_for_slot(s.spec.font_slot);
     const int32_t line_h  = s.spec.font_size_px > 0 ? s.spec.font_size_px : 16;
     auto logical = split_lines(s.text);
@@ -216,7 +291,7 @@ void measure_label_locked(LabelState& s, int32_t available_w,
     for (auto& ll : logical) {
         if (s.spec.wrap && available_w > 0) {
             auto wrapped = wrap_line(ll, available_w, advance,
-                                     s.spec.letter_spacing_px);
+                                     label_letter_spacing(s.spec));
             for (auto& w : wrapped) visual.push_back(std::move(w));
         } else {
             visual.push_back(ll);
@@ -225,23 +300,71 @@ void measure_label_locked(LabelState& s, int32_t available_w,
     if (s.spec.max_lines > 0 &&
         static_cast<int32_t>(visual.size()) > s.spec.max_lines) {
         visual.resize(static_cast<size_t>(s.spec.max_lines));
-        // truncated tail marker
-        if (!visual.empty()) visual.back() += "\xE2\x80\xA6";   // '…'
+        if (!visual.empty())
+            visual.back() = ellipsize_label_line(visual.back(), available_w,
+                                                  s.spec);
+    }
+    // Single-line no-wrap: ellipsize to the available width so paint
+    // never emits unbounded overflow long chains.
+    if (visual.size() == 1 && !s.spec.wrap && available_w > 0 &&
+        label_line_width(s.spec, visual[0]) > available_w) {
+        visual[0] = ellipsize_label_line(visual[0], available_w, s.spec);
     }
     int32_t max_w = 0;
-    for (auto& v : visual) {
-        const int32_t w = static_cast<int32_t>(utf8_glyph_count(v)) * advance +
-            static_cast<int32_t>(s.spec.letter_spacing_px * (utf8_glyph_count(v) > 0
-                ? static_cast<float>(utf8_glyph_count(v) - 1) : 0.0f));
-        max_w = std::max(max_w, w);
-    }
+    for (const auto& line : visual)
+        max_w = std::max(max_w, label_line_width(s.spec, line));
     const int32_t total_h = static_cast<int32_t>(visual.size()) * line_h;
-    if (out_w) *out_w = max_w;
+    const int32_t measured_width =
+        std::min(max_w, available_w > 0 ? available_w : max_w);
+    if (out_w) *out_w = measured_width;
     if (out_h) *out_h = total_h;
     s.cached_max_width = available_w;
-    s.cached_width = max_w;
+    s.cached_width = measured_width;
     s.cached_height = total_h;
     s.measure_dirty = false;
+    return visual;
+}
+
+// Compute measured (width, height) for a label.  `available_w<=0` →
+// unconstrained (single logical line width).
+void measure_label_locked(LabelState& s, int32_t available_w,
+                          int32_t* out_w, int32_t* out_h) {
+    (void)label_visual_lines_locked(s, available_w, out_w, out_h);
+}
+
+sao_status_t paint_label_line(sao_ui_paint_ctx_handle_t context, float x,
+                              float y, std::string_view line, float font_size,
+                              uint32_t foreground,
+                              const SaoUiLabelSpec& spec) {
+    const float spacing = label_letter_spacing(spec);
+    if (spacing <= 0.0F) {
+        const std::string text(line);
+        return sao_ui_paint_ctx_draw_utf8(context, x, y, text.c_str(),
+                                          font_size, foreground);
+    }
+    const float step = static_cast<float>(glyph_advance_for_slot(spec.font_slot)) +
+                       spacing;
+    size_t offset = 0;
+    float cursor = x;
+    while (offset < line.size()) {
+        const unsigned char lead = static_cast<unsigned char>(line[offset]);
+        size_t bytes = 1;
+        if ((lead & 0xE0U) == 0xC0U)
+            bytes = 2;
+        else if ((lead & 0xF0U) == 0xE0U)
+            bytes = 3;
+        else if ((lead & 0xF8U) == 0xF0U)
+            bytes = 4;
+        bytes = std::min(bytes, line.size() - offset);
+        const std::string glyph(line.substr(offset, bytes));
+        const sao_status_t status = sao_ui_paint_ctx_draw_utf8(
+            context, cursor, y, glyph.c_str(), font_size, foreground);
+        if (status != SAO_STATUS_OK)
+            return status;
+        cursor += step;
+        offset += bytes;
+    }
+    return SAO_STATUS_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +427,10 @@ void fmt_rel_into(int64_t epoch_ms, int64_t base_epoch_ms,
         return;
     }
     const int64_t delta = epoch_ms - base_epoch_ms;
-    const uint64_t abs_delta =
-        static_cast<uint64_t>(delta < 0 ? -delta : delta);
+    // Unsigned magnitude avoids the INT64_MIN negation overflow.
+    const uint64_t abs_delta = delta < 0
+        ? (0ull - static_cast<uint64_t>(delta))
+        : static_cast<uint64_t>(delta);
     char sub[32] = {0};
     fmt_dur_into(abs_delta, sub, sizeof(sub));
     std::snprintf(buf, buf_size, "%s%s", delta >= 0 ? "+" : "-", sub);
@@ -837,22 +962,88 @@ sao_status_t sao::ui::detail::widget_text_paint(
         default:
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;
         }
+        const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
         if (spec.bg_argb != 0) {
+            const uint32_t background = high_contrast
+                                            ? sao::ui::detail::panel_theme_color(
+                                                  SAO_UI_TOKEN_APP_BG)
+                                            : spec.bg_argb;
             const sao_status_t fill_status = sao_ui_paint_ctx_fill_rect(
                 context, static_cast<float>(x), static_cast<float>(y),
-                static_cast<float>(width), static_cast<float>(height), spec.bg_argb);
+                static_cast<float>(width), static_cast<float>(height), background);
             if (fill_status != SAO_STATUS_OK)
                 return fill_status;
         }
         const uint32_t foreground =
-            spec.fg_argb == 0
+            spec.fg_argb == 0 || high_contrast
                 ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_TEXT)
                 : spec.fg_argb;
         const float font_size = static_cast<float>(
             spec.font_size_px > 0 ? spec.font_size_px : std::clamp(height - 4, 5, 16));
-        return sao_ui_paint_ctx_draw_utf8(
-            context, static_cast<float>(x + 2), static_cast<float>(y + 2),
-            text.c_str(), font_size, foreground);
+        // Resolve the center point inside the widget rect (the center is
+        // the fixed reference for both align and anchor semantics).
+        const float cx = static_cast<float>(x) + static_cast<float>(width) * 0.5f;
+        const float cy = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
+        // Horizontal origin from align + anchor column.
+        //   LEFT   → west edge (+pad)
+        //   CENTER → center
+        //   RIGHT  → east edge (-pad)
+        // anchor column shifts the block within the rect when align is unset.
+        const int32_t anchor = spec.anchor;
+        const bool anchor_column_west  = (anchor == SAO_UI_ANCHOR_NW ||
+                                          anchor == SAO_UI_ANCHOR_W ||
+                                          anchor == SAO_UI_ANCHOR_SW);
+        const bool anchor_column_east  = (anchor == SAO_UI_ANCHOR_NE ||
+                                          anchor == SAO_UI_ANCHOR_E ||
+                                          anchor == SAO_UI_ANCHOR_SE);
+        const bool anchor_row_north    = (anchor == SAO_UI_ANCHOR_NW ||
+                                          anchor == SAO_UI_ANCHOR_NE ||
+                                          anchor == SAO_UI_ANCHOR_N);
+        const bool anchor_row_south    = (anchor == SAO_UI_ANCHOR_SW ||
+                                          anchor == SAO_UI_ANCHOR_SE ||
+                                          anchor == SAO_UI_ANCHOR_S);
+        const int32_t pad = 2;
+        const int32_t available_w = std::max(0, width - pad * 2);
+        const int32_t line_h = spec.font_size_px > 0 ? spec.font_size_px : 16;
+        LabelState visual_state;
+        visual_state.spec = spec;
+        visual_state.spec.text_utf8 = nullptr;
+        visual_state.text = std::move(text);
+        int32_t block_height = 0;
+        const std::vector<std::string> lines = label_visual_lines_locked(
+            visual_state, available_w, nullptr, &block_height);
+        float origin_y = static_cast<float>(y) + static_cast<float>(pad);
+        if (anchor_row_south) {
+            origin_y = static_cast<float>(y + height - pad - block_height);
+        } else if (!anchor_row_north) {
+            origin_y = cy - static_cast<float>(block_height) * 0.5F;
+        }
+        // Draw each line, skipping lines completely outside the widget
+        // vertical range (the paint context clip also constrains us).
+        float draw_y = origin_y;
+        const float bottom_bound = static_cast<float>(y) + static_cast<float>(height);
+        for (const auto& line : lines) {
+            if (draw_y + font_size <= static_cast<float>(y) ||
+                draw_y >= bottom_bound) {
+                draw_y += static_cast<float>(line_h);
+                continue;
+            }
+            const int32_t line_width = label_line_width(spec, line);
+            float line_x = static_cast<float>(x + pad);
+            if (spec.align == SAO_UI_ALIGN_CENTER) {
+                line_x = cx - static_cast<float>(line_width) * 0.5F;
+            } else if (spec.align == SAO_UI_ALIGN_RIGHT || anchor_column_east) {
+                line_x = static_cast<float>(x + width - pad - line_width);
+            } else if (!anchor_column_west && spec.align != SAO_UI_ALIGN_LEFT) {
+                line_x = static_cast<float>(x + pad);
+            }
+            const sao_status_t draw_status = paint_label_line(
+                context, line_x, draw_y, line, font_size, foreground, spec);
+            if (draw_status != SAO_STATUS_OK)
+                return draw_status;
+            draw_y += static_cast<float>(line_h);
+        }
+        return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
