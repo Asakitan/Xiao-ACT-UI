@@ -84,6 +84,7 @@ struct AppState {
     bool shell_active = false;
     bool license_active = false;
     bool streaming_entitled = false;
+    bool ui_online = false;
 };
 
 bool shouldEmitRtIoReady(const AppState& state,
@@ -118,7 +119,7 @@ class App {
 
     // Reverse-order teardown.  Called by run() on both success and every
     // fatal-error branch.  Safe to call multiple times.
-    void shutdown() noexcept;
+    bool shutdown() noexcept;
 
     // State accessor for tests.
     const AppState& state() const noexcept {
@@ -132,8 +133,11 @@ class App {
 
     AppState state_{};
     UserMenu user_menu_{};
+    void stopAutoUpdate() noexcept;
     HANDLE single_instance_mutex_ = nullptr;
     HANDLE dual_run_driver_mutex_ = nullptr;
+    HANDLE auto_update_cancel_event_ = nullptr;
+    HANDLE auto_update_worker_ = nullptr;
     bool dual_run_driver_acquired_ = false;
     bool security_initialized_ = false;
     bool smoke_ready_printed_ = false;

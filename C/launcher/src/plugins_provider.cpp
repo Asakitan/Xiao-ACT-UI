@@ -103,6 +103,11 @@ namespace loader = sao::plugins::loader;
 
 thread_local sao_plugins_registry* g_active_operation_registry = nullptr;
 
+std::filesystem::path pathFromUtf8(std::string_view value) {
+    const auto* first = reinterpret_cast<const char8_t*>(value.data());
+    return std::filesystem::path(first, first + value.size());
+}
+
 struct ProviderOwnerState {
     std::atomic_uint32_t leases{0};
 };
@@ -1567,15 +1572,14 @@ bool loadConfiguredManifest(const std::wstring& manifest_path, loader::plugin_ma
     const auto directory = std::filesystem::path(manifest_path).parent_path();
     std::error_code error;
     if (manifest.native_entry.empty() &&
-        (!std::filesystem::is_regular_file(directory / std::filesystem::u8path(manifest.entry),
-                                           error) ||
+        (!std::filesystem::is_regular_file(directory / pathFromUtf8(manifest.entry), error) ||
          error)) {
         return false;
     }
     if (!manifest.native_entry.empty()) {
         error.clear();
-        if (!std::filesystem::is_regular_file(
-                directory / std::filesystem::u8path(manifest.native_entry), error) ||
+        if (!std::filesystem::is_regular_file(directory / pathFromUtf8(manifest.native_entry),
+                                              error) ||
             error) {
             return false;
         }
@@ -1617,10 +1621,9 @@ int32_t registerProductionProviders(sao_plugins_registry_body& owned) noexcept {
     }
 }
 
-int32_t
-registerHostAdapters(sao_plugins_registry_body& owned,
-                     const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
-    (void)owned;
+int32_t registerHostAdapters(
+    [[maybe_unused]] sao_plugins_registry_body& owned,
+    [[maybe_unused]] const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
     [[maybe_unused]] int32_t status = SAO_OK;
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
     status = sao::plugins::emma_host::sao_plugins_emma_register_loader_adapter(&owned.emma_owner);
@@ -1734,8 +1737,7 @@ restoreReloadTargets(const std::vector<ReloadTarget>& targets,
     return aggregate;
 }
 
-int32_t unregisterHostAdapters(sao_plugins_registry_body& owned) noexcept {
-    (void)owned;
+int32_t unregisterHostAdapters([[maybe_unused]] sao_plugins_registry_body& owned) noexcept {
     [[maybe_unused]] int32_t status = SAO_OK;
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
     if (owned.csharp_owner != nullptr) {

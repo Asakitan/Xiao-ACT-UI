@@ -11,10 +11,15 @@
 
 namespace sao::launcher {
 
-void takeUiOffline(AppState& state) noexcept {
-    if (state.platform_ctx) {
-        (void)sao_ui_take_offline(static_cast<sao_platform_ctx*>(state.platform_ctx));
+bool takeUiOffline(AppState& state) noexcept {
+    if (!state.ui_online) return true;
+    if (state.platform_ctx == nullptr) return false;
+    if (sao_ui_take_offline(static_cast<sao_platform_ctx*>(state.platform_ctx)) !=
+        SAO_STATUS_OK) {
+        return false;
     }
+    state.ui_online = false;
+    return true;
 }
 
 bool shutdownPlugins(AppState& state) noexcept {
@@ -77,7 +82,7 @@ void releaseSingleInstanceMutex(AppState& /*state*/) noexcept {
 }
 
 bool runFullShutdown(AppState& state, bool security_initialized) noexcept {
-    takeUiOffline(state);
+    if (!takeUiOffline(state)) return false;
     if (!shutdownPlugins(state)) {
         return false;
     }

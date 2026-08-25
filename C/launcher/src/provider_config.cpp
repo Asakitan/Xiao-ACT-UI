@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -12,6 +13,10 @@ namespace {
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+constexpr uint32_t kDefaultHeartbeatIntervalMs = 300000U;
+constexpr std::string_view kNativeUpdateManifestUrl =
+    "http://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
 
 std::mutex g_configuration_mutex;
 LauncherProviderConfiguration g_configuration;
@@ -33,13 +38,145 @@ bool decodeHex(std::string_view input, uint8_t* output, size_t output_size) {
     return true;
 }
 
+bool isAllZero(const std::array<uint8_t, 32>& value) {
+    uint8_t aggregate = 0;
+    for (const uint8_t byte : value) aggregate |= byte;
+    return aggregate == 0;
+}
+
+bool isPrintableAscii(std::string_view value) {
+    return std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+        return ch >= 0x20u && ch <= 0x7eu;
+    });
+}
+
+bool validPort(std::string_view value) {
+    if (value.empty() || value.size() > 5) return false;
+    uint32_t port = 0;
+    for (const unsigned char ch : value) {
+        if (!std::isdigit(ch)) return false;
+        port = port * 10u + static_cast<uint32_t>(ch - '0');
+    }
+    return port != 0 && port <= 65535u;
+}
+
+bool validHttpsEndpoint(std::string_view endpoint) {
+    constexpr std::string_view scheme = "https://";
+    constexpr size_t endpoint_capacity = 512;
+    constexpr size_t longest_operation = 9; // "heartbeat"
+    if (endpoint.size() + 1u + longest_operation + 1u > endpoint_capacity ||
+        endpoint.size() <= scheme.size() || endpoint.find_first_of("?#\\") !=
+            std::string_view::npos || !isPrintableAscii(endpoint)) {
+        return false;
+    }
+    for (size_t index = 0; index < scheme.size(); ++index) {
+        const auto lhs = static_cast<unsigned char>(endpoint[index]);
+        const auto rhs = static_cast<unsigned char>(scheme[index]);
+        if (std::tolower(lhs) != std::tolower(rhs)) return false;
+    }
+    const size_t authority_end = endpoint.find('/', scheme.size());
+    const std::string_view authority = endpoint.substr(
+        scheme.size(), authority_end == std::string_view::npos
+                           ? std::string_view::npos
+                           : authority_end - scheme.size());
+    if (authority.empty() || authority.find('@') != std::string_view::npos) return false;
+    if (authority.front() == '[') {
+        const size_t close = authority.find(']');
+        if (close == std::string_view::npos || close == 1) return false;
+        const auto suffix = authority.substr(close + 1);
+        return suffix.empty() || (suffix.front() == ':' && validPort(suffix.substr(1)));
+    }
+    const size_t first_colon = authority.find(':');
+    const size_t last_colon = authority.rfind(':');
+    if (first_colon != last_colon) return false;
+    const std::string_view host = authority.substr(0, first_colon);
+    if (host.empty()) return false;
+    return first_colon == std::string_view::npos ||
+        validPort(authority.substr(first_colon + 1));
+}
+
+
+bool validHttpManifestUrl(std::string_view endpoint) {
+    constexpr size_t endpoint_capacity = 2048;
+    if (endpoint.empty() || endpoint.size() >= endpoint_capacity ||
+        endpoint.find_first_of("#\\@") != std::string_view::npos ||
+        !isPrintableAscii(endpoint)) {
+        return false;
+    }
+
+    const size_t scheme_end = endpoint.find("://");
+    if (scheme_end == std::string_view::npos) return false;
+    const std::string_view scheme = endpoint.substr(0, scheme_end);
+    const auto matches = [&](std::string_view expected) {
+        if (scheme.size() != expected.size()) return false;
+        for (size_t index = 0; index < expected.size(); ++index) {
+            if (std::tolower(static_cast<unsigned char>(scheme[index])) !=
+                static_cast<unsigned char>(expected[index])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!matches("http") && !matches("https")) return false;
+
+    const size_t authority_start = scheme_end + 3u;
+    if (authority_start >= endpoint.size()) return false;
+    const size_t authority_end = endpoint.find_first_of("/?", authority_start);
+    const std::string_view authority = endpoint.substr(
+        authority_start,
+        authority_end == std::string_view::npos
+            ? std::string_view::npos
+            : authority_end - authority_start);
+    if (authority.empty()) return false;
+
+    if (authority.front() == '[') {
+        const size_t close = authority.find(']');
+        if (close == std::string_view::npos || close == 1u) return false;
+        const auto suffix = authority.substr(close + 1u);
+        if (!suffix.empty() &&
+            (suffix.front() != ':' || !validPort(suffix.substr(1)))) {
+            return false;
+        }
+    } else {
+        const size_t first_colon = authority.find(':');
+        const size_t last_colon = authority.rfind(':');
+        if (first_colon != last_colon) return false;
+        const std::string_view host = authority.substr(0, first_colon);
+        if (host.empty()) return false;
+        if (first_colon != std::string_view::npos &&
+            !validPort(authority.substr(first_colon + 1))) {
+            return false;
+        }
+    }
+
+    const size_t path_start = endpoint.find('/', authority_start);
+    if (path_start == std::string_view::npos) return false;
+    const size_t query_start = endpoint.find('?', path_start);
+    const std::string_view path = endpoint.substr(
+        path_start,
+        query_start == std::string_view::npos
+            ? std::string_view::npos
+            : query_start - path_start);
+    return path.size() >= 5u &&
+        std::equal(path.end() - 5, path.end(), ".json",
+                   [](char lhs, char rhs) {
+                       return std::tolower(static_cast<unsigned char>(lhs)) ==
+                           std::tolower(static_cast<unsigned char>(rhs));
+                   });
+}
+
 bool sectionEnabled(const json& section) {
     const auto enabled = section.find("enabled");
     return enabled == section.end() ? true : enabled->get<bool>();
 }
 
 fs::path resolvePath(const fs::path& base, const std::string& value) {
-    auto path = fs::u8path(value);
+    std::u8string utf8;
+    utf8.reserve(value.size());
+    for (const unsigned char byte : value) {
+        utf8.push_back(static_cast<char8_t>(byte));
+    }
+    auto path = fs::path(utf8);
     if (path.is_relative()) path = base / path;
     return path.lexically_normal();
 }
@@ -135,13 +272,46 @@ bool parseLicense(const json& root, LicenseProviderConfiguration& output) {
     }
     output.endpoint = endpoint->get<std::string>();
     output.build_id = section->value("build_id", std::string{});
+    if (!validHttpsEndpoint(output.endpoint) || output.build_id.empty() ||
+        output.build_id.size() > 63u || !isPrintableAscii(output.build_id)) {
+        return false;
+    }
     if (section->value("responses_prevalidated", false)) return false;
     output.responses_prevalidated = false;
-    output.heartbeat_interval_ms = section->value("heartbeat_interval_ms", 0U);
+    output.heartbeat_interval_ms = section->value(
+        "heartbeat_interval_ms", kDefaultHeartbeatIntervalMs);
+    if (output.heartbeat_interval_ms == 0) {
+        output.heartbeat_interval_ms = kDefaultHeartbeatIntervalMs;
+    }
     const auto public_key = section->find("server_ed25519_pubkey");
+    const auto tls_spki_pin = section->find("server_tls_spki_sha256");
     return public_key != section->end() && public_key->is_string() &&
         decodeHex(public_key->get_ref<const std::string&>(),
-                  output.server_public_key.data(), output.server_public_key.size());
+                  output.server_public_key.data(), output.server_public_key.size()) &&
+        !isAllZero(output.server_public_key) &&
+        tls_spki_pin != section->end() && tls_spki_pin->is_string() &&
+        decodeHex(tls_spki_pin->get_ref<const std::string&>(),
+                  output.server_tls_spki_sha256.data(),
+                  output.server_tls_spki_sha256.size()) &&
+        !isAllZero(output.server_tls_spki_sha256);
+}
+
+
+bool parseUpdate(const json& root, UpdateProviderConfiguration& output) {
+    const auto section = root.find("update");
+    if (section == root.end()) return true;
+    if (!section->is_object()) return false;
+    output.enabled = sectionEnabled(*section);
+    if (!output.enabled) return true;
+
+    const auto manifest_url = section->find("manifest_url");
+    if (manifest_url == section->end() || !manifest_url->is_string() ||
+        manifest_url->get_ref<const std::string&>().empty()) {
+        return false;
+    }
+    output.manifest_url = manifest_url->get<std::string>();
+    return validHttpManifestUrl(output.manifest_url) &&
+        output.manifest_url == kNativeUpdateManifestUrl;
 }
 
 bool parsePlugins(const json& root, const fs::path& base,
@@ -159,6 +329,15 @@ bool parsePlugins(const json& root, const fs::path& base,
         !parsePathArray(*section, "manifests", base, output.manifests)) {
         return false;
     }
+    const auto runtime_manifest = section->find("runtime_manifest");
+    if (runtime_manifest != section->end()) {
+        if (!runtime_manifest->is_string() ||
+            runtime_manifest->get_ref<const std::string&>().empty()) {
+            return false;
+        }
+        output.runtime_manifest_path =
+            resolvePath(base, runtime_manifest->get<std::string>()).wstring();
+    }
     const auto python_home = section->find("python_home");
     if (python_home != section->end()) {
         if (!python_home->is_string() ||
@@ -174,14 +353,54 @@ bool parsePlugins(const json& root, const fs::path& base,
 
 } // namespace
 
+namespace {
+
+sao_status_t parseProviderConfigurationFile(
+    const fs::path& path,
+    LauncherProviderConfiguration& output) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return SAO_STATUS_INVALID_ARGUMENT;
+    const auto root = json::parse(input);
+    if (!root.is_object() ||
+        !parseShell(root, path.parent_path(), output.shell) ||
+        !parseLicense(root, output.license) ||
+        !parseUpdate(root, output.update) ||
+        !parsePlugins(root, path.parent_path(), output.plugins)) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    if (output.shell.enabled) return SAO_STATUS_NOT_IMPLEMENTED;
+    return SAO_STATUS_OK;
+}
+
+} // namespace
+
 sao_status_t loadLauncherProviderConfiguration(
     const wchar_t* base_dir,
     const wchar_t* config_path) noexcept {
     LauncherProviderConfiguration next;
     if (config_path == nullptr || config_path[0] == L'\0') {
         try {
-            if (base_dir != nullptr && base_dir[0] != L'\0') {
-                next.plugins = defaultPluginsConfiguration(fs::path(base_dir));
+            const fs::path launcher_base =
+                base_dir == nullptr || base_dir[0] == L'\0'
+                    ? fs::path{}
+                    : fs::path(base_dir).lexically_normal();
+            const fs::path default_config = launcher_base.empty()
+                ? fs::path{}
+                : launcher_base / L"SaoAuto.provider.json";
+            std::error_code error;
+            if (!default_config.empty() && fs::exists(default_config, error)) {
+                if (error) return SAO_STATUS_INVALID_ARGUMENT;
+                const auto status =
+                    parseProviderConfigurationFile(default_config, next);
+                if (status != SAO_STATUS_OK) return status;
+            } else {
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
+                if (!launcher_base.empty()) {
+                    next.plugins = defaultPluginsConfiguration(launcher_base);
+                }
+#else
+                return SAO_STATUS_INVALID_ARGUMENT;
+#endif
             }
             std::lock_guard lock(g_configuration_mutex);
             g_configuration = std::move(next);
@@ -203,20 +422,8 @@ sao_status_t loadLauncherProviderConfiguration(
             path = launcher_base / path;
         }
         path = path.lexically_normal();
-        std::ifstream input(path, std::ios::binary);
-        if (!input) return SAO_STATUS_INVALID_ARGUMENT;
-        const auto root = json::parse(input);
-        if (!root.is_object() ||
-            !parseShell(root, path.parent_path(), next.shell) ||
-            !parseLicense(root, next.license) ||
-            !parsePlugins(root, path.parent_path(), next.plugins)) {
-            return SAO_STATUS_INVALID_ARGUMENT;
-        }
-        // The repository has no serialized contract that can reconstruct
-        // sao_shell_stub_runtime_provider_t callbacks and process-relative
-        // region pointers.  A metadata filename is therefore an unsupported
-        // configuration, not a successfully installed runtime provider.
-        if (next.shell.enabled) return SAO_STATUS_NOT_IMPLEMENTED;
+        const auto status = parseProviderConfigurationFile(path, next);
+        if (status != SAO_STATUS_OK) return status;
         std::lock_guard lock(g_configuration_mutex);
         g_configuration = std::move(next);
         return SAO_STATUS_OK;

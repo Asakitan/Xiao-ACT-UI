@@ -458,6 +458,7 @@ sao_status_t sao_launcher_init_pipeline_retry_pending_cleanup(void);
 namespace sao::launcher {
 
 struct AppState;
+struct PluginsProviderConfiguration;
 
 // Build the platform ABI config used by both the GUI App and the headless
 // pipeline.  log_level_storage must remain alive while config is consumed.
@@ -465,6 +466,11 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
                          char* log_level_storage, std::size_t log_level_capacity) noexcept;
 
 bool isPaidLicenseTier(const char* tier) noexcept;
+
+// Runs the configured plugin-runtime installer after platform bring-up and
+// before plugin discovery.  A configured manifest is fail-closed.
+sao_status_t ensureConfiguredPluginRuntimes(const AppState& state,
+    const PluginsProviderConfiguration& plugins) noexcept;
 
 } // namespace sao::launcher
 #endif

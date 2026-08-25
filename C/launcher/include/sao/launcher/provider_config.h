@@ -19,8 +19,14 @@ struct LicenseProviderConfiguration {
     std::string endpoint;
     std::string build_id;
     std::array<uint8_t, 32> server_public_key{};
+    std::array<uint8_t, 32> server_tls_spki_sha256{};
     bool responses_prevalidated = false;
-    uint32_t heartbeat_interval_ms = 0;
+    uint32_t heartbeat_interval_ms = 300000;
+};
+
+struct UpdateProviderConfiguration {
+    bool enabled = false;
+    std::string manifest_url;
 };
 
 struct PluginsProviderConfiguration {
@@ -28,6 +34,7 @@ struct PluginsProviderConfiguration {
     std::vector<std::wstring> roots;
     std::vector<std::wstring> user_roots;
     std::vector<std::wstring> manifests;
+    std::wstring runtime_manifest_path;
     std::wstring python_home;
     bool workspace_walkup = false;
     uint32_t max_depth = 1;
@@ -36,6 +43,7 @@ struct PluginsProviderConfiguration {
 struct LauncherProviderConfiguration {
     ShellProviderConfiguration shell;
     LicenseProviderConfiguration license;
+    UpdateProviderConfiguration update;
     PluginsProviderConfiguration plugins;
 };
 

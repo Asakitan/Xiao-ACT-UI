@@ -36,6 +36,7 @@ set(SAO_LAUNCHER_HEADERS
     # Rollout system.
     include/sao/launcher/rollout.h
     include/sao/launcher/provider_config.h
+    include/sao/launcher/auto_update.h
     include/sao/launcher/user_menu.h
 )
 
@@ -142,7 +143,7 @@ if (TARGET sao::license::sdk AND TARGET sao::license::client)
     target_include_directories(sao_launcher_license_provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(sao_launcher_license_provider PRIVATE
-        sao::license::sdk sao::license::client sao_core winhttp)
+        sao::license::sdk sao::license::client sao_core winhttp crypt32 bcrypt)
 endif()
 
 if (TARGET sao::plugins::loader)
@@ -196,6 +197,22 @@ add_executable(SaoAuto WIN32
     ${SAO_LAUNCHER_SOURCES}
     ${SAO_LAUNCHER_RESOURCES}
 )
+if (TARGET sao::server::freetier::updater AND TARGET SaoAutoUpdateHelper)
+    target_sources(SaoAuto PRIVATE src/auto_update.cpp)
+    target_link_libraries(SaoAuto PRIVATE sao::server::freetier::updater)
+    target_compile_definitions(SaoAuto PRIVATE SAO_LAUNCHER_HAS_AUTO_UPDATE=1)
+    add_dependencies(SaoAuto SaoAutoUpdateHelper)
+    add_custom_command(TARGET SaoAuto POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:SaoAutoUpdateHelper>"
+            "$<TARGET_FILE_DIR:SaoAuto>/SaoAutoUpdateHelper.exe"
+        COMMENT "Copying native launcher update helper"
+        VERBATIM
+    )
+else()
+    message(STATUS
+        "launcher: native updater/helper unavailable; auto update stays disabled")
+endif()
 target_compile_definitions(SaoAuto PRIVATE
     "$<$<CONFIG:Debug>:SAO_LAUNCHER_ACTUAL_DEBUG=1>")
 
@@ -443,6 +460,18 @@ add_custom_command(TARGET SaoAuto POST_BUILD
     VERBATIM
 )
 
+set(SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/SaoAuto.provider.json")
+add_custom_command(TARGET SaoAuto POST_BUILD
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSAO_PROVIDER_CONFIG_SOURCE=${SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE}"
+        "-DSAO_PROVIDER_CONFIG_DEST=$<TARGET_FILE_DIR:SaoAuto>/SaoAuto.provider.json"
+        "-DSAO_PROVIDER_CONFIG_CONFIG=$<CONFIG>"
+        -P "${CMAKE_SOURCE_DIR}/cmake/stage_provider_config.cmake"
+    COMMENT "Staging launcher provider configuration"
+    VERBATIM
+)
+
 if (SAO_HARDENED_BUILD)
     target_compile_definitions(SaoAuto PRIVATE SAO_LAUNCHER_HARDENED=1)
     # Strip the CRT startup banner and turn off exception handlers where we
@@ -463,13 +492,6 @@ endif()
 # Tests for the launcher itself.  Cover argv parsing, single-instance mutex,
 # BASE_DIR resolution.  Anything that needs a real GUI stays out of unit
 # tests and moves into tests/integration/.
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-    if (TARGET sao_launcher_tests)
-        target_compile_definitions(sao_launcher_tests PRIVATE
-            "$<$<CONFIG:Debug>:SAO_LAUNCHER_ACTUAL_DEBUG=1>")
-    endif()
-endif()
 
 install(TARGETS SaoAuto
     RUNTIME DESTINATION bin

@@ -6,6 +6,9 @@
 
 #include "sao/launcher/app.h"
 #include "sao/launcher/args.h"
+#if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
+#include "sao/launcher/auto_update.h"
+#endif
 #include "sao/launcher/crash_handler.h"
 #include "sao/launcher/dual_run.h"
 #include "sao/launcher/init_pipeline.h"
@@ -21,8 +24,11 @@
 #define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
 #endif
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
+#include <string>
 
 namespace sao::launcher {
 
@@ -60,12 +66,84 @@ void consolePrintLine(const char* line) noexcept {
 }
 
 void smokePrint(const AppState& state, const char* tag) noexcept {
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     if (state.smoke_mode)
         consolePrintLine(tag);
+#else
+    (void)state;
+    (void)tag;
+#endif
+}
+
+bool acceptanceSmokeMode(const AppState& state) noexcept {
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
+    return state.smoke_mode;
+#else
+    (void)state;
+    return false;
+#endif
+}
+
+bool acceptanceExitAfterInit(const AppState& state) noexcept {
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
+    return state.smoke_mode && state.exit_after_init;
+#else
+    (void)state;
+    return false;
+#endif
 }
 
 void rtIoOperatorPrint(const char* line, void*) noexcept {
     consolePrintLine(line);
+}
+
+// Startup diagnostics: enabled by --log-level=trace|debug.  Emits the
+// resolved command-line configuration plus every pipeline exit/fail mark
+// so a hung or partially-booting launcher is diagnosable from the parent
+// console without a debugger.
+bool traceDiagnosticsEnabled(const AppState& state) noexcept {
+    return _wcsicmp(state.log_level, L"trace") == 0 ||
+        _wcsicmp(state.log_level, L"debug") == 0;
+}
+
+void tracePrint(const AppState& state, const char* line) noexcept {
+    if (traceDiagnosticsEnabled(state))
+        consolePrintLine(line);
+}
+
+void tracePrintfImpl(const AppState& state, const char* format, ...) noexcept {
+    if (!traceDiagnosticsEnabled(state))
+        return;
+    char buffer[512];
+    va_list args;
+    va_start(args, format);
+    (void)vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    consolePrintLine(buffer);
+}
+
+void logStartupConfiguration(const AppState& state) noexcept {
+    if (!traceDiagnosticsEnabled(state))
+        return;
+#ifndef SAO_LAUNCHER_VERSION
+#define SAO_LAUNCHER_VERSION "0.0.0"
+#endif
+    tracePrintfImpl(state,
+                    "STARTUP SaoAuto " SAO_LAUNCHER_VERSION
+                    " safe_mode=%d smoke=%d rt_io_operator=%d "
+                    "preflight=%d input_checks=%d r5=%d mf=%d "
+                    "exit_after_validation=%d status_page=%d "
+                    "log_level=%ls config=%ls",
+                    state.safe_mode ? 1 : 0, state.smoke_mode ? 1 : 0,
+                    state.rt_io_operator ? 1 : 0,
+                    state.rt_io_preflight_only ? 1 : 0,
+                    state.rt_io_input_checks ? 1 : 0,
+                    state.rt_io_r5_check ? 1 : 0,
+                    state.rt_io_mf_check ? 1 : 0,
+                    state.rt_io_exit_after_validation ? 1 : 0,
+                    state.rt_io_force_status_page ? 1 : 0,
+                    state.log_level[0] ? state.log_level : L"info",
+                    state.config_path[0] ? state.config_path : L"<default>");
 }
 
 } // namespace
@@ -89,6 +167,7 @@ int App::run() {
         return rc;
     }
     smokePrint(state_, "STAGE_ARGS");
+    logStartupConfiguration(state_);
 
     LauncherLifecycleDecision lifecycle;
     if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) !=
@@ -97,10 +176,13 @@ int App::run() {
     }
     smokePrint(state_, "STAGE_LIFECYCLE");
     const auto finish = [&](int exit_code, const char* hint) {
+        tracePrintfImpl(state_, "EXIT %s code=%d", hint, exit_code);
         completeLauncherLifecycle(lifecycle, exit_code, hint);
         return exit_code;
     };
     const auto fail = [&](int exit_code, const wchar_t* step, const char* hint) {
+        tracePrintfImpl(state_, "FAIL step=%ls hint=%s code=%d", step, hint, exit_code);
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
         int32_t fallback_exit = 0;
         if (sao_launcher_dual_run_maybe_fallback_to_python(&lifecycle.dual_config, exit_code, step,
                                                            &fallback_exit)) {
@@ -108,10 +190,12 @@ int App::run() {
             completeLauncherLifecycle(lifecycle, exit_code, hint);
             return fallback_exit;
         }
+#endif
         shutdown();
         return finish(exit_code, hint);
     };
 
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     // 1b. Dual-run step zero.  Read %APPDATA%\SaoAuto\dual_run.json
     // and, if the user has selected python_only or a Python-preferred variant,
     // spawn Python and hand off.  See dual_run.h for the full contract.
@@ -150,6 +234,7 @@ int App::run() {
             return finish(handoff_exit, "python_handoff");
         }
     }
+#endif
     smokePrint(state_, "STAGE_DUAL_RUN");
 
     // 2. Crash handler.  Everything after this point produces a minidump on
@@ -184,7 +269,7 @@ int App::run() {
 
     // 5. License verification. The bypass exists only in the actual Debug
     // configuration, even if AppState is populated outside the CLI parser.
-#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     const bool no_license_bypass = state_.no_license;
 #else
     const bool no_license_bypass = false;
@@ -219,6 +304,12 @@ int App::run() {
     }
     smokePrint(state_, "STAGE_PLATFORM");
 
+    if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) !=
+        SAO_STATUS_OK) {
+        return fail(SAO_EXIT_PLUGIN_LOAD_FAIL, L"runtime_installer",
+                    "runtime_installer");
+    }
+
     // 9. Plugin discovery.  In safe mode we skip this entirely.
     if (!state_.safe_mode && provider_configuration.plugins.enabled) {
         rc = discoverPlugins();
@@ -236,13 +327,16 @@ int App::run() {
     // rt-io operator mode the only readiness signal is the gated
     // RT_IO_READY emitted after the strict chain succeeds; the generic
     // platform checkpoint must not claim readiness first.
-    if (state_.smoke_mode && state_.exit_after_init) {
+    if (acceptanceExitAfterInit(state_)) {
         if (!state_.rt_io_operator) {
             smokePrint(state_, "READY");
             smoke_ready_printed_ = true;
             smokePrint(state_, "STAGE_SHUTDOWN_BEGIN");
-            shutdown();
+            const bool shutdown_complete = shutdown();
             smokePrint(state_, "STAGE_SHUTDOWN_END");
+            if (!shutdown_complete) {
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown");
+            }
             return finish(SAO_EXIT_OK, nullptr);
         }
     }
@@ -253,13 +347,23 @@ int App::run() {
         return fail(rc, L"ui_bring_online", "ui_bring_online");
     }
 
+#if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
+    if (!state_.smoke_mode && !state_.exit_after_init &&
+        !state_.rt_io_operator && provider_configuration.update.enabled) {
+        startAutoUpdate(provider_configuration.update,
+                        std::wstring(state_.base_dir),
+                        std::wstring(state_.exe_path),
+                        GetCurrentThreadId(), &auto_update_cancel_event_,
+                        &auto_update_worker_);
+    }
+#endif
     // UI-online smoke checkpoint for callers that want to observe the
     // UI bring-up step too.  When only
     // ``--smoke`` is set (no ``--exit-after-init``) we still print READY
     // before falling through to the message loop so
     // interactive smoke inspection works.  Strict operator mode reports
     // readiness exclusively through the gated RT_IO_READY.
-    if (state_.smoke_mode && !smoke_ready_printed_ && !state_.rt_io_operator) {
+    if (acceptanceSmokeMode(state_) && !smoke_ready_printed_ && !state_.rt_io_operator) {
         smokePrint(state_, "READY");
         smoke_ready_printed_ = true;
     }
@@ -271,8 +375,10 @@ int App::run() {
         }
         if (state_.rt_io_preflight_only ||
             state_.rt_io_exit_after_validation ||
-            (state_.smoke_mode && state_.exit_after_init)) {
-            shutdown();
+            acceptanceExitAfterInit(state_)) {
+            if (!shutdown()) {
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown");
+            }
             return finish(SAO_EXIT_OK, nullptr);
         }
     }
@@ -280,7 +386,10 @@ int App::run() {
     // 10. Blocking main loop.  Returns when WM_QUIT is posted.
     rc = runMessageLoop();
 
-    shutdown();
+    const bool shutdown_complete = shutdown();
+    if (rc == SAO_EXIT_OK && !shutdown_complete) {
+        return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown");
+    }
     return finish(rc, rc == SAO_EXIT_OK ? nullptr : "message_loop");
 }
 
@@ -417,6 +526,7 @@ int App::bringUpUi() {
     if (sao_ui_bring_online(static_cast<sao_platform_ctx*>(state_.platform_ctx)) != SAO_STATUS_OK) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
+    state_.ui_online = true;
     if (!user_menu_.create(state_.base_dir)) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
@@ -488,10 +598,33 @@ int App::runMessageLoop() {
     return static_cast<int>(msg.wParam);
 }
 
-void App::shutdown() noexcept {
-    if (shutdown_called_) {
-        return;
+void App::stopAutoUpdate() noexcept {
+    if (auto_update_cancel_event_ != nullptr) {
+        (void)SetEvent(auto_update_cancel_event_);
     }
+    if (auto_update_worker_ != nullptr) {
+        const DWORD wait_result = WaitForSingleObject(auto_update_worker_, 5000u);
+        if (wait_result == WAIT_OBJECT_0 ||
+            WaitForSingleObject(auto_update_worker_, 0u) == WAIT_OBJECT_0) {
+            (void)CloseHandle(auto_update_worker_);
+            auto_update_worker_ = nullptr;
+            if (auto_update_cancel_event_ != nullptr) {
+                (void)CloseHandle(auto_update_cancel_event_);
+                auto_update_cancel_event_ = nullptr;
+            }
+        }
+    } else if (auto_update_cancel_event_ != nullptr) {
+        (void)CloseHandle(auto_update_cancel_event_);
+        auto_update_cancel_event_ = nullptr;
+    }
+}
+
+bool App::shutdown() noexcept {
+    if (shutdown_called_) {
+        stopAutoUpdate();
+        return true;
+    }
+    stopAutoUpdate();
     if (state_.platform_ctx != nullptr) {
         (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
     }
@@ -504,7 +637,7 @@ void App::shutdown() noexcept {
         }
     }
     if (!shutdown_complete)
-        return;
+        return false;
     security_initialized_ = false;
     if (single_instance_mutex_) {
         releaseSingleInstance(single_instance_mutex_);
@@ -516,6 +649,7 @@ void App::shutdown() noexcept {
         dual_run_driver_acquired_ = false;
     }
     shutdown_called_ = true;
+    return true;
 }
 
 } // namespace sao::launcher

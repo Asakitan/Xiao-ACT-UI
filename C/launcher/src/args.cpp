@@ -82,12 +82,22 @@ bool parseCommandLineFromArgv(int argc,
         // reports ready.  Both flags are inert in a shipped binary — the
         // tests/integration harness is their only consumer.
         if (wcsEqualsCI(a, L"--smoke")) {
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
             state.smoke_mode = true;
             continue;
+#else
+            exit_code_out = SAO_EXIT_BAD_ARGS;
+            return false;
+#endif
         }
         if (wcsEqualsCI(a, L"--exit-after-init")) {
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
             state.exit_after_init = true;
             continue;
+#else
+            exit_code_out = SAO_EXIT_BAD_ARGS;
+            return false;
+#endif
         }
         if (wcsEqualsCI(a, L"--rt-io-operator")) {
             state.rt_io_operator = true;
@@ -123,7 +133,7 @@ bool parseCommandLineFromArgv(int argc,
             continue;
         }
         if (wcsEqualsCI(a, L"--no-license")) {
-#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
             state.no_license = true;
             continue;
 #else
@@ -162,11 +172,13 @@ void printHelp() noexcept {
     // the stub uses MessageBoxW so the launcher stays purely GUI.
     static const wchar_t* help =
         L"SaoAuto.exe [options]\r\n\r\n"
-        L"  --safe-mode           Skip plugin discovery, load core UI only\r\n"
+        L"  --safe-mode           Skip plugins and privileged RT I/O; load core UI only\r\n"
         L"  --no-license          Bypass license verification (Debug only)\r\n"
+    #if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
         L"  --smoke               Enable console-attached full-stack smoke mode;\r\n"
         L"                        skip GUI message loop, print READY on stdout\r\n"
         L"  --exit-after-init     With --smoke, return after platform init is ready\r\n"
+    #endif
         L"  --rt-io-operator      Run the strict mandatory HYPERVISOR RT I/O chain\r\n"
         L"  --rt-io-preflight-only  Run read-only preflight, then cleanly exit\r\n"
         L"  --rt-io-input-checks  Add mouse-zero and F24 down/up checks\r\n"

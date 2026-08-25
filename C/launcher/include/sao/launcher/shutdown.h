@@ -10,7 +10,7 @@ namespace sao::launcher {
 
 struct AppState;
 
-void takeUiOffline(AppState& state) noexcept;
+bool takeUiOffline(AppState& state) noexcept;
 bool shutdownPlugins(AppState& state) noexcept;
 bool tearDownPlatform(AppState& state) noexcept;
 bool shutdownSecurity(bool initialized) noexcept;

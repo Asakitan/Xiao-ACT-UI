@@ -23,6 +23,7 @@ struct SharedFisheyeVisibility {
     bool plugin_manager = false;
     bool process_selector = false;
     bool entity_menu = false;
+    bool native_panel = false;
 };
 
 struct Authority {

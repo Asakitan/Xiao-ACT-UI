@@ -251,74 +251,111 @@ json row_node(json children) {
     return json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-json card_node(std::string title, json children) {
-    return json{{"type", "card"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+json badge_node(std::string text, std::string_view style = "muted") {
+    return json{{"type", "badge"}, {"text", bounded_text(std::move(text), 256U)},
+                {"style", style}, {"height", 22}};
 }
 
-json section_node(std::string title, json children) {
-    return json{{"type", "section"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+json card_node(std::string title, json children, std::string_view accent = "cyan") {
+    return json{{"type", "card"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
+}
+
+json section_node(std::string title, json children, std::string_view accent = "cyan") {
+    return json{{"type", "section"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
+}
+
+json status_strip_node(std::string label, std::string message, std::string_view accent) {
+    return card_node("Status / 状态", json::array({row_node(json::array({
+        badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
+                     accent);
+}
+
+std::string tier_display(std::string_view tier) {
+    if (tier == "free") return "Free / 免费";
+    if (tier == "pro") return "Pro / 专业";
+    if (tier == "team") return "Team / 团队";
+    return "Unknown / 未知";
+}
+
+std::string_view license_accent(const Snapshot& snapshot) {
+    if (snapshot.busy) return "gold";
+    if (!snapshot.error_text.empty() || snapshot.last_status != SAO_STATUS_OK) return "danger";
+    return snapshot.activated ? "ok" : "cyan";
+}
+
+std::string_view expiry_accent(const Snapshot& snapshot) {
+    if (!snapshot.activated) return "muted";
+    if (snapshot.expiry_ms == 0U) return "ok";
+    const auto now_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000U;
+    return snapshot.expiry_ms > now_ms ? "gold" : "danger";
 }
 std::string build_panel_spec(const Snapshot& snapshot) {
+    const std::string_view accent = license_accent(snapshot);
     json nodes = json::array();
+    const std::string label = snapshot.busy ? "Busy / 处理中" :
+                              (!snapshot.error_text.empty() || snapshot.last_status != SAO_STATUS_OK)
+                                  ? "Error / 错误" : snapshot.activated ? "Active / 已激活" : "Ready / 就绪";
+    const std::string message = snapshot.busy ? "Verifying license / 正在验证授权" :
+                                !snapshot.error_text.empty() ? snapshot.error_text :
+                                snapshot.status_text.empty() ? "License status / 授权状态" : snapshot.status_text;
+    nodes.push_back(status_strip_node(label, message, accent));
     json status = json::array();
     {
         json row = json::array();
-        row.push_back(text_node("授权等级 (Tier)", "muted", 22));
-        row.push_back(text_node(snapshot.activated ? snapshot.tier : "—",
-                                snapshot.activated ? "accent" : "muted", 22));
+        row.push_back(text_node("Tier / 等级", "muted", 22));
+        row.push_back(badge_node(snapshot.activated ? tier_display(snapshot.tier) : "Inactive / 未激活",
+                                 snapshot.activated ? "cyan" : "muted"));
         status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
-        row.push_back(text_node("到期时间 (Expiry)", "muted", 22));
-        row.push_back(text_node(snapshot.activated ? format_expiry(snapshot.expiry_ms) : "—",
-                                snapshot.activated ? "accent" : "muted", 22));
+        row.push_back(text_node("Expiry / 到期", "muted", 22));
+        row.push_back(badge_node(snapshot.activated ? format_expiry(snapshot.expiry_ms) : "—",
+                                 expiry_accent(snapshot)));
         status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
-        row.push_back(text_node("设备指纹 (HWID)", "muted", 22));
+        row.push_back(text_node("HWID / 设备指纹", "muted", 22));
         row.push_back(text_node(snapshot.hwid_hex.empty() ? "—" : snapshot.hwid_hex,
                                 "mono", 22));
         status.push_back(row_node(std::move(row)));
     }
     {
         json row = json::array();
-        row.push_back(button_node("license.copy_hwid", "Copy HWID", kCopyHwidAction,
+        row.push_back(button_node("license.copy_hwid", "Copy HWID / 复制 HWID", kCopyHwidAction,
                                   json::object(), "ghost", snapshot.hwid_hex.empty() || snapshot.busy));
-        row.push_back(button_node("license.refresh", "Refresh status", kRefreshAction,
+        row.push_back(button_node("license.refresh", "Refresh / 刷新", kRefreshAction,
                                   json::object(), "default", snapshot.busy));
         status.push_back(row_node(std::move(row)));
     }
-    nodes.push_back(section_node("License Status", std::move(status)));
+    nodes.push_back(section_node("License Status / 授权状态", std::move(status), accent));
 
     json activation = json::array();
     activation.push_back(text_node("Activation key / 激活码", "muted", 22));
     activation.push_back(input_node("license.key_input", snapshot.license_key, kKeyInputAction));
     json activation_actions = json::array();
     activation_actions.push_back(button_node(
-        "license.activate", snapshot.busy ? "Activating..." : "Activate", kActivateAction,
-        json::object(), "primary", snapshot.busy));
-    activation_actions.push_back(button_node("license.skip", "Skip / Use Free Tier", kSkipAction,
+        "license.activate", snapshot.busy ? "Activating... / 激活中..." : "Activate / 激活",
+        kActivateAction, json::object(), "primary", snapshot.busy));
+    activation_actions.push_back(button_node("license.skip", "Use Free Tier / 使用免费版", kSkipAction,
                                              json::object(), "ghost", snapshot.busy));
     activation.push_back(row_node(std::move(activation_actions)));
     if (snapshot.busy)
-        activation.push_back(text_node("Verifying with license server...", "muted", 22));
-    nodes.push_back(section_node("Activation", std::move(activation)));
+        activation.push_back(text_node("Verifying with license server... / 正在验证授权服务器...", "warn", 22));
+    nodes.push_back(section_node("Activation / 激活", std::move(activation), snapshot.busy ? "gold" : "cyan"));
     if (!snapshot.error_text.empty()) {
         json msg = json::array();
-        msg.push_back(text_node(snapshot.error_text, "bad", 28));
+        msg.push_back(text_node(snapshot.error_text, "danger", 28));
         msg.push_back(button_node("license.error-retry", "Retry / 重试", kRefreshAction,
                                   json::object(), "primary", snapshot.busy));
-        nodes.push_back(section_node("Error", std::move(msg)));
+        nodes.push_back(section_node("Error / 错误", std::move(msg), "danger"));
     } else if (!snapshot.status_text.empty()) {
         json msg = json::array();
         msg.push_back(text_node(snapshot.status_text, "muted", 28));
-        nodes.push_back(section_node("Status", std::move(msg)));
+        nodes.push_back(section_node("Message / 消息", std::move(msg), snapshot.activated ? "ok" : "cyan"));
     }
     std::string serialized = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)

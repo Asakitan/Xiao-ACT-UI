@@ -143,7 +143,7 @@ sao_status_t run_owned_action(State& state, RunOwnedActionFn action,
 
 bool should_show_shared_fisheye(const SharedFisheyeVisibility& visibility) noexcept {
     return visibility.workshop || visibility.plugin_manager || visibility.process_selector ||
-           visibility.entity_menu;
+           visibility.entity_menu || visibility.native_panel;
 }
 
 sao_status_t authorization_status(std::int32_t action, const State& state) noexcept {

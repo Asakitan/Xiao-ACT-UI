@@ -15,7 +15,7 @@ extern "C" sao_status_t sao_shell_verify_integrity(
         (void)configuration;
         out->tampered = 1;
         strncpy_s(out->reason, sizeof(out->reason),
-                  "external shell metadata provider unsupported",
+                  "external shell metadata provider unavailable: no pointer-free emitter or production key server",
                   _TRUNCATE);
         return SAO_STATUS_NOT_IMPLEMENTED;
     } catch (...) {

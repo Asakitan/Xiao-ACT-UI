@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -27,7 +28,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #endif
 
@@ -38,16 +41,104 @@ using Json = nlohmann::json;
 constexpr std::array<int, 11> kModifierKeys{VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LSHIFT, VK_RSHIFT};
 constexpr int kFirstVirtualKey = 1;
 constexpr int kLastVirtualKey = 254;
+constexpr std::size_t kMaximumActionIdBytes = 256U;
+constexpr std::size_t kMaximumActionPayloadBytes = 4096U;
+constexpr std::size_t kMaximumLabelBytes = 256U;
+constexpr std::size_t kMaximumTextBytes = 4096U;
+constexpr std::size_t kMaximumBindingCount = 1024U;
+constexpr std::size_t kMaximumSpecBytes = 256U * 1024U;
+
+bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7fU) {
+            ++offset;
+            continue;
+        }
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation_count = 1;
+            code_point = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation_count = 2;
+            code_point = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (std::size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xc0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3fU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation_count + 1U;
+    }
+    return true;
+}
+
+bool valid_text(std::string_view value, std::size_t maximum, bool required) noexcept {
+    return (!required || !value.empty()) && value.size() <= maximum &&
+           value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+std::string bounded_utf8(std::string value, std::size_t maximum, std::string_view fallback) {
+    if (value.find('\0') != std::string::npos || !valid_utf8(value))
+        return std::string(fallback);
+    if (value.size() <= maximum)
+        return value;
+    if (maximum <= 3U)
+        return std::string(maximum == 3U ? "..." : "");
+    std::size_t end = maximum - 3U;
+    while (end > 0U && (static_cast<unsigned char>(value[end]) & 0xc0U) == 0x80U)
+        --end;
+    value.resize(end);
+    value.append("...");
+    return value;
+}
+
+std::string bounded_action_node_id(std::string_view prefix, std::string_view binding_id,
+                                   std::size_t index, bool identity_safe) {
+    if (identity_safe && prefix.size() + binding_id.size() <= kMaximumActionIdBytes)
+        return std::string(prefix) + std::string(binding_id);
+    return std::string(prefix) + "row." + std::to_string(index);
+}
+
+std::optional<std::string_view> bounded_action(const char* action) noexcept {
+    if (action == nullptr)
+        return std::nullopt;
+    const void* terminator = std::memchr(action, '\0', kMaximumActionIdBytes + 1U);
+    if (terminator == nullptr)
+        return std::nullopt;
+    const auto length = static_cast<std::size_t>(static_cast<const char*>(terminator) - action);
+    const std::string_view result(action, length);
+    return valid_text(result, kMaximumActionIdBytes, true)
+               ? std::optional<std::string_view>(result)
+               : std::nullopt;
+}
 
 std::string status_label(PanelStatus status) {
     switch (status) {
-    case PanelStatus::capturing: return "Capturing...";
-    case PanelStatus::success: return "Success";
-    case PanelStatus::cancelled: return "Capture cancelled";
-    case PanelStatus::conflict: return "Conflict";
-    case PanelStatus::system_error: return "System error";
-    case PanelStatus::save_error: return "Save failed; restored";
-    case PanelStatus::ready: default: return "Ready";
+    case PanelStatus::capturing: return "Capturing / 捕获中";
+    case PanelStatus::success: return "Saved / 已保存";
+    case PanelStatus::cancelled: return "Cancelled / 已取消";
+    case PanelStatus::conflict: return "Conflict / 冲突";
+    case PanelStatus::system_error: return "System error / 系统错误";
+    case PanelStatus::save_error: return "Save rollback / 保存回滚";
+    case PanelStatus::ready: default: return "Ready / 就绪";
     }
 }
 
@@ -64,13 +155,21 @@ std::string status_style(PanelStatus status) {
 }
 
 Json text_node(std::string text, std::string_view style = "value", int height = 24) {
-    return Json{{"type", "text"}, {"text", std::move(text)}, {"style", style}, {"height", height}};
+    return Json{{"type", "text"},
+                {"text", bounded_utf8(std::move(text), kMaximumTextBytes,
+                                      "Invalid UTF-8 text / 无效 UTF-8 文本")},
+                {"style", style},
+                {"height", height}};
 }
 
 Json button_node(std::string id, std::string label, std::string action, Json payload,
                  std::string_view style = "default", bool disabled = false) {
-    Json node{{"type", "button"}, {"id", std::move(id)}, {"label", std::move(label)},
-              {"action", std::move(action)}, {"style", style}, {"height", 28}};
+    Json node{{"type", "button"},
+              {"id", bounded_utf8(std::move(id), kMaximumActionIdBytes, "button")},
+              {"label", bounded_utf8(std::move(label), kMaximumLabelBytes, "Action")},
+              {"action", bounded_utf8(std::move(action), kMaximumActionIdBytes, "")},
+              {"style", style},
+              {"height", 28}};
     if (!payload.is_null()) node["payload"] = std::move(payload);
     if (disabled) node["disabled"] = true;
     return node;
@@ -81,13 +180,111 @@ Json row_node(Json children) {
 }
 
 Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
-    return Json{{"type", "card"}, {"title", std::move(title)}, {"accent", accent},
+    return Json{{"type", "card"},
+                {"title", bounded_utf8(std::move(title), kMaximumLabelBytes, "Panel")},
+                {"accent", accent},
                 {"children", std::move(children)}};
 }
 
+Json status_strip_node(std::string message, std::string_view accent, bool capturing) {
+    Json children = Json::array();
+    children.push_back(row_node(Json::array({text_node(std::move(message), accent, 24)})));
+    if (capturing)
+        children.push_back(row_node(Json::array({button_node(
+            "capture.cancel", "Cancel capture / 取消捕获", "hotkey.capture.cancel",
+            Json::object(), "ghost")})));
+    return card_node("Status / 状态", std::move(children), accent);
+}
+
+std::string_view panel_accent(const std::unordered_map<std::string, PanelStatus>& statuses,
+                              std::string_view message, bool capturing) {
+    if (capturing) return "gold";
+    if (message.find("Conflict") != std::string_view::npos ||
+        message.find("failed") != std::string_view::npos ||
+        message.find("error") != std::string_view::npos ||
+        message.find("rollback") != std::string_view::npos) return "danger";
+    bool have_success = false;
+    for (const auto& [id, status] : statuses) {
+        (void)id;
+        if (status == PanelStatus::conflict || status == PanelStatus::system_error ||
+            status == PanelStatus::save_error) return "danger";
+        have_success = have_success || status == PanelStatus::success;
+    }
+    return have_success ? "ok" : "cyan";
+}
+
+std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
+                             const std::unordered_map<std::string, PanelStatus>& statuses,
+                             std::string_view message, bool capture_running) {
+    const std::string visible_message = message.empty() ? "Ready / 就绪" : std::string(message);
+    const std::string_view accent = panel_accent(statuses, visible_message, capture_running);
+    const auto compact_spec = [&](std::string_view reason) {
+        Json nodes = Json::array();
+        nodes.push_back(status_strip_node(std::string(reason), "danger", capture_running));
+        nodes.push_back(card_node(
+            "Bindings / 快捷键",
+            Json::array({text_node("The hotkey list exceeded the panel budget. Reduce the number "
+                                      "or length of configured bindings. / 快捷键列表超出面板大小限制，"
+                                      "请减少快捷键数量或文本长度。",
+                                  "bad", 48)}),
+            "danger"));
+        std::string compact = Json{{"version", 1}, {"title", ""}, {"surface", "solid"},
+                                   {"nodes", std::move(nodes)}}
+                                  .dump();
+        if (compact.size() <= kMaximumSpecBytes)
+            return compact;
+        return Json{{"version", 1}, {"title", ""}, {"surface", "solid"},
+                    {"nodes", Json::array({text_node("Hotkey panel unavailable / 快捷键面板不可用",
+                                                      "bad", 48)})}}
+            .dump();
+    };
+    if (bindings.size() > kMaximumBindingCount)
+        return compact_spec("Hotkey list exceeded the panel item limit / 快捷键列表超出项目限制");
+    Json nodes = Json::array();
+    nodes.push_back(status_strip_node(visible_message, accent, capture_running));
+    Json rows = Json::array();
+    for (std::size_t index = 0; index < bindings.size(); ++index) {
+        const auto& binding = bindings[index];
+        const auto found = statuses.find(binding.id);
+        const PanelStatus status = found == statuses.end() ? PanelStatus::ready : found->second;
+        const bool identity_safe = valid_text(binding.id, kMaximumActionIdBytes, true);
+        const std::string display_id = bounded_utf8(
+            binding.id, kMaximumActionIdBytes, "Invalid binding id / 无效快捷键 ID");
+        const std::string description = bounded_utf8(
+            binding.description, kMaximumTextBytes, "Invalid description / 无效描述");
+        const Json payload = identity_safe ? Json(binding.id) : Json();
+        const bool action_disabled = capture_running || !identity_safe;
+        rows.push_back(row_node(Json::array({
+            text_node(description, "value", 28),
+            text_node(display_id, "mono", 28),
+            text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 28),
+            Json{{"type", "badge"},
+                 {"text", identity_safe ? status_label(status) : "Unavailable / 不可用"},
+                 {"style", status_style(status)}, {"height", 22}},
+            button_node(bounded_action_node_id("capture.", binding.id, index, identity_safe),
+                        "Capture / 捕获", kCaptureAction, payload, "primary", action_disabled),
+            button_node(bounded_action_node_id("reset.", binding.id, index, identity_safe),
+                        "Reset / 重置", kResetAction, payload, "ghost", action_disabled),
+        })));
+    }
+    nodes.push_back(card_node("Bindings / 快捷键", std::move(rows), "cyan"));
+    std::string serialized = Json{{"version", 1}, {"title", ""}, {"surface", "solid"},
+                                  {"nodes", std::move(nodes)}}
+                                 .dump();
+    if (serialized.size() <= kMaximumSpecBytes)
+        return serialized;
+    return compact_spec("Hotkey panel exceeded the 256 KiB serialized budget / 快捷键面板超出 256 KiB 序列化限制");
+}
+
 std::string payload_id(std::string_view payload_json) {
-    const Json payload = Json::parse(payload_json.begin(), payload_json.end(), nullptr, false);
-    return payload.is_string() ? payload.get<std::string>() : std::string();
+    if (payload_json.size() > kMaximumActionPayloadBytes ||
+        !valid_text(payload_json, kMaximumActionPayloadBytes, false))
+        return {};
+    const Json payload = Json::parse(payload_json.begin(), payload_json.end(), nullptr, false, false);
+    if (!payload.is_string())
+        return {};
+    const std::string id = payload.get<std::string>();
+    return valid_text(id, kMaximumActionIdBytes, true) ? id : std::string();
 }
 
 struct CaptureResult {
@@ -157,10 +354,11 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
                                             std::size_t length, void* user_data) {
         auto* state = static_cast<Impl*>(user_data);
         CallbackLease lease(state);
-        if (!lease || action == nullptr || (payload == nullptr && length != 0U)) return;
+        const auto action_view = bounded_action(action);
+        if (!lease || !action_view.has_value() || (payload == nullptr && length != 0U)) return;
         const std::string_view json(payload == nullptr ? "" : reinterpret_cast<const char*>(payload),
                                     payload == nullptr ? 0U : length);
-        (void)state->dispatch(action, json);
+        (void)state->dispatch(*action_view, json);
     }
 
     static void SAO_UI_CALL event_callback(std::int32_t event_kind, void* user_data) {
@@ -273,24 +471,24 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             if (result.generation != capture_generation || panel == nullptr || retirement != RetirementState::online) return;
         }
         if (result.timed_out) {
-            set_status(result.id, PanelStatus::cancelled, "Capture timed out");
+            set_status(result.id, PanelStatus::cancelled, "Timeout / 超时");
         } else if (result.system_error) {
             set_status(result.id, PanelStatus::system_error,
-                       result.error_message.empty() ? "Capture completion failed"
+                       result.error_message.empty() ? "System error / 捕获完成失败"
                                                     : result.error_message);
         } else if (result.cancelled) {
-            set_status(result.id, PanelStatus::cancelled, "Capture cancelled");
+            set_status(result.id, PanelStatus::cancelled, "Cancelled / 已取消");
         } else {
             std::string reason;
             const RebindResult result_code = rebind_live(result.id, result.vk, result.modifiers, &reason);
             if (result_code == RebindResult::success)
-                set_status(result.id, PanelStatus::success, "Saved");
+                set_status(result.id, PanelStatus::success, "Saved / 已保存");
             else if (result_code == RebindResult::conflict)
-                set_status(result.id, PanelStatus::conflict, "Conflict with " + reason);
+                set_status(result.id, PanelStatus::conflict, "Conflict / 冲突: " + reason);
             else if (result_code == RebindResult::save_error)
-                set_status(result.id, PanelStatus::save_error, reason);
+                set_status(result.id, PanelStatus::save_error, "Save rollback / 保存回滚: " + reason);
             else
-                set_status(result.id, PanelStatus::system_error, reason);
+                set_status(result.id, PanelStatus::system_error, "System error / 系统错误: " + reason);
         }
         (void)refresh_now();
     }
@@ -298,7 +496,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void set_status(const std::string& id, PanelStatus status, std::string message) {
         std::lock_guard lock(mutex);
         row_status[id] = status;
-        status_message = std::move(message);
+        status_message = bounded_utf8(std::move(message), kMaximumTextBytes,
+                                      "Status unavailable / 状态不可用");
     }
 
     void stop_capture() noexcept {
@@ -335,7 +534,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             capturing_binding_id = id;
             capture_running = true;
             row_status[id] = PanelStatus::capturing;
-            status_message = "Press a key; Esc cancels";
+            status_message = "Press a key; Esc cancels / 按键；Esc 取消";
         }
         try {
             auto self = shared_from_this();
@@ -498,48 +697,26 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         std::unordered_map<std::string, PanelStatus> statuses;
         std::string message;
         bool capture_running_local = false;
-        std::string capturing_binding_id_local;
         {
             std::lock_guard lock(mutex);
             target_body = body;
             statuses = row_status;
             message = status_message;
             capture_running_local = capture_running;
-            capturing_binding_id_local = capturing_binding_id;
         }
         if (target_body == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
-        Json nodes = Json::array();
-        if (!message.empty()) {
-            Json status_nodes = Json::array({text_node(message, "accent", 28)});
-            if (capture_running_local)
-                status_nodes.push_back(button_node("capture.cancel", "Cancel capture", "hotkey.capture.cancel", Json::object(), "ghost"));
-            nodes.push_back(card_node("Status", std::move(status_nodes)));
-        }
-        Json rows = Json::array();
-        for (const auto& binding : snapshot()) {
-            const auto found = statuses.find(binding.id);
-            const PanelStatus status = found == statuses.end() ? PanelStatus::ready : found->second;
-            rows.push_back(row_node(Json::array({
-                text_node(binding.description, "value", 28),
-                text_node(binding.id, "mono", 28),
-                text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 28),
-                Json{{"type", "badge"}, {"text", status_label(status)}, {"style", status_style(status)}, {"height", 22}},
-                button_node("capture." + binding.id, "Capture", kCaptureAction, Json(binding.id), "primary",
-                             capture_running_local && capturing_binding_id_local != binding.id),
-                button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost", capture_running_local),
-            })));
-        }
-        nodes.push_back(card_node("Bindings", std::move(rows)));
-        const std::string spec = Json{{"version", 1}, {"title", ""}, {"surface", "solid"}, {"nodes", std::move(nodes)}}.dump();
+        const std::string spec = build_panel_spec(snapshot(), statuses, message, capture_running_local);
         return sao_ui_panel_body_set_spec(target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
     }
 
     sao_status_t dispatch(std::string_view action, std::string_view payload_json) noexcept {
+        if (!valid_text(action, kMaximumActionIdBytes, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (action == "hotkey.capture.cancel") {
             std::string old_id;
             { std::lock_guard lock(mutex); old_id = capturing_binding_id; }
             stop_capture();
-            if (!old_id.empty()) set_status(old_id, PanelStatus::cancelled, "Capture cancelled");
+            if (!old_id.empty()) set_status(old_id, PanelStatus::cancelled, "Cancelled / 已取消");
             return refresh_now();
         }
         const std::string id = payload_id(payload_json);
@@ -549,10 +726,10 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             stop_capture();
             std::string reason;
             const RebindResult result = reset_to_default(id, &reason);
-            if (result == RebindResult::success) set_status(id, PanelStatus::success, "Reset and saved");
-            else if (result == RebindResult::conflict) set_status(id, PanelStatus::conflict, "Conflict with " + reason);
-            else if (result == RebindResult::save_error) set_status(id, PanelStatus::save_error, reason);
-            else set_status(id, PanelStatus::system_error, reason);
+            if (result == RebindResult::success) set_status(id, PanelStatus::success, "Reset and saved / 已重置并保存");
+            else if (result == RebindResult::conflict) set_status(id, PanelStatus::conflict, "Conflict / 冲突: " + reason);
+            else if (result == RebindResult::save_error) set_status(id, PanelStatus::save_error, "Save rollback / 保存回滚: " + reason);
+            else set_status(id, PanelStatus::system_error, "System error / 系统错误: " + reason);
             return refresh_now();
         }
         return SAO_STATUS_ERR_NOT_FOUND;
@@ -652,18 +829,7 @@ std::string format_combo_utf8(std::uint32_t vk, std::uint32_t modifiers) {
 }
 
 std::string build_panel_spec_for_testing() {
-    Json rows = Json::array();
-    for (const auto& binding : snapshot()) {
-        rows.push_back(row_node(Json::array({
-            text_node(binding.description),
-            text_node(binding.id, "mono"),
-            text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent"),
-            Json{{"type", "badge"}, {"text", "Ready"}, {"style", "muted"}, {"height", 22}},
-            button_node("capture." + binding.id, "Capture", kCaptureAction, Json(binding.id), "primary"),
-            button_node("reset." + binding.id, "Reset", kResetAction, Json(binding.id), "ghost"),
-        })));
-    }
-    return Json{{"version", 1}, {"title", ""}, {"surface", "solid"}, {"nodes", Json::array({card_node("Bindings", std::move(rows))})}}.dump();
+    return build_panel_spec(snapshot(), {}, {}, false);
 }
 
 Owner::Owner(sao_ui_compositor_handle_t compositor) noexcept {

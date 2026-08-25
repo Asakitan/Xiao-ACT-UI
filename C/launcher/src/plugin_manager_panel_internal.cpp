@@ -154,10 +154,9 @@ Json row_node(Json children) {
     return Json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-Json card_node(std::string title, Json children) {
-    return Json{{"type", "card"},
-                {"title", clamp_utf8(std::move(title), 512U)},
-                {"children", std::move(children)}};
+Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
+    return Json{{"type", "card"}, {"title", clamp_utf8(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
 }
 
 std::string_view state_style(PluginState state) noexcept {
@@ -171,9 +170,9 @@ std::string_view state_style(PluginState state) noexcept {
 
 std::string_view source_label(PluginSource source) noexcept {
     static constexpr std::array<std::string_view, 3> labels{
-        "Unknown source",
-        "Built-in",
-        "User",
+        "Unknown / 未知来源",
+        "Built-in / 内置",
+        "User / 用户",
     };
     const auto index = static_cast<std::size_t>(source);
     return index < labels.size() ? labels[index] : labels.front();
@@ -197,14 +196,14 @@ ManagerState manager_state(const Snapshot& snapshot) {
 
 std::string_view manager_state_label(ManagerState state) {
     switch (state) {
-    case ManagerState::initializing: return "initializing";
-    case ManagerState::loading: return "loading";
-    case ManagerState::ready: return "ready";
-    case ManagerState::empty: return "empty";
-    case ManagerState::unavailable: return "unavailable";
-    case ManagerState::error: return "error";
+    case ManagerState::initializing: return "Initializing / 初始化";
+    case ManagerState::loading: return "Loading / 加载中";
+    case ManagerState::ready: return "Ready / 就绪";
+    case ManagerState::empty: return "Empty / 空";
+    case ManagerState::unavailable: return "Unavailable / 不可用";
+    case ManagerState::error: return "Error / 错误";
     }
-    return "error";
+    return "Error / 错误";
 }
 
 std::string status_message(std::string_view operation, sao_status_t status);
@@ -392,9 +391,9 @@ Operations make_default_operations_with_reload_all(ReloadAllHandler reload_all_h
 
 std::string_view plugin_state_label(PluginState state) noexcept {
     static constexpr std::array<std::string_view, 13> labels{
-        "Unknown", "Discovered", "Validating", "Resolving dependencies",
-        "Bootstrapping", "Loading", "Enabled", "Disabled",
-        "Unloading", "Unloaded", "Failed", "Enabling", "Disabling",
+        "Unknown / 未知", "Discovered / 已发现", "Validating / 校验中", "Resolving dependencies / 解析依赖",
+        "Bootstrapping / 启动中", "Loading / 加载中", "Enabled / 已启用", "Disabled / 已禁用",
+        "Unloading / 卸载中", "Unloaded / 已卸载", "Failed / 失败", "Enabling / 启用中", "Disabling / 禁用中",
     };
     const auto index = static_cast<std::size_t>(state);
     return index < labels.size() ? labels[index] : labels.front();
@@ -446,22 +445,38 @@ SaoPanelDescriptor descriptor_for_testing() noexcept {
     return descriptor;
 }
 
-Json section_node(std::string title, Json children) {
-    return Json{{"type", "section"},
-                {"title", clamp_utf8(std::move(title), 512U)},
-                {"children", std::move(children)}};
+Json section_node(std::string title, Json children, std::string_view accent = "cyan") {
+    return Json{{"type", "section"}, {"title", clamp_utf8(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
+}
+
+std::string_view manager_accent(ManagerState state) noexcept {
+    if (state == ManagerState::ready) return "ok";
+    if (state == ManagerState::initializing || state == ManagerState::loading) return "gold";
+    if (state == ManagerState::error || state == ManagerState::unavailable) return "danger";
+    return "cyan";
+}
+
+std::string_view plugin_accent(PluginState state) noexcept {
+    if (plugin_state_is_enabled(state)) return "ok";
+    if (plugin_state_is_transitioning(state)) return "gold";
+    if (state == PluginState::failed) return "danger";
+    if (state == PluginState::unknown) return "muted";
+    return "cyan";
+}
+
+Json status_strip_node(const Snapshot& snapshot, ManagerState manager) {
+    const std::string_view accent = manager_accent(manager);
+    return card_node("Status / 状态", Json::array({row_node(Json::array({
+        badge_node(std::string(manager_state_label(manager)), accent),
+        badge_node(std::to_string(snapshot.plugins.size()) + " plugins / 个插件", "cyan")}))}), accent);
 }
 std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                        const std::unordered_set<std::string>& busy_plugins) {
     const ManagerState manager = manager_state(snapshot);
     Json nodes = Json::array();
+    nodes.push_back(status_strip_node(snapshot, manager));
     Json overview = Json::array();
-    Json status_badges = Json::array();
-    status_badges.push_back(badge_node(std::string(manager_state_label(manager)),
-                                       manager == ManagerState::ready ? "ok" : manager == ManagerState::error || manager == ManagerState::unavailable ? "bad" : "warn"));
-    status_badges.push_back(
-        badge_node(std::to_string(snapshot.plugins.size()) + " plugins / 个插件", "accent"));
-    overview.push_back(row_node(std::move(status_badges)));
     Json toolbar = Json::array();
     toolbar.push_back(button_node("plugin-manager.refresh",
                                   snapshot.loader_available ? "Refresh / 刷新" : "Retry / 重试",
@@ -471,11 +486,11 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                                   std::string(kActionReloadAll), Json(), "default",
                                   !snapshot.reload_all_available || snapshot.busy));
     overview.push_back(row_node(std::move(toolbar)));
-    nodes.push_back(section_node("Controls", std::move(overview)));
+    nodes.push_back(section_node("Controls / 控制", std::move(overview), "cyan"));
     if (manager == ManagerState::initializing || manager == ManagerState::loading) {
         Json loader = Json::array();
-        loader.push_back(text_node("Loading plugin catalog...", "warn", 42));
-        nodes.push_back(section_node("Loader", std::move(loader)));
+        loader.push_back(text_node("Loading plugin catalog... / 正在加载插件目录...", "warn", 42));
+        nodes.push_back(section_node("Loader / 加载器", std::move(loader), "gold"));
     } else if (manager == ManagerState::unavailable) {
         Json loader = Json::array();
         loader.push_back(text_node(snapshot.error_message.empty()
@@ -485,21 +500,21 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
         loader.push_back(button_node("plugin-manager.retry", "Retry / 重试",
                                      std::string(kActionRefresh), Json(), "primary",
                                      snapshot.busy));
-        nodes.push_back(section_node("Loader", std::move(loader)));
+        nodes.push_back(section_node("Loader / 加载器", std::move(loader), "danger"));
     } else if (!snapshot.error_message.empty()) {
         Json errors = Json::array();
         errors.push_back(text_node(snapshot.error_message, "bad", 42));
         errors.push_back(button_node("plugin-manager.error-retry", "Retry / 重试",
                                      std::string(kActionRefresh), Json(), "primary",
                                      snapshot.busy));
-        nodes.push_back(section_node("Error", std::move(errors)));
+        nodes.push_back(section_node("Error / 错误", std::move(errors), "danger"));
     } else if (snapshot.plugins.empty()) {
         Json empty = Json::array();
         empty.push_back(text_node("No plugins discovered / 未发现插件。", "muted", 34));
         empty.push_back(button_node("plugin-manager.empty-retry", "Refresh / 刷新",
                                     std::string(kActionRefresh), Json(), "primary",
                                     snapshot.busy));
-        nodes.push_back(section_node("Plugins", std::move(empty)));
+        nodes.push_back(section_node("Plugins / 插件", std::move(empty), "cyan"));
     } else {
         Json plugin_cards = Json::array();
         for (std::size_t index = 0; index < snapshot.plugins.size(); ++index) {
@@ -510,18 +525,17 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                                   busy_plugins.find(plugin.plugin_id) != busy_plugins.end();
             Json details = Json::array();
             Json metadata = Json::array();
-            metadata.push_back(badge_node("v" + plugin.version, "accent"));
-            metadata.push_back(badge_node(plugin.language.empty() ? "language unknown" : plugin.language,
-                                          "muted"));
-            metadata.push_back(badge_node(std::string(source_label(plugin.source)), "muted"));
+            metadata.push_back(badge_node("v" + plugin.version, "cyan"));
             metadata.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
                                           state_style(plugin.state)));
             details.push_back(row_node(std::move(metadata)));
             details.push_back(text_node("ID: " + plugin.plugin_id, "mono", 24));
+            details.push_back(text_node("Language / 语言: " + (plugin.language.empty() ? "Unknown / 未知" : plugin.language) +
+                                           " · Source / 来源: " + std::string(source_label(plugin.source)), "muted", 24));
             if (!plugin.description.empty())
-                details.push_back(text_node(clamp_utf8(plugin.description, 320U), "muted", 38));
+                details.push_back(text_node("Description / 描述: " + clamp_utf8(plugin.description, 320U), "muted", 38));
             if (!plugin.source_path.empty())
-                details.push_back(text_node("Source: " + clamp_utf8(plugin.source_path, 320U),
+                details.push_back(text_node("Path / 路径: " + clamp_utf8(plugin.source_path, 320U),
                                            "mono", 30));
             Json actions = Json::array();
             actions.push_back(button_node("plugin-manager.toggle." + std::to_string(index),
@@ -536,9 +550,9 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                                           row_busy || !plugin_state_allows_reload(plugin.state)));
             details.push_back(row_node(std::move(actions)));
             plugin_cards.push_back(card_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
-                                              std::move(details)));
+                                              std::move(details), plugin_accent(plugin.state)));
         }
-        nodes.push_back(section_node("Plugins", std::move(plugin_cards)));
+        nodes.push_back(section_node("Plugins / 插件", std::move(plugin_cards), "cyan"));
     }
     std::string spec =
         Json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
@@ -872,9 +886,10 @@ struct Owner::Impl {
         {
             std::lock_guard lock(mutex);
             owner_publishing = false;
+            if (publish_status != SAO_STATUS_OK) cache_dirty = true;
         }
         worker_cv.notify_all();
-        return publish_status;
+        return SAO_STATUS_OK;
     }
 
     void worker_main(std::stop_token stop) noexcept {

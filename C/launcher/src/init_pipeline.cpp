@@ -157,7 +157,7 @@ inline RecordOutcomeFn g_record_outcome = nullptr;
 namespace sao::launcher {
 
 static bool actualDebugNoLicenseRequested(const AppState& state) noexcept {
-#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     return state.no_license;
 #else
     (void)state;
@@ -214,7 +214,8 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
     config.log_level = log_level_storage;
     config.safe_mode = state.safe_mode ? 1 : 0;
     const bool no_license_bypass = actualDebugNoLicenseRequested(state);
-    config.streaming_entitled = no_license_bypass || state.streaming_entitled ? 1 : 0;
+    config.streaming_entitled =
+        !state.safe_mode && (no_license_bypass || state.streaming_entitled) ? 1 : 0;
     config.rt_io_operator = state.rt_io_operator ? 1 : 0;
     config.rt_io_dev_license_bypass = no_license_bypass ? 1 : 0;
     config.rt_io_force_status_page = state.rt_io_force_status_page ? 1 : 0;
@@ -560,12 +561,21 @@ runtime_installer_ensure_all_passthrough(const wchar_t* /*base_dir*/,
 std::mutex g_runtime_installer_hook_mutex;
 sao::launcher::runtime_installer_glue::EnsureAllFn g_runtime_installer_ensure_all_hook =
     &runtime_installer_ensure_all_passthrough;
+bool g_runtime_installer_hook_is_production = false;
 
-sao::launcher::runtime_installer_glue::EnsureAllFn current_runtime_installer_hook() {
+struct RuntimeInstallerHookSnapshot {
+    sao::launcher::runtime_installer_glue::EnsureAllFn ensure_all = nullptr;
+    bool production = false;
+};
+
+RuntimeInstallerHookSnapshot current_runtime_installer_hook() {
     std::lock_guard lock(g_runtime_installer_hook_mutex);
-    return g_runtime_installer_ensure_all_hook == nullptr
-               ? &runtime_installer_ensure_all_passthrough
-               : g_runtime_installer_ensure_all_hook;
+    return {
+        g_runtime_installer_ensure_all_hook == nullptr
+            ? &runtime_installer_ensure_all_passthrough
+            : g_runtime_installer_ensure_all_hook,
+        g_runtime_installer_hook_is_production,
+    };
 }
 
 #if defined(SAO_LAUNCHER_HAS_RUNTIME_INSTALLER)
@@ -578,11 +588,21 @@ extern "C" sao_status_t sao_runtime_installer_ensure_all(
     const wchar_t* base_dir,
     sao::launcher::runtime_installer_glue::ProgressFn progress_cb,
     void* progress_user_data);
+struct sao_runtime_manifest_s;
+using sao_runtime_manifest_handle_t = sao_runtime_manifest_s*;
+extern "C" sao_status_t sao_runtime_installer_load_manifest(
+    const char* manifest_json_utf8, size_t manifest_json_length,
+    sao_runtime_manifest_handle_t* out_handle);
+extern "C" void sao_runtime_installer_manifest_release(
+    sao_runtime_manifest_handle_t handle);
+extern "C" sao_status_t sao_runtime_installer_bind_manifest(
+    sao_runtime_manifest_handle_t handle);
 
 struct RuntimeInstallerHookInstall {
     RuntimeInstallerHookInstall() noexcept {
         std::lock_guard lock(g_runtime_installer_hook_mutex);
         g_runtime_installer_ensure_all_hook = &sao_runtime_installer_ensure_all;
+        g_runtime_installer_hook_is_production = true;
     }
 };
 RuntimeInstallerHookInstall g_runtime_installer_hook_install;
@@ -621,6 +641,121 @@ void forward_runtime_installer_progress(const char* kind_opaque_id_utf8,
     // Real overlay updates land when the installer-core track lands; the
     // pass-through here keeps the launcher fail-closed and the tests
     // deterministic without an active compositor.
+}
+
+bool read_runtime_manifest(const std::wstring& path, std::string& manifest) {
+    constexpr LONGLONG maximum_bytes = 4ll * 1024ll * 1024ll;
+    HANDLE raw = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+            FILE_FLAG_SEQUENTIAL_SCAN,
+        nullptr);
+    if (raw == INVALID_HANDLE_VALUE) return false;
+    std::unique_ptr<void, decltype(&CloseHandle)> file(raw, &CloseHandle);
+    if (GetFileType(file.get()) != FILE_TYPE_DISK) return false;
+
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    if (!GetFileInformationByHandleEx(
+            file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+        (attributes.FileAttributes &
+         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+        return false;
+    }
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0 ||
+        size.QuadPart > maximum_bytes) {
+        return false;
+    }
+    manifest.resize(static_cast<size_t>(size.QuadPart));
+    size_t offset = 0u;
+    while (offset < manifest.size()) {
+        DWORD read = 0u;
+        const DWORD remaining = static_cast<DWORD>(manifest.size() - offset);
+        if (!ReadFile(file.get(), manifest.data() + offset, remaining, &read, nullptr) ||
+            read == 0u) {
+            manifest.clear();
+            return false;
+        }
+        offset += read;
+    }
+    return true;
+}
+
+std::mutex g_runtime_installer_manifest_mutex;
+
+sao_status_t run_configured_runtime_installer(
+    const sao::launcher::AppState& state,
+    const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
+    using sao::launcher::runtime_installer_glue::g_record_outcome;
+    const auto record = [&](bool ok) noexcept {
+        if (g_record_outcome != nullptr) g_record_outcome(state.platform_ctx, ok);
+    };
+    try {
+        if (state.safe_mode || !configuration.enabled) {
+            record(true);
+            return SAO_STATUS_OK;
+        }
+        const bool manifest_configured = !configuration.runtime_manifest_path.empty();
+        const RuntimeInstallerHookSnapshot hook = current_runtime_installer_hook();
+        if (hook.ensure_all == nullptr ||
+            hook.ensure_all == &runtime_installer_ensure_all_passthrough) {
+            const sao_status_t status = manifest_configured
+                ? SAO_STATUS_NOT_IMPLEMENTED
+                : SAO_STATUS_OK;
+            record(status == SAO_STATUS_OK);
+            return status;
+        }
+
+        RuntimeInstallerProgressContext progress{};
+        progress.platform = static_cast<sao_platform_ctx*>(state.platform_ctx);
+        sao_status_t status = SAO_STATUS_OK;
+#if defined(SAO_LAUNCHER_HAS_RUNTIME_INSTALLER)
+        if (hook.production) {
+            if (!manifest_configured) {
+                record(true);
+                return SAO_STATUS_OK;
+            }
+            std::lock_guard manifest_lock(g_runtime_installer_manifest_mutex);
+            std::string manifest;
+            if (!read_runtime_manifest(configuration.runtime_manifest_path, manifest)) {
+                record(false);
+                return SAO_STATUS_INVALID_ARGUMENT;
+            }
+            sao_runtime_manifest_handle_t handle = nullptr;
+            status = sao_runtime_installer_load_manifest(
+                manifest.data(), manifest.size(), &handle);
+            if (status == SAO_STATUS_OK && handle == nullptr) {
+                status = SAO_STATUS_INTERNAL;
+            }
+            if (status == SAO_STATUS_OK) {
+                status = sao_runtime_installer_bind_manifest(handle);
+            }
+            if (status == SAO_STATUS_OK) {
+                status = hook.ensure_all(state.base_dir,
+                                         &forward_runtime_installer_progress,
+                                         &progress);
+            }
+            const sao_status_t unbind_status =
+                sao_runtime_installer_bind_manifest(nullptr);
+            if (handle != nullptr) {
+                sao_runtime_installer_manifest_release(handle);
+            }
+            if (status == SAO_STATUS_OK && unbind_status != SAO_STATUS_OK) {
+                status = unbind_status;
+            }
+        } else
+#endif
+        {
+            status = hook.ensure_all(state.base_dir,
+                                     &forward_runtime_installer_progress,
+                                     &progress);
+        }
+        record(status == SAO_STATUS_OK);
+        return status;
+    } catch (...) {
+        record(false);
+        return SAO_STATUS_INTERNAL;
+    }
 }
 
 // Notify the optional hook that we entered a teardown step.  Silent when
@@ -793,42 +928,18 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         }
     }
 
-    // Step 8.5 — runtime installer (skipped in safe mode and when plugins
-    // are disabled since neither branch will try to spin up a host).
-    //
-    // The launcher-side runtime_installer ensures every plugin host has
-    // its runtime binary (Python embed, .NET hostfxr, Lua, AngelScript).
-    // The installer-core track owns the concrete implementation; the
-    // launcher pipes progress through a compositor-native overlay so
-    // there is no separate WebView window during install.
-    //
-    // Failure is not fatal to the pipeline — plugin hosts with a
-    // pre-installed runtime still come online; the ones without record
-    // authority.runtime_installer=false so the Panel surfaces them as
-    // unavailable via sync_entity_publication_authority.
-    //
-    // Headless tests skip the call entirely when the hook still points
-    // at the pass-through default so the pipeline's ordering assertions
-    // stay stable; tests that want to observe the call install a mock
-    // via sao_launcher_init_pipeline_test_set_runtime_installer_hook.
-    bool runtime_installer_ok = true;
-    if (!state.safe_mode && provider_configuration.plugins.enabled) {
-        sao::launcher::runtime_installer_glue::EnsureAllFn hook = current_runtime_installer_hook();
-        if (hook != nullptr && hook != &runtime_installer_ensure_all_passthrough) {
-            RuntimeInstallerProgressContext progress_ctx{};
-            progress_ctx.platform = static_cast<sao_platform_ctx*>(state.platform_ctx);
-            const sao_status_t installer_status =
-                hook(state.base_dir, &forward_runtime_installer_progress, &progress_ctx);
-            if (installer_status != SAO_STATUS_OK) {
-                runtime_installer_ok = false;
+    // Step 8.5 — configured runtime installation is one canonical, fail-closed
+    // step shared with the GUI launcher.  With no manifest configured it is
+    // a no-op; test hooks still exercise this ordering boundary directly.
+    const sao_status_t installer_status =
+        ensureConfiguredPluginRuntimes(state, provider_configuration.plugins);
+    if (installer_status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
-                (void)sao_core_logf(SAO_LOG_WARN, "launcher.runtime_installer",
-                                    "ensure_all failed: status=%d; plugin runtimes may be "
-                                    "unavailable",
-                                    installer_status);
+        (void)sao_core_logf(SAO_LOG_ERROR, "launcher.runtime_installer",
+                            "configured runtime installation failed: status=%d",
+                            installer_status);
 #endif
-            }
-        }
+        return SAO_EXIT_PLUGIN_LOAD_FAIL;
     }
 
     // Step 9 — plugin discovery (skipped in safe mode).
@@ -849,20 +960,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
                 return SAO_EXIT_PLUGIN_LOAD_FAIL;
             }
         }
-        // Record runtime installer outcome so the Panel catalog can hide
-        // plugin-runtime entries when the installer failed even though
-        // plugin discovery itself succeeded (hosts with pre-installed
-        // runtimes still come online — the Panel just cannot pretend
-        // the missing ones are healthy). The record helper is set by
-        // whichever platform composition provider is active (production
-        // owns sao_platform_ctx as a complete type; the test provider
-        // installs its own stub).
-        using sao::launcher::runtime_installer_glue::g_record_outcome;
-        if (g_record_outcome != nullptr) {
-            g_record_outcome(state.platform_ctx, runtime_installer_ok);
-        }
     }
-    (void)runtime_installer_ok;
 
     // Step 10 — UI online.
     {
@@ -1136,6 +1234,15 @@ sao_status_t applyNervgearModeTransaction(bool& mode, NervgearModeSetFn set_shel
 }
 
 } // namespace
+
+namespace sao::launcher {
+
+sao_status_t ensureConfiguredPluginRuntimes(const AppState& state,
+    const PluginsProviderConfiguration& plugins) noexcept {
+    return run_configured_runtime_installer(state, plugins);
+}
+
+} // namespace sao::launcher
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 namespace sao::launcher::testing {
@@ -1657,6 +1764,7 @@ extern "C" void sao_launcher_init_pipeline_test_set_runtime_installer_hook(
     std::lock_guard lock(g_runtime_installer_hook_mutex);
     g_runtime_installer_ensure_all_hook =
         ensure_all == nullptr ? &runtime_installer_ensure_all_passthrough : ensure_all;
+    g_runtime_installer_hook_is_production = false;
 }
 
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                             \
@@ -2147,6 +2255,7 @@ create_settings_owner(const wchar_t* base_dir,
 struct SharedPanelVisibilityProbe {
     bool plugin_manager = false;
     bool process_selector = false;
+    bool native_panel = false;
 };
 
 sao_status_t reload_plugins(void* user_data);
@@ -2154,7 +2263,7 @@ sao_status_t reload_plugins(void* user_data);
 void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept;
 #endif
 
-void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t panel,
+void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t,
                                                  const SaoPanelDescriptor* descriptor,
                                                  void* user_data) {
     auto* visibility = static_cast<SharedPanelVisibilityProbe*>(user_data);
@@ -2165,14 +2274,11 @@ void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t panel,
                     sao::launcher::plugin_manager_panel::kPanelId.data()) == 0;
     const bool process_selector = std::strcmp(descriptor->panel_id_utf8,
                                               sao::launcher::process_selector_panel::kPanelId) == 0;
-    if (!plugin_manager && !process_selector)
-        return;
-    SaoPanelState state{};
-    if (sao_ui_panel_get_state(panel, &state) != SAO_STATUS_OK)
-        return;
-    visibility->plugin_manager = visibility->plugin_manager || (plugin_manager && state.visible);
+    const bool visible = descriptor->visible;
+    visibility->native_panel = visibility->native_panel || visible;
+    visibility->plugin_manager = visibility->plugin_manager || (plugin_manager && visible);
     visibility->process_selector =
-        visibility->process_selector || (process_selector && state.visible);
+        visibility->process_selector || (process_selector && visible);
 }
 
 sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
@@ -2196,6 +2302,7 @@ sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
         panels.plugin_manager,
         panels.process_selector,
         entity.overlay_visible && entity.menu_visible,
+        panels.native_panel,
     };
     if (!sao::launcher::entity_builtin_action::should_show_shared_fisheye(visibility))
         return sao_ui_fisheye_backdrop_hide(ctx->fisheye_backdrop);
@@ -2226,20 +2333,24 @@ sao_status_t tick_shared_fisheye(sao_platform_ctx* ctx) noexcept {
     return sao_ui_fisheye_backdrop_tick(ctx->fisheye_backdrop);
 }
 
-sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* ctx) noexcept {
+sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* ctx,
+                                     bool safe_mode) noexcept {
     if (base_dir == nullptr || ctx == nullptr || ctx->compositor == nullptr ||
-        ctx->rt_io_proxy == nullptr) {
+        (!safe_mode && ctx->rt_io_proxy == nullptr)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     sao_status_t status = sao_ui_fisheye_backdrop_create(ctx->compositor, &ctx->fisheye_backdrop);
     if (status != SAO_STATUS_OK)
         return status;
     try {
-        ctx->plugin_manager_panel = std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
-            ctx->compositor, [ctx] { return reload_plugins(ctx); });
-        ctx->process_selector_panel =
-            std::make_unique<sao::launcher::process_selector_panel::Owner>(ctx->compositor,
-                                                                           ctx->rt_io_proxy);
+        if (!safe_mode) {
+            ctx->plugin_manager_panel =
+                std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
+                    ctx->compositor, [ctx] { return reload_plugins(ctx); });
+            ctx->process_selector_panel =
+                std::make_unique<sao::launcher::process_selector_panel::Owner>(
+                    ctx->compositor, ctx->rt_io_proxy);
+        }
         ctx->workshop_panel = std::make_unique<sao::launcher::workshop_panel::Owner>(
             ctx->compositor, std::filesystem::path(base_dir));
         ctx->workshop_panel->set_visibility_changed_callback([ctx](bool visible) {
@@ -2484,6 +2595,24 @@ sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask
     SaoRtIoCallResult result{};
     return sao_rt_io_clear_window_exstyle(ctx->window_rect_controller, &token, mask, timeout_ms,
                                           &result);
+}
+
+sao_status_t SAO_UI_CALL unlink_z_order(void* user_data, void* hwnd, uint32_t timeout_ms) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || hwnd == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
+    const SaoRtIoWindowToken& token = ctx->window_rect_token;
+    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
+        token.hwnd != hwnd_value) {
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    SaoRtIoCallResult result{};
+    return sao_rt_io_unlink_z_order(ctx->window_rect_controller, &token, timeout_ms, &result);
 }
 
 sao_status_t SAO_UI_CALL apply_overlay_protection_provider(
@@ -2981,7 +3110,7 @@ bool rt_io_operator_production_enums_known(
     const SaoRtIoProductionStateWireV1& state) noexcept {
     return state.r1_state <= 3u && state.reserved_resource_state_2 == 0u &&
         state.r3_state <= 3u && state.cached_write_state <= 4u &&
-        state.hid.selected_backend <= 3u;
+        state.hid.selected_backend <= 4u;
 }
 
 void rt_io_operator_copy_call(
@@ -3709,29 +3838,30 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return rollback_and_fail("ui_theme_set_active_id", status);
     }
 
-    SaoRtIoProxyConfigV3 rt_io_cfg{};
-    rt_io_cfg.struct_size = sizeof(rt_io_cfg);
-    rt_io_cfg.abi_version = SAO_RT_IO_PROXY_CONFIG_V3_ABI_VERSION;
-    rt_io_cfg.v2_config.struct_size = sizeof(rt_io_cfg.v2_config);
-    rt_io_cfg.v2_config.abi_version = SAO_RT_IO_PROXY_CONFIG_ABI_VERSION;
-    rt_io_cfg.v2_config.ready_policy = SAO_RT_IO_PROXY_READY_POLICY_STRICT_PRODUCTION;
-    rt_io_cfg.v2_config.legacy_config.session_name_utf8 = "launcher";
-    rt_io_cfg.v2_config.legacy_config.strict_bootstrap = 1;
-    rt_io_cfg.v2_config.legacy_config.driver_strategy = cfg->rt_io_operator != 0
-        ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
-        : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
-    rt_io_cfg.bootstrap_mode = cfg->rt_io_operator != 0
-        ? SAO_RT_IO_PROXY_BOOTSTRAP_MODE_SCM_STRICT
-        : SAO_RT_IO_PROXY_BOOTSTRAP_MODE_LEGACY_CHILD;
-    if (cfg->rt_io_operator != 0) {
+    const bool safe_mode = cfg->safe_mode != 0;
+    if (!safe_mode) {
+        SaoRtIoProxyConfigV3 rt_io_cfg{};
+        rt_io_cfg.struct_size = sizeof(rt_io_cfg);
+        rt_io_cfg.abi_version = SAO_RT_IO_PROXY_CONFIG_V3_ABI_VERSION;
+        rt_io_cfg.v2_config.struct_size = sizeof(rt_io_cfg.v2_config);
+        rt_io_cfg.v2_config.abi_version = SAO_RT_IO_PROXY_CONFIG_ABI_VERSION;
+        rt_io_cfg.v2_config.ready_policy = SAO_RT_IO_PROXY_READY_POLICY_STRICT_PRODUCTION;
+        rt_io_cfg.v2_config.legacy_config.session_name_utf8 = "launcher";
+        rt_io_cfg.v2_config.legacy_config.strict_bootstrap = 1;
+        rt_io_cfg.v2_config.legacy_config.driver_strategy =
+            cfg->rt_io_operator != 0 ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
+                                     : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
+        // Production always uses the LocalSystem SCM/HIDF bootstrap.  The
+        // V2/LEGACY_CHILD API remains available to explicit compatibility
+        // and test callers, but launcher defaults no longer bypass the
+        // service identity contract.
+        rt_io_cfg.bootstrap_mode = SAO_RT_IO_PROXY_BOOTSTRAP_MODE_SCM_STRICT;
         const NTSTATUS nonce_status = BCryptGenRandom(
-            nullptr, rt_io_cfg.session_nonce,
-            static_cast<ULONG>(sizeof(rt_io_cfg.session_nonce)),
+            nullptr, rt_io_cfg.session_nonce, static_cast<ULONG>(sizeof(rt_io_cfg.session_nonce)),
             BCRYPT_USE_SYSTEM_PREFERRED_RNG);
         const NTSTATUS transaction_status = BCryptGenRandom(
             nullptr, reinterpret_cast<PUCHAR>(&rt_io_cfg.transaction_id),
-            static_cast<ULONG>(sizeof(rt_io_cfg.transaction_id)),
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            static_cast<ULONG>(sizeof(rt_io_cfg.transaction_id)), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
         if (nonce_status != 0 || transaction_status != 0) {
             return rollback_and_fail("rt_io_proxy_open_v3_rng", SAO_STATUS_INTERNAL);
         }
@@ -3743,36 +3873,42 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         rt_io_cfg.transaction_id |= 1ull;
         ctx->rt_io_strict_transaction_id = rt_io_cfg.transaction_id;
         ctx->rt_io_strict_chain_generation = 0u;
-        rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
-    } else {
-#if defined(SAO_LAUNCHER_ACTUAL_DEBUG)
-        rt_io_cfg.v2_config.legacy_config.dev_license_bypass =
-            cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
+        if (cfg->rt_io_operator != 0) {
+            rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
+        } else {
+#if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
+            rt_io_cfg.v2_config.legacy_config.dev_license_bypass =
+                cfg->rt_io_dev_license_bypass != 0 ? 1u : 0u;
 #else
-        rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
+            rt_io_cfg.v2_config.legacy_config.dev_license_bypass = 0u;
 #endif
-    }
-    // Operator mode hides the F12 status page by default (stealth posture);
-    // rt_io_force_status_page is an explicit opt-in override so the page
-    // stays reachable when the operator deliberately wants it.
-    rt_io_cfg.v2_config.legacy_config.disable_status_page =
-        (cfg->rt_io_operator != 0 && cfg->rt_io_force_status_page == 0) ? 1u : 0u;
-    status = sao_rt_io_proxy_open_v3(&rt_io_cfg, &ctx->rt_io_proxy);
-    if (status != SAO_STATUS_OK) {
-        return rollback_and_fail("rt_io_proxy_open_v3", status);
-    }
-    status =
-        sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
-    if (status != SAO_STATUS_OK) {
-        return rollback_and_fail("rt_io_window_rect_controller_create", status);
+        }
+        // Operator mode hides the F12 status page by default (stealth posture);
+        // rt_io_force_status_page is an explicit opt-in override.
+        rt_io_cfg.v2_config.legacy_config.disable_status_page =
+            (cfg->rt_io_operator != 0 && cfg->rt_io_force_status_page == 0) ? 1u : 0u;
+        status = sao_rt_io_proxy_open_v3(&rt_io_cfg, &ctx->rt_io_proxy);
+        if (status != SAO_STATUS_OK) {
+            return rollback_and_fail("rt_io_proxy_open_v3", status);
+        }
+        status =
+            sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
+        if (status != SAO_STATUS_OK) {
+            return rollback_and_fail("rt_io_window_rect_controller_create", status);
+        }
     }
 
-    SaoUiDcMutationProviderV2 dc_mutation_provider{};
-    dc_mutation_provider.struct_size = sizeof(dc_mutation_provider);
-    dc_mutation_provider.hide_window_rect = &hide_window_rect;
-    dc_mutation_provider.hide_exstyle = &hide_exstyle;
-    dc_mutation_provider.user_data = ctx;
-    status = sao_ui_dc_mutation_coordinator_create_ex_v2(&dc_mutation_provider,
+    SaoUiDcMutationProviderV3 dc_mutation_provider{};
+    const SaoUiDcMutationProviderV3* selected_mutation_provider = nullptr;
+    if (!safe_mode) {
+        dc_mutation_provider.struct_size = sizeof(dc_mutation_provider);
+        dc_mutation_provider.hide_window_rect = &hide_window_rect;
+        dc_mutation_provider.hide_exstyle = &hide_exstyle;
+        dc_mutation_provider.unlink_z_order = &unlink_z_order;
+        dc_mutation_provider.user_data = ctx;
+        selected_mutation_provider = &dc_mutation_provider;
+    }
+    status = sao_ui_dc_mutation_coordinator_create_ex_v3(selected_mutation_provider,
                                                          &ctx->dc_mutation_coordinator);
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_dc_mutation_coordinator_create", status);
@@ -3811,7 +3947,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     }
     ctx->sdk_compositor_bound = true;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
-    status = create_shared_ui_owners(cfg->base_dir, ctx);
+    status = create_shared_ui_owners(cfg->base_dir, ctx, safe_mode);
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("create_shared_ui_owners", status);
     }
@@ -3821,13 +3957,16 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     action_authority.fisheye_procedural = ctx->fisheye_backdrop != nullptr;
     action_authority.fisheye_live = ctx->fisheye_backdrop != nullptr;
 #endif
-    status = sao_rt_io_window_rect_register(
-        ctx->window_rect_controller,
-        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &ctx->window_rect_token);
-    if (status != SAO_STATUS_OK) {
-        return rollback_and_fail("rt_io_window_rect_register", status);
+    if (!safe_mode) {
+        status = sao_rt_io_window_rect_register(
+            ctx->window_rect_controller,
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)),
+            &ctx->window_rect_token);
+        if (status != SAO_STATUS_OK) {
+            return rollback_and_fail("rt_io_window_rect_register", status);
+        }
+        ctx->window_rect_registered = true;
     }
-    ctx->window_rect_registered = true;
 
     status = sao_streaming_flow_startup(2.0);
     if (status != SAO_STATUS_OK) {
@@ -4372,9 +4511,10 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
 #endif
 #if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER)
         if (cfg->enable_anti_dump) {
-            // Start the watcher while the image headers are still available to
-            // the MSVC thread bootstrap.  Release/hardened header erasure
-            // follows after every security worker that needs a thread is running.
+            // Keep the snapshot watcher active without erasing the launcher's
+            // complete PE headers. Platform, plugin, and UI startup still create
+            // CRT threads after security initialization, and zeroing the headers
+            // makes that thread bootstrap fail in hardened builds.
             (void)sao_security_anti_dump_snapshot_watch_start(1000u);
         }
 #endif
@@ -4388,17 +4528,6 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
                 return worker_status;
             }
         }
-#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER) && !defined(SAO_LAUNCHER_ACTUAL_DEBUG)
-        if (cfg->enable_anti_dump) {
-            // Later memory dumps capture a sanitized image.  Erasure failures
-            // remain non-fatal: a partially scrubbed image still leaks less
-            // than an untouched image.
-            HMODULE self_module = GetModuleHandleW(nullptr);
-            if (self_module != nullptr)
-                (void)sao_security_anti_dump_erase_headers(
-                    reinterpret_cast<void*>(self_module));
-        }
-#endif
         return SAO_STATUS_OK;
     } catch (...) {
         stop_anti_debug_worker();

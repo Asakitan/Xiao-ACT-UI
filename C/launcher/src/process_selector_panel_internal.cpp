@@ -246,29 +246,51 @@ Json row_node(Json children) {
     return Json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-Json card_node(std::string title, Json children) {
-    return Json{{"type", "card"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
+    return Json{{"type", "card"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
 }
 
-Json section_node(std::string title, Json children) {
-    return Json{{"type", "section"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+Json section_node(std::string title, Json children, std::string_view accent = "cyan") {
+    return Json{{"type", "section"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
+}
+
+std::string_view snapshot_accent(SnapshotState state) noexcept {
+    if (state == SnapshotState::fresh) return "ok";
+    if (state == SnapshotState::loading || state == SnapshotState::stale) return "gold";
+    if (state == SnapshotState::failed) return "danger";
+    return "cyan";
+}
+
+Json status_strip_node(SnapshotState state) {
+    const std::string_view accent = snapshot_accent(state);
+    std::string_view summary = "Ready / 就绪";
+    if (state == SnapshotState::loading)
+        summary = "Refreshing / 正在刷新";
+    else if (state == SnapshotState::stale)
+        summary = "Showing last successful scan / 显示上次成功结果";
+    else if (state == SnapshotState::failed)
+        summary = "Scan failed / 扫描失败";
+    else if (state == SnapshotState::empty)
+        summary = "No results yet / 暂无结果";
+    return card_node("Status / 状态", Json::array({row_node(Json::array({
+        badge_node(std::string(snapshot_state_label(state)), accent),
+        text_node(std::string(summary), accent, 24)}))}), accent);
 }
 std::string build_panel_spec(const Snapshot& snapshot) {
     const SnapshotState state = snapshot_state(snapshot);
     const bool attach_allowed = state == SnapshotState::fresh;
     Json nodes = Json::array();
+    nodes.push_back(status_strip_node(state));
     Json filters = Json::array();
     Json actions = Json::array();
-    actions.push_back(button_node("process.refresh", snapshot.loading ? "Refreshing..." : "Refresh",
+    actions.push_back(button_node("process.refresh", snapshot.loading ? "Refreshing... / 正在刷新..." : "Refresh / 刷新",
                                   kRefreshAction, Json::object(), "primary", snapshot.loading));
-    actions.push_back(button_node("process.filter.all", "Show all", kFilterAction,
+    actions.push_back(button_node("process.filter.all", "Show all / 全部", kFilterAction,
                                   {{"mode", "all"}},
                                   snapshot.filter == FilterMode::all ? "primary" : "ghost"));
-    actions.push_back(button_node("process.filter.game", "Likely games", kFilterAction,
+    actions.push_back(button_node("process.filter.game", "Likely games / 可能的游戏", kFilterAction,
                                   {{"mode", "likely_game"}},
                                   snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
     filters.push_back(row_node(std::move(actions)));
@@ -286,19 +308,31 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     if (snapshot.attached_process.has_value()) {
         const ProcessRecord& process = *snapshot.attached_process;
         Json details = Json::array();
-        details.push_back(row_node(Json::array({badge_node("Attached", "ok"),
-                                                badge_node("PID " + std::to_string(process.pid), "accent")})));
+        details.push_back(row_node(Json::array({badge_node("Attached / 已附加", "ok"),
+                                                badge_node("PID " + std::to_string(process.pid), "cyan")})));
         details.push_back(text_node(process.image_path_utf8, "mono", 34));
         nodes.push_back(section_node(
             "Attached / 已附加",
-            Json::array({card_node(process.base_name_utf8, std::move(details))})));
+            Json::array({card_node(process.base_name_utf8, std::move(details), "ok")}), "ok"));
     }
     if (state == SnapshotState::loading && !snapshot.visible_processes.empty())
-        nodes.push_back(section_node("Status / 状态", Json::array({text_node("Refreshing, showing last results", "warn", 28)})));
+        nodes.push_back(section_node(
+            "Status / 状态",
+            Json::array({text_node("Refreshing, showing last results / 正在刷新，显示上次结果",
+                                        "warn", 28)}),
+            "gold"));
     else if (state == SnapshotState::stale)
-        nodes.push_back(section_node("Status / 状态", Json::array({text_node("Stale — last successful scan", "warn", 28)})));
+        nodes.push_back(section_node(
+            "Status / 状态",
+            Json::array({text_node("Stale — last successful scan / 过期 — 上次成功扫描",
+                                        "warn", 28)}),
+            "gold"));
     else if (state == SnapshotState::empty)
-        nodes.push_back(section_node("Status / 状态", Json::array({text_node("No successful scan results yet", "muted", 28)})));
+        nodes.push_back(section_node(
+            "Status / 状态",
+            Json::array({text_node("No successful scan results yet / 尚无成功扫描结果",
+                                        "muted", 28)}),
+            "cyan"));
     if (!snapshot.status_text.empty()) {
         const std::string_view style = snapshot.last_status == SAO_STATUS_OK ? "muted" : "bad";
         Json status = Json::array();
@@ -308,17 +342,17 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                                          Json::object(), "primary"));
         nodes.push_back(section_node(
             snapshot.last_status == SAO_STATUS_OK ? "Status / 状态" : "Error / 错误",
-            std::move(status)));
+            std::move(status), snapshot.last_status == SAO_STATUS_OK ? "cyan" : "danger"));
     }
     if (snapshot.visible_processes.empty()) {
         Json empty = Json::array();
         empty.push_back(text_node(state == SnapshotState::loading
-                                      ? "Scanning running processes..."
+                                      ? "Scanning running processes... / 正在扫描运行中的进程..."
                                       : snapshot.filter == FilterMode::likely_game
-                                            ? "No likely game processes matched. Switch to Show all or refresh."
-                                            : "No queryable processes are available. Refresh to try again.",
+                                            ? "No likely game processes matched. Switch to Show all or refresh. / 未匹配到可能的游戏进程，请切换全部或刷新。"
+                                            : "No queryable processes are available. Refresh to try again. / 没有可查询的进程，请刷新重试。",
                                   "muted", 44));
-        empty.push_back(button_node("process.empty-refresh", "Refresh", kRefreshAction,
+        empty.push_back(button_node("process.empty-refresh", "Refresh / 刷新", kRefreshAction,
                                     Json::object(), "primary", snapshot.loading));
         nodes.push_back(section_node("Process List / 进程列表", std::move(empty)));
     } else {
@@ -328,15 +362,16 @@ std::string build_panel_spec(const Snapshot& snapshot) {
             details.push_back(row_node(Json::array({
                 badge_node("PID " + std::to_string(process.pid),
                            is_likely_game_process(process) ? "ok" : "muted"),
-                badge_node(is_likely_game_process(process) ? "Likely game" : "Process", "muted")})));
+                badge_node(is_likely_game_process(process) ? "Likely game / 可能的游戏" : "Process / 进程", "muted")})));
             details.push_back(text_node(process.image_path_utf8, "mono", 34));
             details.push_back(button_node(
-                "process.attach." + std::to_string(process.pid), "Select / Attach", kAttachAction,
+                "process.attach." + std::to_string(process.pid), "Select / Attach / 选择并附加", kAttachAction,
                 {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "primary",
                 !attach_allowed));
-            cards.push_back(card_node(process.base_name_utf8, std::move(details)));
+            cards.push_back(card_node(process.base_name_utf8, std::move(details),
+                                      is_likely_game_process(process) ? "cyan" : "muted"));
         }
-        nodes.push_back(section_node("Process List / 进程列表", std::move(cards)));
+        nodes.push_back(section_node("Process List / 进程列表", std::move(cards), "cyan"));
     }
     std::string serialized = Json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)

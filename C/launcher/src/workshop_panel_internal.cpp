@@ -311,16 +311,20 @@ json row_node(json children) {
     return json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
 
-json card_node(std::string title, json children) {
-    return json{{"type", "card"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+json card_node(std::string title, json children, std::string_view accent = "cyan") {
+    return json{{"type", "card"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
 }
 
-json section_node(std::string title, json children) {
-    return json{{"type", "section"},
-                {"title", bounded_text(std::move(title), 512U)},
-                {"children", std::move(children)}};
+json section_node(std::string title, json children, std::string_view accent = "cyan") {
+    return json{{"type", "section"}, {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent}, {"children", std::move(children)}};
+}
+
+json status_strip_node(std::string label, std::string message, std::string_view accent) {
+    return card_node("Status / 状态", json::array({row_node(json::array({
+        badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
+                     accent);
 }
 
 json button_node(std::string id, std::string label, std::string action, json payload,
@@ -1310,43 +1314,47 @@ class Owner::Impl final {
         json nodes = json::array();
         const bool busy = worker_active_ || !tasks_.empty();
         json controls = json::array();
+        const std::string_view status_accent = !error_text_.empty() ? "danger" : busy ? "gold" : online_ ? "ok" : "danger";
+        nodes.push_back(status_strip_node(busy ? "Busy / 处理中" : online_ ? "Online / 在线" : "Offline / 离线",
+                                          error_text_.empty() ? (progress_text_.empty() ? "Ready / 就绪" : progress_text_) : error_text_,
+                                          status_accent));
         json status_badges = json::array();
-        status_badges.push_back(badge_node(online_ ? "Online" : "Offline", online_ ? "ok" : "bad"));
-        const std::uint32_t page_count = page_size_ == 0U ? 0U : (total_ + page_size_ - 1U) / page_size_;
-        status_badges.push_back(badge_node("Page " + std::to_string(current_page_) + " of " + std::to_string(page_count), "accent"));
-        status_badges.push_back(badge_node(std::to_string(total_) + " plugins", "gold"));
+        const bool has_pages = total_ != 0U && page_size_ != 0U;
+        status_badges.push_back(badge_node(online_ ? "Online / 在线" : "Offline / 离线", online_ ? "ok" : "danger"));
+        status_badges.push_back(badge_node(has_pages ? "Page " + std::to_string(current_page_) + " of " + std::to_string((total_ + page_size_ - 1U) / page_size_) + " / 第" + std::to_string(current_page_) + "页，共" + std::to_string((total_ + page_size_ - 1U) / page_size_) + "页" : "Empty / 空页", has_pages ? "cyan" : "muted"));
+        status_badges.push_back(badge_node(std::to_string(total_) + " plugins / 个插件", "gold"));
         controls.push_back(row_node(std::move(status_badges)));
         json navigation = json::array();
-        navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "Refresh" : "Retry",
+        navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "Refresh / 刷新" : "Retry / 重试",
                                          "workshop.refresh", json::object(), "primary", busy));
-        navigation.push_back(button_node("workshop.previous", "Previous", "workshop.page.previous",
+        navigation.push_back(button_node("workshop.previous", "Previous / 上一页", "workshop.page.previous",
                                          json::object(), "default", busy || current_page_ <= 1));
-        navigation.push_back(button_node("workshop.next", "Next", "workshop.page.next", json::object(),
+        navigation.push_back(button_node("workshop.next", "Next / 下一页", "workshop.page.next", json::object(),
                                          "default", busy || !next_page_available(current_page_, page_size_, total_)));
-        navigation.push_back(button_node("workshop.close", "Close", "workshop.close",
+        navigation.push_back(button_node("workshop.close", "Close / 关闭", "workshop.close",
                                          json::object(), "ghost", false));
         controls.push_back(row_node(std::move(navigation)));
-        nodes.push_back(section_node("Controls", std::move(controls)));
+        nodes.push_back(section_node("Controls / 控制", std::move(controls), busy ? "gold" : "cyan"));
 
         json catalog = json::array();
         if (items_.empty()) {
-            catalog.push_back(text_node(busy ? "Loading plugins..." : "No plugins on this page.", "muted", 38));
+            catalog.push_back(text_node(busy ? "Loading plugins... / 正在加载插件..." : "No plugins on this page. / 此页暂无插件。", "muted", 38));
             if (!busy)
-                catalog.push_back(button_node("workshop.catalog-retry", "Refresh", "workshop.refresh",
+                catalog.push_back(button_node("workshop.catalog-retry", "Refresh / 刷新", "workshop.refresh",
                                               json::object(), "primary"));
         } else {
             for (std::size_t index = 0; index < items_.size(); ++index) {
                 const PluginSummary& item = items_[index];
                 json details = json::array();
                 json metadata = json::array();
-                metadata.push_back(badge_node("v" + item.version, "accent"));
-                metadata.push_back(badge_node(item.tag.empty() ? "untagged" : item.tag, "muted"));
-                metadata.push_back(badge_node(item.author.empty() ? item.id : item.author, "muted"));
+                metadata.push_back(badge_node("v" + item.version, "cyan"));
                 std::error_code installed_error;
                 const bool installed = std::filesystem::is_directory(plugins_dir_ / item.id, installed_error) && !installed_error;
                 metadata.push_back(badge_node(installed ? "Installed" : "Not installed", installed ? "ok" : "muted"));
-                metadata.push_back(badge_node(updated_ago(item.updated_ms), "muted"));
                 details.push_back(row_node(std::move(metadata)));
+                details.push_back(text_node("Tag / 标签: " + (item.tag.empty() ? "untagged / 未分类" : item.tag) +
+                                                " · Author / 作者: " + (item.author.empty() ? item.id : item.author) +
+                                                " · " + updated_ago(item.updated_ms), "muted", 24));
                 json metrics = json::array();
                 metrics.push_back(badge_node(format_rating(item.rating), "gold"));
                 metrics.push_back(badge_node(std::to_string(item.downloads) + " downloads", "accent"));
@@ -1362,10 +1370,10 @@ class Owner::Impl final {
                     actions.push_back(button_node("uninstall." + std::to_string(index), "Remove",
                                                   "workshop.plugin.uninstall", payload, "danger", busy));
                 details.push_back(row_node(std::move(actions)));
-                catalog.push_back(card_node(item.name + " · v" + item.version, std::move(details)));
+                catalog.push_back(card_node(item.name + " · v" + item.version, std::move(details), installed ? "ok" : "cyan"));
             }
         }
-        nodes.push_back(section_node("Catalog", std::move(catalog)));
+        nodes.push_back(section_node("Catalog / 目录", std::move(catalog), "cyan"));
 
         json detail_children = json::array();
         if (detail_.has_value()) {
@@ -1415,7 +1423,7 @@ class Owner::Impl final {
                                    {"caption", progress_text_}, {"height", 24}});
         if (!error_text_.empty())
             task_center.push_back(text_node(error_text_, "bad", 42));
-        nodes.push_back(section_node("Task Center", std::move(task_center)));
+        nodes.push_back(section_node("Task Center / 任务中心", std::move(task_center), busy ? "gold" : last_status_ == SAO_STATUS_OK ? "ok" : "danger"));
         std::string spec = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
         if (spec.size() <= kMaximumPanelSpecBytes)
             return spec;
