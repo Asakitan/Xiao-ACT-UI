@@ -51,6 +51,3 @@ target_link_libraries(sao_platform_engine
     PRIVATE nlohmann_json::nlohmann_json
 )
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

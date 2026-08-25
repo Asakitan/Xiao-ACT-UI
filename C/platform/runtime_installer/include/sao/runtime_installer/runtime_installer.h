@@ -4,7 +4,7 @@
 // that the language / interpreter runtime it needs is present on disk before
 // the host DLL is loaded.  When the runtime is missing the installer probes
 // a signed manifest, downloads the payload over WinHTTP, verifies its hash
-// against the manifest entry (SHA-256 mandatory, BLAKE3 optional), extracts
+// against the manifest entry (SHA-256 and BLAKE3 both mandatory), extracts
 // it into %LOCALAPPDATA%/SaoAuto/runtimes/<opaque_id>/<version>/ and only
 // then reports the runtime as usable.
 //
@@ -63,6 +63,9 @@ extern "C" {
 #define SAO_RUNTIME_INSTALLER_ABI_VERSION \
     ((SAO_RUNTIME_INSTALLER_ABI_VERSION_MAJOR << 16) | \
      SAO_RUNTIME_INSTALLER_ABI_VERSION_MINOR)
+
+#define SAO_RUNTIME_INSTALLER_STATUS_ERR_PARTIAL_RECOVERY \
+    ((sao_status_t)-203)
 
 SAO_RUNTIME_INSTALLER_API uint32_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_abi_version(void);

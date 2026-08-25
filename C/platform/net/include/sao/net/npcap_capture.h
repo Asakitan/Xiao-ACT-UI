@@ -84,8 +84,20 @@ SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_start(
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_stop(
     sao_net_capture_handle_t handle);
 
+// Completion-aware close. A callback-thread call records the close request
+// and returns SAO_NET_STATUS_BUSY; cleanup completes after the callback
+// returns. Other BUSY results require an externally serialized retry.
+// The final owner close must not begin concurrently with a brand-new call
+// that has not yet entered this API; operations already admitted internally
+// hold lifetime references.
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_try_close(
+    sao_net_capture_handle_t handle);
+
+// ABI-compatible fire-and-forget wrapper; it may schedule deferred cleanup.
 SAO_NET_API void SAO_NET_CALL sao_net_capture_close(
     sao_net_capture_handle_t handle);
+
+#define SAO_NET_STATUS_BUSY SAO_STATUS_ERR_CANCELLED
 
 // ───────────────────────────────────────────────────────────────────────
 // Low-level Npcap wrapper (game-agnostic).
@@ -183,6 +195,16 @@ SAO_NET_API sao_status_t SAO_NET_CALL sao_net_npcap_dispatch(
 // Close the pcap handle.  Safe to pass NULL.
 SAO_NET_API void SAO_NET_CALL sao_net_npcap_close(
     sao_net_npcap_handle_t handle);
+
+#if defined(SAO_NET_TESTING)
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_test_open(
+    sao_net_capture_handle_t* out_handle);
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_test_submit(
+    sao_net_capture_handle_t handle, const uint8_t* bytes, size_t length,
+    uint64_t ts_ms);
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_capture_test_fail(
+    sao_net_capture_handle_t handle);
+#endif
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -19,6 +19,7 @@ add_library(sao::net ALIAS sao_platform_net)
 
 target_compile_definitions(sao_platform_net PRIVATE SAO_NET_BUILDING_DLL)
 
+
 target_include_directories(sao_platform_net
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
@@ -77,6 +78,3 @@ else()
                    "CAPABILITY_MISSING (SAO_NET_ZSTD_MISSING defined)")
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

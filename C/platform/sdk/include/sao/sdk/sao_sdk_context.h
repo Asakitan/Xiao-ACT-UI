@@ -425,6 +425,80 @@ struct SaoSdkBannerTable {
                                          uint32_t duration_ms, uint32_t argb_color);
 };
 
+// GPU Hunt scene observations are bounded heuristic records.  A
+// WorldCandidate coordinate or GeometricInference graph is not an
+// engine-authoritative result.
+#define SAO_SDK_GPU_HUNT_SCENE_DATA_ABI_VERSION 1u
+
+#define SAO_SDK_GPU_HUNT_SCENE_KIND_UNKNOWN                 0u
+#define SAO_SDK_GPU_HUNT_SCENE_KIND_CHARACTER_CANDIDATE     1u
+#define SAO_SDK_GPU_HUNT_SCENE_KIND_ACTOR_CANDIDATE         2u
+#define SAO_SDK_GPU_HUNT_SCENE_KIND_ANIMATED_PROP_CANDIDATE 3u
+
+#define SAO_SDK_GPU_HUNT_SCENE_SOURCE_GPU_UPLOAD_HEAP     1u
+#define SAO_SDK_GPU_HUNT_SCENE_SOURCE_ENGINE_OBJECT_GRAPH 2u
+#define SAO_SDK_GPU_HUNT_SCENE_SOURCE_THREAD_STACK_ANCHOR 3u
+
+#define SAO_SDK_GPU_HUNT_COORDINATE_SPACE_UNKNOWN             0u
+#define SAO_SDK_GPU_HUNT_COORDINATE_SPACE_WORLD_CANDIDATE     1u
+#define SAO_SDK_GPU_HUNT_COORDINATE_SPACE_LOCAL               2u
+#define SAO_SDK_GPU_HUNT_COORDINATE_SPACE_COMPONENT           3u
+#define SAO_SDK_GPU_HUNT_COORDINATE_SPACE_WORLD_AUTHORITATIVE 4u
+
+#define SAO_SDK_GPU_HUNT_GRAPH_SOURCE_NONE                 0u
+#define SAO_SDK_GPU_HUNT_GRAPH_SOURCE_GEOMETRIC_INFERENCE  1u
+#define SAO_SDK_GPU_HUNT_GRAPH_SOURCE_ENGINE_AUTHORITATIVE 2u
+
+#define SAO_SDK_GPU_HUNT_SCENE_FLAG_PRIMARY       (1u << 0)
+#define SAO_SDK_GPU_HUNT_SCENE_FLAG_HUMANOID      (1u << 1)
+#define SAO_SDK_GPU_HUNT_SCENE_FLAG_STALE         (1u << 2)
+#define SAO_SDK_GPU_HUNT_SCENE_FLAG_MOVING        (1u << 3)
+#define SAO_SDK_GPU_HUNT_SCENE_FLAG_HAS_HIERARCHY (1u << 4)
+
+struct SaoSdkGpuHuntSceneSnapshot {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint64_t observation_epoch;
+    uint64_t scene_revision;
+    uint64_t sample_sequence;
+    uint64_t tick;
+    uint32_t object_count;
+    uint32_t added_count;
+    uint32_t updated_count;
+    uint32_t removed_count;
+    uint8_t matrix_locked;
+    uint8_t camera_valid;
+    uint8_t reserved0[6];
+    float camera_position[3];
+    float scene_confidence;
+};
+
+struct SaoSdkGpuHuntSceneObject {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint64_t object_id;
+    uint64_t observation_epoch;
+    uint64_t first_seen_tick;
+    uint64_t last_seen_tick;
+    uint64_t heap_base;
+    uint32_t heap_offset;
+    uint32_t kind;
+    uint32_t source;
+    uint32_t coordinate_space;
+    uint32_t graph_source;
+    uint32_t flags;
+    uint32_t layout;
+    uint32_t tier;
+    uint32_t bone_count;
+    uint32_t reserved0;
+    float confidence;
+    float bounding_radius;
+    float centroid[3];
+    float velocity[3];
+    uint32_t stale_ticks;
+    uint32_t reserved1;
+};
+
 // GPU hunt capability — DX12 upload-heap view/projection matrix and
 // skeleton bone locator.  Plugins never speak rt_io directly; the
 // tracker owns a provider session obtained from the context's retained
@@ -693,6 +767,23 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* get_motion_prediction_sample_count)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         uint32_t* out_count);
+
+    // Optional scene-observation tail.  Existing ABI 1.11 metadata and
+    // motion slot offsets remain frozen; consumers authorize each slot by
+    // struct_size before use.
+    sao_sdk_status_t(SAO_SDK_CALL* get_scene_snapshot)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        struct SaoSdkGpuHuntSceneSnapshot* out_snapshot);
+
+    sao_sdk_status_t(SAO_SDK_CALL* get_scene_objects)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        struct SaoSdkGpuHuntSceneObject* out_objects, size_t max_objects,
+        size_t* out_object_count);
+
+    sao_sdk_status_t(SAO_SDK_CALL* get_scene_object_bones)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker, uint64_t object_id,
+        float* out_positions_xyz, uint32_t* out_parents, size_t max_bones,
+        size_t* out_bone_count);
 };
 
 #define SAO_SDK_GPU_HUNT_TABLE_ABI_VERSION_MAJOR SAO_SDK_ABI_VERSION_MAJOR
@@ -708,6 +799,9 @@ struct SaoSdkGpuHuntTable {
 #define SAO_SDK_GPU_HUNT_TABLE_MOTION_REQUIRED_SIZE                                          \
     (offsetof(struct SaoSdkGpuHuntTable, get_motion_prediction_sample_count) +                \
      sizeof(((struct SaoSdkGpuHuntTable*)0)->get_motion_prediction_sample_count))
+#define SAO_SDK_GPU_HUNT_TABLE_SCENE_REQUIRED_SIZE                                           \
+    (offsetof(struct SaoSdkGpuHuntTable, get_scene_object_bones) +                           \
+     sizeof(((struct SaoSdkGpuHuntTable*)0)->get_scene_object_bones))
 
 // HeapLocatorProfile constants (ABI 1.10).  Append-only; existing
 // values never move.

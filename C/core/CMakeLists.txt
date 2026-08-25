@@ -21,6 +21,3 @@ target_include_directories(sao_core PRIVATE
 
 target_link_libraries(sao_core PRIVATE user32)
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

@@ -18,7 +18,7 @@
 //         "url":          "https://cdn.example/py-3.11.8-embed-amd64.zip",
 //         "url_mirrors":  [ "https://mirror1/..." ],
 //         "sha256_hex":   "e0d9...",
-//         "blake3_hex":   "8f47...",              // optional
+//         "blake3_hex":   "8f47...",              // required
 //         "size_bytes":   10485760,
 //         "archive_type": "zip",                  // "zip" | "raw" | "nupkg"
 //         "install_hint": "extract_top_level"     // see kInstallHint*
@@ -27,8 +27,8 @@
 //     ]
 //   }
 //
-// Every field named above is required except "url_mirrors" and
-// "blake3_hex".  Unknown fields are ignored (forward compatibility).
+// Every field named above is required except "url_mirrors". Unknown fields
+// are ignored (forward compatibility).
 //
 // The parsed schema is exposed as opaque handles; this header only declares
 // enums and length limits that the C ABI header (runtime_installer.h)
@@ -155,6 +155,27 @@ sao_runtime_installer_test_set_transport(
 // restores the default.
 SAO_RUNTIME_INSTALLER_API void SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_test_set_root(const char* utf8_path_or_null);
+
+enum sao_runtime_installer_test_failpoint_e : uint32_t {
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_MARKER_WRITE          = 1u << 0,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_BACKUP_CURRENT_RENAME = 1u << 1,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_BACKUP_MARKER_RENAME  = 1u << 2,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_COMMIT_CURRENT_RENAME = 1u << 3,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_COMMIT_CURRENT_COPY   = 1u << 4,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_COMMIT_MARKER_RENAME  = 1u << 5,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_COMMIT_MARKER_COPY    = 1u << 6,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_RESTORE_CURRENT       = 1u << 7,
+    SAO_RUNTIME_INSTALLER_TEST_FAIL_RESTORE_MARKER        = 1u << 8,
+};
+
+SAO_RUNTIME_INSTALLER_API void SAO_RUNTIME_INSTALLER_CALL
+sao_runtime_installer_test_set_failpoints(uint32_t failpoints);
+
+SAO_RUNTIME_INSTALLER_API void SAO_RUNTIME_INSTALLER_CALL
+sao_runtime_installer_test_set_tar_timeout_ms(uint32_t timeout_ms);
+
+SAO_RUNTIME_INSTALLER_API void SAO_RUNTIME_INSTALLER_CALL
+sao_runtime_installer_test_set_named_mutex_timeout_ms(uint32_t timeout_ms);
 #endif  // SAO_RUNTIME_INSTALLER_ENABLE_TEST_HOOKS
 
 #ifdef __cplusplus

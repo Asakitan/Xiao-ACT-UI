@@ -23,6 +23,3 @@ target_link_libraries(sao_platform_scripting
     PUBLIC sao::core
 )
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

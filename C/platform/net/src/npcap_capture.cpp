@@ -12,10 +12,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -207,14 +210,204 @@ struct sao_net_npcap_s {
 };
 
 struct sao_net_capture_s {
+    struct TestPacket {
+        std::vector<uint8_t> bytes;
+        uint64_t ts_ms = 0;
+    };
+
+    std::mutex mutex;
+    std::condition_variable condition;
     sao_net_npcap_handle_t npcap = nullptr;
     uint32_t snap_len = 65535;
-    std::atomic<bool> stop_requested{false};
-    std::atomic<bool> running{false};
+    bool stop_requested = false;
+    bool running = false;
     std::thread worker;
+    std::thread::id worker_id{};
     sao_net_packet_callback_t callback = nullptr;
     void* callback_user_data = nullptr;
+    uint32_t lifetime_refs = 1;
+    uint32_t active_callbacks = 0;
+    bool admission_open = false;
+    bool owner_released = false;
+    bool close_requested = false;
+    bool worker_finished = true;
+    bool worker_exit_complete = true;
+    bool worker_attached = false;
+    bool cleanup_done = false;
+    bool join_in_progress = false;
+    bool test_backend = false;
+    bool test_read_error = false;
+    std::deque<TestPacket> test_packets;
 };
+
+namespace {
+
+constexpr sao_status_t k_capture_busy_status = SAO_NET_STATUS_BUSY;
+
+void release_capture_ref(sao_net_capture_s* handle);
+
+bool retain_capture_ref(sao_net_capture_s* handle) {
+    if (handle == nullptr) return false;
+    std::lock_guard<std::mutex> guard(handle->mutex);
+    if (handle->lifetime_refs == 0) return false;
+    ++handle->lifetime_refs;
+    return true;
+}
+
+void close_capture_pcap(sao_net_capture_s* handle) {
+    sao_net_npcap_handle_t npcap = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (!handle->close_requested || !handle->worker_finished ||
+            handle->cleanup_done) {
+            return;
+        }
+        handle->cleanup_done = true;
+        npcap = handle->npcap;
+        handle->npcap = nullptr;
+    }
+    if (npcap != nullptr) sao_net_npcap_close(npcap);
+}
+
+void release_capture_ref(sao_net_capture_s* handle) {
+    if (handle == nullptr) return;
+    bool destroy = false;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (handle->lifetime_refs == 0) return;
+        --handle->lifetime_refs;
+        destroy = handle->lifetime_refs == 0 && handle->owner_released &&
+                  handle->worker_finished && handle->worker_exit_complete &&
+                  handle->cleanup_done;
+    }
+    if (destroy) delete handle;
+}
+
+class CaptureOperationLease {
+public:
+    explicit CaptureOperationLease(sao_net_capture_s* handle)
+        : handle_(retain_capture_ref(handle) ? handle : nullptr) {}
+    ~CaptureOperationLease() { release_capture_ref(handle_); }
+    explicit operator bool() const noexcept { return handle_ != nullptr; }
+private:
+    sao_net_capture_s* handle_ = nullptr;
+};
+
+void finish_capture_worker(sao_net_capture_s* handle) {
+    sao_net_npcap_handle_t npcap = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        handle->running = false;
+        handle->admission_open = false;
+        handle->callback = nullptr;
+        handle->callback_user_data = nullptr;
+        handle->worker_finished = true;
+        if (handle->close_requested && !handle->cleanup_done) {
+            handle->cleanup_done = true;
+            npcap = handle->npcap;
+            handle->npcap = nullptr;
+        }
+        if (handle->close_requested && !handle->join_in_progress &&
+            handle->worker.joinable()) {
+            handle->worker.detach();
+        }
+        handle->condition.notify_all();
+    }
+    if (npcap != nullptr) sao_net_npcap_close(npcap);
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        handle->worker_exit_complete = true;
+        handle->condition.notify_all();
+    }
+    release_capture_ref(handle);
+}
+
+bool enter_capture_callback(sao_net_capture_s* handle,
+                            sao_net_packet_callback_t* callback_out,
+                            void** user_data_out) {
+    std::lock_guard<std::mutex> guard(handle->mutex);
+    if (!handle->admission_open || handle->stop_requested ||
+        handle->callback == nullptr) {
+        return false;
+    }
+    ++handle->active_callbacks;
+    ++handle->lifetime_refs;
+    *callback_out = handle->callback;
+    *user_data_out = handle->callback_user_data;
+    return true;
+}
+
+void leave_capture_callback(sao_net_capture_s* handle) {
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (handle->active_callbacks != 0) --handle->active_callbacks;
+        handle->condition.notify_all();
+    }
+    release_capture_ref(handle);
+}
+
+void invoke_capture_callback(sao_net_capture_s* handle,
+                             const uint8_t* bytes, size_t length,
+                             uint64_t timestamp_ms) {
+    sao_net_packet_callback_t callback = nullptr;
+    void* user_data = nullptr;
+    if (!enter_capture_callback(handle, &callback, &user_data)) return;
+    try {
+        callback(bytes, length, timestamp_ms * 1'000'000ull, user_data);
+    } catch (...) {
+    }
+    leave_capture_callback(handle);
+}
+
+bool capture_stop_requested(sao_net_capture_s* handle) {
+    std::lock_guard<std::mutex> guard(handle->mutex);
+    return handle->stop_requested;
+}
+
+sao_status_t stop_capture_worker(sao_net_capture_s* handle) {
+    if (!retain_capture_ref(handle)) return SAO_STATUS_ERR_HANDLE_INVALID;
+    bool caller_is_worker = false;
+    bool should_join = false;
+    bool busy = false;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        handle->stop_requested = true;
+        handle->admission_open = false;
+        handle->callback = nullptr;
+        handle->callback_user_data = nullptr;
+        handle->condition.notify_all();
+        caller_is_worker = handle->worker_id == std::this_thread::get_id() &&
+                           handle->worker.joinable();
+        if (!caller_is_worker && handle->worker.joinable()) {
+            if (handle->join_in_progress) {
+                busy = true;
+            } else {
+                handle->join_in_progress = true;
+                should_join = true;
+            }
+        } else if (!caller_is_worker && !handle->worker_exit_complete) {
+            busy = true;
+        }
+    }
+    if (busy) {
+        release_capture_ref(handle);
+        return k_capture_busy_status;
+    }
+    if (caller_is_worker) {
+        release_capture_ref(handle);
+        return k_capture_busy_status;
+    }
+    if (should_join) {
+        handle->worker.join();
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        handle->join_in_progress = false;
+        handle->condition.notify_all();
+    }
+    release_capture_ref(handle);
+    return SAO_STATUS_OK;
+}
+
+}  // namespace
 
 // ───────────────────────────────────────────────────────────────────────
 // Low-level Npcap primitive surface.
@@ -506,81 +699,245 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_capture_open(
 extern "C" sao_status_t SAO_NET_CALL sao_net_capture_start(
     sao_net_capture_handle_t handle, sao_net_packet_callback_t callback,
     void* user_data) {
-    if (handle == nullptr || handle->npcap == nullptr) {
-        return SAO_STATUS_ERR_HANDLE_INVALID;
-    }
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (callback == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (handle->running.exchange(true, std::memory_order_acq_rel)) {
-        return SAO_STATUS_ERR_ALREADY_EXISTS;
+    CaptureOperationLease operation(handle);
+    if (!operation) return SAO_STATUS_ERR_HANDLE_INVALID;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (handle->owner_released ||
+            (!handle->test_backend && handle->npcap == nullptr)) {
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        if (handle->running || handle->worker.joinable()) {
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        handle->stop_requested = false;
+        handle->running = true;
+        handle->worker_finished = false;
+        handle->worker_exit_complete = false;
+        handle->worker_attached = false;
+        handle->admission_open = true;
+        handle->callback = callback;
+        handle->callback_user_data = user_data;
+        ++handle->lifetime_refs;
     }
-    handle->stop_requested.store(false, std::memory_order_release);
-    handle->callback = callback;
-    handle->callback_user_data = user_data;
     try {
-        handle->worker = std::thread([handle] {
-            std::vector<uint8_t> packet(handle->snap_len);
-            while (!handle->stop_requested.load(std::memory_order_acquire)) {
-                uint64_t timestamp_ms = 0;
-                size_t packet_size = 0;
-                const auto status = sao_net_npcap_next_packet(
-                    handle->npcap, packet.data(), packet.size(),
-                    &timestamp_ms, &packet_size);
-                if (status == SAO_STATUS_ERR_TIMEOUT) continue;
-                if (status == SAO_STATUS_ERR_BUFFER_TOO_SMALL) {
-                    try {
-                        packet.resize(packet_size);
-                    } catch (...) {
-                        break;
-                    }
-                    continue;
+        std::thread worker([handle] {
+            {
+                std::unique_lock<std::mutex> lock(handle->mutex);
+                handle->condition.wait(lock, [handle] {
+                    return handle->worker_attached || handle->stop_requested;
+                });
+                if (handle->stop_requested && !handle->worker_attached) {
+                    lock.unlock();
+                    finish_capture_worker(handle);
+                    return;
                 }
-                if (status != SAO_STATUS_OK) break;
-                try {
-                    handle->callback(packet.data(), packet_size,
-                                     timestamp_ms * 1'000'000ull,
-                                     handle->callback_user_data);
-                } catch (...) {
-                    break;
-                }
+                handle->worker_id = std::this_thread::get_id();
             }
-            handle->running.store(false, std::memory_order_release);
+            try {
+                std::vector<uint8_t> packet(handle->snap_len);
+                while (true) {
+                    if (capture_stop_requested(handle)) break;
+                    uint64_t timestamp_ms = 0;
+                    size_t packet_size = 0;
+                    sao_status_t status = SAO_STATUS_ERR_TIMEOUT;
+                    if (handle->test_backend) {
+                        sao_net_capture_s::TestPacket test_packet;
+                        {
+                            std::unique_lock<std::mutex> lock(handle->mutex);
+                            handle->condition.wait(lock, [handle] {
+                                return handle->stop_requested ||
+                                       handle->test_read_error ||
+                                       !handle->test_packets.empty();
+                            });
+                            if (handle->stop_requested) break;
+                            if (handle->test_read_error) {
+                                handle->test_read_error = false;
+                                status = SAO_STATUS_ERR_OS_CALL_FAILED;
+                            } else {
+                                test_packet = std::move(handle->test_packets.front());
+                                handle->test_packets.pop_front();
+                                timestamp_ms = test_packet.ts_ms;
+                                packet_size = test_packet.bytes.size();
+                                packet = std::move(test_packet.bytes);
+                                status = SAO_STATUS_OK;
+                            }
+                        }
+                    } else {
+                        status = sao_net_npcap_next_packet(
+                            handle->npcap, packet.data(), packet.size(),
+                            &timestamp_ms, &packet_size);
+                    }
+                    if (status == SAO_STATUS_ERR_TIMEOUT) continue;
+                    if (status == SAO_STATUS_ERR_BUFFER_TOO_SMALL) {
+                        packet.resize(packet_size);
+                        continue;
+                    }
+                    if (status != SAO_STATUS_OK) break;
+                    invoke_capture_callback(handle, packet.data(), packet_size,
+                                            timestamp_ms);
+                }
+            } catch (...) {
+            }
+            finish_capture_worker(handle);
         });
+        {
+            std::lock_guard<std::mutex> guard(handle->mutex);
+            handle->worker = std::move(worker);
+            handle->worker_id = handle->worker.get_id();
+            handle->worker_attached = true;
+            if (handle->worker_exit_complete && handle->close_requested &&
+                handle->worker.joinable()) {
+                handle->worker.detach();
+            }
+            handle->condition.notify_all();
+        }
         return SAO_STATUS_OK;
     } catch (...) {
-        handle->callback = nullptr;
-        handle->callback_user_data = nullptr;
-        handle->running.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> guard(handle->mutex);
+            handle->callback = nullptr;
+            handle->callback_user_data = nullptr;
+            handle->admission_open = false;
+            handle->running = false;
+            handle->worker_finished = true;
+            handle->worker_exit_complete = true;
+            handle->worker_attached = false;
+        }
+        release_capture_ref(handle);
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
 
 extern "C" sao_status_t SAO_NET_CALL sao_net_capture_stop(
     sao_net_capture_handle_t handle) {
-    if (handle == nullptr || handle->npcap == nullptr) {
-        return SAO_STATUS_ERR_HANDLE_INVALID;
-    }
-    handle->stop_requested.store(true, std::memory_order_release);
-    if (handle->worker.joinable()) {
-        if (handle->worker.get_id() == std::this_thread::get_id()) {
-            return SAO_STATUS_ERR_CANCELLED;
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    return stop_capture_worker(handle);
+}
+
+extern "C" sao_status_t SAO_NET_CALL sao_net_capture_try_close(
+    sao_net_capture_handle_t handle) {
+    if (handle == nullptr) return SAO_STATUS_OK;
+    if (!retain_capture_ref(handle)) return SAO_STATUS_ERR_HANDLE_INVALID;
+    bool caller_is_worker = false;
+    bool should_join = false;
+    bool busy = false;
+    bool release_owner = false;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (!handle->owner_released) release_owner = true;
+        handle->owner_released = true;
+        handle->close_requested = true;
+        handle->stop_requested = true;
+        handle->admission_open = false;
+        handle->callback = nullptr;
+        handle->callback_user_data = nullptr;
+        handle->condition.notify_all();
+        caller_is_worker = handle->worker_id == std::this_thread::get_id() &&
+                           handle->worker.joinable();
+        if (!caller_is_worker && handle->worker.joinable()) {
+            if (handle->join_in_progress) {
+                busy = true;
+            } else {
+                handle->join_in_progress = true;
+                should_join = true;
+            }
+        } else if (!caller_is_worker && !handle->worker_exit_complete) {
+            busy = true;
         }
-        handle->worker.join();
     }
-    handle->running.store(false, std::memory_order_release);
-    handle->callback = nullptr;
-    handle->callback_user_data = nullptr;
+    if (release_owner) release_capture_ref(handle);
+    if (busy || caller_is_worker) {
+        release_capture_ref(handle);
+        return k_capture_busy_status;
+    }
+    if (should_join) {
+        handle->worker.join();
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        handle->join_in_progress = false;
+        handle->condition.notify_all();
+    }
+    close_capture_pcap(handle);
+    release_capture_ref(handle);
     return SAO_STATUS_OK;
 }
 
 extern "C" void SAO_NET_CALL sao_net_capture_close(
     sao_net_capture_handle_t handle) {
-    if (handle == nullptr) return;
-    (void)sao_net_capture_stop(handle);
-    if (handle->worker.joinable() &&
-        handle->worker.get_id() != std::this_thread::get_id()) {
-        handle->worker.join();
-    }
-    sao_net_npcap_close(handle->npcap);
-    handle->npcap = nullptr;
-    delete handle;
+    (void)sao_net_capture_try_close(handle);
 }
+
+extern "C" bool sao_net_capture_retain_internal(
+    sao_net_capture_handle_t handle) {
+    if (handle == nullptr) return false;
+    std::lock_guard<std::mutex> guard(handle->mutex);
+    if (handle->owner_released || handle->lifetime_refs == 0) return false;
+    ++handle->lifetime_refs;
+    return true;
+}
+
+extern "C" void sao_net_capture_release_internal(
+    sao_net_capture_handle_t handle) {
+    release_capture_ref(handle);
+}
+
+#if defined(SAO_NET_TESTING)
+extern "C" sao_status_t SAO_NET_CALL sao_net_capture_test_open(
+    sao_net_capture_handle_t* out_handle) {
+    if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_handle = nullptr;
+    try {
+        auto* handle = new sao_net_capture_s();
+        handle->test_backend = true;
+        *out_handle = handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_NET_CALL sao_net_capture_test_submit(
+    sao_net_capture_handle_t handle, const uint8_t* bytes, size_t length,
+    uint64_t ts_ms) {
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (bytes == nullptr && length != 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!retain_capture_ref(handle)) return SAO_STATUS_ERR_HANDLE_INVALID;
+    bool accepted = false;
+    try {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (handle->test_backend && handle->running &&
+            !handle->close_requested && handle->admission_open) {
+            sao_net_capture_s::TestPacket packet;
+            if (length != 0) packet.bytes.assign(bytes, bytes + length);
+            packet.ts_ms = ts_ms;
+            handle->test_packets.push_back(std::move(packet));
+            handle->condition.notify_all();
+            accepted = true;
+        }
+    } catch (...) {
+        release_capture_ref(handle);
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    release_capture_ref(handle);
+    return accepted ? SAO_STATUS_OK : SAO_STATUS_ERR_CANCELLED;
+}
+
+extern "C" sao_status_t SAO_NET_CALL sao_net_capture_test_fail(
+    sao_net_capture_handle_t handle) {
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!retain_capture_ref(handle)) return SAO_STATUS_ERR_HANDLE_INVALID;
+    bool accepted = false;
+    {
+        std::lock_guard<std::mutex> guard(handle->mutex);
+        if (handle->test_backend && handle->running) {
+            handle->test_read_error = true;
+            handle->condition.notify_all();
+            accepted = true;
+        }
+    }
+    release_capture_ref(handle);
+    return accepted ? SAO_STATUS_OK : SAO_STATUS_ERR_NOT_INITIALIZED;
+}
+#endif

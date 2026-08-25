@@ -20,6 +20,7 @@
 #include "download_engine_internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -117,14 +118,34 @@ struct WinHttpDeleter {
 };
 using WinHttpHandle = std::unique_ptr<void, WinHttpDeleter>;
 
+sao_status_t apply_remaining_timeouts(
+    HINTERNET handle,
+    const std::chrono::steady_clock::time_point& deadline) noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) return SAO_STATUS_ERR_TIMEOUT;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - now).count();
+    const int timeout_ms = static_cast<int>(std::max<int64_t>(
+        1, std::min<int64_t>(remaining, 60'000)));
+    return ::WinHttpSetTimeouts(handle, timeout_ms, timeout_ms, timeout_ms,
+                                timeout_ms)
+        ? SAO_STATUS_OK
+        : SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+
 }  // namespace
 
 sao_status_t stream_download(const char* url_utf8,
                              DownloadSink& sink,
                              uint64_t max_bytes,
                              sao_runtime_installer_progress_cb_t progress_cb,
-                             void* user_data) noexcept {
+                             void* user_data) {
     if (url_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::minutes(5);
+    const auto deadline_expired = [&deadline]() noexcept {
+        return std::chrono::steady_clock::now() >= deadline;
+    };
     HttpsUrl parsed{};
     if (!parse_https_url(url_utf8, parsed)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
@@ -137,12 +158,9 @@ sao_status_t stream_download(const char* url_utf8,
         0));
     if (!session) return SAO_STATUS_ERR_OS_CALL_FAILED;
 
-    // 60s timeouts across the board; large downloads use the sink loop for
-    // additional read-timeout tolerance.
-    const int timeout_ms = 60'000;
-    if (!::WinHttpSetTimeouts(session.get(), timeout_ms, timeout_ms, timeout_ms, timeout_ms)) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
+    if (const auto timeout_status =
+            apply_remaining_timeouts(session.get(), deadline);
+        timeout_status != SAO_STATUS_OK) return timeout_status;
 
     WinHttpHandle connection(::WinHttpConnect(
         session.get(), parsed.host.c_str(), parsed.port, 0));
@@ -157,18 +175,34 @@ sao_status_t stream_download(const char* url_utf8,
         WINHTTP_DEFAULT_ACCEPT_TYPES,
         WINHTTP_FLAG_SECURE));
     if (!request) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    DWORD redirect_policy =
+        WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    if (!::WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY,
+                            &redirect_policy, sizeof(redirect_policy))) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
 
-    if (!::WinHttpSendRequest(
+    if (const auto timeout_status =
+            apply_remaining_timeouts(request.get(), deadline);
+        timeout_status != SAO_STATUS_OK) return timeout_status;
+    const BOOL send_ok = ::WinHttpSendRequest(
             request.get(),
             WINHTTP_NO_ADDITIONAL_HEADERS,
             0,
             WINHTTP_NO_REQUEST_DATA,
             0,
             0,
-            0)) {
+            0);
+    if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+    if (!send_ok) {
         return SAO_STATUS_ERR_NET_DOWN;
     }
-    if (!::WinHttpReceiveResponse(request.get(), nullptr)) {
+    if (const auto timeout_status =
+            apply_remaining_timeouts(request.get(), deadline);
+        timeout_status != SAO_STATUS_OK) return timeout_status;
+    const BOOL receive_ok = ::WinHttpReceiveResponse(request.get(), nullptr);
+    if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+    if (!receive_ok) {
         return SAO_STATUS_ERR_NET_DOWN;
     }
 
@@ -176,13 +210,15 @@ sao_status_t stream_download(const char* url_utf8,
     // WinHttp with the default flags, so anything else here is fatal.
     DWORD status_code = 0;
     DWORD status_len = sizeof(status_code);
-    if (!::WinHttpQueryHeaders(
+    const BOOL status_query_ok = ::WinHttpQueryHeaders(
             request.get(),
             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX,
             &status_code,
             &status_len,
-            WINHTTP_NO_HEADER_INDEX)) {
+                WINHTTP_NO_HEADER_INDEX);
+            if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+            if (!status_query_ok) {
         return SAO_STATUS_ERR_NET_HTTP_STATUS;
     }
     if (status_code != 200) return SAO_STATUS_ERR_NET_HTTP_STATUS;
@@ -193,13 +229,15 @@ sao_status_t stream_download(const char* url_utf8,
     {
         wchar_t buf[32];
         DWORD buf_len = sizeof(buf);
-        if (::WinHttpQueryHeaders(
+        const BOOL length_query_ok = ::WinHttpQueryHeaders(
                 request.get(),
                 WINHTTP_QUERY_CONTENT_LENGTH,
                 WINHTTP_HEADER_NAME_BY_INDEX,
                 buf,
                 &buf_len,
-                WINHTTP_NO_HEADER_INDEX)) {
+                WINHTTP_NO_HEADER_INDEX);
+            if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+            if (length_query_ok) {
             uint64_t v = 0;
             for (DWORD i = 0; i < buf_len / sizeof(wchar_t); ++i) {
                 const wchar_t c = buf[i];
@@ -215,14 +253,26 @@ sao_status_t stream_download(const char* url_utf8,
     std::vector<uint8_t> chunk(64 * 1024);
     uint64_t received = 0;
     for (;;) {
+        if (const auto timeout_status =
+            apply_remaining_timeouts(request.get(), deadline);
+            timeout_status != SAO_STATUS_OK) return timeout_status;
         DWORD available = 0;
-        if (!::WinHttpQueryDataAvailable(request.get(), &available)) {
+        const BOOL available_ok =
+            ::WinHttpQueryDataAvailable(request.get(), &available);
+        if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+        if (!available_ok) {
             return SAO_STATUS_ERR_NET_DOWN;
         }
         if (available == 0) break;
         const DWORD take = std::min<DWORD>(available, static_cast<DWORD>(chunk.size()));
         DWORD read_bytes = 0;
-        if (!::WinHttpReadData(request.get(), chunk.data(), take, &read_bytes)) {
+        if (const auto timeout_status =
+                apply_remaining_timeouts(request.get(), deadline);
+            timeout_status != SAO_STATUS_OK) return timeout_status;
+        const BOOL read_ok = ::WinHttpReadData(
+            request.get(), chunk.data(), take, &read_bytes);
+        if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+        if (!read_ok) {
             return SAO_STATUS_ERR_NET_DOWN;
         }
         if (read_bytes == 0) break;
@@ -233,10 +283,23 @@ sao_status_t stream_download(const char* url_utf8,
         }
         if (progress_cb != nullptr) {
             progress_cb(received, declared_total, user_data);
+            if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
         }
     }
-    sink.commit_length(received);
+    if (deadline_expired()) return SAO_STATUS_ERR_TIMEOUT;
+    return sink.commit_length(received);
+}
+
+#if defined(SAO_RUNTIME_INSTALLER_ENABLE_TEST_HOOKS)
+extern "C" sao_status_t SAO_RUNTIME_INSTALLER_CALL
+sao_runtime_installer_test_post_available_status(
+    int32_t query_succeeded, uint32_t available,
+    int32_t deadline_expired_for_test) {
+    if (deadline_expired_for_test != 0) return SAO_STATUS_ERR_TIMEOUT;
+    if (query_succeeded == 0) return SAO_STATUS_ERR_NET_DOWN;
+    (void)available;
     return SAO_STATUS_OK;
 }
+#endif
 
 }  // namespace sao::runtime_installer::internal

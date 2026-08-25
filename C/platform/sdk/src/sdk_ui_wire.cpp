@@ -898,6 +898,7 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_panel(void* ctx_impl, const char* pane
     descriptor.visible = true;
     descriptor.remember_geometry = true;
     descriptor.initial_opacity = 1.0F;
+    descriptor.struct_size = sizeof(descriptor);
     const auto status = ui_register_ui_panel(ctx_impl, &descriptor, out_panel);
     if (status != SAO_SDK_OK) return status;
     auto* state = cast_ctx(ctx_impl);

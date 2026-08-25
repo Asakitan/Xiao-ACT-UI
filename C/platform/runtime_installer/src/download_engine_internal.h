@@ -16,16 +16,16 @@ namespace sao::runtime_installer::internal {
 class DownloadSink {
 public:
     virtual ~DownloadSink() = default;
-    virtual sao_status_t write(const uint8_t* bytes, size_t length) noexcept = 0;
+    virtual sao_status_t write(const uint8_t* bytes, size_t length) = 0;
     // Called after a successful download so implementations can flush /
     // record the total length.  Not called on error.
-    virtual void commit_length(uint64_t total_bytes) noexcept = 0;
+    virtual sao_status_t commit_length(uint64_t total_bytes) = 0;
 };
 
 sao_status_t stream_download(const char* url_utf8,
                              DownloadSink& sink,
                              uint64_t max_bytes,
                              sao_runtime_installer_progress_cb_t progress_cb,
-                             void* user_data) noexcept;
+                             void* user_data);
 
 }  // namespace sao::runtime_installer::internal

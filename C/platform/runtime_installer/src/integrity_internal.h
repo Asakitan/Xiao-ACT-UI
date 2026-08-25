@@ -22,10 +22,10 @@ public:
     HashPipeline(HashPipeline&&) = delete;
     HashPipeline& operator=(HashPipeline&&) = delete;
 
-    sao_status_t begin(bool include_blake3) noexcept;
-    sao_status_t update(const uint8_t* bytes, size_t length) noexcept;
+    sao_status_t begin(bool include_blake3);
+    sao_status_t update(const uint8_t* bytes, size_t length);
     sao_status_t finish(std::string& sha256_hex,
-                        std::string& blake3_hex) noexcept;
+                        std::string& blake3_hex);
 
 private:
     class Impl;
@@ -39,6 +39,9 @@ sao_status_t compare_hex_equal(const std::string& lhs,
                                const std::string& rhs) noexcept;
 
 sao_status_t hash_file_sha256(const std::wstring& path,
-                              std::string& sha256_hex) noexcept;
+                              std::string& sha256_hex);
+
+sao_status_t hash_directory_tree_sha256(const std::wstring& root,
+                                        std::string& sha256_hex);
 
 }  // namespace sao::runtime_installer::internal

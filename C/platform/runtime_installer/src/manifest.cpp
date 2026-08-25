@@ -42,6 +42,7 @@ public:
         : begin_(data), cursor_(data), end_(data + length) {}
 
     size_t offset() const noexcept { return static_cast<size_t>(cursor_ - begin_); }
+    bool at_end() const noexcept { return cursor_ == end_; }
 
     void skip_whitespace() noexcept {
         while (cursor_ < end_) {
@@ -70,7 +71,7 @@ public:
     // Read a JSON string into an output buffer.  Only the escapes the
     // manifest actually uses are supported: \" \\ \/ \n \r \t \uXXXX.
     // Anything else is a parse error.
-    sao_status_t read_string(std::string& out, size_t max_bytes) noexcept {
+    sao_status_t read_string(std::string& out, size_t max_bytes) {
         skip_whitespace();
         if (cursor_ >= end_ || *cursor_ != '"') {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -160,7 +161,7 @@ public:
     }
 
     // Skip an entire JSON value without keeping it.  Used for unknown keys.
-    sao_status_t skip_value() noexcept {
+    sao_status_t skip_value() {
         skip_whitespace();
         if (cursor_ >= end_) return SAO_STATUS_ERR_INVALID_ARGUMENT;
         const char c = *cursor_;
@@ -267,15 +268,17 @@ bool valid_lowercase_hex(std::string_view s) noexcept {
 
 sao_status_t parse_entry(Reader& reader,
                          ManifestEntry& entry,
-                         bool& out_kind_known) noexcept {
+                         bool& out_kind_known) {
     out_kind_known = false;
     if (auto s = reader.expect('{'); s != SAO_STATUS_OK) return s;
     bool have_kind = false;
     bool have_version = false;
     bool have_url = false;
     bool have_sha = false;
+    bool have_blake = false;
     bool have_size = false;
     bool have_archive = false;
+    bool have_hint = false;
     if (reader.accept('}')) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     do {
         std::string key;
@@ -333,10 +336,11 @@ sao_status_t parse_entry(Reader& reader,
             have_sha = true;
         } else if (key == k_blake.view()) {
             if (auto s = reader.read_string(entry.blake3_hex, SAO_RUNTIME_MANIFEST_MAX_HEX_BYTES); s != SAO_STATUS_OK) return s;
-            if (!entry.blake3_hex.empty() &&
-                (entry.blake3_hex.size() != 64 || !valid_lowercase_hex(entry.blake3_hex))) {
+            if (entry.blake3_hex.size() != 64 ||
+                !valid_lowercase_hex(entry.blake3_hex)) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
+            have_blake = true;
         } else if (key == k_size.view()) {
             if (auto s = reader.read_uint64(entry.size_bytes); s != SAO_STATUS_OK) return s;
             if (entry.size_bytes == 0 || entry.size_bytes > SAO_RUNTIME_MANIFEST_MAX_PAYLOAD_BYTES) {
@@ -352,13 +356,15 @@ sao_status_t parse_entry(Reader& reader,
             std::string value;
             if (auto s = reader.read_string(value, 32); s != SAO_STATUS_OK) return s;
             if (auto s = parse_hint(value, entry.install_hint); s != SAO_STATUS_OK) return s;
+            have_hint = true;
         } else {
             // Unknown key -- skip its value to preserve forward compat.
             if (auto s = reader.skip_value(); s != SAO_STATUS_OK) return s;
         }
     } while (reader.accept(','));
     if (auto s = reader.expect('}'); s != SAO_STATUS_OK) return s;
-    if (!have_kind || !have_version || !have_url || !have_sha || !have_size || !have_archive) {
+    if (!have_kind || !have_version || !have_url || !have_sha ||
+        !have_blake || !have_size || !have_archive || !have_hint) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     return SAO_STATUS_OK;
@@ -368,7 +374,7 @@ sao_status_t parse_entry(Reader& reader,
 
 sao_status_t parse_manifest(const char* data,
                             size_t length,
-                            Manifest& out) noexcept {
+                            Manifest& out) {
     if (data == nullptr || length == 0 ||
         length > SAO_RUNTIME_MANIFEST_MAX_JSON_BYTES) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -434,7 +440,8 @@ sao_status_t parse_manifest(const char* data,
     } while (reader.accept(','));
     if (auto s = reader.expect('}'); s != SAO_STATUS_OK) return s;
     reader.skip_whitespace();
-    if (!have_schema || !have_version || !have_entries || out.entries.empty()) {
+    if (!reader.at_end() || !have_schema || !have_version || !have_entries ||
+        out.entries.empty()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     return SAO_STATUS_OK;
@@ -450,10 +457,6 @@ const ManifestEntry* find_entry(const Manifest& manifest,
 
 }  // namespace sao::runtime_installer::internal
 
-// ---------------------------------------------------------------------------
-// C ABI thunks that read individual fields off a parsed manifest.  These are
-// intentionally thin -- the real work happens in the parser above.
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -474,9 +477,9 @@ sao_status_t copy_out(const std::string& src,
     return SAO_STATUS_OK;
 }
 
-sao::runtime_installer::internal::Manifest*
-handle_to_manifest(sao_runtime_manifest_handle_t handle) noexcept {
-    return reinterpret_cast<sao::runtime_installer::internal::Manifest*>(handle);
+sao::runtime_installer::internal::ManifestSnapshot snapshot(
+    sao_runtime_manifest_handle_t handle) noexcept {
+    return sao::runtime_installer::internal::snapshot_manifest_handle(handle);
 }
 
 }  // namespace
@@ -485,54 +488,44 @@ extern "C" {
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_url(
-    sao_runtime_manifest_handle_t handle,
-    sao_runtime_kind_t            kind,
-    char*                         out_utf8,
-    size_t                        capacity,
-    size_t*                       out_required) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    const auto* manifest = handle_to_manifest(handle);
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    char* out_utf8, size_t capacity, size_t* out_required) {
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
-    if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-    return copy_out(entry->url, out_utf8, capacity, out_required);
+    return entry == nullptr ? SAO_STATUS_ERR_NOT_FOUND
+                            : copy_out(entry->url, out_utf8, capacity, out_required);
 }
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_version(
-    sao_runtime_manifest_handle_t handle,
-    sao_runtime_kind_t            kind,
-    char*                         out_utf8,
-    size_t                        capacity,
-    size_t*                       out_required) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    const auto* manifest = handle_to_manifest(handle);
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    char* out_utf8, size_t capacity, size_t* out_required) {
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
-    if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-    return copy_out(entry->version, out_utf8, capacity, out_required);
+    return entry == nullptr ? SAO_STATUS_ERR_NOT_FOUND
+                            : copy_out(entry->version, out_utf8, capacity, out_required);
 }
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_sha256_hex(
-    sao_runtime_manifest_handle_t handle,
-    sao_runtime_kind_t            kind,
-    char*                         out_utf8,
-    size_t                        capacity,
-    size_t*                       out_required) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    const auto* manifest = handle_to_manifest(handle);
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    char* out_utf8, size_t capacity, size_t* out_required) {
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
-    if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
-    return copy_out(entry->sha256_hex, out_utf8, capacity, out_required);
+    return entry == nullptr ? SAO_STATUS_ERR_NOT_FOUND
+                            : copy_out(entry->sha256_hex, out_utf8, capacity, out_required);
 }
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_archive(
-    sao_runtime_manifest_handle_t handle,
-    sao_runtime_kind_t            kind,
-    sao_runtime_archive_t*        out_archive) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    sao_runtime_archive_t* out_archive) {
     if (out_archive == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    const auto* manifest = handle_to_manifest(handle);
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
     if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
     *out_archive = entry->archive;
@@ -541,12 +534,11 @@ sao_runtime_installer_manifest_entry_archive(
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_install_hint(
-    sao_runtime_manifest_handle_t   handle,
-    sao_runtime_kind_t              kind,
-    sao_runtime_install_hint_t*     out_hint) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    sao_runtime_install_hint_t* out_hint) {
     if (out_hint == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    const auto* manifest = handle_to_manifest(handle);
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
     if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
     *out_hint = entry->install_hint;
@@ -555,12 +547,11 @@ sao_runtime_installer_manifest_entry_install_hint(
 
 SAO_RUNTIME_INSTALLER_API sao_status_t SAO_RUNTIME_INSTALLER_CALL
 sao_runtime_installer_manifest_entry_size(
-    sao_runtime_manifest_handle_t handle,
-    sao_runtime_kind_t            kind,
-    uint64_t*                     out_bytes) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_runtime_manifest_handle_t handle, sao_runtime_kind_t kind,
+    uint64_t* out_bytes) {
     if (out_bytes == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    const auto* manifest = handle_to_manifest(handle);
+    const auto manifest = snapshot(handle);
+    if (!manifest) return SAO_STATUS_ERR_HANDLE_INVALID;
     const auto* entry = sao::runtime_installer::internal::find_entry(*manifest, kind);
     if (entry == nullptr) return SAO_STATUS_ERR_NOT_FOUND;
     *out_bytes = entry->size_bytes;

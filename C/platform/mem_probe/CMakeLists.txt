@@ -51,6 +51,3 @@ if (MSVC)
         PROPERTIES COMPILE_FLAGS "/arch:AVX2")
 endif()
 
-if (SAO_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

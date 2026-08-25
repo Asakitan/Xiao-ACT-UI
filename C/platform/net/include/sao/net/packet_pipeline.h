@@ -46,6 +46,13 @@ SAO_NET_API sao_status_t SAO_NET_CALL sao_net_pipeline_create(
 SAO_NET_API void SAO_NET_CALL sao_net_pipeline_destroy(
     sao_net_pipeline_handle_t handle);
 
+// Completion-aware destroy. BUSY from the pipeline's own frame callback
+// means owner release is recorded and finalization is deferred until that
+// callback exits; other BUSY returns require a serialized retry. Final owner
+// destruction must not race a brand-new raw-handle API entry.
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_pipeline_try_destroy(
+    sao_net_pipeline_handle_t handle);
+
 // Optional endpoint hint — if set, the pipeline only accepts inbound
 // segments from this remote.  Zeroed endpoint means "auto-discover from
 // heuristics" (see Python `packet_bridge._lock_endpoint`).
