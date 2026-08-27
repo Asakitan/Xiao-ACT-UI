@@ -28,6 +28,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 #include "sao/ui/compositor.h"
 
@@ -50,13 +51,24 @@ public:
             slot_count > SAO_UI_SOPF_MMF_MAX_SLOT_COUNT) {
             return false;
         }
-        const uint64_t pixel_bytes = static_cast<uint64_t>(width) *
-                                     static_cast<uint64_t>(height) * 4ull;
+        const uint64_t pixel_count = static_cast<uint64_t>(width) *
+                                      static_cast<uint64_t>(height);
+        if (pixel_count == 0 || pixel_count > UINT64_MAX / 4ull)
+            return false;
+        const uint64_t pixel_bytes = pixel_count * 4ull;
+        if (pixel_bytes > UINT64_MAX - 4095ull)
+            return false;
         const uint64_t slot_stride = ((pixel_bytes + 4095ull) / 4096ull) * 4096ull;
+        if (slot_stride == 0 ||
+            slot_count > (UINT64_MAX -
+                          static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES)) /
+                             slot_stride)
+            return false;
         const uint64_t total =
             static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES) +
             static_cast<uint64_t>(slot_count) * slot_stride;
-        if (total > SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES) {
+        if (total > SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES ||
+            total > static_cast<uint64_t>(std::numeric_limits<SIZE_T>::max())) {
             return false;
         }
         mmf_handle_ = ::CreateFileMappingW(
@@ -64,6 +76,11 @@ public:
             static_cast<DWORD>((total >> 32) & 0xFFFFFFFFu),
             static_cast<DWORD>(total & 0xFFFFFFFFu), mmf_name);
         if (mmf_handle_ == nullptr) {
+            return false;
+        }
+        if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+            ::CloseHandle(mmf_handle_);
+            mmf_handle_ = nullptr;
             return false;
         }
         view_ = static_cast<uint8_t*>(::MapViewOfFile(
@@ -173,9 +190,10 @@ public:
     // re-create its layer with matching size before re-attaching.
     bool resize(const wchar_t* mmf_name, uint32_t new_width,
                 uint32_t new_height) {
-        return init(mmf_name, new_width, new_height, slot_count_ == 0u
-                                                          ? 3u
-                                                          : slot_count_);
+        (void)mmf_name;
+        (void)new_width;
+        (void)new_height;
+        return false;
     }
 
 private:

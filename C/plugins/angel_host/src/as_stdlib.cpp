@@ -1,6 +1,7 @@
 #include "sao/plugins/angel_host/as_stdlib.h"
 
 #include "as_generic_bindings_internal.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 
 #include <atomic>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
@@ -28,6 +30,16 @@ namespace sao::plugins::angel_host {
 namespace {
 
 using ordered_json = nlohmann::ordered_json;
+
+bool shared_json_text_valid(std::string_view text) noexcept {
+    return !text.empty() && sdk_binding::sao_plugins_binding_validate_json_text(
+                                reinterpret_cast<const uint8_t*>(text.data()), text.size());
+}
+
+bool shared_json_value_valid(const ordered_json& value, std::string& serialized) noexcept {
+    try { serialized = value.dump(); return shared_json_text_valid(serialized); }
+    catch (...) { serialized.clear(); return false; }
+}
 
 struct json_value {
     std::atomic_uint32_t references{1};
@@ -104,6 +116,7 @@ void json_parse(asIScriptGeneric* generic) {
             set_active_exception("json_parse received a null string");
             return;
         }
+        if (!shared_json_text_valid(*text)) { set_active_exception("JSON exceeds the shared complexity or UTF-8 budget"); return; }
         ordered_json parsed = ordered_json::parse(*text, nullptr, false);
         if (parsed.is_discarded()) {
             set_active_exception("invalid JSON");
@@ -118,8 +131,10 @@ void json_parse(asIScriptGeneric* generic) {
 void json_stringify(asIScriptGeneric* generic) {
     json_callback_barrier("json serialization failed", [generic] {
         const auto* value = static_cast<const json_value*>(generic->GetObject());
+        std::string serialized;
+        if (value != nullptr && !shared_json_value_valid(value->value, serialized)) { set_active_exception("JSON exceeds the shared complexity or UTF-8 budget"); return; }
         new (generic->GetAddressOfReturnLocation())
-            std::string(value == nullptr ? "null" : value->value.dump());
+            std::string(value == nullptr ? "null" : std::move(serialized));
     });
 }
 
@@ -353,6 +368,7 @@ extern "C" SAO_PLUGINS_API
 #if defined(SAO_HAS_ANGELSCRIPT)
     if (engine == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    engine_execution_guard engine_lock;
     try {
         std::lock_guard lock(g_stdlib_install_mutex);
         auto* state =

@@ -1,11 +1,13 @@
 // SAO Auto — launcher/user_menu.cpp
 
 #include "sao/launcher/user_menu.h"
+#include "sao/launcher/app.h"
+#include "sao/launcher/args.h"
+#include "sao/launcher/single_instance.h"
+#include "sao/launcher/working_dir.h"
 
 #include "hotkey_config_panel.h"
 #include "settings_config_panel.h"
-
-#include "sao_security/obfuscation/enc_str.h"
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 #include "sao/sdk/sao_sdk_platform_internal.h"
@@ -14,6 +16,9 @@
 #endif
 
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <cwchar>
 #include <iterator>
 #include <string>
@@ -39,34 +44,6 @@ sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
     return static_cast<sao_ui_compositor_handle_t>(raw);
 }
 #endif
-
-// ASCII-only widening for identifiers decrypted from SAO_ENC_STR.
-// Byte-by-byte widen to keep decrypted plaintext scoped to this TU.
-void widen_ascii(const char* src, wchar_t* dst, std::size_t dst_cap) {
-    if (!dst || dst_cap == 0) return;
-    std::size_t i = 0;
-    if (src) {
-        for (; src[i] != '\0' && i + 1 < dst_cap; ++i) {
-            dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(src[i]));
-        }
-    }
-    dst[i] = L'\0';
-}
-
-// Opaque window class name (replaces plaintext "SaoAuto.Launcher.UserMenu").
-// Wrap the static array in a struct so C++11 magic-statics give us
-// thread-safe once-initialisation across concurrent create() / destroy().
-const wchar_t* opaque_window_class_name() noexcept {
-    struct Widened {
-        wchar_t buf[32];
-        Widened() noexcept {
-            const auto enc = SAO_ENC_STR("4F5A.um");
-            widen_ascii(enc.decrypt(), buf, std::size(buf));
-        }
-    };
-    static const Widened w{};
-    return w.buf;
-}
 
 sao_status_t g_settings_menu_status = SAO_STATUS_OK;
 sao_status_t g_hotkey_menu_status = SAO_STATUS_OK;
@@ -153,44 +130,37 @@ bool openExistingUserDocsIndex(const wchar_t* docs_index_path,
 bool buildUserDocsIndexPath(const wchar_t* base_dir,
                             wchar_t* path_out,
                             std::size_t path_capacity) noexcept {
-    if (!path_out || path_capacity == 0) {
-        return false;
-    }
+    if (!path_out || path_capacity == 0) return false;
     path_out[0] = L'\0';
-    if (!base_dir || base_dir[0] == L'\0') {
-        return false;
-    }
-
-    std::size_t base_length = wcsnlen_s(base_dir, path_capacity);
-    if (base_length == 0 || base_length >= path_capacity) {
-        return false;
-    }
-    while (base_length > 0 &&
-           (base_dir[base_length - 1] == L'\\' || base_dir[base_length - 1] == L'/')) {
-        --base_length;
-    }
-    if (base_length == 0) {
-        return false;
-    }
-
-    constexpr std::size_t suffix_length = std::size(kDocsIndexSuffix) - 1;
-    if (base_length > path_capacity - 1 ||
-        suffix_length > path_capacity - base_length - 1) {
-        return false;
-    }
-
-    std::wmemcpy(path_out, base_dir, base_length);
-    std::wmemcpy(path_out + base_length, kDocsIndexSuffix, suffix_length + 1);
+    std::wstring path;
+    if (!buildUserDocsIndexPath(base_dir, path)) return false;
+    if (path.size() + 1u > path_capacity) return false;
+    std::wmemcpy(path_out, path.c_str(), path.size() + 1u);
     return true;
 }
 
-bool openUserDocsIndex(const wchar_t* base_dir, HWND owner) noexcept {
-    wchar_t docs_index_path[MAX_PATH]{};
-    if (!buildUserDocsIndexPath(base_dir, docs_index_path,
-                                std::size(docs_index_path))) {
+bool buildUserDocsIndexPath(const wchar_t* base_dir,
+                            std::wstring& path_out) noexcept {
+    path_out.clear();
+    if (!base_dir || base_dir[0] == L'\0') return false;
+    try {
+        path_out.assign(base_dir);
+        while (!path_out.empty() &&
+               (path_out.back() == wchar_t(92) || path_out.back() == L'/'))
+            path_out.pop_back();
+        if (path_out.empty()) return false;
+        path_out += kDocsIndexSuffix;
+        return true;
+    } catch (...) {
+        path_out.clear();
         return false;
     }
-    return openExistingUserDocsIndex(docs_index_path, owner);
+}
+
+bool openUserDocsIndex(const wchar_t* base_dir, HWND owner) noexcept {
+    std::wstring docs_index_path;
+    return buildUserDocsIndexPath(base_dir, docs_index_path) &&
+        openExistingUserDocsIndex(docs_index_path.c_str(), owner);
 }
 
 UserMenu::~UserMenu() noexcept {
@@ -199,9 +169,9 @@ UserMenu::~UserMenu() noexcept {
 
 bool UserMenu::create(const wchar_t* base_dir) noexcept {
     destroy();
-    if (!buildUserDocsIndexPath(base_dir, docs_index_path_, std::size(docs_index_path_))) {
+    if (!base_dir || !*base_dir)
         return false;
-    }
+    if (!buildUserDocsIndexPath(base_dir, docs_index_path_)) return false;
 
     instance_ = GetModuleHandleW(nullptr);
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
@@ -219,7 +189,7 @@ bool UserMenu::create(const wchar_t* base_dir) noexcept {
         window_class.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     }
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    const wchar_t* opaque_class = opaque_window_class_name();
+    const wchar_t* opaque_class = kSingleInstanceWindowClassName;
     window_class.lpszClassName = opaque_class;
     if (RegisterClassExW(&window_class) == 0) {
         destroy();
@@ -251,13 +221,13 @@ void UserMenu::destroy() noexcept {
         window_ = nullptr;
     }
     if (window_class_registered_ && instance_) {
-        (void)UnregisterClassW(opaque_window_class_name(), instance_);
+        (void)UnregisterClassW(kSingleInstanceWindowClassName, instance_);
         window_class_registered_ = false;
     }
 
     instance_ = nullptr;
     taskbar_created_message_ = 0;
-    docs_index_path_[0] = L'\0';
+    docs_index_path_.clear();
 }
 
 void UserMenu::bind_hotkey_owner(hotkey::Owner* owner) noexcept {
@@ -267,6 +237,25 @@ void UserMenu::bind_hotkey_owner(hotkey::Owner* owner) noexcept {
 void UserMenu::unbind_hotkey_owner(hotkey::Owner* owner) noexcept {
     if (owner == nullptr || owner == hotkey_owner_)
         hotkey_owner_ = nullptr;
+}
+
+void UserMenu::processCommandLine(const wchar_t* command_line,
+                                  bool show_menu_when_empty) noexcept {
+    if (!window_ || command_line == nullptr) return;
+    AppState command_state{};
+    bool should_exit = false;
+    int exit_code = SAO_EXIT_OK;
+    if (!parseCommandLineText(command_line, command_state, should_exit, exit_code))
+        return;
+
+    ShowWindow(window_, SW_SHOWNOACTIVATE);
+    SetForegroundWindow(window_);
+    if (!command_state.open_path.empty()) {
+        if (!openExistingUserDocsIndex(command_state.open_path.c_str(), window_))
+            showUserGuideUnavailableError();
+    } else if (show_menu_when_empty) {
+        showContextMenu();
+    }
 }
 
 LRESULT CALLBACK UserMenu::windowProc(HWND window,
@@ -296,6 +285,39 @@ LRESULT UserMenu::handleMessage(HWND window,
                                 UINT message,
                                 WPARAM w_param,
                                 LPARAM l_param) noexcept {
+    if (message == WM_COPYDATA) {
+        const auto* copy = reinterpret_cast<const COPYDATASTRUCT*>(l_param);
+        if (copy == nullptr || copy->dwData != kSingleInstanceCopyDataTag ||
+            copy->lpData == nullptr || copy->cbData < sizeof(SingleInstancePayloadHeader))
+            return 0;
+        const auto* header = static_cast<const SingleInstancePayloadHeader*>(copy->lpData);
+        if (header->magic != kSingleInstancePayloadMagic ||
+            header->version != kSingleInstancePayloadVersion || header->reserved != 0 ||
+            header->target_exe_chars == 0 || header->command_line_chars == 0)
+            return 0;
+        const std::size_t strings_bytes =
+            (static_cast<std::size_t>(header->target_exe_chars) +
+             static_cast<std::size_t>(header->command_line_chars)) * sizeof(wchar_t);
+        if (strings_bytes > copy->cbData - sizeof(SingleInstancePayloadHeader))
+            return 0;
+        const auto* strings = reinterpret_cast<const wchar_t*>(
+            static_cast<const std::uint8_t*>(copy->lpData) + sizeof(SingleInstancePayloadHeader));
+        const wchar_t* command_line = strings + header->target_exe_chars;
+        if (strings[header->target_exe_chars - 1u] != L'\0' ||
+            command_line[header->command_line_chars - 1u] != L'\0')
+            return 0;
+        std::wstring current_exe;
+        std::wstring current_canonical_exe;
+        if (!getCurrentModulePath(current_exe) ||
+            !singleInstanceCanonicalInstallPath(current_exe.c_str(),
+                                                current_canonical_exe) ||
+            singleInstanceInstallIdentity(current_canonical_exe.c_str()) !=
+                header->install_identity ||
+            singleInstanceInstallIdentity(strings) != header->install_identity)
+            return 0;
+        processCommandLine(command_line, true);
+        return 1;
+    }
     if (message == taskbar_created_message_) {
         notification_icon_added_ = false;
         if (!addNotificationIcon()) {
@@ -404,7 +426,7 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
 }
 
 void UserMenu::openUserGuide() noexcept {
-    if (!openExistingUserDocsIndex(docs_index_path_, window_)) {
+    if (!openExistingUserDocsIndex(docs_index_path_.c_str(), window_)) {
         showUserGuideUnavailableError();
     }
 }

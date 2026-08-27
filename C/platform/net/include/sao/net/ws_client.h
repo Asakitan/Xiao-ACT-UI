@@ -36,6 +36,13 @@ SAO_NET_API sao_status_t SAO_NET_CALL sao_net_ws_connect(
     uint32_t timeout_ms,
     sao_net_ws_client_handle_t* out_handle);
 
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_ws_connect_scoped_v2(
+    const char* url_utf8,               // wss://…
+    const char* scope_utf8,              // exact TLS scope
+    const char* headers_utf8,           // optional extra HTTP handshake headers
+    uint32_t timeout_ms,
+    sao_net_ws_client_handle_t* out_handle);
+
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_ws_start_receive(
     sao_net_ws_client_handle_t handle,
     sao_net_ws_message_callback_t callback,

@@ -4,9 +4,11 @@
 
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao_plugins/sao_status.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -245,12 +247,12 @@ void context_plugin_id(asIScriptGeneric* generic) {
     }
 }
 
-void context_should_stop(asIScriptGeneric* generic) {
+void context_time(asIScriptGeneric* generic) {
     try {
-        auto* context = static_cast<loader::plugin_context_t*>(generic->GetObject());
-        generic->SetReturnByte(loader::sao_plugins_ctx_should_stop(context) ? 1 : 0);
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        generic->SetReturnDouble(std::chrono::duration<double>(now).count());
     } catch (...) {
-        generic->SetReturnByte(1);
+        generic->SetReturnDouble(0.0);
     }
 }
 
@@ -283,7 +285,8 @@ template <typename Integer> bool read_integer(const ordered_json& value, Integer
         if (!value.is_number_unsigned())
             return false;
         const auto raw = value.get<uint64_t>();
-        if (raw > static_cast<uint64_t>(std::numeric_limits<Integer>::max())) {
+        if (raw > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()) ||
+            raw > static_cast<uint64_t>(std::numeric_limits<Integer>::max())) {
             return false;
         }
         output = static_cast<Integer>(raw);
@@ -308,6 +311,12 @@ int32_t set_arguments(asIScriptContext* context, asIScriptFunction* function,
                       const char* args_json_utf8, std::vector<as_string>& string_arguments) {
     ordered_json arguments = ordered_json::array();
     if (args_json_utf8 != nullptr && args_json_utf8[0] != '\0') {
+        size_t args_size = 0;
+        if (!sdk_binding::sao_plugins_binding_bounded_json_c_string(args_json_utf8, args_size) ||
+            !sdk_binding::sao_plugins_binding_validate_json_text(
+                reinterpret_cast<const uint8_t*>(args_json_utf8), args_size)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         arguments = ordered_json::parse(args_json_utf8, nullptr, false);
         if (arguments.is_discarded() || !arguments.is_array()) {
             return SAO_ERR_INVALID_ARGUMENT;
@@ -420,6 +429,10 @@ int32_t copy_json_result(const ordered_json& value, char** output) {
     if (output == nullptr)
         return SAO_OK;
     const std::string text = value.dump();
+    if (!sdk_binding::sao_plugins_binding_validate_json_text(
+            reinterpret_cast<const uint8_t*>(text.data()), text.size())) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     auto buffer = std::unique_ptr<char, decltype(&std::free)>(
         static_cast<char*>(std::malloc(text.size() + 1)), &std::free);
     if (!buffer)
@@ -480,7 +493,7 @@ int32_t register_generic_core_bindings(asIScriptEngine* engine) {
     if (engine == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
 
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
 
     if (engine->GetTypeInfoByName("string") == nullptr) {
         int result = engine->RegisterObjectType("string", sizeof(as_string),
@@ -543,6 +556,10 @@ int32_t register_generic_core_bindings(asIScriptEngine* engine) {
                                          asFUNCTION(context_should_stop), asCALL_GENERIC);
         if (!registration_ok(result))
             return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("PluginContext", "double time() const",
+                                              asFUNCTION(context_time), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
     }
 
     if (engine->GetGlobalFunctionByDecl("void log_info(const string &in)") == nullptr) {
@@ -591,7 +608,7 @@ int32_t invoke_generic_function(asIScriptContext* context, asIScriptFunction* fu
         return SAO_ERR_INVALID_ARGUMENT;
     }
     try {
-        std::lock_guard engine_lock(engine_execution_mutex());
+        engine_execution_guard engine_lock;
         if (context->Prepare(function) < 0)
             return SAO_ERR_OS_CALL_FAILED;
         context->SetUserData(context_user_data, kPluginContextUserDataSlot);

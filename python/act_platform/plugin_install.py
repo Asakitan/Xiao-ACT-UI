@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import tempfile
 import zipfile
 from typing import Any, Callable, Optional
@@ -37,15 +38,113 @@ def _is_within(base: str, target: str) -> bool:
         return False
 
 
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
+_WINDOWS_INVALID_CHARS = set('<>:"|?*')
+
+
+def _has_reparse_point(path: str) -> bool:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+            get_attributes.argtypes = [ctypes.c_wchar_p]
+            get_attributes.restype = ctypes.c_uint32
+            attributes = get_attributes(os.path.abspath(path))
+            return attributes == 0xFFFFFFFF or bool(attributes.__and__(0x400))
+        except Exception:
+            return True
+    return os.path.islink(path)
+
+
+def _assert_no_reparse_chain(path: str) -> None:
+    absolute = os.path.abspath(path)
+    drive, tail = os.path.splitdrive(absolute)
+    current = drive + os.sep if tail.startswith(("\\", "/")) else drive
+    for part in tail.lstrip("\\/").replace("/", os.sep).split(os.sep):
+        if not part:
+            continue
+        current = os.path.join(current, part)
+        if os.path.lexists(current) and _has_reparse_point(current):
+            raise ValueError(f"路径包含 Windows reparse point: {current}")
+
+
+def _assert_no_reparse_tree(path: str) -> None:
+    _assert_no_reparse_chain(path)
+    if not os.path.isdir(path):
+        return
+    for current, directories, files in os.walk(path, topdown=True, followlinks=False):
+        for name in [*directories, *files]:
+            _assert_no_reparse_chain(os.path.join(current, name))
+
+
+def _safe_makedirs(path: str, root: str) -> None:
+    if not _is_within(root, path):
+        raise ValueError(f"路径逃出插件目录: {path}")
+    _assert_no_reparse_chain(root)
+    os.makedirs(path, exist_ok=True)
+    _assert_no_reparse_chain(path)
+    if not os.path.isdir(path):
+        raise ValueError(f"目标不是目录: {path}")
+
+
+def _validate_windows_member(member: str, directory: bool) -> str:
+    raw = str(member or "").replace("\\", "/")
+    if not raw or "\x00" in raw or raw.startswith("/"):
+        raise ValueError(f"压缩包包含非法 Windows 路径: {member}")
+    parts = raw.split("/")
+    if directory and parts[-1] == "":
+        parts.pop()
+    if not parts or any(not part or part in {".", ".."} for part in parts):
+        raise ValueError(f"压缩包包含非法 Windows 路径: {member}")
+    for part in parts:
+        if len(part) > 255 or any(ord(character) < 0x20 or character in _WINDOWS_INVALID_CHARS for character in part):
+            raise ValueError(f"压缩包包含非法 Windows 文件名: {member}")
+        if part.endswith((" ", ".")):
+            raise ValueError(f"压缩包包含非法 Windows 文件名: {member}")
+        if part.split(".", 1)[0].casefold() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"压缩包包含 Windows 保留文件名: {member}")
+    return "/".join(parts)
+
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0xFFFF
+    return stat.S_ISLNK(mode)
+
+
 def _extract_safe(zip_path: str, dest_dir: str) -> None:
-    # 解压 ``zip_path`` 到 ``dest_dir``，拒绝任何越出目标目录的成员 (zip slip)。
+    # 逐 entry 解压，拒绝 zip slip、Windows 非法名称、链接和 reparse 路径。
     dest_abs = os.path.abspath(dest_dir)
+    _safe_makedirs(dest_abs, dest_abs)
+    seen: set[str] = set()
     with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            target = os.path.join(dest_abs, member)
+        for info in zf.infolist():
+            directory = info.is_dir() or info.filename.endswith(("/", "\\"))
+            if _is_zip_symlink(info):
+                raise ValueError(f"压缩包包含链接 entry: {info.filename}")
+            rel = _validate_windows_member(info.filename, directory)
+            if rel.casefold() in seen:
+                raise ValueError(f"压缩包包含重复 entry: {info.filename}")
+            seen.add(rel.casefold())
+            target = os.path.abspath(os.path.join(dest_abs, *rel.split("/")))
             if not _is_within(dest_abs, target):
-                raise ValueError(f"压缩包包含不安全路径(zip slip): {member}")
-        zf.extractall(dest_abs)
+                raise ValueError(f"压缩包包含不安全路径(zip slip): {info.filename}")
+            _assert_no_reparse_chain(dest_abs)
+            parent = os.path.dirname(target)
+            _safe_makedirs(parent, dest_abs)
+            _assert_no_reparse_chain(parent)
+            if directory:
+                _safe_makedirs(target, dest_abs)
+                continue
+            if os.path.lexists(target):
+                raise ValueError(f"压缩包目标已存在: {info.filename}")
+            with zf.open(info, "r") as source, open(target, "xb") as output:
+                shutil.copyfileobj(source, output)
+            _assert_no_reparse_chain(target)
 
 
 def _read_manifest_dict(manifest_path: str) -> dict[str, Any]:
@@ -92,7 +191,7 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
         return {"ok": False, "message": "不是有效的 .zip 插件包", "errors": ["not a zip archive"]}
 
     user_plugins_dir = os.path.abspath(str(user_plugins_dir or ""))
-    os.makedirs(user_plugins_dir, exist_ok=True)
+    _safe_makedirs(user_plugins_dir, user_plugins_dir)
     # 临时解压目录建在 user_plugins 内，保证与最终目标同盘，move 是原子 rename。
     tmp_dir = tempfile.mkdtemp(prefix=".import_", dir=user_plugins_dir)
     try:
@@ -101,13 +200,17 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
         except Exception as exc:
             return {"ok": False, "message": f"解压失败: {exc}", "errors": [str(exc)]}
 
+        _assert_no_reparse_tree(tmp_dir)
         root = _locate_plugin_root(tmp_dir)
         if root is None:
             return {"ok": False, "message": "压缩包内未找到 plugin.json(根部或单层子目录)",
                     "errors": ["manifest not found"]}
 
         try:
-            manifest = _read_manifest_dict(os.path.join(root, MANIFEST_FILE))
+            _assert_no_reparse_tree(root)
+            manifest_path = os.path.join(root, MANIFEST_FILE)
+            _assert_no_reparse_chain(manifest_path)
+            manifest = _read_manifest_dict(manifest_path)
         except Exception as exc:
             return {"ok": False, "message": f"plugin.json 解析失败: {exc}", "errors": [str(exc)]}
 
@@ -127,6 +230,11 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
         if not _is_within(root, check_abs):
             return {"ok": False, "id": plugin_id, "message": "entry 越出插件目录",
                     "errors": ["entry escapes plugin dir"]}
+        try:
+            _assert_no_reparse_chain(check_abs)
+        except Exception as exc:
+            return {"ok": False, "id": plugin_id, "message": f"入口路径不安全: {exc}",
+                    "errors": [str(exc)]}
         if not os.path.isfile(check_abs):
             missing_kind = "受保护构建文件" if protected else "入口文件"
             return {"ok": False, "id": plugin_id, "message": f"{missing_kind}缺失: {check_name}",
@@ -135,7 +243,11 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
         target = os.path.join(user_plugins_dir, plugin_id)
         replaced = False
         previous_version = ""
-        if os.path.isdir(target):
+        if os.path.lexists(target):
+            _assert_no_reparse_tree(target)
+            if not os.path.isdir(target):
+                return {"ok": False, "id": plugin_id, "message": f"插件目标不是目录: {plugin_id}",
+                        "errors": ["plugin target is not a directory"]}
             if not allow_replace:
                 return {"ok": False, "id": plugin_id, "message": f"插件已存在: {plugin_id}",
                         "errors": ["already installed"]}
@@ -148,7 +260,12 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
             replaced = True
 
         try:
-            shutil.move(root, target)
+            _assert_no_reparse_chain(user_plugins_dir)
+            _assert_no_reparse_tree(root)
+            if os.path.lexists(target):
+                raise ValueError(f"插件目标在安装前重新出现: {plugin_id}")
+            os.rename(root, target)
+            _assert_no_reparse_tree(target)
         except Exception as exc:
             return {"ok": False, "id": plugin_id, "message": f"安装到 user_plugins 失败: {exc}",
                     "errors": [str(exc)]}
@@ -180,6 +297,11 @@ def remove_installed_plugin(plugin_path: str, user_plugins_dir: str) -> dict[str
         return {"ok": False, "message": "只能卸载 user_plugins 目录内的插件", "errors": ["not a user plugin"]}
     if not os.path.isdir(plugin_path):
         return {"ok": False, "message": "插件目录不存在", "errors": ["plugin dir not found"]}
+    try:
+        _assert_no_reparse_chain(user_plugins_dir)
+        _assert_no_reparse_tree(plugin_path)
+    except Exception as exc:
+        return {"ok": False, "message": f"插件路径不安全: {exc}", "errors": [str(exc)]}
     shutil.rmtree(plugin_path, ignore_errors=True)
     return {"ok": True, "message": "已删除插件目录", "path": plugin_path, "errors": []}
 

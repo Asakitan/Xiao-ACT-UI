@@ -1172,6 +1172,20 @@ struct Owner::Impl {
         return teardown_status == SAO_STATUS_OK ? primary_status : teardown_status;
     }
 
+    void request_shutdown() noexcept {
+        {
+            std::lock_guard lock(mutex);
+            worker_accepting = false;
+            accepting = false;
+            tasks.clear();
+            busy_plugin_ids.clear();
+            reload_all_pending = false;
+        }
+        worker_cv.notify_all();
+        if (worker.joinable())
+            worker.request_stop();
+    }
+
     void stop_worker() noexcept {
         {
             std::lock_guard lock(mutex);
@@ -1276,6 +1290,11 @@ Owner& Owner::operator=(Owner&& other) noexcept {
     }
     impl_ = std::move(other.impl_);
     return *this;
+}
+
+void Owner::request_shutdown() noexcept {
+    if (impl_ != nullptr)
+        impl_->request_shutdown();
 }
 
 sao_status_t Owner::set_operations(Operations operations) noexcept {

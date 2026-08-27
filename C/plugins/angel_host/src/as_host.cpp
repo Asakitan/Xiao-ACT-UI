@@ -13,18 +13,23 @@
 #include "sao/plugins/angel_host/as_host.h"
 
 #include "as_generic_bindings_internal.h"
+#include "as_host_internal.h"
 
 #include "sao/plugins/angel_host/as_error.h"
 #include "sao/plugins/angel_host/as_module_bridge.h"
 #include "sao/plugins/angel_host/as_stdlib.h"
+#include "sao/plugins/loader/loader_status.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if defined(SAO_HAS_ANGELSCRIPT)
@@ -34,23 +39,6 @@
 namespace sao::plugins::angel_host {
 
 #if defined(SAO_HAS_ANGELSCRIPT)
-
-struct as_host_s {
-    struct retained_message {
-        std::string section;
-        std::string message;
-        int row = 0;
-        int column = 0;
-        int type = 0;
-    };
-
-    asIScriptEngine* engine = nullptr;
-    void (*message_callback)(const char*, int, int, int, void*) = nullptr;
-    void* user_data = nullptr;
-    std::mutex engine_mutex;
-    std::mutex message_mutex;
-    std::vector<retained_message> messages;
-};
 
 std::mutex g_host_registry_mutex;
 std::unordered_map<as_host_handle_t, std::shared_ptr<as_host_s>> g_host_registry;
@@ -63,16 +51,19 @@ std::shared_ptr<as_host_s> acquire_host(as_host_handle_t host) {
     return found == g_host_registry.end() ? std::shared_ptr<as_host_s>{} : found->second;
 }
 
-std::shared_ptr<as_host_s> retire_host(as_host_handle_t host) {
-    if (host == nullptr)
+std::shared_ptr<as_host_s> acquire_host_for_engine(asIScriptEngine* engine) {
+    if (engine == nullptr)
         return {};
     std::lock_guard lock(g_host_registry_mutex);
-    const auto found = g_host_registry.find(host);
-    if (found == g_host_registry.end())
-        return {};
-    auto state = found->second;
-    g_host_registry.erase(found);
-    return state;
+    for (const auto& [handle, state] : g_host_registry) {
+        (void)handle;
+        if (state == nullptr)
+            continue;
+        std::lock_guard lifecycle_lock(state->lifecycle_mutex);
+        if (state->engine == engine)
+            return state;
+    }
+    return {};
 }
 
 std::string retained_messages_text(as_host_s& host, const char* fallback) {
@@ -108,6 +99,12 @@ void clear_retained_messages(as_host_s& host) {
 
 static void as_message_relay(const asSMessageInfo* msg, void* param) {
     auto* host = static_cast<as_host_s*>(param);
+    const auto state = acquire_host(host);
+    if (state != nullptr) {
+        std::lock_guard lock(state->lifecycle_mutex);
+        ++state->active_message_callbacks;
+    }
+
     void (*callback)(const char*, int, int, int, void*) = nullptr;
     void* callback_user_data = nullptr;
     {
@@ -120,6 +117,194 @@ static void as_message_relay(const asSMessageInfo* msg, void* param) {
     }
     if (callback != nullptr) {
         callback(msg->message, msg->row, msg->col, static_cast<int>(msg->type), callback_user_data);
+    }
+
+    if (state != nullptr) {
+        std::lock_guard lock(state->lifecycle_mutex);
+        if (state->active_message_callbacks > 0)
+            --state->active_message_callbacks;
+        if (state->active_message_callbacks == 0 && state->destroy_deferred)
+            defer_host_finalize(state);
+    }
+}
+
+void erase_host_from_registry(const shared_host_state& host) noexcept {
+    try {
+        std::lock_guard lock(g_host_registry_mutex);
+        const auto found = g_host_registry.find(host.get());
+        if (found != g_host_registry.end() && found->second == host)
+            g_host_registry.erase(found);
+    } catch (...) {
+    }
+}
+
+void finalize_host(const shared_host_state& host) noexcept {
+    if (!host)
+        return;
+    if (engine_execution_active()) {
+        defer_host_finalize(host);
+        return;
+    }
+    asIScriptEngine* engine = nullptr;
+    std::unique_lock engine_lock(host->engine_mutex);
+    std::unique_lock execution_lock(engine_execution_mutex());
+    std::unique_lock lifecycle_lock(host->lifecycle_mutex);
+    if (!host->closing || host->finalizing || host->active_instances != 0 ||
+        host->active_callbacks != 0 || host->active_message_callbacks != 0 ||
+        host->engine == nullptr) {
+        return;
+    }
+    host->finalizing = true;
+    host->destroy_deferred = false;
+    engine = host->engine;
+    host->engine = nullptr;
+    lifecycle_lock.unlock();
+    engine->ShutDownAndRelease();
+    erase_host_from_registry(host);
+}
+
+bool host_accepts_admission(const shared_host_state& host) noexcept {
+    if (!host)
+        return false;
+    try {
+        std::lock_guard lock(host->lifecycle_mutex);
+        return !host->closing && host->engine != nullptr;
+    } catch (...) {
+        return false;
+    }
+}
+
+host_instance_lease::~host_instance_lease() noexcept {
+    reset();
+}
+
+host_instance_lease::host_instance_lease(host_instance_lease&& other) noexcept
+    : host_(std::move(other.host_)) {}
+
+host_instance_lease& host_instance_lease::operator=(host_instance_lease&& other) noexcept {
+    if (this != &other) {
+        reset();
+        host_ = std::move(other.host_);
+    }
+    return *this;
+}
+
+int32_t host_instance_lease::acquire(const shared_host_state& host) noexcept {
+    if (!host)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        std::lock_guard lock(host->lifecycle_mutex);
+        if (host->engine == nullptr)
+            return SAO_ERR_HANDLE_INVALID;
+        if (host->closing)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        ++host->active_instances;
+        host_ = host;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+void host_instance_lease::reset() noexcept {
+    if (!host_)
+        return;
+    const auto host = std::move(host_);
+    try {
+        {
+            std::lock_guard lock(host->lifecycle_mutex);
+            if (host->active_instances > 0)
+                --host->active_instances;
+        }
+        maybe_finalize_host(host);
+    } catch (...) {
+    }
+}
+
+bool host_instance_lease::active() const noexcept {
+    return host_ != nullptr;
+}
+
+host_callback_lease::~host_callback_lease() noexcept {
+    reset();
+}
+
+host_callback_lease::host_callback_lease(host_callback_lease&& other) noexcept
+    : host_(std::move(other.host_)) {}
+
+host_callback_lease& host_callback_lease::operator=(host_callback_lease&& other) noexcept {
+    if (this != &other) {
+        reset();
+        host_ = std::move(other.host_);
+    }
+    return *this;
+}
+
+int32_t host_callback_lease::acquire(const shared_host_state& host) noexcept {
+    if (!host)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        std::lock_guard lock(host->lifecycle_mutex);
+        if (host->engine == nullptr)
+            return SAO_ERR_HANDLE_INVALID;
+        if (host->closing)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        ++host->active_callbacks;
+        host_ = host;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+void host_callback_lease::reset() noexcept {
+    if (!host_)
+        return;
+    const auto host = std::move(host_);
+    try {
+        {
+            std::lock_guard lock(host->lifecycle_mutex);
+            if (host->active_callbacks > 0)
+                --host->active_callbacks;
+        }
+        maybe_finalize_host(host);
+    } catch (...) {
+    }
+}
+
+bool host_callback_lease::active() const noexcept {
+    return host_ != nullptr;
+}
+
+void maybe_finalize_host(const shared_host_state& host) noexcept {
+    if (engine_execution_active()) {
+        defer_host_finalize(host);
+        return;
+    }
+    finalize_host(host);
+}
+
+int32_t request_host_destroy(const shared_host_state& host) noexcept {
+    if (!host)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        {
+            std::lock_guard lock(host->lifecycle_mutex);
+            if (host->engine == nullptr)
+                return SAO_ERR_HANDLE_INVALID;
+            host->closing = true;
+            if (host->active_message_callbacks != 0) {
+                host->destroy_deferred = true;
+                defer_host_finalize(host);
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            }
+            if (host->finalizing || host->active_instances != 0 || host->active_callbacks != 0)
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        finalize_host(host);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
 }
 
@@ -158,16 +343,10 @@ sao_plugins_ashost_destroy(as_host_handle_t host) {
     if (host == nullptr)
         return SAO_ERR_HANDLE_INVALID;
 #if defined(SAO_HAS_ANGELSCRIPT)
-    const auto state = retire_host(host);
+    const auto state = acquire_host(host);
     if (!state)
         return SAO_ERR_HANDLE_INVALID;
-    std::lock_guard lock(state->engine_mutex);
-    std::lock_guard engine_lock(engine_execution_mutex());
-    if (state->engine) {
-        state->engine->ShutDownAndRelease();
-        state->engine = nullptr;
-    }
-    return SAO_OK;
+    return request_host_destroy(state);
 #else
     return SAO_ERR_NOT_IMPLEMENTED;
 #endif
@@ -180,7 +359,8 @@ sao_plugins_ashost_engine(as_host_handle_t host) {
     if (!state)
         return nullptr;
     std::lock_guard lock(state->engine_mutex);
-    return state->engine;
+    std::lock_guard lifecycle_lock(state->lifecycle_mutex);
+    return state->closing ? nullptr : state->engine;
 #else
     (void)host;
     return nullptr;
@@ -246,7 +426,7 @@ sao_plugins_ashost_execute(as_host_handle_t host, const char* source_utf8, size_
     if (!state)
         return SAO_ERR_HANDLE_INVALID;
     std::lock_guard lock(state->engine_mutex);
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     asIScriptEngine* engine = state->engine;
     if (engine == nullptr)
         return SAO_ERR_HANDLE_INVALID;
@@ -349,8 +529,15 @@ sao_plugins_ashost_execute(as_host_handle_t host, const char* source_utf8, size_
             ret_type_id == asTYPEID_INT16 || ret_type_id == asTYPEID_UINT16 ||
             ret_type_id == asTYPEID_INT8 || ret_type_id == asTYPEID_UINT8) {
             s = std::to_string(ctx->GetReturnDWord());
-        } else if (ret_type_id == asTYPEID_INT64 || ret_type_id == asTYPEID_UINT64) {
+        } else if (ret_type_id == asTYPEID_INT64) {
             s = std::to_string(ctx->GetReturnQWord());
+        } else if (ret_type_id == asTYPEID_UINT64) {
+            const auto value = ctx->GetReturnQWord();
+            if (value > static_cast<asQWORD>((std::numeric_limits<int64_t>::max)())) {
+                ctx->Release();
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            s = std::to_string(value);
         } else if (ret_type_id == asTYPEID_FLOAT) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(ctx->GetReturnFloat()));
@@ -392,7 +579,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_call_func
     if (!state)
         return SAO_ERR_HANDLE_INVALID;
     std::lock_guard lock(state->engine_mutex);
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     asIScriptEngine* engine = state->engine;
     if (engine == nullptr)
         return SAO_ERR_HANDLE_INVALID;

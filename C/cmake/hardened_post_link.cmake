@@ -1,4 +1,6 @@
 # Hardened post-link dispatcher.
+# This helper is intentionally standalone; no production build target invokes
+# it until a complete consumer and shipping contract exists.
 # The parent build creates this step only when SAO_HARDENED_BUILD is enabled;
 # the configuration guard below keeps multi-config Debug builds transform-free.
 

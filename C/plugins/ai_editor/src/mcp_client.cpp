@@ -14,12 +14,14 @@
 #include <deque>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,6 +37,17 @@ constexpr uint32_t kMaxEnvBytes = 32U * 1024U;
 constexpr uint32_t kDefaultStartupMs = 15000U;
 constexpr uint32_t kDefaultRequestMs = 30000U;
 constexpr uint32_t kShutdownGraceMs = 2000U;
+constexpr uint32_t kMaxMessageBytes = 4U * 1024U * 1024U;
+constexpr size_t kMaxTimedOutRequests = 1024U;
+
+bool checked_dword_size(size_t size, DWORD& out) noexcept {
+    if (size > static_cast<size_t>(std::numeric_limits<DWORD>::max()) ||
+        size > static_cast<size_t>(kMaxMessageBytes)) {
+        return false;
+    }
+    out = static_cast<DWORD>(size);
+    return true;
+}
 constexpr uint32_t kMcpProtocolVersion = 2024;  // "2024-11-05" era
 
 struct ScopedHandle {
@@ -197,12 +210,16 @@ bool crack_http_url(std::string_view url, std::wstring& host,
         return false;
     }
     const std::wstring wide = utf8_to_wide(url);
+    DWORD wide_length = 0;
+    if (!checked_dword_size(wide.size(), wide_length)) {
+        return false;
+    }
     URL_COMPONENTS components{};
     components.dwStructSize = sizeof(components);
     components.dwHostNameLength = static_cast<DWORD>(-1);
     components.dwUrlPathLength = static_cast<DWORD>(-1);
     components.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(wide.c_str(), static_cast<DWORD>(wide.size()), 0,
+    if (!WinHttpCrackUrl(wide.c_str(), wide_length, 0,
                          &components)) {
         return false;
     }
@@ -342,11 +359,9 @@ public:
         if (!cwd.empty() && !valid_utf8(cwd)) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        startup_ms_ = std::clamp<uint32_t>(config.value("startupMs", 0U), 500U,
-                                           120000U);
-        if (startup_ms_ == 0) {
-            startup_ms_ = kDefaultStartupMs;
-        }
+        const uint32_t configured_startup_ms = config.value("startupMs", 0U);
+        startup_ms_ = configured_startup_ms == 0U ? kDefaultStartupMs :
+                       std::clamp<uint32_t>(configured_startup_ms, 500U, 120000U);
 
         SECURITY_ATTRIBUTES security_attributes{};
         security_attributes.nLength = sizeof(security_attributes);
@@ -470,11 +485,9 @@ public:
                 http_headers_.emplace_back(key, value_str);
             }
         }
-        startup_ms_ = std::clamp<uint32_t>(config.value("startupMs", 0U), 500U,
-                                           120000U);
-        if (startup_ms_ == 0) {
-            startup_ms_ = kDefaultStartupMs;
-        }
+        const uint32_t configured_startup_ms = config.value("startupMs", 0U);
+        startup_ms_ = configured_startup_ms == 0U ? kDefaultStartupMs :
+                       std::clamp<uint32_t>(configured_startup_ms, 500U, 120000U);
         http_session_ = InternetHandle(WinHttpOpen(
             L"SAO-AI-Editor-MCP/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
@@ -549,10 +562,14 @@ public:
                 }
             }
             pending_.clear();
+            timed_out_request_ids_.clear();
+            timed_out_request_order_.clear();
         }
         if (http_transport_) {
-            // Drop WinHTTP handles under the http_mutex_ so an in-flight POST
-            // wraps up before the connection dies.
+            // The serial lock covers the complete WinHTTP request lifetime.
+            // Shutdown waits for an in-flight request to return before it
+            // closes the session or connection handles.
+            std::lock_guard<std::mutex> request_guard(http_request_serial_mutex_);
             std::lock_guard<std::mutex> http_guard(http_mutex_);
             http_connection_.reset();
             http_session_.reset();
@@ -618,14 +635,17 @@ private:
                      {"method", std::string(method)},
                      {"params", params}};
         if (http_transport_) {
-            return call_http(id, request, budget, result);
+            return call_http(request["id"], request, budget, result);
+        }
+        const std::string payload = dump_json(request);
+        if (payload.size() > kMaxMessageBytes) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         auto response = std::make_shared<PendingResponse>();
         {
             std::lock_guard<std::mutex> guard(pending_mutex_);
             pending_[id] = response;
         }
-        const std::string payload = dump_json(request);
         if (!send_framed(payload)) {
             std::lock_guard<std::mutex> guard(pending_mutex_);
             pending_.erase(id);
@@ -634,7 +654,9 @@ private:
         if (response->future.wait_for(std::chrono::milliseconds(budget)) !=
             std::future_status::ready) {
             std::lock_guard<std::mutex> guard(pending_mutex_);
-            pending_.erase(id);
+            if (pending_.erase(id) != 0U) {
+                mark_timed_out_locked(id);
+            }
             return SAO_AI_EDITOR_ERR_TIMEOUT;
         }
         Json envelope = response->future.get();
@@ -649,8 +671,8 @@ private:
     // Streamable-HTTP transport: POST the JSON-RPC request, accept either
     // application/json or text/event-stream (first event only), match ids,
     // surface JSON-RPC errors the same way the stdio path does.
-    int32_t call_http(int64_t id, const Json& request, uint32_t timeout_ms,
-                      Json& result) {
+    int32_t call_http(const Json& expected_id, const Json& request,
+                      uint32_t timeout_ms, Json& result) {
         const std::string payload = dump_json(request);
         std::string response_body;
         std::string response_content_type;
@@ -679,11 +701,9 @@ private:
         if (!envelope.is_object()) {
             return SAO_AI_EDITOR_ERR_PROTOCOL;
         }
-        // The server MAY echo the request id (it should) — if present, sanity
-        // check it before accepting the response.  Missing id we tolerate to
-        // stay lenient with less-strict servers.
-        if (envelope.contains("id") && envelope["id"].is_number_integer() &&
-            envelope["id"].get<int64_t>() != id) {
+        if (!envelope.contains("id") ||
+            envelope["id"].type() != expected_id.type() ||
+            envelope["id"] != expected_id) {
             return SAO_AI_EDITOR_ERR_PROTOCOL;
         }
         if (envelope.contains("error")) {
@@ -697,21 +717,30 @@ private:
     int32_t http_post(const std::string& body, uint32_t timeout_ms,
                       DWORD& out_status_code, std::string& out_content_type,
                       std::string& out_body) {
-        if (!http_connection_) {
-            return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+        std::unique_lock<std::mutex> request_serial_lock(
+            http_request_serial_mutex_);
+        DWORD body_length = 0;
+        if (!checked_dword_size(body.size(), body_length)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
-        std::lock_guard<std::mutex> guard(http_mutex_);
-        const DWORD flags = http_secure_ ? WINHTTP_FLAG_SECURE : 0;
-        InternetHandle request(WinHttpOpenRequest(
-            http_connection_.get(), L"POST", http_path_.c_str(), nullptr,
-            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
-        if (!request) {
+        InternetHandle request_handle;
+        {
+            std::lock_guard<std::mutex> guard(http_mutex_);
+            if (stopping_.load(std::memory_order_acquire) ||
+                !http_connection_) {
+                return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+            }
+            const DWORD flags = http_secure_ ? WINHTTP_FLAG_SECURE : 0;
+            request_handle.reset(WinHttpOpenRequest(
+                http_connection_.get(), L"POST", http_path_.c_str(), nullptr,
+                WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+        }
+        if (!request_handle) {
             return SAO_AI_EDITOR_ERR_HTTP;
         }
-        // Set per-request timeouts so a wedged server doesn't wedge the
-        // caller.  WinHttpSetTimeouts takes (resolve, connect, send, receive).
+        HINTERNET request = request_handle.get();
         const int budget = static_cast<int>(timeout_ms);
-        WinHttpSetTimeouts(request.get(), budget, budget, budget, budget);
+        WinHttpSetTimeouts(request, budget, budget, budget, budget);
         std::wstring headers =
             L"Content-Type: application/json\r\n"
             L"Accept: application/json, text/event-stream\r\n";
@@ -719,19 +748,20 @@ private:
             headers += utf8_to_wide(key) + L": " + utf8_to_wide(value) +
                        L"\r\n";
         }
+        DWORD header_length = 0;
+        if (!checked_dword_size(headers.size(), header_length)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
         if (!WinHttpSendRequest(
-                request.get(), headers.c_str(),
-                static_cast<DWORD>(headers.size()),
-                const_cast<char*>(body.data()),
-                static_cast<DWORD>(body.size()),
-                static_cast<DWORD>(body.size()), 0)) {
+                request, headers.c_str(), header_length,
+                const_cast<char*>(body.data()), body_length, body_length, 0)) {
             return SAO_AI_EDITOR_ERR_HTTP;
         }
-        if (!WinHttpReceiveResponse(request.get(), nullptr)) {
+        if (!WinHttpReceiveResponse(request, nullptr)) {
             return SAO_AI_EDITOR_ERR_HTTP;
         }
         DWORD status_size = sizeof(out_status_code);
-        if (!WinHttpQueryHeaders(request.get(),
+        if (!WinHttpQueryHeaders(request,
                                  WINHTTP_QUERY_STATUS_CODE |
                                      WINHTTP_QUERY_FLAG_NUMBER,
                                  WINHTTP_HEADER_NAME_BY_INDEX,
@@ -739,17 +769,15 @@ private:
                                  WINHTTP_NO_HEADER_INDEX)) {
             return SAO_AI_EDITOR_ERR_HTTP;
         }
-        // Content-Type is optional in HTTP but MCP servers do send one; treat
-        // "missing" as application/json (the spec's default reply shape).
         DWORD content_type_size = 0;
-        WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_TYPE,
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_TYPE,
                             WINHTTP_HEADER_NAME_BY_INDEX,
                             WINHTTP_NO_OUTPUT_BUFFER, &content_type_size,
                             WINHTTP_NO_HEADER_INDEX);
         if (content_type_size > 0) {
             std::wstring content_type(content_type_size / sizeof(wchar_t),
                                       L'\0');
-            if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_TYPE,
+            if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_TYPE,
                                     WINHTTP_HEADER_NAME_BY_INDEX,
                                     content_type.data(), &content_type_size,
                                     WINHTTP_NO_HEADER_INDEX)) {
@@ -762,7 +790,7 @@ private:
         std::array<char, 16U * 1024U> buffer{};
         for (;;) {
             DWORD available = 0;
-            if (!WinHttpQueryDataAvailable(request.get(), &available) ||
+            if (!WinHttpQueryDataAvailable(request, &available) ||
                 available == 0) {
                 break;
             }
@@ -770,15 +798,14 @@ private:
                 const DWORD requested = std::min<DWORD>(
                     available, static_cast<DWORD>(buffer.size()));
                 DWORD read = 0;
-                if (!WinHttpReadData(request.get(), buffer.data(), requested,
-                                     &read) ||
+                if (!WinHttpReadData(request, buffer.data(), requested, &read) ||
                     read == 0) {
-                    break;
+                    return SAO_AI_EDITOR_ERR_HTTP;
                 }
-                out_body.append(buffer.data(), read);
-                if (out_body.size() > 8U * 1024U * 1024U) {
+                if (out_body.size() > kMaxMessageBytes - read) {
                     return SAO_AI_EDITOR_ERR_PROTOCOL;
                 }
+                out_body.append(buffer.data(), read);
                 available -= read;
             }
         }
@@ -850,8 +877,9 @@ private:
 
     void reader_loop() {
         sao_ai_editor_mcp_decoder_t decoder = nullptr;
-        if (sao_ai_editor_mcp_decoder_create(4U * 1024U * 1024U, &decoder) !=
+        if (sao_ai_editor_mcp_decoder_create(kMaxMessageBytes, &decoder) !=
             SAO_AI_EDITOR_OK) {
+            stopping_.store(true, std::memory_order_release);
             return;
         }
         std::vector<char> buffer(64U * 1024U);
@@ -865,6 +893,11 @@ private:
             uint32_t required = 0;
             int32_t status = sao_ai_editor_mcp_decoder_feed(
                 decoder, buffer.data(), read, nullptr, 0, &required);
+            if (status != SAO_AI_EDITOR_OK &&
+                status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+                stopping_.store(true, std::memory_order_release);
+                break;
+            }
             if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL || required == 0) {
                 continue;
             }
@@ -873,15 +906,20 @@ private:
                 decoder, nullptr, 0, messages.data(),
                 static_cast<uint32_t>(messages.size()), &required);
             if (status != SAO_AI_EDITOR_OK) {
-                continue;
+                stopping_.store(true, std::memory_order_release);
+                break;
             }
             Json parsed = Json::parse(messages.data(), messages.data() + required,
                                       nullptr, false);
             if (!parsed.is_array()) {
-                continue;
+                stopping_.store(true, std::memory_order_release);
+                break;
             }
             for (auto& message : parsed) {
-                dispatch_message(std::move(message));
+                if (!dispatch_message(std::move(message))) {
+                    stopping_.store(true, std::memory_order_release);
+                    break;
+                }
             }
         }
         sao_ai_editor_mcp_decoder_destroy(decoder);
@@ -904,18 +942,45 @@ private:
         }
     }
 
-    void dispatch_message(Json message) {
-        if (!message.is_object()) {
-            return;
+    void mark_timed_out_locked(int64_t id) {
+        if (timed_out_request_ids_.insert(id).second) {
+            timed_out_request_order_.push_back(id);
+            while (timed_out_request_order_.size() > kMaxTimedOutRequests) {
+                timed_out_request_ids_.erase(timed_out_request_order_.front());
+                timed_out_request_order_.pop_front();
+            }
         }
-        if (message.contains("id") && (message.contains("result") ||
-                                        message.contains("error"))) {
+    }
+
+    bool consume_timed_out_locked(int64_t id) {
+        if (timed_out_request_ids_.erase(id) == 0U) {
+            return false;
+        }
+        const auto found = std::find(timed_out_request_order_.begin(),
+                                     timed_out_request_order_.end(), id);
+        if (found != timed_out_request_order_.end()) {
+            timed_out_request_order_.erase(found);
+        }
+        return true;
+    }
+
+    bool dispatch_message(Json message) {
+        if (!message.is_object()) {
+            return false;
+        }
+        if (message.contains("id") &&
+            (message.contains("result") || message.contains("error"))) {
+            if (message.contains("result") && message.contains("error")) {
+                return false;
+            }
             const auto& id_value = message["id"];
-            int64_t id = 0;
-            if (id_value.is_number_integer()) {
-                id = id_value.get<int64_t>();
-            } else {
-                return;
+            if (!id_value.is_number_integer()) {
+                return false;
+            }
+            const int64_t id = id_value.get<int64_t>();
+            const Json expected_id = id;
+            if (id_value.type() != expected_id.type()) {
+                return false;
             }
             std::shared_ptr<PendingResponse> pending;
             {
@@ -926,16 +991,20 @@ private:
                     pending_.erase(found);
                 }
             }
-            if (pending) {
-                try {
-                    pending->promise.set_value(std::move(message));
-                } catch (...) {
+            if (pending == nullptr) {
+                std::lock_guard<std::mutex> guard(pending_mutex_);
+                if (consume_timed_out_locked(id)) {
+                    return true;
                 }
+                return false;
             }
-            return;
+            try {
+                pending->promise.set_value(std::move(message));
+            } catch (...) {
+                return false;
+            }
+            return true;
         }
-        // Notifications (method + no id) get forwarded to the observer so the
-        // AI editor runtime can surface list_changed / message / etc. events.
         if (message.contains("method") && message["method"].is_string() &&
             !message.contains("id")) {
             NotificationCallback callback_snapshot;
@@ -947,10 +1016,11 @@ private:
                 try {
                     callback_snapshot(name_, message);
                 } catch (...) {
-                    // Callback failures must not tear down the reader loop.
                 }
             }
+            return true;
         }
+        return false;
     }
 
     std::string name_;
@@ -967,6 +1037,8 @@ private:
     std::mutex write_mutex_;
     std::mutex pending_mutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingResponse>> pending_;
+    std::unordered_set<int64_t> timed_out_request_ids_;
+    std::deque<int64_t> timed_out_request_order_;
     std::atomic<int64_t> next_id_{1};
     mutable std::mutex state_mutex_;
     std::string protocol_version_;
@@ -991,6 +1063,7 @@ private:
     InternetHandle http_session_;
     InternetHandle http_connection_;
     std::mutex http_mutex_;
+    std::mutex http_request_serial_mutex_;
 };
 
 }  // namespace

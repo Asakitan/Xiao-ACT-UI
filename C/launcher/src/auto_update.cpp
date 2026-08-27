@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cwchar>
 #include <filesystem>
 #include <iterator>
 #include <memory>
@@ -32,6 +33,9 @@ constexpr std::size_t kManifestUrlCapacity = 2048u;
 constexpr std::size_t kManifestSha256Capacity = 65u;
 constexpr std::uint64_t kMaximumUpdateBytes = 512ull * 1024ull * 1024ull;
 constexpr DWORD kHelperReadyTimeoutMs = 5u * 60u * 1000u;
+constexpr DWORD kHelperTerminationTimeoutMs = 2u * 1000u;
+constexpr std::string_view kNativeUpdateManifestUrl =
+    "https://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
 
 struct WorkerContext {
     UpdateProviderConfiguration configuration;
@@ -117,11 +121,118 @@ fs::path user_staging_root() {
         return root / L"SaoAuto" / L"update-staging";
     }
 
-    wchar_t temporary[MAX_PATH] = {};
-    const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(temporary)), temporary);
-    if (length == 0u || length >= std::size(temporary))
-        return {};
-    return fs::path(temporary) / L"SaoAuto" / L"update-staging";
+    std::vector<wchar_t> temporary(512u);
+    for (;;) {
+        const DWORD length = GetTempPathW(static_cast<DWORD>(temporary.size()), temporary.data());
+        if (length == 0u)
+            return {};
+        if (length < temporary.size() - 1u)
+            return fs::path(temporary.data()) / L"SaoAuto" / L"update-staging";
+        if (temporary.size() >= 32768u)
+            return {};
+        temporary.resize(temporary.size() * 2u);
+    }
+}
+
+constexpr ULONGLONG kStagingOrphanAge100ns = 24ull * 60ull * 60ull * 10000000ull;
+constexpr wchar_t kStagingPreservationMarker[] = L".sao-preserved";
+
+bool path_is_absent(const fs::path& path) noexcept {
+    if (GetFileAttributesW(path.wstring().c_str()) != INVALID_FILE_ATTRIBUTES)
+        return false;
+    const DWORD error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
+bool parse_staging_owner_pid(const fs::path& staging, DWORD& pid_out) noexcept {
+    const std::wstring name = staging.filename().wstring();
+    if (name.rfind(L"run-", 0u) != 0u)
+        return false;
+    const std::size_t separator = name.find(L'-', 4u);
+    if (separator == std::wstring::npos || separator == 4u ||
+        separator + 1u >= name.size()) {
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    const unsigned long parsed = std::wcstoul(name.c_str() + 4u, &end, 10);
+    if (parsed == 0u || parsed > MAXDWORD ||
+        end != name.c_str() + separator) {
+        return false;
+    }
+    for (std::size_t index = separator + 1u; index < name.size(); ++index) {
+        if (name[index] < L'0' || name[index] > L'9')
+            return false;
+    }
+    pid_out = static_cast<DWORD>(parsed);
+    return true;
+}
+
+bool owner_process_is_gone(DWORD pid) noexcept {
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (process == nullptr)
+        return GetLastError() == ERROR_INVALID_PARAMETER;
+    const DWORD wait_result = WaitForSingleObject(process, 0u);
+    (void)CloseHandle(process);
+    return wait_result == WAIT_OBJECT_0;
+}
+
+bool staging_is_old_enough(const fs::path& staging) noexcept {
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(staging.wstring().c_str(), GetFileExInfoStandard,
+                              &attributes) ||
+        (attributes.dwFileAttributes &
+         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
+            FILE_ATTRIBUTE_DIRECTORY) {
+        return false;
+    }
+
+    FILETIME now_file_time{};
+    GetSystemTimeAsFileTime(&now_file_time);
+    ULARGE_INTEGER now{};
+    now.LowPart = now_file_time.dwLowDateTime;
+    now.HighPart = now_file_time.dwHighDateTime;
+    ULARGE_INTEGER written{};
+    written.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
+    written.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+    return now.QuadPart >= written.QuadPart &&
+           now.QuadPart - written.QuadPart >= kStagingOrphanAge100ns;
+}
+
+bool staging_tree_is_safe(const fs::path& staging) noexcept {
+    try {
+        std::error_code error;
+        fs::recursive_directory_iterator iterator(
+            staging, fs::directory_options::none, error);
+        if (error)
+            return false;
+        for (const fs::recursive_directory_iterator end{};
+             iterator != end; iterator.increment(error)) {
+            if (error)
+                return false;
+            const DWORD attributes =
+                GetFileAttributesW(iterator->path().wstring().c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES ||
+                (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+                return false;
+            }
+        }
+        return !error;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool staging_is_safe_orphan(const fs::path& staging) noexcept {
+    DWORD owner_pid = 0u;
+    if (!parse_staging_owner_pid(staging, owner_pid) ||
+        !staging_is_old_enough(staging) || !owner_process_is_gone(owner_pid) ||
+        !path_is_absent(staging / kStagingPreservationMarker) ||
+        !path_is_absent(staging / L"helper.ready") ||
+        !staging_tree_is_safe(staging)) {
+        return false;
+    }
+    return true;
 }
 
 void prune_staging_directories() noexcept {
@@ -144,7 +255,8 @@ void prune_staging_directories() noexcept {
             const DWORD attributes = GetFileAttributesW(iterator->path().wstring().c_str());
             if (attributes == INVALID_FILE_ATTRIBUTES ||
                 (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
-                (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u) {
+                (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u ||
+                !staging_is_safe_orphan(iterator->path())) {
                 continue;
             }
             std::error_code ignored;
@@ -169,6 +281,27 @@ fs::path create_staging_directory() {
     return error ? fs::path{} : staging;
 }
 
+bool write_staging_preservation_marker(const fs::path& staging) noexcept {
+    const fs::path marker = staging / kStagingPreservationMarker;
+    HANDLE handle = CreateFileW(marker.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
+                                CREATE_NEW, FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        return error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS;
+    }
+    static constexpr char marker_text[] = "preserved\n";
+    DWORD written = 0u;
+    const bool wrote = WriteFile(handle, marker_text,
+                                 static_cast<DWORD>(sizeof(marker_text) - 1u),
+                                 &written, nullptr) != FALSE &&
+                       written == sizeof(marker_text) - 1u &&
+                       FlushFileBuffers(handle) != FALSE;
+    const bool closed = CloseHandle(handle) != FALSE;
+    if (!wrote || !closed)
+        (void)DeleteFileW(marker.wstring().c_str());
+    return wrote && closed;
+}
+
 class StagingCleanup {
   public:
     explicit StagingCleanup(fs::path path) : path_(std::move(path)) {}
@@ -180,6 +313,7 @@ class StagingCleanup {
     }
     void preserve() noexcept {
         preserve_ = true;
+        (void)write_staging_preservation_marker(path_);
     }
 
   private:
@@ -215,15 +349,48 @@ bool regular_ready_marker(const fs::path& marker) noexcept {
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u;
 }
 
-bool terminate_helper(PROCESS_INFORMATION& process) noexcept {
-    DWORD exit_code = STILL_ACTIVE;
-    bool terminated = GetExitCodeProcess(process.hProcess, &exit_code) != FALSE;
-    if (terminated && exit_code == STILL_ACTIVE) {
-        terminated = TerminateProcess(process.hProcess, 1u) != FALSE;
+bool terminate_helper(const PROCESS_INFORMATION& process, HANDLE job) noexcept {
+    if (process.hProcess == nullptr)
+        return false;
+
+    DWORD wait_result = WaitForSingleObject(process.hProcess, 0u);
+    if (wait_result == WAIT_OBJECT_0)
+        return true;
+    if (wait_result == WAIT_FAILED)
+        return false;
+
+    (void)TerminateProcess(process.hProcess, 1u);
+    if (job != nullptr)
+        (void)TerminateJobObject(job, 1u);
+
+    const ULONGLONG deadline = GetTickCount64() + kHelperTerminationTimeoutMs;
+    ULONGLONG now = GetTickCount64();
+    while (now < deadline) {
+        const ULONGLONG remaining = deadline - now;
+        const DWORD wait_ms = static_cast<DWORD>(std::min<ULONGLONG>(remaining, 100u));
+        wait_result = WaitForSingleObject(process.hProcess, wait_ms);
+        if (wait_result == WAIT_OBJECT_0)
+            return true;
+        if (wait_result == WAIT_FAILED)
+            return false;
+        now = GetTickCount64();
     }
-    const DWORD wait_result = WaitForSingleObject(process.hProcess, 2000u);
-    const bool waited = wait_result == WAIT_OBJECT_0 || wait_result == WAIT_TIMEOUT;
-    return terminated && waited;
+    return WaitForSingleObject(process.hProcess, 0u) == WAIT_OBJECT_0;
+}
+
+bool close_helper_handles(PROCESS_INFORMATION& process, HANDLE& job) noexcept {
+    bool closed = true;
+    const auto close = [&closed](HANDLE& handle) noexcept {
+        if (handle != nullptr) {
+            if (!CloseHandle(handle))
+                closed = false;
+            handle = nullptr;
+        }
+    };
+    close(process.hThread);
+    close(process.hProcess);
+    close(job);
+    return closed;
 }
 
 bool post_launcher_quit(DWORD launcher_thread_id, HANDLE cancel_event) noexcept {
@@ -239,13 +406,15 @@ bool post_launcher_quit(DWORD launcher_thread_id, HANDLE cancel_event) noexcept 
 
 bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
                    const fs::path& target_dir, const fs::path& restart_exe, std::string_view sha256,
-                   DWORD launcher_thread_id, HANDLE cancel_event) noexcept {
+                   DWORD launcher_thread_id, HANDLE cancel_event,
+                   bool* preserve_staging_out) noexcept {
+    if (preserve_staging_out != nullptr)
+        *preserve_staging_out = false;
     if (is_cancelled(cancel_event))
         return false;
     const fs::path ready_marker = archive_path.parent_path() / L"helper.ready";
-    if (!DeleteFileW(ready_marker.wstring().c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND) {
+    if (!DeleteFileW(ready_marker.wstring().c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
         return false;
-    }
 
     std::wstring command = quote_argument(helper_path.wstring());
     command += L" --parent-pid ";
@@ -259,40 +428,59 @@ bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
     command += L" --sha256 ";
     command += quote_argument(std::wstring(sha256.begin(), sha256.end()));
 
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr)
+        return false;
     std::vector<wchar_t> mutable_command(command.begin(), command.end());
     mutable_command.push_back(L'\0');
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(helper_path.wstring().c_str(), mutable_command.data(), nullptr, nullptr,
-                        FALSE, CREATE_NO_WINDOW, nullptr, target_dir.wstring().c_str(), &startup,
-                        &process)) {
+                        FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                        target_dir.wstring().c_str(), &startup, &process)) {
+        (void)close_helper_handles(process, job);
         return false;
     }
-    const ULONGLONG deadline = GetTickCount64() + kHelperReadyTimeoutMs;
+    const bool process_owned_by_job = AssignProcessToJobObject(job, process.hProcess) != FALSE;
+    const bool resumed =
+        process_owned_by_job && ResumeThread(process.hThread) != static_cast<DWORD>(-1);
     bool ready = false;
-    while (GetTickCount64() < deadline) {
-        if (is_cancelled(cancel_event))
-            break;
-        const DWORD process_result = WaitForSingleObject(process.hProcess, 50u);
-        if (process_result == WAIT_OBJECT_0 || process_result == WAIT_FAILED)
-            break;
-        if (process_result == WAIT_TIMEOUT && regular_ready_marker(ready_marker)) {
-            ready = post_launcher_quit(launcher_thread_id, cancel_event);
-            break;
+    bool helper_shutdown_confirmed = true;
+    if (!process_owned_by_job || !resumed) {
+        if (preserve_staging_out != nullptr)
+            *preserve_staging_out = true;
+        helper_shutdown_confirmed = terminate_helper(process, process_owned_by_job ? job : nullptr);
+    } else {
+        const ULONGLONG deadline = GetTickCount64() + kHelperReadyTimeoutMs;
+        while (GetTickCount64() < deadline) {
+            if (is_cancelled(cancel_event))
+                break;
+            const DWORD process_result = WaitForSingleObject(process.hProcess, 50u);
+            if (process_result == WAIT_OBJECT_0 || process_result == WAIT_FAILED)
+                break;
+            if (process_result == WAIT_TIMEOUT && regular_ready_marker(ready_marker)) {
+                ready = post_launcher_quit(launcher_thread_id, cancel_event);
+                break;
+            }
+        }
+        if (!ready) {
+            if (preserve_staging_out != nullptr)
+                *preserve_staging_out = true;
+            helper_shutdown_confirmed = terminate_helper(process, job);
         }
     }
-    if (!ready)
-        terminate_helper(process);
-    const bool thread_closed = CloseHandle(process.hThread) != FALSE;
-    const bool process_closed = CloseHandle(process.hProcess) != FALSE;
-    return ready && thread_closed && process_closed;
+    const bool handles_closed = close_helper_handles(process, job);
+    if (!handles_closed && preserve_staging_out != nullptr)
+        *preserve_staging_out = true;
+    return ready && helper_shutdown_confirmed && handles_closed;
 }
 
 bool run_auto_update(const WorkerContext& context) noexcept {
     try {
         if (is_cancelled(context.cancel_event) || !context.configuration.enabled ||
             context.base_dir.empty() || context.exe_path.empty() ||
+            context.configuration.manifest_url != kNativeUpdateManifestUrl ||
             !is_exact_json_url(context.configuration.manifest_url)) {
             return false;
         }
@@ -301,8 +489,10 @@ bool run_auto_update(const WorkerContext& context) noexcept {
             return false;
 
         sao_updater_manifest_t manifest{};
-        if (sao_updater_fetch_manifest(context.configuration.manifest_url.c_str(), &manifest) !=
-                SAO_OK ||
+        if (sao_updater_fetch_manifest_pinned(
+                context.configuration.manifest_url.c_str(),
+                context.configuration.server_tls_spki_sha256.data(),
+                context.configuration.server_tls_spki_sha256.size(), &manifest) != SAO_OK ||
             is_cancelled(context.cancel_event)) {
             return false;
         }
@@ -334,9 +524,11 @@ bool run_auto_update(const WorkerContext& context) noexcept {
         }
 
         const fs::path staging = create_staging_directory();
-        if (staging.empty() || is_cancelled(context.cancel_event))
+        if (staging.empty())
             return false;
         StagingCleanup cleanup(staging);
+        if (is_cancelled(context.cancel_event))
+            return false;
         const fs::path archive = staging / L"SaoAutoUpdate.archive";
         const fs::path helper = staging / L"SaoAutoUpdateHelper.exe";
         const fs::path source_helper = fs::path(context.base_dir) / L"SaoAutoUpdateHelper.exe";
@@ -347,8 +539,10 @@ bool run_auto_update(const WorkerContext& context) noexcept {
             is_cancelled(context.cancel_event)) {
             return false;
         }
-        if (sao_updater_download_w(manifest.url, manifest.sha256, archive.wstring().c_str(),
-                                   nullptr, nullptr) != SAO_OK ||
+        if (sao_updater_download_w_pinned(
+                manifest.url, context.configuration.server_tls_spki_sha256.data(),
+                context.configuration.server_tls_spki_sha256.size(), manifest.sha256,
+                archive.wstring().c_str(), nullptr, nullptr) != SAO_OK ||
             is_cancelled(context.cancel_event)) {
             return false;
         }
@@ -358,11 +552,14 @@ bool run_auto_update(const WorkerContext& context) noexcept {
         if (error || downloaded_size != manifest.size || is_cancelled(context.cancel_event)) {
             return false;
         }
+        bool preserve_staging = false;
         if (launch_helper(helper, archive, target, restart, sha256, context.launcher_thread_id,
-                          context.cancel_event)) {
+                          context.cancel_event, &preserve_staging)) {
             cleanup.preserve();
             return true;
         }
+        if (preserve_staging)
+            cleanup.preserve();
     } catch (...) {
     }
     return false;

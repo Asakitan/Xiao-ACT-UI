@@ -75,7 +75,11 @@ sao_status_t send_request_and_receive(
     size_t body_length,
     uint32_t timeout_ms) noexcept;
 
+sao_status_t configure_pinned_security(HINTERNET request,
+                                       const char* scope_utf8) noexcept;
 sao_status_t validate_request_certificate(HINTERNET request,
+                                          const wchar_t* server_name,
                                           const char* scope_utf8) noexcept;
+sao_status_t validate_request_scope(const char* scope_utf8) noexcept;
 
 }  // namespace sao::net::internal

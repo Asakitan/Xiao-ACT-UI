@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Windows SCM host for the legacy Python license and update services.
+# Windows SCM host for the Python update service and legacy license compatibility service.
 from __future__ import annotations
 
 import argparse
@@ -153,6 +153,26 @@ def _configure_runtime(config) -> None:
         sys.path.insert(0, role_dir)
     if config.root not in sys.path:
         sys.path.insert(1, config.root)
+    if config.role == "update":
+        default_certfile = os.path.join(config.root, "license_server", "server.crt")
+        default_keyfile = os.path.join(config.root, "license_server", "server.key")
+        certfile = os.environ.get("UPDATE_HOST_SSL_CERTFILE", "").strip() or default_certfile
+        keyfile = os.environ.get("UPDATE_HOST_SSL_KEYFILE", "").strip() or default_keyfile
+        certfile = os.path.abspath(os.path.expandvars(os.path.expanduser(certfile)))
+        keyfile = os.path.abspath(os.path.expandvars(os.path.expanduser(keyfile)))
+        if not os.path.isfile(certfile):
+            raise FileNotFoundError(
+                f"update service TLS certificate file does not exist: {certfile}"
+            )
+        if not os.path.isfile(keyfile):
+            raise FileNotFoundError(
+                f"update service TLS private key file does not exist: {keyfile}"
+            )
+        from tls_pinning import validate_certificate_file
+        validate_certificate_file(certfile)
+        os.environ["UPDATE_HOST_SSL_CERTFILE"] = certfile
+        os.environ["UPDATE_HOST_SSL_KEYFILE"] = keyfile
+        os.environ["UPDATE_HOST_REQUIRE_TLS"] = "1"
     if config.port is not None:
         env_name = "SAO_SERVER_PORT" if config.role == "license" else "UPDATE_HOST_PORT"
         os.environ[env_name] = str(config.port)

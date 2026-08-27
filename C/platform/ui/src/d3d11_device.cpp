@@ -263,6 +263,9 @@ extern "C" void* SAO_UI_CALL sao_ui_d3d11_device_context_ptr(
         return nullptr;
     }
 #if defined(_WIN32)
+    if (!is_owner_thread(handle)) {
+        return nullptr;
+    }
     std::lock_guard<std::mutex> lock(handle->mutex);
     return handle->context;
 #else

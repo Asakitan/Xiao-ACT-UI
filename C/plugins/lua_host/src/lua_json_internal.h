@@ -84,8 +84,23 @@ inline bool consume_json_node(json_budget& budget, std::string& error) {
     return true;
 }
 
+inline bool json_numbers_fit_signed(const json& value) noexcept {
+    if (value.is_number_unsigned() &&
+        value.get<std::uint64_t>() > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
+        return false;
+    if (value.is_array()) {
+        for (const auto& child : value) if (!json_numbers_fit_signed(child)) return false;
+    } else if (value.is_object()) {
+        for (const auto& [key, child] : value.items()) {
+            (void)key;
+            if (!json_numbers_fit_signed(child)) return false;
+        }
+    }
+    return true;
+}
+
 inline bool consume_json_string(std::string_view value, json_budget& budget, std::string& error) {
-    if (!valid_utf8(value)) {
+    if (value.find('\0') != std::string_view::npos || !valid_utf8(value)) {
         error = "JSON strings must be valid UTF-8";
         return false;
     }
@@ -118,6 +133,10 @@ inline bool push_json(lua_State* state, const json& value, json_budget& budget, 
         lua_pushinteger(state, static_cast<lua_Integer>(value.get<int64_t>()));
     } else if (value.is_number_unsigned()) {
         const auto number = value.get<uint64_t>();
+        if (number > static_cast<uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+            error = "JSON unsigned integers above INT64_MAX are not supported";
+            return false;
+        }
         if (number <= static_cast<uint64_t>(LUA_MAXINTEGER)) {
             lua_pushinteger(state, static_cast<lua_Integer>(number));
         } else {
@@ -363,8 +382,35 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
     }
 }
 
+inline bool json_strings_are_valid(const json& value) {
+    if (value.is_string())
+        return value.get_ref<const std::string&>().find('\0') == std::string::npos &&
+               valid_utf8(value.get_ref<const std::string&>());
+    if (value.is_array()) {
+        for (const auto& child : value)
+            if (!json_strings_are_valid(child))
+                return false;
+    } else if (value.is_object()) {
+        for (const auto& [key, child] : value.items()) {
+            if (key.find('\0') != std::string::npos || !valid_utf8(key) ||
+                !json_strings_are_valid(child))
+                return false;
+        }
+    }
+    return true;
+}
 inline bool serialize_json(const json& value, std::string& output, std::string& error) {
     try {
+        if (!json_numbers_fit_signed(value)) {
+            output.clear();
+            error = "JSON unsigned integers above INT64_MAX are not supported";
+            return false;
+        }
+        if (!json_strings_are_valid(value)) {
+            output.clear();
+            error = "JSON strings must not contain embedded NUL bytes";
+            return false;
+        }
         output = value.dump(-1, ' ', false, json::error_handler_t::strict);
         if (output.size() > kMaximumJsonOutputBytes) {
             output.clear();
@@ -388,6 +434,14 @@ inline bool parse_json(const char* data, std::size_t size, json& output, std::st
         output = json::parse(data, data + size, nullptr, false);
         if (output.is_discarded()) {
             error = "JSON input is invalid";
+            return false;
+        }
+        if (!json_numbers_fit_signed(output)) {
+            error = "JSON unsigned integers above INT64_MAX are not supported";
+            return false;
+        }
+        if (!json_strings_are_valid(output)) {
+            error = "JSON strings must not contain embedded NUL bytes";
             return false;
         }
         return true;

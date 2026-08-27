@@ -13,6 +13,7 @@
 #include "sao/plugins/csharp_host/cs_host.h"
 
 #include "cs_host_internal.h"
+#include "cs_component_internal.h"
 
 #include "sao/plugins/loader/loader_status.h"
 
@@ -226,12 +227,13 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host) {
     (void)cfg;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
+    std::unique_ptr<cs_host_impl> impl;
     try {
         std::lock_guard singleton_lock(singleton_mutex());
         if (singleton_slot() != nullptr) {
             return sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
         }
-        auto impl = std::make_unique<cs_host_impl>();
+        impl = std::make_unique<cs_host_impl>();
 
         std::wstring dll_path;
         if (cfg != nullptr && cfg->hostfxr_path != nullptr && cfg->hostfxr_path[0] != L'\0') {
@@ -270,17 +272,6 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host) {
             FreeLibrary(impl->hostfxr_module);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        // Shutdown closes host contexts and releases this ordinary LoadLibrary reference; the
-        // process-lifetime PIN keeps hostfxr mapped for sequential managed registry rebuilds.
-        HMODULE pinned_module = nullptr;
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                   GET_MODULE_HANDLE_EX_FLAG_PIN,
-                               reinterpret_cast<LPCWSTR>(impl->hostfxr_module),
-                               &pinned_module) == 0) {
-            FreeLibrary(impl->hostfxr_module);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-
         impl->runtime_version = extract_runtime_version_from_path(dll_path);
         impl->available = true;
 
@@ -289,6 +280,10 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host) {
         *out_host = reinterpret_cast<cs_host_handle_t>(raw);
         return SAO_OK;
     } catch (...) {
+        if (impl != nullptr && impl->hostfxr_module != nullptr) {
+            (void)FreeLibrary(impl->hostfxr_module);
+            impl->hostfxr_module = nullptr;
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 #endif
@@ -299,9 +294,24 @@ sao_plugins_cshost_shutdown(cs_host_handle_t host) {
     if (host == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     try {
+        auto* impl = reinterpret_cast<cs_host_impl*>(host);
+        {
+            std::lock_guard singleton_lock(singleton_mutex());
+            if (singleton_slot().get() != impl)
+                return SAO_ERR_HANDLE_INVALID;
+        }
+        std::string retired_error;
+        const int32_t retired_status = cshost_retry_retired_components(host, retired_error);
+        if (retired_status != SAO_OK) {
+            std::lock_guard singleton_lock(singleton_mutex());
+            if (singleton_slot().get() == impl) {
+                std::lock_guard lock(impl->mutex);
+                impl->last_error = retired_error;
+            }
+            return retired_status;
+        }
         std::lock_guard singleton_lock(singleton_mutex());
         auto& slot = singleton_slot();
-        auto* impl = reinterpret_cast<cs_host_impl*>(host);
         if (slot.get() != impl)
             return SAO_ERR_HANDLE_INVALID;
         {

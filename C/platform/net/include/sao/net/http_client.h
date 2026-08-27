@@ -27,9 +27,26 @@ SAO_NET_API sao_status_t SAO_NET_CALL sao_net_http_get(
     uint32_t timeout_ms,
     sao_net_http_response_handle_t* out_response);
 
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_http_get_scoped_v2(
+    const char* url_utf8,
+    const char* scope_utf8,
+    const char* headers_utf8,
+    uint32_t timeout_ms,
+    sao_net_http_response_handle_t* out_response);
+
 // POST with a raw body.  content_type_utf8 defaults to "application/octet-stream".
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_http_post(
     const char* url_utf8,
+    const char* headers_utf8,
+    const char* content_type_utf8,
+    const uint8_t* body_bytes,
+    size_t body_length,
+    uint32_t timeout_ms,
+    sao_net_http_response_handle_t* out_response);
+
+SAO_NET_API sao_status_t SAO_NET_CALL sao_net_http_post_scoped_v2(
+    const char* url_utf8,
+    const char* scope_utf8,
     const char* headers_utf8,
     const char* content_type_utf8,
     const uint8_t* body_bytes,

@@ -164,9 +164,10 @@ SAO_CORE_API sao_status_t SAO_CORE_CALL sao_core_settings_key_count(
 
 // Compact serialise: matches json.dumps(data, ensure_ascii=False).
 // input_json_utf8/input_size is the source blob (must parse as an object).
-// out_buf/out_capacity receive the serialised form; if buf is null or too
-// small, out_size_needed is populated and SAO_STATUS_ERR_BUFFER_TOO_SMALL
-// is returned (no null terminator).
+// out_buf/out_capacity receive the serialised form; the sizing query
+// (out_buf == null, out_capacity == 0) and any undersized buffer populate
+// out_size_needed and return SAO_STATUS_ERR_BUFFER_TOO_SMALL.  The byte count
+// excludes a null terminator.
 SAO_CORE_API sao_status_t SAO_CORE_CALL sao_core_settings_dump_compact(
     const uint8_t* input_json_utf8,
     size_t         input_size,

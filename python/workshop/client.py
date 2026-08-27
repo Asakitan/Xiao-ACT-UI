@@ -4,21 +4,93 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
+import hmac
 import json
 import os
+import ssl
 import urllib.parse
-import urllib.request
+from urllib.error import HTTPError
 from typing import Any, Callable, Optional
+
+from tls_pinning import validate_peer_certificate
 
 _UA = "SAO-Workshop/1.0"
 _TIMEOUT = 30
 _DL_TIMEOUT = 300
+_WORKSHOP_ORIGIN = "https://x2.sjcmc.cn:15018"
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        try:
+            certificate = self.sock.getpeercert(binary_form=True) if self.sock else b""
+            validate_peer_certificate(certificate)
+        except Exception:
+            self.close()
+            raise
+
+
+_TLS_CONTEXT = ssl.create_default_context()
+_TLS_CONTEXT.check_hostname = False
+_TLS_CONTEXT.verify_mode = ssl.CERT_NONE
+
+
+def _validate_url(url: str) -> urllib.parse.SplitResult:
+    parsed = urllib.parse.urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Workshop requires the fixed HTTPS origin") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.casefold() != "x2.sjcmc.cn"
+        or port != 15018
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError("Workshop requires the fixed HTTPS origin")
+    return parsed
+
+
+def _request(method: str, url: str, headers: dict[str, str], body: bytes = b"", timeout: float = _TIMEOUT):
+    parsed = _validate_url(url)
+    target = parsed.path or "/"
+    if parsed.query:
+        target += "?" + parsed.query
+    connection = _PinnedHTTPSConnection(
+        parsed.hostname,
+        parsed.port,
+        timeout=timeout,
+        context=_TLS_CONTEXT,
+    )
+    try:
+        connection.request(method, target, body=body, headers=headers)
+        response = connection.getresponse()
+        if not 200 <= response.status < 300:
+            response_body = response.read(4096)
+            raise HTTPError(url, response.status, response.reason, response.headers, response_body)
+        return connection, response
+    except Exception:
+        connection.close()
+        raise
 
 
 def _get_json(url: str, timeout: float = _TIMEOUT) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    connection, response = _request(
+        "GET",
+        url,
+        {"User-Agent": _UA, "Accept": "application/json"},
+        timeout=timeout,
+    )
+    try:
+        return json.loads(response.read().decode("utf-8"))
+    finally:
+        response.close()
+        connection.close()
 
 
 def _post_json(url: str, api_key: str, body: bytes = b"",
@@ -33,14 +105,19 @@ def _post_json(url: str, api_key: str, body: bytes = b"",
     }
     if extra_headers:
         headers.update(extra_headers)
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    connection, response = _request("POST", url, headers, body=body, timeout=timeout)
+    try:
+        return json.loads(response.read().decode("utf-8"))
+    finally:
+        response.close()
+        connection.close()
 
 
 class WorkshopClient:
     def __init__(self, base_url: str, api_key: str = "", is_paid: bool = False, workshop_token: str = ""):
-        self.base = base_url.rstrip("/")
+        if (base_url or "").rstrip("/") != _WORKSHOP_ORIGIN:
+            raise ValueError("Workshop requires the fixed HTTPS origin")
+        self.base = _WORKSHOP_ORIGIN
         self.api_key = api_key
         self.is_paid = is_paid
         self.workshop_token = workshop_token
@@ -96,15 +173,14 @@ class WorkshopClient:
         headers = {"User-Agent": _UA}
         if self.is_paid:
             headers["X-Paid-User"] = "true"
-        req = urllib.request.Request(url, headers=headers)
+        connection, response = _request("GET", url, headers, timeout=_DL_TIMEOUT)
         sha = hashlib.sha256()
         total = 0
-
-        with urllib.request.urlopen(req, timeout=_DL_TIMEOUT) as resp:
-            content_length = int(resp.headers.get("Content-Length", 0) or 0)
+        try:
+            content_length = int(response.headers.get("Content-Length", 0) or 0)
             with open(tmp, "wb") as f:
                 while True:
-                    chunk = resp.read(65536)
+                    chunk = response.read(65536)
                     if not chunk:
                         break
                     f.write(chunk)
@@ -112,9 +188,12 @@ class WorkshopClient:
                     total += len(chunk)
                     if progress_cb and content_length:
                         progress_cb(total, content_length)
+        finally:
+            response.close()
+            connection.close()
 
         digest = sha.hexdigest()
-        if expected_sha256 and digest != expected_sha256:
+        if expected_sha256 and not hmac.compare_digest(digest, expected_sha256.lower()):
             os.remove(tmp)
             raise ValueError(f"SHA256 mismatch: expected {expected_sha256}, got {digest}")
 
@@ -150,7 +229,7 @@ class WorkshopClient:
             "author": metadata.get("author", ""),
             "tag": tag,
             "game_ids": json.dumps(metadata.get("game_ids", [])),
-            "signature_alg": metadata.get("signature_alg", "ed25519"),
+            "signature_alg": metadata.get("signature_alg", "none"),
             "min_major": minimum_parts[0],
             "min_minor": minimum_parts[1],
             "min_patch": minimum_parts[2],
@@ -180,7 +259,5 @@ class WorkshopClient:
 
     def fetch_content_key(self, plugin_id: str, version: str = "") -> bytes:
         # Fetch the AES-256 content key for a closed-source (protected) plugin
-        # build. Requires network + a valid workshop token every call — no local
-        # caching by design: a protected plugin is only ever decryptable while
-        # the app is live and talking to the server.
+        # build. Requires a valid workshop token every call; no local caching.
         raise RuntimeError("protected Workshop content keys are unavailable on the v1 host")

@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <iterator>
 #include <string>
 
 namespace sao::launcher {
@@ -143,7 +144,7 @@ void logStartupConfiguration(const AppState& state) noexcept {
                     state.rt_io_exit_after_validation ? 1 : 0,
                     state.rt_io_force_status_page ? 1 : 0,
                     state.log_level[0] ? state.log_level : L"info",
-                    state.config_path[0] ? state.config_path : L"<default>");
+                    state.config_path.empty() ? L"<default>" : state.config_path.c_str());
 }
 
 } // namespace
@@ -169,9 +170,15 @@ int App::run() {
     smokePrint(state_, "STAGE_ARGS");
     logStartupConfiguration(state_);
 
+    rc = installCrashHandler();
+    if (rc != SAO_EXIT_OK) {
+        return rc;
+    }
+
     LauncherLifecycleDecision lifecycle;
     if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) !=
         SAO_STATUS_OK) {
+        ::sao::launcher::uninstallCrashHandler();
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     smokePrint(state_, "STAGE_LIFECYCLE");
@@ -184,14 +191,16 @@ int App::run() {
         tracePrintfImpl(state_, "FAIL step=%ls hint=%s code=%d", step, hint, exit_code);
 #if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
         int32_t fallback_exit = 0;
-        if (sao_launcher_dual_run_maybe_fallback_to_python(&lifecycle.dual_config, exit_code, step,
+        if (sao_launcher_dual_run_maybe_fallback_to_python_v2(&lifecycle.dual_config_v2, exit_code, step,
                                                            &fallback_exit)) {
-            shutdown();
-            completeLauncherLifecycle(lifecycle, exit_code, hint);
+            if (!shutdown())
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
+            completeLauncherLifecycle(lifecycle, fallback_exit, "python_handoff");
             return fallback_exit;
         }
 #endif
-        shutdown();
+        if (!shutdown())
+            return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
         return finish(exit_code, hint);
     };
 
@@ -209,16 +218,27 @@ int App::run() {
             (GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0) &&
             inherited_role[0] != L'\0';
 
+        bool plain_cpp_due_to_existing_driver = false;
         if (!is_child_of_dual_run_driver) {
             sao_status_t ms = sao_launcher_dual_run_acquire_driver_mutex(&dual_run_driver_mutex_);
             if (ms == SAO_STATUS_OK)
                 dual_run_driver_acquired_ = true;
+            else if (ms == SAO_LAUNCHER_ALREADY_RUNNING) {
+                dual_cfg.mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+                lifecycle.dual_config_v2.legacy.mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+                lifecycle.selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+                plain_cpp_due_to_existing_driver = true;
+            } else {
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL,
+                              "dual_run_driver_mutex");
+            }
         }
 
         int32_t should_continue = 1;
         int32_t handoff_exit = 0;
-        sao_status_t zs =
-            sao_launcher_dual_run_step_zero(&dual_cfg, &should_continue, &handoff_exit);
+        sao_status_t zs = plain_cpp_due_to_existing_driver
+            ? SAO_STATUS_OK
+            : sao_launcher_dual_run_step_zero_v2(&lifecycle.dual_config_v2, &should_continue, &handoff_exit);
         if (zs == SAO_LAUNCHER_PYTHON_UNAVAILABLE) {
             return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero", "dual_run_step_zero");
         }
@@ -230,25 +250,19 @@ int App::run() {
             // is SAO_EXIT_HANDOFF_TO_PYTHON = 100 for the python_only
             // path) plus, in smoke mode, a stdout tag it can grep for.
             smokePrint(state_, "HANDOFF_TO_PYTHON");
-            shutdown();
+            if (!shutdown())
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
             return finish(handoff_exit, "python_handoff");
         }
     }
 #endif
     smokePrint(state_, "STAGE_DUAL_RUN");
 
-    // 2. Crash handler.  Everything after this point produces a minidump on
-    //    unhandled SEH.
-    rc = installCrashHandler();
-    if (rc != SAO_EXIT_OK) {
-        // Non-fatal in principle, but if we can't install it we log and
-        // continue — the shutdown path still fires normally.
-    }
-
-    // 3. Single-instance guard.
+    // 2. Single-instance guard.
     rc = acquireSingleInstance();
     if (rc != SAO_EXIT_OK) {
-        shutdown();
+        if (!shutdown())
+            return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
         return finish(rc, "single_instance");
     }
     smokePrint(state_, "STAGE_SINGLE_INSTANCE");
@@ -259,8 +273,8 @@ int App::run() {
         return fail(rc, L"working_dir", "working_dir");
     }
 
-    if (loadLauncherProviderConfiguration(state_.base_dir,
-                                          state_.config_path[0] ? state_.config_path : nullptr) !=
+    if (loadLauncherProviderConfiguration(state_.base_dir.c_str(),
+                                          state_.config_path.empty() ? nullptr : state_.config_path.c_str()) !=
         SAO_STATUS_OK) {
         return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"provider_config", "provider_config");
     }
@@ -350,8 +364,10 @@ int App::run() {
 #if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
     if (!state_.smoke_mode && !state_.exit_after_init &&
         !state_.rt_io_operator && provider_configuration.update.enabled) {
+        MSG queue_probe{};
+        (void)PeekMessageW(&queue_probe, nullptr, 0, 0, PM_NOREMOVE);
         startAutoUpdate(provider_configuration.update,
-                        std::wstring(state_.base_dir),
+                        state_.base_dir,
                         std::wstring(state_.exe_path),
                         GetCurrentThreadId(), &auto_update_cancel_event_,
                         &auto_update_worker_);
@@ -413,11 +429,15 @@ int App::installCrashHandler() {
 }
 
 int App::acquireSingleInstance() {
-    if (!::sao::launcher::acquireSingleInstance(single_instance_mutex_)) {
+    const auto acquire_result =
+        ::sao::launcher::acquireSingleInstance(single_instance_mutex_);
+    if (acquire_result == SingleInstanceAcquireResult::already_running) {
         // Forward our command line to the running instance before we die.
         forwardCommandLineToRunningInstance(GetCommandLineW());
         return SAO_EXIT_ALREADY_RUNNING;
     }
+    if (acquire_result == SingleInstanceAcquireResult::failed)
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
     return SAO_EXIT_OK;
 }
 
@@ -426,13 +446,16 @@ int App::resolveWorkingDir() {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     // Point the crash handler at <base_dir>/crash/ now that we know it.
-    wchar_t crash_dir[MAX_PATH]{};
-    if (swprintf_s(crash_dir, MAX_PATH, L"%ls\\crash", state_.base_dir) < 0) {
+    const std::wstring crash_dir = state_.base_dir + L"\\crash";
+    if (!ensureDirectoryExists(crash_dir.c_str()))
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    setCrashDumpDirectory(crash_dir.c_str());
+    std::wstring active_crash_dir;
+    if (!getCrashDumpDirectory(active_crash_dir) ||
+        _wcsicmp(active_crash_dir.c_str(), crash_dir.c_str()) != 0) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
-    ensureDirectoryExists(crash_dir);
-    setCrashDumpDirectory(crash_dir);
-    lstrcpynW(SaoLauncherBaseDir, state_.base_dir, MAX_PATH);
+    sao_launcher_set_base_dir(state_.base_dir.c_str());
     return SAO_EXIT_OK;
 }
 
@@ -527,7 +550,7 @@ int App::bringUpUi() {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
     state_.ui_online = true;
-    if (!user_menu_.create(state_.base_dir)) {
+    if (!user_menu_.create(state_.base_dir.c_str())) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
     if (sao_platform_bind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx),
@@ -536,6 +559,7 @@ int App::bringUpUi() {
         user_menu_.destroy();
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
+    user_menu_.processCommandLine(GetCommandLineW(), false);
     return SAO_EXIT_OK;
 }
 
@@ -598,58 +622,63 @@ int App::runMessageLoop() {
     return static_cast<int>(msg.wParam);
 }
 
-void App::stopAutoUpdate() noexcept {
+bool App::stopAutoUpdate() noexcept {
     if (auto_update_cancel_event_ != nullptr) {
         (void)SetEvent(auto_update_cancel_event_);
     }
     if (auto_update_worker_ != nullptr) {
+        (void)CancelSynchronousIo(auto_update_worker_);
         const DWORD wait_result = WaitForSingleObject(auto_update_worker_, 5000u);
-        if (wait_result == WAIT_OBJECT_0 ||
-            WaitForSingleObject(auto_update_worker_, 0u) == WAIT_OBJECT_0) {
+        if (wait_result == WAIT_OBJECT_0) {
             (void)CloseHandle(auto_update_worker_);
             auto_update_worker_ = nullptr;
             if (auto_update_cancel_event_ != nullptr) {
                 (void)CloseHandle(auto_update_cancel_event_);
                 auto_update_cancel_event_ = nullptr;
             }
+            return true;
         }
+        return false;
     } else if (auto_update_cancel_event_ != nullptr) {
         (void)CloseHandle(auto_update_cancel_event_);
         auto_update_cancel_event_ = nullptr;
     }
+    return true;
 }
 
 bool App::shutdown() noexcept {
     if (shutdown_called_) {
-        stopAutoUpdate();
-        return true;
+        return stopAutoUpdate();
     }
-    stopAutoUpdate();
-    if (state_.platform_ctx != nullptr) {
-        (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
-    }
-    user_menu_.destroy();
-    bool shutdown_complete = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        if (runFullShutdown(state_, security_initialized_)) {
-            shutdown_complete = true;
-            break;
+    constexpr int kMaximumShutdownAttempts = 3;
+    for (int attempt = 0; attempt < kMaximumShutdownAttempts; ++attempt) {
+        if (stopAutoUpdate()) {
+            if (state_.platform_ctx != nullptr) {
+                (void)sao_platform_unbind_user_menu(
+                    static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
+            }
+            user_menu_.destroy();
+            if (runFullShutdown(state_, security_initialized_)) {
+                security_initialized_ = false;
+                releaseOwnedSingleInstanceMutex(single_instance_mutex_);
+                if (dual_run_driver_acquired_ && dual_run_driver_mutex_) {
+                    sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex_);
+                    dual_run_driver_mutex_ = nullptr;
+                    dual_run_driver_acquired_ = false;
+                }
+                shutdown_called_ = true;
+                return true;
+            }
+        }
+        if (attempt + 1 < kMaximumShutdownAttempts) {
+            if (state_.platform_ctx != nullptr) {
+                (void)sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                  kUiFrameIntervalMs);
+            }
+            Sleep(2u);
         }
     }
-    if (!shutdown_complete)
-        return false;
-    security_initialized_ = false;
-    if (single_instance_mutex_) {
-        releaseSingleInstance(single_instance_mutex_);
-        single_instance_mutex_ = nullptr;
-    }
-    if (dual_run_driver_acquired_ && dual_run_driver_mutex_) {
-        sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex_);
-        dual_run_driver_mutex_ = nullptr;
-        dual_run_driver_acquired_ = false;
-    }
-    shutdown_called_ = true;
-    return true;
+    return false;
 }
 
 } // namespace sao::launcher

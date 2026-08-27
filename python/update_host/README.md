@@ -12,10 +12,37 @@ python update_host_main.py
 ```
 
 生产服务器由 `server_service.py` 以 Windows SCM 服务托管本源码入口；
-`build_server_deploy_zip.bat` 生成纯源码部署包，不包含冻结 EXE。
+`build_server_deploy_zip.bat` 生成可直接作为 `--root` 使用的纯源码部署包，不包含冻结 EXE。
 
-客户端默认访问 `http://x2.sjcmc.cn:15018`；服务端仍只监听内部 `9973`，由端口映射提供外部 `15018`。
-可在 `settings.json` 中设置 `update_host` 覆盖.
+客户端默认访问 `https://x2.sjcmc.cn:15018`；服务端在内部 `9973` 上直接提供 TLS，公网通过 TCP 端口映射把 `15018` 转发到 `9973`。
+公网基址固定为 `https://x2.sjcmc.cn:15018`，不读取测试环境或其他外部 origin 覆盖；可在 `settings.json` 中设置 `update_host` 覆盖客户端地址。
+
+## 生产 TLS 与 SCM 部署
+
+部署包根目录布局如下：
+
+```
+server_service.py
+update_host/
+  update_host_main.py
+  start_server.bat
+  ...
+license_server/
+  server.crt
+  server.key
+```
+
+`server.crt` 和 `server.key` 是自签 TLS 证书/私钥，只存在于本地部署包的 `license_server/` 目录，不进入源码仓库。打包脚本要求证书和私钥已经存在：默认读取源码旁的 `python/license_server/server.crt`、`python/license_server/server.key`，也可用 `UPDATE_HOST_SSL_CERTFILE` 与 `UPDATE_HOST_SSL_KEYFILE` 指定现有文件；缺任一文件时打包立即失败。脚本只把它们复制到被 Git 忽略的部署输出目录，再写入 zip。
+
+客户端连接 `https://x2.sjcmc.cn:15018` 时应校验该证书的 SPKI pin。更换自签证书或密钥后，必须同步更新客户端 SPKI pin；证书链不依赖公网 CA。
+
+服务端监听的是 **9973/TLS**；网络边界需要配置 **15018/TCP → 部署机 9973/TCP** 映射，并保持 TLS 字节流直通。SCM 运行示例：
+
+```powershell
+python server_service.py run --service-name SaoUpdateHost --role update --root C:\SAO\update-host
+```
+
+其中 `C:\SAO\update-host` 必须是上述部署包解压后的根目录.
 
 ## 发布新版本
 
@@ -120,7 +147,7 @@ update_host/
 
 ## 安全
 
-- 当前公网契约为 `http://x2.sjcmc.cn:15018` + SHA256；manifest 的绝对 URL 只由受控 `UPDATE_HOST_PUBLIC_BASE_URL` 生成，不信任请求的 Host/Forwarded 头
+- 当前公网契约为 `https://x2.sjcmc.cn:15018` + SHA256 + TLS/SPKI pin；manifest 的绝对 URL 使用固定公网基址生成，不信任请求的 Host/Forwarded 头
 - v1 不做包签名；发布 key 缺失返回 503，错误 key 返回 403
 - 服务器侧的 `force_update` / `minimum_version` 是强制升级控制点
-- 管理页不把 key 写进 HTML、URL 或持久化配置，只通过 `X-API-Key` header 提交；页面启用 no-store、CSP nonce 与防 iframe 响应头。公网仍是 HTTP，管理时的 key 传输不具备 TLS 保密性
+- 管理页不把 key 写进 HTML、URL 或持久化配置，只通过 `X-API-Key` header 提交；页面启用 no-store、CSP nonce 与防 iframe 响应头。公网使用 HTTPS，管理时的 key 传输受 TLS 保护

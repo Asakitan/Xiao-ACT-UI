@@ -1690,6 +1690,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
                                                                 std::memory_order_acq_rel)) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    sao_ui_dcomp_bridge_handle_t dcomp_bridge = nullptr;
+    sao_ui_d3d11_device_handle_t d3d11_device = nullptr;
     try {
         if (handle->host != nullptr) {
 #if defined(_WIN32)
@@ -1723,11 +1725,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
         handle->layers.clear();
         handle->pending_layer_destroys.clear();
         handle->released_pending_count = 0;
-        sao_ui_dcomp_bridge_destroy(handle->dcomp_bridge);
-        sao_ui_d3d11_device_destroy(handle->d3d11_device);
+        dcomp_bridge = std::exchange(handle->dcomp_bridge, nullptr);
+        d3d11_device = std::exchange(handle->d3d11_device, nullptr);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    sao_ui_dcomp_bridge_destroy(dcomp_bridge);
+    sao_ui_d3d11_device_destroy(d3d11_device);
     sao::ui::input_router_detail::destroy_layer_input_state(handle->input_state);
     handle->input_state = nullptr;
     const sao_ui_overlay_host_handle_t claimed_host = handle->host;
@@ -2687,6 +2691,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_tick(
     if (std::this_thread::get_id() != compositor->render_thread)
         return SAO_STATUS_ERR_ACCESS_DENIED;
     try {
+        if (compositor->host != nullptr) {
+            const sao_status_t host_status =
+                sao_ui_overlay_host_pump_messages(compositor->host);
+            if (host_status != SAO_STATUS_OK)
+                return host_status;
+        }
         const auto pending = flush_pending_owner_input(compositor);
         if (pending.ran_post_tasks || pending.status != SAO_STATUS_OK)
             return pending.status;

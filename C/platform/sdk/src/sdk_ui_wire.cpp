@@ -29,6 +29,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 #include <limits>
 #include <unordered_set>
 #include <vector>
@@ -79,6 +80,120 @@ uint64_t g_next_widget_token_generation = 1;
 
 using Json = nlohmann::json;
 
+constexpr size_t kMaximumTypedPropsBytes = 8U * 1024U * 1024U;
+constexpr size_t kMaximumTypedPropsDepth = 64U;
+constexpr size_t kMaximumTypedPropsNodes = 16384U;
+constexpr size_t kMaximumTypedPropsStringBytes = 1024U * 1024U;
+constexpr size_t kMaximumTypedPropsTotalStringBytes = 4U * 1024U * 1024U;
+
+bool valid_utf8(std::string_view value) noexcept {
+    size_t index = 0;
+    while (index < value.size()) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        size_t width = 0;
+        uint32_t code_point = 0;
+        if (byte <= 0x7fU) {
+            width = 1;
+            code_point = byte;
+        } else if (byte >= 0xc2U && byte <= 0xdfU) {
+            width = 2;
+            code_point = byte & 0x1fU;
+        } else if (byte >= 0xe0U && byte <= 0xefU) {
+            width = 3;
+            code_point = byte & 0x0fU;
+        } else if (byte >= 0xf0U && byte <= 0xf4U) {
+            width = 4;
+            code_point = byte & 0x07U;
+        } else {
+            return false;
+        }
+        if (index + width > value.size()) return false;
+        for (size_t offset = 1; offset < width; ++offset) {
+            const auto continuation = static_cast<unsigned char>(value[index + offset]);
+            if ((continuation & 0xc0U) != 0x80U) return false;
+            code_point = (code_point << 6U) | (continuation & 0x3fU);
+        }
+        if ((width == 2U && code_point < 0x80U) ||
+            (width == 3U && code_point < 0x800U) ||
+            (width == 4U && code_point < 0x10000U) ||
+            code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        index += width;
+    }
+    return true;
+}
+
+bool valid_optional_utf8_c_string(const char* value) noexcept {
+    if (value == nullptr) return true;
+    size_t length = 0;
+    while (length <= kMaximumTypedPropsStringBytes && value[length] != '\0') ++length;
+    return length <= kMaximumTypedPropsStringBytes &&
+           valid_utf8(std::string_view(value, length));
+}
+
+class bounded_typed_props_sax final : public Json::json_sax_t {
+public:
+    bool null() override { return consume_node(); }
+    bool boolean(bool) override { return consume_node(); }
+    bool number_integer(number_integer_t) override { return consume_node(); }
+    bool number_unsigned(number_unsigned_t) override { return consume_node(); }
+    bool number_float(number_float_t value, const string_t&) override { return std::isfinite(value) && consume_node(); }
+    bool string(string_t& value) override { return consume_node() && consume_string(value); }
+    bool binary(binary_t& value) override { return consume_node() && value.size() <= kMaximumTypedPropsBytes; }
+    bool start_object(std::size_t) override { return start_container(); }
+    bool key(string_t& value) override { return consume_string(value); }
+    bool end_object() override { return end_container(); }
+    bool start_array(std::size_t) override { return start_container(); }
+    bool end_array() override { return end_container(); }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+private:
+    size_t depth_ = 0;
+    size_t nodes_ = 0;
+    size_t string_bytes_ = 0;
+
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumTypedPropsNodes) return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool consume_string(std::string_view value) noexcept {
+        if (value.find('\0') != std::string_view::npos ||
+            !valid_utf8(value) || value.size() > kMaximumTypedPropsStringBytes ||
+            string_bytes_ > kMaximumTypedPropsTotalStringBytes - value.size()) {
+            return false;
+        }
+        string_bytes_ += value.size();
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumTypedPropsDepth || !consume_node()) return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0) return false;
+        --depth_;
+        return true;
+    }
+};
+
+bool validate_typed_props_text(std::string_view text) noexcept {
+    if (text.empty() || text.size() > kMaximumTypedPropsBytes || !valid_utf8(text)) return false;
+    try { bounded_typed_props_sax sax; return Json::sax_parse(text.begin(), text.end(), &sax); }
+    catch (...) { return false; }
+}
+bool serialize_validated_typed_props(const Json& value, std::string& output) noexcept {
+    try { output = value.dump(); return validate_typed_props_text(output); }
+    catch (...) { output.clear(); return false; }
+}
 
 struct CreatedWidget {
     sao_ui_widget_handle_t widget = nullptr;
@@ -112,8 +227,9 @@ bool widget_entry_current(const PanelEntry& entry, const WidgetEntry& expected) 
 }
 
 bool sdk_struct_size_valid(uint32_t declared_size, size_t required_size, size_t full_size) {
-    const size_t size = declared_size == 0u ? required_size : declared_size;
-    return size >= required_size && size <= full_size;
+    if (required_size > full_size) return false;
+    const size_t size = declared_size == 0u ? full_size : declared_size;
+    return size >= required_size;
 }
 
 sao_sdk_ui_widget_t allocate_widget_token() {
@@ -297,13 +413,27 @@ bool parse_table_columns(const Json& props, std::vector<std::string>* keys,
 }
 
 sao_sdk_status_t parse_props(const SaoSdkWidgetSpec& spec, Json* out) {
-    if (out == nullptr || (spec.props_json_utf8 == nullptr && spec.props_len != 0)) return SAO_SDK_ERR_INVALID_ARGUMENT;
-    if (spec.props_json_utf8 == nullptr) { *out = Json::object(); return SAO_SDK_OK; }
-    if (spec.props_len == 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (out == nullptr || (spec.props_json_utf8 == nullptr && spec.props_len != 0))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (spec.props_json_utf8 == nullptr) {
+        *out = Json::object();
+        return SAO_SDK_OK;
+    }
+    if (spec.props_len == 0 || spec.props_len > kMaximumTypedPropsBytes ||
+        !valid_utf8(std::string_view(reinterpret_cast<const char*>(spec.props_json_utf8),
+                                     spec.props_len))) {
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    }
     try {
-        *out = Json::parse(reinterpret_cast<const char*>(spec.props_json_utf8), reinterpret_cast<const char*>(spec.props_json_utf8) + spec.props_len);
+        const auto* begin = reinterpret_cast<const char*>(spec.props_json_utf8);
+        const auto* end = begin + spec.props_len;
+        bounded_typed_props_sax sax;
+        if (!Json::sax_parse(begin, end, &sax)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        *out = Json::parse(begin, end);
         return out->is_object() ? SAO_SDK_OK : SAO_SDK_ERR_INVALID_ARGUMENT;
-    } catch (...) { return SAO_SDK_ERR_INVALID_ARGUMENT; }
+    } catch (...) {
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    }
 }
 
 bool json_color(const Json& value) {
@@ -1262,7 +1392,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     if (state == nullptr || panel == nullptr || widget_spec == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (!sdk_struct_size_valid(widget_spec->struct_size, SAO_SDK_WIDGET_SPEC_REQUIRED_SIZE,
-                               sizeof(SaoSdkWidgetSpec)))
+                               sizeof(SaoSdkWidgetSpec)) ||
+        !valid_optional_utf8_c_string(widget_spec->widget_id_utf8) ||
+        !valid_optional_utf8_c_string(widget_spec->text_utf8))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     Json parsed;
     const auto parse_status = parse_props(*widget_spec, &parsed);
@@ -1278,7 +1410,11 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     const Json wire_props = uses_generic_sdk_props(widget_spec->kind)
                                 ? generic_props(*widget_spec, parsed)
                                 : initial_typed_props(widget_spec->kind, parsed);
-    const std::string wire_json = wire_props.dump();
+    std::string wire_json;
+    if (!serialize_validated_typed_props(wire_props, wire_json)) {
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    }
 
     sao_ui_panel_body_handle_t body = nullptr;
     std::shared_ptr<std::mutex> native_mutex;
@@ -1426,7 +1562,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
     if (state == nullptr || panel == nullptr || widget == nullptr || widget_spec == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (!sdk_struct_size_valid(widget_spec->struct_size, SAO_SDK_WIDGET_SPEC_REQUIRED_SIZE,
-                               sizeof(SaoSdkWidgetSpec)))
+                               sizeof(SaoSdkWidgetSpec)) ||
+        !valid_optional_utf8_c_string(widget_spec->widget_id_utf8) ||
+        !valid_optional_utf8_c_string(widget_spec->text_utf8))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     Json parsed;
     const auto parse_status = parse_props(*widget_spec, &parsed);
@@ -1440,7 +1578,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
     const Json wire_props = uses_generic_sdk_props(widget_spec->kind)
                                 ? generic_props(*widget_spec, parsed)
                                 : parsed;
-    const std::string wire_json = wire_props.dump();
+    std::string wire_json;
+    if (!serialize_validated_typed_props(wire_props, wire_json)) return SAO_SDK_ERR_INVALID_ARGUMENT;
 
     sao_ui_panel_body_handle_t body = nullptr;
     std::shared_ptr<std::mutex> native_mutex;

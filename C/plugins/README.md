@@ -187,7 +187,9 @@ AS / C# / Python。
 - ``compat/migration.h``: 用不到的老字段 (比如废弃的 ``priority`` 单位) 给一个警告
   日志, 但**不**阻止加载。
 
-**迁移测试点** (跑 Python 平台里现成的插件, 目标 100% 通过):
+**历史迁移验证清单（2026-08-23 测试删除前）**：
+
+下列条目只记录旧迁移覆盖面，不是当前测试入口或执行指令：
 
 - ``hide_seek_plugin`` (纯 Python + cv2)
 - ``midi_piano_plugin`` (Python + vendor 依赖 bootstrap)

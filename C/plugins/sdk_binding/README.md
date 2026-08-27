@@ -38,7 +38,7 @@ C ABI 暴露给自己的语言。这一层做**类型转换 + 异常屏障**, �
 - ``nlohmann-json`` (json_node 底层实现)
 - 语言特定依赖不在这, 落在各 ``*_host/`` 里
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/``: 语言无关部分 (json_node / barrier) 有单测, 语言特定的桥
-在对应 ``*_host/tests/`` 里跑集成测试。
+旧 ``tests/`` 与 ``*_host/tests/``、Catch2 和 CTest 注册均已删除；此前的
+json_node/barrier/语言桥结果仅作历史证据。

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "as_host_internal.h"
+
 #include <cstdint>
 #include <mutex>
 

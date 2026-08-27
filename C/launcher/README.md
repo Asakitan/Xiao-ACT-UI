@@ -79,12 +79,7 @@ launcher/
 |   +-- app.rc              version resource + manifest include
 |   +-- icon.ico            placeholder (or link to sao_auto/python/icon.ico)
 |   +-- version.h           VERSIONINFO fields (auto-generated from CMake)
-+-- tests/
-    +-- CMakeLists.txt
-    +-- test_launcher_smoke.cpp
-    +-- test_args.cpp
-    +-- test_single_instance.cpp
-    +-- test_working_dir.cpp
++-- tests/                # 已于 2026-08-23 删除（历史目录）
 ```
 
 ## Command line

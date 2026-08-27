@@ -443,6 +443,11 @@ struct sao_launcher_init_hooks_t {
 // ``config.BASE_DIR``).  Set by the pipeline right after
 // ``resolveWorkingDir`` completes; NOT thread-safe to read before then.
 extern wchar_t SaoLauncherBaseDir[260];
+void sao_launcher_set_base_dir(const wchar_t* base_dir);
+const wchar_t* sao_launcher_base_dir(void);
+uint32_t sao_launcher_base_dir_length(void);
+sao_status_t sao_launcher_copy_base_dir(wchar_t* out_dir,
+                                         uint32_t* inout_char_count);
 
 sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
                                             const sao_launcher_init_hooks_t* hooks,

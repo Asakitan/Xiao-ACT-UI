@@ -20,20 +20,70 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <climits>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <new>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 using nlohmann::json;
+namespace fs = std::filesystem;
+
+namespace {
+
+bool path_from_utf8(const char* input, fs::path& output) noexcept {
+    if (input == nullptr || input[0] == '\0') return false;
+    try {
+#if defined(_WIN32)
+        const size_t input_length = std::strlen(input);
+        if (input_length > static_cast<size_t>(INT_MAX)) return false;
+        const int required = MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, input, -1, nullptr, 0);
+        if (required <= 1) return false;
+        std::wstring wide(static_cast<size_t>(required), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, -1,
+                                wide.data(), required) != required) {
+            return false;
+        }
+        wide.resize(static_cast<size_t>(required - 1));
+        output = fs::path(std::move(wide));
+#else
+        output = fs::path(input);
+#endif
+        return !output.empty();
+    } catch (...) {
+        output.clear();
+        return false;
+    }
+}
+
+}  // namespace
+
+namespace {
+
+void clear_abi_output(void* output, size_t capacity, size_t* required) noexcept {
+    if (required != nullptr) *required = 0;
+    if (output != nullptr && capacity != 0) {
+        std::memset(output, 0, capacity);
+    }
+}
+
+}  // namespace
 
 struct sao_core_settings_s {
     using Value = std::variant<int64_t, double, bool, std::string>;
@@ -57,107 +107,173 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_config_open(
     const char* backing_path_utf8, sao_core_config_handle_t* out_handle) {
     if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
-    if (backing_path_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-
     sao_core_settings_t* settings = nullptr;
-    const sao_status_t load_status =
-        sao_core_settings_load(backing_path_utf8, &settings);
-    if (load_status != SAO_STATUS_OK) return load_status;
-
     try {
+        if (backing_path_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const sao_status_t load_status =
+            sao_core_settings_load(backing_path_utf8, &settings);
+        if (load_status != SAO_STATUS_OK) return load_status;
         *out_handle = new sao_core_config_s{backing_path_utf8, settings};
+        settings = nullptr;
+        return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
-        sao_core_settings_free(settings);
+        if (settings != nullptr) sao_core_settings_free(settings);
+        *out_handle = nullptr;
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        if (settings != nullptr) sao_core_settings_free(settings);
+        *out_handle = nullptr;
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" void SAO_CORE_CALL sao_core_config_close(
     sao_core_config_handle_t handle) {
+    try {
     if (handle == nullptr) return;
     sao_core_settings_free(handle->settings);
     delete handle;
+
+    } catch (...) {
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_flush(
     sao_core_config_handle_t handle) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     return sao_core_settings_save(handle->backing_path.c_str(), handle->settings);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_get_bool(
     sao_core_config_handle_t handle, const char* key_utf8, bool* out_value) {
+    if (out_value != nullptr) *out_value = false;
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     if (!config_contains_key(handle, key_utf8)) return SAO_STATUS_ERR_NOT_FOUND;
     return sao_core_settings_get_bool(handle->settings, key_utf8, false, out_value);
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = false;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_get_int(
     sao_core_config_handle_t handle, const char* key_utf8, int64_t* out_value) {
+    if (out_value != nullptr) *out_value = 0;
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     if (!config_contains_key(handle, key_utf8)) return SAO_STATUS_ERR_NOT_FOUND;
     return sao_core_settings_get_int(handle->settings, key_utf8, 0, out_value);
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = 0;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_get_double(
     sao_core_config_handle_t handle, const char* key_utf8, double* out_value) {
+    if (out_value != nullptr) *out_value = 0.0;
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     if (!config_contains_key(handle, key_utf8)) return SAO_STATUS_ERR_NOT_FOUND;
     return sao_core_settings_get_float(handle->settings, key_utf8, 0.0, out_value);
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = 0.0;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_get_string(
     sao_core_config_handle_t handle, const char* key_utf8,
     char* out_buffer, size_t buffer_len, size_t* out_bytes_needed) {
+    clear_abi_output(out_buffer, buffer_len, out_bytes_needed);
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (key_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (!config_contains_key(handle, key_utf8)) return SAO_STATUS_ERR_NOT_FOUND;
     return sao_core_settings_get_string(handle->settings, key_utf8, nullptr,
                                         out_buffer, buffer_len,
                                         out_bytes_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buffer, buffer_len, out_bytes_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_set_bool(
     sao_core_config_handle_t handle, const char* key_utf8, bool value) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     return sao_core_settings_set_bool(handle->settings, key_utf8, value);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_set_int(
     sao_core_config_handle_t handle, const char* key_utf8, int64_t value) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     return sao_core_settings_set_int(handle->settings, key_utf8, value);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_set_double(
     sao_core_config_handle_t handle, const char* key_utf8, double value) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     return sao_core_settings_set_float(handle->settings, key_utf8, value);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_set_string(
     sao_core_config_handle_t handle, const char* key_utf8,
     const char* value_utf8) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     return sao_core_settings_set_string(handle->settings, key_utf8, value_utf8);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_config_erase(
     sao_core_config_handle_t handle, const char* key_utf8) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (key_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     handle->settings->data.erase(key_utf8);
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +324,26 @@ void appendEscapedJsonString(std::string& out, const std::string& in) {
 // decimal point and floats with the shortest round-trip representation.
 // We approximate that: ints go through %lld, floats through the standard
 // nlohmann::json path which itself uses grisu2 shortest.
+sao_status_t replace_file_atomically(const fs::path& path,
+                                      const fs::path& tmp_path) noexcept {
+#if defined(_WIN32)
+    if (ReplaceFileW(path.c_str(), tmp_path.c_str(), nullptr,
+                     REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)) {
+        return SAO_STATUS_OK;
+    }
+    const DWORD error = GetLastError();
+    if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) &&
+        MoveFileExW(tmp_path.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        return SAO_STATUS_OK;
+    }
+    return SAO_STATUS_ERR_OS_CALL_FAILED;
+#else
+    std::error_code error;
+    fs::rename(tmp_path, path, error);
+    return error ? SAO_STATUS_ERR_OS_CALL_FAILED : SAO_STATUS_OK;
+#endif
+}
+
 std::string formatValue(const sao_core_settings_s::Value& v) {
     return std::visit([](auto&& arg) -> std::string {
         using T = std::decay_t<decltype(arg)>;
@@ -237,6 +373,8 @@ std::string formatValue(const sao_core_settings_s::Value& v) {
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_create(
     sao_core_settings_t** out_settings) {
+    if (out_settings != nullptr) *out_settings = nullptr;
+    try {
     if (out_settings == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         *out_settings = new sao_core_settings_s{};
@@ -245,70 +383,116 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_create(
         return SAO_STATUS_ERR_UNKNOWN;
     }
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        if (out_settings != nullptr) *out_settings = nullptr;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_load(
     const char* path_utf8, sao_core_settings_t** out_settings) {
-    if (path_utf8 == nullptr || out_settings == nullptr) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
+    if (out_settings == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_settings = nullptr;
-
-    // Missing file is not an error — hand back an empty envelope so the
-    // launcher can seed defaults and save() on shutdown to bootstrap the
-    // file on first launch.  This matches the Python SettingsManager
-    // behaviour (no file → empty dict, no traceback).
-    std::ifstream in(path_utf8, std::ios::binary);
-    if (!in.good()) {
-        return sao_core_settings_create(out_settings);
-    }
-
-    std::stringstream buf;
-    buf << in.rdbuf();
-    const std::string blob = buf.str();
-
-    json parsed;
-    try {
-        parsed = json::parse(blob);
-    } catch (const json::exception&) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-
-    if (!parsed.is_object()) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-
     sao_core_settings_t* handle = nullptr;
-    sao_status_t rc = sao_core_settings_create(&handle);
-    if (rc != SAO_STATUS_OK) return rc;
-
-    for (auto it = parsed.begin(); it != parsed.end(); ++it) {
-        const std::string& key = it.key();
-        const json& val = it.value();
-        if (val.is_number_integer() || val.is_number_unsigned()) {
-            handle->data[key] = static_cast<int64_t>(val.get<int64_t>());
-        } else if (val.is_number_float()) {
-            handle->data[key] = val.get<double>();
-        } else if (val.is_boolean()) {
-            handle->data[key] = val.get<bool>();
-        } else if (val.is_string()) {
-            handle->data[key] = val.get<std::string>();
-        } else {
-            // Nested arrays / objects / nulls aren't part of the flat settings
-            // envelope contract — surface them as invalid so the caller
-            // fails loudly rather than losing data on a subsequent save.
-            sao_core_settings_free(handle);
+    try {
+        if (path_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        fs::path path;
+        if (!path_from_utf8(path_utf8, path)) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
-    }
 
-    *out_settings = handle;
-    return SAO_STATUS_OK;
+        std::error_code status_error;
+        const fs::file_status file_status = fs::status(path, status_error);
+        if (status_error) {
+            if (status_error == std::errc::no_such_file_or_directory) {
+                return sao_core_settings_create(out_settings);
+            }
+            if (status_error == std::errc::permission_denied) {
+                return SAO_STATUS_ERR_ACCESS_DENIED;
+            }
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        if (file_status.type() == fs::file_type::not_found) {
+            return sao_core_settings_create(out_settings);
+        }
+        if (!fs::is_regular_file(file_status)) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+#if defined(_WIN32)
+            if (GetLastError() == ERROR_ACCESS_DENIED) {
+                return SAO_STATUS_ERR_ACCESS_DENIED;
+            }
+#else
+            if (errno == EACCES) return SAO_STATUS_ERR_ACCESS_DENIED;
+#endif
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+
+        std::stringstream buf;
+        buf << in.rdbuf();
+        if (in.bad() || (in.fail() && !in.eof())) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        const std::string blob = buf.str();
+
+        json parsed;
+        try {
+            parsed = json::parse(blob);
+        } catch (const json::exception&) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+
+        if (!parsed.is_object()) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+
+        sao_status_t rc = sao_core_settings_create(&handle);
+        if (rc != SAO_STATUS_OK) return rc;
+
+        for (auto it = parsed.begin(); it != parsed.end(); ++it) {
+            const std::string& key = it.key();
+            const json& val = it.value();
+            if (val.is_number_integer() || val.is_number_unsigned()) {
+                handle->data[key] = static_cast<int64_t>(val.get<int64_t>());
+            } else if (val.is_number_float()) {
+                handle->data[key] = val.get<double>();
+            } else if (val.is_boolean()) {
+                handle->data[key] = val.get<bool>();
+            } else if (val.is_string()) {
+                handle->data[key] = val.get<std::string>();
+            } else {
+                sao_core_settings_free(handle);
+                handle = nullptr;
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+        }
+
+        *out_settings = handle;
+        handle = nullptr;
+        return SAO_STATUS_OK;
+    } catch (const json::exception&) {
+        if (handle != nullptr) sao_core_settings_free(handle);
+        *out_settings = nullptr;
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        if (handle != nullptr) sao_core_settings_free(handle);
+        *out_settings = nullptr;
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_save(
     const char* path_utf8, const sao_core_settings_t* settings) {
+    try {
     if (path_utf8 == nullptr || settings == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    fs::path path;
+    if (!path_from_utf8(path_utf8, path)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -340,29 +524,35 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_save(
         out.push_back('}');
     }
 
-    // Write atomically-ish: dump to a temp file, then rename.  On
-    // Windows ``std::rename`` fails if the target exists; use the C
-    // library ``rename`` after removing the target for simplicity.
-    // This basic persistence path uses remove + rename rather than
-    // ``ReplaceFileW``; callers needing stronger transactions use the
-    // launcher-owned secure settings path.
-    std::string tmp_path = std::string(path_utf8) + ".tmp";
+    // Write a sibling temp file and atomically replace the destination.
+    // The existing destination is never removed first, so a failed replace
+    // leaves the previous settings intact.
+    fs::path tmp_path = path;
+#if defined(_WIN32)
+    tmp_path += L".tmp";
+#else
+    tmp_path += ".tmp";
+#endif
     {
         std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
         if (!f.good()) return SAO_STATUS_ERR_OS_CALL_FAILED;
         f.write(out.data(), static_cast<std::streamsize>(out.size()));
         if (!f.good()) return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    std::remove(path_utf8);
-    if (std::rename(tmp_path.c_str(), path_utf8) != 0) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    return replace_file_atomically(path, tmp_path);
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" void SAO_CORE_CALL sao_core_settings_free(
     sao_core_settings_t* settings) {
+    try {
     delete settings;
+
+    } catch (...) {
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +561,8 @@ extern "C" void SAO_CORE_CALL sao_core_settings_free(
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_int(
     const sao_core_settings_t* settings, const char* key_utf8,
     int64_t default_value, int64_t* out_value) {
+    if (out_value != nullptr) *out_value = 0;
+    try {
     if (settings == nullptr || key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -387,11 +579,18 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_int(
     // mismatch instead so callers know their settings.json disagrees
     // with the code.
     return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = 0;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_bool(
     const sao_core_settings_t* settings, const char* key_utf8,
     bool default_value, bool* out_value) {
+    if (out_value != nullptr) *out_value = false;
+    try {
     if (settings == nullptr || key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -405,11 +604,18 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_bool(
         return SAO_STATUS_OK;
     }
     return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = false;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_float(
     const sao_core_settings_t* settings, const char* key_utf8,
     double default_value, double* out_value) {
+    if (out_value != nullptr) *out_value = 0.0;
+    try {
     if (settings == nullptr || key_utf8 == nullptr || out_value == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -431,12 +637,19 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_float(
         return SAO_STATUS_OK;
     }
     return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+    } catch (...) {
+        if (out_value != nullptr) *out_value = 0.0;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_string(
     const sao_core_settings_t* settings, const char* key_utf8,
     const char* default_value_utf8,
     char* out_buffer, size_t buffer_len, size_t* out_size_needed) {
+    clear_abi_output(out_buffer, buffer_len, out_size_needed);
+    try {
     if (settings == nullptr || key_utf8 == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -466,6 +679,11 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_string(
     std::memcpy(out_buffer, src->data(), src->size());
     out_buffer[src->size()] = '\0';
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        clear_abi_output(out_buffer, buffer_len, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,48 +691,75 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_get_string(
 // ---------------------------------------------------------------------------
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_set_int(
     sao_core_settings_t* settings, const char* key_utf8, int64_t value) {
+    try {
     if (settings == nullptr || key_utf8 == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     settings->data[key_utf8] = value;
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_set_bool(
     sao_core_settings_t* settings, const char* key_utf8, bool value) {
+    try {
     if (settings == nullptr || key_utf8 == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     settings->data[key_utf8] = value;
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_set_float(
     sao_core_settings_t* settings, const char* key_utf8, double value) {
+    try {
     if (settings == nullptr || key_utf8 == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     settings->data[key_utf8] = value;
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_set_string(
     sao_core_settings_t* settings, const char* key_utf8,
     const char* value_utf8) {
+    try {
     if (settings == nullptr || key_utf8 == nullptr || value_utf8 == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     settings->data[key_utf8] = std::string(value_utf8);
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_key_count(
     const sao_core_settings_t* settings, size_t* out_count) {
+    if (out_count != nullptr) *out_count = 0;
+    try {
     if (settings == nullptr || out_count == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_count = settings->data.size();
     return SAO_STATUS_OK;
+
+    } catch (...) {
+        if (out_count != nullptr) *out_count = 0;
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -678,10 +923,8 @@ sao_status_t settings_dump_finish(const std::string& str,
                                   size_t out_capacity,
                                   size_t* out_size_needed) {
     if (out_size_needed != nullptr) *out_size_needed = str.size();
-    if (out_buf == nullptr) {
-        return out_capacity == 0 ? SAO_STATUS_OK
-                                 : SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
+    if (out_buf == nullptr && out_capacity != 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (out_buf == nullptr) return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
     if (out_capacity < str.size()) return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
     if (!str.empty()) std::memcpy(out_buf, str.data(), str.size());
     return SAO_STATUS_OK;
@@ -771,6 +1014,8 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_dump_compact(
     uint8_t*       out_buf,
     size_t         out_capacity,
     size_t*        out_size_needed) {
+    clear_abi_output(out_buf, out_capacity, out_size_needed);
+    try {
     ojson root;
     const sao_status_t rc = parse_settings_object(
         input_json_utf8, input_size, root);
@@ -778,6 +1023,11 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_dump_compact(
     std::string s;
     writeCompact(s, root);
     return settings_dump_finish(s, out_buf, out_capacity, out_size_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buf, out_capacity, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_dump_pretty(
@@ -786,6 +1036,8 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_dump_pretty(
     uint8_t*       out_buf,
     size_t         out_capacity,
     size_t*        out_size_needed) {
+    clear_abi_output(out_buf, out_capacity, out_size_needed);
+    try {
     ojson root;
     const sao_status_t rc = parse_settings_object(
         input_json_utf8, input_size, root);
@@ -793,6 +1045,11 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_dump_pretty(
     std::string s;
     writePretty(s, root, 0);
     return settings_dump_finish(s, out_buf, out_capacity, out_size_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buf, out_capacity, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_normalize_panel_themes(
@@ -801,6 +1058,8 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_normalize_panel_themes(
     uint8_t*       out_buf,
     size_t         out_capacity,
     size_t*        out_size_needed) {
+    clear_abi_output(out_buf, out_capacity, out_size_needed);
+    try {
     ojson root;
     const sao_status_t rc = parse_settings_object(
         input_json_utf8, input_size, root);
@@ -817,6 +1076,11 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_normalize_panel_themes(
     std::string s;
     writeCompact(s, normalised);
     return settings_dump_finish(s, out_buf, out_capacity, out_size_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buf, out_capacity, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_merge_hotkeys(
@@ -825,6 +1089,8 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_merge_hotkeys(
     uint8_t*       out_buf,
     size_t         out_capacity,
     size_t*        out_size_needed) {
+    clear_abi_output(out_buf, out_capacity, out_size_needed);
+    try {
     ojson root;
     const sao_status_t rc = parse_settings_object(
         input_json_utf8, input_size, root);
@@ -842,6 +1108,11 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_merge_hotkeys(
     std::string s;
     writeCompact(s, merged);
     return settings_dump_finish(s, out_buf, out_capacity, out_size_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buf, out_capacity, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_strip_legacy_dump(
@@ -850,6 +1121,8 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_strip_legacy_dump(
     uint8_t*       out_buf,
     size_t         out_capacity,
     size_t*        out_size_needed) {
+    clear_abi_output(out_buf, out_capacity, out_size_needed);
+    try {
     ojson root;
     const sao_status_t rc = parse_settings_object(
         input_json_utf8, input_size, root);
@@ -871,4 +1144,9 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_settings_strip_legacy_dump(
     std::string s;
     writeCompact(s, stripped);
     return settings_dump_finish(s, out_buf, out_capacity, out_size_needed);
+
+    } catch (...) {
+        clear_abi_output(out_buf, out_capacity, out_size_needed);
+                return SAO_STATUS_ERR_UNKNOWN;
+    }
 }

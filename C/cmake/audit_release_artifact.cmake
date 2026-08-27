@@ -14,6 +14,12 @@ if (NOT DEFINED SAO_AUDIT_EXPECTED_FILES OR
         "SAO_AUDIT_EXPECTED_FILES must provide the canonical staged inventory")
 endif()
 
+if (NOT DEFINED SAO_AUDIT_PROJECT_OWNED_PES OR
+    "${SAO_AUDIT_PROJECT_OWNED_PES}" STREQUAL "")
+    message(FATAL_ERROR
+        "SAO_AUDIT_PROJECT_OWNED_PES must provide explicit project-owned PE paths")
+endif()
+
 set(_sao_ship_bin_directory "${SAO_AUDIT_SHIP_DIRECTORY}/bin")
 if (NOT IS_DIRECTORY "${_sao_ship_bin_directory}")
     message(FATAL_ERROR "Staged install tree is missing bin/: ${_sao_ship_bin_directory}")
@@ -30,6 +36,115 @@ foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
             "Required staged release inventory entry is missing: ${_sao_expected_file}")
     endif()
 endforeach()
+
+foreach (_sao_project_owned_pe IN LISTS SAO_AUDIT_PROJECT_OWNED_PES)
+    if (IS_ABSOLUTE "${_sao_project_owned_pe}" OR
+        "${_sao_project_owned_pe}" MATCHES "(^|/)\.\.?(/|$)" OR
+        NOT "${_sao_project_owned_pe}" MATCHES "\.(exe|dll)$" OR
+        "${_sao_project_owned_pe}" MATCHES "(^|/)WebView2Loader\.dll$")
+        message(FATAL_ERROR
+            "Project-owned PE entry is not an allowed relative executable/DLL path: "
+            "${_sao_project_owned_pe}")
+    endif()
+    list(FIND SAO_AUDIT_EXPECTED_FILES
+        "${_sao_project_owned_pe}" _sao_project_owned_expected_index)
+    if (_sao_project_owned_expected_index EQUAL -1)
+        message(FATAL_ERROR
+            "Project-owned PE is missing from the expected staged inventory: "
+            "${_sao_project_owned_pe}")
+    endif()
+    if (NOT EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_project_owned_pe}" OR
+        IS_DIRECTORY "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_project_owned_pe}")
+        message(FATAL_ERROR
+            "Project-owned PE is missing from the staged ship tree: "
+            "${_sao_project_owned_pe}")
+    endif()
+endforeach()
+
+if (NOT DEFINED SAO_AUDIT_REQUIRED_DIRECTORIES OR "${SAO_AUDIT_REQUIRED_DIRECTORIES}" STREQUAL "")
+    message(FATAL_ERROR "SAO_AUDIT_REQUIRED_DIRECTORIES must provide the staged directory contract")
+endif()
+foreach (_sao_required_directory IN LISTS SAO_AUDIT_REQUIRED_DIRECTORIES)
+    if (NOT IS_DIRECTORY "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_required_directory}")
+        message(FATAL_ERROR "Required staged release directory is missing: ${_sao_required_directory}")
+    endif()
+endforeach()
+
+if (NOT DEFINED SAO_AUDIT_INSTALL_MANIFEST OR NOT EXISTS "${SAO_AUDIT_INSTALL_MANIFEST}")
+    message(FATAL_ERROR "The ship install manifest is required: ${SAO_AUDIT_INSTALL_MANIFEST}")
+endif()
+if (NOT DEFINED SAO_AUDIT_PLUGIN_ROOT OR "${SAO_AUDIT_PLUGIN_ROOT}" STREQUAL "")
+    message(FATAL_ERROR "SAO_AUDIT_PLUGIN_ROOT must name the staged plugin root")
+endif()
+cmake_path(CONVERT "${SAO_AUDIT_PLUGIN_ROOT}" TO_CMAKE_PATH_LIST
+    _sao_audit_plugin_root NORMALIZE)
+if (IS_ABSOLUTE "${_sao_audit_plugin_root}" OR
+    NOT IS_DIRECTORY "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_audit_plugin_root}")
+    message(FATAL_ERROR
+        "The staged plugin root is missing or not relative to the ship tree: "
+        "${SAO_AUDIT_PLUGIN_ROOT}")
+endif()
+if (NOT DEFINED SAO_AUDIT_PROVIDER_CONFIG OR NOT EXISTS "${SAO_AUDIT_PROVIDER_CONFIG}")
+    message(FATAL_ERROR "The staged provider config is required: ${SAO_AUDIT_PROVIDER_CONFIG}")
+endif()
+file(READ "${SAO_AUDIT_PROVIDER_CONFIG}" _sao_provider_config_text)
+string(JSON _sao_provider_roots_type
+    ERROR_VARIABLE _sao_provider_json_error
+    TYPE "${_sao_provider_config_text}" plugins roots)
+if (_sao_provider_json_error OR NOT _sao_provider_roots_type STREQUAL "ARRAY")
+    message(FATAL_ERROR
+        "Staged provider config must contain a JSON array at plugins.roots"
+        " (error=${_sao_provider_json_error})")
+endif()
+string(JSON _sao_provider_roots_length
+    ERROR_VARIABLE _sao_provider_json_error
+    LENGTH "${_sao_provider_config_text}" plugins roots)
+if (_sao_provider_json_error OR NOT _sao_provider_roots_length EQUAL 1)
+    message(FATAL_ERROR
+        "Staged provider config plugins.roots must contain exactly one entry")
+endif()
+string(JSON _sao_provider_root
+    ERROR_VARIABLE _sao_provider_json_error
+    GET "${_sao_provider_config_text}" plugins roots 0)
+if (_sao_provider_json_error OR NOT _sao_provider_root STREQUAL "plugins")
+    message(FATAL_ERROR
+        "Staged provider config plugins.roots must be exactly [\"plugins\"]")
+endif()
+
+file(STRINGS "${SAO_AUDIT_INSTALL_MANIFEST}" _sao_install_manifest_entries)
+if (NOT _sao_install_manifest_entries)
+    message(FATAL_ERROR "The ship install manifest is empty: ${SAO_AUDIT_INSTALL_MANIFEST}")
+endif()
+set(_sao_manifest_relative_files "")
+foreach (_sao_manifest_entry IN LISTS _sao_install_manifest_entries)
+    string(STRIP "${_sao_manifest_entry}" _sao_manifest_entry)
+    file(RELATIVE_PATH _sao_manifest_relative "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_manifest_entry}")
+    cmake_path(CONVERT "${_sao_manifest_relative}" TO_CMAKE_PATH_LIST _sao_manifest_relative NORMALIZE)
+    if (_sao_manifest_relative MATCHES "(^|/)\\.\\.(/|$)" OR NOT EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_manifest_relative}")
+        message(FATAL_ERROR "Invalid or missing ship install manifest entry: ${_sao_manifest_entry}")
+    endif()
+    list(APPEND _sao_manifest_relative_files "${_sao_manifest_relative}")
+endforeach()
+list(REMOVE_DUPLICATES _sao_manifest_relative_files)
+list(SORT _sao_manifest_relative_files)
+
+foreach (_sao_project_owned_pe IN LISTS SAO_AUDIT_PROJECT_OWNED_PES)
+    list(FIND _sao_manifest_relative_files
+        "${_sao_project_owned_pe}" _sao_project_owned_manifest_index)
+    if (_sao_project_owned_manifest_index EQUAL -1)
+        message(FATAL_ERROR
+            "Project-owned PE is missing from the ship install manifest: "
+            "${_sao_project_owned_pe}")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _sao_forbidden_runtime_manifest_files LIST_DIRECTORIES false
+    "${SAO_AUDIT_SHIP_DIRECTORY}/share/sao/plugin_runtimes/*"
+    "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_audit_plugin_root}/runtimes/manifest.json"
+    "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_audit_plugin_root}/runtimes/build-time-manifest.json")
+if (_sao_forbidden_runtime_manifest_files)
+    message(FATAL_ERROR "Build-time runtime metadata must not be installed or shipped: ${_sao_forbidden_runtime_manifest_files}")
+endif()
 
 if (NOT DEFINED SAO_AUDIT_DUMPBIN OR NOT EXISTS "${SAO_AUDIT_DUMPBIN}")
     message(FATAL_ERROR "dumpbin.exe is required for the release artifact audit")
@@ -123,7 +238,7 @@ set(_sao_forbidden_ship_patterns
     "*.wrapped.*"
 )
 
-function(sao_audit_pe binary_path)
+function(sao_audit_pe binary_path project_owned)
     set(SAO_AUDIT_BINARY "${binary_path}")
     sao_audit_dumpbin(/headers SAO_AUDIT_HEADERS)
     sao_audit_dumpbin(/imports SAO_AUDIT_IMPORTS)
@@ -131,6 +246,36 @@ function(sao_audit_pe binary_path)
 
     get_filename_component(_sao_binary_extension "${binary_path}" EXT)
     string(TOLOWER "${_sao_binary_extension}" _sao_binary_extension)
+
+    if (project_owned)
+        string(REPLACE "\r\n" "\n" _sao_headers_lines "${SAO_AUDIT_HEADERS}")
+        string(REPLACE "\r" "\n" _sao_headers_lines "${_sao_headers_lines}")
+        string(REPLACE "\n" ";" _sao_headers_lines "${_sao_headers_lines}")
+        set(_sao_certificate_directory_lines "")
+        foreach (_sao_headers_line IN LISTS _sao_headers_lines)
+            if (_sao_headers_line MATCHES
+                "Certificate[ \t]+Table|Certificates[ \t]+Directory")
+                list(APPEND _sao_certificate_directory_lines "${_sao_headers_line}")
+            endif()
+        endforeach()
+        if (NOT _sao_certificate_directory_lines)
+            message(FATAL_ERROR
+                "Project-owned release PE is missing a Certificate Table or "
+                "Certificates Directory headers line: ${binary_path}")
+        endif()
+        foreach (_sao_certificate_directory_line IN LISTS _sao_certificate_directory_lines)
+            if (NOT _sao_certificate_directory_line MATCHES
+                "^[ \t]*[0-9A-Fa-f]+[ \t]+\[[ \t]*0[ \t]*\][ \t]+RVA[ \t]+\[[ \t]*size[ \t]*\][ \t]+of[ \t]+(Certificate[ \t]+Table|Certificates[ \t]+Directory)[ \t]*$")
+                message(FATAL_ERROR
+                    "Project-owned release PE must have a zero-size Certificate Table or "
+                    "Certificates Directory: ${binary_path}: ${_sao_certificate_directory_line}")
+            endif()
+        endforeach()
+        message(STATUS "${binary_path}: project-owned PE certificate table is empty")
+    else()
+        message(STATUS
+            "${binary_path}: certificate table not constrained (third-party/runtime/driver artifact)")
+    endif()
 
     if (SAO_AUDIT_EXPECT_HARDENING STREQUAL "ON")
         foreach (_sao_required IN ITEMS
@@ -274,8 +419,16 @@ function(sao_audit_dependency_closure binary_path parent_chain)
 
     set(SAO_AUDIT_BINARY "${binary_path}")
     sao_audit_dumpbin(/DEPENDENTS SAO_AUDIT_DEPENDENTS)
-    string(REGEX MATCHALL "[ \\t]+[A-Za-z0-9_.+\\-]+\\.dll" _sao_dependency_rows
-        "${SAO_AUDIT_DEPENDENTS}")
+    string(REPLACE "\r\n" "\n" _sao_dependency_lines "${SAO_AUDIT_DEPENDENTS}")
+    string(REPLACE "\r" "\n" _sao_dependency_lines "${_sao_dependency_lines}")
+    string(REPLACE "\n" ";" _sao_dependency_lines "${_sao_dependency_lines}")
+    set(_sao_dependency_rows "")
+    foreach (_sao_dependency_line IN LISTS _sao_dependency_lines)
+        string(STRIP "${_sao_dependency_line}" _sao_dependency_line)
+        if (_sao_dependency_line MATCHES "^[A-Za-z0-9_.+-]+\\.dll$")
+            list(APPEND _sao_dependency_rows "${_sao_dependency_line}")
+        endif()
+    endforeach()
     foreach (_sao_dependency_row IN LISTS _sao_dependency_rows)
         string(STRIP "${_sao_dependency_row}" _sao_dependency)
         string(TOLOWER "${_sao_dependency}" _sao_dependency_lower)
@@ -337,6 +490,19 @@ endif()
 list(REMOVE_DUPLICATES _sao_ship_pe_binaries)
 list(SORT _sao_ship_pe_binaries)
 
+file(RELATIVE_PATH _sao_audit_binary_relative
+    "${SAO_AUDIT_SHIP_DIRECTORY}" "${SAO_AUDIT_BINARY}")
+cmake_path(CONVERT "${_sao_audit_binary_relative}" TO_CMAKE_PATH_LIST
+    _sao_audit_binary_relative NORMALIZE)
+list(FIND SAO_AUDIT_PROJECT_OWNED_PES
+    "${_sao_audit_binary_relative}" _sao_audit_binary_project_owned_index)
+if (_sao_audit_binary_project_owned_index EQUAL -1)
+    message(FATAL_ERROR
+        "Canonical SaoAuto artifact is not listed as project-owned: "
+        "${_sao_audit_binary_relative}")
+endif()
+
+set(_sao_ship_pe_relative_paths)
 foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
     file(RELATIVE_PATH _sao_ship_pe_relative
         "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_ship_pe}")
@@ -346,8 +512,42 @@ foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
         "${_sao_ship_pe_relative}" _sao_expected_pe_index)
     if (_sao_expected_pe_index EQUAL -1)
         message(FATAL_ERROR
-            "Ship directory contains an unexpected PE artifact: "
+            "Ship directory PE artifact is missing from the expected staged inventory: "
             "${_sao_ship_pe_relative}")
+    endif()
+    list(FIND _sao_manifest_relative_files
+        "${_sao_ship_pe_relative}" _sao_manifest_pe_index)
+    if (_sao_manifest_pe_index EQUAL -1)
+        message(FATAL_ERROR
+            "Ship directory PE artifact is missing from the install manifest: "
+            "${_sao_ship_pe_relative}")
+    endif()
+    list(APPEND _sao_ship_pe_relative_paths "${_sao_ship_pe_relative}")
+endforeach()
+
+foreach (_sao_project_owned_pe IN LISTS SAO_AUDIT_PROJECT_OWNED_PES)
+    list(FIND _sao_ship_pe_relative_paths
+        "${_sao_project_owned_pe}" _sao_project_owned_staged_index)
+    if (_sao_project_owned_staged_index EQUAL -1)
+        message(FATAL_ERROR
+            "Project-owned PE is not present in the staged PE inventory: "
+            "${_sao_project_owned_pe}")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _sao_ship_regular_files LIST_DIRECTORIES false
+    "${SAO_AUDIT_SHIP_DIRECTORY}/*")
+foreach (_sao_ship_file IN LISTS _sao_ship_regular_files)
+    file(RELATIVE_PATH _sao_ship_file_relative "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_ship_file}")
+    cmake_path(CONVERT "${_sao_ship_file_relative}" TO_CMAKE_PATH_LIST _sao_ship_file_relative NORMALIZE)
+    list(FIND _sao_manifest_relative_files "${_sao_ship_file_relative}" _sao_manifest_file_index)
+    if (_sao_manifest_file_index EQUAL -1)
+        message(FATAL_ERROR "Ship directory contains an unexpected file outside install manifest: ${_sao_ship_file_relative}")
+    endif()
+endforeach()
+foreach (_sao_manifest_relative IN LISTS _sao_manifest_relative_files)
+    if (NOT EXISTS "${SAO_AUDIT_SHIP_DIRECTORY}/${_sao_manifest_relative}")
+        message(FATAL_ERROR "Install manifest contains a non-staged file: ${_sao_manifest_relative}")
     endif()
 endforeach()
 
@@ -357,7 +557,18 @@ message(STATUS "Release audit sweeping ${_sao_pe_total} PE binary(ies)")
 foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
     math(EXPR _sao_pe_index "${_sao_pe_index} + 1")
     message(STATUS "  [${_sao_pe_index}/${_sao_pe_total}] ${_sao_ship_pe}")
-    sao_audit_pe("${_sao_ship_pe}")
+    file(RELATIVE_PATH _sao_ship_pe_relative
+        "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_ship_pe}")
+    cmake_path(CONVERT "${_sao_ship_pe_relative}" TO_CMAKE_PATH_LIST
+        _sao_ship_pe_relative NORMALIZE)
+    list(FIND SAO_AUDIT_PROJECT_OWNED_PES
+        "${_sao_ship_pe_relative}" _sao_project_owned_index)
+    if (_sao_project_owned_index EQUAL -1)
+        set(_sao_project_owned FALSE)
+    else()
+        set(_sao_project_owned TRUE)
+    endif()
+    sao_audit_pe("${_sao_ship_pe}" "${_sao_project_owned}")
 endforeach()
 
 set(_SAO_AUDIT_DEPENDENCY_VISITED "")
@@ -365,4 +576,6 @@ foreach (_sao_ship_pe IN LISTS _sao_ship_pe_binaries)
     sao_audit_dependency_closure("${_sao_ship_pe}" "${_sao_ship_pe}")
 endforeach()
 message(STATUS "Release audit passed for all ${_sao_pe_total} ship PE(s)")
+list(LENGTH _sao_manifest_relative_files _sao_manifest_file_total)
+message(STATUS "  exact install inventory: ${_sao_manifest_file_total} file(s)")
 message(STATUS "  ship diagnostics: absent")

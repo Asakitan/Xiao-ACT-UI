@@ -32,7 +32,7 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [OK] Debug build complete.
-echo      Artefacts: build\windows-debug\bin\SaoAuto.exe
+echo      Artefact: build\windows-debug\bin\Debug\SaoAuto.exe
 goto :done
 
 :fail

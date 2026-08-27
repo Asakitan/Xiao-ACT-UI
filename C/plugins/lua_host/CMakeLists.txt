@@ -39,20 +39,18 @@ target_link_libraries(sao_plugins_lua_host PUBLIC
     sao_plugins_loader
 )
 
-# Lua 5.4 resolution order:
-#   1. find_package(Lua 5.4) / find_package(lua 5.4 CONFIG) (vcpkg / system)
-#   2. FetchContent from lua.org when SAO_PLUGINS_LUA_AUTO_FETCH=ON
-# Auto-fetch is opt-in so shipping / air-gapped builds stay reproducible.
+# Lua 5.4 is resolved only from vcpkg or another preprovisioned package.
 option(SAO_PLUGINS_LUA_REQUIRE_RUNTIME
        "Fail configure when the Lua 5.4 runtime is unavailable" OFF)
 option(SAO_PLUGINS_LUA_AUTO_FETCH
-       "Download upstream Lua 5.4.8 source tarball on demand (FetchContent) when no runtime is found." OFF)
-set(SAO_LUA_FETCH_URL
-    "https://www.lua.org/ftp/lua-5.4.8.tar.gz"
-    CACHE STRING "URL from which the Lua source tarball is fetched when auto-fetch is enabled")
-set(SAO_LUA_FETCH_SHA256
-    ""
-    CACHE STRING "SHA256 of the fetched Lua source tarball (empty = skip integrity check)")
+       "Legacy compatibility switch; runtime downloads are disabled." OFF)
+if (SAO_PLUGINS_LUA_AUTO_FETCH)
+    message(WARNING
+        "SAO_PLUGINS_LUA_AUTO_FETCH is deprecated and ignored; Lua resolution remains offline.")
+    set(SAO_PLUGINS_LUA_AUTO_FETCH OFF)
+    set(SAO_PLUGINS_LUA_AUTO_FETCH OFF CACHE BOOL
+        "Legacy compatibility switch; runtime downloads are disabled." FORCE)
+endif()
 
 find_package(Lua 5.4 QUIET)
 if (NOT Lua_FOUND)
@@ -81,44 +79,6 @@ elseif (Lua_FOUND OR LUA_FOUND)
     target_compile_definitions(sao_plugins_lua_host PRIVATE SAO_HAS_LUA=1)
     message(STATUS "plugins/lua_host: using system/vcpkg Lua 5.4 (SAO_HAS_LUA=1)")
     set(_sao_lua_resolved ON)
-endif()
-
-if (NOT _sao_lua_resolved AND SAO_PLUGINS_LUA_AUTO_FETCH)
-    include(FetchContent)
-    set(_sao_lua_fetch_args
-        lua_source
-        URL "${SAO_LUA_FETCH_URL}")
-    if (SAO_LUA_FETCH_SHA256)
-        list(APPEND _sao_lua_fetch_args URL_HASH "SHA256=${SAO_LUA_FETCH_SHA256}")
-    endif()
-    FetchContent_Declare(${_sao_lua_fetch_args})
-    FetchContent_MakeAvailable(lua_source)
-    # Upstream Lua ships a plain Makefile.  Compose a small static library
-    # target here so we can link it uniformly.  Excludes lua.c (interpreter
-    # main) and luac.c (compiler main); we only need the library API.
-    file(GLOB _sao_lua_sources CONFIGURE_DEPENDS
-        "${lua_source_SOURCE_DIR}/src/*.c")
-    list(FILTER _sao_lua_sources EXCLUDE REGEX "/(lua|luac)\\.c$")
-    if (_sao_lua_sources)
-        add_library(sao_lua_embedded STATIC ${_sao_lua_sources})
-        target_include_directories(sao_lua_embedded PUBLIC
-            "${lua_source_SOURCE_DIR}/src")
-        target_compile_definitions(sao_lua_embedded PUBLIC LUA_COMPAT_5_3)
-        set_property(TARGET sao_lua_embedded PROPERTY C_STANDARD 99)
-        if (MSVC)
-            # Upstream Lua intentionally relies on narrowing C idioms that
-            # are noisy under this project's /W4 policy.  Keep warnings
-            # enabled for the host adapter while treating fetched C as vendor code.
-            target_compile_options(sao_lua_embedded PRIVATE
-                /wd4244 /wd4310 /wd4324 /wd4701 /wd4702)
-        endif()
-        target_link_libraries(sao_plugins_lua_host PRIVATE sao_lua_embedded)
-        target_compile_definitions(sao_plugins_lua_host PRIVATE SAO_HAS_LUA=1)
-        message(STATUS "plugins/lua_host: fetched Lua 5.4 source into ${lua_source_SOURCE_DIR} (SAO_HAS_LUA=1)")
-        set(_sao_lua_resolved ON)
-    else()
-        message(WARNING "plugins/lua_host: FetchContent succeeded but no *.c under ${lua_source_SOURCE_DIR}/src")
-    endif()
 endif()
 
 if (NOT _sao_lua_resolved)

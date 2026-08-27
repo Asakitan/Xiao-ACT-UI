@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +19,98 @@ namespace sao::plugins::sdk_binding {
 namespace {
 
 using ordered_json = nlohmann::ordered_json;
+
+bool valid_utf8(std::string_view value) noexcept {
+    size_t index = 0;
+    while (index < value.size()) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        size_t width = 0;
+        uint32_t code_point = 0;
+        if (byte <= 0x7fU) { width = 1; code_point = byte; }
+        else if (byte >= 0xc2U && byte <= 0xdfU) { width = 2; code_point = byte & 0x1fU; }
+        else if (byte >= 0xe0U && byte <= 0xefU) { width = 3; code_point = byte & 0x0fU; }
+        else if (byte >= 0xf0U && byte <= 0xf4U) { width = 4; code_point = byte & 0x07U; }
+        else return false;
+        if (index + width > value.size()) return false;
+        for (size_t offset = 1; offset < width; ++offset) {
+            const auto continuation = static_cast<unsigned char>(value[index + offset]);
+            if ((continuation & 0xc0U) != 0x80U) return false;
+            code_point = (code_point << 6U) | (continuation & 0x3fU);
+        }
+        if ((width == 2U && code_point < 0x80U) ||
+            (width == 3U && code_point < 0x800U) ||
+            (width == 4U && code_point < 0x10000U) ||
+            code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) return false;
+        index += width;
+    }
+    return true;
+}
+
+class bounded_binding_json_sax final : public ordered_json::json_sax_t {
+public:
+    bool null() override { return consume_node(); }
+    bool boolean(bool) override { return consume_node(); }
+    bool number_integer(number_integer_t) override { return consume_node(); }
+    bool number_unsigned(number_unsigned_t value) override {
+        return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) &&
+               consume_node();
+    }
+    bool number_float(number_float_t value, const string_t&) override { return std::isfinite(value) && consume_node(); }
+    bool string(string_t& value) override { return consume_node() && consume_string(value); }
+    bool binary(binary_t& value) override { return consume_node() && value.size() <= kMaximumBindingJsonBytes; }
+    bool start_object(std::size_t) override { return start_container(); }
+    bool key(string_t& value) override { return consume_string(value); }
+    bool end_object() override { return end_container(); }
+    bool start_array(std::size_t) override { return start_container(); }
+    bool end_array() override { return end_container(); }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+private:
+    size_t depth_ = 0;
+    size_t nodes_ = 0;
+    size_t string_bytes_ = 0;
+
+    bool consume_node() noexcept {
+        if (nodes_ >= kMaximumBindingJsonNodes) return false;
+        ++nodes_;
+        return true;
+    }
+
+    bool consume_string(std::string_view value) noexcept {
+        if (value.find('\0') != std::string_view::npos ||
+            !valid_utf8(value) || value.size() > kMaximumBindingJsonStringBytes ||
+            string_bytes_ > kMaximumBindingJsonTotalStringBytes - value.size()) return false;
+        string_bytes_ += value.size();
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumBindingJsonDepth || !consume_node()) return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0) return false;
+        --depth_;
+        return true;
+    }
+};
+
+bool dump_bounded_json(const ordered_json& value, std::string& output) noexcept {
+    try {
+        output = value.dump();
+        if (output.empty() || output.size() > kMaximumBindingJsonBytes || !valid_utf8(output)) return false;
+        bounded_binding_json_sax sax;
+        return ordered_json::sax_parse(output.begin(), output.end(), &sax);
+    } catch (...) {
+        output.clear();
+        return false;
+    }
+}
 
 bool valid_context(const SaoSdkContext* ctx) noexcept {
     return ctx != nullptr && ctx->ctx_impl != nullptr &&
@@ -34,7 +127,8 @@ int32_t normalize_status(int32_t status) noexcept {
 
 int32_t write_result(const ordered_json& value,
                      sdk_context_call_request* request) {
-    const std::string serialized = value.dump();
+    std::string serialized;
+    if (!dump_bounded_json(value, serialized)) return SAO_ERR_INVALID_ARGUMENT;
     if (request->out_required != nullptr) {
         *request->out_required = serialized.size() + 1;
     }
@@ -63,11 +157,14 @@ ordered_json parse_arguments(const sdk_context_call_request* request,
         *valid = true;
         return ordered_json::object();
     }
-    if (request->args_json_utf8 == nullptr) return {};
+    if (request->args_json_utf8 == nullptr || request->args_size > kMaximumBindingJsonBytes ||
+        !valid_utf8(std::string_view(request->args_json_utf8, request->args_size))) return {};
     try {
-        auto arguments = ordered_json::parse(
-            request->args_json_utf8,
-            request->args_json_utf8 + request->args_size);
+        const auto* begin = request->args_json_utf8;
+        const auto* end = begin + request->args_size;
+        bounded_binding_json_sax sax;
+        if (!ordered_json::sax_parse(begin, end, &sax)) return {};
+        auto arguments = ordered_json::parse(begin, end);
         *valid = arguments.is_object();
         return arguments;
     } catch (...) {
@@ -147,12 +244,15 @@ int32_t config_get(const SaoSdkContext* ctx,
     size_t required = 0;
     status = sao_sdk_config_get_string(ctx, key.c_str(), nullptr, 0, &required);
     if (status == SAO_SDK_ERR_BUFFER_TOO_SMALL && required > 0) {
+        if (required > kMaximumBindingJsonBytes) return SAO_ERR_INVALID_ARGUMENT;
         std::string string_value(required, '\0');
         status = sao_sdk_config_get_string(ctx, key.c_str(),
                                            string_value.data(),
                                            string_value.size(), &required);
         if (status == SAO_SDK_OK) {
-            string_value.resize(std::strlen(string_value.c_str()));
+            const auto terminator = string_value.find('\0');
+            if (terminator == std::string::npos) return SAO_ERR_INVALID_ARGUMENT;
+            string_value.resize(terminator);
             return write_result(string_value, request);
         }
     }
@@ -275,8 +375,10 @@ int32_t dispatch_event(const SaoSdkContext* ctx,
     }
     if (method == sdk_method_id::method_emit) {
         const auto payload = arguments.find("payload");
-        const std::string serialized =
-            (payload == arguments.end() ? ordered_json::object() : *payload).dump();
+        std::string serialized;
+        if (!dump_bounded_json(payload == arguments.end() ? ordered_json::object() : *payload,
+                               serialized))
+            return SAO_ERR_INVALID_ARGUMENT;
         const int32_t status = sao_sdk_event_publish(
             ctx, topic.c_str(),
             reinterpret_cast<const uint8_t*>(serialized.data()),
@@ -311,7 +413,8 @@ int32_t dispatch_ui(const SaoSdkContext* ctx,
         }
         const auto spec = arguments.find("spec");
         if (spec == arguments.end()) return SAO_ERR_INVALID_ARGUMENT;
-        const std::string serialized = spec->dump();
+        std::string serialized;
+        if (!dump_bounded_json(*spec, serialized)) return SAO_ERR_INVALID_ARGUMENT;
         const int32_t status = sao_sdk_ui_set_overlay(
             ctx, surface.c_str(),
             reinterpret_cast<const uint8_t*>(serialized.data()),
@@ -329,8 +432,9 @@ int32_t dispatch_ui(const SaoSdkContext* ctx,
             ? metadata->value("title", panel_id)
             : panel_id;
     const auto spec = arguments.find("spec");
-    const std::string serialized =
-        (spec == arguments.end() ? ordered_json::object() : *spec).dump();
+    std::string serialized;
+    if (!dump_bounded_json(spec == arguments.end() ? ordered_json::object() : *spec, serialized))
+        return SAO_ERR_INVALID_ARGUMENT;
     sao_sdk_ui_panel_t panel = nullptr;
     const int32_t status = sao_sdk_ui_register_panel(
         ctx, panel_id.c_str(), title.c_str(),
@@ -443,6 +547,7 @@ sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx,
     case sdk_method_id::prop_path:
     case sdk_method_id::prop_web_path:
     case sdk_method_id::prop_assets_path:
+    case sdk_method_id::method_time:
         return SAO_OK;
     case sdk_method_id::method_subscribe:
     case sdk_method_id::method_unsubscribe:
@@ -479,6 +584,7 @@ sao_plugins_sdk_context_dispatch(const SaoSdkContext* ctx,
                                  sdk_method_id method_id,
                                  sdk_context_call_request* request) {
     if (request == nullptr || !valid_context(ctx) ||
+        request->args_size > kMaximumBindingJsonBytes ||
         (request->args_size > 0 && request->args_json_utf8 == nullptr)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
@@ -498,6 +604,11 @@ sao_plugins_sdk_context_dispatch(const SaoSdkContext* ctx,
         case sdk_method_id::prop_assets_path:
             status = dispatch_property(ctx, method_id, request);
             break;
+        case sdk_method_id::method_time: {
+            const auto now = std::chrono::system_clock::now().time_since_epoch();
+            status = write_result(std::chrono::duration<double>(now).count(), request);
+            break;
+        }
         case sdk_method_id::method_get_setting:
         case sdk_method_id::method_setting:
         case sdk_method_id::method_set_setting:

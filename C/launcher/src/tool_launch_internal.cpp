@@ -435,6 +435,7 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
             return;
         }
 
+        SetLastError(ERROR_SUCCESS);
         HANDLE launch_mutex_handle = CreateMutexW(nullptr, FALSE,
                                                   kAiEditorLaunchMutex);
         if (launch_mutex_handle == nullptr) {

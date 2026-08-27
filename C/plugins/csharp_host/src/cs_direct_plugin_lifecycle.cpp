@@ -114,7 +114,12 @@ sao_plugins_cshost_load_plugin(cs_host_handle_t host, const char* plugin_json_pa
         int32_t status = sao::plugins::loader::sao_plugins_manifest_load_from_file(
             manifest_path.c_str(), &manifest);
         if (status != SAO_OK) {
-            set_error(out_error_utf8, "cannot parse plugin.json");
+            set_error(out_error_utf8, manifest.parse_error.empty() ? "cannot parse plugin.json" : manifest.parse_error);
+            return status;
+        }
+        status = sao::plugins::loader::validate_manifest(manifest);
+        if (status != SAO_OK) {
+            set_error(out_error_utf8, manifest.parse_error.empty() ? "plugin manifest failed canonical validation" : manifest.parse_error);
             return status;
         }
         ensure_direct_legacy_contract(manifest);

@@ -21,6 +21,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WINDOW_TITLE = "SAO Creative Workshop"
 _MIN_SIZE = (800, 520)
 _POS_FILE = os.path.join(os.path.expanduser("~"), ".sao", "workshop_pos.json")
+_WORKSHOP_SERVER_URL = "https://x2.sjcmc.cn:15018"
 
 _running_window = None
 
@@ -62,22 +63,7 @@ def _save_window_pos(x: int, y: int, w: int, h: int):
 
 
 def _get_server_url() -> str:
-    try:
-        cfg_path = os.path.join(_ROOT, "dev_publish_config.json")
-        if os.path.isfile(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            host = data.get("host", "").strip()
-            if host:
-                return host
-    except Exception:
-        pass
-    try:
-        from config import WORKSHOP_SERVER_URL
-        return WORKSHOP_SERVER_URL
-    except Exception:
-        pass
-    return "http://x2.sjcmc.cn:15018"
+    return _WORKSHOP_SERVER_URL
 
 
 class WorkshopAPI:
@@ -144,7 +130,12 @@ class WorkshopAPI:
                     from act_platform.runtime import act_plugin_import
                     result = act_plugin_import(self._gui_ref, zip_path)
                     return result if isinstance(result, dict) else {"ok": True}
-                except ImportError:
+                except ImportError as exc:
+                    if getattr(sys, "frozen", False):
+                        return {
+                            "ok": False,
+                            "error": f"native Workshop installer unavailable: {exc}",
+                        }
                     from act_platform.plugin_install import install_plugin_archive
                     user_plugins = os.path.join(_ROOT, "user_plugins")
                     os.makedirs(user_plugins, exist_ok=True)

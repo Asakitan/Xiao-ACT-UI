@@ -16,6 +16,7 @@
 #include "sao/launcher/user_menu.h"
 
 #include <cstdint>
+#include <string>
 #include <windows.h>
 
 namespace sao::launcher {
@@ -70,12 +71,13 @@ struct AppState {
     // Overrides the default operator-mode stealth posture that hides the
     // helper's F12 status page.  Does not itself enable rt_io_operator.
     bool rt_io_force_status_page = false;
-    wchar_t config_path[MAX_PATH] = {0};
+    std::wstring config_path;
+    std::wstring open_path;
     wchar_t log_level[16] = {0};
 
     // Resolved paths.
-    wchar_t base_dir[MAX_PATH] = {0};
-    wchar_t exe_path[MAX_PATH] = {0};
+    std::wstring base_dir;
+    std::wstring exe_path;
 
     // Init pipeline handles.  Void* on purpose — they belong to whichever
     // subsystem produced them.
@@ -133,7 +135,7 @@ class App {
 
     AppState state_{};
     UserMenu user_menu_{};
-    void stopAutoUpdate() noexcept;
+    bool stopAutoUpdate() noexcept;
     HANDLE single_instance_mutex_ = nullptr;
     HANDLE dual_run_driver_mutex_ = nullptr;
     HANDLE auto_update_cancel_event_ = nullptr;

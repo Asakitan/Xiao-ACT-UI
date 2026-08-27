@@ -9,6 +9,8 @@
 #include "sao/launcher/init_pipeline.h"
 #include "sao/launcher/single_instance.h"
 
+#include <windows.h>
+
 namespace sao::launcher {
 
 bool takeUiOffline(AppState& state) noexcept {
@@ -51,11 +53,25 @@ bool tearDownPlatform(AppState& state) noexcept {
     return true;
 }
 
-bool shutdownSecurity(bool initialized) noexcept {
-    if (initialized && sao_security_shutdown() != SAO_STATUS_OK) {
+bool shutdownSecurity(bool& initialized) noexcept {
+    if (!initialized)
+        return true;
+    if (sao_security_shutdown() != SAO_STATUS_OK)
         return false;
-    }
+    initialized = false;
     return true;
+}
+
+void serviceShutdownRetry(AppState& state) noexcept {
+    if (state.platform_ctx != nullptr) {
+        if (state.ui_online &&
+            sao_ui_take_offline(static_cast<sao_platform_ctx*>(state.platform_ctx)) ==
+                SAO_STATUS_OK) {
+            state.ui_online = false;
+        }
+        (void)sao_ui_tick(static_cast<sao_platform_ctx*>(state.platform_ctx), 1u);
+    }
+    Sleep(2u);
 }
 
 bool shutdownShell(AppState& state) noexcept {
@@ -76,30 +92,25 @@ bool shutdownLicense(AppState& state) noexcept {
     return true;
 }
 
-void releaseSingleInstanceMutex(AppState& /*state*/) noexcept {
-    // The mutex handle is owned by App itself, not AppState — this hook
-    // exists so the pipeline layout stays symmetric.  Nothing to do here.
+void releaseOwnedSingleInstanceMutex(HANDLE& mutex) noexcept {
+    if (mutex != nullptr) {
+        releaseSingleInstance(mutex);
+        mutex = nullptr;
+    }
 }
 
-bool runFullShutdown(AppState& state, bool security_initialized) noexcept {
-    if (!takeUiOffline(state)) return false;
-    if (!shutdownPlugins(state)) {
-        return false;
+bool runFullShutdown(AppState& state, bool& security_initialized) noexcept {
+    constexpr int kMaximumAttempts = 3;
+    for (int attempt = 0; attempt < kMaximumAttempts; ++attempt) {
+        if (takeUiOffline(state) && shutdownPlugins(state) &&
+            tearDownPlatform(state) && shutdownSecurity(security_initialized) &&
+            shutdownShell(state) && shutdownLicense(state)) {
+            return true;
+        }
+        if (attempt + 1 < kMaximumAttempts)
+            serviceShutdownRetry(state);
     }
-    if (!tearDownPlatform(state)) {
-        return false;
-    }
-    if (!shutdownSecurity(security_initialized)) {
-        return false;
-    }
-    if (!shutdownShell(state)) {
-        return false;
-    }
-    if (!shutdownLicense(state)) {
-        return false;
-    }
-    releaseSingleInstanceMutex(state);
-    return true;
+    return false;
 }
 
 } // namespace sao::launcher

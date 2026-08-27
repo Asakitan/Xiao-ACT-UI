@@ -33,13 +33,11 @@ bool valid_scope(const char* scope) noexcept {
     if (scope == nullptr) return false;
     const size_t length = ::strnlen(scope, kMaximumScopeBytes + 1);
     if (length == 0 || length > kMaximumScopeBytes) return false;
-    for (size_t index = 0; index < length; ++index) {
-        const auto value = static_cast<unsigned char>(scope[index]);
-        if (!(std::isalnum(value) != 0 || value == '-' || value == '_' || value == '.')) {
-            return false;
-        }
-    }
-    return true;
+    return std::strcmp(scope, SAO_NET_TLS_SCOPE_LICENSE) == 0 ||
+           std::strcmp(scope, SAO_NET_TLS_SCOPE_UPDATE) == 0 ||
+           std::strcmp(scope, SAO_NET_TLS_SCOPE_WORKSHOP) == 0 ||
+           std::strcmp(scope, SAO_NET_TLS_SCOPE_CLOUD) == 0 ||
+           std::strcmp(scope, SAO_NET_TLS_SCOPE_DEFAULT) == 0;
 }
 
 bool constant_time_equal(const uint8_t left[32], const uint8_t right[32]) noexcept {
@@ -110,13 +108,58 @@ bool pins_match(const std::vector<std::array<uint8_t, 32>>& pins,
     return matched;
 }
 
-std::vector<std::array<uint8_t, 32>> installed_pin_snapshot() {
+std::vector<std::array<uint8_t, 32>> installed_pin_snapshot(
+    const char* scope_utf8) {
     std::vector<std::array<uint8_t, 32>> pins;
     std::lock_guard<std::mutex> guard(g_installed_mutex);
-    for (const auto& entry : g_installed_pins) {
-        pins.insert(pins.end(), entry.second.begin(), entry.second.end());
-    }
+    const auto found = g_installed_pins.find(scope_utf8);
+    if (found != g_installed_pins.end()) pins = found->second;
     return pins;
+}
+
+bool has_installed_pins(const char* scope_utf8) noexcept {
+    if (!valid_scope(scope_utf8)) return false;
+    std::lock_guard<std::mutex> guard(g_installed_mutex);
+    const auto found = g_installed_pins.find(scope_utf8);
+    return found != g_installed_pins.end() && !found->second.empty();
+}
+
+bool verify_server_certificate(PCCERT_CONTEXT certificate,
+                               const wchar_t* server_name) noexcept {
+    if (certificate == nullptr || certificate->pCertInfo == nullptr ||
+        server_name == nullptr || server_name[0] == L'\0') {
+        return false;
+    }
+    if (CertVerifyTimeValidity(nullptr, certificate->pCertInfo) != 0) {
+        return false;
+    }
+
+    CERT_CHAIN_PARA chain_parameters{};
+    chain_parameters.cbSize = sizeof(chain_parameters);
+    PCCERT_CHAIN_CONTEXT chain = nullptr;
+    if (!CertGetCertificateChain(nullptr, certificate, nullptr,
+                                 certificate->hCertStore, &chain_parameters,
+                                 0, nullptr, &chain) || chain == nullptr) {
+        return false;
+    }
+
+    SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_parameters{};
+    ssl_parameters.cbStruct = sizeof(ssl_parameters);
+    ssl_parameters.dwAuthType = AUTHTYPE_SERVER;
+    ssl_parameters.pwszServerName = const_cast<wchar_t*>(server_name);
+
+    CERT_CHAIN_POLICY_PARA policy_parameters{};
+    policy_parameters.cbSize = sizeof(policy_parameters);
+    policy_parameters.pvExtraPolicyPara = &ssl_parameters;
+    CERT_CHAIN_POLICY_STATUS policy_status{};
+    policy_status.cbSize = sizeof(policy_status);
+    const bool policy_called = CertVerifyCertificateChainPolicy(
+        CERT_CHAIN_POLICY_SSL, chain, &policy_parameters, &policy_status) != FALSE;
+    const DWORD policy_error = policy_status.dwError;
+    CertFreeCertificateChain(chain);
+    if (!policy_called) return false;
+
+    return policy_error == ERROR_SUCCESS || policy_error == CERT_E_UNTRUSTEDROOT;
 }
 
 }  // namespace
@@ -207,16 +250,44 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_tls_validate_certificate(
 
 namespace sao::net::internal {
 
+sao_status_t validate_request_scope(const char* scope_utf8) noexcept {
+    return valid_scope(scope_utf8) ? SAO_STATUS_OK
+                                   : SAO_STATUS_ERR_INVALID_ARGUMENT;
+}
+
+sao_status_t configure_pinned_security(HINTERNET request,
+                                       const char* scope_utf8) noexcept {
+    const auto scope_status = validate_request_scope(scope_utf8);
+    if (scope_status != SAO_STATUS_OK) return scope_status;
+    if (!has_installed_pins(scope_utf8)) return SAO_STATUS_OK;
+    if (request == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+
+    DWORD security_flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
+    if (!WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS,
+                          &security_flags, sizeof(security_flags))) {
+        return map_winhttp_error(GetLastError());
+    }
+    return SAO_STATUS_OK;
+}
+
 sao_status_t validate_request_certificate(HINTERNET request,
+                                          const wchar_t* server_name,
                                           const char* scope_utf8) noexcept {
-    (void)scope_utf8;
-    auto pins = installed_pin_snapshot();
+    const auto scope_status = validate_request_scope(scope_utf8);
+    if (scope_status != SAO_STATUS_OK) return scope_status;
+    auto pins = installed_pin_snapshot(scope_utf8);
     if (pins.empty()) return SAO_STATUS_OK;
+    if (request == nullptr || server_name == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 
     PCCERT_CONTEXT certificate = nullptr;
     DWORD size = sizeof(certificate);
     if (!WinHttpQueryOption(request, WINHTTP_OPTION_SERVER_CERT_CONTEXT,
                             &certificate, &size) || certificate == nullptr) {
+        return SAO_STATUS_ERR_NET_TLS;
+    }
+    if (!verify_server_certificate(certificate, server_name)) {
+        CertFreeCertificateContext(certificate);
+        for (auto& pin : pins) SecureZeroMemory(pin.data(), pin.size());
         return SAO_STATUS_ERR_NET_TLS;
     }
     uint8_t digest[32]{};

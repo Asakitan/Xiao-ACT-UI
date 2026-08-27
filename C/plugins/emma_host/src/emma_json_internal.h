@@ -80,7 +80,7 @@ inline bool consume_json_node(json_budget& budget, std::string& error) {
 }
 
 inline bool consume_json_string(std::string_view value, json_budget& budget, std::string& error) {
-    if (!valid_utf8(value)) {
+    if (value.find('\0') != std::string_view::npos || !valid_utf8(value)) {
         error = "JSON strings must be valid UTF-8";
         return false;
     }
@@ -106,7 +106,11 @@ class bounded_json_sax final : public nlohmann::json_sax<json> {
     bool number_integer(number_integer_t) override {
         return consume_node();
     }
-    bool number_unsigned(number_unsigned_t) override {
+    bool number_unsigned(number_unsigned_t value) override {
+        if (value > static_cast<number_unsigned_t>((std::numeric_limits<std::int64_t>::max)())) {
+            error_ = "JSON unsigned integer exceeds Emma's signed integer range";
+            return false;
+        }
         return consume_node();
     }
     bool number_float(number_float_t, const string_t&) override {
@@ -202,8 +206,8 @@ inline bool parse_json(const char* data, std::size_t size, json& output, std::st
     }
 }
 
-inline bool bounded_c_string_length(const char* data, std::size_t maximum,
-                                    std::size_t& length) noexcept {
+inline bool bounded_json_c_string(const char* data, std::size_t maximum,
+                                  std::size_t& length) noexcept {
     if (data == nullptr)
         return false;
     length = 0;
@@ -214,7 +218,7 @@ inline bool bounded_c_string_length(const char* data, std::size_t maximum,
 
 inline bool parse_json_c_string(const char* data, json& output, std::string& error) {
     std::size_t size = 0;
-    if (!bounded_c_string_length(data, kMaximumEmmaJsonInputBytes, size)) {
+    if (!bounded_json_c_string(data, kMaximumEmmaJsonInputBytes, size)) {
         error = "JSON input exceeds its byte budget";
         return false;
     }

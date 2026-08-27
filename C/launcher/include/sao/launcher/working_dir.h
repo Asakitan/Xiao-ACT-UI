@@ -24,6 +24,7 @@
 
 #include <windows.h>
 #include <cstddef>
+#include <string>
 
 namespace sao::launcher {
 
@@ -32,12 +33,15 @@ namespace sao::launcher {
 // Returns true on success.
 struct AppState;
 bool resolveWorkingDir(AppState& state) noexcept;
+bool getCurrentModulePath(std::wstring& path_out) noexcept;
 
 // Given exe_path, compute base_dir by the rules above.  Testable helper —
 // takes explicit inputs, no globals.
 bool computeBaseDir(const wchar_t* exe_path,
                     wchar_t* base_dir_out,
                     std::size_t base_dir_cap) noexcept;
+bool computeBaseDir(const wchar_t* exe_path,
+                    std::wstring& base_dir_out) noexcept;
 
 // Ensure a directory exists under BASE_DIR (creates parents as needed).
 // Used to prep `crash/`, `logs/`, `plugins/`, `data/` on first launch.

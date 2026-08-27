@@ -33,9 +33,25 @@ public:
             r.error_message = "target_pid required";
             return r;
         }
+        fs::path out = fs::path(cfg.output_dir) / "Assembly-CSharp.cs";
+        std::error_code output_error;
+        if (fs::exists(out, output_error)) {
+            if (output_error || fs::is_directory(out, output_error)) {
+                r.error_message = "cannot remove stale output file";
+                return r;
+            }
+            output_error.clear();
+            fs::remove(out, output_error);
+            if (output_error) {
+                r.error_message = "cannot remove stale output file";
+                return r;
+            }
+        } else if (output_error) {
+            r.error_message = "cannot inspect stale output file";
+            return r;
+        }
         std::error_code ec;
         fs::create_directories(cfg.output_dir, ec);
-
         sao_core_process_handle_t handle = nullptr;
         if (sao_core_process_open(cfg.target_pid,
                                    SAO_PROCESS_ACCESS_INFO | SAO_PROCESS_ACCESS_READ,
@@ -67,7 +83,6 @@ public:
             adapter, offsets.data(), class_cap, &off_count, names.data(),
             names.size(), &names_used);
 
-        fs::path out = fs::path(cfg.output_dir) / "Assembly-CSharp.cs";
         {
             std::ofstream fs_out(out);
             if (!fs_out) {
@@ -80,17 +95,37 @@ public:
                    << "// Target PID: " << cfg.target_pid << "\n"
                    << "// Engine: IL2CPP\n"
                    << "// Enumerated: " << off_count << " classes/symbols\n\n";
-            if (st == SAO_STATUS_OK) {
-                for (size_t i = 0; i < off_count; ++i) {
-                    const char* name = names.data() + offsets[i];
-                    fs_out << "// class " << name << " {}\n";
-                }
-            } else {
-                fs_out << "// (enumeration returned status " << st << ")\n";
+            if (st != SAO_STATUS_OK) {
+                fs_out.close();
+                std::error_code remove_error;
+                fs::remove(out, remove_error);
+                sao_memprobe_engine_close(adapter);
+                sao_core_process_close(handle);
+                r.error_message = "IL2CPP class enumeration failed";
+                return r;
+            }
+            for (size_t i = 0; i < off_count; ++i) {
+                const char* name = names.data() + offsets[i];
+                fs_out << "// class " << name << " {}\n";
+            }
+            fs_out.flush();
+            const bool output_ok = fs_out.good();
+            fs_out.close();
+            if (!output_ok || !fs_out.good()) {
+                std::error_code remove_error;
+                fs::remove(out, remove_error);
+                sao_memprobe_engine_close(adapter);
+                sao_core_process_close(handle);
+                r.error_message = "IL2CPP dump output write failed";
+                return r;
             }
         }
         sao_memprobe_engine_close(adapter);
         sao_core_process_close(handle);
+        if (!fs::exists(out)) {
+            r.error_message = "IL2CPP dump output missing";
+            return r;
+        }
         r.ok = true;
         r.output_files.push_back(out.string());
         r.class_count = static_cast<uint32_t>(off_count);

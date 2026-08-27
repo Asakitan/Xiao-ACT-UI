@@ -43,10 +43,13 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_lua_json_to_stack(lua_State* L, const char* utf8_json) {
     if (L == nullptr || utf8_json == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    size_t input_size = 0;
+    if (!sao_plugins_binding_bounded_json_c_string(utf8_json, input_size))
+        return SAO_ERR_INVALID_ARGUMENT;
     language_binding_request request{};
     request.runtime = L;
     request.input = reinterpret_cast<const uint8_t*>(utf8_json);
-    request.input_size = std::strlen(utf8_json);
+    request.input_size = input_size;
     return sao_plugins_binding_dispatch_provider(
         language_host_kind::lua, language_binding_operation::json_to_value, &request);
 }

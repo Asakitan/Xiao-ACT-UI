@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1247,6 +1248,13 @@ int ctx_log(lua_State* state) {
     return 0;
 }
 
+int ctx_time(lua_State* state) {
+    (void)checked_bridge(state);
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    lua_pushnumber(state, static_cast<lua_Number>(std::chrono::duration<double>(now).count()));
+    return 1;
+}
+
 int ctx_set_defaults(lua_State* state) {
     auto* bridge = checked_bridge(state);
     std::string defaults;
@@ -1895,6 +1903,7 @@ int register_ctx_body(lua_State* state) {
     if (luaL_newmetatable(state, "SaoPluginContext") != 0) {
         lua_newtable(state);
         set_method(state, "log", safe_method<ctx_log>);
+        set_method(state, "time", safe_method<ctx_time>);
         set_method(state, "set_defaults", safe_method<ctx_set_defaults>);
         set_method(state, "get_setting", safe_method<ctx_get_setting>);
         set_method(state, "setting", safe_method<ctx_get_setting>);

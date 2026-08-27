@@ -11,6 +11,7 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/sdk_binding/binding_angel.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -32,6 +33,14 @@ namespace {
 
 std::mutex g_plugin_registry_mutex;
 std::unordered_map<as_plugin_handle_t, shared_plugin_state> g_plugin_registry;
+std::atomic_uint64_t g_next_module_generation{1};
+
+std::string next_module_name(const std::string& plugin_id) {
+    uint64_t generation = g_next_module_generation.fetch_add(1, std::memory_order_relaxed);
+    if (generation == 0)
+        generation = g_next_module_generation.fetch_add(1, std::memory_order_relaxed);
+    return "sao_plugin_" + plugin_id + "_g" + std::to_string(generation);
+}
 
 std::string format_retained_error(const retained_script_error& error) {
     std::ostringstream stream;
@@ -146,6 +155,7 @@ void retain_unexpected_lifecycle_error(as_plugin_handle_t plugin, const char* ph
 #if defined(SAO_HAS_ANGELSCRIPT)
 
 asIScriptFunction* find_hook(as_plugin_handle_t plugin, const char* name) {
+    engine_execution_guard engine_lock;
     return plugin != nullptr && plugin->module != nullptr && name != nullptr
                ? plugin->module->GetFunctionByName(name)
                : nullptr;
@@ -179,7 +189,7 @@ std::filesystem::path path_from_utf8(const char* value) {
 
 int32_t invoke_with_new_context(asIScriptEngine* engine, asIScriptFunction* function,
                                 const char* args_json, char** output) {
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     asIScriptContext* raw = engine->CreateContext();
     if (raw == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
@@ -190,7 +200,7 @@ int32_t invoke_with_new_context(asIScriptEngine* engine, asIScriptFunction* func
 
 int32_t execute_lifecycle(as_plugin_s& plugin, asIScriptFunction* function, const char* phase,
                           bool pass_context, bool* bool_result = nullptr) {
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     if (function == nullptr || plugin.context == nullptr) {
         retain_plugin_error(plugin, phase, SAO_ERR_HANDLE_INVALID,
                             "AngelScript lifecycle function or context is unavailable");
@@ -245,15 +255,26 @@ int32_t execute_lifecycle(as_plugin_s& plugin, asIScriptFunction* function, cons
 }
 
 int32_t teardown_plugin_locked(as_plugin_s& plugin) {
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     if (plugin.binding != nullptr) {
         const int32_t status = sdk_binding::sao_plugins_binding_angel_deactivate(plugin.binding);
         if (status != SAO_OK) {
+            plugin.lifecycle = plugin_runtime_state::cleanup_pending;
             retain_plugin_error(plugin, "teardown", status,
                                 "AngelScript sdk_binding deactivate failed");
             return status;
         }
         plugin.binding = nullptr;
+    }
+    if (plugin.module != nullptr && plugin.engine != nullptr) {
+        const int32_t status = sao_plugins_ashost_bind_ctx(
+            plugin.engine, nullptr, plugin.module_name.c_str());
+        if (status != SAO_OK) {
+            plugin.lifecycle = plugin_runtime_state::cleanup_pending;
+            retain_plugin_error(plugin, "teardown", status,
+                                "AngelScript module context cleanup failed");
+            return status;
+        }
     }
     if (plugin.context != nullptr) {
         plugin.context->SetUserData(nullptr, kPluginContextUserDataSlot);
@@ -261,14 +282,40 @@ int32_t teardown_plugin_locked(as_plugin_s& plugin) {
         plugin.context = nullptr;
     }
     if (plugin.module != nullptr && plugin.engine != nullptr) {
-        (void)sao_plugins_ashost_bind_ctx(plugin.engine, nullptr, plugin.module_name.c_str());
         plugin.engine->DiscardModule(plugin.module_name.c_str());
         plugin.module = nullptr;
     }
     plugin.bound_context = nullptr;
     plugin.lifecycle = plugin_runtime_state::dead;
+    plugin.unload_owner = {};
+    plugin.unload_hook_completed = false;
     return SAO_OK;
 }
+
+int32_t rollback_failed_load(const shared_plugin_state& plugin, int32_t failure,
+                             as_plugin_handle_t* out_plugin) noexcept {
+    if (!plugin)
+        return failure;
+    int32_t cleanup_status = SAO_OK;
+    try {
+        std::lock_guard lock(plugin->call_mutex);
+        cleanup_status = teardown_plugin_locked(*plugin);
+    } catch (...) {
+        cleanup_status = SAO_ERR_OS_CALL_FAILED;
+        plugin->lifecycle = plugin_runtime_state::cleanup_pending;
+    }
+    if (cleanup_status == SAO_OK)
+        return failure;
+    const int32_t register_status = register_plugin_state(plugin);
+    if (register_status == SAO_OK ||
+        register_status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS) {
+        if (out_plugin != nullptr)
+            *out_plugin = plugin.get();
+        return cleanup_status;
+    }
+    return register_status;
+}
+
 
 #endif
 
@@ -281,12 +328,20 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_load_scri
         return SAO_ERR_INVALID_ARGUMENT;
     *out_plugin = nullptr;
     if (engine == nullptr || plugin_dir == nullptr || entry_relative == nullptr ||
-        plugin_id_utf8 == nullptr || entry_relative[0] == '\0' || plugin_id_utf8[0] == '\0') {
+        plugin_id_utf8 == nullptr || entry_relative[0] == '\0' or plugin_id_utf8[0] == '\0') {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    shared_plugin_state plugin;
     try {
 #if defined(SAO_HAS_ANGELSCRIPT)
-        std::lock_guard engine_lock(engine_execution_mutex());
+        const shared_host_state host_state = acquire_host_for_engine(engine);
+        if (!host_state)
+            return SAO_ERR_HANDLE_INVALID;
+        host_instance_lease host_instance;
+        const int32_t admission_status = host_instance.acquire(host_state);
+        if (admission_status != SAO_OK)
+            return admission_status;
+        engine_execution_guard engine_lock;
         const std::filesystem::path path =
             std::filesystem::path(plugin_dir) / path_from_utf8(entry_relative);
         std::string source;
@@ -297,56 +352,40 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_load_scri
         if (status != SAO_OK)
             return status;
         const int32_t stdlib_status = sao_plugins_ashost_install_stdlib(engine);
-        if (stdlib_status != SAO_OK && stdlib_status != SAO_ERR_NOT_IMPLEMENTED) {
+        if (stdlib_status != SAO_OK and stdlib_status != SAO_ERR_NOT_IMPLEMENTED)
             return stdlib_status;
-        }
 
-        auto plugin = std::make_shared<as_plugin_s>();
+        plugin = std::make_shared<as_plugin_s>();
+        plugin->host_state = host_state;
+        plugin->host_instance = std::move(host_instance);
         plugin->engine = engine;
         plugin->bound_context = ctx_ptr;
         plugin->plugin_id = plugin_id_utf8;
-        plugin->module_name = "sao_plugin_" + plugin->plugin_id;
+        plugin->module_name = next_module_name(plugin->plugin_id);
         plugin->module = engine->GetModule(plugin->module_name.c_str(), asGM_ALWAYS_CREATE);
         if (plugin->module == nullptr)
-            return SAO_ERR_OS_CALL_FAILED;
+            return rollback_failed_load(plugin, SAO_ERR_OS_CALL_FAILED, out_plugin);
         constexpr char bridge_section[] = "PluginContext@ ctx;";
         if (plugin->module->AddScriptSection("sao_module_bridge", bridge_section,
-                                             sizeof(bridge_section) - 1) < 0 ||
-            plugin->module->AddScriptSection(entry_relative, source.c_str(), source.size()) < 0 ||
+                                             sizeof(bridge_section) - 1) < 0 or
+            plugin->module->AddScriptSection(entry_relative, source.c_str(), source.size()) < 0 or
             plugin->module->Build() < 0) {
-            engine->DiscardModule(plugin->module_name.c_str());
-            plugin->module = nullptr;
-            return SAO_ERR_INVALID_ARGUMENT;
+            return rollback_failed_load(plugin, SAO_ERR_INVALID_ARGUMENT, out_plugin);
         }
         status = sao_plugins_ashost_bind_ctx(engine, ctx_ptr, plugin->module_name.c_str());
-        if (status != SAO_OK) {
-            engine->DiscardModule(plugin->module_name.c_str());
-            plugin->module = nullptr;
-            return status;
-        }
+        if (status != SAO_OK)
+            return rollback_failed_load(plugin, status, out_plugin);
         status = sdk_binding::sao_plugins_binding_angel_activate(
             reinterpret_cast<sdk_binding::plugin_context_ptr>(ctx_ptr), engine, &plugin->binding);
-        if (status != SAO_OK) {
-            (void)sao_plugins_ashost_bind_ctx(engine, nullptr, plugin->module_name.c_str());
-            engine->DiscardModule(plugin->module_name.c_str());
-            plugin->module = nullptr;
-            return status;
-        }
+        if (status != SAO_OK)
+            return rollback_failed_load(plugin, status, out_plugin);
         plugin->context = engine->CreateContext();
-        if (plugin->context == nullptr) {
-            (void)sdk_binding::sao_plugins_binding_angel_deactivate(plugin->binding);
-            plugin->binding = nullptr;
-            (void)sao_plugins_ashost_bind_ctx(engine, nullptr, plugin->module_name.c_str());
-            engine->DiscardModule(plugin->module_name.c_str());
-            plugin->module = nullptr;
-            return SAO_ERR_OS_CALL_FAILED;
-        }
+        if (plugin->context == nullptr)
+            return rollback_failed_load(plugin, SAO_ERR_OS_CALL_FAILED, out_plugin);
         plugin->context->SetUserData(plugin.get(), kPluginContextUserDataSlot);
         status = register_plugin_state(plugin);
-        if (status != SAO_OK) {
-            (void)teardown_plugin_locked(*plugin);
-            return status;
-        }
+        if (status != SAO_OK)
+            return rollback_failed_load(plugin, status, out_plugin);
         *out_plugin = plugin.get();
         return SAO_OK;
 #else
@@ -354,7 +393,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_load_scri
         return SAO_ERR_NOT_IMPLEMENTED;
 #endif
     } catch (...) {
-        return SAO_ERR_OS_CALL_FAILED;
+        return rollback_failed_load(plugin, SAO_ERR_OS_CALL_FAILED, out_plugin);
     }
 }
 
@@ -438,22 +477,57 @@ sao_plugins_ashost_call_on_unload(as_plugin_handle_t plugin, bool* out_allow_unl
     *out_allow_unload = true;
     if (plugin == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    shared_plugin_state state;
     try {
 #if defined(SAO_HAS_ANGELSCRIPT)
-        const shared_plugin_state state = acquire_plugin_state(plugin);
+        state = acquire_plugin_state(plugin);
         if (!state)
             return SAO_ERR_HANDLE_INVALID;
         std::lock_guard lock(state->call_mutex);
-        if (state->lifecycle != plugin_runtime_state::ready)
+        const std::thread::id owner = std::this_thread::get_id();
+        if (state->lifecycle == plugin_runtime_state::ready) {
+            state->lifecycle = plugin_runtime_state::unloading;
+            state->unload_owner = owner;
+            state->unload_hook_completed = false;
+        } else if (state->lifecycle == plugin_runtime_state::unloading) {
+            if (state->unload_owner != owner)
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            if (state->unload_hook_completed)
+                return SAO_OK;
+        } else {
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        }
         auto* function = find_hook(state.get(), "on_unload");
-        return function == nullptr
-                   ? SAO_OK
-                   : execute_lifecycle(*state, function, "on_unload", false, out_allow_unload);
+        if (function == nullptr) {
+            state->unload_hook_completed = true;
+            return SAO_OK;
+        }
+        const int32_t status = execute_lifecycle(*state, function, "on_unload", false,
+                                                  out_allow_unload);
+        if (status != SAO_OK || !*out_allow_unload) {
+            state->lifecycle = plugin_runtime_state::ready;
+            state->unload_owner = {};
+            state->unload_hook_completed = false;
+        } else {
+            state->unload_hook_completed = true;
+        }
+        return status;
 #else
         return SAO_ERR_NOT_IMPLEMENTED;
 #endif
     } catch (...) {
+        if (state) {
+            try {
+                std::lock_guard lock(state->call_mutex);
+                if (state->unload_owner == std::this_thread::get_id() &&
+                    state->lifecycle == plugin_runtime_state::unloading) {
+                    state->lifecycle = plugin_runtime_state::ready;
+                    state->unload_owner = {};
+                    state->unload_hook_completed = false;
+                }
+            } catch (...) {
+            }
+        }
         retain_unexpected_lifecycle_error(plugin, "on_unload");
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -474,6 +548,7 @@ sao_plugins_ashost_call_hook(as_plugin_handle_t plugin, const char* hook_name,
         if (!state)
             return SAO_ERR_HANDLE_INVALID;
         std::lock_guard lock(state->call_mutex);
+        engine_execution_guard engine_lock;
         if (state->lifecycle != plugin_runtime_state::ready)
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
         auto* function = find_hook(state.get(), hook_name);
@@ -544,28 +619,53 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ashost_unload_script(as_plugin_handle_t plugin) {
     if (plugin == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    shared_plugin_state state;
     try {
 #if defined(SAO_HAS_ANGELSCRIPT)
-        const shared_plugin_state state = retire_plugin_state(plugin);
+        state = acquire_plugin_state(plugin);
         if (!state)
             return SAO_ERR_HANDLE_INVALID;
         std::lock_guard lock(state->call_mutex);
-        if (state->lifecycle != plugin_runtime_state::ready) {
-            (void)restore_plugin_state(state);
-            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        const std::thread::id owner = std::this_thread::get_id();
+        if (state->lifecycle == plugin_runtime_state::ready ||
+            state->lifecycle == plugin_runtime_state::cleanup_pending) {
+            state->lifecycle = plugin_runtime_state::unloading;
+            state->unload_owner = owner;
+        } else if (state->lifecycle == plugin_runtime_state::unloading) {
+            if (state->unload_owner != owner)
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        } else {
+            return SAO_ERR_HANDLE_INVALID;
         }
-        state->lifecycle = plugin_runtime_state::unloading;
         const int32_t status = teardown_plugin_locked(*state);
         if (status != SAO_OK) {
-            state->lifecycle = plugin_runtime_state::ready;
-            const int32_t restore_status = restore_plugin_state(state);
-            return restore_status == SAO_OK ? status : restore_status;
+            state->lifecycle = plugin_runtime_state::cleanup_pending;
+            state->unload_owner = {};
+            state->unload_hook_completed = false;
+            return status;
         }
-        return status;
+        const shared_plugin_state retired = retire_plugin_state(plugin);
+        if (!retired)
+            return SAO_ERR_HANDLE_INVALID;
+        state->host_instance.reset();
+        state->host_state.reset();
+        return SAO_OK;
 #else
         return SAO_ERR_NOT_IMPLEMENTED;
 #endif
     } catch (...) {
+        if (state) {
+            try {
+                std::lock_guard lock(state->call_mutex);
+                if (state->unload_owner == std::this_thread::get_id() &&
+                    state->lifecycle == plugin_runtime_state::unloading) {
+                    state->lifecycle = plugin_runtime_state::cleanup_pending;
+                    state->unload_owner = {};
+                    state->unload_hook_completed = false;
+                }
+            } catch (...) {
+            }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

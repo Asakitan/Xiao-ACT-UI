@@ -34,6 +34,26 @@ bool memory_callback_reentered(ContextState* state) noexcept {
 
 namespace {
 
+sao_sdk_status_t map_tts_status(sao_status_t status) noexcept {
+    switch (status) {
+    case SAO_STATUS_OK: return SAO_SDK_OK;
+    case SAO_STATUS_ERR_INVALID_ARGUMENT: return SAO_SDK_ERR_INVALID_ARGUMENT;
+    case SAO_STATUS_ERR_NOT_INITIALIZED: return SAO_SDK_ERR_NOT_INITIALIZED;
+    case SAO_STATUS_ERR_HANDLE_INVALID: return SAO_SDK_ERR_HANDLE_INVALID;
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL: return SAO_SDK_ERR_BUFFER_TOO_SMALL;
+    case SAO_STATUS_ERR_NOT_IMPLEMENTED: return SAO_SDK_ERR_NOT_IMPLEMENTED;
+    case SAO_STATUS_ERR_CANCELLED: return SAO_SDK_ERR_BUSY;
+    case SAO_STATUS_ERR_ABI_MISMATCH: return SAO_SDK_ERR_ABI_MISMATCH;
+    case SAO_STATUS_ERR_CAPABILITY_MISSING: return SAO_SDK_ERR_UNSUPPORTED;
+    case SAO_STATUS_ERR_ACCESS_DENIED: return SAO_SDK_ERR_ACCESS_DENIED;
+    case SAO_STATUS_ERR_NOT_FOUND: return SAO_SDK_ERR_NOT_FOUND;
+    case SAO_STATUS_ERR_ALREADY_EXISTS: return SAO_SDK_ERR_ALREADY_EXISTS;
+    case SAO_STATUS_ERR_READ_FAULT: return SAO_SDK_ERR_READ_FAULT;
+    case static_cast<sao_status_t>(-102): return SAO_SDK_ERR_BUSY;
+    default: return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
 constexpr uint32_t kProviderMinimumSize =
     static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, release) +
                           sizeof(static_cast<SaoSdkProviderVTable*>(nullptr)->release));
@@ -41,6 +61,20 @@ constexpr uint32_t kGpuHuntProviderMinimumSize =
     static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, gpu_hunt_read) +
                           sizeof(static_cast<SaoSdkProviderVTable*>(nullptr)->gpu_hunt_read));
 constexpr uint32_t kMemoryProviderMinimumSize = SAO_SDK_MEMORY_PROVIDER_REQUIRED_SIZE;
+constexpr size_t kMaximumTtsUtf8Bytes = 64u * 1024u;
+
+bool bounded_utf8_length(const char* value, size_t* out_length) noexcept {
+    if (out_length == nullptr) return false;
+    *out_length = 0u;
+    if (value == nullptr) return false;
+    for (size_t length = 0u; length < kMaximumTtsUtf8Bytes; ++length) {
+        if (value[length] == '\0') {
+            *out_length = length;
+            return true;
+        }
+    }
+    return false;
+}
 
 class MemoryCallbackScope {
   public:
@@ -808,35 +842,48 @@ sao_sdk_status_t SAO_SDK_CALL platform_gpu_hunt_read(void*, void* session_value,
 }
 
 std::vector<uint16_t> utf8_to_utf16(const char* value) {
-    if (value == nullptr)
-        return {};
-    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, nullptr, 0);
-    if (length <= 0)
-        return {};
-    std::vector<uint16_t> result(static_cast<size_t>(length));
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1,
-                            reinterpret_cast<wchar_t*>(result.data()), length) <= 0) {
+    size_t byte_length = 0u;
+    if (!bounded_utf8_length(value, &byte_length) || byte_length == 0u ||
+        byte_length > static_cast<size_t>(std::numeric_limits<int>::max())) {
         return {};
     }
+    const int length = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
+        nullptr, 0);
+    if (length <= 0)
+        return {};
+    std::vector<uint16_t> result(static_cast<size_t>(length) + 1u);
+    if (MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
+            reinterpret_cast<wchar_t*>(result.data()), length) != length) {
+        return {};
+    }
+    result[static_cast<size_t>(length)] = 0u;
     return result;
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_tts_speak(void*, const char* text_utf8, float volume,
                                                  float rate) {
-    const auto text = utf8_to_utf16(text_utf8);
-    if (text.empty())
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    const int32_t native_rate = static_cast<int32_t>(std::clamp(rate, -10.0f, 10.0f));
-    const int32_t native_volume = static_cast<int32_t>(std::clamp(volume, 0.0f, 1.0f) * 100.0f);
-    return static_cast<sao_sdk_status_t>(
-        sao_ui_alerts_speak(text.data(), nullptr, native_rate, native_volume));
+    try {
+        if (!std::isfinite(volume) || !std::isfinite(rate)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        const auto text = utf8_to_utf16(text_utf8);
+        if (text.empty())
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        const int32_t native_rate = static_cast<int32_t>(std::clamp(rate, -10.0f, 10.0f));
+        const int32_t native_volume = static_cast<int32_t>(std::clamp(volume, 0.0f, 1.0f) * 100.0f);
+        return map_tts_status(sao_ui_alerts_speak(
+            text.data(), nullptr, native_rate, native_volume));
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_tts_stop(void*) {
-    // SAPI's SPF_PURGEBEFORESPEAK flag is exercised by alerts_speak.
-    // A zero-volume word-joiner replaces the queue without producing audio.
-    constexpr uint16_t kSilentPurge[] = {0x2060u, 0u};
-    return static_cast<sao_sdk_status_t>(sao_ui_alerts_speak(kSilentPurge, nullptr, 0, 0));
+    try {
+        return map_tts_status(sao_ui_alerts_stop());
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }
 
 void SAO_ENGINE_CALL platform_render_bridge_release(void* user_data) {
@@ -1822,6 +1869,7 @@ sao_sdk_status_t memory_enumerate_modules(ContextState* state, SaoSdkMemoryModul
 
 sao_sdk_status_t provider_tts_speak(ContextState* state, const char* text_utf8, float volume,
                                     float rate) {
+    if (!std::isfinite(volume) || !std::isfinite(rate)) return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
     if (text_utf8 == nullptr)

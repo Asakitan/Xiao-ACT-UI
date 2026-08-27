@@ -96,10 +96,12 @@ extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
 sao_plugins_binding_angel_json_to_dict(asIScriptEngine* engine, const char* utf8_json) {
     if (engine == nullptr || utf8_json == nullptr)
         return nullptr;
+    size_t input_size = 0;
+    if (!sao_plugins_binding_bounded_json_c_string(utf8_json, input_size)) return nullptr;
     language_binding_request request{};
     request.runtime = engine;
     request.input = reinterpret_cast<const uint8_t*>(utf8_json);
-    request.input_size = std::strlen(utf8_json);
+    request.input_size = input_size;
     request.out_object = &request.value;
     return sao_plugins_binding_dispatch_provider(language_host_kind::angel,
                                                  language_binding_operation::json_to_value,

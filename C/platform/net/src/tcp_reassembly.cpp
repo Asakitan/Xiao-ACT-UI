@@ -13,7 +13,6 @@
 #include <array>
 #include <cstring>
 #include <deque>
-#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -117,6 +116,9 @@ static bool parse_pcap_frame(const uint8_t* pkt, size_t size, ParsedTcp& out) {
         uint8_t ihl = static_cast<uint8_t>(ip[0] & 0x0f);
         size_t ip_header_len = static_cast<size_t>(ihl) * 4u;
         if (ip_header_len < 20 || ip_size < ip_header_len) return false;
+        const uint16_t total_length = static_cast<uint16_t>((ip[2] << 8) | ip[3]);
+        if (total_length < ip_header_len || total_length > ip_size) return false;
+        ip_size = total_length;
         uint8_t proto = ip[9];
         if (proto != 6) return false;  // not TCP
 
@@ -155,6 +157,10 @@ static bool parse_pcap_frame(const uint8_t* pkt, size_t size, ParsedTcp& out) {
 
     if (ip_ver == 6) {
         if (ip_size < 40) return false;
+        const uint16_t payload_length = static_cast<uint16_t>((ip[4] << 8) | ip[5]);
+        const size_t total_length = 40u + static_cast<size_t>(payload_length);
+        if (total_length > ip_size) return false;
+        ip_size = total_length;
         uint8_t next_hdr = ip[6];
         // Only handle the base case: IPv6 -> TCP with no extension chain.
         if (next_hdr != 6) return false;
@@ -187,6 +193,11 @@ static bool parse_pcap_frame(const uint8_t* pkt, size_t size, ParsedTcp& out) {
 }
 
 // ── Per-flow state ─────────────────────────────────────────────────────
+struct OutOfOrderSegment {
+    uint32_t seq = 0;
+    std::vector<uint8_t> data;
+};
+
 struct TcpFlow {
     sao_net_stream_id_t stream_id = 0;
     // ISN + next_seq are 32-bit; comparisons use wrapping arithmetic.
@@ -195,7 +206,7 @@ struct TcpFlow {
     uint64_t last_seen_ms = 0;
     uint64_t buffered_bytes = 0;  // in-order bytes still sitting in `pending`
     std::vector<uint8_t> pending;  // in-order but not yet popped
-    std::map<uint32_t, std::vector<uint8_t>> out_of_order;
+    std::vector<OutOfOrderSegment> out_of_order;
 };
 
 // Compare seq numbers with wrap-around: returns true if a is "less than" b
@@ -311,44 +322,69 @@ static void publish_pending(sao_net_reassembler_s* r, TcpFlow& flow) {
 
 // Try to consume OOO segments now that next_seq has advanced.
 static void drain_ooo(sao_net_reassembler_s* r, TcpFlow& flow) {
-    while (!flow.out_of_order.empty()) {
-        auto it = flow.out_of_order.begin();
-        uint32_t seq = it->first;
-        if (seq == flow.next_seq) {
-            auto data = std::move(it->second);
-            flow.out_of_order.erase(it);
-            flow.pending.insert(flow.pending.end(), data.begin(), data.end());
-            flow.buffered_bytes = flow.pending.size();
-            flow.next_seq = static_cast<uint32_t>(flow.next_seq + data.size());
-            continue;
-        }
-        // If the front seq is behind next_seq entirely, it's a fully
-        // covered retransmit — drop it silently.
-        uint32_t delta = seq_delta(seq, flow.next_seq);
-        if (delta > 0 && delta <= it->second.size()) {
-            // partial overlap: trim and consume
-            auto data = std::move(it->second);
-            flow.out_of_order.erase(it);
-            uint32_t skip = delta;
-            if (skip < data.size()) {
-                flow.pending.insert(flow.pending.end(),
-                                    data.begin() +
-                                        static_cast<ptrdiff_t>(skip),
-                                    data.end());
-                flow.buffered_bytes = flow.pending.size();
-                flow.next_seq = static_cast<uint32_t>(flow.next_seq +
-                                                    data.size() - skip);
+    for (;;) {
+        size_t candidate = static_cast<size_t>(-1);
+        uint32_t candidate_behind = 0;
+        for (size_t index = 0; index < flow.out_of_order.size();) {
+            auto& segment = flow.out_of_order[index];
+            if (seq_lt(segment.seq, flow.next_seq)) {
+                const uint32_t behind = seq_delta(segment.seq, flow.next_seq);
+                if (behind >= segment.data.size()) {
+                    flow.out_of_order.erase(flow.out_of_order.begin() +
+                                            static_cast<ptrdiff_t>(index));
+                    continue;
+                }
+                if (candidate == static_cast<size_t>(-1) ||
+                    behind < candidate_behind) {
+                    candidate = index;
+                    candidate_behind = behind;
+                }
+            } else if (segment.seq == flow.next_seq) {
+                candidate = index;
+                candidate_behind = 0;
+                break;
             }
-            continue;
+            ++index;
         }
-        if (seq_lt(seq, flow.next_seq)) {
-            // fully behind → drop retransmit
-            flow.out_of_order.erase(it);
-            continue;
-        }
-        break;  // still ahead of next_seq
+        if (candidate == static_cast<size_t>(-1)) break;
+        auto segment = std::move(flow.out_of_order[candidate]);
+        flow.out_of_order.erase(flow.out_of_order.begin() +
+                                static_cast<ptrdiff_t>(candidate));
+        const size_t skip = static_cast<size_t>(candidate_behind);
+        if (skip >= segment.data.size()) continue;
+        flow.pending.insert(flow.pending.end(), segment.data.begin() +
+                                                static_cast<ptrdiff_t>(skip),
+                            segment.data.end());
+        flow.buffered_bytes = flow.pending.size();
+        flow.next_seq = static_cast<uint32_t>(
+            flow.next_seq + segment.data.size() - skip);
     }
     publish_pending(r, flow);
+}
+
+static void enforce_ooo_cap(sao_net_reassembler_s* r, TcpFlow& flow) {
+    while (!flow.out_of_order.empty()) {
+        size_t total = 0;
+        for (const auto& segment : flow.out_of_order) {
+            total += segment.data.size();
+        }
+        if (total <= r->cfg.max_bytes_per_stream) break;
+
+        size_t farthest = 0;
+        uint32_t farthest_distance =
+            seq_delta(flow.next_seq, flow.out_of_order[0].seq);
+        for (size_t index = 1; index < flow.out_of_order.size(); ++index) {
+            const uint32_t distance =
+                seq_delta(flow.next_seq, flow.out_of_order[index].seq);
+            if (distance > farthest_distance) {
+                farthest = index;
+                farthest_distance = distance;
+            }
+        }
+        flow.out_of_order.erase(flow.out_of_order.begin() +
+                                static_cast<ptrdiff_t>(farthest));
+        r->stats.packets_dropped_no_capacity += 1;
+    }
 }
 
 // Evict flows past the timeout.  Their remaining bytes are flushed.
@@ -471,29 +507,22 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_reassembler_ingest(
         return SAO_STATUS_OK;
     }
 
-    // Out-of-order (future) segment.  Dedup on identical seq.
-    auto ooo_it = flow.out_of_order.find(p.seq);
-    if (ooo_it != flow.out_of_order.end()) {
-        if (ooo_it->second.size() >= p.payload_len) {
+    // Out-of-order future segment. Distances from next_seq are unsigned
+    // wrap-aware values; no numeric ordering is used across the 32-bit wrap.
+    for (auto& segment : flow.out_of_order) {
+        if (segment.seq != p.seq) continue;
+        if (segment.data.size() >= p.payload_len) {
             reasm->stats.packets_dropped_retransmit += 1;
             return SAO_STATUS_OK;
         }
-        // Larger version — replace.
-        ooo_it->second.assign(p.payload, p.payload + p.payload_len);
+        segment.data.assign(p.payload, p.payload + p.payload_len);
+        enforce_ooo_cap(reasm, flow);
         return SAO_STATUS_OK;
     }
-    flow.out_of_order.emplace(
-        p.seq, std::vector<uint8_t>(p.payload, p.payload + p.payload_len));
+    flow.out_of_order.push_back(OutOfOrderSegment{
+        p.seq, std::vector<uint8_t>(p.payload, p.payload + p.payload_len)});
 
-    // Cap runaway OOO storage by evicting the oldest entry that is
-    // strictly ahead by more than max_bytes_per_stream.
-    while (!flow.out_of_order.empty()) {
-        size_t total = 0;
-        for (auto& kv : flow.out_of_order) total += kv.second.size();
-        if (total <= reasm->cfg.max_bytes_per_stream) break;
-        flow.out_of_order.erase(flow.out_of_order.rbegin()->first);
-        reasm->stats.packets_dropped_no_capacity += 1;
-    }
+    enforce_ooo_cap(reasm, flow);
     return SAO_STATUS_OK;
 }
 
@@ -527,13 +556,27 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_reassembler_flush_stream(
     for (auto& kv : reasm->flows) {
         if (kv.second.stream_id != stream_id) continue;
         TcpFlow& flow = kv.second;
-        // Fold OOO tail into pending in whatever order it sits — after
-        // a flush we don't care about gaps.
-        for (auto& ooo : flow.out_of_order) {
-            flow.pending.insert(flow.pending.end(), ooo.second.begin(),
-                                ooo.second.end());
+        // Flush the nearest segment by wrap-aware distance, skipping any gap.
+        while (!flow.out_of_order.empty()) {
+            size_t nearest = 0;
+            uint32_t nearest_distance =
+                seq_delta(flow.next_seq, flow.out_of_order[0].seq);
+            for (size_t index = 1; index < flow.out_of_order.size(); ++index) {
+                const uint32_t distance =
+                    seq_delta(flow.next_seq, flow.out_of_order[index].seq);
+                if (distance < nearest_distance) {
+                    nearest = index;
+                    nearest_distance = distance;
+                }
+            }
+            auto segment = std::move(flow.out_of_order[nearest]);
+            flow.out_of_order.erase(flow.out_of_order.begin() +
+                                    static_cast<ptrdiff_t>(nearest));
+            flow.next_seq = segment.seq;
+            flow.pending.insert(flow.pending.end(), segment.data.begin(),
+                                segment.data.end());
+            flow.next_seq = static_cast<uint32_t>(flow.next_seq + segment.data.size());
         }
-        flow.out_of_order.clear();
         flow.buffered_bytes = flow.pending.size();
         if (!flow.pending.empty()) {
             std::vector<uint8_t> chunk;

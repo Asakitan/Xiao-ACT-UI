@@ -388,11 +388,12 @@ WEB_DIR = _runtime_first("web")
 # 可写数据 (exe 旁边)
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 
-# 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
-DEFAULT_UPDATE_HOST = "http://x2.sjcmc.cn:15018"
+# 远程 update/workshop 生产地址固定为 HTTPS origin.
+DEFAULT_UPDATE_HOST = "https://x2.sjcmc.cn:15018"
+WORKSHOP_SERVER_URL = DEFAULT_UPDATE_HOST
 DEFAULT_LICENSE_SERVER = "https://x2.sjcmc.cn:15522"
 UPDATE_CHANNEL = "stable"
-UPDATE_TARGET = "windows-x64"
+UPDATE_TARGET = "windows-x64-native"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"

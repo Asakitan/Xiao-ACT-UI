@@ -28,57 +28,68 @@ struct alias_registry {
 
 struct method_mapping {
     const char* legacy_name;
-    sdk_method_id target;
+    uint16_t target;
 };
 
-constexpr method_mapping kDefaultMappings[] = {
-    {"plugin_id", sdk_method_id::prop_plugin_id},
-    {"path", sdk_method_id::prop_path},
-    {"web_path", sdk_method_id::prop_web_path},
-    {"assets_path", sdk_method_id::prop_assets_path},
-    {"subscribe", sdk_method_id::method_subscribe},
-    {"unsubscribe", sdk_method_id::method_unsubscribe},
-    {"emit", sdk_method_id::method_emit},
-    {"publish", sdk_method_id::method_emit},
-    {"get_setting", sdk_method_id::method_get_setting},
-    {"setting", sdk_method_id::method_setting},
-    {"set_setting", sdk_method_id::method_set_setting},
-    {"set_defaults", sdk_method_id::method_set_defaults},
-    {"register_ui_panel", sdk_method_id::method_register_ui_panel},
-    {"register_script", sdk_method_id::method_register_ui_panel},
-    {"set_overlay", sdk_method_id::method_set_overlay},
-    {"register_hotkey", sdk_method_id::method_register_hotkey},
-    {"add_hotkey", sdk_method_id::method_register_hotkey},
-    {"register_menu_category",
-     sdk_method_id::method_register_menu_category},
-    {"register_menu_surface", sdk_method_id::method_register_menu_surface},
-    {"register_action_handler", sdk_method_id::method_register_action_handler},
-    {"request_redraw", sdk_method_id::method_request_redraw},
-    {"set_interval", sdk_method_id::method_set_interval},
-    {"set_timeout", sdk_method_id::method_set_timeout},
-    {"clear_timer", sdk_method_id::method_clear_timer},
-    {"notify", sdk_method_id::method_notify},
-    {"dismiss_notify", sdk_method_id::method_dismiss_notify},
-    {"toast", sdk_method_id::method_toast},
-    {"register_report_view", sdk_method_id::method_register_report_view},
-    {"register_timer", sdk_method_id::method_register_timer},
-    // Phase 2 (P0 compat shim): 补 v1 老插件用到但未 alias 的 method。
-    // sdk_method_id enum 都已有对应值; 之前只是 shim table 没 alias, 派发时
-    // 命中 kUnknownMethod。全部追加后老插件的 register_* 调用直通 C loader。
-    {"register_parser_adapter", sdk_method_id::method_register_parser_adapter},
-    {"register_exporter", sdk_method_id::method_register_exporter},
-    {"register_formatter", sdk_method_id::method_register_formatter},
-    {"register_trigger_type", sdk_method_id::method_register_trigger_type},
-    {"register_data_source", sdk_method_id::method_register_data_source},
-    {"register_engine", sdk_method_id::method_register_engine},
-    {"register_render_hook", sdk_method_id::method_register_render_hook},
-    {"clear_overlay", sdk_method_id::method_set_overlay},
-    {"open_file", sdk_method_id::method_open_file},
-    {"open_window", sdk_method_id::method_open_file},
-    {"get_snapshot", sdk_method_id::method_get_snapshot},
-    {"snapshot_value", sdk_method_id::method_get_snapshot},
-    {"recent_events", sdk_method_id::method_get_snapshot},
-    {"load_local", sdk_method_id::method_load_local},
+constexpr method_mapping kMethodMappings[] = {
+    {"plugin_id", static_cast<uint16_t>(sdk_method_id::prop_plugin_id)},
+    {"path", static_cast<uint16_t>(sdk_method_id::prop_path)},
+    {"web_path", static_cast<uint16_t>(sdk_method_id::prop_web_path)},
+    {"assets_path", static_cast<uint16_t>(sdk_method_id::prop_assets_path)},
+    {"should_stop", kUnknownMethod},
+    {"get_plugin_id", static_cast<uint16_t>(sdk_method_id::prop_plugin_id)},
+    {"get_base_dir", static_cast<uint16_t>(sdk_method_id::prop_path)},
+    {"log", kUnknownMethod}, {"log_info", kUnknownMethod},
+    {"log_warn", kUnknownMethod}, {"log_error", kUnknownMethod},
+    {"subscribe", static_cast<uint16_t>(sdk_method_id::method_subscribe)},
+    {"subscribe_once", kUnknownMethod},
+    {"unsubscribe", static_cast<uint16_t>(sdk_method_id::method_unsubscribe)},
+    {"on", kUnknownMethod}, {"on_damage", kUnknownMethod}, {"on_heal", kUnknownMethod},
+    {"on_skill", kUnknownMethod}, {"on_boss", kUnknownMethod},
+    {"on_snapshot", kUnknownMethod}, {"on_encounter_finalized", kUnknownMethod},
+    {"emit", static_cast<uint16_t>(sdk_method_id::method_emit)},
+    {"publish", static_cast<uint16_t>(sdk_method_id::method_emit)},
+    {"time", static_cast<uint16_t>(sdk_method_id::method_time)},
+    {"get_snapshot", kUnknownMethod}, {"snapshot_value", kUnknownMethod},
+    {"recent_events", kUnknownMethod},
+    {"get_setting", static_cast<uint16_t>(sdk_method_id::method_get_setting)},
+    {"setting", static_cast<uint16_t>(sdk_method_id::method_setting)},
+    {"set_setting", static_cast<uint16_t>(sdk_method_id::method_set_setting)},
+    {"set_defaults", static_cast<uint16_t>(sdk_method_id::method_set_defaults)},
+    {"register_parser_adapter", kUnknownMethod}, {"register_exporter", kUnknownMethod},
+    {"register_formatter", kUnknownMethod}, {"register_trigger_type", kUnknownMethod},
+    {"register_report_view", kUnknownMethod}, {"register_timer", kUnknownMethod},
+    {"register_ui_panel", static_cast<uint16_t>(sdk_method_id::method_register_ui_panel)},
+    {"register_script", static_cast<uint16_t>(sdk_method_id::method_register_ui_panel)},
+    {"register_render_hook", kUnknownMethod},
+    {"set_overlay", static_cast<uint16_t>(sdk_method_id::method_set_overlay)},
+    {"clear_overlay", kUnknownMethod},
+    {"register_hotkey", static_cast<uint16_t>(sdk_method_id::method_register_hotkey)},
+    {"add_hotkey", static_cast<uint16_t>(sdk_method_id::method_register_hotkey)},
+    {"register_engine", kUnknownMethod}, {"register", kUnknownMethod},
+    {"register_data_source", kUnknownMethod}, {"register_menu_category", kUnknownMethod},
+    {"register_menu_surface", kUnknownMethod}, {"register_action_handler", kUnknownMethod},
+    {"add_menu_item", kUnknownMethod},
+    {"request_redraw", static_cast<uint16_t>(sdk_method_id::method_request_redraw)},
+    {"set_interval", static_cast<uint16_t>(sdk_method_id::method_set_interval)},
+    {"set_timeout", kUnknownMethod},
+    {"clear_timer", static_cast<uint16_t>(sdk_method_id::method_clear_timer)},
+    {"run_on_ui", kUnknownMethod}, {"notify", static_cast<uint16_t>(sdk_method_id::method_notify)},
+    {"dismiss_notify", kUnknownMethod}, {"toast", static_cast<uint16_t>(sdk_method_id::method_toast)},
+    {"open_file", kUnknownMethod}, {"open_window", kUnknownMethod},
+    {"create_compositor_layer", kUnknownMethod}, {"upload_compositor_frame", kUnknownMethod},
+    {"set_compositor_layer_mmf_source", kUnknownMethod},
+    {"set_compositor_layer_shared_texture_source", kUnknownMethod},
+    {"set_compositor_layer_position", kUnknownMethod}, {"set_compositor_layer_visible", kUnknownMethod},
+    {"set_compositor_layer_input", kUnknownMethod}, {"destroy_compositor_layer", kUnknownMethod},
+    {"compositor_gpu_interop_available", kUnknownMethod},
+    {"compositor_layer_shared_texture_active", kUnknownMethod},
+    {"compositor_display_refresh_hz", kUnknownMethod},
+    {"get_engine", kUnknownMethod}, {"get", kUnknownMethod}, {"get_engine_method", kUnknownMethod},
+    {"require_engine", kUnknownMethod}, {"call_engine", kUnknownMethod},
+    {"call_runtime", kUnknownMethod}, {"ensure_requirements", kUnknownMethod},
+    {"load_local", kUnknownMethod}, {"register_thread", kUnknownMethod},
+    {"set_owner_attr", kUnknownMethod}, {"owner_attr", kUnknownMethod},
 };
 
 constexpr const char* kSpecialMethods[] = {"metadata"};
@@ -106,13 +117,44 @@ char* duplicate_string(std::string_view value) noexcept {
     return output;
 }
 
-uint16_t lookup_default(std::string_view name) noexcept {
-    for (const auto& mapping : kDefaultMappings) {
-        if (name == mapping.legacy_name) {
-            return static_cast<uint16_t>(mapping.target);
-        }
+const method_mapping* find_builtin_mapping(std::string_view name) noexcept {
+    for (const auto& mapping : kMethodMappings) {
+        if (name == mapping.legacy_name) return &mapping;
     }
-    return kUnknownMethod;
+    return nullptr;
+}
+
+uint16_t lookup_default(std::string_view name) noexcept {
+    const auto* mapping = find_builtin_mapping(name);
+    return mapping == nullptr ? kUnknownMethod : mapping->target;
+}
+
+bool real_dispatch_method(sdk_method_id method) noexcept {
+    switch (method) {
+    case sdk_method_id::prop_plugin_id:
+    case sdk_method_id::prop_path:
+    case sdk_method_id::prop_web_path:
+    case sdk_method_id::prop_assets_path:
+    case sdk_method_id::method_subscribe:
+    case sdk_method_id::method_unsubscribe:
+    case sdk_method_id::method_emit:
+    case sdk_method_id::method_get_setting:
+    case sdk_method_id::method_setting:
+    case sdk_method_id::method_set_setting:
+    case sdk_method_id::method_set_defaults:
+    case sdk_method_id::method_register_ui_panel:
+    case sdk_method_id::method_set_overlay:
+    case sdk_method_id::method_register_hotkey:
+    case sdk_method_id::method_request_redraw:
+    case sdk_method_id::method_set_interval:
+    case sdk_method_id::method_clear_timer:
+    case sdk_method_id::method_notify:
+    case sdk_method_id::method_toast:
+    case sdk_method_id::method_time:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool special_method(std::string_view name) noexcept {
@@ -121,16 +163,16 @@ bool special_method(std::string_view name) noexcept {
 }
 
 bool fixed_fail_closed_method(std::string_view name) noexcept {
-    return name == "register_menu_surface" || name == "register_action_handler";
-}
-
-bool fixed_menu_action_method(std::string_view name) noexcept {
-    return name == "register_menu_category" || fixed_fail_closed_method(name);
+    const auto* mapping = find_builtin_mapping(name);
+    return mapping != nullptr && mapping->target == kUnknownMethod;
 }
 
 int32_t write_json_result(const ordered_json& value,
                           sdk_binding::sdk_context_call_request* request) {
     const std::string serialized = value.dump();
+    if (!sdk_binding::sao_plugins_binding_validate_json_text(
+            reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size()))
+        return SAO_ERR_INVALID_ARGUMENT;
     if (request->out_required != nullptr) {
         *request->out_required = serialized.size() + 1;
     }
@@ -170,11 +212,19 @@ const char* support_name(int32_t status) noexcept {
 
 ordered_json method_report(const SaoSdkContext* ctx,
                            const method_mapping& mapping) {
-    const int32_t status = sdk_binding::sao_plugins_sdk_context_method_status(
-        ctx, mapping.target);
+    if (mapping.target == kUnknownMethod) {
+        return ordered_json{
+            {"legacy", mapping.legacy_name},
+            {"target", ""},
+            {"status", "unsupported"},
+            {"status_code", loader::SAO_PLUGINS_ERR_UNSUPPORTED},
+        };
+    }
+    const auto target = static_cast<sdk_method_id>(mapping.target);
+    const int32_t status = sdk_binding::sao_plugins_sdk_context_method_status(ctx, target);
     return ordered_json{
         {"legacy", mapping.legacy_name},
-        {"target", sdk_binding::sao_plugins_binding_method_name(mapping.target)},
+        {"target", sdk_binding::sao_plugins_binding_method_name(target)},
         {"status", support_name(status)},
         {"status_code", status},
     };
@@ -202,7 +252,7 @@ sao_plugins_compat_v1_report(plugin_context_ptr ctx,
             {"status", "supported"},
             {"status_code", SAO_OK},
         });
-        for (const auto& mapping : kDefaultMappings) {
+        for (const auto& mapping : kMethodMappings) {
             methods.push_back(method_report(sdk, mapping));
         }
         ordered_json report{
@@ -252,7 +302,7 @@ extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
 sao_plugins_compat_is_v1_method(const char* method_name) {
     if (method_name == nullptr || method_name[0] == '\0') return false;
     if (special_method(method_name) ||
-        lookup_default(method_name) != kUnknownMethod) {
+        find_builtin_mapping(method_name) != nullptr) {
         return true;
     }
     auto& aliases = registry();
@@ -268,7 +318,13 @@ sao_plugins_compat_convert_open_file_filters(
     *out_v2_pipe_string = nullptr;
     if (v1_filters_json == nullptr) return SAO_ERR_INVALID_ARGUMENT;
     try {
-        const auto source = ordered_json::parse(v1_filters_json);
+        size_t raw_size = 0;
+        if (!sdk_binding::sao_plugins_binding_bounded_json_c_string(
+            v1_filters_json, raw_size) ||
+            !sdk_binding::sao_plugins_binding_validate_json_text(
+                reinterpret_cast<const uint8_t*>(v1_filters_json), raw_size))
+            return SAO_ERR_INVALID_ARGUMENT;
+        const auto source = ordered_json::parse(v1_filters_json, v1_filters_json + raw_size);
         if (!source.is_array()) return SAO_ERR_INVALID_ARGUMENT;
         std::string output;
         for (const auto& item : source) {
@@ -295,6 +351,12 @@ sao_plugins_compat_convert_open_file_filters(
             output.push_back('|');
             output += pattern;
         }
+        if (output.size() > sdk_binding::kMaximumBindingJsonBytes)
+            return SAO_ERR_INVALID_ARGUMENT;
+        const auto output_json = ordered_json(output).dump();
+        if (!sdk_binding::sao_plugins_binding_validate_json_text(
+                reinterpret_cast<const uint8_t*>(output_json.data()), output_json.size()))
+            return SAO_ERR_INVALID_ARGUMENT;
         *out_v2_pipe_string = duplicate_string(output);
         return *out_v2_pipe_string == nullptr ? SAO_ERR_OS_CALL_FAILED
                                                : SAO_OK;
@@ -322,8 +384,10 @@ sao_plugins_compat_ctx_v1_register_alias(const char* old_name,
         new_method_id >= static_cast<uint16_t>(sdk_method_id::method_count_)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    if (fixed_menu_action_method(old_name) && new_method_id != lookup_default(old_name)) {
-        return SAO_ERR_INVALID_ARGUMENT;
+    if (!real_dispatch_method(static_cast<sdk_method_id>(new_method_id)))
+        return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+    if (find_builtin_mapping(old_name) != nullptr) {
+        return lookup_default(old_name) == new_method_id ? SAO_OK : SAO_ERR_INVALID_ARGUMENT;
     }
     try {
         auto& aliases = registry();
@@ -338,13 +402,14 @@ sao_plugins_compat_ctx_v1_register_alias(const char* old_name,
 extern "C" SAO_PLUGINS_API uint16_t SAO_PLUGINS_CALL
 sao_plugins_compat_ctx_v1_lookup_alias(const char* old_name) {
     if (old_name == nullptr || old_name[0] == '\0') return kUnknownMethod;
-    if (fixed_menu_action_method(old_name))
-        return lookup_default(old_name);
+    if (fixed_fail_closed_method(old_name))
+        return kUnknownMethod;
     auto& aliases = registry();
     {
         std::lock_guard lock(aliases.mutex);
         const auto found = aliases.aliases.find(old_name);
-        if (found != aliases.aliases.end()) return found->second;
+        if (found != aliases.aliases.end() &&
+            real_dispatch_method(static_cast<sdk_method_id>(found->second))) return found->second;
     }
     return lookup_default(old_name);
 }

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog
@@ -1228,7 +1229,11 @@ class WorkshopPanel:
                     try:
                         from act_platform.runtime import act_plugin_import
                         act_plugin_import(self.owner, path)
-                    except ImportError:
+                    except ImportError as exc:
+                        if getattr(sys, "frozen", False):
+                            raise RuntimeError(
+                                f"native Workshop installer unavailable: {exc}"
+                            ) from exc
                         from act_platform.plugin_install import install_plugin_archive
                         from config import BASE_DIR
                         dest = os.path.join(BASE_DIR, 'user_plugins')

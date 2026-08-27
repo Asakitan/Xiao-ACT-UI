@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1835,6 +1836,10 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     auto wrapper = std::make_shared<emma_dict>();
     wrapper->items.emplace("plugin_id", runtime->plugin_id);
     wrapper->items.emplace("path", path_utf8(runtime->plugin_root));
+    wrapper->items.emplace("time", make_host_callable("ctx.time", [](std::vector<emma_value>) {
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        return emma_value(std::chrono::duration<double>(now).count());
+    }));
     wrapper->items.emplace(
         "log", make_host_callable("ctx.log", [context](std::vector<emma_value> arguments) {
             if (arguments.empty()) {

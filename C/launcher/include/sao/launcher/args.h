@@ -19,6 +19,11 @@ struct AppState;
 // false with `should_exit_out` set to true and `exit_code_out` populated.
 bool parseCommandLine(AppState& state, bool& should_exit_out, int& exit_code_out) noexcept;
 
+bool parseCommandLineText(const wchar_t* command_line,
+                          AppState& state,
+                          bool& should_exit_out,
+                          int& exit_code_out) noexcept;
+
 // Testable form: takes an explicit argv array (already parsed by
 // CommandLineToArgvW).
 bool parseCommandLineFromArgv(int argc,

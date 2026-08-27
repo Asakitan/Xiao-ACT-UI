@@ -126,6 +126,6 @@ adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
 - 无 3rdparty JSON 依赖 (compat/py_v1_manifest 内置手写 JSON 解析器)
 - 无 3rdparty 引擎依赖 (那些落在 ``*_host/`` 各自)
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/`` 目录, 需要 ``-DSAO_BUILD_TESTS=ON``。
+旧 ``tests/`` 目录、``SAO_BUILD_TESTS`` 与 CTest 注册已删除；本节不再是可运行入口。

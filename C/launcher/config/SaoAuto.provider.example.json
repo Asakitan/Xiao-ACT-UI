@@ -26,7 +26,9 @@
     "_update_comment": "原生 C++ 完整包更新使用独立 target，避免与已冻结的 Python 版本线混用。客户端只访问公网映射 15018，不访问服务器内部 9973。",
     "update": {
         "enabled": true,
-        "manifest_url": "http://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json"
+        "manifest_url": "https://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json",
+        "_server_tls_spki_sha256_comment": "Native update HTTPS SPKI pin; production pinned API requires the fixed d317 pin.",
+        "server_tls_spki_sha256": "d3171ec5b86303233b6abda8e83142293d6910099aedd0cdac947d276006db0a"
     },
 
     "_shell_comment": "Shell (crypter stub) provider 当前未接入 launcher；必须显式关闭或删除本节。",
@@ -44,8 +46,8 @@
 
     "_env_hints_comment": "以下不属于本 JSON，但部署时需设的环境变量：",
     "_env_hints": {
-        "SAO_WORKSHOP_BASE_URL": "http://x2.sjcmc.cn:15018/api/v1/workshop  (外部端口；服务端内部监听 9973)",
-        "SAO_UPDATE_HOST":       "http://x2.sjcmc.cn:15018                  (dev_publish CLI 使用的外部地址)",
+        "SAO_WORKSHOP_BASE_URL": "https://x2.sjcmc.cn:15018/api/v1/workshop (生产固定 origin；服务端内部监听 9973)",
+        "SAO_UPDATE_HOST":       "https://x2.sjcmc.cn:15018                  (dev_publish CLI 使用的外部地址)",
         "SAO_UPDATE_API_KEY":    "<publish_api_key>                         (必须在服务端启动前配置；服务端不再接受首次请求自动绑定)"
     }
 }

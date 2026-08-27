@@ -73,13 +73,19 @@ sao_status_t prepareLauncherLifecycle(
     bool force_cpp_only) noexcept {
     decision = {};
     if (force_cpp_only) {
-        sao_launcher_dual_run_config_default(&decision.dual_config);
+        sao_launcher_dual_run_config_v2_default(&decision.dual_config_v2);
+        decision.dual_config = decision.dual_config_v2.legacy;
         decision.selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
         decision.dual_config.mode = decision.selected_mode;
+        decision.dual_config_v2.legacy.mode = decision.selected_mode;
         return SAO_STATUS_OK;
     }
 
-    (void)sao_launcher_dual_run_config_load(&decision.dual_config);
+    const sao_status_t config_status =
+        sao_launcher_dual_run_config_v2_load(&decision.dual_config_v2);
+    if (config_status != SAO_STATUS_OK)
+        return config_status;
+    decision.dual_config = decision.dual_config_v2.legacy;
     LARGE_INTEGER started{};
     if (QueryPerformanceCounter(&started)) {
         decision.start_qpc = started.QuadPart;
@@ -89,6 +95,7 @@ sao_status_t prepareLauncherLifecycle(
     if (decision.child_process) {
         decision.selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
         decision.dual_config.mode = decision.selected_mode;
+        decision.dual_config_v2.legacy.mode = decision.selected_mode;
         return SAO_STATUS_OK;
     }
 
@@ -112,6 +119,7 @@ sao_status_t prepareLauncherLifecycle(
     }
 
     decision.dual_config.mode = decision.selected_mode;
+    decision.dual_config_v2.legacy.mode = decision.selected_mode;
     decision.active = true;
     return SAO_STATUS_OK;
 }
@@ -121,11 +129,36 @@ void completeLauncherLifecycle(
     int exit_code,
     const char* failure_hint) noexcept {
     if (decision.active) {
-        if (exit_code == SAO_EXIT_OK ||
-            exit_code == SAO_EXIT_HANDOFF_TO_PYTHON) {
+        if (exit_code == SAO_EXIT_OK) {
             (void)sao_rollout_record_success(
                 decision.selected_mode,
                 elapsedMilliseconds(decision.start_qpc));
+        } else if (exit_code == SAO_EXIT_HANDOFF_TO_PYTHON) {
+            sao_dual_run_handoff_snapshot handoff{};
+            const sao_status_t handoff_status =
+                sao_launcher_dual_run_take_handoff_result(&handoff);
+            if (handoff_status == SAO_STATUS_OK &&
+                handoff.state == SAO_DUAL_RUN_HANDOFF_SUCCEEDED) {
+                (void)sao_rollout_record_success(
+                    decision.selected_mode,
+                    elapsedMilliseconds(decision.start_qpc));
+            } else if (handoff_status == SAO_STATUS_OK &&
+                       handoff.state == SAO_DUAL_RUN_HANDOFF_FAILED) {
+                (void)sao_rollout_record_failure(
+                    decision.selected_mode,
+                    handoff.exit_code,
+                    "python_handoff");
+            } else {
+                const int32_t reason = handoff_status != SAO_STATUS_OK
+                    ? handoff_status
+                    : handoff.state != SAO_DUAL_RUN_HANDOFF_NONE
+                        ? handoff.state
+                        : SAO_LAUNCHER_SPAWN_FAILED;
+                (void)sao_rollout_record_failure(
+                    decision.selected_mode,
+                    reason,
+                    "python_handoff_result");
+            }
         } else if (exit_code != SAO_EXIT_ALREADY_RUNNING &&
                    exit_code != SAO_EXIT_BAD_ARGS) {
             (void)sao_rollout_record_failure(

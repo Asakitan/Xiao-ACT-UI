@@ -74,6 +74,7 @@ typedef struct sao_rollout_retreat_entry {
     int32_t  old_percent;
     int32_t  new_percent;
     char     reason[64];         // "3_of_5_failed", "manual_retreat", ...
+    uint64_t watermark;            // stats snapshot consumed by this retreat
 } sao_rollout_retreat_entry;
 
 typedef struct sao_rollout_config {

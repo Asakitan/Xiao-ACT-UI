@@ -16,7 +16,9 @@ using json = nlohmann::json;
 
 constexpr uint32_t kDefaultHeartbeatIntervalMs = 300000U;
 constexpr std::string_view kNativeUpdateManifestUrl =
-    "http://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
+    "https://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
+constexpr std::string_view kNativeUpdateTlsSpkiSha256 =
+    "d3171ec5b86303233b6abda8e83142293d6910099aedd0cdac947d276006db0a";
 
 std::mutex g_configuration_mutex;
 LauncherProviderConfiguration g_configuration;
@@ -42,6 +44,14 @@ bool isAllZero(const std::array<uint8_t, 32>& value) {
     uint8_t aggregate = 0;
     for (const uint8_t byte : value) aggregate |= byte;
     return aggregate == 0;
+}
+
+bool equalBytes(const std::array<uint8_t, 32>& left,
+                const std::array<uint8_t, 32>& right) {
+    uint8_t difference = 0;
+    for (size_t index = 0; index < left.size(); ++index)
+        difference |= static_cast<uint8_t>(left[index] ^ right[index]);
+    return difference == 0;
 }
 
 bool isPrintableAscii(std::string_view value) {
@@ -310,8 +320,21 @@ bool parseUpdate(const json& root, UpdateProviderConfiguration& output) {
         return false;
     }
     output.manifest_url = manifest_url->get<std::string>();
+    const auto tls_spki_pin = section->find("server_tls_spki_sha256");
+    if (tls_spki_pin == section->end() || !tls_spki_pin->is_string() ||
+        !decodeHex(tls_spki_pin->get_ref<const std::string&>(),
+                   output.server_tls_spki_sha256.data(),
+                   output.server_tls_spki_sha256.size())) {
+        return false;
+    }
+    std::array<uint8_t, 32> native_pin{};
+    if (!decodeHex(kNativeUpdateTlsSpkiSha256, native_pin.data(), native_pin.size())) {
+        return false;
+    }
     return validHttpManifestUrl(output.manifest_url) &&
-        output.manifest_url == kNativeUpdateManifestUrl;
+        output.manifest_url == kNativeUpdateManifestUrl &&
+        !isAllZero(output.server_tls_spki_sha256) &&
+        equalBytes(output.server_tls_spki_sha256, native_pin);
 }
 
 bool parsePlugins(const json& root, const fs::path& base,

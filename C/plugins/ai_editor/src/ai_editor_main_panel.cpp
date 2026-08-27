@@ -871,6 +871,14 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
         response.error = "backend response is not valid JSON-RPC 2.0";
         return response;
     }
+    const auto request_id = request["id"];
+    if (!document.contains("id") ||
+        document["id"].type() != request_id.type() ||
+        document["id"] != request_id) {
+        response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
+        response.error = "backend response id does not match the request";
+        return response;
+    }
     if (const auto error = document.find("error"); error != document.end() && error->is_object()) {
         response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
         response.error = error->value("message", "backend rejected the request");

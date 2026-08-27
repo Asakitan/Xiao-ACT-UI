@@ -36,6 +36,6 @@ PluginContext`` 直接可用 → 无需改一个字迁移。
   embeddable package)
 - 见 ``vendor_note.md`` —— 嵌入式 CPython 分发从哪拿
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/``。集成测试要求真实 CPython 存在, 否则跳过。
+旧 ``tests/``、Catch2 与 CTest 注册已删除；此前依赖真实 CPython 的集成结果仅作历史证据。

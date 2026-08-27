@@ -27,8 +27,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <condition_variable>
 #include <iterator>
+#include <limits>
 #include <mutex>
+#include <unordered_map>
 #include <new>
 
 namespace {
@@ -105,6 +108,114 @@ struct sao_ui_dcomp_bridge_s {
     void*                   _unused = nullptr;
 #endif
 };
+
+namespace {
+
+#if defined(_WIN32)
+void release_bridge_resources(sao_ui_dcomp_bridge_s* bridge) noexcept {
+    if (bridge == nullptr) return;
+    if (bridge->attached && bridge->dc_tgt != nullptr && bridge->dc_vis != nullptr &&
+        bridge->dc_dev != nullptr) {
+        (void)bridge->dc_tgt->SetRoot(nullptr);
+        (void)bridge->dc_vis->SetContent(nullptr);
+        (void)bridge->dc_dev->Commit();
+        bridge->attached = false;
+    }
+    safe_release(&bridge->upload_texture);
+    safe_release(&bridge->swap);
+    safe_release(&bridge->dc_vis);
+    safe_release(&bridge->dc_tgt);
+    safe_release(&bridge->dc_dev);
+    safe_release(&bridge->dxgi_fac);
+    safe_release(&bridge->dxgi_adp);
+    safe_release(&bridge->dxgi_dev);
+    safe_release(&bridge->d3d_ctx);
+    safe_release(&bridge->d3d_dev);
+    bridge->alive = false;
+}
+
+class BridgeCreateGuard {
+public:
+    explicit BridgeCreateGuard(sao_ui_dcomp_bridge_s* bridge) noexcept : bridge_(bridge) {}
+
+    ~BridgeCreateGuard() {
+        if (bridge_ != nullptr) {
+            release_bridge_resources(bridge_);
+            delete bridge_;
+        }
+    }
+
+    BridgeCreateGuard(const BridgeCreateGuard&) = delete;
+    BridgeCreateGuard& operator=(const BridgeCreateGuard&) = delete;
+
+    void commit() noexcept { bridge_ = nullptr; }
+
+private:
+    sao_ui_dcomp_bridge_s* bridge_ = nullptr;
+};
+class HostLeaseGuard {
+  public:
+    HostLeaseGuard(sao_ui_overlay_host_handle_t host, void* expected_hwnd,
+                   void** out_hwnd) noexcept
+        : status_(sao_ui_overlay_host_acquire_lease(
+              host, expected_hwnd, &lease_, out_hwnd)) {}
+
+    ~HostLeaseGuard() {
+        if (lease_ != nullptr) sao_ui_overlay_host_release_lease(lease_);
+    }
+    HostLeaseGuard(const HostLeaseGuard&) = delete;
+    HostLeaseGuard& operator=(const HostLeaseGuard&) = delete;
+    sao_status_t status() const noexcept { return status_; }
+
+  private:
+    void* lease_ = nullptr;
+    sao_status_t status_ = SAO_STATUS_ERR_UNKNOWN;
+};
+#endif
+
+struct BridgeRegistryEntry {
+    size_t active_leases = 0u;
+    bool destroying = false;
+};
+
+std::mutex g_bridge_registry_mu;
+std::condition_variable g_bridge_registry_cv;
+std::unordered_map<sao_ui_dcomp_bridge_s*, BridgeRegistryEntry> g_bridge_registry;
+
+class BridgeLease {
+public:
+    explicit BridgeLease(sao_ui_dcomp_bridge_s* bridge) : bridge_(bridge) {
+        if (bridge_ == nullptr) return;
+        std::lock_guard<std::mutex> lock(g_bridge_registry_mu);
+        const auto found = g_bridge_registry.find(bridge_);
+        if (found == g_bridge_registry.end() || found->second.destroying) {
+            bridge_ = nullptr;
+            return;
+        }
+        ++found->second.active_leases;
+    }
+
+    ~BridgeLease() {
+        if (bridge_ == nullptr) return;
+        {
+            std::lock_guard<std::mutex> lock(g_bridge_registry_mu);
+            const auto found = g_bridge_registry.find(bridge_);
+            if (found != g_bridge_registry.end() && found->second.active_leases != 0u)
+                --found->second.active_leases;
+        }
+        g_bridge_registry_cv.notify_all();
+    }
+
+    BridgeLease(const BridgeLease&) = delete;
+    BridgeLease& operator=(const BridgeLease&) = delete;
+    explicit operator bool() const noexcept { return bridge_ != nullptr; }
+    sao_ui_dcomp_bridge_s* get() const noexcept { return bridge_; }
+
+private:
+    sao_ui_dcomp_bridge_s* bridge_ = nullptr;
+};
+
+}
 
 #if defined(_WIN32)
 
@@ -188,9 +299,10 @@ sao_status_t attach_visual_tree(sao_ui_dcomp_bridge_s* bridge) {
 // ── create ──────────────────────────────────────────────────────────
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
-    sao_ui_overlay_host_handle_t /*host*/,
+    sao_ui_overlay_host_handle_t host,
     const SaoDcompBridgeConfig* config,
     sao_ui_dcomp_bridge_handle_t* out_handle) {
+    try {
     if (out_handle == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -199,10 +311,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
 #if !defined(_WIN32)
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #else
-    if (config == nullptr || config->hwnd == nullptr) {
+    if (host == nullptr || config == nullptr || config->hwnd == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (!::IsWindow(reinterpret_cast<HWND>(config->hwnd))) {
+    void* host_hwnd = nullptr;
+    HostLeaseGuard host_lease(host, config->hwnd, &host_hwnd);
+    const sao_status_t host_lease_status = host_lease.status();
+    if (host_lease_status != SAO_STATUS_OK) return host_lease_status;
+    const HWND config_hwnd = reinterpret_cast<HWND>(host_hwnd);
+    if (::GetWindowThreadProcessId(config_hwnd, nullptr) != ::GetCurrentThreadId()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -215,6 +332,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
     if (b == nullptr) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    BridgeCreateGuard create_guard(b);
     b->hwnd = reinterpret_cast<HWND>(config->hwnd);
     b->owner_thread = ::GetCurrentThreadId();
     b->width = config->width == 0 ? 1 : config->width;
@@ -224,7 +342,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
         ? static_cast<uint32_t>(DXGI_ALPHA_MODE_PREMULTIPLIED)
         : config->alpha_mode;
     if (b->alpha_mode != DXGI_ALPHA_MODE_PREMULTIPLIED) {
-        delete b;
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -235,8 +352,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
         b->d3d_dev->GetImmediateContext(&b->d3d_ctx);
         b->feature_level = b->d3d_dev->GetFeatureLevel();
         if (b->d3d_ctx == nullptr) {
-            safe_release(&b->d3d_dev);
-            delete b;
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         }
     } else {
@@ -257,9 +372,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
                 &b->d3d_dev, &b->feature_level, &b->d3d_ctx);
         }
         if (FAILED(hr) || b->d3d_dev == nullptr || b->d3d_ctx == nullptr) {
-            safe_release(&b->d3d_ctx);
-            safe_release(&b->d3d_dev);
-            delete b;
             return SAO_STATUS_ERR_DEVICE_LOST;
         }
     }
@@ -269,72 +381,37 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
         __uuidof(IDXGIDevice),
         reinterpret_cast<void**>(&b->dxgi_dev));
     if (FAILED(hr) || b->dxgi_dev == nullptr) {
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
     // ── 3. GetAdapter → IDXGIFactory2 ────────────────────────────
     hr = b->dxgi_dev->GetAdapter(&b->dxgi_adp);
     if (FAILED(hr) || b->dxgi_adp == nullptr) {
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     hr = b->dxgi_adp->GetParent(
         __uuidof(IDXGIFactory2),
         reinterpret_cast<void**>(&b->dxgi_fac));
     if (FAILED(hr) || b->dxgi_fac == nullptr) {
-        safe_release(&b->dxgi_adp);
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
     // ── 4. DCompositionCreateDevice + CreateTargetForHwnd + CreateVisual
-    IUnknown* dc_dev_iunk = nullptr;
     hr = g_pDCompositionCreateDevice(
         b->dxgi_dev,
         __uuidof(IDCompositionDevice),
-        reinterpret_cast<void**>(&dc_dev_iunk));
-    if (FAILED(hr) || dc_dev_iunk == nullptr) {
-        safe_release(&b->dxgi_fac);
-        safe_release(&b->dxgi_adp);
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
+        reinterpret_cast<void**>(&b->dc_dev));
+    if (FAILED(hr) || b->dc_dev == nullptr) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    b->dc_dev = reinterpret_cast<IDCompositionDevice*>(dc_dev_iunk);
 
     // topmost=TRUE per header line 111 (CreateTargetForHwnd second arg).
     hr = b->dc_dev->CreateTargetForHwnd(b->hwnd, TRUE, &b->dc_tgt);
     if (FAILED(hr) || b->dc_tgt == nullptr) {
-        safe_release(&b->dc_dev);
-        safe_release(&b->dxgi_fac);
-        safe_release(&b->dxgi_adp);
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     hr = b->dc_dev->CreateVisual(&b->dc_vis);
     if (FAILED(hr) || b->dc_vis == nullptr) {
-        safe_release(&b->dc_tgt);
-        safe_release(&b->dc_dev);
-        safe_release(&b->dxgi_fac);
-        safe_release(&b->dxgi_adp);
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 
@@ -344,36 +421,61 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
         attach_status = attach_visual_tree(b);
     }
     if (attach_status != SAO_STATUS_OK) {
-        safe_release(&b->upload_texture);
-        safe_release(&b->swap);
-        safe_release(&b->dc_vis);
-        safe_release(&b->dc_tgt);
-        safe_release(&b->dc_dev);
-        safe_release(&b->dxgi_fac);
-        safe_release(&b->dxgi_adp);
-        safe_release(&b->dxgi_dev);
-        safe_release(&b->d3d_ctx);
-        safe_release(&b->d3d_dev);
-        delete b;
         return attach_status;
     }
 
-    g_bridge_live_count.fetch_add(1, std::memory_order_relaxed);
+    bool registry_inserted = false;
+    bool live_counted = false;
+    try {
+        {
+            std::lock_guard<std::mutex> lock(g_bridge_registry_mu);
+            const auto [it, inserted] = g_bridge_registry.emplace(b, BridgeRegistryEntry{});
+            (void)it;
+            if (!inserted) return SAO_STATUS_ERR_ALREADY_EXISTS;
+            registry_inserted = true;
+        }
+        g_bridge_live_count.fetch_add(1, std::memory_order_relaxed);
+        live_counted = true;
+    } catch (...) {
+        if (registry_inserted) {
+            std::lock_guard<std::mutex> lock(g_bridge_registry_mu);
+            g_bridge_registry.erase(b);
+        }
+        if (live_counted) g_bridge_live_count.fetch_sub(1, std::memory_order_relaxed);
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    create_guard.commit();
     *out_handle = b;
     return SAO_STATUS_OK;
 #endif
+    } catch (...) {
+        if (out_handle != nullptr) *out_handle = nullptr;
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ── destroy ─────────────────────────────────────────────────────────
 
 extern "C" void SAO_UI_CALL sao_ui_dcomp_bridge_destroy(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return;
 #if defined(_WIN32)
     sao_ui_dcomp_bridge_s* b = handle;
-    if (b->alive) {
-        g_bridge_live_count.fetch_sub(1, std::memory_order_relaxed);
+    {
+        std::unique_lock<std::mutex> lock(g_bridge_registry_mu);
+        const auto found = g_bridge_registry.find(b);
+        if (found == g_bridge_registry.end()) return;
+        if (!is_owner_thread(b)) return;
+        found->second.destroying = true;
+        g_bridge_registry_cv.wait(lock, [&] {
+            const auto current = g_bridge_registry.find(b);
+            return current == g_bridge_registry.end() ||
+                   current->second.active_leases == 0u;
+        });
+        g_bridge_registry.erase(b);
     }
+    g_bridge_live_count.fetch_sub(1, std::memory_order_relaxed);
     if (b->attached && b->dc_tgt != nullptr && b->dc_vis != nullptr &&
         b->dc_dev != nullptr) {
         b->dc_tgt->SetRoot(nullptr);
@@ -393,46 +495,66 @@ extern "C" void SAO_UI_CALL sao_ui_dcomp_bridge_destroy(
     b->alive = false;
     delete b;
 #endif
+    } catch (...) {
+        return;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_attach(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if defined(_WIN32)
-    if (!is_owner_thread(handle)) return SAO_STATUS_ERR_ACCESS_DENIED;
-    if (!handle->alive || handle->swap == nullptr) {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* bridge = lease.get();
+    if (!is_owner_thread(bridge)) return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!bridge->alive || bridge->swap == nullptr) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    if (handle->attached) return SAO_STATUS_OK;
-    return attach_visual_tree(handle);
+    if (bridge->attached) return SAO_STATUS_OK;
+    return attach_visual_tree(bridge);
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_detach(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if defined(_WIN32)
-    if (!is_owner_thread(handle)) return SAO_STATUS_ERR_ACCESS_DENIED;
-    if (!handle->alive) return SAO_STATUS_ERR_NOT_INITIALIZED;
-    if (!handle->attached) return SAO_STATUS_OK;
-    HRESULT hr = handle->dc_tgt->SetRoot(nullptr);
-    if (SUCCEEDED(hr)) hr = handle->dc_vis->SetContent(nullptr);
-    if (SUCCEEDED(hr)) hr = handle->dc_dev->Commit();
-    if (FAILED(hr)) return status_from_hresult(handle, hr);
-    handle->attached = false;
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* bridge = lease.get();
+    if (!is_owner_thread(bridge)) return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!bridge->alive) return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (!bridge->attached) return SAO_STATUS_OK;
+    HRESULT hr = bridge->dc_tgt->SetRoot(nullptr);
+    if (SUCCEEDED(hr)) hr = bridge->dc_vis->SetContent(nullptr);
+    if (SUCCEEDED(hr)) hr = bridge->dc_dev->Commit();
+    if (FAILED(hr)) return status_from_hresult(bridge, hr);
+    bridge->attached = false;
     return SAO_STATUS_OK;
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_present(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if defined(_WIN32)
-    sao_ui_dcomp_bridge_s* b = handle;
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* b = lease.get();
     if (!is_owner_thread(b)) return SAO_STATUS_ERR_ACCESS_DENIED;
     if (!b->alive || !b->attached || b->swap == nullptr || b->dc_dev == nullptr) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
@@ -446,30 +568,40 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_present(
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_resize(
     sao_ui_dcomp_bridge_handle_t handle, uint32_t width, uint32_t height) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (width == 0 || height == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if defined(_WIN32)
-    if (!is_owner_thread(handle)) return SAO_STATUS_ERR_ACCESS_DENIED;
-    if (!handle->alive || handle->swap == nullptr) {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* bridge = lease.get();
+    if (!is_owner_thread(bridge)) return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!bridge->alive || bridge->swap == nullptr) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    if (width == handle->width && height == handle->height) return SAO_STATUS_OK;
-    sao_status_t status = check_device_removed(handle);
+    if (width == bridge->width && height == bridge->height) return SAO_STATUS_OK;
+    sao_status_t status = check_device_removed(bridge);
     if (status != SAO_STATUS_OK) return status;
-    release_upload_texture(handle);
-    const HRESULT hr = handle->swap->ResizeBuffers(
-        handle->buffer_count, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
-    if (FAILED(hr)) return status_from_hresult(handle, hr);
-    handle->width = width;
-    handle->height = height;
+    release_upload_texture(bridge);
+    const HRESULT hr = bridge->swap->ResizeBuffers(
+        bridge->buffer_count, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+    if (FAILED(hr)) return status_from_hresult(bridge, hr);
+    bridge->width = width;
+    bridge->height = height;
     return SAO_STATUS_OK;
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
@@ -478,21 +610,34 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
     uint32_t width,
     uint32_t height,
     uint32_t stride) {
+    try {
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    const uint64_t row_bytes = static_cast<uint64_t>(width) * 4u;
     if (premultiplied_bgra == nullptr || width == 0 || height == 0 ||
-        stride < width * 4u) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        row_bytes > std::numeric_limits<uint32_t>::max() ||
+        static_cast<uint64_t>(stride) < row_bytes ||
+        static_cast<uint64_t>(height) >
+            std::numeric_limits<size_t>::max() / static_cast<size_t>(stride))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const uint64_t total_bytes = static_cast<uint64_t>(stride) * height;
+    if (total_bytes > std::numeric_limits<size_t>::max() ||
+        total_bytes > static_cast<uint64_t>(512u) * 1024u * 1024u)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if defined(_WIN32)
-    if (!is_owner_thread(handle)) return SAO_STATUS_ERR_ACCESS_DENIED;
-    if (!handle->alive || !handle->attached || handle->swap == nullptr) {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* bridge = lease.get();
+    if (!is_owner_thread(bridge)) return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!bridge->alive || !bridge->attached || bridge->swap == nullptr) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    sao_status_t status = check_device_removed(handle);
+    sao_status_t status = check_device_removed(bridge);
     if (status != SAO_STATUS_OK) return status;
-    if (width != handle->width || height != handle->height) {
-        status = sao_ui_dcomp_bridge_resize(handle, width, height);
+    if (width != bridge->width || height != bridge->height) {
+        status = sao_ui_dcomp_bridge_resize(bridge, width, height);
         if (status != SAO_STATUS_OK) return status;
     }
-    if (handle->upload_texture == nullptr) {
+    if (bridge->upload_texture == nullptr) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = width;
         desc.Height = height;
@@ -503,63 +648,90 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
         desc.Usage = D3D11_USAGE_DYNAMIC;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        const HRESULT create_hr = handle->d3d_dev->CreateTexture2D(
-            &desc, nullptr, &handle->upload_texture);
-        if (FAILED(create_hr) || handle->upload_texture == nullptr) {
-            return status_from_hresult(handle, create_hr);
+        const HRESULT create_hr = bridge->d3d_dev->CreateTexture2D(
+            &desc, nullptr, &bridge->upload_texture);
+        if (FAILED(create_hr) || bridge->upload_texture == nullptr) {
+            return status_from_hresult(bridge, create_hr);
         }
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    HRESULT hr = handle->d3d_ctx->Map(
-        handle->upload_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-    if (FAILED(hr)) return status_from_hresult(handle, hr);
-    const size_t row_bytes = static_cast<size_t>(width) * 4u;
+    HRESULT hr = bridge->d3d_ctx->Map(
+        bridge->upload_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    if (FAILED(hr)) return status_from_hresult(bridge, hr);
+    const size_t copy_row_bytes = static_cast<size_t>(row_bytes);
     for (uint32_t row = 0; row < height; ++row) {
         std::memcpy(static_cast<uint8_t*>(mapped.pData) +
                         static_cast<size_t>(row) * mapped.RowPitch,
                     premultiplied_bgra + static_cast<size_t>(row) * stride,
-                    row_bytes);
+                    copy_row_bytes);
     }
-    handle->d3d_ctx->Unmap(handle->upload_texture, 0);
+    bridge->d3d_ctx->Unmap(bridge->upload_texture, 0);
 
     ID3D11Texture2D* back_buffer = nullptr;
-    hr = handle->swap->GetBuffer(
+    hr = bridge->swap->GetBuffer(
         0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back_buffer));
     if (FAILED(hr) || back_buffer == nullptr) {
         safe_release(&back_buffer);
-        return status_from_hresult(handle, hr);
+        return status_from_hresult(bridge, hr);
     }
-    handle->d3d_ctx->CopyResource(back_buffer, handle->upload_texture);
+    bridge->d3d_ctx->CopyResource(back_buffer, bridge->upload_texture);
     safe_release(&back_buffer);
-    return check_device_removed(handle);
+    return check_device_removed(bridge);
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ── GL interop / keyed mutex compatibility gates ─────────────────
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_register_gl_interop(
-    sao_ui_dcomp_bridge_handle_t, void*, uint32_t,
+    sao_ui_dcomp_bridge_handle_t handle, void*, uint32_t,
     void** out_interop_handle) {
+    try {
     if (out_interop_handle != nullptr) *out_interop_handle = nullptr;
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_unregister_gl_interop(
-    sao_ui_dcomp_bridge_handle_t, void*) {
+    sao_ui_dcomp_bridge_handle_t handle, void*) {
+    try {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_lock_texture(
-    sao_ui_dcomp_bridge_handle_t, void*) {
+    sao_ui_dcomp_bridge_handle_t handle, void*) {
+    try {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_unlock_texture(
-    sao_ui_dcomp_bridge_handle_t, void*) {
+    sao_ui_dcomp_bridge_handle_t handle, void*) {
+    try {
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ── device_removed ──────────────────────────────────────────────
@@ -568,16 +740,23 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_unlock_texture(
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_device_removed(
     sao_ui_dcomp_bridge_handle_t handle, uint32_t* out_reason) {
+    try {
     if (out_reason != nullptr) *out_reason = 0;
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
 #if defined(_WIN32)
-    sao_ui_dcomp_bridge_s* b = handle;
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* b = lease.get();
+    if (!is_owner_thread(b)) return SAO_STATUS_ERR_ACCESS_DENIED;
     const sao_status_t status = check_device_removed(b);
     if (out_reason != nullptr) *out_reason = b->last_removed_reason;
     return status;
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ── borrowed getters ────────────────────────────────────────────
@@ -585,63 +764,93 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_device_removed(
 
 extern "C" void* SAO_UI_CALL sao_ui_dcomp_bridge_d3d11_device(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return nullptr;
 #if defined(_WIN32)
-    return handle->d3d_dev;
+    BridgeLease lease(handle);
+    return lease ? lease.get()->d3d_dev : nullptr;
 #else
     return nullptr;
 #endif
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_dcomp_bridge_d3d11_context(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return nullptr;
 #if defined(_WIN32)
-    return handle->d3d_ctx;
+    BridgeLease lease(handle);
+    if (!lease || !is_owner_thread(lease.get()))
+        return nullptr;
+    return lease.get()->d3d_ctx;
 #else
     return nullptr;
 #endif
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_dcomp_bridge_swap_chain(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return nullptr;
 #if defined(_WIN32)
-    return handle->swap;
+    BridgeLease lease(handle);
+    return lease ? lease.get()->swap : nullptr;
 #else
     return nullptr;
 #endif
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_dcomp_bridge_dcomp_device(
     sao_ui_dcomp_bridge_handle_t handle) {
+    try {
     if (handle == nullptr) return nullptr;
 #if defined(_WIN32)
-    return handle->dc_dev;
+    BridgeLease lease(handle);
+    return lease ? lease.get()->dc_dev : nullptr;
 #else
     return nullptr;
 #endif
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_get_state(
     sao_ui_dcomp_bridge_handle_t handle,
     SaoDcompBridgeState* out_state) {
+    try {
     if (out_state != nullptr) *out_state = {};
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
     if (out_state == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if defined(_WIN32)
-    out_state->width = handle->width;
-    out_state->height = handle->height;
-    out_state->alpha_mode = handle->alpha_mode;
-    out_state->buffer_count = handle->buffer_count;
-    out_state->owner_thread_id = handle->owner_thread;
-    out_state->last_removed_reason = handle->last_removed_reason;
-    out_state->attached = handle->attached;
-    out_state->alive = handle->alive;
-    out_state->swap_chain_ready = handle->swap != nullptr;
-    out_state->upload_texture_ready = handle->upload_texture != nullptr;
+    BridgeLease lease(handle);
+    if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_dcomp_bridge_s* b = lease.get();
+    if (!is_owner_thread(b)) return SAO_STATUS_ERR_ACCESS_DENIED;
+    out_state->width = b->width;
+    out_state->height = b->height;
+    out_state->alpha_mode = b->alpha_mode;
+    out_state->buffer_count = b->buffer_count;
+    out_state->owner_thread_id = b->owner_thread;
+    out_state->last_removed_reason = b->last_removed_reason;
+    out_state->attached = b->attached;
+    out_state->alive = b->alive;
+    out_state->swap_chain_ready = b->swap != nullptr;
+    out_state->upload_texture_ready = b->upload_texture != nullptr;
 #endif
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ── test hook (internal) ────────────────────────────────────────
@@ -652,5 +861,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_get_state(
 // same signature locally.
 extern "C" SAO_UI_API int64_t SAO_UI_CALL
 sao_ui_dcomp_bridge_live_count_for_test(void) {
+    try {
     return g_bridge_live_count.load(std::memory_order_relaxed);
+    } catch (...) {
+        return 0;
+    }
 }

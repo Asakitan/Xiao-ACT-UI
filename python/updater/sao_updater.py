@@ -13,7 +13,7 @@
 # "minimum_version": "2.0.1",   # 客户端 < 该版本时强制升级
 # "force_update": false,
 # "package_type": "runtime-delta" | "full-package",
-# "target": "windows-x64",
+# "target": "windows-x64-native",
 # "channel": "stable",
 # "download_url": "https://.../release.zip",
 # "sha256": "<hex>",
@@ -32,13 +32,16 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict, field
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -47,7 +50,6 @@ try:
     from config import (
         APP_VERSION,
         BASE_DIR,
-        DEFAULT_UPDATE_HOST,
         RUNTIME_DIR,
         RUNTIME_STAGING_DIR,
         UPDATE_CHANNEL,
@@ -57,18 +59,85 @@ try:
 except Exception:  # pragma: no cover - 仅在最早 bootstrap 失败时
     APP_VERSION = "0.0.0"
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    DEFAULT_UPDATE_HOST = ""
     RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
     RUNTIME_STAGING_DIR = os.path.join(RUNTIME_DIR, "staging")
     UPDATE_CHANNEL = "stable"
     UPDATE_STATE_FILE = os.path.join(RUNTIME_DIR, "update_state.json")
-    UPDATE_TARGET = "windows-x64"
+    UPDATE_TARGET = "windows-x64-native"
 
 
 HTTP_TIMEOUT = 8.0
 DOWNLOAD_TIMEOUT = 60.0
 CHECK_RETRY_DELAY = 0.75
 USER_AGENT = f"SAOAuto-Updater/{APP_VERSION}"
+UPDATE_ORIGIN = "https://x2.sjcmc.cn:15018"
+
+try:
+    from tls_pinning import validate_peer_certificate
+except Exception:
+    validate_peer_certificate = None
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        try:
+            if self.sock is None or validate_peer_certificate is None:
+                raise RuntimeError("TLS SPKI pinning is unavailable")
+            validate_peer_certificate(self.sock.getpeercert(binary_form=True))
+        except Exception:
+            self.close()
+            raise
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, "redirect refused", headers, None
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=self._context,
+            check_hostname=self._check_hostname,
+        )
+
+
+_TLS_CONTEXT = ssl.create_default_context()
+_TLS_CONTEXT.check_hostname = False
+_TLS_CONTEXT.verify_mode = ssl.CERT_NONE
+_UPDATE_OPENER = urllib.request.build_opener(
+    _NoRedirectHandler(),
+    _PinnedHTTPSHandler(context=_TLS_CONTEXT, check_hostname=False),
+)
+
+
+def _validate_update_url(url: str) -> urllib.parse.SplitResult:
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("更新服务必须使用固定 HTTPS origin") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.casefold() != "x2.sjcmc.cn"
+        or port != 15018
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError("更新服务必须使用固定 HTTPS origin")
+    return parsed
+
+
+def _open_update_url(request: urllib.request.Request, timeout: float):
+    _validate_update_url(request.full_url)
+    return _UPDATE_OPENER.open(request, timeout=timeout)
 
 # 状态码
 STATE_IDLE = "idle"
@@ -104,6 +173,8 @@ class UpdateManifest:
             v = data.get(f)
             if isinstance(v, str):
                 setattr(m, f, v)
+        if not m.download_url and isinstance(data.get("url"), str):
+            m.download_url = data["url"]
         m.force_update = bool(data.get("force_update", False))
         try:
             m.size = int(data.get("size") or 0)
@@ -259,7 +330,7 @@ def promote_runtime_update_exe() -> bool:
 def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Tuple[int, Optional[Dict[str, Any]], str]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_update_url(req, timeout) as resp:
             status = int(getattr(resp, "status", 200) or 200)
             data = resp.read()
             if not data:
@@ -319,7 +390,7 @@ def _http_download(
             os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         except Exception:
             pass
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_update_url(req, timeout) as resp:
             try:
                 content_length = int(resp.headers.get("Content-Length") or 0)
             except Exception:
@@ -411,7 +482,7 @@ class UpdateManager:
     # 线程安全的更新管理器, 由 entity / webview 共用.
 
     def __init__(self, host: Optional[str] = None, channel: str = UPDATE_CHANNEL):
-        self.host = (host or DEFAULT_UPDATE_HOST or "").rstrip("/")
+        self.host = UPDATE_ORIGIN
         self.channel = channel
         self.status = UpdateStatus()
         self.manifest: Optional[UpdateManifest] = None
@@ -493,11 +564,10 @@ class UpdateManager:
 
     # ---- 内部 ----
     def _do_check(self):
-        if not self.host:
-            self._set_state(state=STATE_ERROR, error="未配置 update_host")
-            return
         self._set_state(state=STATE_CHECKING, error="", progress=0.0)
-        url = f"{self.host}/api/update/latest?channel={self.channel}&target={UPDATE_TARGET}&current={APP_VERSION}"
+        channel = urllib.parse.quote(str(self.channel or UPDATE_CHANNEL), safe="")
+        target = urllib.parse.quote(str(UPDATE_TARGET), safe="")
+        url = f"{UPDATE_ORIGIN}/update/{channel}/{target}/latest.json"
         status_code, data, fetch_error = _http_get_json(url)
         if not data and _should_retry_check(status_code, fetch_error):
             try:
@@ -522,23 +592,6 @@ class UpdateManager:
                 last_checked=time.time(),
             )
             return
-        if data and data.get("available") is False:
-            with self._lock:
-                self.manifest = None
-            self._set_state(
-                state=STATE_UP_TO_DATE,
-                latest_version=str(data.get("version") or APP_VERSION),
-                force_required=False,
-                package_type="",
-                notes="",
-                published_at="",
-                download_url="",
-                sha256="",
-                size=0,
-                error="",
-                last_checked=time.time(),
-            )
-            return
         if not data:
             self._set_state(
                 state=STATE_ERROR,
@@ -547,6 +600,18 @@ class UpdateManager:
             )
             return
         manifest = UpdateManifest.from_json(data)
+        if manifest.download_url:
+            try:
+                _validate_update_url(manifest.download_url)
+            except Exception as exc:
+                with self._lock:
+                    self.manifest = None
+                self._set_state(
+                    state=STATE_ERROR,
+                    error=f"manifest 下载地址无效: {exc}",
+                    last_checked=time.time(),
+                )
+                return
         with self._lock:
             self.manifest = manifest
         if not manifest.version:
@@ -591,6 +656,11 @@ class UpdateManager:
             manifest = self.manifest
         if not manifest or not manifest.download_url:
             self._set_state(state=STATE_ERROR, error="无可用更新包")
+            return
+        try:
+            _validate_update_url(manifest.download_url)
+        except Exception as exc:
+            self._set_state(state=STATE_ERROR, error=f"下载地址无效: {exc}")
             return
         _ensure_dirs()
         ext = ".zip"

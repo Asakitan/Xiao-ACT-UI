@@ -310,14 +310,15 @@ class bounded_context_json_sax final : public json::json_sax_t {
     bool number_integer(number_integer_t) override {
         return consume_node();
     }
-    bool number_unsigned(number_unsigned_t) override {
-        return consume_node();
+    bool number_unsigned(number_unsigned_t value) override {
+        return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) &&
+               consume_node();
     }
     bool number_float(number_float_t value, const string_t&) override {
         return std::isfinite(value) && consume_node();
     }
-    bool string(string_t&) override {
-        return consume_node();
+    bool string(string_t& value) override {
+        return consume_node() && value.find('\0') == string_t::npos;
     }
     bool binary(binary_t&) override {
         return consume_node();
@@ -325,8 +326,8 @@ class bounded_context_json_sax final : public json::json_sax_t {
     bool start_object(std::size_t) override {
         return start_container();
     }
-    bool key(string_t&) override {
-        return true;
+    bool key(string_t& value) override {
+        return value.find('\0') == string_t::npos;
     }
     bool end_object() override {
         return end_container();
@@ -2034,6 +2035,9 @@ int32_t plugin_context_register_entity_provider_arrays(
         return SAO_PLUGINS_ERR_ABI_MISMATCH;
     } else if (provider_v2_stride_bytes % alignof(native_entity_provider_descriptor_v2) != 0) {
         return SAO_ERR_INVALID_ARGUMENT;
+    } else if (provider_v2_stride_bytes > kMaximumNativeEntityProviderDescriptorSize ||
+               provider_v2_count > kMaximumNativeEntityProviderDescriptorSpanBytes / provider_v2_stride_bytes) {
+        return SAO_ERR_INVALID_ARGUMENT;
     }
     if (provider_v1_count > kMaximumEntityProvidersPerContext ||
         provider_v2_count > kMaximumEntityProvidersPerContext - provider_v1_count) {
@@ -2072,6 +2076,7 @@ int32_t plugin_context_register_entity_provider_arrays(
             return rollback_status == SAO_OK ? status : rollback_status;
         };
         uintptr_t descriptor_address = reinterpret_cast<uintptr_t>(providers_v1);
+        size_t descriptor_span = 0;
         for (size_t index = 0; index < provider_v1_count; ++index) {
             native_entity_provider_descriptor descriptor{};
             const int32_t descriptor_status = copy_external_entity_struct(
@@ -2080,8 +2085,11 @@ int32_t plugin_context_register_entity_provider_arrays(
             if (descriptor_status != SAO_OK) {
                 return rollback_registered(descriptor_status);
             }
-            if (descriptor.struct_size >
-                (std::numeric_limits<uintptr_t>::max)() - descriptor_address) {
+            if (descriptor.struct_size > kMaximumNativeEntityProviderDescriptorSize ||
+                descriptor_span > kMaximumNativeEntityProviderDescriptorSpanBytes -
+                                    descriptor.struct_size ||
+                descriptor.struct_size >
+                    (std::numeric_limits<uintptr_t>::max)() - descriptor_address) {
                 return rollback_registered(SAO_ERR_INVALID_ARGUMENT);
             }
             std::shared_ptr<entity_provider_state> provider;
@@ -2093,6 +2101,7 @@ int32_t plugin_context_register_entity_provider_arrays(
             }
             registered.push_back(std::move(provider));
             descriptor_address += descriptor.struct_size;
+            descriptor_span += descriptor.struct_size;
         }
 
         const uintptr_t descriptor_v2_base = reinterpret_cast<uintptr_t>(providers_v2);

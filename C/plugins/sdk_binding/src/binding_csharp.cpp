@@ -36,12 +36,15 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_csharp_c
         args_json_utf8 == nullptr || out_result_json_utf8 == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    size_t input_size = 0;
+    if (!sao_plugins_binding_bounded_json_c_string(args_json_utf8, input_size))
+        return SAO_ERR_INVALID_ARGUMENT;
     language_binding_request request{};
     request.runtime = domain;
     request.name_utf8 = assembly_qualified_class;
     request.secondary_name_utf8 = method_name;
     request.input = reinterpret_cast<const uint8_t*>(args_json_utf8);
-    request.input_size = std::strlen(args_json_utf8);
+    request.input_size = input_size;
     request.out_object = reinterpret_cast<void**>(out_result_json_utf8);
     return sao_plugins_binding_dispatch_provider(language_host_kind::csharp,
                                                  language_binding_operation::static_call, &request);

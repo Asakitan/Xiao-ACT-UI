@@ -29,7 +29,7 @@
 
 #include <cstdint>
 #include <limits>
-#include <vector>
+
 
 #include "mmf_frame_writer.h"
 #include "self_render.h"
@@ -111,31 +111,9 @@ public:
         if (!preflight.init(new_width, new_height)) {
             return false;
         }
-        const int old_width = fb_.width();
-        const int old_height = fb_.height();
-        const uint64_t old_generation = writer_.last_committed_generation();
-        std::vector<uint8_t> old_pixels;
-        if (fb_.pixels() != nullptr && writer_.current_slot_bytes() != 0u) {
-            try {
-                old_pixels.assign(fb_.pixels(),
-                                  fb_.pixels() + writer_.current_slot_bytes());
-            } catch (...) {
-                return false;
-            }
-        }
-        const wchar_t* name = mmf_name_;
-        HWND t = target_;
-        shutdown();
-        if (init(name, t, new_width, new_height)) {
-            return true;
-        }
-        if (!init(name, t, old_width, old_height) || old_pixels.empty() ||
-            !fb_.is_initialized() ||
-            !writer_.restore_frame(old_pixels.data(), old_pixels.size(),
-                                   old_generation)) {
-            return false;
-        }
-        ::memcpy(fb_.pixels_mutable(), old_pixels.data(), old_pixels.size());
+        // The compositor has no generation/name handshake in this surface.
+        // Reusing the published name would destroy the live mapping before a
+        // consumer can switch, so leave the old surface intact and fail closed.
         return false;
     }
 

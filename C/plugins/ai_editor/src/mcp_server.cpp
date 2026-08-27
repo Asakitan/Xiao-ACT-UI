@@ -114,24 +114,27 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
     }
     const std::string method = request["method"].get<std::string>();
     const Json id = request.value("id", Json(nullptr));
+    const bool notification = !request.contains("id");
+    const auto finish = [&](int32_t status) {
+        if (notification) response = Json();
+        return status;
+    };
     if (method == "initialize") {
         response = result_envelope(
             id,
             Json{{"protocolVersion", "2024-11-05"},
                  {"capabilities",
-                  Json{{"tools", Json::object()}, {"resources",
-                                                   Json::object()}}},
+                  Json{{"tools", Json::object()}, {"resources", Json::object()}}},
                  {"serverInfo",
                   Json{{"name", "sao-ai-editor"}, {"version", "1.0"}}}});
-        return SAO_AI_EDITOR_OK;
+        return finish(SAO_AI_EDITOR_OK);
     }
     if (method == "shutdown") {
         response = result_envelope(id, Json::object());
-        return SAO_AI_EDITOR_OK;
+        return finish(SAO_AI_EDITOR_OK);
     }
     if (method == "notifications/initialized" ||
         method == "notifications/cancelled") {
-        // Notifications carry no id; silently accept.
         response = Json();
         return SAO_AI_EDITOR_OK;
     }
@@ -139,17 +142,17 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
         Json tools;
         if (tools_schema(runtime, tools) != SAO_AI_EDITOR_OK) {
             response = error_envelope(id, -32000, "runtime tools discovery failed");
-            return SAO_AI_EDITOR_OK;
+            return finish(SAO_AI_EDITOR_OK);
         }
         response = result_envelope(id, Json{{"tools", std::move(tools)}});
-        return SAO_AI_EDITOR_OK;
+        return finish(SAO_AI_EDITOR_OK);
     }
     if (method == "tools/call") {
         const Json params = request.value("params", Json::object());
         if (!params.is_object() || !params.contains("name") ||
             !params["name"].is_string()) {
             response = error_envelope(id, -32602, "params.name required");
-            return SAO_AI_EDITOR_OK;
+            return finish(SAO_AI_EDITOR_OK);
         }
         const Json arguments = params.value("arguments", Json::object());
         Json forwarded{{"jsonrpc", "2.0"},
@@ -162,21 +165,19 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
         const int32_t status = forward_dispatch(runtime, forwarded, inner);
         if (status != SAO_AI_EDITOR_OK) {
             response = error_envelope(id, -32000, "dispatch failed");
-            return status;
+            return finish(SAO_AI_EDITOR_OK);
         }
         if (inner.contains("error")) {
             const std::string message =
                 inner["error"].value("message", "tool failed");
             response = error_envelope(id, -32000, message);
-            return SAO_AI_EDITOR_OK;
+            return finish(SAO_AI_EDITOR_OK);
         }
         response = result_envelope(
             id,
-            Json{{"content",
-                  Json::array({Json{{"type", "text"},
-                                    {"text", inner.value("result",
-                                                          Json::object()).dump(2)}}})}});
-        return SAO_AI_EDITOR_OK;
+            Json{{"content", Json::array({Json{{"type", "text"},
+                                                  {"text", inner.value("result", Json::object()).dump(2)}}})}});
+        return finish(SAO_AI_EDITOR_OK);
     }
     if (method == "resources/list") {
         Json forwarded{{"jsonrpc", "2.0"},
@@ -184,34 +185,28 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
                        {"method", "tools.call"},
                        {"params", {{"mode", "agent"},
                                    {"name", "listFiles"},
-                                   {"arguments",
-                                    {{"path", "."},
-                                     {"recursive", true},
-                                     {"limit", 500}}}}}};
+                                   {"arguments", {{"path", "."},
+                                                   {"recursive", true},
+                                                   {"limit", 500}}}}}};
         Json inner;
         const int32_t status = forward_dispatch(runtime, forwarded, inner);
         if (status != SAO_AI_EDITOR_OK) {
             response = error_envelope(id, -32000, "list resources failed");
-            return status;
+            return finish(SAO_AI_EDITOR_OK);
         }
         Json entries = Json::array();
-        if (inner.contains("result") &&
-            inner["result"].contains("entries") &&
+        if (inner.contains("result") && inner["result"].contains("entries") &&
             inner["result"]["entries"].is_array()) {
             for (const auto& entry : inner["result"]["entries"]) {
-                if (!entry.is_object() ||
-                    entry.value("type", "") != "file") {
-                    continue;
-                }
+                if (!entry.is_object() || entry.value("type", "") != "file") continue;
                 const std::string name = entry.value("name", "");
-                entries.push_back(
-                    Json{{"uri", "sao://workspace/" + name},
-                         {"name", name},
-                         {"mimeType", "text/plain"}});
+                entries.push_back(Json{{"uri", "sao://workspace/" + name},
+                                       {"name", name},
+                                       {"mimeType", "text/plain"}});
             }
         }
         response = result_envelope(id, Json{{"resources", std::move(entries)}});
-        return SAO_AI_EDITOR_OK;
+        return finish(SAO_AI_EDITOR_OK);
     }
     if (method == "resources/read") {
         const Json params = request.value("params", Json::object());
@@ -219,7 +214,7 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
         constexpr std::string_view prefix = "sao://workspace/";
         if (uri.rfind(prefix, 0) != 0) {
             response = error_envelope(id, -32602, "unsupported uri");
-            return SAO_AI_EDITOR_OK;
+            return finish(SAO_AI_EDITOR_OK);
         }
         const std::string path = uri.substr(prefix.size());
         Json forwarded{{"jsonrpc", "2.0"},
@@ -233,22 +228,19 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
         if (status != SAO_AI_EDITOR_OK || inner.contains("error")) {
             response = error_envelope(id, -32000,
                                        inner.contains("error")
-                                           ? inner["error"].value(
-                                                 "message", "read failed")
+                                           ? inner["error"].value("message", "read failed")
                                            : "read failed");
-            return status;
+            return finish(SAO_AI_EDITOR_OK);
         }
         response = result_envelope(
             id,
-            Json{{"contents",
-                  Json::array({Json{{"uri", uri},
-                                    {"mimeType", "text/plain"},
-                                    {"text", inner["result"].value("content",
-                                                                    "")}}})}});
-        return SAO_AI_EDITOR_OK;
+            Json{{"contents", Json::array({Json{{"uri", uri},
+                                                    {"mimeType", "text/plain"},
+                                                    {"text", inner["result"].value("content", "")}}})}});
+        return finish(SAO_AI_EDITOR_OK);
     }
     response = error_envelope(id, -32601, "method not found");
-    return SAO_AI_EDITOR_OK;
+    return finish(SAO_AI_EDITOR_OK);
 }
 
 bool write_all(HANDLE handle, const void* data, size_t size) {
@@ -283,7 +275,14 @@ bool send_response(HANDLE stdout_handle, const Json& response) {
 
 }  // namespace
 
-int run_mcp_server_stdio(const std::filesystem::path& workspace_root) {
+int32_t SAO_AI_EDITOR_CALL dispatch_mcp_message(
+    sao_ai_editor_runtime_t runtime, const nlohmann::json& request,
+    nlohmann::json& response) {
+    return handle_message(runtime, request, response);
+}
+
+int SAO_AI_EDITOR_CALL
+run_mcp_server_stdio(const std::filesystem::path& workspace_root) {
     SaoAiEditorRuntimeConfig config{};
     config.struct_size = sizeof(config);
     const std::string workspace_utf8 = wide_utf8(workspace_root.native());
@@ -323,6 +322,10 @@ int run_mcp_server_stdio(const std::filesystem::path& workspace_root) {
         uint32_t required = 0;
         int32_t status = sao_ai_editor_mcp_decoder_feed(
             decoder, buffer.data(), read, nullptr, 0, &required);
+        if (status != SAO_AI_EDITOR_OK && status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            exit_code = 9;
+            break;
+        }
         if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL || required == 0) {
             continue;
         }
@@ -331,20 +334,28 @@ int run_mcp_server_stdio(const std::filesystem::path& workspace_root) {
             decoder, nullptr, 0, messages.data(),
             static_cast<uint32_t>(messages.size()), &required);
         if (status != SAO_AI_EDITOR_OK) {
-            continue;
+            exit_code = 9;
+            break;
         }
         Json parsed = Json::parse(messages.data(), messages.data() + required,
                                   nullptr, false);
         if (!parsed.is_array()) {
-            continue;
+            exit_code = 9;
+            break;
         }
         bool should_exit = false;
         for (auto& message : parsed) {
             if (!message.is_object()) {
-                continue;
+                exit_code = 9;
+                should_exit = true;
+                break;
             }
             Json response;
-            (void)handle_message(runtime, message, response);
+            if (handle_message(runtime, message, response) != SAO_AI_EDITOR_OK) {
+                exit_code = 9;
+                should_exit = true;
+                break;
+            }
             if (message.value("method", "") == "shutdown") {
                 should_exit = true;
             }
@@ -418,7 +429,7 @@ std::string extract_method_name(const Json& message) {
 
 }  // namespace
 
-int run_extension_host_stdio(
+int SAO_AI_EDITOR_CALL run_extension_host_stdio(
     const std::filesystem::path& workspace_root,
     const std::filesystem::path& node_executable_hint) {
     SaoAiEditorRuntimeConfig config{};
@@ -473,6 +484,10 @@ int run_extension_host_stdio(
         uint32_t required = 0;
         int32_t status = sao_ai_editor_mcp_decoder_feed(
             decoder, buffer.data(), read, nullptr, 0, &required);
+        if (status != SAO_AI_EDITOR_OK && status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            exit_code = 9;
+            break;
+        }
         if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL || required == 0) {
             continue;
         }
@@ -481,17 +496,21 @@ int run_extension_host_stdio(
             decoder, nullptr, 0, messages.data(),
             static_cast<uint32_t>(messages.size()), &required);
         if (status != SAO_AI_EDITOR_OK) {
-            continue;
+            exit_code = 9;
+            break;
         }
         Json parsed = Json::parse(messages.data(), messages.data() + required,
                                   nullptr, false);
         if (!parsed.is_array()) {
-            continue;
+            exit_code = 9;
+            break;
         }
         bool should_exit = false;
         for (const auto& message : parsed) {
             if (!message.is_object()) {
-                continue;
+                exit_code = 9;
+                should_exit = true;
+                break;
             }
             const std::string method = extract_method_name(message);
             // host.shutdown is our extension host stdio sentinel — reply
@@ -511,8 +530,7 @@ int run_extension_host_stdio(
             // unknown methods, but the standard says notifications must
             // not have responses.
             const bool is_notification =
-                !message.contains("id") || message["id"].is_null();
-
+                !message.contains("id");
             Json response;
             const int32_t dispatch_status =
                 forward_dispatch(runtime, message, response);

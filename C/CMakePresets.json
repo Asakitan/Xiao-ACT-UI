@@ -14,9 +14,10 @@
         "value": "x64",
         "strategy": "set"
       },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps_shared"
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
       },
       "environment": {
         "SAO_BUILD_ROOT": "${sourceDir}"
@@ -28,7 +29,9 @@
       "description": "Full-symbol debug build with every baseline subsystem enabled.",
       "inherits": "windows-base",
       "cacheVariables": {
-        "SAO_HARDENED_BUILD": "OFF"
+        "SAO_HARDENED_BUILD": "OFF",
+        "SAO_RT_IO_HELPER_ALLOW_UNSIGNED_PINNED": "ON",
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
       }
     },
     {
@@ -37,7 +40,9 @@
       "description": "Release build (RelWithDebInfo) with optimizations enabled.",
       "inherits": "windows-base",
       "cacheVariables": {
-        "SAO_HARDENED_BUILD": "OFF"
+        "SAO_HARDENED_BUILD": "OFF",
+        "SAO_RT_IO_HELPER_ALLOW_UNSIGNED_PINNED": "ON",
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
       }
     },
     {
@@ -46,7 +51,9 @@
       "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP.",
       "inherits": "windows-base",
       "cacheVariables": {
-        "SAO_HARDENED_BUILD": "ON"
+        "SAO_HARDENED_BUILD": "ON",
+        "SAO_RT_IO_HELPER_ALLOW_UNSIGNED_PINNED": "ON",
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
       }
     },
     {
@@ -57,7 +64,9 @@
       "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "SAO_HARDENED_BUILD": "OFF"
+        "SAO_HARDENED_BUILD": "OFF",
+        "SAO_RT_IO_HELPER_ALLOW_UNSIGNED_PINNED": "ON",
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
       }
     }
   ],

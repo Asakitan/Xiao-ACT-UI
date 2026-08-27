@@ -5,10 +5,8 @@ param(
     [ValidateSet('debug', 'release', 'hardened', 'ninja-debug')]
     [string] $Preset = 'debug',
     [switch] $Clean,
-    [switch] $Integration,
     [switch] $Pack,
-    [int] $Parallel = 16,
-    [string] $SignThumbprint = ''
+    [int] $Parallel = 16
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,15 +46,8 @@ try {
         return Join-Path $binDir $Name
     }
     $launcherPath = Resolve-BuildExecutable 'SaoAuto.exe'
-    $signCli = Resolve-BuildExecutable 'sao_sign.exe'
-    if ($SignThumbprint) {
-        if ($SignThumbprint -notmatch '^[0-9A-Fa-f]{40}$') {
-            throw 'SignThumbprint must contain exactly 40 hexadecimal characters'
-        }
-        if (-not (Test-Path $signCli)) { throw "requested signing requires sao_sign.exe" }
-        Write-Host "[sign] Signing $launcherPath ..." -ForegroundColor Cyan
-        & $signCli --input $launcherPath --cert $SignThumbprint
-        if ($LASTEXITCODE -ne 0) { throw "sao_sign failed" }
+    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+        throw "SaoAuto.exe was not produced at $launcherPath"
     }
     if ($isShipPreset) {
         Write-Host "[3/$stepCount] Staging and auditing the ship tree ..." -ForegroundColor Cyan
@@ -67,7 +58,17 @@ try {
     if ($Pack) {
         $packCli = Resolve-BuildExecutable 'sao_pack.exe'
         if (-not (Test-Path $packCli)) { throw "requested packaging requires sao_pack.exe" }
-        $version = (Select-String -Path 'CMakeLists.txt' -Pattern 'VERSION\s+([0-9.]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
+        $versionFile = Join-Path $buildDir 'sao_version.txt'
+        if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+            throw "CMake version file was not produced at $versionFile"
+        }
+        $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+        if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "CMake version file is empty: $versionFile"
+        }
+        if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "CMake version must match strict x.y.z: $version"
+        }
         $releaseRoot = Join-Path $PSScriptRoot "dist\release\SaoAuto"
         $shipBin = Join-Path $buildDir 'ship\bin'
         Write-Host "[pack] Assembling from audited ship tree to $releaseRoot ..." -ForegroundColor Cyan
@@ -79,10 +80,16 @@ try {
         if (-not (Test-Path -LiteralPath "$releaseRoot.zip" -PathType Leaf)) {
             throw 'release ZIP was not produced'
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $releaseRoot 'plugins') -PathType Container)) {
+            throw 'onedir package is missing the same-root plugins directory'
+        }
     }
     Write-Host ""
     Write-Host "[OK] $Preset build complete." -ForegroundColor Green
-    Write-Host "     Ship tree: $(Join-Path $buildDir 'ship\bin\SaoAuto.exe')"
+    Write-Host "     Artifact:  $launcherPath"
+    if ($isShipPreset) {
+        Write-Host "     Ship tree: $(Join-Path $buildDir 'ship\bin\SaoAuto.exe')"
+    }
 } finally {
     Pop-Location
 }

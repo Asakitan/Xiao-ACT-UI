@@ -62,6 +62,7 @@ int32_t cshost_component_invoke(managed_component_s* component, managed_hook hoo
                                 std::string& out_error) noexcept;
 
 int32_t cshost_component_close(managed_component_s* component, std::string& out_error) noexcept;
+int32_t cshost_retry_retired_components(cs_host_handle_t host, std::string& out_error) noexcept;
 void cshost_component_abandon(managed_component_s* component) noexcept;
 
 int32_t cshost_close_runtime_context(hostfxr_close_fn close, hostfxr_handle_t context,

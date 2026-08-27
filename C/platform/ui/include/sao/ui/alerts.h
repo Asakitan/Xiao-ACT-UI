@@ -52,6 +52,8 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_speak(
     int32_t         rate,
     int32_t         volume);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_stop(void);
+
 // Enumerate the installed SAPI voices.  When `capacity==0` writes the
 // required count into `out_count` and returns SAO_STATUS_OK (query
 // mode).  Otherwise writes UTF-8 voice names into `out_names` (each

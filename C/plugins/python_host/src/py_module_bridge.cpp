@@ -30,6 +30,7 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/python_host/py_host.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/sdk/sao_sdk.h"
 
 #if defined(SAO_HAS_PYTHON_EMBED)
@@ -42,6 +43,7 @@
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -1067,6 +1069,17 @@ PyObject* json_stringify(PyObject* value) {
         return nullptr;
     PyObject* result = PyObject_CallOneArg(dumps, value);
     Py_DECREF(dumps);
+    if (result != nullptr && PyUnicode_Check(result)) {
+        Py_ssize_t length = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(result, &length);
+        if (text == nullptr || length <= 0 ||
+            !sdk_binding::sao_plugins_binding_validate_json_text(
+                reinterpret_cast<const uint8_t*>(text), static_cast<size_t>(length))) {
+            Py_DECREF(result);
+            PyErr_SetString(PyExc_ValueError, "JSON exceeds the shared complexity or UTF-8 budget");
+            return nullptr;
+        }
+    }
     return result;
 }
 
@@ -1088,8 +1101,9 @@ class BoundedMenuJsonSax final : public nlohmann::json::json_sax_t {
     bool number_integer(number_integer_t) override {
         return consume_node();
     }
-    bool number_unsigned(number_unsigned_t) override {
-        return consume_node();
+    bool number_unsigned(number_unsigned_t value) override {
+        return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) &&
+               consume_node();
     }
     bool number_float(number_float_t, const string_t&) override {
         return consume_node();
@@ -1148,7 +1162,9 @@ class BoundedMenuJsonSax final : public nlohmann::json::json_sax_t {
 bool valid_menu_json(std::string_view value) noexcept {
     try {
         BoundedMenuJsonSax sax;
-        return nlohmann::json::sax_parse(value.begin(), value.end(), &sax);
+        return sdk_binding::sao_plugins_binding_validate_json_text(
+                   reinterpret_cast<const uint8_t*>(value.data()), value.size()) &&
+               nlohmann::json::sax_parse(value.begin(), value.end(), &sax);
     } catch (...) {
         return false;
     }
@@ -2528,6 +2544,11 @@ PyObject* PluginContext_get_base_dir(PluginContextObject* self, PyObject* /*args
     return Py_NewRef(self->base_dir);
 }
 
+PyObject* PluginContext_time(PluginContextObject*, PyObject* /*args*/) {
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    return PyFloat_FromDouble(std::chrono::duration<double>(now).count());
+}
+
 // ── 旧 PluginContext capability adapters ──────────────────
 
 PyObject* register_timer(PluginContextObject* self, PyObject* args, bool one_shot) {
@@ -3536,6 +3557,8 @@ PyMethodDef PluginContext_methods[] = {
      "Get plugin id."},
     {"get_base_dir", reinterpret_cast<PyCFunction>(PluginContext_get_base_dir), METH_NOARGS,
      "Get base dir."},
+    {"time", reinterpret_cast<PyCFunction>(PluginContext_time), METH_NOARGS,
+     "Get the current epoch time."},
 
     // 老 Python 平台 PluginContext 兼容方法 (lenient):
     {"log", reinterpret_cast<PyCFunction>(PluginContext_log), METH_VARARGS,

@@ -54,6 +54,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -101,6 +102,10 @@
 #include "sao_security/anti_dump/erase_headers.h"
 #include "sao_security/anti_dump/snapshot_detect.h"
 #endif
+#if __has_include("sao_security/anti_screencap/capture_mode.h")
+#include "sao_security/anti_screencap/capture_mode.h"
+#define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
+#endif
 #if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER) &&                                      \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/user_evasion/api.h"
@@ -122,6 +127,39 @@
 // ---------------------------------------------------------------------------
 
 extern "C" wchar_t SaoLauncherBaseDir[260] = {0};
+
+namespace {
+std::wstring g_dynamic_base_dir;
+}
+
+extern "C" void sao_launcher_set_base_dir(const wchar_t* base_dir) {
+    g_dynamic_base_dir = base_dir == nullptr ? std::wstring{} : std::wstring(base_dir);
+    SaoLauncherBaseDir[0] = wchar_t(0);
+    if (g_dynamic_base_dir.size() + 1u <= std::size(SaoLauncherBaseDir))
+        std::wmemcpy(SaoLauncherBaseDir, g_dynamic_base_dir.c_str(), g_dynamic_base_dir.size() + 1u);
+}
+
+extern "C" const wchar_t* sao_launcher_base_dir(void) {
+    return g_dynamic_base_dir.c_str();
+}
+
+extern "C" uint32_t sao_launcher_base_dir_length(void) {
+    return g_dynamic_base_dir.size() >= UINT32_MAX
+        ? UINT32_MAX : static_cast<uint32_t>(g_dynamic_base_dir.size());
+}
+
+extern "C" sao_status_t sao_launcher_copy_base_dir(
+    wchar_t* out_dir, uint32_t* inout_char_count) {
+    if (inout_char_count == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+    const uint32_t required = sao_launcher_base_dir_length() + 1u;
+    if (out_dir == nullptr || *inout_char_count < required) {
+        *inout_char_count = required;
+        return out_dir == nullptr ? SAO_STATUS_OK : SAO_STATUS_INVALID_ARGUMENT;
+    }
+    std::wmemcpy(out_dir, g_dynamic_base_dir.c_str(), required);
+    *inout_char_count = required;
+    return SAO_STATUS_OK;
+}
 
 // File-scope glue for the runtime installer hook. Lives in a real named
 // namespace so both the anonymous-namespace pipeline caller and the
@@ -209,8 +247,8 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
 #endif
 
     config = {};
-    config.base_dir = state.base_dir;
-    config.config_path = state.config_path[0] ? state.config_path : nullptr;
+    config.base_dir = state.base_dir.c_str();
+    config.config_path = state.config_path.empty() ? nullptr : state.config_path.c_str();
     config.log_level = log_level_storage;
     config.safe_mode = state.safe_mode ? 1 : 0;
     const bool no_license_bypass = actualDebugNoLicenseRequested(state);
@@ -470,9 +508,9 @@ void appendJsonEscaped(std::string& json, const char* text, size_t text_capacity
 
 struct HeadlessCleanupState {
     HeadlessCleanupState() : base_dir_environment(L"SAO_BASE_DIR") {
+        previous_base_dir_dynamic = sao_launcher_base_dir();
         std::memcpy(previous_base_dir, SaoLauncherBaseDir, sizeof(previous_base_dir));
-        (void)sao::launcher::getCrashDumpDirectory(previous_crash_dir,
-                                                   std::size(previous_crash_dir));
+        (void)sao::launcher::getCrashDumpDirectory(previous_crash_dir);
     }
 
     ~HeadlessCleanupState() {
@@ -480,7 +518,7 @@ struct HeadlessCleanupState {
             sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex);
         }
         if (mutex_acquired && single_instance_mutex != nullptr) {
-            sao::launcher::releaseSingleInstance(single_instance_mutex);
+            sao::launcher::releaseOwnedSingleInstanceMutex(single_instance_mutex);
         }
         if (crash_installed) {
             sao::launcher::uninstallCrashHandler();
@@ -502,7 +540,8 @@ struct HeadlessCleanupState {
     bool ui_online = false;
     EnvironmentVariableRollback base_dir_environment;
     wchar_t previous_base_dir[260] = {0};
-    wchar_t previous_crash_dir[260] = L".";
+    std::wstring previous_base_dir_dynamic;
+    std::wstring previous_crash_dir = L".";
     bool launcher_globals_published = false;
 };
 
@@ -511,9 +550,9 @@ bool restoreHeadlessProcessGlobals(HeadlessCleanupState& cleanup) noexcept {
     if (environment_restored)
         cleanup.base_dir_environment.commit();
     if (cleanup.launcher_globals_published) {
-        std::memcpy(SaoLauncherBaseDir, cleanup.previous_base_dir,
-                    sizeof(cleanup.previous_base_dir));
-        sao::launcher::setCrashDumpDirectory(cleanup.previous_crash_dir);
+        sao_launcher_set_base_dir(cleanup.previous_base_dir_dynamic.empty()
+            ? cleanup.previous_base_dir : cleanup.previous_base_dir_dynamic.c_str());
+        sao::launcher::setCrashDumpDirectory(cleanup.previous_crash_dir.c_str());
         cleanup.launcher_globals_published = false;
     }
     return environment_restored;
@@ -521,6 +560,12 @@ bool restoreHeadlessProcessGlobals(HeadlessCleanupState& cleanup) noexcept {
 
 std::mutex g_pending_cleanup_mutex;
 std::unique_ptr<HeadlessCleanupState> g_pending_cleanup;
+bool publishLauncherBaseDir(const std::wstring& base_dir) noexcept {
+    if (base_dir.empty()) return false;
+    sao_launcher_set_base_dir(base_dir.c_str());
+    return true;
+}
+
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
@@ -731,7 +776,7 @@ sao_status_t run_configured_runtime_installer(
                 status = sao_runtime_installer_bind_manifest(handle);
             }
             if (status == SAO_STATUS_OK) {
-                status = hook.ensure_all(state.base_dir,
+                status = hook.ensure_all(state.base_dir.c_str(),
                                          &forward_runtime_installer_progress,
                                          &progress);
             }
@@ -746,7 +791,7 @@ sao_status_t run_configured_runtime_installer(
         } else
 #endif
         {
-            status = hook.ensure_all(state.base_dir,
+            status = hook.ensure_all(state.base_dir.c_str(),
                                      &forward_runtime_installer_progress,
                                      &progress);
         }
@@ -771,13 +816,16 @@ void notifyStep(const sao_launcher_init_hooks_t* hooks, const char* name) {
 // so tests can distinguish "pipeline never reached this step" from a
 // provider failure.
 int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState& state,
-                sao_dual_run_config& dual_cfg, HANDLE& single_instance_mutex,
+                sao_dual_run_config& dual_cfg, sao_dual_run_config_v2& dual_cfg_v2,
+                HANDLE& single_instance_mutex,
                 HANDLE& dual_run_driver_mutex, bool& crash_installed, bool& mutex_acquired,
                 bool& dual_run_driver_acquired, bool& base_dir_resolved, bool& license_verified,
                 bool& shell_verified, bool& security_initialized, bool& platform_up,
                 bool& plugins_discovered, bool& ui_online, bool& handed_off_to_python,
+                bool& dual_run_gate_failed, sao_status_t& pipeline_status,
                 int& handed_off_exit_code) {
     using namespace sao::launcher;
+    (void)crash_installed;
 
     // ------------------------------------------------------------------
     // Step 0 — read dual_run.json + decide dispatch.  When the
@@ -800,18 +848,21 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     if (!is_child_of_dual_run_driver) {
         sao_status_t ms = sao_launcher_dual_run_acquire_driver_mutex(&dual_run_driver_mutex);
         if (ms == SAO_LAUNCHER_ALREADY_RUNNING) {
-            // Another dual-run driver owns the mutex; fall back to being
-            // just a plain CPP instance for this run (the per-exe
-            // single_instance mutex will catch true duplicates).
+            dual_cfg.mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+            dual_cfg_v2.legacy.mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
         } else if (ms == SAO_STATUS_OK) {
             dual_run_driver_acquired = true;
+        } else {
+            dual_run_gate_failed = true;
+            pipeline_status = ms;
+            return SAO_EXIT_PLATFORM_INIT_FAIL;
         }
     }
 
     int32_t should_continue = 1;
     int32_t handoff_exit_code = 0;
     sao_status_t zs =
-        sao_launcher_dual_run_step_zero(&dual_cfg, &should_continue, &handoff_exit_code);
+        sao_launcher_dual_run_step_zero_v2(&dual_cfg_v2, &should_continue, &handoff_exit_code);
     if (zs == SAO_LAUNCHER_PYTHON_UNAVAILABLE) {
         // python_only requested but no Python — return a specific error.
         return SAO_EXIT_PLATFORM_INIT_FAIL;
@@ -828,14 +879,14 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         return handoff_exit_code;
     }
 
-    // Step 1 — crash handler.  Non-fatal on install failure so we still
-    // hit the message loop; a runtime crash without a minidump is worse
-    // than continuing without one.
-    crash_installed = installCrashHandler();
-
-    // Step 2 — single-instance mutex.
-    if (!acquireSingleInstance(single_instance_mutex)) {
+    // Step 1 — single-instance mutex.
+    const auto acquire_result = acquireSingleInstance(single_instance_mutex);
+    if (acquire_result == SingleInstanceAcquireResult::already_running) {
+        forwardCommandLineToRunningInstance(GetCommandLineW());
         return SAO_EXIT_ALREADY_RUNNING;
+    }
+    if (acquire_result == SingleInstanceAcquireResult::failed) {
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     mutex_acquired = true;
 
@@ -845,16 +896,19 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     }
     base_dir_resolved = true;
 
-    // Publish base_dir globally for downstream providers.  A defensive copy so
-    // downstream callers don't accidentally hold a pointer into AppState.
-    lstrcpynW(SaoLauncherBaseDir, state.base_dir, 260);
+    // Publish base_dir globally for downstream providers without truncation.
+    if (!publishLauncherBaseDir(state.base_dir))
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
 
     // Prep the crash directory now that we know where to write dumps.
-    wchar_t crash_dir[MAX_PATH]{};
-    lstrcpynW(crash_dir, state.base_dir, MAX_PATH);
-    lstrcatW(crash_dir, L"\\crash");
-    ensureDirectoryExists(crash_dir);
-    setCrashDumpDirectory(crash_dir);
+    const std::wstring crash_dir = state.base_dir + L"\\crash";
+    if (!ensureDirectoryExists(crash_dir.c_str()))
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    setCrashDumpDirectory(crash_dir.c_str());
+    std::wstring active_crash_dir;
+    if (!getCrashDumpDirectory(active_crash_dir) ||
+        _wcsicmp(active_crash_dir.c_str(), crash_dir.c_str()) != 0)
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
 
     // Step 4 — load settings.json (optional, non-fatal).  The launcher
     // itself doesn't consume the values yet; loading the file here
@@ -863,7 +917,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     // optional providers remain disabled.  An explicit malformed config is
     // fatal rather than partially enabling a subsystem.
     if (loadLauncherProviderConfiguration(
-            state.base_dir, state.config_path[0] ? state.config_path : nullptr) != SAO_STATUS_OK) {
+            state.base_dir.c_str(), state.config_path.empty() ? nullptr : state.config_path.c_str()) != SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
@@ -908,6 +962,13 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         if (sao_security_init(&cfg) != SAO_STATUS_OK) {
             return SAO_EXIT_PLATFORM_INIT_FAIL;
         }
+#if defined(SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API)
+        if (cfg.enable_anti_screencap &&
+            sao_security_anti_screencap_register_process_windows() < 0) {
+            (void)sao_security_shutdown();
+            return SAO_EXIT_PLATFORM_INIT_FAIL;
+        }
+#endif
         security_initialized = true;
     }
 
@@ -1100,8 +1161,7 @@ bool teardown(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState& s
         notifyStep(hooks, "license");
     }
     if (mutex_acquired && single_instance_mutex) {
-        releaseSingleInstance(single_instance_mutex);
-        single_instance_mutex = nullptr;
+        releaseOwnedSingleInstanceMutex(single_instance_mutex);
         mutex_acquired = false;
         notifyStep(hooks, "single_instance");
     }
@@ -1124,12 +1184,13 @@ sao_status_t retryPendingCleanup() noexcept {
                   cleanup.plugins_discovered, cleanup.ui_online)) {
         return SAO_STATUS_INTERNAL;
     }
+    if (!restoreHeadlessProcessGlobals(cleanup))
+        return SAO_STATUS_INTERNAL;
     if (cleanup.dual_run_driver_acquired && cleanup.dual_run_driver_mutex != nullptr) {
         sao_launcher_dual_run_release_driver_mutex(cleanup.dual_run_driver_mutex);
         cleanup.dual_run_driver_mutex = nullptr;
         cleanup.dual_run_driver_acquired = false;
     }
-    restoreHeadlessProcessGlobals(cleanup);
     g_pending_cleanup.reset();
     return SAO_STATUS_OK;
 }
@@ -1306,26 +1367,34 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
         }
     }
 
+    cleanup->crash_installed = installCrashHandler();
+
     LauncherLifecycleDecision lifecycle;
-    if (prepareLauncherLifecycle(lifecycle, state.rt_io_operator) !=
-        SAO_STATUS_OK) {
+    const sao_status_t lifecycle_status =
+        prepareLauncherLifecycle(lifecycle, state.rt_io_operator);
+    if (lifecycle_status != SAO_STATUS_OK) {
         if (exit_code_out)
             *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
-        return SAO_STATUS_INTERNAL;
+        return lifecycle_status;
     }
 
     bool handed_off_to_python = false;
+    bool dual_run_gate_failed = false;
+    sao_status_t pipeline_status = SAO_STATUS_OK;
     int handed_off_exit_code = 0;
 
-    int rc = runPipeline(hooks, state, lifecycle.dual_config, cleanup->single_instance_mutex,
+    int rc = runPipeline(hooks, state, lifecycle.dual_config, lifecycle.dual_config_v2,
+                         cleanup->single_instance_mutex,
                          cleanup->dual_run_driver_mutex, cleanup->crash_installed,
                          cleanup->mutex_acquired, cleanup->dual_run_driver_acquired,
                          cleanup->base_dir_resolved, cleanup->license_verified,
                          cleanup->shell_verified, cleanup->security_initialized,
                          cleanup->platform_up, cleanup->plugins_discovered, cleanup->ui_online,
-                         handed_off_to_python, handed_off_exit_code);
+                         handed_off_to_python, dual_run_gate_failed, pipeline_status,
+                         handed_off_exit_code);
+    lifecycle.selected_mode = lifecycle.dual_config.mode;
+    lifecycle.dual_config_v2.legacy.mode = lifecycle.selected_mode;
     cleanup->launcher_globals_published = cleanup->base_dir_resolved;
-    const int rollout_result = rc;
 
     // CPP_PREFERRED_PYTHON_FALLBACK — if any CPP step failed AFTER step-zero
     // let us know it wanted CPP, retry via Python.  step-zero itself didn't
@@ -1335,7 +1404,8 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     const bool is_child_of_dual_run_driver =
         GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0 &&
         inherited_role[0] != L'\0';
-    if (!is_child_of_dual_run_driver && !handed_off_to_python && rc != SAO_EXIT_OK &&
+    if (!dual_run_gate_failed && !is_child_of_dual_run_driver &&
+        !handed_off_to_python && rc != SAO_EXIT_OK &&
         rc != SAO_EXIT_ALREADY_RUNNING && rc != SAO_EXIT_BAD_ARGS) {
         if (lifecycle.dual_config.mode == SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK) {
             int32_t fbec = 0;
@@ -1346,8 +1416,8 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
                 step_name = L"plugins_discover";
             else if (!cleanup->ui_online)
                 step_name = L"ui_bring_online";
-            if (sao_launcher_dual_run_maybe_fallback_to_python(&lifecycle.dual_config, rc,
-                                                               step_name, &fbec)) {
+            if (sao_launcher_dual_run_maybe_fallback_to_python_v2(&lifecycle.dual_config_v2, rc,
+                                                                  step_name, &fbec)) {
                 handed_off_to_python = true;
                 handed_off_exit_code = fbec;
                 rc = fbec;
@@ -1366,12 +1436,6 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
         }
     }
 
-    if (cleanup->dual_run_driver_acquired && cleanup->dual_run_driver_mutex) {
-        sao_launcher_dual_run_release_driver_mutex(cleanup->dual_run_driver_mutex);
-        cleanup->dual_run_driver_mutex = nullptr;
-        cleanup->dual_run_driver_acquired = false;
-    }
-
     const char* failure_hint = "init_pipeline";
     if (!cleanup->base_dir_resolved)
         failure_hint = "working_dir";
@@ -1384,20 +1448,23 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
         failure_hint = "plugins_discover";
     } else if (!cleanup->ui_online)
         failure_hint = "ui_bring_online";
-    completeLauncherLifecycle(lifecycle, rollout_result, failure_hint);
-
     if (!teardown_complete && (rc == SAO_EXIT_OK || handed_off_to_python)) {
         rc = SAO_EXIT_PLATFORM_INIT_FAIL;
         handed_off_to_python = false;
     }
-    if (rc != SAO_EXIT_OK || handed_off_to_python) {
+    if (teardown_complete) {
         if (!restoreHeadlessProcessGlobals(*cleanup)) {
             rc = SAO_EXIT_PLATFORM_INIT_FAIL;
             handed_off_to_python = false;
+            teardown_complete = false;
         }
-    } else {
-        cleanup->base_dir_environment.commit();
     }
+    if (teardown_complete && cleanup->dual_run_driver_acquired && cleanup->dual_run_driver_mutex) {
+        sao_launcher_dual_run_release_driver_mutex(cleanup->dual_run_driver_mutex);
+        cleanup->dual_run_driver_mutex = nullptr;
+        cleanup->dual_run_driver_acquired = false;
+    }
+    completeLauncherLifecycle(lifecycle, rc, failure_hint);
     if (exit_code_out)
         *exit_code_out = rc;
     if (!teardown_complete) {
@@ -1405,6 +1472,8 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
         g_pending_cleanup = std::move(cleanup);
         return SAO_STATUS_INTERNAL;
     }
+    if (pipeline_status != SAO_STATUS_OK)
+        return pipeline_status;
     if (handed_off_to_python) {
         return SAO_STATUS_OK;
     }
@@ -1778,6 +1847,16 @@ struct AntiDebugWorkerState {
     std::condition_variable cv;
     std::thread worker;
     bool stop_requested = false;
+
+    ~AntiDebugWorkerState() noexcept {
+        {
+            std::lock_guard lock(mutex);
+            stop_requested = true;
+        }
+        cv.notify_all();
+        if (worker.joinable())
+            worker.join();
+    }
 };
 
 AntiDebugWorkerState& anti_debug_worker_state() {
@@ -1862,14 +1941,8 @@ void stop_anti_debug_worker() noexcept {
         state.cv.notify_all();
         worker = std::move(state.worker);
     }
-    if (worker.joinable()) {
-        try {
-            worker.join();
-        } catch (...) {
-            if (worker.joinable())
-                worker.detach();
-        }
-    }
+    if (worker.joinable())
+        worker.join();
     {
         std::lock_guard lock(state.mutex);
         state.stop_requested = false;
@@ -3017,7 +3090,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     HWND owner = ctx == nullptr || ctx->overlay_host == nullptr
                      ? nullptr
                      : static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
-    if (sao::launcher::openUserDocsIndex(SaoLauncherBaseDir, owner)) {
+    if (sao::launcher::openUserDocsIndex(sao_launcher_base_dir(), owner)) {
         return SAO_STATUS_OK;
     }
     if (ctx != nullptr && ctx->compositor != nullptr) {
@@ -3259,7 +3332,8 @@ void rt_io_operator_copy_strict_response(
 }
 
 bool rt_io_operator_strict_success(
-    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    const sao_launcher_rt_io_operator_report_t& report,
+    uint64_t provider_generation) noexcept {
     const bool chain_complete =
         report.strict_required_mask == SAO_RT_IO_STRICT_CHAIN_STAGE_ALL &&
         report.strict_prepared_mask == report.strict_required_mask &&
@@ -3275,17 +3349,30 @@ bool rt_io_operator_strict_success(
         report.strict_category_rollback_attempted_mask == 0u &&
         report.strict_category_rollback_complete_mask == 0u &&
         report.strict_category_count == SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT;
-    return report.strict_policy == SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY &&
+    const bool active_projection_complete =
+        report.strict_vt_session_id != 0u &&
+        report.strict_vt_session_id == report.strict_transaction_id &&
+        report.strict_vt_owner_generation != 0u &&
+        report.strict_vt_owner_generation == provider_generation &&
+        report.strict_vt_requested_engine == SAO_RT_IO_ENGINE_HYPERVISOR &&
         report.strict_vt_runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR &&
+        report.strict_vt_load_path == SAO_RT_IO_VT_LOAD_PATH_HELPER_MANUAL_MAP &&
+        report.strict_vt_stage == SAO_RT_IO_VT_STAGE_ACTIVE &&
+        report.strict_vt_control_status == 0 &&
+        report.strict_vt_capture_status == 0 &&
+        report.strict_vt_validation_status == 0 &&
+        report.strict_vt_cleanup_status == 0 &&
+        report.strict_vt_recovery_status == 0 &&
+        report.strict_vt_terminal_reason == 0;
+    return report.strict_policy == SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY &&
         report.strict_stage == SAO_RT_IO_STRICT_CHAIN_STAGE_VT_ACTIVE &&
         report.strict_transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_ACTIVE &&
         report.strict_transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_COMMITTED &&
-        report.strict_vt_stage == SAO_RT_IO_VT_STAGE_ACTIVE &&
         report.strict_vt_root_active != 0u &&
         report.strict_helper_system != 0u &&
         report.strict_helper_identity_authenticated != 0u &&
         report.strict_final_residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
-        chain_complete && categories_complete;
+        active_projection_complete && chain_complete && categories_complete;
 }
 
 bool rt_io_operator_strict_recovery_required(
@@ -3491,7 +3578,8 @@ sao_status_t sao_platform_rt_io_operator_init(
     rt_io_operator_cache_strict_chain(ctx, response);
     out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
     out_report->loaded = out_report->strict_vt_root_active;
-    out_report->strict_success = rt_io_operator_strict_success(*out_report) ? 1u : 0u;
+    out_report->strict_success = rt_io_operator_strict_success(
+        *out_report, response.wire.snapshot.state.provider_generation) ? 1u : 0u;
     out_report->probe_passed = out_report->strict_success;
     const bool complete = status == SAO_STATUS_OK &&
         response.wire.operation_status == SAO_STATUS_OK &&
@@ -3601,7 +3689,8 @@ sao_status_t sao_platform_rt_io_operator_status(
     rt_io_operator_cache_strict_chain(ctx, response);
     out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
     out_report->backend_ready = out_report->strict_vt_root_active;
-    out_report->strict_success = rt_io_operator_strict_success(*out_report) ? 1u : 0u;
+    out_report->strict_success = rt_io_operator_strict_success(
+        *out_report, response.wire.snapshot.state.provider_generation) ? 1u : 0u;
     const bool complete = status == SAO_STATUS_OK &&
         response.wire.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&

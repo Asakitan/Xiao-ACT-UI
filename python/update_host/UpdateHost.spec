@@ -12,6 +12,7 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 
 HERE = os.path.dirname(os.path.abspath(SPECPATH))
+PYTHON_ROOT = os.path.dirname(HERE)
 
 FASTAPI_HIDDENIMPORTS = collect_submodules("fastapi")
 STARLETTE_HIDDENIMPORTS = collect_submodules("starlette")
@@ -21,7 +22,7 @@ ANYIO_HIDDENIMPORTS = collect_submodules("anyio")
 
 a = Analysis(
     ["update_host_main.py"],
-    pathex=[HERE],
+    pathex=[HERE, PYTHON_ROOT],
     binaries=[],
     datas=[],
     hiddenimports=(
@@ -33,6 +34,7 @@ a = Analysis(
         + [
             "fastapi.staticfiles",
             "starlette.staticfiles",
+            "tls_pinning",
             "email.mime",
             "email.mime.multipart",
             "email.mime.text",

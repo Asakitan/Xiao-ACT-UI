@@ -195,6 +195,8 @@ inline constexpr size_t kMaximumEntityActionResultJsonBytes = 1024 * 1024;
 inline constexpr size_t kMaximumEntityProvidersPerContext = 256;
 inline constexpr size_t kMaximumAttachedEntityProviders = 4096;
 inline constexpr size_t kMaximumEntityProvidersPerCatalog = 4096;
+inline constexpr size_t kMaximumNativeEntityProviderDescriptorSize = 4096U;
+inline constexpr size_t kMaximumNativeEntityProviderDescriptorSpanBytes = 1024U * 1024U;
 
 static_assert(kNativeEntityProviderDescriptorRequiredPrefixSize <=
               sizeof(native_entity_provider_descriptor));

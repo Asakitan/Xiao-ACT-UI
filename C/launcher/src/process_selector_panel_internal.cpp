@@ -627,6 +627,18 @@ struct Owner::State {
         }
     }
 
+    void request_shutdown() noexcept {
+        {
+            std::lock_guard lock(mutex);
+            accepting = false;
+            work_items.clear();
+            ++requested_generation;
+        }
+        worker_cv.notify_all();
+        if (worker.joinable())
+            worker.request_stop();
+    }
+
     Owner* owner{};
     sao_status_t fail_next_unregister_status{SAO_STATUS_OK};
     sao_status_t fail_next_action_restore_status{SAO_STATUS_OK};
@@ -991,6 +1003,11 @@ sao_status_t Owner::publish() noexcept {
     } catch (...) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+}
+
+void Owner::request_shutdown() noexcept {
+    if (state_ != nullptr)
+        state_->request_shutdown();
 }
 
 sao_status_t Owner::open() noexcept {

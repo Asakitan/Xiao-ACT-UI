@@ -13,16 +13,26 @@ public:
     DumpKind kind() const override { return DumpKind::Source; }
     DumpResult dump(const DumpConfig& cfg) override {
         DumpResult r;
-        if (cfg.output_dir.empty()) { r.error_message = "output_dir required"; return r; }
-        std::error_code ec;
-        fs::create_directories(cfg.output_dir, ec);
-        fs::path out = fs::path(cfg.output_dir) / "Source-netvars.dt";
-        std::ofstream fs_out(out);
-        fs_out << "// SAO Auto Source engine netvar dump. PID=" << cfg.target_pid << "\n"
-               << "// Source netvar table walk requires engine-specific ClientClass "
-                  "signature scan; deferred to live impl.\n";
-        r.ok = true;
-        r.output_files.push_back(out.string());
+        if (!cfg.output_dir.empty()) {
+            const fs::path out = fs::path(cfg.output_dir) / "Source-netvars.dt";
+            std::error_code output_error;
+            if (fs::exists(out, output_error)) {
+                if (output_error || fs::is_directory(out, output_error)) {
+                    r.error_message = "cannot remove stale output file";
+                    return r;
+                }
+                output_error.clear();
+                fs::remove(out, output_error);
+                if (output_error) {
+                    r.error_message = "cannot remove stale output file";
+                    return r;
+                }
+            } else if (output_error) {
+                r.error_message = "cannot inspect stale output file";
+                return r;
+            }
+        }
+        r.error_message = "NOT_IMPLEMENTED: Source SDK dumper requires an engine-specific ClientClass walk";
         return r;
     }
 };

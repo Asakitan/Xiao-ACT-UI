@@ -29,6 +29,7 @@
 #include "sao/plugins/compat/libs_vendor_bridge.h"
 #include "sao/plugins/compat/py_v1_manifest.h"
 #include "sao/plugins/loader/loader_status.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/plugins/python_host/py_host.h"
 #include "sao/plugins/python_host/py_module_bridge.h"
 #include "sao/sdk/sao_sdk.h"
@@ -1745,6 +1746,13 @@ sao_plugins_pyhost_call_hook(py_plugin_handle_t plugin, const char* hook_name,
             }
             args_tuple = PyTuple_Pack(1, pl->ctx);
         } else if (args_json_utf8 != nullptr && *args_json_utf8 != '\0') {
+            size_t args_size = 0;
+            if (!sdk_binding::sao_plugins_binding_bounded_json_c_string(args_json_utf8, args_size) ||
+                !sdk_binding::sao_plugins_binding_validate_json_text(
+                    reinterpret_cast<const uint8_t*>(args_json_utf8), args_size)) {
+                Py_DECREF(hook);
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
             // JSON → PyObject (用 json.loads).
             PyObject* json_mod = PyImport_ImportModule("json");
             if (json_mod == nullptr) {
@@ -1830,6 +1838,11 @@ sao_plugins_pyhost_call_hook(py_plugin_handle_t plugin, const char* hook_name,
                         json_out = c;
                     Py_DECREF(s);
                 }
+            }
+            if (ok && !sdk_binding::sao_plugins_binding_validate_json_text(
+                           reinterpret_cast<const uint8_t*>(json_out.data()), json_out.size())) {
+                Py_DECREF(res);
+                return SAO_ERR_INVALID_ARGUMENT;
             }
             char* buf = static_cast<char*>(std::malloc(json_out.size() + 1));
             if (buf != nullptr) {

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-# Creative Workshop API routes — plugin marketplace on update_host.
+# DEPRECATED legacy Workshop routes retained for compatibility only.
+# Canonical routes are implemented by update_host.app and this router is not mounted.
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import asyncio
 import json
 import os
 import secrets
@@ -80,6 +82,31 @@ def _save_json(path: str, data):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _write_chunk_sync(path: str, body: bytes) -> None:
+    with open(path, "wb") as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _assemble_chunks_sync(chunk_dir: str, total_chunks: int, destination: str) -> tuple[str, int]:
+    hasher = hashlib.sha256()
+    size = 0
+    with open(destination, "wb") as output:
+        for index in range(total_chunks):
+            with open(os.path.join(chunk_dir, f"{index:06d}"), "rb") as source:
+                while True:
+                    data = source.read(1024 * 1024)
+                    if not data:
+                        break
+                    output.write(data)
+                    hasher.update(data)
+                    size += len(data)
+        output.flush()
+        os.fsync(output.fileno())
+    return hasher.hexdigest(), size
 
 
 def _sha256_and_size(path: str) -> tuple[str, int]:
@@ -484,8 +511,7 @@ async def publish_chunk(request: Request, upload_id: str, index: int):
     if not body:
         raise HTTPException(400, "empty chunk")
 
-    with open(chunk_path, "wb") as f:
-        f.write(body)
+    await asyncio.to_thread(_write_chunk_sync, chunk_path, body)
     info["received"].add(index)
 
     return JSONResponse({
@@ -516,18 +542,11 @@ async def publish_complete(request: Request, upload_id: str):
     fname = f"plugin-{safe_ver}.zip"
     dst = os.path.join(pdir, fname)
 
-    hasher = hashlib.sha256()
-    size = 0
     tmp = dst + ".assembling"
     try:
-        with open(tmp, "wb") as out:
-            for i in range(info["total_chunks"]):
-                chunk_path = os.path.join(info["chunk_dir"], f"{i:06d}")
-                with open(chunk_path, "rb") as cf:
-                    data = cf.read()
-                out.write(data)
-                hasher.update(data)
-                size += len(data)
+        digest, size = await asyncio.to_thread(
+            _assemble_chunks_sync, info["chunk_dir"], info["total_chunks"], tmp
+        )
         os.replace(tmp, dst)
     except Exception as exc:
         try:
@@ -539,7 +558,6 @@ async def publish_complete(request: Request, upload_id: str):
         shutil.rmtree(info["chunk_dir"], ignore_errors=True)
         _ACTIVE_UPLOADS.pop(upload_id, None)
 
-    digest = hasher.hexdigest()
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:

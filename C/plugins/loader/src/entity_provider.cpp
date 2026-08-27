@@ -407,14 +407,15 @@ class bounded_json_sax final : public nlohmann::json::json_sax_t {
     bool number_integer(number_integer_t) override {
         return consume_node();
     }
-    bool number_unsigned(number_unsigned_t) override {
-        return consume_node();
+    bool number_unsigned(number_unsigned_t value) override {
+        return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) &&
+               consume_node();
     }
     bool number_float(number_float_t, const string_t&) override {
         return consume_node();
     }
-    bool string(string_t&) override {
-        return consume_node();
+    bool string(string_t& value) override {
+        return consume_node() && value.find('\0') == string_t::npos;
     }
     bool binary(binary_t&) override {
         return consume_node();
@@ -422,8 +423,8 @@ class bounded_json_sax final : public nlohmann::json::json_sax_t {
     bool start_object(std::size_t) override {
         return start_container();
     }
-    bool key(string_t&) override {
-        return true;
+    bool key(string_t& value) override {
+        return value.find('\0') == string_t::npos;
     }
     bool end_object() override {
         return end_container();

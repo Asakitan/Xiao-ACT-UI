@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <windows.h>
+
 namespace sao::launcher {
 
 struct AppState;
@@ -13,13 +15,13 @@ struct AppState;
 bool takeUiOffline(AppState& state) noexcept;
 bool shutdownPlugins(AppState& state) noexcept;
 bool tearDownPlatform(AppState& state) noexcept;
-bool shutdownSecurity(bool initialized) noexcept;
+bool shutdownSecurity(bool& initialized) noexcept;
 bool shutdownShell(AppState& state) noexcept;
 bool shutdownLicense(AppState& state) noexcept;
-void releaseSingleInstanceMutex(AppState& state) noexcept;
+void releaseOwnedSingleInstanceMutex(HANDLE& mutex) noexcept;
 
 // Convenience: run every step above in reverse-init order.  App::shutdown
 // calls this.
-bool runFullShutdown(AppState& state, bool security_initialized) noexcept;
+bool runFullShutdown(AppState& state, bool& security_initialized) noexcept;
 
 } // namespace sao::launcher

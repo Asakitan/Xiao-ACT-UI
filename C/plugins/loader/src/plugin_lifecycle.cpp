@@ -170,6 +170,7 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
         return SAO_ERR_INVALID_ARGUMENT;
     }
     uintptr_t provider_address = reinterpret_cast<uintptr_t>(descriptor.entity_providers);
+    size_t provider_span = 0;
     for (uint32_t index = 0; index < provider_count; ++index) {
         if (provider_address > (std::numeric_limits<uintptr_t>::max)() - sizeof(uint32_t)) {
             return SAO_ERR_INVALID_ARGUMENT;
@@ -179,6 +180,9 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
                     sizeof(provider_struct_size));
         if (provider_struct_size < kNativeEntityProviderDescriptorRequiredPrefixSize)
             return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        if (provider_struct_size > kMaximumNativeEntityProviderDescriptorSize ||
+            provider_span > kMaximumNativeEntityProviderDescriptorSpanBytes - provider_struct_size)
+            return SAO_ERR_INVALID_ARGUMENT;
         native_entity_provider_descriptor current{};
         std::memcpy(&current, reinterpret_cast<const void*>(provider_address),
                     (std::min)(static_cast<size_t>(provider_struct_size), sizeof(current)));
@@ -190,6 +194,7 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
             return SAO_ERR_INVALID_ARGUMENT;
         }
         provider_address += current.struct_size;
+        provider_span += current.struct_size;
     }
 
     const uint32_t provider_v2_count =
@@ -208,6 +213,9 @@ int32_t validate_native_descriptor(const plugin_manifest& manifest,
             return SAO_ERR_INVALID_ARGUMENT;
         if (provider_v2_stride < kNativeEntityProviderDescriptorV2RequiredPrefixSize)
             return SAO_PLUGINS_ERR_ABI_MISMATCH;
+        if (provider_v2_stride > kMaximumNativeEntityProviderDescriptorSize ||
+            provider_v2_count > kMaximumNativeEntityProviderDescriptorSpanBytes / provider_v2_stride)
+            return SAO_ERR_INVALID_ARGUMENT;
         const uintptr_t provider_v2_address = reinterpret_cast<uintptr_t>(providers_v2);
         if (provider_v2_stride % alignof(native_entity_provider_descriptor_v2) != 0) {
             return SAO_ERR_INVALID_ARGUMENT;

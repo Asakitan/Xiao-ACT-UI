@@ -27,6 +27,7 @@ struct LicenseProviderConfiguration {
 struct UpdateProviderConfiguration {
     bool enabled = false;
     std::string manifest_url;
+    std::array<uint8_t, 32> server_tls_spki_sha256{};
 };
 
 struct PluginsProviderConfiguration {

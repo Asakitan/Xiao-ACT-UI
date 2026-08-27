@@ -50,6 +50,7 @@ exports/
 *.tmp
 *.temp
 *.bak
+*.bak_*
 *.orig
 *.rej
 *.dmp

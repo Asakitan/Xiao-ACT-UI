@@ -34,11 +34,18 @@ const wchar_t* normalizedLogLevel(const wchar_t* value) {
 } // namespace
 
 bool parseCommandLine(AppState& state, bool& should_exit_out, int& exit_code_out) noexcept {
+    return parseCommandLineText(GetCommandLineW(), state, should_exit_out, exit_code_out);
+}
+
+bool parseCommandLineText(const wchar_t* command_line,
+                          AppState& state,
+                          bool& should_exit_out,
+                          int& exit_code_out) noexcept {
     should_exit_out = false;
     exit_code_out   = SAO_EXIT_OK;
 
     int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    LPWSTR* argv = CommandLineToArgvW(command_line, &argc);
     if (!argv) {
         return false;
     }
@@ -141,8 +148,17 @@ bool parseCommandLineFromArgv(int argc,
             return false;
 #endif
         }
+        if (wcsStartsWithCI(a, L"--file=")) {
+            const wchar_t* path = a + wcslen(L"--file=");
+            if (path[0] == L'\0') {
+                exit_code_out = SAO_EXIT_BAD_ARGS;
+                return false;
+            }
+            state.open_path.assign(path);
+            continue;
+        }
         if (wcsStartsWithCI(a, L"--config=")) {
-            lstrcpynW(state.config_path, a + wcslen(L"--config="), MAX_PATH);
+            state.config_path.assign(a + wcslen(L"--config="));
             continue;
         }
         if (wcsStartsWithCI(a, L"--log-level=")) {

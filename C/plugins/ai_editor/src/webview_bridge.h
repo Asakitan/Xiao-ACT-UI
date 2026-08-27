@@ -360,9 +360,10 @@ struct WebViewConfig {
     std::string window_title;     // Win32 window caption
     int width = 1280;
     int height = 800;
-    // When true, incoming WebMessageReceived JSON payloads are routed into
-    // the NativeRuntime hidden behind `runtime_handle`.  Requires
-    // `runtime_handle` to be non-null.
+    // When true and url is empty, top-frame WebMessageReceived JSON payloads
+    // are routed into the NativeRuntime hidden behind `runtime_handle`.
+    // Requires `runtime_handle` to be non-null. A non-empty URL is always an
+    // unbridged external surface.
     bool bridge_native_runtime = true;
     sao_ai_editor_runtime_t runtime_handle = nullptr;
     // Required compositor bridge frame ring. The WebView2 HWND is created

@@ -37,6 +37,8 @@
 
 #include "sao/engine/render_hook.h"
 
+extern "C" void SAO_UI_CALL sao_ui_level_up_effect_overlay_set_compositor(sao_ui_compositor_handle_t compositor);
+
 namespace sao_sdk_internal {
 
 // ─── Shared runtime ──────────────────────────────────────────────────
@@ -120,6 +122,7 @@ sao_sdk_status_t start_runtime_locked(SharedRuntime& runtime) {
         runtime.owns_compositor = true;
         runtime.compositor_bound = false;
         runtime.compositor_owner_thread = std::this_thread::get_id();
+        sao_ui_level_up_effect_overlay_set_compositor(runtime.compositor);
         created_compositor = true;
     }
     if (runtime.input_router == nullptr) {
@@ -127,6 +130,7 @@ sao_sdk_status_t start_runtime_locked(SharedRuntime& runtime) {
             sao_ui_input_router_deep_create(runtime.compositor, &runtime.input_router);
         if (status != SAO_STATUS_OK) {
             if (created_compositor) {
+                sao_ui_level_up_effect_overlay_set_compositor(nullptr);
                 const sao_status_t destroy_status =
                     sao_ui_compositor_try_destroy(runtime.compositor);
                 if (destroy_status == SAO_STATUS_OK) {
@@ -180,6 +184,7 @@ sao_sdk_status_t SharedRuntime::bind_compositor(sao_ui_compositor_handle_t repla
     const sao_status_t replacement_owner = sao_ui_compositor_require_owner_thread(replacement);
     if (replacement_owner != SAO_STATUS_OK)
         return map_runtime_status(replacement_owner);
+    bool level_up_unbound = false;
     try {
         std::lock_guard<std::mutex> guard(mu);
         if (active_contexts != 0)
@@ -220,6 +225,8 @@ sao_sdk_status_t SharedRuntime::bind_compositor(sao_ui_compositor_handle_t repla
             created_router = true;
         }
         if (owns_compositor && previous_compositor != nullptr) {
+            sao_ui_level_up_effect_overlay_set_compositor(nullptr);
+            level_up_unbound = true;
             const sao_status_t destroy_status =
                 sao_ui_compositor_try_destroy(previous_compositor);
             if (destroy_status != SAO_STATUS_OK) {
@@ -229,9 +236,14 @@ sao_sdk_status_t SharedRuntime::bind_compositor(sao_ui_compositor_handle_t repla
                     const sao_status_t rollback_status =
                         sao_ui_input_router_deep_rebind_compositor(
                             retained_router, replacement, previous_compositor);
-                    if (rollback_status != SAO_STATUS_OK)
+                    if (rollback_status != SAO_STATUS_OK) {
+                        sao_ui_level_up_effect_overlay_set_compositor(previous_compositor);
+                        level_up_unbound = false;
                         return map_runtime_status(rollback_status);
+                    }
                 }
+                sao_ui_level_up_effect_overlay_set_compositor(previous_compositor);
+                level_up_unbound = false;
                 return map_runtime_status(destroy_status);
             }
         }
@@ -240,8 +252,12 @@ sao_sdk_status_t SharedRuntime::bind_compositor(sao_ui_compositor_handle_t repla
         owns_compositor = false;
         compositor_bound = true;
         compositor_owner_thread = std::this_thread::get_id();
+        sao_ui_level_up_effect_overlay_set_compositor(replacement);
+        level_up_unbound = false;
         return SAO_SDK_OK;
     } catch (...) {
+        if (level_up_unbound && compositor != nullptr)
+            sao_ui_level_up_effect_overlay_set_compositor(compositor);
         return SAO_SDK_ERR_INTERNAL;
     }
 }
@@ -255,10 +271,13 @@ sao_sdk_status_t SharedRuntime::unbind_compositor() {
             return SAO_SDK_ERR_ACCESS_DENIED;
         if (active_contexts != 0)
             return SAO_SDK_ERR_BUSY;
+        sao_ui_level_up_effect_overlay_set_compositor(nullptr);
         const sao_status_t router_status =
             sao_ui_input_router_deep_try_destroy(input_router);
-        if (router_status != SAO_STATUS_OK)
+        if (router_status != SAO_STATUS_OK) {
+            sao_ui_level_up_effect_overlay_set_compositor(compositor);
             return map_runtime_status(router_status);
+        }
         input_router = nullptr;
         compositor = nullptr;
         owns_compositor = false;

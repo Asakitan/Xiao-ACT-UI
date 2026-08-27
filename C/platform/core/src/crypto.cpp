@@ -57,8 +57,10 @@ sao_status_t hash_bytes(
     uint8_t* out_digest,
     size_t digest_capacity) {
     AlgorithmSpec spec{};
-    if (!algorithm_spec(algo, &spec) || out_digest == nullptr ||
-        digest_capacity < spec.digest_size ||
+    if (!algorithm_spec(algo, &spec)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (out_digest == nullptr || digest_capacity < spec.digest_size ||
         (key_len != 0 && key == nullptr) || (data_len != 0 && data == nullptr) ||
         key_len > std::numeric_limits<ULONG>::max() ||
         data_len > std::numeric_limits<ULONG>::max()) {

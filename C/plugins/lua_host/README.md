@@ -50,6 +50,6 @@ C++ ctx → lua_State (真 5.4) → 插件 lua script
 
 - ``lua`` (5.4)
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/``。
+旧 ``tests/``、Catch2 与 CTest 注册已删除，不再存在可运行测试入口。

@@ -30,6 +30,21 @@ goto :fail
 echo [1/4] Configuring windows-release preset...
 cmake --preset windows-release
 if errorlevel 1 goto :fail
+if not exist build\windows-release\sao_version.txt (
+    echo ERROR: CMake version file was not produced.
+    goto :fail
+)
+set "SAO_VERSION="
+set /p SAO_VERSION=<build\windows-release\sao_version.txt
+if not defined SAO_VERSION (
+    echo ERROR: CMake version file is empty.
+    goto :fail
+)
+echo(!SAO_VERSION!| findstr.exe /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
+if errorlevel 1 (
+    echo ERROR: CMake version must be strict semver x.y.z.
+    goto :fail
+)
 
 echo [2/4] Building windows-release ship tree...
 cmake --build --preset windows-release --parallel
@@ -48,7 +63,7 @@ if exist build\windows-release\bin\RelWithDebInfo\sao_pack.exe (
     echo ERROR: sao_pack.exe not built -- release packaging is mandatory.
     goto :fail
 )
-"!PACK_TOOL!" --input build\windows-release\ship\bin --output dist\release\SaoAuto --version 0.2.0 --zip --force
+"!PACK_TOOL!" --input build\windows-release\ship\bin --output dist\release\SaoAuto --version !SAO_VERSION! --zip --force
 if errorlevel 1 goto :fail
 if not exist dist\release\SaoAuto\manifest.json (
     echo ERROR: package manifest was not produced.
@@ -56,6 +71,10 @@ if not exist dist\release\SaoAuto\manifest.json (
 )
 if not exist dist\release\SaoAuto.zip (
     echo ERROR: release ZIP was not produced.
+    goto :fail
+)
+if not exist dist\release\SaoAuto\plugins\ (
+    echo ERROR: onedir package is missing the same-root plugins directory.
     goto :fail
 )
 

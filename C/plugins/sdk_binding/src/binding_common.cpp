@@ -23,6 +23,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -39,14 +40,30 @@ namespace sao::plugins::sdk_binding {
 namespace {
 
 using ordered_json = nlohmann::ordered_json;
+bool valid_utf8(std::string_view value) noexcept {
+    size_t i=0; while(i<value.size()){const auto b=(unsigned char)value[i];size_t w=0;uint32_t cp=0;
+        if(b<=0x7fU){w=1;cp=b;}else if(b>=0xc2U&&b<=0xdfU){w=2;cp=b&0x1fU;}else if(b>=0xe0U&&b<=0xefU){w=3;cp=b&0x0fU;}else if(b>=0xf0U&&b<=0xf4U){w=4;cp=b&7U;}else return false;
+        if(i+w>value.size())return false;for(size_t j=1;j<w;++j){const auto c=(unsigned char)value[i+j];if((c&0xc0U)!=0x80U)return false;cp=(cp<<6U)|(c&0x3fU);}if((w==2&&cp<0x80U)||(w==3&&cp<0x800U)||(w==4&&cp<0x10000U)||cp>0x10ffffU||(cp>=0xd800U&&cp<=0xdfffU))return false;i+=w;}return true;
+}
+class bounded_binding_json_sax final : public ordered_json::json_sax_t { public:
+ bool null()override{return node();} bool boolean(bool)override{return node();} bool number_integer(number_integer_t)override{return node();} bool number_unsigned(number_unsigned_t value)override{return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) && node();} bool number_float(number_float_t v,const string_t&)override{return std::isfinite(v)&&node();} bool string(string_t&v)override{return node()&&str(v);} bool binary(binary_t&v)override{return node()&&v.size()<=kMaximumBindingJsonBytes;} bool start_object(std::size_t)override{return start();} bool key(string_t&v)override{return str(v);} bool end_object()override{return end();} bool start_array(std::size_t)override{return start();} bool end_array()override{return end();} bool parse_error(std::size_t,const std::string&,const nlohmann::detail::exception&)override{return false;}
+ private: bool node()noexcept{if(nodes_>=kMaximumBindingJsonNodes)return false;++nodes_;return true;} bool str(std::string_view v)noexcept{if(v.find('\0')!=std::string_view::npos||!valid_utf8(v)||v.size()>kMaximumBindingJsonStringBytes||strings_>kMaximumBindingJsonTotalStringBytes-v.size())return false;strings_+=v.size();return true;} bool start()noexcept{if(depth_>=kMaximumBindingJsonDepth||!node())return false;++depth_;return true;} bool end()noexcept{if(depth_==0)return false;--depth_;return true;} size_t depth_=0,nodes_=0,strings_=0;
+};
+bool validate_json_text(std::string_view text)noexcept{if(text.empty()||text.size()>kMaximumBindingJsonBytes||!valid_utf8(text))return false;try{bounded_binding_json_sax sax;return ordered_json::sax_parse(text.begin(),text.end(),&sax);}catch(...){return false;}}
 
 json_node json_to_node(const ordered_json& value) {
     if (value.is_null())
         return json_node{nullptr};
     if (value.is_boolean())
         return json_node{value.get<bool>()};
-    if (value.is_number_integer() || value.is_number_unsigned()) {
+    if (value.is_number_integer()) {
         return json_node{value.get<int64_t>()};
+    }
+    if (value.is_number_unsigned()) {
+        const auto number = value.get<uint64_t>();
+        if (number > static_cast<uint64_t>((std::numeric_limits<int64_t>::max)()))
+            throw std::out_of_range("JSON unsigned integer exceeds int64");
+        return json_node{static_cast<int64_t>(number)};
     }
     if (value.is_number_float())
         return json_node{value.get<double>()};
@@ -92,6 +109,7 @@ ordered_json node_to_json(const json_node& node) {
 } // namespace
 
 json_node json_node::from_string(std::string_view text) {
+    if (!validate_json_text(text)) return json_node{};
     try {
         return json_to_node(ordered_json::parse(text));
     } catch (...) {
@@ -101,7 +119,8 @@ json_node json_node::from_string(std::string_view text) {
 
 std::string json_node::to_string() const {
     try {
-        return node_to_json(*this).dump();
+        const auto serialized = node_to_json(*this).dump();
+        return validate_json_text(serialized) ? serialized : "null";
     } catch (...) {
         return "null";
     }
@@ -1107,6 +1126,7 @@ static constexpr method_name_map k_names[] = {
     {sdk_method_id::method_call_runtime, "call_runtime"},
     {sdk_method_id::method_ensure_requirements, "ensure_requirements"},
     {sdk_method_id::method_load_local, "load_local"},
+    {sdk_method_id::method_time, "time"},
 };
 static_assert(std::size(k_names) == static_cast<size_t>(sdk_method_id::method_count_));
 
@@ -1182,6 +1202,13 @@ sao_plugins_binding_method_from_name(const char* name) {
             return e.id;
     }
     return sdk_method_id::method_count_;
+}
+
+extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
+sao_plugins_binding_validate_json_text(const uint8_t* data, size_t size) {
+    if (data == nullptr || size == 0 || size > kMaximumBindingJsonBytes)
+        return false;
+    return validate_json_text(std::string_view(reinterpret_cast<const char*>(data), size));
 }
 
 namespace {
@@ -1431,9 +1458,14 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_plugin_i
         if (status != SAO_OK)
             return status;
         std::array<char, 512> provider_error{};
+        if (args_size > 0 && !validate_json_text(std::string_view(
+                reinterpret_cast<const char*>(args_json_utf8), args_size)))
+            return SAO_ERR_INVALID_ARGUMENT;
+        std::vector<uint8_t> staged(kMaximumBindingJsonBytes + 1U);
+        size_t staged_required = 0;
         invoke_call call{plugin,       method_name_utf8,      args_json_utf8,
-                         args_size,    out_result_json_utf8,  out_capacity,
-                         out_required, provider_error.data(), provider_error.size()};
+                         args_size,    staged.data(), staged.size(),
+                         &staged_required, provider_error.data(), provider_error.size()};
         char* barrier_error = nullptr;
         {
             current_binding_scope scope(plugin);
@@ -1448,6 +1480,26 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_plugin_i
         else
             set_last_error_best_effort(plugin, "language host invoke failed");
         sao_plugins_binding_free_error(barrier_error);
+        if (status == SAO_OK) {
+            if (staged_required == 0 || staged_required > staged.size() ||
+                staged[staged_required - 1U] != '\0' ||
+                !validate_json_text(std::string_view(
+                    reinterpret_cast<const char*>(staged.data()), staged_required - 1U))) {
+                if (out_result_json_utf8 != nullptr && out_capacity > 0)
+                    out_result_json_utf8[0] = '\0';
+                *out_required = 0;
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            return copy_to_caller(std::string_view(
+                reinterpret_cast<const char*>(staged.data()), staged_required - 1U),
+                reinterpret_cast<char*>(out_result_json_utf8), out_capacity, out_required);
+        }
+        if (status == SAO_ERR_BUFFER_TOO_SMALL) {
+            if (staged_required > staged.size()) { *out_required = 0; return SAO_ERR_INVALID_ARGUMENT; }
+            *out_required = staged_required;
+            if (out_result_json_utf8 != nullptr && out_capacity > 0)
+                out_result_json_utf8[0] = '\0';
+        }
         return status;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1490,6 +1542,13 @@ sao_plugins_binding_dispatch_provider(language_host_kind language,
             host_lease.adapter().dispatch == nullptr)
             return unsupported();
 
+        if (operation == language_binding_operation::json_to_value ||
+            operation == language_binding_operation::static_call) {
+            if (request->input == nullptr || request->input_size == 0 ||
+                !sao_plugins_binding_validate_json_text(request->input, request->input_size))
+                return SAO_ERR_INVALID_ARGUMENT;
+        }
+
         binding_call_lease binding_lease;
         uint64_t watermark = 0;
         if (operation == language_binding_operation::callback_wrap) {
@@ -1505,7 +1564,21 @@ sao_plugins_binding_dispatch_provider(language_host_kind language,
         dispatch_call call{host_lease.adapter(), operation, request};
         if (operation != language_binding_operation::callback_wrap) {
             current_binding_scope scope(nullptr);
-            return sao_plugins_binding_barrier(&call_dispatch, &call, nullptr);
+            status = sao_plugins_binding_barrier(&call_dispatch, &call, nullptr);
+            if (status == SAO_OK && operation == language_binding_operation::value_to_json) {
+                if (request->out_object == nullptr || *request->out_object == nullptr)
+                    return SAO_ERR_INVALID_ARGUMENT;
+                auto* serialized = static_cast<char*>(*request->out_object);
+                size_t length = 0;
+                while (length <= kMaximumBindingJsonBytes && serialized[length] != '\0') ++length;
+                if (length > kMaximumBindingJsonBytes ||
+                    !validate_json_text(std::string_view(serialized, length))) {
+                    std::free(serialized);
+                    *request->out_object = nullptr;
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+            }
+            return status;
         }
 
         callback_reservation_scope reservation(binding_lease.get());

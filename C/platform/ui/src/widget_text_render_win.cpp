@@ -216,10 +216,17 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
         if (FAILED(target->EndDraw()))
             return false;
 
-        const UINT stride = width * 4U;
-        out_pixels->resize(static_cast<size_t>(stride) * height);
+        const uint64_t row_bytes = static_cast<uint64_t>(width) * 4u;
+        if (row_bytes > std::numeric_limits<UINT>::max() ||
+            static_cast<uint64_t>(height) >
+                std::numeric_limits<size_t>::max() / row_bytes)
+            return false;
+        const size_t total_bytes = static_cast<size_t>(row_bytes) * height;
+        if (total_bytes > std::numeric_limits<UINT>::max()) return false;
+        const UINT stride = static_cast<UINT>(row_bytes);
+        out_pixels->resize(total_bytes);
         if (FAILED(bitmap->CopyPixels(nullptr, stride,
-                                      static_cast<UINT>(out_pixels->size()),
+                                      static_cast<UINT>(total_bytes),
                                       out_pixels->data())))
             return false;
         *out_w = width;

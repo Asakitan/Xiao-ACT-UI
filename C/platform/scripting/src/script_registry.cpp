@@ -14,6 +14,7 @@ namespace {
 struct RegistryEntry {
     std::string name;
     SaoScriptEngineVTable vtable{};
+    size_t active_leases = 0;
 };
 
 std::recursive_mutex g_registry_mutex;
@@ -71,6 +72,43 @@ RegistryEntry* find_entry_locked(int32_t language) noexcept {
     return found == g_entries.end() ? nullptr : found->get();
 }
 
+RegistryEntry* find_provider_entry_locked(
+    const SaoScriptEngineVTable& vtable) noexcept {
+    const auto matches = [&vtable](const std::unique_ptr<RegistryEntry>& entry) {
+        return entry->vtable.name_utf8 == vtable.name_utf8 &&
+               entry->vtable.language == vtable.language &&
+               entry->vtable.user_data == vtable.user_data;
+    };
+    for (const auto& entry : g_entries) {
+        if (matches(entry)) return entry.get();
+    }
+    for (const auto& entry : g_retired_entries) {
+        if (matches(entry)) return entry.get();
+    }
+    return nullptr;
+}
+
+void reclaim_retired_locked() noexcept {
+    g_retired_entries.erase(
+        std::remove_if(g_retired_entries.begin(), g_retired_entries.end(),
+                       [](const std::unique_ptr<RegistryEntry>& entry) {
+                           return entry->active_leases == 0;
+                       }),
+        g_retired_entries.end());
+}
+
+void release_registry_lease(const SaoScriptEngineVTable& vtable) noexcept {
+    try {
+        std::lock_guard lock(g_registry_mutex);
+        RegistryEntry* entry = find_provider_entry_locked(vtable);
+        if (entry != nullptr && entry->active_leases != 0) {
+            --entry->active_leases;
+        }
+        reclaim_retired_locked();
+    } catch (...) {
+    }
+}
+
 sao_status_t check_available(const SaoScriptEngineVTable& vtable) noexcept {
     if (!sao::scripting::internal::has_provider_field(
             vtable, offsetof(SaoScriptEngineVTable, available),
@@ -106,40 +144,45 @@ sao_status_t acquire_provider(int32_t language,
     *out_vtable = {};
     {
         std::lock_guard lock(g_registry_mutex);
-        const RegistryEntry* entry = find_entry_locked(language);
+        RegistryEntry* entry = find_entry_locked(language);
         if (entry == nullptr) return SAO_STATUS_ERR_SCRIPT_UNSUPPORTED;
         *out_vtable = entry->vtable;
-        const sao_status_t available_status = check_available(*out_vtable);
-        if (available_status != SAO_STATUS_OK) {
-            *out_vtable = {};
-            return available_status;
-        }
-        if (has_provider_field(*out_vtable,
-                               offsetof(SaoScriptEngineVTable, retain),
-                               sizeof(out_vtable->retain)) &&
-            out_vtable->retain != nullptr) {
-            try {
-                out_vtable->retain(out_vtable->user_data);
-            } catch (...) {
-                *out_vtable = {};
-                return SAO_STATUS_ERR_SCRIPT_PROVIDER_EXCEPTION;
-            }
+        ++entry->active_leases;
+    }
+
+    const auto rollback = [&] {
+        release_registry_lease(*out_vtable);
+        *out_vtable = {};
+    };
+    const sao_status_t available_status = check_available(*out_vtable);
+    if (available_status != SAO_STATUS_OK) {
+        rollback();
+        return available_status;
+    }
+    if (has_provider_field(*out_vtable,
+                           offsetof(SaoScriptEngineVTable, retain),
+                           sizeof(out_vtable->retain)) &&
+        out_vtable->retain != nullptr) {
+        try {
+            out_vtable->retain(out_vtable->user_data);
+        } catch (...) {
+            rollback();
+            return SAO_STATUS_ERR_SCRIPT_PROVIDER_EXCEPTION;
         }
     }
     return SAO_STATUS_OK;
 }
 
 void release_provider(const SaoScriptEngineVTable& vtable) noexcept {
-    if (!has_provider_field(vtable,
-                            offsetof(SaoScriptEngineVTable, release),
-                            sizeof(vtable.release)) ||
-        vtable.release == nullptr) {
-        return;
-    }
+    const bool has_release =
+        has_provider_field(vtable, offsetof(SaoScriptEngineVTable, release),
+                           sizeof(vtable.release)) &&
+        vtable.release != nullptr;
     try {
-        vtable.release(vtable.user_data);
+        if (has_release) vtable.release(vtable.user_data);
     } catch (...) {
     }
+    release_registry_lease(vtable);
 }
 
 }  // namespace sao::scripting::internal
@@ -153,6 +196,7 @@ extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_register(
         replacement->vtable = copy_vtable(*vtable);
         replacement->vtable.name_utf8 = replacement->name.c_str();
         std::lock_guard lock(g_registry_mutex);
+        reclaim_retired_locked();
         const auto found = std::find_if(
             g_entries.begin(), g_entries.end(),
             [vtable](const std::unique_ptr<RegistryEntry>& entry) {
@@ -161,6 +205,9 @@ extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_register(
         if (found == g_entries.end()) {
             g_entries.push_back(std::move(replacement));
         } else {
+            if (g_retired_entries.size() == g_retired_entries.max_size()) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
             g_retired_entries.push_back(std::move(*found));
             *found = std::move(replacement);
         }
@@ -176,17 +223,20 @@ extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_find(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_vtable = nullptr;
-    SaoScriptEngineVTable snapshot{};
+    thread_local SaoScriptEngineVTable snapshot{};
+    thread_local std::string snapshot_name;
     {
         std::lock_guard lock(g_registry_mutex);
         RegistryEntry* entry = find_entry_locked(language);
         if (entry == nullptr) return SAO_STATUS_ERR_SCRIPT_UNSUPPORTED;
         snapshot = entry->vtable;
-        *out_vtable = &entry->vtable;
+        snapshot_name = entry->name;
+        snapshot.name_utf8 = snapshot_name.c_str();
     }
     const sao_status_t status = check_available(snapshot);
-    if (status != SAO_STATUS_OK) *out_vtable = nullptr;
-    return status;
+    if (status != SAO_STATUS_OK) return status;
+    *out_vtable = &snapshot;
+    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_enumerate(
@@ -197,14 +247,29 @@ extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_enumerate(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        std::lock_guard lock(g_registry_mutex);
-        *out_count = g_entries.size();
-        if (out_vtables == nullptr || max_vtables < g_entries.size()) {
-            return g_entries.empty() ? SAO_STATUS_OK
-                                     : SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        std::vector<SaoScriptEngineVTable> snapshots;
+        std::vector<std::string> names;
+        {
+            std::lock_guard lock(g_registry_mutex);
+            *out_count = g_entries.size();
+            if (out_vtables == nullptr || max_vtables < g_entries.size()) {
+                return g_entries.empty() ? SAO_STATUS_OK
+                                         : SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            }
+            snapshots.reserve(g_entries.size());
+            names.reserve(g_entries.size());
+            for (const auto& entry : g_entries) {
+                snapshots.push_back(entry->vtable);
+                names.push_back(entry->name);
+            }
         }
-        for (size_t index = 0; index < g_entries.size(); ++index) {
-            out_vtables[index] = &g_entries[index]->vtable;
+        thread_local std::vector<SaoScriptEngineVTable> thread_vtables;
+        thread_local std::vector<std::string> thread_names;
+        thread_vtables = std::move(snapshots);
+        thread_names = std::move(names);
+        for (size_t index = 0; index < thread_vtables.size(); ++index) {
+            thread_vtables[index].name_utf8 = thread_names[index].c_str();
+            out_vtables[index] = &thread_vtables[index];
         }
         return SAO_STATUS_OK;
     } catch (...) {
@@ -216,16 +281,26 @@ extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_enumerate(
 extern "C" sao_status_t SAO_SCRIPTING_CALL sao_script_registry_unregister(
     int32_t language) {
     if (!valid_language(language)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard lock(g_registry_mutex);
-    const auto found = std::find_if(
-        g_entries.begin(), g_entries.end(),
-        [language](const std::unique_ptr<RegistryEntry>& entry) {
-            return entry->vtable.language == language;
-        });
-    if (found == g_entries.end()) return SAO_STATUS_ERR_SCRIPT_UNSUPPORTED;
-    g_retired_entries.push_back(std::move(*found));
-    g_entries.erase(found);
-    return SAO_STATUS_OK;
+    try {
+        std::lock_guard lock(g_registry_mutex);
+        reclaim_retired_locked();
+        const auto found = std::find_if(
+            g_entries.begin(), g_entries.end(),
+            [language](const std::unique_ptr<RegistryEntry>& entry) {
+                return entry->vtable.language == language;
+            });
+        if (found == g_entries.end()) return SAO_STATUS_ERR_SCRIPT_UNSUPPORTED;
+        if (g_retired_entries.size() == g_retired_entries.max_size()) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        g_retired_entries.reserve(g_retired_entries.size() + 1);
+        g_retired_entries.push_back(std::move(*found));
+        g_entries.erase(found);
+        reclaim_retired_locked();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_SCRIPTING_CALL
@@ -234,19 +309,38 @@ sao_script_registry_release_owner(const void* owner, size_t* out_removed) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     *out_removed = 0;
-    std::lock_guard lock(g_registry_mutex);
-    for (auto iterator = g_entries.begin(); iterator != g_entries.end();) {
-        const auto& vtable = (*iterator)->vtable;
-        const bool has_owner = sao::scripting::internal::has_provider_field(
-            vtable, offsetof(SaoScriptEngineVTable, owner),
-            sizeof(vtable.owner));
-        if (!has_owner || vtable.owner != owner) {
-            ++iterator;
-            continue;
+    try {
+        std::lock_guard lock(g_registry_mutex);
+        reclaim_retired_locked();
+        size_t matching = 0;
+        for (const auto& entry : g_entries) {
+            const auto& vtable = entry->vtable;
+            const bool has_owner = sao::scripting::internal::has_provider_field(
+                vtable, offsetof(SaoScriptEngineVTable, owner),
+                sizeof(vtable.owner));
+            if (has_owner && vtable.owner == owner) ++matching;
         }
-        g_retired_entries.push_back(std::move(*iterator));
-        iterator = g_entries.erase(iterator);
-        ++*out_removed;
+        if (matching > g_retired_entries.max_size() - g_retired_entries.size()) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        g_retired_entries.reserve(g_retired_entries.size() + matching);
+        for (auto iterator = g_entries.begin(); iterator != g_entries.end();) {
+            const auto& vtable = (*iterator)->vtable;
+            const bool has_owner = sao::scripting::internal::has_provider_field(
+                vtable, offsetof(SaoScriptEngineVTable, owner),
+                sizeof(vtable.owner));
+            if (!has_owner || vtable.owner != owner) {
+                ++iterator;
+                continue;
+            }
+            g_retired_entries.push_back(std::move(*iterator));
+            iterator = g_entries.erase(iterator);
+            ++*out_removed;
+        }
+        reclaim_retired_locked();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        *out_removed = 0;
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }

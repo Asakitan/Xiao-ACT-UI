@@ -89,6 +89,7 @@ struct Owner final {
     Owner(Owner&& other) noexcept;
     Owner& operator=(Owner&& other) noexcept;
 
+    void request_shutdown() noexcept;
     [[nodiscard]] sao_status_t set_operations(Operations operations) noexcept;
 
     // Registers once, refreshes, shows, and raises the existing instance on

@@ -28,6 +28,7 @@ struct adapter_plugin_record {
         loading,
         ready,
         unloading,
+        cleanup_pending,
     } lifecycle = state::loading;
     as_host_handle_t host = nullptr;
     as_plugin_handle_t script = nullptr;
@@ -134,7 +135,6 @@ int32_t destroy_snapshot(adapter_resource_snapshot& snapshot) noexcept {
             return SAO_ERR_OS_CALL_FAILED;
         }
     }
-    snapshot.loader_context = nullptr;
     return SAO_OK;
 }
 
@@ -226,33 +226,58 @@ int32_t with_plugin(loader_plugin_handle_t plugin, void* user_data, Callback&& c
     return status == SAO_OK ? callback(lease.script()) : status;
 }
 
+int32_t rollback_adapter_load(as_loader_adapter_owner_s* owner,
+                              loader_plugin_handle_t plugin,
+                              adapter_plugin_record& pending,
+                              int32_t failure,
+                              std::string retained_error) noexcept {
+    adapter_resource_snapshot snapshot = take_resources(pending);
+    int32_t cleanup_status = SAO_OK;
+    try {
+        cleanup_status = destroy_snapshot(snapshot);
+    } catch (...) {
+        cleanup_status = SAO_ERR_OS_CALL_FAILED;
+    }
+    std::lock_guard lock(g_adapter_mutex);
+    if (owner == g_adapter_owner && owner->active) {
+        const auto found = owner->plugins.find(plugin);
+        if (cleanup_status != SAO_OK) {
+            if (found != owner->plugins.end()) {
+                restore_resources(found->second, snapshot);
+                found->second.lifecycle = adapter_plugin_record::state::cleanup_pending;
+            }
+        } else if (found != owner->plugins.end()) {
+            owner->plugins.erase(found);
+        }
+        owner->last_errors[plugin] = std::move(retained_error);
+    }
+    return cleanup_status == SAO_OK ? failure : cleanup_status;
+}
+
 int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                                       const sao::plugins::loader::plugin_manifest* manifest,
                                       void* user_data) {
     as_loader_adapter_owner_s* owner = nullptr;
     adapter_plugin_record pending;
-    bool reserved = false;
     try {
         {
             std::lock_guard lock(g_adapter_mutex);
             owner = active_owner(user_data);
             if (owner == nullptr)
                 return SAO_ERR_NOT_INITIALIZED;
-            if (plugin == nullptr || manifest == nullptr || manifest->plugin_id.empty() ||
+            if (plugin == nullptr or manifest == nullptr or manifest->plugin_id.empty() or
                 manifest->source_path.empty()) {
                 return SAO_ERR_INVALID_ARGUMENT;
             }
-            if (owner->plugins.find(plugin) != owner->plugins.end()) {
+            if (owner->plugins.find(plugin) != owner->plugins.end())
                 return sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
-            }
             owner->last_errors.erase(plugin);
             owner->plugins.emplace(plugin, adapter_plugin_record{});
-            reserved = true;
         }
 
         int32_t status = sao::plugins::loader::sao_plugins_lifecycle_get_context(
             plugin, &pending.loader_context);
-        if (status != SAO_OK || pending.loader_context == nullptr) {
+        if (status != SAO_OK or pending.loader_context == nullptr) {
             if (status == SAO_OK)
                 status = SAO_ERR_NOT_INITIALIZED;
         } else {
@@ -262,18 +287,16 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             status = sao_sdk_context_create(manifest->source_path.c_str(),
                                             manifest->plugin_id.c_str(), &pending.sdk_context);
         }
-        if (status == SAO_OK) {
+        if (status == SAO_OK)
             status = sao_sdk_context_bind_platform_services(pending.sdk_context);
-        }
         asIScriptEngine* engine = nullptr;
         if (status == SAO_OK) {
             engine = sao_plugins_ashost_engine(pending.host);
             if (engine == nullptr)
                 status = SAO_ERR_HANDLE_INVALID;
         }
-        if (status == SAO_OK) {
+        if (status == SAO_OK)
             status = register_gpu_hunt_bindings(engine, pending.sdk_context);
-        }
         if (status == SAO_OK) {
             const std::wstring plugin_dir = path_from_utf8(manifest->source_path.c_str()).wstring();
             const std::string entry =
@@ -286,50 +309,35 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             std::string retained_error = "AngelScript plugin runtime load failed";
             if (pending.host != nullptr) {
                 char* host_error = nullptr;
-                if (sao_plugins_ashost_get_last_error(pending.host, &host_error) == SAO_OK &&
+                if (sao_plugins_ashost_get_last_error(pending.host, &host_error) == SAO_OK and
                     host_error != nullptr) {
                     retained_error = host_error;
                 }
                 std::free(host_error);
             }
-            adapter_resource_snapshot snapshot = take_resources(pending);
-            const int32_t cleanup_status = destroy_snapshot(snapshot);
-            std::lock_guard lock(g_adapter_mutex);
-            if (owner == g_adapter_owner) {
-                owner->plugins.erase(plugin);
-                owner->last_errors[plugin] = std::move(retained_error);
-            }
-            return cleanup_status == SAO_OK ? status : cleanup_status;
+            return rollback_adapter_load(owner, plugin, pending, status,
+                                         std::move(retained_error));
         }
 
+        bool owner_changed = false;
         {
             std::lock_guard lock(g_adapter_mutex);
             const auto found = owner->plugins.find(plugin);
-            if (owner != g_adapter_owner || !owner->active || found == owner->plugins.end() ||
-                found->second.lifecycle != adapter_plugin_record::state::loading) {
-                status = SAO_ERR_HANDLE_INVALID;
-            } else {
+            owner_changed = owner != g_adapter_owner or not owner->active or
+                            found == owner->plugins.end() or
+                            found->second.lifecycle != adapter_plugin_record::state::loading;
+            if (not owner_changed) {
                 pending.lifecycle = adapter_plugin_record::state::ready;
                 found->second = std::move(pending);
-                reserved = false;
             }
         }
-        if (status != SAO_OK) {
-            adapter_resource_snapshot snapshot = take_resources(pending);
-            const int32_t cleanup_status = destroy_snapshot(snapshot);
-            if (cleanup_status != SAO_OK)
-                status = cleanup_status;
-        }
-        return status;
+        if (owner_changed)
+            return rollback_adapter_load(owner, plugin, pending, SAO_ERR_HANDLE_INVALID,
+                                         "AngelScript adapter owner changed during load");
+        return SAO_OK;
     } catch (...) {
-        adapter_resource_snapshot snapshot = take_resources(pending);
-        const int32_t cleanup_status = destroy_snapshot(snapshot);
-        if (reserved && owner != nullptr) {
-            std::lock_guard lock(g_adapter_mutex);
-            if (owner == g_adapter_owner)
-                owner->plugins.erase(plugin);
-        }
-        return cleanup_status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : cleanup_status;
+        return rollback_adapter_load(owner, plugin, pending, SAO_ERR_OS_CALL_FAILED,
+                                     "AngelScript plugin runtime load raised a C++ exception");
     }
 }
 
@@ -399,9 +407,11 @@ int32_t SAO_PLUGINS_CALL adapter_on_unload(loader_plugin_handle_t plugin, bool* 
 }
 
 int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* user_data) {
+    as_loader_adapter_owner_s* owner = nullptr;
+    adapter_resource_snapshot snapshot;
+    bool unloading = false;
+    bool was_cleanup_pending = false;
     try {
-        as_loader_adapter_owner_s* owner = nullptr;
-        adapter_resource_snapshot snapshot;
         {
             std::lock_guard lock(g_adapter_mutex);
             owner = active_owner(user_data);
@@ -410,23 +420,28 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
             const auto found = owner->plugins.find(plugin);
             if (found == owner->plugins.end())
                 return SAO_ERR_HANDLE_INVALID;
-            if (found->second.lifecycle != adapter_plugin_record::state::ready) {
+            if (found->second.lifecycle != adapter_plugin_record::state::ready and
+                found->second.lifecycle != adapter_plugin_record::state::cleanup_pending) {
                 return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
             }
-            if (found->second.active_calls != 0) {
+            if (found->second.active_calls != 0)
                 return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-            }
+            was_cleanup_pending =
+                found->second.lifecycle == adapter_plugin_record::state::cleanup_pending;
             found->second.lifecycle = adapter_plugin_record::state::unloading;
             snapshot = take_resources(found->second);
+            unloading = true;
         }
         const int32_t status = destroy_snapshot(snapshot);
         if (status != SAO_OK) {
             std::lock_guard lock(g_adapter_mutex);
             const auto found = owner->plugins.find(plugin);
-            if (owner == g_adapter_owner && found != owner->plugins.end() &&
+            if (owner == g_adapter_owner and found != owner->plugins.end() and
                 found->second.lifecycle == adapter_plugin_record::state::unloading) {
                 restore_resources(found->second, snapshot);
-                found->second.lifecycle = adapter_plugin_record::state::ready;
+                found->second.lifecycle = was_cleanup_pending
+                                               ? adapter_plugin_record::state::cleanup_pending
+                                               : adapter_plugin_record::state::ready;
             }
             return status;
         }
@@ -435,7 +450,7 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
             if (owner != g_adapter_owner)
                 return SAO_ERR_HANDLE_INVALID;
             const auto found = owner->plugins.find(plugin);
-            if (found == owner->plugins.end() ||
+            if (found == owner->plugins.end() or
                 found->second.lifecycle != adapter_plugin_record::state::unloading) {
                 return SAO_ERR_HANDLE_INVALID;
             }
@@ -443,6 +458,17 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
         }
         return SAO_OK;
     } catch (...) {
+        if (unloading and owner != nullptr) {
+            std::lock_guard lock(g_adapter_mutex);
+            const auto found = owner->plugins.find(plugin);
+            if (owner == g_adapter_owner and found != owner->plugins.end() and
+                found->second.lifecycle == adapter_plugin_record::state::unloading) {
+                restore_resources(found->second, snapshot);
+                found->second.lifecycle = was_cleanup_pending
+                                               ? adapter_plugin_record::state::cleanup_pending
+                                               : adapter_plugin_record::state::ready;
+            }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,6 +33,22 @@
 struct SaoSdkContext;
 
 namespace sao::plugins::sdk_binding {
+
+inline constexpr size_t kMaximumBindingJsonBytes = 8U * 1024U * 1024U;
+inline constexpr size_t kMaximumBindingJsonDepth = 64U;
+inline constexpr size_t kMaximumBindingJsonNodes = 16384U;
+inline constexpr size_t kMaximumBindingJsonStringBytes = 1024U * 1024U;
+inline constexpr size_t kMaximumBindingJsonTotalStringBytes = 4U * 1024U * 1024U;
+
+inline bool sao_plugins_binding_bounded_json_c_string(const char* value,
+                                                       size_t& out_size) noexcept {
+    if (value == nullptr) return false;
+    const auto* terminator = static_cast<const char*>(
+        std::memchr(value, '\0', kMaximumBindingJsonBytes + 1U));
+    if (terminator == nullptr) return false;
+    out_size = static_cast<size_t>(terminator - value);
+    return out_size != 0;
+}
 
 // json 中立类型 (中间格式)
 using json_value =
@@ -141,6 +158,7 @@ enum class sdk_method_id : uint16_t {
     method_call_runtime,
     method_ensure_requirements,
     method_load_local,
+    method_time,
 
     method_count_, // sentinel
 };
@@ -241,6 +259,9 @@ sao_plugins_binding_method_name(sdk_method_id method);
 // 反查: 语言侧的字符串 name → sdk_method_id (未知返回 method_count_)。
 extern "C" SAO_PLUGINS_API sdk_method_id SAO_PLUGINS_CALL
 sao_plugins_binding_method_from_name(const char* name);
+
+extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
+sao_plugins_binding_validate_json_text(const uint8_t* data, size_t size);
 
 // 通用异常屏障: 语言侧回调调用平台 SDK 时用这个包起来。
 using barrier_fn = int32_t(SAO_PLUGINS_CALL*)(void* user_data);

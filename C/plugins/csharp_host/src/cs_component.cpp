@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 #include <unordered_set>
 
 namespace sao::plugins::csharp_host {
@@ -334,9 +335,25 @@ struct managed_component_s {
     const cs_managed_sdk_table* sdk_table = nullptr;
     cs_managed_sdk_session_t sdk_session = nullptr;
     bool resident_key_reserved = false;
-    bool assembly_process_resident = false;
+    bool assembly_load_attempted = false;
     bool initialized = false;
 };
+
+std::mutex g_retired_mutex;
+std::mutex g_retired_retry_mutex;
+std::vector<managed_component_s*> g_retired_components;
+
+void quarantine_component(managed_component_s* component) noexcept {
+    if (component == nullptr) return;
+    try {
+        std::lock_guard lock(g_retired_mutex);
+        if (std::find(g_retired_components.begin(), g_retired_components.end(), component) ==
+            g_retired_components.end()) {
+            g_retired_components.push_back(component);
+        }
+    } catch (...) {
+    }
+}
 
 int32_t cshost_component_attach_contexts(managed_component_s* component, void* sdk_context,
                                          void* loader_context) noexcept {
@@ -483,10 +500,10 @@ int32_t cshost_component_load(cs_host_handle_t host,
         const auto load = reinterpret_cast<load_assembly_and_get_function_pointer_fn>(delegate);
         for (size_t index = 0; index < component->hooks.size(); ++index) {
             void* hook = nullptr;
+            component->assembly_load_attempted = true;
             const int32_t hook_status =
                 call_load_function(load, component->assembly_path.c_str(),
                                    component->managed_type.c_str(), kHookNames[index], &hook);
-            component->assembly_process_resident = true;
             if (hook_status == 0 && hook != nullptr) {
                 component->hooks[index] = reinterpret_cast<component_entry_fn>(hook);
             }
@@ -627,9 +644,15 @@ int32_t cshost_component_close(managed_component_s* component, std::string& out_
 }
 
 void cshost_component_abandon(managed_component_s* component) noexcept {
-    if (component == nullptr)
+    if (component == nullptr) return;
+    std::string error;
+    if (cshost_close_runtime_context(component->runtime.close, component->context, error) != SAO_OK) {
+        quarantine_component(component);
         return;
-    if (component->resident_key_reserved && !component->assembly_process_resident) {
+    }
+    component->context = nullptr;
+    cshost_release_runtime_api(component->runtime);
+    if (component->resident_key_reserved) {
         try {
             std::lock_guard lock(g_resident_mutex);
             g_resident_paths.erase(component->resident_key);
@@ -637,13 +660,38 @@ void cshost_component_abandon(managed_component_s* component) noexcept {
         } catch (...) {
         }
     }
-    std::string ignored_error;
-    if (cshost_close_runtime_context(component->runtime.close, component->context, ignored_error) ==
-        SAO_OK) {
-        component->context = nullptr;
-    }
-    cshost_release_runtime_api(component->runtime);
     delete component;
+}
+
+int32_t cshost_retry_retired_components(cs_host_handle_t host, std::string& out_error) noexcept {
+    out_error.clear();
+    if (host == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard retry_lock(g_retired_retry_mutex);
+        std::vector<managed_component_s*> pending;
+        {
+            std::lock_guard lock(g_retired_mutex);
+            for (auto* component : g_retired_components) {
+                if (component != nullptr && component->runtime.owner == host)
+                    pending.push_back(component);
+            }
+        }
+        for (auto* component : pending) {
+            std::string error;
+            const int32_t status = cshost_component_close(component, error);
+            if (status != SAO_OK) {
+                out_error = error.empty() ? "retired C# component close failed" : error;
+                return status;
+            }
+            std::lock_guard lock(g_retired_mutex);
+            const auto found = std::find(g_retired_components.begin(), g_retired_components.end(), component);
+            if (found != g_retired_components.end()) g_retired_components.erase(found);
+        }
+        return SAO_OK;
+    } catch (...) {
+        out_error = "retired C# component retry crossed the native exception boundary";
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 void cshost_reset_sdk_counters() noexcept {

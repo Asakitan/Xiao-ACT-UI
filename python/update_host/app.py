@@ -35,12 +35,17 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import asyncio
 import json
 import os
 import re
 import secrets
+import shutil
 import sys
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
@@ -60,38 +65,24 @@ RELEASE_DIR = os.environ.get("UPDATE_HOST_RELEASE_DIR", os.path.join(HERE, "rele
 HOST_CONFIG_PATH = os.path.join(HERE, "update_host_config.json")
 
 
-def _validated_public_base_url(value: str) -> str:
-    normalized = (value or "").strip().rstrip("/")
-    try:
-        parsed = urlsplit(normalized)
-        port = parsed.port
-    except ValueError as exc:
-        raise RuntimeError("invalid UPDATE_HOST_PUBLIC_BASE_URL") from exc
-    if (
-        parsed.scheme not in ("http", "https")
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
-        or port is None
-        or not (1 <= port <= 65535)
-    ):
-        raise RuntimeError("invalid UPDATE_HOST_PUBLIC_BASE_URL")
-    return normalized
-
-
-PUBLIC_BASE_URL = _validated_public_base_url(
-    os.environ.get("UPDATE_HOST_PUBLIC_BASE_URL", "http://x2.sjcmc.cn:15018")
-)
+_PRODUCTION_PUBLIC_BASE_URL = "https://x2.sjcmc.cn:15018"
+PUBLIC_BASE_URL = _PRODUCTION_PUBLIC_BASE_URL
 
 UPDATE_ROOT = os.path.join(RELEASE_DIR, "update")
 WORKSHOP_ROOT = os.path.join(RELEASE_DIR, "workshop")
 WORKSHOP_CATALOG_PATH = os.path.join(WORKSHOP_ROOT, "_catalog.json")
+WORKSHOP_LOCKS_ROOT = os.path.join(WORKSHOP_ROOT, "_locks")
 
 os.makedirs(UPDATE_ROOT, exist_ok=True)
 os.makedirs(WORKSHOP_ROOT, exist_ok=True)
+os.makedirs(WORKSHOP_LOCKS_ROOT, exist_ok=True)
+
+UPDATE_UPLOAD_MAX_BYTES = 512 * 1024 * 1024
+WORKSHOP_UPLOAD_MAX_BYTES = 256 * 1024 * 1024
+_WORKSHOP_SIGNATURE_ALG = "none"
+_PUBLISH_LOCKS: Dict[str, threading.RLock] = {}
+_PUBLISH_LOCKS_GUARD = threading.Lock()
+_PUBLICATION_FORMAT_VERSION = 1
 
 
 # ── config ─────────────────────────────────────────────────────────────
@@ -118,6 +109,39 @@ def _get_base_url_from_request(request: Request) -> str:
     return PUBLIC_BASE_URL
 
 
+def _resolve_latest_manifest_url(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(500, "latest update manifest URL is invalid")
+    url = value.strip()
+    if not url:
+        return ""
+
+    parsed = urlsplit(url)
+    if parsed.scheme:
+        if parsed.scheme.casefold() != "https":
+            raise HTTPException(500, "latest update manifest URL must use HTTPS")
+        try:
+            base = urlsplit(PUBLIC_BASE_URL)
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise HTTPException(500, "latest update manifest URL is invalid") from exc
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or not parsed.hostname
+            or parsed.hostname.casefold() != base.hostname.casefold()
+            or parsed_port != base.port
+        ):
+            raise HTTPException(500, "latest update manifest URL has an invalid origin")
+        return url
+
+    if parsed.netloc:
+        raise HTTPException(500, "latest update manifest URL must be relative")
+    return PUBLIC_BASE_URL.rstrip("/") + "/" + url.lstrip("/")
+
+
 # ── 校验辅助 ────────────────────────────────────────────────────────────
 
 _SEG_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
@@ -139,9 +163,24 @@ def _safe_plugin_id(v: str) -> str:
 
 
 def _safe_version(v: str) -> str:
-    if not v or not _VERSION_RE.match(v):
+    if not v or not _VERSION_RE.match(v) or ".." in v or "/" in v or "\\\\" in v:
         raise HTTPException(400, f"invalid version: {v!r}")
     return v
+
+
+def _version_core(v: str) -> Tuple[int, ...]:
+    core = re.split(r"[-+]", v, maxsplit=1)[0]
+    return tuple(int(part) for part in core.split("."))
+
+
+def _safe_minimum_version(value: str, release_version: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    _safe_version(value)
+    if _version_core(value) > _version_core(release_version):
+        raise HTTPException(400, "minimum_version must not exceed version")
+    return value
 
 
 def _safe_commit(v: str) -> str:
@@ -175,9 +214,290 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+@contextmanager
+def _publication_lock(lock_path: str):
+    key = os.path.abspath(lock_path)
+    with _PUBLISH_LOCKS_GUARD:
+        thread_lock = _PUBLISH_LOCKS.setdefault(key, threading.RLock())
+    os.makedirs(os.path.dirname(key) or ".", exist_ok=True)
+    with thread_lock:
+        with open(key, "a+b") as lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    import msvcrt
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_json_write(path: str, data: Any) -> None:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+async def _receive_upload(request: Request, directory: str, prefix: str, max_bytes: int) -> Tuple[str, int, str]:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(400, "invalid Content-Length") from exc
+        if declared < 0:
+            raise HTTPException(400, "invalid Content-Length")
+        if declared > max_bytes:
+            raise HTTPException(413, f"request body exceeds {max_bytes} bytes")
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{prefix}.", suffix=".uploading", dir=directory)
+    total = 0
+    digest = hashlib.sha256()
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(413, f"request body exceeds {max_bytes} bytes")
+                await asyncio.to_thread(stream.write, chunk)
+                digest.update(chunk)
+            await asyncio.to_thread(stream.flush)
+            await asyncio.to_thread(os.fsync, stream.fileno())
+        if total == 0:
+            raise HTTPException(400, "empty request body")
+        return tmp_path, total, digest.hexdigest()
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _load_publication_journal(path: str) -> Optional[Dict[str, Any]]:
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, ValueError):
+        _quarantine_publication_journal(path)
+        return None
+    if not isinstance(value, dict):
+        _quarantine_publication_journal(path)
+        return None
+    return value
+
+
+def _quarantine_publication_journal(path: str) -> None:
+    for attempt in range(32):
+        target = f"{path}.corrupt.{os.getpid()}.{time.time_ns()}.{attempt}"
+        try:
+            os.replace(path, target)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            continue
+
+
+def _remove_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _path_within(root: str, child: str) -> bool:
+    try:
+        root_real = os.path.realpath(root)
+        child_real = os.path.realpath(child)
+        return os.path.commonpath([root_real, child_real]) == root_real
+    except ValueError:
+        return False
+
+
+def _valid_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _valid_update_journal(journal: Dict[str, Any], channel: str, target: str,
+                          update_dir: str) -> bool:
+    if journal.get("format_version") != _PUBLICATION_FORMAT_VERSION:
+        return False
+    if journal.get("channel") != channel or journal.get("target") != target:
+        return False
+    version = journal.get("version")
+    try:
+        _safe_version(version)
+    except (HTTPException, TypeError):
+        return False
+    filename = f"update-{version}.zip"
+    url = f"/update/{channel}/{target}/artifacts/{filename}"
+    if journal.get("url") != url or journal.get("filename") != filename:
+        return False
+    if not _valid_sha256(journal.get("sha256")):
+        return False
+    size = journal.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        return False
+    manifest = journal.get("manifest")
+    if not isinstance(manifest, dict):
+        return False
+    if (manifest.get("version") != version or manifest.get("url") != url or
+            manifest.get("sha256") != journal.get("sha256") or
+            manifest.get("size") != size or not isinstance(manifest.get("notes"), str)):
+        return False
+    artifact = journal.get("artifact")
+    staging = journal.get("staging")
+    if not isinstance(artifact, str) or not isinstance(staging, str):
+        return False
+    return (_path_within(update_dir, artifact) and _path_within(update_dir, staging) and
+            os.path.basename(artifact) == filename)
+
+
+def _valid_workshop_journal(journal: Dict[str, Any], plugin_id: str,
+                            plugin_dir: str) -> bool:
+    if journal.get("format_version") != _PUBLICATION_FORMAT_VERSION:
+        return False
+    if journal.get("plugin_id") != plugin_id:
+        return False
+    version = journal.get("version")
+    try:
+        _safe_version(version)
+    except (HTTPException, TypeError):
+        return False
+    filename = f"{plugin_id}-{version}.sao-plugin"
+    url = f"/api/v1/workshop/plugins/{plugin_id}/download?version={version}"
+    if journal.get("url") != url or journal.get("filename") != filename:
+        return False
+    if not _valid_sha256(journal.get("sha256")):
+        return False
+    size = journal.get("size_bytes")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        return False
+    meta = journal.get("meta")
+    if not isinstance(meta, dict) or meta.get("id") != plugin_id or meta.get("version") != version:
+        return False
+    if meta.get("signature_alg") != _WORKSHOP_SIGNATURE_ALG:
+        return False
+    if meta.get("sha256") != journal.get("sha256") or meta.get("size_bytes") != size:
+        return False
+    artifact = journal.get("artifact")
+    staging = journal.get("staging")
+    if not isinstance(artifact, str) or not isinstance(staging, str):
+        return False
+    return (_path_within(plugin_dir, artifact) and _path_within(plugin_dir, staging) and
+            os.path.basename(artifact) == filename)
+
+
+def _recover_update_publication_unlocked(channel: str, target: str) -> None:
+    update_dir = _update_dir(channel, target)
+    journal_path = os.path.join(update_dir, ".publish-journal.json")
+    journal = _load_publication_journal(journal_path)
+    if not journal:
+        return
+    if not _valid_update_journal(journal, channel, target, update_dir):
+        _quarantine_publication_journal(journal_path)
+        return
+    artifact = str(journal["artifact"])
+    staging = str(journal["staging"])
+    manifest = journal["manifest"]
+    try:
+        expected_size = int(manifest.get("size", 0))
+        expected_sha = str(manifest.get("sha256", ""))
+        valid_artifact = (
+            os.path.isfile(artifact)
+            and os.path.getsize(artifact) == expected_size
+            and _sha256_hex_of_file(artifact) == expected_sha
+        )
+    except (OSError, ValueError):
+        valid_artifact = False
+    if valid_artifact:
+        _atomic_json_write(_update_latest_path(channel, target), manifest)
+    else:
+        _remove_file(staging)
+    _remove_file(journal_path)
+
+
+def _publish_update_sync(
+    channel: str,
+    target: str,
+    tmp_path: str,
+    dest_path: str,
+    manifest: Dict[str, Any],
+) -> None:
+    update_dir = _update_dir(channel, target)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    with _publication_lock(os.path.join(update_dir, "_publish.lock")):
+        _recover_update_publication_unlocked(channel, target)
+        journal_path = os.path.join(update_dir, ".publish-journal.json")
+        _atomic_json_write(journal_path, {
+            "format_version": _PUBLICATION_FORMAT_VERSION,
+            "channel": channel,
+            "target": target,
+            "version": manifest["version"],
+            "url": manifest["url"],
+            "filename": os.path.basename(dest_path),
+            "sha256": manifest["sha256"],
+            "size": manifest["size"],
+            "staging": tmp_path,
+            "artifact": dest_path,
+            "manifest": manifest,
+        })
+        os.replace(tmp_path, dest_path)
+        _atomic_json_write(_update_latest_path(channel, target), manifest)
+        if manifest.get("commit"):
+            _write_update_anchor(channel, target, {
+                "commit": manifest["commit"],
+                "commit_short": manifest.get("commit_short", ""),
+                "version": manifest.get("version", ""),
+                "source": "publish",
+                "updated_at": _now_utc_iso(),
+            })
+        _remove_file(journal_path)
+
+
 # ── FastAPI ────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SAO Update+Workshop Host", version="3.0.0-cpp")
+
+
+@app.middleware("http")
+async def require_https(request: Request, call_next):
+    if str(request.scope.get("scheme", "")).casefold() != "https":
+        return Response(
+            content="HTTPS required",
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -206,11 +526,7 @@ def _update_anchor_path(channel: str, target: str) -> str:
 
 def _write_update_anchor(channel: str, target: str, anchor: Dict[str, Any]) -> None:
     path = _update_anchor_path(channel, target)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as stream:
-        json.dump(anchor, stream, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    _atomic_json_write(path, anchor)
 
 
 def _update_artifacts_dir(channel: str, target: str) -> str:
@@ -294,18 +610,18 @@ async def get_update_latest(channel: str, target: str, request: Request):
             "size": 0,
             "notes": "no release published yet",
         })
-    with open(p, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-    # 若 url 是相对路径，改成绝对 URL 供 C++ updater 直接 GET
-    url = manifest.get("url", "")
-    if url and not url.startswith(("http://", "https://")):
-        base = _get_base_url_from_request(request)
-        url = base.rstrip("/") + "/" + url.lstrip("/")
-        manifest = dict(manifest, url=url)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, "latest update manifest is unreadable") from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(500, "latest update manifest is invalid")
+    url = _resolve_latest_manifest_url(manifest.get("url", ""))
     # 严格 5 字段返回
     return {
         "version": str(manifest.get("version", "")),
-        "url": str(manifest.get("url", "")),
+        "url": url,
         "sha256": str(manifest.get("sha256", "")),
         "size": int(manifest.get("size", 0)),
         "notes": str(manifest.get("notes", "")),
@@ -342,6 +658,7 @@ async def publish_update(
     _safe_seg(channel)
     _safe_seg(target)
     _safe_version(version)
+    minimum_version = _safe_minimum_version(minimum_version, version)
     if commit:
         commit = _safe_commit(commit)
         commit_short = _safe_commit(commit_short) if commit_short else commit[:8]
@@ -352,41 +669,11 @@ async def publish_update(
     if anchor_version:
         _safe_version(anchor_version)
 
+    update_dir = _update_dir(channel, target)
     art_dir = _update_artifacts_dir(channel, target)
-    os.makedirs(art_dir, exist_ok=True)
-
     filename = f"update-{version}.zip"
     dest_path = os.path.join(art_dir, filename)
-
-    # 流式接收 body → 落盘 → SHA-256
-    tmp_path = dest_path + ".uploading"
-    total = 0
-    h = hashlib.sha256()
-    try:
-        with open(tmp_path, "wb") as out:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                out.write(chunk)
-                h.update(chunk)
-                total += len(chunk)
-        if total == 0:
-            raise HTTPException(400, "empty request body")
-        os.replace(tmp_path, dest_path)
-    except HTTPException:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
-    except Exception as e:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise HTTPException(500, f"write failed: {e}")
-
-    sha256_hex = h.hexdigest()
+    tmp_path, total, sha256_hex = await _receive_upload(request, art_dir, filename, UPDATE_UPLOAD_MAX_BYTES)
 
     # C++ updater 用 max_body=256KB 拉 latest.json（updater.cpp:165）；这里 truncate notes
     # 保 200KB 上限，留 56KB 余量给其他字段 + JSON overhead。
@@ -416,25 +703,19 @@ async def publish_update(
         "published_at": _now_utc_iso(),
     }
 
-    latest_path = _update_latest_path(channel, target)
-    tmp = latest_path + ".tmp"
-    os.makedirs(os.path.dirname(latest_path) or ".", exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, latest_path)
-
-    if commit:
-        _write_update_anchor(
-            channel,
-            target,
-            {
-                "commit": commit,
-                "commit_short": commit_short,
-                "version": version,
-                "source": "publish",
-                "updated_at": _now_utc_iso(),
-            },
+    try:
+        await asyncio.to_thread(
+            _publish_update_sync, channel, target, tmp_path, dest_path, manifest
         )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"publish commit failed: {exc}") from exc
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     return {
         "ok": True,
@@ -481,13 +762,20 @@ def _workshop_versions_dir(plugin_id: str) -> str:
     return os.path.join(_workshop_plugin_dir(plugin_id), "versions")
 
 
+def _workshop_lock_path(plugin_id: str) -> str:
+    return os.path.join(WORKSHOP_LOCKS_ROOT, f"{_safe_plugin_id(plugin_id)}.lock")
+
+
 def _load_meta(plugin_id: str) -> Optional[Dict[str, Any]]:
     p = _workshop_meta_path(plugin_id)
     if not os.path.isfile(p):
         return None
     try:
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            meta = json.load(f)
+        if not isinstance(meta, dict) or meta.get("signature_alg") != _WORKSHOP_SIGNATURE_ALG:
+            return None
+        return meta
     except Exception:
         return None
 
@@ -495,10 +783,7 @@ def _load_meta(plugin_id: str) -> Optional[Dict[str, Any]]:
 def _save_meta(plugin_id: str, meta: Dict[str, Any]) -> None:
     p = _workshop_meta_path(plugin_id)
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
+    _atomic_json_write(p, meta)
 
 
 _UINT32_MAX = 0xFFFFFFFF
@@ -551,7 +836,7 @@ def _summary_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _rebuild_catalog() -> List[Dict[str, Any]]:
+def _rebuild_catalog_unlocked() -> List[Dict[str, Any]]:
     items = []
     if os.path.isdir(WORKSHOP_ROOT):
         for name in sorted(os.listdir(WORKSHOP_ROOT)):
@@ -567,11 +852,13 @@ def _rebuild_catalog() -> List[Dict[str, Any]]:
             if isinstance(meta, dict):
                 items.append(_summary_from_meta(meta))
     catalog = {"items": items, "updated_at": _now_utc_iso()}
-    tmp = WORKSHOP_CATALOG_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(catalog, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, WORKSHOP_CATALOG_PATH)
+    _atomic_json_write(WORKSHOP_CATALOG_PATH, catalog)
     return items
+
+
+def _rebuild_catalog() -> List[Dict[str, Any]]:
+    with _publication_lock(os.path.join(WORKSHOP_LOCKS_ROOT, "_catalog.lock")):
+        return _rebuild_catalog_unlocked()
 
 
 def _load_catalog_items() -> List[Dict[str, Any]]:
@@ -581,11 +868,144 @@ def _load_catalog_items() -> List[Dict[str, Any]]:
                 data = json.load(f)
             items = data.get("items", [])
             if isinstance(items, list):
-                return items
+                valid = True
+                for item in items:
+                    if not isinstance(item, dict):
+                        valid = False
+                        break
+                    try:
+                        safe_id = _safe_plugin_id(str(item.get("id", "")))
+                    except HTTPException:
+                        valid = False
+                        break
+                    if _load_meta(safe_id) is None:
+                        valid = False
+                        break
+                if valid:
+                    return items
         except Exception:
             pass
-    return _rebuild_catalog()
+    with _publication_lock(os.path.join(WORKSHOP_LOCKS_ROOT, "_catalog.lock")):
+        return _rebuild_catalog_unlocked()
 
+
+
+def _workshop_journal_path(plugin_id: str) -> str:
+    return os.path.join(_workshop_plugin_dir(plugin_id), ".publish-journal.json")
+
+
+def _recover_workshop_publication_unlocked(plugin_id: str) -> None:
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    journal_path = _workshop_journal_path(plugin_id)
+    journal = _load_publication_journal(journal_path)
+    if not journal:
+        return
+    if not _valid_workshop_journal(journal, plugin_id, plugin_dir):
+        _quarantine_publication_journal(journal_path)
+        return
+    artifact = str(journal["artifact"])
+    staging = str(journal["staging"])
+    meta = journal["meta"]
+    try:
+        valid_artifact = (
+            os.path.isfile(artifact)
+            and os.path.getsize(artifact) == int(meta.get("size_bytes", 0))
+            and _sha256_hex_of_file(artifact) == str(meta.get("sha256", ""))
+        )
+    except (OSError, ValueError):
+        valid_artifact = False
+    if valid_artifact:
+        _save_meta(plugin_id, meta)
+        _rebuild_catalog()
+    else:
+        _remove_file(staging)
+    _remove_file(journal_path)
+
+
+def _publish_workshop_sync(
+    plugin_id: str,
+    tmp_path: str,
+    dest_path: str,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    with _publication_lock(_workshop_lock_path(plugin_id)):
+        _recover_workshop_publication_unlocked(plugin_id)
+        previous = _load_meta(plugin_id) or {}
+        metadata = dict(metadata)
+        metadata["signature_alg"] = _WORKSHOP_SIGNATURE_ALG
+        metadata["name"] = metadata.get("name") or previous.get("name", plugin_id)
+        metadata["tag"] = metadata.get("tag") or previous.get("tag", "")
+        metadata["author"] = metadata.get("author") or previous.get("author", "")
+        metadata["game_ids"] = metadata.get("game_ids") or _normalize_game_ids(previous.get("game_ids", []))
+        metadata["rating"] = _clamp_u32(previous.get("rating", 0))
+        metadata["downloads"] = _clamp_u32(previous.get("downloads", 0))
+        metadata["description"] = metadata.get("description") or previous.get("description", "")
+        journal_path = _workshop_journal_path(plugin_id)
+        _atomic_json_write(journal_path, {
+            "format_version": _PUBLICATION_FORMAT_VERSION,
+            "plugin_id": plugin_id,
+            "version": metadata["version"],
+            "url": f"/api/v1/workshop/plugins/{plugin_id}/download?version={metadata['version']}",
+            "filename": os.path.basename(dest_path),
+            "sha256": metadata["sha256"],
+            "size_bytes": metadata["size_bytes"],
+            "staging": tmp_path,
+            "artifact": dest_path,
+            "meta": metadata,
+        })
+        os.replace(tmp_path, dest_path)
+        _save_meta(plugin_id, metadata)
+        _rebuild_catalog()
+        _remove_file(journal_path)
+    return metadata
+
+
+def _increment_download_count_sync(plugin_id: str, version: str) -> None:
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    with _publication_lock(_workshop_lock_path(plugin_id)):
+        _recover_workshop_publication_unlocked(plugin_id)
+        meta = _load_admin_meta(plugin_id)
+        if str(meta.get("version", "")) != version:
+            return
+        current = _clamp_u32(meta.get("downloads", 0))
+        if current < _UINT32_MAX:
+            meta["downloads"] = current + 1
+            _save_meta(plugin_id, meta)
+            _rebuild_catalog()
+
+
+def _update_workshop_meta_sync(plugin_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    with _publication_lock(_workshop_lock_path(plugin_id)):
+        _recover_workshop_publication_unlocked(plugin_id)
+        meta = _load_admin_meta(plugin_id)
+        meta.update(updates)
+        meta["updated_ms"] = _now_ms()
+        _save_meta(plugin_id, meta)
+        _rebuild_catalog()
+        return meta
+
+
+def _delete_workshop_sync(plugin_id: str, version: str) -> Dict[str, Any]:
+    plugin_dir = _workshop_plugin_dir(plugin_id)
+    with _publication_lock(_workshop_lock_path(plugin_id)):
+        _recover_workshop_publication_unlocked(plugin_id)
+        meta = _load_admin_meta(plugin_id)
+        if version:
+            active_version = str(meta.get("version", ""))
+            if version == active_version:
+                raise HTTPException(409, "active version cannot be deleted; publish a newer version or delete the entire plugin")
+            artifact_path = os.path.join(_workshop_versions_dir(plugin_id), f"{plugin_id}-{version}.sao-plugin")
+            if not os.path.isfile(artifact_path):
+                raise HTTPException(404, "artifact not found")
+            os.remove(artifact_path)
+            remaining = _scan_plugin_versions(plugin_id)
+            _rebuild_catalog()
+            return {"ok": True, "id": plugin_id, "deleted_version": version, "remaining": remaining}
+        shutil.rmtree(plugin_dir)
+        _rebuild_catalog()
+        return {"ok": True, "id": plugin_id, "remaining": []}
 
 
 def _scan_plugin_versions(plugin_id: str) -> List[str]:
@@ -688,7 +1108,7 @@ async def list_workshop_plugins(
     search: str = Query(""),
     sort: str = Query("updated_at"),
 ):
-    items = _load_catalog_items()
+    items = await asyncio.to_thread(_load_catalog_items)
     game_counts: Dict[str, int] = {}
     for item in items:
         for item_game_id in _normalize_game_ids(item.get("game_ids", [])):
@@ -762,7 +1182,7 @@ async def get_workshop_plugin_detail(plugin_id: str):
         # detail
         "description": str(meta.get("description", "")),
         "sha256": str(meta.get("sha256", "")),
-        "signature_alg": str(meta.get("signature_alg", "ed25519")),
+        "signature_alg": _WORKSHOP_SIGNATURE_ALG,
         "size_bytes": int(meta.get("size_bytes", 0)),
         "min_major": _clamp_u32(meta.get("min_major", 0)),
         "min_minor": _clamp_u32(meta.get("min_minor", 0)),
@@ -772,29 +1192,23 @@ async def get_workshop_plugin_detail(plugin_id: str):
 
 @app.get("/api/v1/workshop/plugins/{plugin_id}/download")
 async def download_workshop_plugin(plugin_id: str, version: str = Query("")):
-    meta = _load_meta(_safe_plugin_id(plugin_id))
+    plugin_id = _safe_plugin_id(plugin_id)
+    meta = _load_meta(plugin_id)
     if meta is None:
         raise HTTPException(404, "plugin not found")
     if version:
         _safe_version(version)
     else:
         version = str(meta.get("version", ""))
+        _safe_version(version)
     versions_dir = _workshop_versions_dir(plugin_id)
     filename = f"{plugin_id}-{version}.sao-plugin"
     p = os.path.join(versions_dir, filename)
     if not os.path.isfile(p):
         raise HTTPException(404, "artifact not found")
 
-    # 记一次下载 (uint32 clamp — C++ 端存 uint32_t，超 4.29B 直接不再递增)
-    try:
-        cur = _clamp_u32(meta.get("downloads", 0))
-        if cur < _UINT32_MAX:
-            meta["downloads"] = cur + 1
-            _save_meta(plugin_id, meta)
-            _rebuild_catalog()
-    except Exception:
-        pass
-
+    # FileResponse 流式发送在锁外；只有下载计数 RMW 进入跨进程锁。
+    await asyncio.to_thread(_increment_download_count_sync, plugin_id, version)
     return FileResponse(p, media_type="application/octet-stream", filename=filename)
 
 
@@ -807,7 +1221,7 @@ async def publish_workshop_plugin(
     tag: str = Query(""),
     author: str = Query(""),
     game_ids: str = Query(""),
-    signature_alg: str = Query("ed25519"),
+    signature_alg: str = Query(_WORKSHOP_SIGNATURE_ALG),
     min_major: int = Query(0),
     min_minor: int = Query(0),
     min_patch: int = Query(0),
@@ -818,63 +1232,51 @@ async def publish_workshop_plugin(
     _safe_plugin_id(plugin_id)
     _safe_version(version)
     parsed_game_ids = _parse_game_ids(game_ids)
-    if signature_alg not in ("ed25519", "ecdsa-p256"):
-        raise HTTPException(400, "signature_alg must be 'ed25519' or 'ecdsa-p256'")
+    if signature_alg != _WORKSHOP_SIGNATURE_ALG:
+        raise HTTPException(400, "signature_alg must be 'none'")
+    for field, value in (("min_major", min_major), ("min_minor", min_minor), ("min_patch", min_patch)):
+        if value < 0 or value > _UINT32_MAX:
+            raise HTTPException(400, f"{field} must be between 0 and {_UINT32_MAX}")
 
     versions_dir = _workshop_versions_dir(plugin_id)
     os.makedirs(versions_dir, exist_ok=True)
     filename = f"{plugin_id}-{version}.sao-plugin"
     dest_path = os.path.join(versions_dir, filename)
 
-    tmp_path = dest_path + ".uploading"
-    total = 0
-    h = hashlib.sha256()
+    tmp_path, total, digest = await _receive_upload(request, versions_dir, filename, WORKSHOP_UPLOAD_MAX_BYTES)
     try:
-        with open(tmp_path, "wb") as out:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                out.write(chunk)
-                h.update(chunk)
-                total += len(chunk)
-        if total == 0:
-            raise HTTPException(400, "empty request body")
-        os.replace(tmp_path, dest_path)
+        prev = _load_meta(plugin_id) or {}
+        meta = {
+            "id": plugin_id,
+            "name": name or prev.get("name", plugin_id),
+            "version": version,
+            "tag": tag or prev.get("tag", ""),
+            "author": author or prev.get("author", ""),
+            "game_ids": parsed_game_ids or _normalize_game_ids(prev.get("game_ids", [])),
+            "updated_ms": _now_ms(),
+            "rating": _clamp_u32(prev.get("rating", 0)),
+            "downloads": _clamp_u32(prev.get("downloads", 0)),
+            "description": x_description or prev.get("description", ""),
+            "sha256": digest,
+            "signature_alg": _WORKSHOP_SIGNATURE_ALG,
+            "size_bytes": total,
+            "min_major": min_major,
+            "min_minor": min_minor,
+            "min_patch": min_patch,
+            "published_at": _now_utc_iso(),
+        }
+        meta = await asyncio.to_thread(
+            _publish_workshop_sync, plugin_id, tmp_path, dest_path, meta
+        )
     except HTTPException:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
         raise
-    except Exception as e:
+    except Exception as exc:
+        raise HTTPException(500, f"publish commit failed: {exc}") from exc
+    finally:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
-        raise HTTPException(500, f"write failed: {e}")
-
-    prev = _load_meta(plugin_id) or {}
-    meta = {
-        "id": plugin_id,
-        "name": name or prev.get("name", plugin_id),
-        "version": version,
-        "tag": tag or prev.get("tag", ""),
-        "author": author or prev.get("author", ""),
-        "game_ids": parsed_game_ids or _normalize_game_ids(prev.get("game_ids", [])),
-        "updated_ms": _now_ms(),
-        "rating": _clamp_u32(prev.get("rating", 0)),
-        "downloads": _clamp_u32(prev.get("downloads", 0)),
-        "description": x_description or prev.get("description", ""),
-        "sha256": h.hexdigest(),
-        "signature_alg": signature_alg,
-        "size_bytes": total,
-        "min_major": _clamp_u32(min_major),
-        "min_minor": _clamp_u32(min_minor),
-        "min_patch": _clamp_u32(min_patch),
-        "published_at": _now_utc_iso(),
-    }
-    _save_meta(plugin_id, meta)
-    _rebuild_catalog()
 
     return {
         "ok": True,
@@ -883,7 +1285,6 @@ async def publish_workshop_plugin(
         "sha256": meta["sha256"],
         "size": total,
     }
-
 
 @app.get("/api/v1/workshop/admin/plugins")
 async def list_admin_workshop_plugins(
@@ -924,7 +1325,6 @@ async def update_workshop_plugin_meta(
 ):
     _require_api_key(x_api_key, request)
     plugin_id = _safe_plugin_id(plugin_id)
-    meta = _load_admin_meta(plugin_id)
 
     try:
         body = await request.json()
@@ -934,44 +1334,30 @@ async def update_workshop_plugin_meta(
         raise HTTPException(400, "request body must be a JSON object")
 
     allowed = {
-        "name",
-        "tag",
-        "author",
-        "description",
-        "game_ids",
-        "min_major",
-        "min_minor",
-        "min_patch",
+        "name", "tag", "author", "description", "game_ids",
+        "min_major", "min_minor", "min_patch",
     }
     unknown = sorted(str(key) for key in body if key not in allowed)
     if unknown:
         raise HTTPException(400, f"unknown fields: {', '.join(unknown)}")
 
-    text_limits = {
-        "name": 256,
-        "tag": 128,
-        "author": 256,
-        "description": 64 * 1024,
-    }
+    updates: Dict[str, Any] = {}
+    text_limits = {"name": 256, "tag": 128, "author": 256, "description": 64 * 1024}
     for field, max_bytes in text_limits.items():
         if field in body:
-            meta[field] = _admin_text(body[field], field, max_bytes)
-
+            updates[field] = _admin_text(body[field], field, max_bytes)
     if "game_ids" in body:
         game_ids = body["game_ids"]
         if not isinstance(game_ids, list):
             raise HTTPException(400, "game_ids must be a list")
         if len(game_ids) > 32 or any(not isinstance(item, str) for item in game_ids):
             raise HTTPException(400, "game_ids must contain at most 32 strings")
-        meta["game_ids"] = _normalize_game_ids(game_ids)
-
+        updates["game_ids"] = _normalize_game_ids(game_ids)
     for field in ("min_major", "min_minor", "min_patch"):
         if field in body:
-            meta[field] = _admin_u32(body[field], field)
+            updates[field] = _admin_u32(body[field], field)
 
-    meta["updated_ms"] = _now_ms()
-    _save_meta(plugin_id, meta)
-    _rebuild_catalog()
+    meta = await asyncio.to_thread(_update_workshop_meta_sync, plugin_id, updates)
     return {"ok": True, "plugin": _admin_plugin_record(meta)}
 
 
@@ -987,41 +1373,15 @@ async def delete_workshop_plugin(
     plugin_dir = _workshop_plugin_dir(plugin_id)
     if not os.path.isdir(plugin_dir):
         raise HTTPException(404, "plugin not found")
-
-    meta = _load_admin_meta(plugin_id)
-
     if version:
         version = _safe_version(version)
-        active_version = str(meta.get("version", ""))
-        if version == active_version:
-            raise HTTPException(
-                409,
-                "active version cannot be deleted; publish a newer version or delete the entire plugin",
-            )
-        filename = f"{plugin_id}-{version}.sao-plugin"
-        artifact_path = os.path.join(_workshop_versions_dir(plugin_id), filename)
-        if not os.path.isfile(artifact_path):
-            raise HTTPException(404, "artifact not found")
-        try:
-            os.remove(artifact_path)
-        except OSError as exc:
-            raise HTTPException(500, "failed to delete plugin version") from exc
-        remaining = _scan_plugin_versions(plugin_id)
-        _rebuild_catalog()
-        return {
-            "ok": True,
-            "id": plugin_id,
-            "deleted_version": version,
-            "remaining": remaining,
-        }
-
-    import shutil
     try:
-        shutil.rmtree(plugin_dir)
+        return await asyncio.to_thread(_delete_workshop_sync, plugin_id, version)
+    except HTTPException:
+        raise
     except OSError as exc:
         raise HTTPException(500, "failed to delete plugin") from exc
-    _rebuild_catalog()
-    return {"ok": True, "id": plugin_id, "remaining": []}
+
 
 _ADMIN_HTML_TEMPLATE = r"""<!doctype html>
 <html lang="zh-CN">
@@ -1107,11 +1467,5 @@ async def workshop_admin_page():
 @app.get("/api/v1/workshop/refresh_catalog")
 async def refresh_catalog(x_api_key: Optional[str] = Header(None, alias="X-API-Key"), request: Request = None):
     _require_api_key(x_api_key, request)
-    items = _rebuild_catalog()
+    items = await asyncio.to_thread(_rebuild_catalog)
     return {"ok": True, "items": len(items)}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("UPDATE_HOST_PORT", "9973"))
-    uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=120)

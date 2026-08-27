@@ -112,6 +112,9 @@ public:
 
             const size_t newline = buffer_.find('\n');
             if (newline == std::string::npos) {
+                if (buffer_.size() > kMaximumHeaders) {
+                    return SAO_AI_EDITOR_ERR_PROTOCOL;
+                }
                 break;
             }
             std::string payload = buffer_.substr(0, newline);

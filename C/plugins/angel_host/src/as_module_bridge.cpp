@@ -3,6 +3,7 @@
 #include "as_generic_bindings_internal.h"
 
 #include "sao/plugins/angel_host/as_call.h"
+#include "as_host_internal.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/sdk_binding/binding_angel.h"
 
@@ -14,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #if defined(SAO_HAS_ANGELSCRIPT)
 #include <angelscript.h>
@@ -23,11 +25,45 @@ namespace sao::plugins::angel_host {
 
 namespace {
 std::recursive_mutex g_engine_execution_mutex;
+#if defined(SAO_HAS_ANGELSCRIPT)
+thread_local size_t g_engine_execution_depth = 0;
+thread_local shared_host_state g_deferred_host_finalize;
+#endif
 }
 
 std::recursive_mutex& engine_execution_mutex() noexcept {
     return g_engine_execution_mutex;
 }
+
+bool engine_execution_active() noexcept {
+#if defined(SAO_HAS_ANGELSCRIPT)
+    return g_engine_execution_depth != 0;
+#else
+    return false;
+#endif
+}
+
+#if defined(SAO_HAS_ANGELSCRIPT)
+engine_execution_guard::engine_execution_guard() : lock_(engine_execution_mutex()) {
+    ++g_engine_execution_depth;
+}
+
+engine_execution_guard::~engine_execution_guard() {
+    if (g_engine_execution_depth > 0)
+        --g_engine_execution_depth;
+    const bool outermost = g_engine_execution_depth == 0;
+    lock_.unlock();
+    if (outermost && g_deferred_host_finalize) {
+        auto host = std::move(g_deferred_host_finalize);
+        maybe_finalize_host(host);
+    }
+}
+
+void defer_host_finalize(const shared_host_state& host) noexcept {
+    if (host)
+        g_deferred_host_finalize = host;
+}
+#endif
 
 #if defined(SAO_HAS_ANGELSCRIPT)
 namespace {
@@ -40,6 +76,7 @@ struct angel_binding_plugin {
 struct angel_callback {
     asIScriptEngine* engine = nullptr;
     asIScriptFunction* function = nullptr;
+    host_callback_lease host_callback;
     std::mutex mutex;
     std::condition_variable idle;
     size_t active_calls = 0;
@@ -64,9 +101,10 @@ bool callback_active_on_current_thread(const angel_callback* callback) noexcept 
 void finish_callback_release(angel_callback* callback) noexcept {
     if (callback == nullptr)
         return;
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     callback->function->Release();
     g_live_callbacks.fetch_sub(1, std::memory_order_relaxed);
+    callback->host_callback.reset();
     delete callback;
 }
 
@@ -120,7 +158,7 @@ int32_t SAO_PLUGINS_CALL provider_invoke(void* opaque_plugin, const char* method
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto* plugin = static_cast<angel_binding_plugin*>(opaque_plugin);
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     asIScriptFunction* function = nullptr;
     for (asUINT index = 0; index < plugin->engine->GetModuleCount() && function == nullptr;
          ++index) {
@@ -166,7 +204,7 @@ void SAO_PLUGINS_CALL invoke_angel_callback(void* user_data) {
     }
     g_active_callbacks[g_active_callback_depth++] = callback;
     try {
-        std::lock_guard engine_lock(engine_execution_mutex());
+        engine_execution_guard engine_lock;
         asIScriptContext* context = callback->engine->CreateContext();
         if (context != nullptr) {
             if (context->Prepare(callback->function) >= 0)
@@ -216,7 +254,11 @@ int32_t wrap_callback(sdk_binding::language_binding_request& request) {
     auto callback = std::make_unique<angel_callback>();
     callback->engine = static_cast<asIScriptEngine*>(request.runtime);
     callback->function = static_cast<asIScriptFunction*>(request.value);
-    std::lock_guard engine_lock(engine_execution_mutex());
+    const auto host = acquire_host_for_engine(callback->engine);
+    const int32_t host_status = callback->host_callback.acquire(host);
+    if (host_status != SAO_OK)
+        return host_status;
+    engine_execution_guard engine_lock;
     callback->function->AddRef();
     g_live_callbacks.fetch_add(1, std::memory_order_relaxed);
     *request.out_callback = reinterpret_cast<void*>(&invoke_angel_callback);
@@ -290,7 +332,7 @@ sao_plugins_ashost_register_sdk(asIScriptEngine* engine) {
 #if defined(SAO_HAS_ANGELSCRIPT)
     if (engine == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
-    std::lock_guard engine_lock(engine_execution_mutex());
+    engine_execution_guard engine_lock;
     const int32_t provider_status = ensure_angel_provider();
     return provider_status == SAO_OK ? sdk_binding::sao_plugins_binding_angel_register_sdk(engine)
                                      : provider_status;
@@ -307,7 +349,7 @@ sao_plugins_ashost_bind_ctx(asIScriptEngine* engine, void* ctx_handle, const cha
         return SAO_ERR_INVALID_ARGUMENT;
     }
     try {
-        std::lock_guard engine_lock(engine_execution_mutex());
+        engine_execution_guard engine_lock;
         const int32_t provider_status = ensure_angel_provider();
         if (provider_status != SAO_OK)
             return provider_status;

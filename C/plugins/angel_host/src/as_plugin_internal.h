@@ -1,12 +1,16 @@
 #pragma once
 
 #include "sao/plugins/angel_host/as_plugin_lifecycle.h"
+#if defined(SAO_HAS_ANGELSCRIPT)
+#include "as_host_internal.h"
+#endif
 #include "sao/plugins/sdk_binding/binding_common.h"
 
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 class asIScriptContext;
@@ -22,6 +26,7 @@ using as_string_value = std::string;
 enum class plugin_runtime_state {
     ready,
     unloading,
+    cleanup_pending,
     dead,
 };
 
@@ -36,6 +41,10 @@ struct retained_script_error {
 };
 
 struct as_plugin_s {
+#if defined(SAO_HAS_ANGELSCRIPT)
+    shared_host_state host_state;
+    host_instance_lease host_instance;
+#endif
     asIScriptEngine* engine = nullptr;
     asIScriptModule* module = nullptr;
     asIScriptContext* context = nullptr;
@@ -44,6 +53,8 @@ struct as_plugin_s {
     std::string plugin_id;
     std::string module_name;
     plugin_runtime_state lifecycle = plugin_runtime_state::ready;
+    std::thread::id unload_owner;
+    bool unload_hook_completed = false;
     std::unordered_map<std::string, retained_script_error> retained_errors;
     as_sdk_counters counters{};
     std::mutex call_mutex;

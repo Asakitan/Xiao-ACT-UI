@@ -66,6 +66,6 @@ public class Plugin
 
 见 ``vendor_note.md``。hostfxr + Roslyn 从 .NET 官方拉, 不进 vcpkg。
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/``。集成测试要求 .NET runtime 存在。
+旧 ``tests/``、Catch2 与 CTest 注册已删除；此前依赖 .NET runtime 的集成结果仅作历史证据。

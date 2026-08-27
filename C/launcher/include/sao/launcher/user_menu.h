@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <cstddef>
+#include <string>
 
 namespace sao::launcher {
 
@@ -16,6 +17,8 @@ class Owner;
 bool buildUserDocsIndexPath(const wchar_t* base_dir,
                             wchar_t* path_out,
                             std::size_t path_capacity) noexcept;
+bool buildUserDocsIndexPath(const wchar_t* base_dir,
+                            std::wstring& path_out) noexcept;
 
 bool openUserDocsIndex(const wchar_t* base_dir, HWND owner) noexcept;
 
@@ -31,6 +34,8 @@ public:
     void destroy() noexcept;
     void bind_hotkey_owner(hotkey::Owner* owner) noexcept;
     void unbind_hotkey_owner(hotkey::Owner* owner) noexcept;
+    void processCommandLine(const wchar_t* command_line,
+                            bool show_menu_when_empty = true) noexcept;
 
 private:
     static LRESULT CALLBACK windowProc(HWND window,
@@ -54,7 +59,7 @@ private:
     UINT taskbar_created_message_ = 0;
     bool notification_icon_added_ = false;
     bool window_class_registered_ = false;
-    wchar_t docs_index_path_[MAX_PATH]{};
+    std::wstring docs_index_path_;
     hotkey::Owner* hotkey_owner_ = nullptr;
 };
 

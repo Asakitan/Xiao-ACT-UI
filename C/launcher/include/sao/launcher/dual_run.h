@@ -92,6 +92,7 @@ typedef int32_t sao_launcher_dual_run_mode_t;
 // Values: "cpp" | "python" | "cpp_fallback" | "python_fallback".
 // ---------------------------------------------------------------------------
 #define SAO_DUAL_RUN_ENV_VAR_NAME L"SAO_DUAL_RUN_ROLE"
+#define SAO_DUAL_RUN_HANDOFF_RESULT_ENV_VAR_NAME L"SAO_DUAL_RUN_HANDOFF_RESULT"
 
 // ---------------------------------------------------------------------------
 // Config
@@ -115,6 +116,41 @@ typedef struct sao_dual_run_config {
     sao_dual_run_env_override env_overrides[16];
     int32_t env_overrides_count;
 } sao_dual_run_config;
+
+#define SAO_DUAL_RUN_CONFIG_ABI_VERSION_2 2u
+#define SAO_DUAL_RUN_CONFIG_V2_PATH_CAPACITY 32768u
+typedef struct sao_dual_run_config_v2 {
+    sao_dual_run_config legacy;
+    uint32_t struct_size;
+    uint32_t abi_version;
+    wchar_t python_exe_path[SAO_DUAL_RUN_CONFIG_V2_PATH_CAPACITY];
+    wchar_t python_main_py_path[SAO_DUAL_RUN_CONFIG_V2_PATH_CAPACITY];
+    wchar_t cpp_exe_path[SAO_DUAL_RUN_CONFIG_V2_PATH_CAPACITY];
+} sao_dual_run_config_v2;
+
+void sao_launcher_dual_run_config_v2_default(sao_dual_run_config_v2* cfg);
+sao_status_t sao_launcher_dual_run_config_v2_load(sao_dual_run_config_v2* cfg_out);
+sao_status_t sao_launcher_dual_run_config_v2_load_from_path(
+    const wchar_t* path, sao_dual_run_config_v2* cfg_out);
+sao_status_t sao_launcher_dual_run_config_v2_save(const sao_dual_run_config_v2* cfg);
+sao_status_t sao_launcher_dual_run_config_v2_save_to_path(
+    const wchar_t* path, const sao_dual_run_config_v2* cfg);
+sao_status_t sao_launcher_dual_run_config_v2_copy_python_exe_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count);
+sao_status_t sao_launcher_dual_run_config_v2_copy_python_main_py_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count);
+sao_status_t sao_launcher_dual_run_config_v2_copy_cpp_exe_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count);
+
+sao_status_t sao_launcher_dual_run_copy_python_exe_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count);
+sao_status_t sao_launcher_dual_run_copy_python_main_py_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count);
+sao_status_t sao_launcher_dual_run_copy_cpp_exe_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count);
 
 // Populate a config with the default mode (CPP_PREFERRED_PYTHON_FALLBACK),
 // empty string fields, and zero env overrides.
@@ -153,6 +189,33 @@ typedef struct sao_dual_run_python_probe {
     int32_t patch;
 } sao_dual_run_python_probe;
 
+#define SAO_DUAL_RUN_PYTHON_PROBE_ABI_VERSION_2 2u
+#define SAO_DUAL_RUN_PYTHON_PROBE_V2_PATH_CAPACITY 32768u
+typedef struct sao_dual_run_python_probe_v2 {
+    sao_dual_run_python_probe legacy;
+    uint32_t struct_size;
+    uint32_t abi_version;
+    int32_t available;
+    wchar_t path[SAO_DUAL_RUN_PYTHON_PROBE_V2_PATH_CAPACITY];
+    wchar_t version[32];
+    int32_t major;
+    int32_t minor;
+    int32_t patch;
+} sao_dual_run_python_probe_v2;
+
+void sao_launcher_dual_run_python_probe_v2_default(
+    sao_dual_run_python_probe_v2* probe);
+sao_status_t sao_launcher_dual_run_probe_python_v2(
+    const sao_dual_run_config_v2* cfg,
+    sao_dual_run_python_probe_v2* probe_out);
+sao_status_t sao_launcher_dual_run_copy_probe_path_v2(
+    const sao_dual_run_python_probe_v2* probe, wchar_t* out_path,
+    uint32_t* inout_char_count);
+
+sao_status_t sao_launcher_dual_run_copy_probe_path(
+    const sao_dual_run_python_probe* probe, wchar_t* out_path,
+    uint32_t* inout_char_count);
+
 // Probe for a usable Python.  Search order:
 //   1. ``cfg.python_exe_path`` if non-empty and File exists.
 //   2. Registered PATH via ``where python``.
@@ -178,8 +241,9 @@ typedef struct sao_dual_run_spawn_result {
 // Injects SAO_DUAL_RUN_ROLE=<role> and any env_overrides into the child.
 // ``role`` is a UTF-16 label ("python" or "python_fallback").
 //
-// The caller decides whether to wait on the returned process handle
-// (side-by-side) or to WaitForSingleObject + exit (python_only handoff).
+// The caller owns the returned handles. Handoff paths complete the file
+// handshake without waiting on the child; side-by-side paths retain the
+// process handle in the status registry for non-blocking observation.
 sao_status_t sao_launcher_dual_run_spawn_python(
     const sao_dual_run_config* cfg,
     const wchar_t* role,
@@ -257,6 +321,24 @@ void sao_launcher_dual_run_reset_for_test(void);
 sao_status_t sao_launcher_dual_run_acquire_driver_mutex(HANDLE* mutex_out);
 void         sao_launcher_dual_run_release_driver_mutex(HANDLE mutex);
 
+enum sao_dual_run_handoff_state_e {
+    SAO_DUAL_RUN_HANDOFF_NONE = 0,
+    SAO_DUAL_RUN_HANDOFF_PENDING = 1,
+    SAO_DUAL_RUN_HANDOFF_SUCCEEDED = 2,
+    SAO_DUAL_RUN_HANDOFF_FAILED = 3,
+};
+
+typedef struct sao_dual_run_handoff_snapshot {
+    DWORD pid;
+    int64_t start_time_qpc;
+    uint64_t generation;
+    int32_t state;
+    int32_t exit_code;
+} sao_dual_run_handoff_snapshot;
+
+sao_status_t sao_launcher_dual_run_take_handoff_result(
+    sao_dual_run_handoff_snapshot* out);
+
 // ---------------------------------------------------------------------------
 // Init pipeline step-zero.
 //
@@ -280,6 +362,10 @@ sao_status_t sao_launcher_dual_run_step_zero(
     const sao_dual_run_config* cfg,
     int32_t* continue_out,
     int32_t* exit_code_out);
+sao_status_t sao_launcher_dual_run_step_zero_v2(
+    const sao_dual_run_config_v2* cfg,
+    int32_t* continue_out,
+    int32_t* exit_code_out);
 
 // Hook the init_pipeline consults when it enters ``cpp_preferred_python_fallback``
 // mode and any of the 10 CPP steps fails.  The pipeline calls this with the
@@ -288,6 +374,11 @@ sao_status_t sao_launcher_dual_run_step_zero(
 // the caller should keep propagating the original failure.
 int32_t sao_launcher_dual_run_maybe_fallback_to_python(
     const sao_dual_run_config* cfg,
+    int cpp_step_exit_code,
+    const wchar_t* failing_step_name,
+    int32_t* exit_code_out);
+int32_t sao_launcher_dual_run_maybe_fallback_to_python_v2(
+    const sao_dual_run_config_v2* cfg,
     int cpp_step_exit_code,
     const wchar_t* failing_step_name,
     int32_t* exit_code_out);

@@ -484,6 +484,7 @@ struct Owner::State {
     sao_ui_panel_body_handle_t body{};
     std::size_t operations_in_flight{};
     std::size_t callbacks_in_flight{};
+    std::condition_variable callback_cv;
     bool visible{};
     bool accepting{true};
     bool creating{};
@@ -515,13 +516,49 @@ std::mutex Owner::deferred_mutex_;
 std::vector<std::unique_ptr<Owner::State>>* Owner::deferred_cleanup_ =
     new std::vector<std::unique_ptr<Owner::State>>();
 
+void Owner::stop_background_threads(State& state) noexcept {
+    state.status_cancel_requested.store(true);
+    state.activation_cancel_requested.store(true);
+    Operations::CancelActivation cancel_activation;
+    {
+        std::lock_guard lock(state.mutex);
+        cancel_activation = state.operations.cancel_activation;
+    }
+    if (cancel_activation) {
+        try {
+            cancel_activation();
+        } catch (...) {
+        }
+    }
+    if (state.status_running.load()) {
+        std::unique_lock lock(state.mutex);
+        state.status_cv.wait(lock, [&state] {
+            return !state.status_running.load();
+        });
+    }
+    if (state.activation_running.load()) {
+        std::unique_lock lock(state.mutex);
+        state.activation_cv.wait(lock, [&state] {
+            return !state.activation_running.load();
+        });
+    }
+    if (state.status_thread.joinable())
+        state.status_thread.join();
+    if (state.activation_thread.joinable())
+        state.activation_thread.join();
+}
 void Owner::defer_state(std::unique_ptr<State> state) noexcept {
     if (state == nullptr)
         return;
-    state->owner = nullptr;
+    Owner::stop_background_threads(*state);
     {
-        std::lock_guard lock(state->mutex);
+        std::unique_lock lock(state->mutex);
         state->accepting = false;
+        state->retiring = true;
+        state->callback_cv.wait(lock, [&state] {
+            return state->callbacks_in_flight == 0U;
+        });
+        state->owner = nullptr;
         state->retiring = false;
     }
     std::lock_guard lock(deferred_mutex_);
@@ -618,41 +655,33 @@ void Owner::end_operation() noexcept {
         --state_->operations_in_flight;
 }
 
-bool Owner::begin_callback() noexcept {
-    if (!state_)
-        return false;
-    std::lock_guard lock(state_->mutex);
-    if (state_->startup_status != SAO_STATUS_OK || !state_->accepting || state_->retiring)
-        return false;
-    ++state_->callbacks_in_flight;
-    return true;
-}
-
-void Owner::end_callback() noexcept {
-    if (!state_)
-        return;
-    std::lock_guard lock(state_->mutex);
-    if (state_->callbacks_in_flight != 0U)
-        --state_->callbacks_in_flight;
-}
-
 void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
                                               const std::uint8_t* payload_json_utf8,
                                               std::size_t payload_len,
                                               void* user_data) noexcept {
     auto* state = static_cast<State*>(user_data);
-    Owner* owner = state == nullptr ? nullptr : state->owner;
-    const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
-    if (owner == nullptr || !action.has_value() ||
-        (payload_json_utf8 == nullptr && payload_len != 0U) || !owner->begin_callback()) {
-        return;
-    }
-    struct CallbackGuard {
-        Owner& owner;
-        ~CallbackGuard() {
-            owner.end_callback();
+    Owner* owner = nullptr;
+    if (state != nullptr) {
+        std::lock_guard lock(state->mutex);
+        if (state->startup_status == SAO_STATUS_OK && state->accepting &&
+            !state->retiring && state->owner != nullptr) {
+            ++state->callbacks_in_flight;
+            owner = state->owner;
         }
-    } callback{*owner};
+    }
+    if (owner == nullptr || (payload_json_utf8 == nullptr && payload_len != 0U))
+        return;
+    struct CallbackGuard {
+        State* state;
+        ~CallbackGuard() {
+            std::lock_guard lock(state->mutex);
+            if (state->callbacks_in_flight != 0U)
+                --state->callbacks_in_flight;
+            state->callback_cv.notify_all();
+        }
+    } callback{state};
+    const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
+    if (!action.has_value()) return;
     try {
         const std::string_view payload(
             payload_json_utf8 == nullptr ? "" : reinterpret_cast<const char*>(payload_json_utf8),
@@ -665,15 +694,25 @@ void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
 void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind,
                                              void* user_data) noexcept {
     auto* state = static_cast<State*>(user_data);
-    Owner* owner = state == nullptr ? nullptr : state->owner;
-    if (owner == nullptr || !owner->begin_callback())
-        return;
-    struct CallbackGuard {
-        Owner& owner;
-        ~CallbackGuard() {
-            owner.end_callback();
+    Owner* owner = nullptr;
+    if (state != nullptr) {
+        std::lock_guard lock(state->mutex);
+        if (state->startup_status == SAO_STATUS_OK && state->accepting &&
+            !state->retiring && state->owner != nullptr) {
+            ++state->callbacks_in_flight;
+            owner = state->owner;
         }
-    } callback{*owner};
+    }
+    if (owner == nullptr) return;
+    struct CallbackGuard {
+        State* state;
+        ~CallbackGuard() {
+            std::lock_guard lock(state->mutex);
+            if (state->callbacks_in_flight != 0U)
+                --state->callbacks_in_flight;
+            state->callback_cv.notify_all();
+        }
+    } callback{state};
     try {
         owner->handle_panel_event(event_kind);
     } catch (...) {
@@ -705,6 +744,8 @@ sao_status_t Owner::ensure_panel() noexcept {
             return state_->startup_status;
         if (state_->panel != nullptr)
             return SAO_STATUS_OK;
+        if (!state_->retiring)
+            state_->accepting = true;
         if (!state_->accepting || state_->retiring || state_->creating)
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         state_->creating = true;
@@ -1032,45 +1073,23 @@ sao_status_t Owner::take_offline() noexcept {
     const sao_status_t owner_status = require_owner_thread();
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
-    state_->status_cancel_requested.store(true);
-
-    if (state_->status_running.load()) {
-        std::unique_lock lock(state_->mutex);
-        if (!state_->status_cv.wait_for(lock, std::chrono::milliseconds(250), [this] {
-                return !state_->status_running.load();
-            }))
-            return SAO_UI_PANEL_STATUS_ERR_BUSY;
-    }
-    if (state_->status_thread.joinable())
-        state_->status_thread.join();
-
-    if (state_->activation_running.load()) {
-        state_->activation_cancel_requested.store(true);
-        if (state_->operations.cancel_activation)
-            state_->operations.cancel_activation();
-        std::unique_lock lock(state_->mutex);
-        if (!state_->activation_cv.wait_for(lock, std::chrono::milliseconds(250), [this] {
-                return !state_->activation_running.load();
-            }))
-            return SAO_UI_PANEL_STATUS_ERR_BUSY;
-        lock.unlock();
-    }
-    if (state_->activation_thread.joinable())
-        state_->activation_thread.join();
+    stop_background_threads(*state_);
     sao_ui_panel_handle_t panel = nullptr;
     bool had_action_handler = false;
     bool had_event_handler = false;
     {
-        std::lock_guard lock(state_->mutex);
+        std::unique_lock lock(state_->mutex);
         if (state_->panel == nullptr)
             return SAO_STATUS_OK;
-        if (state_->creating || state_->retiring || state_->operations_in_flight != 0U ||
-            state_->callbacks_in_flight != 0U)
+        if (state_->creating || state_->retiring || state_->operations_in_flight != 0U)
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (state_->body == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         state_->retiring = true;
         state_->accepting = false;
+        state_->callback_cv.wait(lock, [this] {
+            return state_->callbacks_in_flight == 0U;
+        });
         panel = state_->panel;
         had_action_handler = state_->action_handler_attached;
         had_event_handler = state_->event_handler_attached;
@@ -1103,7 +1122,7 @@ sao_status_t Owner::take_offline() noexcept {
         state_->busy = false;
         state_->action_handler_attached = false;
         state_->event_handler_attached = false;
-        state_->accepting = true;
+        state_->accepting = false;
         state_->retiring = false;
         state_->rendered_spec_json.clear();
         state_->publish_pending = true;
@@ -1271,14 +1290,21 @@ sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept
     const sao_status_t owner_status = require_owner_thread();
     if (owner_status != SAO_STATUS_OK)
         return owner_status;
-    if (!begin_callback())
-        return SAO_UI_PANEL_STATUS_ERR_BUSY;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (!state_->accepting || state_->retiring)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        ++state_->callbacks_in_flight;
+    }
     struct CallbackGuard {
-        Owner& owner;
+        State* state;
         ~CallbackGuard() {
-            owner.end_callback();
+            std::lock_guard lock(state->mutex);
+            if (state->callbacks_in_flight != 0U)
+                --state->callbacks_in_flight;
+            state->callback_cv.notify_all();
         }
-    } callback{*this};
+    } callback{state_.get()};
     handle_panel_event(event_kind);
     return SAO_STATUS_OK;
 }

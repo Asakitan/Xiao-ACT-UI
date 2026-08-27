@@ -42,6 +42,10 @@ project(SaoAutoC
     DESCRIPTION "SAO Auto — fully independent native C++ platform"
     LANGUAGES C CXX ASM_MASM)
 
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/sao_version.txt"
+    CONTENT "${PROJECT_VERSION}\n")
+
 # ---------------------------------------------------------------------------
 # Platform gate
 # ---------------------------------------------------------------------------
@@ -98,6 +102,12 @@ option(SAO_BUILD_PLUGINS    "Multi-engine plugin hosts"                         
 option(SAO_BUILD_LAUNCHER   "Standalone SaoAuto.exe launcher"                         ON)
 option(SAO_BUILD_TOOLS      "CLI tools: sign / pack / crypter / obfuscate / ..."      ON)
 
+# Only modules that consume the shared JSON target make the top-level lookup.
+if (SAO_BUILD_PLATFORM OR SAO_BUILD_PLUGINS OR SAO_BUILD_SERVER OR
+    SAO_BUILD_LAUNCHER)
+    find_package(nlohmann_json 3 CONFIG REQUIRED)
+endif()
+
 if (SAO_BUILD_PLUGINS AND NOT SAO_BUILD_PLATFORM)
     message(FATAL_ERROR
         "SAO_BUILD_PLUGINS=ON requires SAO_BUILD_PLATFORM=ON. "
@@ -137,7 +147,7 @@ endif()
 # ---------------------------------------------------------------------------
 if (MSVC)
     # Language-scoped so MASM (as_callfunc_x64_msvc_asm.asm in the
-    # FetchContent-provided AngelScript runtime) does not receive C/C++
+    # third-party AngelScript runtime) does not receive C/C++
     # compiler switches that ml64 rejects (/permissive-, /utf-8, /MP,
     # /GR-, /guard:cf, /Zc:*).  Every C or C++ TU still sees the full
     # posture; MASM sees only the /nologo /Fo… flags MSBuild injects.
@@ -171,27 +181,29 @@ if (MSVC)
     # not receive C/C++ compiler switches.
     foreach (_sao_lang IN ITEMS C CXX)
         add_compile_options(
-            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/GL>"
-            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Gy>"
-            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Gw>"
-            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Brepro>"
+            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/GL>"
+            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Gy>"
+            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Gw>"
+            "$<$<AND:$<COMPILE_LANGUAGE:${_sao_lang}>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>>:/Brepro>"
         )
     endforeach()
 
     add_link_options(
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/LTCG>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/OPT:REF>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/OPT:ICF>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/INCREMENTAL:NO>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/GUARD:CF>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/DYNAMICBASE>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/HIGHENTROPYVA>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/NXCOMPAT>"
-        "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/Brepro>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/LTCG>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/OPT:REF>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/OPT:ICF>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/INCREMENTAL:NO>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/GUARD:CF>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/DYNAMICBASE>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/HIGHENTROPYVA>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/NXCOMPAT>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/Brepro>"
+        "$<$<CONFIG:RelWithDebInfo>:/DEBUG:FULL>"
+        "$<$<CONFIG:RelWithDebInfo>:/PDBALTPATH:%_PDB%>"
     )
     if (SAO_MSVC_SUPPORTS_CETCOMPAT)
         add_link_options(
-            "$<$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>:/CETCOMPAT>"
+            "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<BOOL:${SAO_HARDENED_BUILD}>>:/CETCOMPAT>"
         )
     endif()
 
@@ -238,19 +250,21 @@ endif()
 option(SAO_BUILD_LEGACY_CORE "Build legacy sao_core compat target (required by security/)" ON)
 
 # nlohmann_json is a header-only runtime dependency of the platform/core
-# settings envelope.  Prefer a vcpkg / system installation; when the
-# host lacks either, fall back to FetchContent so the build gate is still
-# satisfiable on a bare CI runner.  Header-only + CMake 3.24 FIND_PACKAGE_ARGS
-# means find_package(nlohmann_json 3 CONFIG REQUIRED) at the subsystem level
-# picks up whichever provider resolves first.
-include(FetchContent)
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-    FIND_PACKAGE_ARGS 3 CONFIG
-)
-FetchContent_MakeAvailable(nlohmann_json)
+# settings envelope. It is resolved exclusively through the vcpkg manifest.
+
+option(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL
+    "Enable the launcher-side plugin runtime auto-installer" OFF)
+set(SAO_PLUGINS_RUNTIME_MANIFEST "" CACHE FILEPATH
+    "Reserved until canonical plugin runtime provider wiring exists")
+mark_as_advanced(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
+mark_as_advanced(SAO_PLUGINS_RUNTIME_MANIFEST)
+
+if (SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
+    message(FATAL_ERROR
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL=ON is reserved: canonical end-to-end "
+        "plugin runtime provider wiring is not implemented; "
+        "SAO_PLUGINS_RUNTIME_MANIFEST does not enable it.")
+endif()
 
 if (SAO_BUILD_PLATFORM)
     add_subdirectory(platform)
@@ -303,6 +317,8 @@ if (TARGET SaoAuto)
             DESTINATION bin
             COMPONENT ship)
     endif()
+    install(CODE [[file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/bin/plugins")]]
+        COMPONENT ship)
 endif()
 if (SAO_BUILD_TOOLS)
     add_subdirectory(tools)
@@ -420,7 +436,12 @@ if (TARGET SaoAuto)
     set(_SAO_RELEASE_EXPECTED_FILES
         "bin/$<TARGET_FILE_NAME:SaoAuto>"
         "bin/docs/html/index.html"
-        "bin/docs/html/assets/style.css")
+        "bin/docs/html/assets/style.css"
+        "bin/docs/html/assets/theme.js"
+        "bin/docs/html/assets/scrollspy.js")
+    set(_SAO_RELEASE_PLUGIN_ROOT "bin/plugins")
+    set(_SAO_RELEASE_EXPECTED_DIRECTORIES
+        "${_SAO_RELEASE_PLUGIN_ROOT}")
     if (SAO_LAUNCHER_PROVIDER_CONFIG_PRESENT)
         list(APPEND _SAO_RELEASE_EXPECTED_FILES
             "bin/SaoAuto.provider.json")
@@ -442,6 +463,25 @@ if (TARGET SaoAuto)
         list(APPEND _SAO_RELEASE_EXPECTED_FILES
             "bin/$<TARGET_FILE_NAME:sao_ai_editor>")
     endif()
+    if (TARGET sao_plugin_ai_editor)
+        set(_SAO_AI_EDITOR_REQUIRED_ASSETS
+            "extension_host_shim.js" "agents/refactor-mentor.json" "agents/security-auditor.json" "agents/sql-expert.json" "agents/test-writer.json"
+            "workflows/security-audit-and-fix.json" "workflows/sql-schema-fix.json" "workflows/test-first-refactor.json"
+            "prompts/performance-review.json" "prompts/refactor-plan.json" "prompts/security-checklist.json" "prompts/sql-audit.json"
+            "kernel_map_panel/index.html" "kernel_map_panel/panel.css" "kernel_map_panel/panel.js"
+            "mcp_management_panel/index.html" "mcp_management_panel/panel.css" "mcp_management_panel/panel.js")
+        foreach (_sao_ai_editor_asset IN LISTS _SAO_AI_EDITOR_REQUIRED_ASSETS)
+            if (_sao_ai_editor_asset STREQUAL "extension_host_shim.js")
+                set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/${_sao_ai_editor_asset}")
+            else()
+                set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/ai_editor/${_sao_ai_editor_asset}")
+            endif()
+            if (NOT EXISTS "${_sao_ai_editor_asset_source}")
+                message(FATAL_ERROR "Required AI Editor ship asset is missing: ${_sao_ai_editor_asset_source}")
+            endif()
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES "bin/assets/ai_editor/${_sao_ai_editor_asset}")
+        endforeach()
+    endif()
     if (TARGET SaoKernelMapMcpServer)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
             SaoKernelMapMcpServer)
@@ -462,6 +502,8 @@ if (TARGET SaoAuto)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES SaoRtIoHelper)
         list(APPEND _SAO_RELEASE_EXPECTED_FILES
             "bin/runtime/helper/$<TARGET_FILE_NAME:SaoRtIoHelper>")
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/runtime/helper/$<TARGET_FILE_NAME:SaoRtIoHelper>.identity")
         foreach (_sao_msvc_runtime IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
             get_filename_component(_sao_msvc_runtime_name
                 "${_sao_msvc_runtime}" NAME)
@@ -500,6 +542,61 @@ if (TARGET SaoAuto)
                 "bin/runtime/helper/$<TARGET_FILE_NAME:${_sao_helper_runtime_target}>")
         endif()
     endforeach()
+
+    set(SAO_AUDIT_PROJECT_OWNED_PES)
+    function(sao_append_audit_project_owned_executable target destination)
+        if (NOT TARGET ${target})
+            return()
+        endif()
+        get_target_property(_sao_target_type ${target} TYPE)
+        if (NOT _sao_target_type STREQUAL "EXECUTABLE")
+            message(FATAL_ERROR
+                "Project-owned executable audit target is not an executable: ${target}")
+        endif()
+        list(APPEND SAO_AUDIT_PROJECT_OWNED_PES
+            "${destination}/$<TARGET_FILE_NAME:${target}>")
+        set(SAO_AUDIT_PROJECT_OWNED_PES
+            "${SAO_AUDIT_PROJECT_OWNED_PES}" PARENT_SCOPE)
+    endfunction()
+    function(sao_append_audit_project_owned_library target destination)
+        if (NOT TARGET ${target})
+            return()
+        endif()
+        get_target_property(_sao_target_type ${target} TYPE)
+        if (_sao_target_type STREQUAL "SHARED_LIBRARY" OR
+            _sao_target_type STREQUAL "MODULE_LIBRARY")
+            list(APPEND SAO_AUDIT_PROJECT_OWNED_PES
+                "${destination}/$<TARGET_FILE_NAME:${target}>")
+            set(SAO_AUDIT_PROJECT_OWNED_PES
+                "${SAO_AUDIT_PROJECT_OWNED_PES}" PARENT_SCOPE)
+        endif()
+    endfunction()
+
+    foreach (_sao_project_owned_executable IN ITEMS
+            SaoAuto SaoAutoUpdateHelper SaoKernelMapMcpServer)
+        sao_append_audit_project_owned_executable(
+            ${_sao_project_owned_executable} "bin")
+    endforeach()
+    if (TARGET sao_ai_editor)
+        sao_append_audit_project_owned_executable(sao_ai_editor "bin")
+    endif()
+    if (TARGET SaoRtIoHelper)
+        sao_append_audit_project_owned_executable(
+            SaoRtIoHelper "bin/runtime/helper")
+    endif()
+    foreach (_sao_project_owned_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
+        sao_append_audit_project_owned_library(
+            ${_sao_project_owned_target} "bin")
+    endforeach()
+    foreach (_sao_project_owned_target IN LISTS _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+        sao_append_audit_project_owned_library(
+            ${_sao_project_owned_target} "bin/runtime/helper")
+    endforeach()
+    if (TARGET sao_plugin_ai_editor)
+        sao_append_audit_project_owned_library(sao_plugin_ai_editor "bin")
+    endif()
+    list(REMOVE_DUPLICATES SAO_AUDIT_PROJECT_OWNED_PES)
+    list(APPEND _SAO_RELEASE_EXPECTED_FILES ${SAO_AUDIT_PROJECT_OWNED_PES})
     list(REMOVE_DUPLICATES _SAO_RELEASE_EXPECTED_FILES)
 
     add_custom_target(sao_release_ship_stage
@@ -523,6 +620,11 @@ if (TARGET SaoAuto)
                 "-DSAO_AUDIT_BINARY=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:SaoAuto>"
                 "-DSAO_AUDIT_SHIP_DIRECTORY=${SAO_SHIP_STAGE_DIRECTORY}"
                 "-DSAO_AUDIT_EXPECTED_FILES=${_SAO_RELEASE_EXPECTED_FILES}"
+                "-DSAO_AUDIT_PROJECT_OWNED_PES=${SAO_AUDIT_PROJECT_OWNED_PES}"
+                "-DSAO_AUDIT_REQUIRED_DIRECTORIES=${_SAO_RELEASE_EXPECTED_DIRECTORIES}"
+                "-DSAO_AUDIT_INSTALL_MANIFEST=${CMAKE_BINARY_DIR}/install_manifest_ship.txt"
+                "-DSAO_AUDIT_PROVIDER_CONFIG=${SAO_SHIP_STAGE_DIRECTORY}/bin/SaoAuto.provider.json"
+                "-DSAO_AUDIT_PLUGIN_ROOT=${_SAO_RELEASE_PLUGIN_ROOT}"
                 "-DSAO_AUDIT_DUMPBIN=${SAO_DUMPBIN_EXECUTABLE}"
                 "-DSAO_AUDIT_EXPECT_HARDENING=$<IF:$<OR:$<CONFIG:Release>,$<BOOL:${SAO_HARDENED_BUILD}>>,ON,OFF>"
                 "-DSAO_AUDIT_EXPECT_CET=$<IF:$<BOOL:${SAO_MSVC_SUPPORTS_CETCOMPAT}>,ON,OFF>"

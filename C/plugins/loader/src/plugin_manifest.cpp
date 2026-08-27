@@ -2,10 +2,15 @@
 #include "plugin_internal.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
+#include <cstdio>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <string_view>
+#include <limits>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -15,7 +20,7 @@
 namespace sao::plugins::loader {
 namespace {
 
-using json = nlohmann::json;
+using json = nlohmann::ordered_json;
 
 class bounded_manifest_json_sax final : public json::json_sax_t {
   public:
@@ -28,8 +33,9 @@ class bounded_manifest_json_sax final : public json::json_sax_t {
     bool number_integer(number_integer_t) override {
         return consume_node();
     }
-    bool number_unsigned(number_unsigned_t) override {
-        return consume_node();
+    bool number_unsigned(number_unsigned_t value) override {
+        return value <= static_cast<number_unsigned_t>((std::numeric_limits<int64_t>::max)()) &&
+               consume_node();
     }
     bool number_float(number_float_t value, const string_t&) override {
         return std::isfinite(value) && consume_node();
@@ -69,7 +75,7 @@ class bounded_manifest_json_sax final : public json::json_sax_t {
     }
 
     bool consume_string(const string_t& value) noexcept {
-        if (value.size() > kMaximumManifestStringBytes ||
+        if (value.find('\0') != string_t::npos || value.size() > kMaximumManifestStringBytes ||
             string_bytes_ > kMaximumManifestAggregateStringBytes ||
             value.size() > kMaximumManifestAggregateStringBytes - string_bytes_) {
             return false;
@@ -77,7 +83,6 @@ class bounded_manifest_json_sax final : public json::json_sax_t {
         string_bytes_ += value.size();
         return true;
     }
-
     bool start_container() noexcept {
         if (depth_ >= kMaximumManifestJsonDepth || !consume_node())
             return false;
@@ -189,21 +194,100 @@ std::vector<std::string> string_array(const json& value) {
 }
 
 void parse_requires(const json& value, std::vector<std::string>& result) {
+    auto trim = [](std::string text) {
+        const auto first = text.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::string{};
+        const auto last = text.find_last_not_of(" \t\r\n");
+        return text.substr(first, last - first + 1);
+    };
+    auto quote = [](std::string_view text) {
+        const char quote_character = text.find('\'') != std::string_view::npos and
+                                             text.find('"') == std::string_view::npos ? '"' : '\'';
+        std::string output(1, quote_character);
+        for (const char character : text) {
+            const auto byte = static_cast<unsigned char>(character);
+            if (character == '\\') output += "\\\\";
+            else if (character == quote_character) { output += "\\"; output.push_back(quote_character); }
+            else if (character == '\n') output += "\\n";
+            else if (character == '\r') output += "\\r";
+            else if (character == '\t') output += "\\t";
+            else if (byte < 0x20U or byte == 0x7fU) {
+                char escaped[5]{};
+                std::snprintf(escaped, sizeof(escaped), "\\x%02x", byte);
+                output += escaped;
+            } else output.push_back(character);
+        }
+        output.push_back(quote_character);
+        return output;
+    };
+    std::function<std::string(const json&, bool)> stringify =
+        [&](const json& item, bool nested) -> std::string {
+        if (item.is_string()) return nested ? quote(item.get<std::string>()) : item.get<std::string>();
+        if (item.is_boolean()) return item.get<bool>() ? "True" : "False";
+        if (item.is_number_integer()) return std::to_string(item.get<int64_t>());
+        if (item.is_number_unsigned()) return std::to_string(item.get<uint64_t>());
+        if (item.is_number_float()) {
+            char buffer[64]{};
+            const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), item.get<double>());
+            if (converted.ec != std::errc{}) return {};
+            std::string output(buffer, converted.ptr);
+            if (output.find_first_of(".eE") == std::string::npos) output += ".0";
+            return output;
+        }
+        if (item.is_null()) return "None";
+        if (item.is_array()) {
+            std::string output = "[";
+            bool first = true;
+            for (const auto& child : item) {
+                if (!first) output += ", ";
+                output += stringify(child, true);
+                first = false;
+            }
+            output += "]";
+            return output;
+        }
+        std::string output = "{";
+        bool first = true;
+        for (const auto& [key, child] : item.items()) {
+            if (!first) output += ", ";
+            output += quote(key) + ": " + stringify(child, true);
+            first = false;
+        }
+        output += "}";
+        return output;
+    };
+    auto scalar = [&](const json& item) { return stringify(item, false); };
+    auto truthy = [](const json& item) {
+        if (item.is_null()) return false;
+        if (item.is_boolean()) return item.get<bool>();
+        if (item.is_number_integer()) return item.get<int64_t>() != 0;
+        if (item.is_number_unsigned()) return item.get<uint64_t>() != 0;
+        if (item.is_number_float()) return item.get<double>() != 0.0;
+        if (item.is_string()) return !item.get_ref<const std::string&>().empty();
+        return !item.empty();
+    };
+    auto append = [&](std::string text) {
+        text = trim(std::move(text));
+        if (!text.empty()) result.push_back(std::move(text));
+    };
     if (value.is_array()) {
-        result = string_array(value);
+        for (const auto& item : value) if (truthy(item)) append(scalar(item));
+        return;
+    }
+    if (value.is_null() || value.is_boolean() || value.is_number() || value.is_string()) {
+        if (truthy(value)) append(scalar(value));
         return;
     }
     if (!value.is_object()) return;
-    for (const auto& [key, item] : value.items()) {
-        if (item.is_boolean()) {
-            if (item.get<bool>()) result.push_back(key);
-        } else if (item.is_string()) {
-            result.push_back(key + item.get<std::string>());
-        } else if (item.is_array()) {
-            const auto prefix = key == "runtime_features" ? "runtime_feature" : key;
-            for (const auto& entry : item) {
-                if (entry.is_string()) result.push_back(prefix + ":" + entry.get<std::string>());
-            }
+    for (const auto& [raw_key, item] : value.items()) {
+        const auto key = trim(raw_key);
+        if (key.empty()) continue;
+        if (key == "runtime_features" && item.is_array()) {
+            for (const auto& feature : item) if (truthy(feature)) append("runtime_feature:" + scalar(feature));
+        } else if (item.is_boolean() && item.get<bool>()) {
+            append(key);
+        } else if (truthy(item)) {
+            append(key + scalar(item));
         }
     }
 }
@@ -217,6 +301,7 @@ void parse_capabilities(const json& value, std::vector<capability_entry>& result
             entry.title = entry.id;
         } else if (item.is_object()) {
             entry.id = string_value(item, "id");
+            if (entry.id.empty()) entry.id = string_value(item, "capability_id");
             entry.title = string_value(item, "title");
             entry.description = string_value(item, "description");
             entry.route = string_value(item, "route");
@@ -236,7 +321,15 @@ void parse_capabilities(const json& value, std::vector<capability_entry>& result
 void parse_hotkeys(const json& value, std::vector<hotkey_entry>& result) {
     if (value.is_object()) {
         for (const auto& [key, item] : value.items()) {
-            if (item.is_string()) result.push_back({key, item.get<std::string>(), key});
+            hotkey_entry entry;
+            entry.hotkey_id = key;
+            if (item.is_string()) entry.default_key = item.get<std::string>();
+            else if (item.is_object()) {
+                entry.default_key = string_value(item, "default");
+                if (entry.default_key.empty()) entry.default_key = string_value(item, "default_key");
+                entry.label = string_value(item, "label");
+            }
+            if (!entry.default_key.empty()) result.push_back(std::move(entry));
         }
         return;
     }
@@ -330,9 +423,9 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
     if (const auto iterator = root.find("settings_schema"); iterator != root.end()) parse_settings(*iterator, output.settings_schema);
     if (const auto iterator = root.find("sao_menu"); iterator != root.end()) output.sao_menu_json = iterator->dump();
     for (const auto* key : {"locales", "i18n", "translations"}) {
-        if (const auto iterator = root.find(key); iterator != root.end()) {
+        if (const auto iterator = root.find(key); iterator != root.end() && iterator->is_object()) {
             output.locales_json = iterator->dump();
-            break;
+            if (!output.locales_json.empty()) break;
         }
     }
     output.primary = root.value("primary", true);
@@ -384,6 +477,13 @@ sao_plugins_manifest_parse(const char* utf8_json_ptr,
         if (utf8_json_len >= 3 && static_cast<unsigned char>(begin[0]) == 0xef &&
             static_cast<unsigned char>(begin[1]) == 0xbb &&
             static_cast<unsigned char>(begin[2]) == 0xbf) begin += 3;
+        const size_t input_size = static_cast<size_t>(utf8_json_ptr + utf8_json_len - begin);
+        if (input_size > static_cast<size_t>((std::numeric_limits<int>::max)()) ||
+            MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, begin, static_cast<int>(input_size),
+                                   nullptr, 0) <= 0) {
+            out_manifest->parse_error = "manifest JSON is not valid UTF-8";
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         bounded_manifest_json_sax sax;
         if (!json::sax_parse(begin, utf8_json_ptr + utf8_json_len, &sax)) {
             out_manifest->parse_error = "manifest exceeds JSON budget or is malformed";
@@ -449,7 +549,7 @@ sao_plugins_manifest_load_from_file(const wchar_t* manifest_path,
             return status;
         }
         const auto plugin_root = resolved_path.parent_path();
-        for (const auto& entry : {candidate.entry, candidate.native_entry}) {
+        for (const auto& entry : {candidate.entry, candidate.native_entry, candidate.runtimeconfig}) {
             if (entry.empty())
                 continue;
             if (!valid_relative_entry(entry)) {
@@ -509,16 +609,24 @@ int32_t validate_manifest(const plugin_manifest& manifest) {
 }
 
 engine_kind parse_engine_kind(std::string_view name) {
-    const auto normalized = lower_ascii(name);
+    std::string normalized(name);
+    const auto first = normalized.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) normalized.clear();
+    else normalized = normalized.substr(first, normalized.find_last_not_of(" \t\r\n") - first + 1);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    normalized.erase(std::remove_if(normalized.begin(), normalized.end(), [](char ch) {
+        return ch == '-' || ch == '_';
+    }), normalized.end());
     if (normalized == "python" || normalized == "py") return engine_kind::python;
     if (normalized == "emma") return engine_kind::emma;
-    if (normalized == "angelscript" || normalized == "angel-script" || normalized == "as") return engine_kind::angelscript;
+    if (normalized == "angelscript" || normalized == "as" || normalized == "angel") return engine_kind::angelscript;
     if (normalized == "lua") return engine_kind::lua;
-    if (normalized == "csharp" || normalized == "c-sharp" || normalized == "cs" ||
-        normalized == "c#" || normalized == ".net" || normalized == "dotnet") return engine_kind::csharp;
+    if (normalized == "csharp" || normalized == "cs" || normalized == "c#" ||
+        normalized == ".net" || normalized == "dotnet") return engine_kind::csharp;
     return engine_kind::unknown;
 }
-
 std::string_view engine_kind_name(engine_kind kind) {
     switch (kind) {
         case engine_kind::python: return "python";
@@ -537,7 +645,7 @@ std::string_view guess_default_entry_for(engine_kind kind) {
         case engine_kind::angelscript: return "plugin.as";
         case engine_kind::lua: return "plugin.lua";
         case engine_kind::csharp: return "plugin.dll";
-        default: return {};
+        default: return "plugin.py";
     }
 }
 

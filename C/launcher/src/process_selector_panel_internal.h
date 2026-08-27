@@ -91,6 +91,7 @@ class Owner final {
     Owner(Owner&&) = delete;
     Owner& operator=(Owner&&) = delete;
 
+    void request_shutdown() noexcept;
     sao_status_t open() noexcept;
     sao_status_t close() noexcept;
     sao_status_t service_ui() noexcept;

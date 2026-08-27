@@ -89,7 +89,11 @@ struct sao_ui_overlay_host_s {
     SaoOverlayHostClientRect client_rect{};
     SaoOverlayHostClientRect desired_rect{};
     uint32_t current_dpi = 96;
+    bool dpi_transition_active = false;
+    bool dpi_pending_bounds = false;
+    SaoOverlayHostClientRect dpi_pending_rect{};
     int32_t cursor_hint = 0;
+    uint64_t last_threat_scan_ms = 0u;
     uint64_t last_process_window_sweep_ms = 0u;
     SaoOverlayHostWMCounters wm_counters{};
 
@@ -193,6 +197,15 @@ class HostLease {
     sao_ui_overlay_host_s* host_ = nullptr;
 };
 
+class HostLeaseToken {
+  public:
+    explicit HostLeaseToken(sao_ui_overlay_host_s* host) noexcept : lease(host) {}
+
+    HostLeaseToken(const HostLeaseToken&) = delete;
+    HostLeaseToken& operator=(const HostLeaseToken&) = delete;
+
+    HostLease lease;
+};
 class HostCallbackLease {
   public:
     explicit HostCallbackLease(sao_ui_overlay_host_s* host) noexcept : host_(host) {
@@ -388,6 +401,29 @@ void publish_real_geometry(sao_ui_overlay_host_s* host, const SaoOverlayHostClie
     host->desired_rect = geometry;
 }
 
+sao_status_t drain_pending_dpi_bounds(sao_ui_overlay_host_s* host) noexcept {
+    SaoOverlayHostClientRect pending{};
+    {
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        if (!host->dpi_pending_bounds) return SAO_STATUS_OK;
+        if (host->dpi_transition_active) return SAO_UI_STATUS_ERR_BUSY;
+        pending = host->dpi_pending_rect;
+    }
+    const sao_status_t status = sao_ui_overlay_host_set_bounds(
+        host, pending.x, pending.y, pending.width, pending.height);
+    if (status != SAO_STATUS_OK) return status;
+    std::lock_guard<std::mutex> lock(host->state_mu);
+    if (host->dpi_pending_bounds &&
+        host->dpi_pending_rect.x == pending.x &&
+        host->dpi_pending_rect.y == pending.y &&
+        host->dpi_pending_rect.width == pending.width &&
+        host->dpi_pending_rect.height == pending.height) {
+        host->dpi_pending_rect = {};
+        host->dpi_pending_bounds = false;
+    }
+    return SAO_STATUS_OK;
+}
+
 bool restore_passthrough_style(sao_ui_overlay_host_s* host, LONG_PTR old_style) {
     const auto& api = win32_api();
     ::SetLastError(ERROR_SUCCESS);
@@ -533,6 +569,29 @@ void dispatch_mouse(sao_ui_overlay_host_s* host, UINT message, WPARAM wparam, LP
 }
 
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
+sao_status_t map_anti_screencap_status(int32_t status) noexcept {
+    if (status == SAO_ASC_APPLY_STATE_INDETERMINATE) {
+        // The anti layer uses -10 for indeterminate; platform UNKNOWN keeps
+        // that state distinct from the platform capability-missing code.
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    switch (status) {
+    case 0: return SAO_STATUS_OK;
+    case -1: return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    case -2: return SAO_STATUS_ERR_NOT_INITIALIZED;
+    case -3: return SAO_STATUS_ERR_HANDLE_INVALID;
+    case -4: return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    case -5: return SAO_STATUS_ERR_OS_CALL_FAILED;
+    case -6: return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case -7: return SAO_STATUS_ERR_NOT_FOUND;
+    case -8: return SAO_STATUS_ERR_ACCESS_DENIED;
+    case -9: return SAO_STATUS_ERR_READ_FAULT;
+    case -10: return SAO_STATUS_ERR_UNKNOWN;
+    case SAO_ASC_APPLY_POLICY_DISABLED: return SAO_STATUS_ERR_CAPABILITY_MISSING;
+    default: return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 sao_status_t unbind_host_capture_pair(sao_ui_overlay_host_s* host) noexcept;
 sao_status_t unregister_host_threat_windows(sao_ui_overlay_host_s* host) noexcept;
 #endif
@@ -569,6 +628,9 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
 #endif
         return ::DefWindowProcW(hwnd, message, wparam, lparam);
     }
+    std::unique_lock<std::recursive_mutex> window_lock;
+    if (host != nullptr)
+        window_lock = std::unique_lock<std::recursive_mutex>(host->window_mu);
     HostCallbackLease callback_lease(host);
     host = callback_lease.get();
     const bool is_render_host = host != nullptr && host->hwnd == hwnd;
@@ -600,10 +662,15 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         }
         if (passthrough)
             return HTTRANSPARENT;
-        return callback == nullptr ||
-                       callback(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), user_data)
-                   ? HTCLIENT
-                   : HTTRANSPARENT;
+        if (callback == nullptr)
+            return HTCLIENT;
+        try {
+            return callback(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), user_data)
+                       ? HTCLIENT
+                       : HTTRANSPARENT;
+        } catch (...) {
+            return HTTRANSPARENT;
+        }
     }
 
     switch (message) {
@@ -672,14 +739,19 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         void* user_data = nullptr;
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
+            if (host->dpi_transition_active) return 0;
             host->client_rect.width = width;
             host->client_rect.height = height;
             ++host->wm_counters.size_events;
             callback = host->size_fn;
             user_data = host->size_user;
         }
-        if (callback != nullptr)
-            callback(width, height, user_data);
+        if (callback != nullptr) {
+            try {
+                callback(width, height, user_data);
+            } catch (...) {
+            }
+        }
         return 0;
     }
     case WM_MOVE: {
@@ -689,14 +761,19 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         const int32_t y = GET_Y_LPARAM(lparam);
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
+            if (host->dpi_transition_active) return 0;
             host->client_rect.x = x;
             host->client_rect.y = y;
             ++host->wm_counters.move_events;
             callback = host->move_fn;
             user_data = host->move_user;
         }
-        if (callback != nullptr)
-            callback(x, y, user_data);
+        if (callback != nullptr) {
+            try {
+                callback(x, y, user_data);
+            } catch (...) {
+            }
+        }
         return 0;
     }
     case WM_ACTIVATE: {
@@ -704,12 +781,17 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         void* user_data = nullptr;
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
+            if (host->dpi_transition_active) return 0;
             ++host->wm_counters.activate_events;
             callback = host->activate_fn;
             user_data = host->activate_user;
         }
-        if (callback != nullptr)
-            callback(LOWORD(wparam) != WA_INACTIVE, user_data);
+        if (callback != nullptr) {
+            try {
+                callback(LOWORD(wparam) != WA_INACTIVE, user_data);
+            } catch (...) {
+            }
+        }
         return 0;
     }
     case WM_WINDOWPOSCHANGING:
@@ -721,52 +803,94 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         return 0;
     case WM_DPICHANGED: {
         const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-        const uint32_t dpi = LOWORD(wparam);
-        int32_t x = 0;
-        int32_t y = 0;
-        int32_t width = 0;
-        int32_t height = 0;
-        bool geometry_published = false;
-        if (suggested != nullptr) {
-            x = suggested->left;
-            y = suggested->top;
-            width = suggested->right - suggested->left;
-            height = suggested->bottom - suggested->top;
-            geometry_published = width > 0 && height > 0 &&
-                                 win32_api().set_window_pos(hwnd, nullptr, x, y, width, height,
-                                                            SWP_NOACTIVATE | SWP_NOZORDER) != FALSE;
-            if (geometry_published) {
-                publish_real_geometry(host, {x, y, width, height});
-                (void)::DwmFlush();
-                (void)submit_physical_rect_scrub(host);
-            }
-        }
-        sao_ui_dpi_changed_fn_t callback = nullptr;
-        void* user_data = nullptr;
+        if (suggested == nullptr) return 0;
+        const int32_t x = suggested->left;
+        const int32_t y = suggested->top;
+        const int32_t width = suggested->right - suggested->left;
+        const int32_t height = suggested->bottom - suggested->top;
+        if (width <= 0 || height <= 0) return 0;
+        const uint32_t new_dpi = LOWORD(wparam) == 0u ? 96u : LOWORD(wparam);
+        const float new_scale = static_cast<float>(new_dpi) / 96.0F;
+
+        uint32_t old_dpi = 96u;
+        SaoOverlayHostClientRect old_client{};
+        SaoOverlayHostClientRect old_desired{};
         sao_ui_dpi_reflow_fn_t reflow = nullptr;
         void* reflow_user = nullptr;
-        uint32_t old_dpi = 96u;
+        sao_ui_dpi_changed_fn_t callback = nullptr;
+        void* callback_user = nullptr;
         {
             std::lock_guard<std::mutex> lock(host->state_mu);
-            old_dpi = host->current_dpi == 0 ? 96u : host->current_dpi;
-            host->current_dpi = dpi == 0 ? 96u : dpi;
-            ++host->wm_counters.dpichanged_events;
-            callback = host->dpi_changed_fn;
-            user_data = host->dpi_changed_user;
+            if (host->dpi_transition_active) return 0;
+            old_dpi = host->current_dpi == 0u ? 96u : host->current_dpi;
+            old_client = host->client_rect;
+            old_desired = host->desired_rect;
             reflow = host->dpi_reflow_fn;
             reflow_user = host->dpi_reflow_user;
+            callback = host->dpi_changed_fn;
+            callback_user = host->dpi_changed_user;
+            host->dpi_transition_active = true;
         }
+
+        bool reflow_prepared = false;
+        auto rollback_prepare = [&]() noexcept {
+            if (reflow_prepared && reflow != nullptr) {
+                try {
+                    (void)reflow(new_dpi, old_dpi,
+                                 static_cast<float>(old_dpi) / 96.0F, reflow_user);
+                } catch (...) {
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(host->state_mu);
+                host->client_rect = old_client;
+                host->desired_rect = old_desired;
+                host->current_dpi = old_dpi;
+                host->dpi_transition_active = false;
+            }
+            (void)drain_pending_dpi_bounds(host);
+        };
+
         if (reflow != nullptr) {
             sao_status_t reflow_status = SAO_STATUS_OK;
-            try { reflow_status = reflow(old_dpi, dpi == 0 ? 96u : dpi, static_cast<float>(dpi == 0 ? 96u : dpi) / 96.0F, reflow_user); } catch (...) { reflow_status = SAO_STATUS_ERR_UNKNOWN; }
+            reflow_prepared = true;
+            try {
+                reflow_status = reflow(old_dpi, new_dpi, new_scale, reflow_user);
+            } catch (...) {
+                reflow_status = SAO_STATUS_ERR_UNKNOWN;
+            }
             if (reflow_status != SAO_STATUS_OK) {
-                std::lock_guard<std::mutex> lock(host->state_mu);
-                host->current_dpi = old_dpi;
+                rollback_prepare();
                 return 0;
             }
         }
-        if (callback != nullptr)
-            callback(dpi == 0 ? 96u : dpi, x, y, width, height, user_data);
+
+        if (win32_api().set_window_pos(hwnd, nullptr, x, y, width, height,
+                                       SWP_NOACTIVATE | SWP_NOZORDER) == FALSE) {
+            rollback_prepare();
+            return 0;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(host->state_mu);
+            host->client_rect = {x, y, width, height};
+            host->desired_rect = {x, y, width, height};
+            host->current_dpi = new_dpi;
+            ++host->wm_counters.dpichanged_events;
+        }
+        (void)::DwmFlush();
+        (void)submit_physical_rect_scrub(host);
+        if (callback != nullptr) {
+            try {
+                callback(new_dpi, x, y, width, height, callback_user);
+            } catch (...) {
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(host->state_mu);
+            host->dpi_transition_active = false;
+        }
+        (void)drain_pending_dpi_bounds(host);
         return 0;
     }
     case WM_DISPLAYCHANGE: {
@@ -780,7 +904,10 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             user_data = host->display_change_user;
         }
         if (callback != nullptr) {
-            callback(static_cast<uint32_t>(wparam), LOWORD(lparam), HIWORD(lparam), user_data);
+            try {
+                callback(static_cast<uint32_t>(wparam), LOWORD(lparam), HIWORD(lparam), user_data);
+            } catch (...) {
+            }
         }
         return 0;
     }
@@ -813,15 +940,13 @@ bool destroy_created_host(sao_ui_overlay_host_s* host) {
         host->owner_hwnd = nullptr;
     if (host->hwnd != nullptr || host->control_hwnd != nullptr || host->owner_hwnd != nullptr)
         return false;
-    if (host->class_atom != 0)
-        ::UnregisterClassW(host->class_name.c_str(), host->hinstance);
+    if (host->class_atom != 0) {
+        if (!::UnregisterClassW(host->class_name.c_str(), host->hinstance))
+            return false;
+        host->class_atom = 0;
+    }
     delete host;
     return true;
-}
-
-void rollback_created_host(sao_ui_overlay_host_s* host) {
-    if (destroy_created_host(host))
-        release_single_instance_lock();
 }
 
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
@@ -849,8 +974,8 @@ sao_status_t unbind_host_capture_pair(sao_ui_overlay_host_s* host) noexcept {
             return SAO_STATUS_OK;
         pair = host->bound_capture_pair;
     }
-    const int32_t status =
-        sao_security_anti_screencap_overlay_host_unbind_if_matches(&pair);
+    const sao_status_t status = map_anti_screencap_status(
+        sao_security_anti_screencap_overlay_host_unbind_if_matches(&pair));
     if (status != SAO_STATUS_OK) {
         const bool window_destroyed =
             (pair.primary_hwnd == nullptr ||
@@ -860,7 +985,7 @@ sao_status_t unbind_host_capture_pair(sao_ui_overlay_host_s* host) noexcept {
             (pair.owner_hwnd == nullptr ||
              !::IsWindow(static_cast<HWND>(pair.owner_hwnd)));
         if (!window_destroyed)
-            return static_cast<sao_status_t>(status);
+            return status;
     }
     std::lock_guard<std::mutex> lock(host->state_mu);
     if (host->capture_pair_bound &&
@@ -896,11 +1021,11 @@ sao_status_t unregister_host_threat_windows(sao_ui_overlay_host_s* host) noexcep
             }
         }
         if (!duplicate) {
-            const int32_t status =
-                sao_security_anti_screencap_unregister_window(windows[index]);
+            const sao_status_t status = map_anti_screencap_status(
+                sao_security_anti_screencap_unregister_window(windows[index]));
             if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_HANDLE_INVALID &&
                 first_error == SAO_STATUS_OK) {
-                first_error = static_cast<sao_status_t>(status);
+                first_error = status;
             }
         }
     }
@@ -908,6 +1033,71 @@ sao_status_t unregister_host_threat_windows(sao_ui_overlay_host_s* host) noexcep
 }
 #endif
 
+sao_status_t rollback_created_host(sao_ui_overlay_host_s* host) {
+    if (host == nullptr) return SAO_STATUS_OK;
+    sao_status_t first_error = SAO_STATUS_OK;
+#if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
+    const sao_status_t unbind_status = unbind_host_capture_pair(host);
+    if (unbind_status != SAO_STATUS_OK && first_error == SAO_STATUS_OK)
+        first_error = unbind_status;
+    const sao_status_t unregister_status = unregister_host_threat_windows(host);
+    if (unregister_status != SAO_STATUS_OK && first_error == SAO_STATUS_OK)
+        first_error = unregister_status;
+#endif
+    if (host->dc_mutation != nullptr && host->hwnd != nullptr &&
+        !sao_ui_dc_mutation_coordinator_invalidate(host->dc_mutation, host->hwnd, 1.0)) {
+        if (first_error == SAO_STATUS_OK) first_error = SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    if (first_error != SAO_STATUS_OK) return first_error;
+    if (!destroy_created_host(host)) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    release_single_instance_lock();
+    return SAO_STATUS_OK;
+}
+
+class OverlayHostCreateGuard {
+  public:
+    explicit OverlayHostCreateGuard(bool lock_owned = false) noexcept
+        : lock_owned_(lock_owned) {}
+    ~OverlayHostCreateGuard() {
+        if (host_ != nullptr) {
+            if (rollback_created_host(host_) == SAO_STATUS_OK) {
+                host_ = nullptr;
+                lock_owned_ = false;
+            }
+        } else if (lock_owned_) {
+            release_single_instance_lock();
+        }
+    }
+    OverlayHostCreateGuard(const OverlayHostCreateGuard&) = delete;
+    OverlayHostCreateGuard& operator=(const OverlayHostCreateGuard&) = delete;
+    void adopt(sao_ui_overlay_host_s* host) noexcept { host_ = host; }
+    sao_status_t fail(sao_status_t original,
+                      sao_ui_overlay_host_handle_t* out_handle) {
+        if (host_ == nullptr) {
+            if (lock_owned_) release_single_instance_lock();
+            lock_owned_ = false;
+            return original;
+        }
+        const sao_status_t cleanup = rollback_created_host(host_);
+        if (cleanup == SAO_STATUS_OK) {
+            host_ = nullptr;
+            lock_owned_ = false;
+            return original;
+        }
+        if (out_handle != nullptr) *out_handle = host_;
+        host_ = nullptr;
+        lock_owned_ = false;
+        return cleanup;
+    }
+    void commit(sao_ui_overlay_host_handle_t* out_handle) noexcept {
+        if (out_handle != nullptr) *out_handle = host_;
+        host_ = nullptr;
+        lock_owned_ = false;
+    }
+  private:
+    sao_ui_overlay_host_s* host_ = nullptr;
+    bool lock_owned_ = false;
+};
 thread_local sao_ui_overlay_host_s* active_capture_transaction = nullptr;
 
 sao_status_t invoke_protection_provider(sao_ui_overlay_host_s* host, bool enable) noexcept {
@@ -933,12 +1123,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     *out_handle = nullptr;
     if (!acquire_single_instance_lock())
         return SAO_STATUS_ERR_ALREADY_EXISTS;
+    OverlayHostCreateGuard create_guard(true);
 
+    try {
     auto* host = new (std::nothrow) sao_ui_overlay_host_s();
-    if (host == nullptr) {
-        release_single_instance_lock();
-        return SAO_STATUS_ERR_UNKNOWN;
-    }
+    if (host == nullptr)
+        return create_guard.fail(SAO_STATUS_ERR_UNKNOWN, out_handle);
+    create_guard.adopt(host);
     host->hinstance = ::GetModuleHandleW(nullptr);
     host->owner_thread_id = ::GetCurrentThreadId();
     host->class_name = make_class_name();
@@ -949,11 +1140,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     window_class.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     window_class.lpszClassName = host->class_name.c_str();
     host->class_atom = ::RegisterClassExW(&window_class);
-    if (host->class_atom == 0) {
-        delete host;
-        release_single_instance_lock();
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
+    if (host->class_atom == 0)
+        return create_guard.fail(SAO_STATUS_ERR_OS_CALL_FAILED, out_handle);
 
     const bool explicit_bounds = config != nullptr && config->width > 0 && config->height > 0;
     const int32_t width = explicit_bounds ? config->width : ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -981,8 +1169,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
                                          width > 0 ? width : 1920, height > 0 ? height : 1080,
                                          host->owner_hwnd, nullptr, host->hinstance, host);
     if (host->hwnd == nullptr) {
-        rollback_created_host(host);
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return create_guard.fail(SAO_STATUS_ERR_OS_CALL_FAILED, out_handle);
     }
 
     MARGINS margins{-1, -1, -1, -1};
@@ -996,8 +1183,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     }
     OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
     if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
-        rollback_created_host(host);
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return create_guard.fail(SAO_STATUS_ERR_OS_CALL_FAILED, out_handle);
     }
     empty.release();
     host->dc_mutation =
@@ -1008,42 +1194,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
         const sao_status_t register_status = sao_ui_dc_mutation_coordinator_register(
             host->dc_mutation, host->hwnd, &host->dc_mutation_token);
         if (register_status != SAO_STATUS_OK) {
-            rollback_created_host(host);
-            return register_status;
+            return create_guard.fail(register_status, out_handle);
         }
     }
     if (config != nullptr && config->sao_screencap_protection) {
         const sao_status_t protection_status =
             sao_ui_overlay_host_set_capture_mode(host, true);
         if (protection_status != SAO_STATUS_OK) {
-            if (host->dc_mutation != nullptr && host->hwnd != nullptr) {
-                if (!sao_ui_dc_mutation_coordinator_invalidate(
-                        host->dc_mutation, host->hwnd, 1.0)) {
-                    *out_handle = host;
-                    return SAO_STATUS_ERR_OS_CALL_FAILED;
-                }
-            }
-#if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
-            const sao_status_t unbind_status = unbind_host_capture_pair(host);
-            if (unbind_status != SAO_STATUS_OK) {
-                *out_handle = host;
-                return unbind_status;
-            }
-            const sao_status_t unregister_status = unregister_host_threat_windows(host);
-            if (unregister_status != SAO_STATUS_OK) {
-                *out_handle = host;
-                return unregister_status;
-            }
-#endif
-            rollback_created_host(host);
-            return protection_status;
+            return create_guard.fail(protection_status, out_handle);
         }
     }
-    *out_handle = host;
+    create_guard.commit(out_handle);
     return SAO_STATUS_OK;
+    } catch (...) {
+        return create_guard.fail(SAO_STATUS_ERR_UNKNOWN, out_handle);
+    }
 }
 
 extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_handle_t handle) {
+    bool retire_started = false;
+    try {
     if (handle == nullptr)
         return true;
 
@@ -1061,6 +1231,7 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
         }
         handle->lifecycle = sao_ui_overlay_host_s::lifecycle_state::retiring;
         handle->destroy_thread_id = current_thread_id;
+        retire_started = true;
     }
 
     {
@@ -1129,50 +1300,138 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
     }
     handle->lifetime_cv.notify_all();
     return success;
+    } catch (...) {
+        if (retire_started && handle != nullptr) {
+            try {
+                {
+                    std::lock_guard<std::mutex> lock(handle->lifetime_mu);
+                    if (handle->lifecycle == sao_ui_overlay_host_s::lifecycle_state::retiring &&
+                        handle->destroy_thread_id == ::GetCurrentThreadId()) {
+                        handle->lifecycle = sao_ui_overlay_host_s::lifecycle_state::active;
+                        handle->destroy_thread_id = 0;
+                    }
+                }
+                handle->lifetime_cv.notify_all();
+            } catch (...) {
+            }
+        }
+        return false;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_hwnd(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     return lease ? handle->hwnd : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_control_hwnd(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     return lease ? handle->control_hwnd : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_owner_hwnd(
     sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     return lease ? handle->owner_hwnd : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_acquire_lease(
+    sao_ui_overlay_host_handle_t handle, void* expected_hwnd, void** out_lease,
+    void** out_hwnd) {
+    try {
+    if (out_lease == nullptr || out_hwnd == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_lease = nullptr;
+    *out_hwnd = nullptr;
+    auto* token = new (std::nothrow) HostLeaseToken(handle);
+    if (token == nullptr || !token->lease) {
+        delete token;
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    }
+    auto* host = token->lease.get();
+    if (host->owner_thread_id != ::GetCurrentThreadId() ||
+        (expected_hwnd != nullptr && host->hwnd != expected_hwnd) ||
+        host->hwnd == nullptr || !::IsWindow(host->hwnd)) {
+        const bool owner_thread = host->owner_thread_id == ::GetCurrentThreadId();
+        delete token;
+        return owner_thread ? SAO_STATUS_ERR_INVALID_ARGUMENT
+                            : SAO_STATUS_ERR_ACCESS_DENIED;
+    }
+    *out_hwnd = host->hwnd;
+    *out_lease = token;
+    return SAO_STATUS_OK;
+    } catch (...) {
+        if (out_lease != nullptr) *out_lease = nullptr;
+        if (out_hwnd != nullptr) *out_hwnd = nullptr;
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" void SAO_UI_CALL sao_ui_overlay_host_release_lease(void* lease) {
+    try {
+        delete static_cast<HostLeaseToken*>(lease);
+    } catch (...) {
+    }
+}
 extern "C" void* SAO_UI_CALL
 sao_ui_overlay_host_dc_mutation_coordinator(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     return lease ? handle->dc_mutation : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_hglrc(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return nullptr;
     return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 extern "C" void* SAO_UI_CALL sao_ui_overlay_host_hdc(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return nullptr;
     return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
     sao_ui_overlay_host_handle_t handle, int32_t x, int32_t y, int32_t width, int32_t height) {
+    try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (width <= 0 || height <= 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    {
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        if (handle->dpi_transition_active) {
+            handle->dpi_pending_rect = {x, y, width, height};
+            handle->dpi_pending_bounds = true;
+            return SAO_UI_STATUS_ERR_BUSY;
+        }
+    }
     if (!win32_api().set_window_pos(handle->hwnd, nullptr, x, y, width, height,
                                     SWP_NOACTIVATE | SWP_NOZORDER)) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
@@ -1184,10 +1443,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
     }
     (void)::DwmFlush();
     return submit_physical_rect_scrub(handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
     sao_ui_overlay_host_handle_t handle, SaoOverlayHostClientRect* out_rect) {
+    try {
     if (out_rect != nullptr)
         std::memset(out_rect, 0, sizeof(*out_rect));
     HostLease lease(handle);
@@ -1198,10 +1461,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
     std::lock_guard<std::mutex> lock(handle->state_mu);
     *out_rect = handle->desired_rect;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visible) {
+    try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr || handle->control_hwnd == nullptr) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1231,20 +1498,28 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
         return SAO_STATUS_OK;
     (void)::DwmFlush();
     return submit_physical_rect_scrub(handle);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_require_owner_thread(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return handle->owner_thread_id == ::GetCurrentThreadId()
                ? SAO_STATUS_OK
                : SAO_STATUS_ERR_ACCESS_DENIED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_set_input_passthrough(sao_ui_overlay_host_handle_t handle, bool passthrough) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1253,19 +1528,34 @@ sao_ui_overlay_host_set_input_passthrough(sao_ui_overlay_host_handle_t handle, b
     }
     std::lock_guard<std::mutex> update_lock(handle->input_update_mu);
     return apply_passthrough_unlocked(handle, passthrough);
+    } catch (...) {
+        if (handle != nullptr) {
+            try {
+                HostLease recovery_lease(handle);
+                if (recovery_lease) mark_input_partial(handle);
+            } catch (...) {
+            }
+        }
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" bool SAO_UI_CALL
 sao_ui_overlay_host_input_passthrough(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return false;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return handle->input_passthrough;
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
     sao_ui_overlay_host_handle_t handle, const SaoOverlayHostInputRect* rects, size_t rect_count) {
+    try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1327,15 +1617,29 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
         handle->input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
     }
     return SAO_STATUS_OK;
+    } catch (...) {
+        if (handle != nullptr) {
+            try {
+                HostLease recovery_lease(handle);
+                if (recovery_lease) mark_input_partial(handle);
+            } catch (...) {
+            }
+        }
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" uint32_t SAO_UI_CALL
 sao_ui_overlay_host_input_sync_state(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_UI_OVERLAY_INPUT_PARTIAL;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return handle->input_sync_state;
+    } catch (...) {
+        return SAO_UI_OVERLAY_INPUT_PARTIAL;
+    }
 }
 
 sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) {
@@ -1343,7 +1647,7 @@ sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) 
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
     if (active_capture_transaction == handle)
-        return static_cast<sao_status_t>(-102);
+        return SAO_UI_STATUS_ERR_BUSY;
     std::lock_guard<std::recursive_mutex> transaction_lock(handle->capture_mode_mu);
     struct CaptureTransactionScope {
         sao_ui_overlay_host_s* previous{};
@@ -1364,9 +1668,9 @@ sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) 
     }
     uint32_t effective = SAO_ASC_MODE_INVALID;
     if (exclude) {
-        const int32_t affinity_status =
+        const sao_status_t affinity_status = map_anti_screencap_status(
             sao_security_anti_screencap_overlay_host_set_capture_mode(
-                &pair, SAO_ASC_MODE_EXCLUDED, &effective);
+                &pair, SAO_ASC_MODE_EXCLUDED, &effective));
         if (affinity_status != SAO_STATUS_OK) return affinity_status;
         mark_host_capture_pair_bound(handle, pair);
         const sao_status_t provider_status = previous_requested
@@ -1374,13 +1678,13 @@ sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) 
             : invoke_protection_provider(handle, true);
         if (provider_status != SAO_STATUS_OK) {
             uint32_t ignored = SAO_ASC_MODE_INVALID;
-            const int32_t unwind =
+            const sao_status_t unwind = map_anti_screencap_status(
                 sao_security_anti_screencap_overlay_host_set_capture_mode(
-                &pair,
-                previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
-                &ignored);
+                    &pair,
+                    previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
+                    &ignored));
             if (unwind != SAO_STATUS_OK)
-                return static_cast<sao_status_t>(unwind);
+                return unwind;
             if (!previous_requested) {
                 const sao_status_t unbind_status = unbind_host_capture_pair(handle);
                 if (unbind_status != SAO_STATUS_OK)
@@ -1393,35 +1697,36 @@ sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) 
             ? invoke_protection_provider(handle, false)
             : SAO_STATUS_OK;
         if (provider_status != SAO_STATUS_OK) return provider_status;
-        const int32_t affinity_status =
+        const sao_status_t affinity_status = map_anti_screencap_status(
             sao_security_anti_screencap_overlay_host_set_capture_mode(
-                &pair, SAO_ASC_MODE_NORMAL, &effective);
+                &pair, SAO_ASC_MODE_NORMAL, &effective));
         if (affinity_status != SAO_STATUS_OK) {
             if (previous_requested) (void)invoke_protection_provider(handle, true);
             return affinity_status;
         }
         mark_host_capture_pair_bound(handle, pair);
     }
-    const int32_t threat_status =
-        sao_security_anti_screencap_react_to_capture_threat(exclude);
+    const sao_status_t threat_status = map_anti_screencap_status(
+        sao_security_anti_screencap_react_to_capture_threat(exclude));
     if (threat_status != SAO_STATUS_OK) {
         // The registered-window sweep failed; the host must not claim
         // exclusion.  Unwind the mode change and surface the failure.
-        const int32_t unwind = sao_security_anti_screencap_overlay_host_set_capture_mode(
-            &pair, previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
-            &effective);
+        const sao_status_t unwind = map_anti_screencap_status(
+            sao_security_anti_screencap_overlay_host_set_capture_mode(
+                &pair, previous_requested ? SAO_ASC_MODE_EXCLUDED : SAO_ASC_MODE_NORMAL,
+                &effective));
         if (!previous_requested)
             (void)invoke_protection_provider(handle, false);
         else if (!exclude)
             (void)invoke_protection_provider(handle, true);
-        if (unwind != SAO_STATUS_OK) return static_cast<sao_status_t>(unwind);
+        if (unwind != SAO_STATUS_OK) return unwind;
         mark_host_capture_pair_bound(handle, pair);
         if (!previous_requested) {
             const sao_status_t unbind_status = unbind_host_capture_pair(handle);
             if (unbind_status != SAO_STATUS_OK)
                 return unbind_status;
         }
-        return static_cast<sao_status_t>(threat_status);
+        return threat_status;
     }
     std::lock_guard<std::mutex> lock(handle->state_mu);
     // MONITORED is a compatibility fallback, not strict exclusion.  Do not
@@ -1442,31 +1747,44 @@ sao_status_t set_capture_mode_impl(sao_ui_overlay_host_s* handle, bool exclude) 
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_set_capture_mode(sao_ui_overlay_host_handle_t handle, bool exclude) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return set_capture_mode_impl(handle, exclude);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" bool SAO_UI_CALL
 sao_ui_overlay_host_capture_excluded(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return false;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return handle->capture_excluded;
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" bool SAO_UI_CALL sao_ui_overlay_host_visible(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return false;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return handle->visible;
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_get_state(sao_ui_overlay_host_handle_t handle, SaoOverlayHostState* out_state) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1480,6 +1798,9 @@ sao_ui_overlay_host_get_state(sao_ui_overlay_host_handle_t handle, SaoOverlayHos
     out_state->capture_excluded = handle->capture_excluded;
     out_state->_pad[0] = 0;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // LEGACY classification: the WGL make-current / release-current /
@@ -1492,71 +1813,85 @@ sao_ui_overlay_host_get_state(sao_ui_overlay_host_handle_t handle, SaoOverlayHos
 // silently break the contract.  See PLAN.md §1.5 for the taxonomy.
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_make_current(
     sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED; // legacy WGL stub
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_release_current(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED; // legacy WGL stub
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_swap_buffers(
     sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED; // legacy WGL stub
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_pump_messages(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (handle->owner_thread_id != ::GetCurrentThreadId())
+        return SAO_STATUS_ERR_ACCESS_DENIED;
 #if defined(SAO_UI_HAS_ANTI_SCREENCAP_FACADE)
     // Threat sweep: the cached detector runs one fresh module scan per
     // second.  When protection was requested and something is detected,
     // raise the exclusion reaction so every registered window is swept.
     {
-        bool protection_requested = false;
+        const uint64_t now_ms = ::GetTickCount64();
+        bool threat_scan_due = false;
+        bool process_window_sweep_due = false;
         {
             std::lock_guard<std::mutex> lock(handle->state_mu);
-            protection_requested = handle->protection_requested;
-        }
-        if (protection_requested) {
-            if (sao_security_anti_screencap_cached_flags(handle->hwnd, 1000u) != 0u) {
-                const int32_t reaction_status =
-                    sao_security_anti_screencap_react_to_capture_threat(true);
-                if (reaction_status != SAO_STATUS_OK)
-                    return reaction_status;
-            }
-            // Startup-gap sweep: lazily register every current-process
-            // top-level window (tray owner, WebView2 bridge, legacy core
-            // windows, decoys) that has not been registered explicitly.
-            // Throttled to 2s; registration is idempotent.
-            const uint64_t now_ms = ::GetTickCount64();
-            bool sweep_due = false;
-            {
-                std::lock_guard<std::mutex> lock(handle->state_mu);
+            if (handle->protection_requested) {
+                if (handle->last_threat_scan_ms == 0u ||
+                    now_ms - handle->last_threat_scan_ms >= 1000u) {
+                    handle->last_threat_scan_ms = now_ms;
+                    threat_scan_due = true;
+                }
                 if (handle->last_process_window_sweep_ms == 0u ||
                     now_ms - handle->last_process_window_sweep_ms >= 2000u) {
                     handle->last_process_window_sweep_ms = now_ms;
-                    sweep_due = true;
+                    process_window_sweep_due = true;
                 }
             }
-            if (sweep_due) {
-                const int32_t register_status =
-                    sao_security_anti_screencap_register_process_windows();
-                if (register_status < 0) {
-                    std::lock_guard<std::mutex> lock(handle->state_mu);
-                    if (handle->last_process_window_sweep_ms == now_ms)
-                        handle->last_process_window_sweep_ms = 0u;
-                    return register_status;
-                }
+        }
+        if (threat_scan_due &&
+            sao_security_anti_screencap_cached_flags(handle->hwnd, 1000u) != 0u) {
+            const sao_status_t reaction_status = map_anti_screencap_status(
+                sao_security_anti_screencap_react_to_capture_threat(true));
+            (void)reaction_status;
+        }
+        // Startup-gap sweep: lazily register every current-process top-level
+        // window that has not been registered explicitly. This is advisory;
+        // a transient enumeration failure must not terminate the UI loop.
+        if (process_window_sweep_due) {
+            const int32_t register_status =
+                sao_security_anti_screencap_register_process_windows();
+            if (register_status < 0) {
+                const sao_status_t mapped_status =
+                    map_anti_screencap_status(register_status);
+                (void)mapped_status;
             }
         }
     }
@@ -1567,11 +1902,16 @@ sao_ui_overlay_host_pump_messages(sao_ui_overlay_host_handle_t handle) {
         ::TranslateMessage(&message);
         ::DispatchMessageW(&message);
     }
-    return SAO_STATUS_OK;
+    const sao_status_t pending_status = drain_pending_dpi_bounds(handle);
+    return pending_status == SAO_UI_STATUS_ERR_BUSY ? SAO_STATUS_OK : pending_status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_msg_wait(sao_ui_overlay_host_handle_t handle, uint32_t timeout_ms) {
+    try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1579,9 +1919,13 @@ sao_ui_overlay_host_msg_wait(sao_ui_overlay_host_handle_t handle, uint32_t timeo
                                          MWMO_INPUTAVAILABLE) == WAIT_FAILED
                ? SAO_STATUS_ERR_OS_CALL_FAILED
                : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" void SAO_UI_CALL sao_ui_overlay_host_set_cursor_hint_(sao_ui_overlay_host_handle_t handle, int32_t hint) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return;
@@ -1590,10 +1934,14 @@ extern "C" void SAO_UI_CALL sao_ui_overlay_host_set_cursor_hint_(sao_ui_overlay_
         handle->cursor_hint = hint >= 0 && hint <= 4 ? hint : 0;
     }
     apply_cursor_hint(handle);
+    } catch (...) {
+        return;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
     sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1601,10 +1949,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
     handle->hit_test_fn = fn;
     handle->hit_test_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_mouse(
     sao_ui_overlay_host_handle_t handle, sao_ui_mouse_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1612,10 +1964,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_mouse(
     handle->mouse_fn = fn;
     handle->mouse_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_client_rect(
     sao_ui_overlay_host_handle_t handle, SaoOverlayHostClientRect* out_rect) {
+    try {
     if (out_rect != nullptr)
         std::memset(out_rect, 0, sizeof(*out_rect));
     HostLease lease(handle);
@@ -1626,26 +1982,38 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_client_rect(
     std::lock_guard<std::mutex> lock(handle->state_mu);
     *out_rect = handle->client_rect;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" uint32_t SAO_UI_CALL
 sao_ui_overlay_host_current_dpi(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return 0;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return handle->current_dpi;
+    } catch (...) {
+        return 0;
+    }
 }
 
 extern "C" float SAO_UI_CALL sao_ui_overlay_host_scale_factor(sao_ui_overlay_host_handle_t handle) {
+    try {
     HostLease lease(handle);
     if (!lease) return 0.0F;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     return static_cast<float>(handle->current_dpi == 0 ? 96u : handle->current_dpi) / 96.0F;
+    } catch (...) {
+        return 0.0F;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_wm_counters(
     sao_ui_overlay_host_handle_t handle, SaoOverlayHostWMCounters* out_counters) {
+    try {
     if (out_counters != nullptr)
         std::memset(out_counters, 0, sizeof(*out_counters));
     HostLease lease(handle);
@@ -1656,10 +2024,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_wm_counters(
     std::lock_guard<std::mutex> lock(handle->state_mu);
     *out_counters = handle->wm_counters;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_size_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_size_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1667,9 +2039,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_size_fn(
     handle->size_fn = fn;
     handle->size_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_move_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_move_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1677,9 +2053,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_move_fn(
     handle->move_fn = fn;
     handle->move_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activate_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_activate_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1687,9 +2067,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activate_fn(
     handle->activate_fn = fn;
     handle->activate_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_changed_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_dpi_changed_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1697,18 +2081,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_changed_fn(
     handle->dpi_changed_fn = fn;
     handle->dpi_changed_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_dpi_reflow_fn(sao_ui_overlay_host_handle_t handle, sao_ui_dpi_reflow_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease) return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(handle->state_mu);
     handle->dpi_reflow_fn = fn;
     handle->dpi_reflow_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_display_change_fn(
     sao_ui_overlay_host_handle_t handle, sao_ui_display_change_fn_t fn, void* user_data) {
+    try {
     HostLease lease(handle);
     if (!lease)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1716,6 +2108,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_display_change_fn(
     handle->display_change_fn = fn;
     handle->display_change_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 #if defined(SAO_UI_OVERLAY_HOST_TESTING)

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -87,6 +88,66 @@ def _emit(progress_cb: Optional[Callable[[Dict[str, object]], None]], **data):
         pass
 
 
+_UPDATE_PROCESS_FALLBACK_LOCK = threading.Lock()
+
+
+class _UpdateProcessLock:
+    def __init__(self, base: str):
+        self._handle = None
+        self._fallback = False
+        digest = hashlib.sha256(
+            os.path.normcase(os.path.abspath(base)).encode("utf-16le")
+        ).hexdigest()
+        self._name = f"Local\\SAO-Auto-Update-{digest}"
+
+    def acquire(self) -> bool:
+        if os.name != "nt":
+            self._fallback = True
+            return _UPDATE_PROCESS_FALLBACK_LOCK.acquire(blocking=False)
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            create_mutex = kernel32.CreateMutexW
+            create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+            create_mutex.restype = wintypes.HANDLE
+            wait = kernel32.WaitForSingleObject
+            wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait.restype = wintypes.DWORD
+            self._handle = create_mutex(None, False, self._name)
+            if not self._handle:
+                return False
+            result = wait(self._handle, 0xFFFFFFFF)
+            if result not in (0, 0x00000080):
+                kernel32.CloseHandle(self._handle)
+                self._handle = None
+                return False
+            return True
+        except Exception:
+            self.release()
+            return False
+
+    def release(self) -> None:
+        if self._fallback:
+            self._fallback = False
+            try:
+                _UPDATE_PROCESS_FALLBACK_LOCK.release()
+            except RuntimeError:
+                pass
+            return
+        if self._handle is not None:
+            try:
+                import ctypes
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.ReleaseMutex(self._handle)
+                kernel32.CloseHandle(self._handle)
+            except Exception:
+                pass
+            finally:
+                self._handle = None
+
+
 def _wait_for_exit(pid: int, timeout: float = WAIT_TIMEOUT) -> bool:
     # 等待主进程退出。仅 Windows: 通过 OpenProcess 检查。
     if pid <= 0:
@@ -132,68 +193,154 @@ def _normalize_rel(rel_path: str) -> str:
     return rel
 
 
-def _replace_with_retry(src: str, dst: str, retries: int = 6, delay: float = 0.4) -> None:
-    # Robust os.replace for Windows-locked files (fonts, dlls, ...).
-    #
-    # Retries with backoff. If still locked, falls back to:
-    # - rename(dst -> dst+'.old-<ts>') to release the lock holder's reference
-    # (Windows allows renaming most files with open handles), then move src
-    # into place.
-    # - if even rename fails, schedule a delayed replace via MoveFileEx
-    # (DELAY_UNTIL_REBOOT) so it succeeds on next boot, and (best-effort)
-    # write src to dst+'.new' so subsequent runs can pick it up.
-    # Never raises for the tmp-staged delete cleanup branch.
+def _has_reparse_point(path: str) -> bool:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+            get_attributes.argtypes = [ctypes.c_wchar_p]
+            get_attributes.restype = ctypes.c_uint32
+            attributes = get_attributes(os.path.abspath(path))
+            return attributes == 0xFFFFFFFF or bool(attributes.__and__(0x400))
+        except Exception:
+            return True
+    return os.path.islink(path)
+
+
+def _assert_safe_chain(path: str, base: Optional[str] = None) -> str:
+    absolute = os.path.abspath(path)
+    if base is not None:
+        absolute_base = os.path.abspath(base)
+        if absolute != absolute_base and not absolute.startswith(absolute_base + os.sep):
+            raise ValueError(f"路径逃出 base: {path}")
+    drive, tail = os.path.splitdrive(absolute)
+    current = drive + os.sep if tail.startswith(("\\", "/")) else drive
+    for part in tail.lstrip("\\/").replace("/", os.sep).split(os.sep):
+        if not part:
+            continue
+        current = os.path.join(current, part)
+        if os.path.lexists(current):
+            if _has_reparse_point(current):
+                raise ValueError(f"路径包含 Windows reparse point: {current}")
+        else:
+            break
+    return absolute
+
+
+def _assert_safe_tree(path: str, base: Optional[str] = None) -> str:
+    absolute = _assert_safe_chain(path, base)
+    if not os.path.isdir(absolute):
+        return absolute
+    for current, directories, files in os.walk(absolute, topdown=True, followlinks=False):
+        for name in [*directories, *files]:
+            _assert_safe_chain(os.path.join(current, name), base)
+    return absolute
+
+
+def _safe_makedirs(path: str, base: str) -> str:
+    absolute = _assert_safe_chain(path, base)
+    os.makedirs(absolute, exist_ok=True)
+    _assert_safe_chain(absolute, base)
+    if not os.path.isdir(absolute):
+        raise ValueError(f"目标不是目录: {absolute}")
+    return absolute
+
+
+def _final_path_by_handle(path: str) -> Optional[str]:
+    if os.name != "nt":
+        return os.path.abspath(path)
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.GetFinalPathNameByHandleW.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+    ]
+    kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.CreateFileW(
+        os.path.abspath(path),
+        0x0080,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x02000000 | 0x00200000,
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if not handle or handle == invalid:
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = kernel32.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            return None
+        return buffer.value
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _assert_final_path_within(path: str, base: str) -> None:
+    _assert_safe_chain(path, base)
+    base_final = _final_path_by_handle(base) or os.path.abspath(base)
+    target = os.path.abspath(path)
+    if os.path.lexists(target):
+        final = _final_path_by_handle(target)
+        if not final:
+            raise ValueError(f"无法取得目标 final path: {target}")
+    else:
+        parent = os.path.dirname(target) or base
+        parent_final = _final_path_by_handle(parent)
+        if not parent_final:
+            raise ValueError(f"无法取得父目录 final path: {parent}")
+        final = os.path.join(parent_final, os.path.basename(target))
+    def normalize(value: str) -> str:
+        value = value.replace("/", "\\")
+        if value.startswith("\\\\?\\"):
+            value = value[4:]
+        return os.path.normcase(value.rstrip("\\/"))
+    base_key = normalize(base_final)
+    final_key = normalize(final)
+    if final_key != base_key and not final_key.startswith(base_key + "\\"):
+        raise ValueError(f"final path escapes base: {path}")
+
+
+def _assert_mutation_paths(source: Optional[str], destination: str, base: str) -> None:
+    _assert_safe_chain(base, base)
+    _assert_final_path_within(base, base)
+    if source is not None:
+        _assert_safe_chain(source, base)
+        _assert_final_path_within(source, base)
+    parent = os.path.dirname(destination) or base
+    _assert_safe_chain(parent, base)
+    _assert_final_path_within(parent, base)
+    _assert_safe_chain(destination, base)
+    _assert_final_path_within(destination, base)
+
+
+def _replace_with_retry(src: str, dst: str, retries: int = 6, delay: float = 0.4,
+                        base: Optional[str] = None) -> None:
+    if getattr(sys, "frozen", False):
+        raise RuntimeError("production replacement requires SaoAutoUpdateHelper")
     last_err: Optional[Exception] = None
     for attempt in range(retries):
         try:
+            if base is not None:
+                _assert_mutation_paths(src, dst, base)
             os.replace(src, dst)
             return
-        except PermissionError as e:
-            last_err = e
-            time.sleep(delay * (1 + attempt))
-        except OSError as e:
-            last_err = e
-            time.sleep(delay * (1 + attempt))
-    # Fallback 1: rename old aside, then move
-    try:
-        if os.path.exists(dst):
-            old = f"{dst}.old-{int(time.time())}"
-            try:
-                os.rename(dst, old)
-            except Exception:
-                pass
-        os.replace(src, dst)
-        return
-    except Exception as e:
-        last_err = e
-    # Fallback 2: stage a .new copy + schedule delayed replace
-    try:
-        staged = dst + ".new"
-        if os.path.exists(staged):
-            try:
-                os.remove(staged)
-            except Exception:
-                pass
-        try:
-            os.replace(src, staged)
-        except Exception:
-            shutil.copyfile(src, staged)
-        if os.name == "nt":
-            try:
-                import ctypes
-                MOVEFILE_REPLACE_EXISTING = 0x1
-                MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
-                MoveFileExW = ctypes.windll.kernel32.MoveFileExW
-                MoveFileExW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
-                MoveFileExW.restype = ctypes.c_bool
-                MoveFileExW(staged, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT)
-            except Exception:
-                pass
-        return
-    except Exception as e:
-        # 真的没办法了, 把原异常抛出去触发回滚
-        raise last_err if last_err is not None else e
-
+        except (PermissionError, OSError) as exc:
+            last_err = exc
+            if attempt + 1 < retries:
+                time.sleep(delay * (1 + attempt))
+    raise last_err if last_err is not None else RuntimeError("replacement failed")
 
 def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) -> List[Dict[str, object]]:
     entries: List[Dict[str, object]] = []
@@ -211,6 +358,7 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
             if rel.lower() != "update.exe":
                 raise ValueError(f"runtime-delta 不允许覆盖启动器 exe: {rel}")
         dst = os.path.join(base, rel)
+        _assert_safe_chain(dst, base)
         entries.append({
             "info": info,
             "rel": rel,
@@ -250,6 +398,8 @@ def _read_zip_remove_hints(zip_path: str) -> List[str]:
 
 
 def _safe_remove_orphan(base: str, rel: str) -> Tuple[bool, str]:
+    if getattr(sys, "frozen", False):
+        return False, "production deletion requires SaoAutoUpdateHelper"
     # Remove a single orphan file declared by manifest.removed_files.
     #
     # Returns ``(removed, reason)``. Refuses to act on paths that escape the
@@ -268,11 +418,16 @@ def _safe_remove_orphan(base: str, rel: str) -> Tuple[bool, str]:
     abs_base = os.path.abspath(base)
     if abs_path == abs_base or not abs_path.startswith(abs_base + os.sep):
         return False, "路径逃出 base"
+    try:
+        _assert_safe_chain(abs_path, base)
+    except Exception as exc:
+        return False, str(exc)
     if not os.path.exists(abs_path):
         return True, "absent"
     try:
         if os.path.isdir(abs_path):
             return False, "拒绝目录删除"
+        _assert_safe_chain(abs_path, base)
         os.remove(abs_path)
         return True, "removed"
     except Exception as exc:
@@ -323,7 +478,9 @@ def _apply_removed_files(
         if os.path.isfile(abs_path):
             try:
                 backup_path = os.path.join(backup_root, "__removed__", norm)
-                os.makedirs(os.path.dirname(backup_path) or backup_root, exist_ok=True)
+                _assert_safe_chain(abs_path, base)
+                _safe_makedirs(os.path.dirname(backup_path) or backup_root, base)
+                _assert_safe_chain(backup_path, base)
                 shutil.copy2(abs_path, backup_path)
                 backups.append((norm, backup_path))
             except Exception:
@@ -349,13 +506,15 @@ def _apply_removed_files(
 def _safe_remove_tree(path: str, base: str) -> bool:
     try:
         abs_base = os.path.abspath(base)
-        abs_path = os.path.abspath(path)
-        if abs_path == abs_base or not abs_path.startswith(abs_base + os.sep):
+        abs_path = _assert_safe_chain(path, base)
+        if abs_path == abs_base:
             return False
         if os.path.isdir(abs_path):
-            shutil.rmtree(abs_path, ignore_errors=True)
+            _assert_safe_tree(abs_path, base)
+            shutil.rmtree(abs_path)
             return True
         if os.path.exists(abs_path):
+            _assert_safe_chain(abs_path, base)
             os.remove(abs_path)
             return True
     except Exception:
@@ -484,7 +643,9 @@ def _apply_zip_package(
                 rel = str(entry["rel"])
                 dst = str(entry["dst"])
                 backup_path = os.path.join(backup_root, rel)
-                os.makedirs(os.path.dirname(backup_path) or backup_root, exist_ok=True)
+                _assert_safe_chain(dst, base)
+                _safe_makedirs(os.path.dirname(backup_path) or backup_root, base)
+                _assert_safe_chain(backup_path, base)
                 shutil.copy2(dst, backup_path)
                 backed_up.append((rel, backup_path))
                 _emit(
@@ -547,7 +708,8 @@ def _apply_zip_package(
             info = entry["info"]
             rel = str(entry["rel"])
             dst = str(entry["dst"])
-            os.makedirs(os.path.dirname(dst) or base, exist_ok=True)
+            _safe_makedirs(os.path.dirname(dst) or base, base)
+            _assert_safe_chain(dst, base)
             # v2.1.2-f: 如果当前正在运行的 helper 自身被增量包覆盖 (例如
             # runtime-delta 顶层带 update.exe), 走 delayed self-replace 路径,
             # 不要直接 rename (Windows 上正在运行的 .exe 不能覆盖).
@@ -558,11 +720,14 @@ def _apply_zip_package(
                 staged_path = dst + ".new"
                 try:
                     if os.path.exists(staged_path):
+                        _assert_mutation_paths(None, staged_path, base)
                         os.remove(staged_path)
                 except Exception:
                     pass
+                _assert_mutation_paths(None, staged_path, base)
                 with zf.open(info, "r") as src, open(staged_path, "wb") as out:
                     shutil.copyfileobj(src, out)
+                _assert_mutation_paths(staged_path, staged_path, base)
                 staged_self_update = (staged_path, dst)
                 applied.append(rel)
                 detail = f"暂存 {rel}，退出后自动切换"
@@ -570,46 +735,27 @@ def _apply_zip_package(
                 tmp_dst = dst + ".tmp-update"
                 try:
                     if os.path.exists(tmp_dst):
+                        _assert_mutation_paths(None, tmp_dst, base)
                         os.remove(tmp_dst)
                 except Exception:
                     pass
-                # v2.1.2-j: 字体/DLL 等容易被 Windows 字体缓存/进程残留持锁的
-                # 文件, 失败时不 raise (整包回滚代价巨大), 仅 stage 一个 .new
-                # 副本, 主程序 XiaoACTUI 启动时由 config._promote_pending_replacements
-                # 完成最终 rename. 用户不会再卡在 SAOUI.ttf 这种锁定文件上。
-                _skip_on_lock = dst.lower().endswith((".ttf", ".otf", ".ttc", ".dll"))
+                _assert_mutation_paths(None, tmp_dst, base)
                 try:
+                    _assert_mutation_paths(None, tmp_dst, base)
                     with zf.open(info, "r") as src, open(tmp_dst, "wb") as out:
                         shutil.copyfileobj(src, out)
+                    _assert_mutation_paths(tmp_dst, dst, base)
                     try:
-                        _replace_with_retry(tmp_dst, dst)
+                        _replace_with_retry(tmp_dst, dst, base=base)
                     except Exception as replace_err:
-                        if _skip_on_lock:
-                            # stage to dst+'.new'; promote on next XiaoACTUI start
-                            staged = dst + ".new"
-                            try:
-                                if os.path.exists(staged):
-                                    os.remove(staged)
-                                os.replace(tmp_dst, staged)
-                            except Exception:
-                                pass
-                            applied.append(f"{rel} (deferred .new)")
-                            detail = f"暂存 {rel} (字体被锁定, 重启后切换)"
-                            _emit(
-                                progress_cb,
-                                phase="apply",
-                                step=2,
-                                headline="正在写入新版本文件",
-                                detail=detail,
-                                progress=float(index) / float(total_files),
-                                indeterminate=False,
-                            )
-                            continue
                         raise replace_err
                 finally:
                     try:
                         if os.path.exists(tmp_dst):
+                            _assert_mutation_paths(None, tmp_dst, base)
                             os.remove(tmp_dst)
+                    except ValueError:
+                        raise
                     except Exception:
                         pass
                 if not bool(entry["exists"]):
@@ -651,6 +797,7 @@ def _rollback(
     for dst in sorted(created_files, key=len, reverse=True):
         try:
             if os.path.exists(dst):
+                _assert_safe_chain(dst, base)
                 os.remove(dst)
         except Exception:
             pass
@@ -668,7 +815,8 @@ def _rollback(
     for rel, backup_path in backed_up:
         try:
             dst = os.path.join(base, rel)
-            os.makedirs(os.path.dirname(dst) or base, exist_ok=True)
+            _safe_makedirs(os.path.dirname(dst) or base, base)
+            _assert_mutation_paths(backup_path, dst, base)
             shutil.copy2(backup_path, dst)
         except Exception:
             pass
@@ -694,7 +842,8 @@ def _schedule_self_replace(
         return False
     script_path = os.path.join(base, f"_swap_update_{int(time.time() * 1000)}.cmd")
     try:
-        with open(script_path, "w", encoding="utf-8") as f:
+        _assert_mutation_paths(None, script_path, base)
+        with open(script_path, "x", encoding="utf-8") as f:
             f.write("@echo off\r\n")
             f.write("ping 127.0.0.1 -n 4 > nul\r\n")
             f.write(f'copy /y "{staged_path}" "{live_path}" > nul\r\n')
@@ -721,15 +870,23 @@ def _schedule_self_replace(
         return False
 
 
-def _cleanup_staging(package_path: str, pending_path: str):
+def _safe_remove_file(path: str, base: str) -> bool:
     try:
-        os.remove(package_path)
+        _assert_safe_chain(path, base)
+        if not os.path.exists(path):
+            return True
+        if os.path.isdir(path):
+            return False
+        _assert_safe_chain(path, base)
+        os.remove(path)
+        return True
     except Exception:
-        pass
-    try:
-        os.remove(pending_path)
-    except Exception:
-        pass
+        return False
+
+
+def _cleanup_staging(package_path: str, pending_path: str, base: str):
+    _safe_remove_file(package_path, os.path.join(base, "staging"))
+    _safe_remove_file(pending_path, base)
 
 
 def _resolve_restart_target(base: str, exe_path: str) -> Optional[str]:
@@ -767,11 +924,142 @@ def run_apply_flow(
     meta: Dict[str, object],
     progress_cb: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> int:
+    process_lock = _UpdateProcessLock(base)
+    if not process_lock.acquire():
+        _emit(
+            progress_cb,
+            phase="error",
+            step=0,
+            headline="更新器已在运行",
+            detail="同一安装目录已有另一个更新进程持有跨进程锁。",
+            progress=0.0,
+            indeterminate=False,
+            status="error",
+            can_close=True,
+        )
+        return 1
+    try:
+        return _run_apply_flow_locked(pid, base, meta, progress_cb)
+    finally:
+        process_lock.release()
+
+
+def _resolve_native_update_helper(base: str) -> Optional[str]:
+    candidates = (
+        os.path.join(base, "SaoAutoUpdateHelper.exe"),
+        os.path.join(base, "runtime", "SaoAutoUpdateHelper.exe"),
+        os.path.join(os.path.dirname(sys.executable), "SaoAutoUpdateHelper.exe"),
+    )
+    for candidate in candidates:
+        try:
+            if os.path.isfile(candidate):
+                _assert_safe_chain(candidate, base)
+                _assert_final_path_within(candidate, base)
+                return os.path.abspath(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def _run_native_apply_flow(
+    pid: int,
+    base: str,
+    meta: Dict[str, object],
+    package_path: str,
+    pending_path: str,
+    progress_cb: Optional[Callable[[Dict[str, object]], None]],
+) -> int:
+    if pid <= 0:
+        raise RuntimeError("native updater requires a valid parent pid")
+    removed_hints = meta.get("removed_files")
+    if isinstance(removed_hints, list) and any(isinstance(item, str) and item.strip() for item in removed_hints):
+        raise RuntimeError("native updater does not support manifest deletions")
+    if _read_zip_remove_hints(package_path):
+        raise RuntimeError("native updater does not support archive deletions")
+    digest = str(meta.get("sha256") or "").strip().lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise RuntimeError("native updater requires a validated package sha256")
+    helper = _resolve_native_update_helper(base)
+    if not helper:
+        raise RuntimeError("SaoAutoUpdateHelper.exe is unavailable")
+    target = _resolve_restart_target(base, str(meta.get("exe_path") or ""))
+    if not target:
+        raise RuntimeError("native updater restart target is unavailable")
+    _assert_final_path_within(target, base)
+    _emit(
+        progress_cb,
+        phase="wait",
+        step=0,
+        headline="等待原生更新器接管",
+        detail="生产更新必须由 SaoAutoUpdateHelper 完成…",
+        progress=None,
+        indeterminate=True,
+    )
+    creationflags = 0x00000008 | 0x00000200
+    process = subprocess.Popen(
+        [
+            helper,
+            "--parent-pid", str(pid),
+            "--archive", package_path,
+            "--target", base,
+            "--restart", target,
+            "--sha256", digest,
+        ],
+        cwd=base,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=creationflags,
+    )
+    code = process.wait()
+    if code != 0:
+        raise RuntimeError(f"SaoAutoUpdateHelper failed with exit code {code}")
+    _cleanup_staging(package_path, pending_path, base)
+    _emit(
+        progress_cb,
+        phase="done",
+        step=3,
+        headline="更新完成",
+        detail="原生更新器已完成替换并启动客户端。",
+        progress=1.0,
+        indeterminate=False,
+        status="success",
+        can_close=True,
+        auto_close=True,
+    )
+    return 0
+
+
+def _run_apply_flow_locked(
+    pid: int,
+    base: str,
+    meta: Dict[str, object],
+    progress_cb: Optional[Callable[[Dict[str, object]], None]] = None,
+) -> int:
     version = str(meta.get("version") or "")
     package_type = str(meta.get("package_type") or "runtime-delta")
     package_path = str(meta.get("package_path") or "")
     exe_path = str(meta.get("exe_path") or "")
     pending_path = os.path.join(base, "staging", "pending.json")
+    try:
+        _assert_safe_chain(base, base)
+        _assert_safe_chain(package_path, os.path.join(base, "staging"))
+    except Exception as exc:
+        detail = f"更新包路径不安全: {exc}"
+        _log(detail, base)
+        _emit(
+            progress_cb,
+            phase="error",
+            step=0,
+            headline="更新包路径不安全",
+            detail=detail,
+            progress=0.0,
+            indeterminate=False,
+            status="error",
+            can_close=True,
+        )
+        return 1
 
     if not package_path or not os.path.exists(package_path):
         detail = f"更新包不存在: {package_path or 'unknown'}"
@@ -788,6 +1076,25 @@ def run_apply_flow(
             can_close=True,
         )
         return 1
+
+    if getattr(sys, "frozen", False):
+        try:
+            return _run_native_apply_flow(pid, base, meta, package_path, pending_path, progress_cb)
+        except Exception as exc:
+            detail = f"生产更新拒绝回退到 Python helper: {exc}"
+            _log(detail, base)
+            _emit(
+                progress_cb,
+                phase="error",
+                step=2,
+                headline="原生更新器不可用",
+                detail=detail,
+                progress=0.0,
+                indeterminate=False,
+                status="error",
+                can_close=True,
+            )
+            return 3
 
     _log(f"waiting for pid={pid} to exit", base)
     _emit(
@@ -876,7 +1183,7 @@ def run_apply_flow(
         except Exception as exc:
             _log(f"orphan cleanup failed (non-fatal): {exc}", base)
 
-    _cleanup_staging(package_path, pending_path)
+    _cleanup_staging(package_path, pending_path, base)
 
     _emit(
         progress_cb,

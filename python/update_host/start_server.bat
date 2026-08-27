@@ -9,6 +9,8 @@ if not defined UPDATE_HOST_RELEASE_DIR set "UPDATE_HOST_RELEASE_DIR=%ROOT%releas
 if not defined UPDATE_HOST_DOWNLOADS set "UPDATE_HOST_DOWNLOADS=%UPDATE_HOST_RELEASE_DIR%"
 if not defined UPDATE_HOST_PORT set "UPDATE_HOST_PORT=9973"
 if not defined UPDATE_HOST_HOST set "UPDATE_HOST_HOST=0.0.0.0"
+set "UPDATE_HOST_TEST_ENV="
+set "UPDATE_HOST_REQUIRE_TLS=1"
 
 echo ============================================================
 echo  SAO Auto Update Host - 一键启动, 自动装依赖
@@ -80,11 +82,8 @@ if !ERRORLEVEL! NEQ 0 (
 )
 
 REM ── [4/4] 启动 ──
-REM app.py 内部用 "from update_host.workshop_routes import ..." 这种包限定写法，
-REM 但 update_host 目录本身没有 __init__.py(隐式命名空间包)——要让它解析成功,
-REM 它的上级目录(这个部署包的根, "%ROOT%.." )必须在 sys.path 上, 所以补进
-REM PYTHONPATH。不补的话 workshop 路由会被 app.py 的 try/except 悄悄吞掉,
-REM 服务照样能起, 但 /api/workshop/* 全部 404, 表现是"看起来正常但功能没了"。
+REM canonical Workshop routes live in app.py. workshop_routes.py is a deprecated
+REM compatibility module and is intentionally not mounted by the service.
 set "PYTHONPATH=%ROOT%..;%PYTHONPATH%"
 
 echo [4/4] 启动服务
@@ -95,7 +94,7 @@ echo   闭源插件自动构建工具链 Cython/MSVC 首次触发时会另外静
 echo     可用环境变量 XIAOWORKSHOP_ROOT 覆盖这个路径
 echo ============================================================
 
-"%VENV_PY%" -m uvicorn app:app --host %UPDATE_HOST_HOST% --port %UPDATE_HOST_PORT%
+"%VENV_PY%" update_host_main.py
 
 popd
 exit /b %ERRORLEVEL%

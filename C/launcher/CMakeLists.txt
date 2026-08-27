@@ -394,34 +394,6 @@ target_link_libraries(SaoAuto PRIVATE
     crypt32        # current-user DPAPI for secure settings envelopes
 )
 
-# Runtime installer wiring.  SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL flips
-# the launcher-side ensure_all() call site.  Windows-tests configures
-# with the flag ON so the pipeline can exercise the fetch path in CI;
-# windows-hardened defaults OFF for reproducibility (no network fetch
-# during a hardened build's smoke run).  Callers may override at
-# configure time via -DSAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL=ON/OFF.
-if (NOT DEFINED SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
-    if (SAO_HARDENED_BUILD)
-        set(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL OFF
-            CACHE BOOL
-            "Enable the launcher-side plugin runtime auto-installer")
-    else()
-        set(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL ON
-            CACHE BOOL
-            "Enable the launcher-side plugin runtime auto-installer")
-    endif()
-endif()
-mark_as_advanced(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
-
-if (SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL AND TARGET sao_runtime_installer)
-    target_link_libraries(SaoAuto PRIVATE sao_runtime_installer)
-    target_compile_definitions(SaoAuto PRIVATE
-        SAO_LAUNCHER_HAS_RUNTIME_INSTALLER=1)
-else()
-    message(STATUS
-        "launcher: runtime installer disabled or unavailable; pass-through hook stays active")
-endif()
-
 # rollout slice — rollout_manager depends on freetier telemetry_client
 # for its record_success / record_failure telemetry publishes.  When the
 # server subsystem is disabled rollout_manager compiles a no-op emit path.
@@ -441,8 +413,14 @@ set(SAO_LAUNCHER_DOCS_INDEX
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/index.html")
 set(SAO_LAUNCHER_DOCS_STYLE
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/style.css")
+set(SAO_LAUNCHER_DOCS_THEME
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/theme.js")
+set(SAO_LAUNCHER_DOCS_SCROLLSPY
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/scrollspy.js")
 if (NOT EXISTS "${SAO_LAUNCHER_DOCS_INDEX}" OR
-    NOT EXISTS "${SAO_LAUNCHER_DOCS_STYLE}")
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_STYLE}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_THEME}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_SCROLLSPY}")
     message(FATAL_ERROR
         "launcher: required packaged user guide files are missing")
 endif()
@@ -456,6 +434,12 @@ add_custom_command(TARGET SaoAuto POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${SAO_LAUNCHER_DOCS_STYLE}"
         "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/style.css"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_THEME}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/theme.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_SCROLLSPY}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/scrollspy.js"
     COMMENT "Copying packaged launcher user guide"
     VERBATIM
 )
@@ -489,9 +473,7 @@ if (MSVC)
     target_link_options(SaoAuto PRIVATE /MANIFEST:NO)
 endif()
 
-# Tests for the launcher itself.  Cover argv parsing, single-instance mutex,
-# BASE_DIR resolution.  Anything that needs a real GUI stays out of unit
-# tests and moves into tests/integration/.
+# Launcher tests and integration-test registration were removed on 2026-08-23.
 
 install(TARGETS SaoAuto
     RUNTIME DESTINATION bin
@@ -502,6 +484,12 @@ install(FILES "${SAO_LAUNCHER_DOCS_INDEX}"
     COMPONENT ship
 )
 install(FILES "${SAO_LAUNCHER_DOCS_STYLE}"
+    DESTINATION bin/docs/html/assets
+    COMPONENT ship
+)
+install(FILES
+    "${SAO_LAUNCHER_DOCS_THEME}"
+    "${SAO_LAUNCHER_DOCS_SCROLLSPY}"
     DESTINATION bin/docs/html/assets
     COMPONENT ship
 )

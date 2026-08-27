@@ -1,4 +1,5 @@
 #include "sao/net/http_client.h"
+#include "sao/net/tls.h"
 
 #include "winhttp_internal.h"
 
@@ -25,23 +26,29 @@ struct sao_net_http_response_s {
 namespace {
 
 sao_status_t execute_request(const wchar_t* method, const char* url_utf8,
+                             const char* scope_utf8,
                              const char* headers_utf8,
                              const char* content_type_utf8,
                              const uint8_t* body_bytes, size_t body_length,
                              uint32_t timeout_ms,
-                             sao_net_http_response_handle_t* out_response) noexcept {
+                             sao_net_http_response_handle_t* out_response,
+                             bool secure_only) noexcept {
     if (out_response == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_response = nullptr;
-    if (url_utf8 == nullptr || method == nullptr ||
+    if (url_utf8 == nullptr || scope_utf8 == nullptr || method == nullptr ||
         body_length > sao::net::internal::kMaximumBodyBytes ||
         body_length > static_cast<size_t>(std::numeric_limits<DWORD>::max()) ||
         (body_length != 0 && body_bytes == nullptr)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
-    ParsedWinHttpUrl url{};
-    auto status = sao::net::internal::parse_winhttp_url(url_utf8, false, url);
+    auto status = sao::net::internal::validate_request_scope(scope_utf8);
     if (status != SAO_STATUS_OK) return status;
+
+    ParsedWinHttpUrl url{};
+    status = sao::net::internal::parse_winhttp_url(url_utf8, false, url);
+    if (status != SAO_STATUS_OK) return status;
+    if (secure_only && !url.secure) return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
     std::wstring headers;
     status = sao::net::internal::normalize_headers(headers_utf8, headers);
@@ -105,12 +112,18 @@ sao_status_t execute_request(const wchar_t* method, const char* url_utf8,
         }
     }
 
+    if (url.secure) {
+        status = sao::net::internal::configure_pinned_security(
+            response->request.get(), scope_utf8);
+        if (status != SAO_STATUS_OK) return status;
+    }
+
     status = sao::net::internal::send_request_and_receive(
         response->request, body_bytes, body_length, timeout_ms);
     if (status != SAO_STATUS_OK) return status;
     if (url.secure) {
         status = sao::net::internal::validate_request_certificate(
-            response->request.get(), "default");
+            response->request.get(), url.host.c_str(), scope_utf8);
         if (status != SAO_STATUS_OK) return status;
     }
 
@@ -130,11 +143,29 @@ sao_status_t execute_request(const wchar_t* method, const char* url_utf8,
 
 }  // namespace
 
+extern "C" sao_status_t SAO_NET_CALL sao_net_http_get_scoped_v2(
+    const char* url_utf8, const char* scope_utf8, const char* headers_utf8,
+    uint32_t timeout_ms,
+    sao_net_http_response_handle_t* out_response) {
+    return execute_request(L"GET", url_utf8, scope_utf8, headers_utf8, nullptr,
+                           nullptr, 0, timeout_ms, out_response, true);
+}
+
 extern "C" sao_status_t SAO_NET_CALL sao_net_http_get(
     const char* url_utf8, const char* headers_utf8, uint32_t timeout_ms,
     sao_net_http_response_handle_t* out_response) {
-    return execute_request(L"GET", url_utf8, headers_utf8, nullptr,
-                           nullptr, 0, timeout_ms, out_response);
+    return execute_request(L"GET", url_utf8, SAO_NET_TLS_SCOPE_DEFAULT,
+                           headers_utf8, nullptr, nullptr, 0, timeout_ms,
+                           out_response, false);
+}
+
+extern "C" sao_status_t SAO_NET_CALL sao_net_http_post_scoped_v2(
+    const char* url_utf8, const char* scope_utf8, const char* headers_utf8,
+    const char* content_type_utf8, const uint8_t* body_bytes,
+    size_t body_length, uint32_t timeout_ms,
+    sao_net_http_response_handle_t* out_response) {
+    return execute_request(L"POST", url_utf8, scope_utf8, headers_utf8, content_type_utf8,
+                           body_bytes, body_length, timeout_ms, out_response, true);
 }
 
 extern "C" sao_status_t SAO_NET_CALL sao_net_http_post(
@@ -142,8 +173,9 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_http_post(
     const char* content_type_utf8, const uint8_t* body_bytes,
     size_t body_length, uint32_t timeout_ms,
     sao_net_http_response_handle_t* out_response) {
-    return execute_request(L"POST", url_utf8, headers_utf8, content_type_utf8,
-                           body_bytes, body_length, timeout_ms, out_response);
+    return execute_request(L"POST", url_utf8, SAO_NET_TLS_SCOPE_DEFAULT,
+                           headers_utf8, content_type_utf8, body_bytes,
+                           body_length, timeout_ms, out_response, false);
 }
 
 extern "C" void SAO_NET_CALL sao_net_http_response_close(

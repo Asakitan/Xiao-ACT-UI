@@ -10,6 +10,8 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
+
 #include <memory>
 #include <new>
 #include <mutex>
@@ -49,6 +51,7 @@ constexpr uint32_t kMouseButtonRight = 1u << 1;
 constexpr uint32_t kMouseButtonMiddle = 1u << 2;
 
 struct WebviewPostRequest final {
+    uint64_t ticket = 0;
     std::string panel_id;
     uint64_t message_seq = 0;
     nlohmann::json message;
@@ -115,8 +118,20 @@ struct WebViewSession {
     Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller;
     Microsoft::WRL::ComPtr<ICoreWebView2> view;
     EventRegistrationToken web_message_token{};
+    EventRegistrationToken navigation_starting_token{};
+    EventRegistrationToken navigation_completed_token{};
     std::wstring navigate_url;
     bool bridge_enabled = true;
+    bool bridge_requested = false;
+    uint64_t controlled_navigation_token = 0;
+    std::deque<uint64_t> pending_controlled_navigation_tokens;
+    bool current_navigation_controlled = false;
+    uint64_t navigation_generation = 0;
+    uint64_t current_navigation_id = 0;
+    uint64_t current_navigation_generation = 0;
+    uint64_t controlled_navigation_id = 0;
+    uint64_t controlled_navigation_generation = 0;
+    uint64_t bridge_generation = 0;
     std::atomic<int32_t> status{SAO_AI_EDITOR_OK};
     std::atomic<bool> teardown_requested{false};
     mutable std::mutex mutex;
@@ -124,8 +139,9 @@ struct WebViewSession {
     size_t callbacks_inflight = 0;
     bool teardown_started = false;
     DWORD ui_thread_id = 0;
-    std::unordered_map<WebviewPostRequest*,
+    std::unordered_map<uint64_t,
                        std::shared_ptr<WebviewPostRequest>> pending_posts;
+    uint64_t next_post_ticket = 1;
     std::string active_panel_id;
     std::string materialized_html;
     int32_t applied_theme{-1};
@@ -240,13 +256,19 @@ bool complete_post_request(const std::shared_ptr<WebviewPostRequest>& request,
     return accepted;
 }
 
+uint64_t allocate_post_ticket_locked(WebViewSession& session) {
+    if (session.next_post_ticket == 0 ||
+        session.next_post_ticket == UINT64_MAX) return 0;
+    return session.next_post_ticket++;
+}
+
 void remove_pending_post(WebViewSession* session,
                          const std::shared_ptr<WebviewPostRequest>& request) {
     if (session == nullptr || request == nullptr) {
         return;
     }
     std::lock_guard<std::mutex> guard(session->mutex);
-    const auto found = session->pending_posts.find(request.get());
+    const auto found = session->pending_posts.find(request->ticket);
     if (found != session->pending_posts.end() && found->second == request) {
         session->pending_posts.erase(found);
     }
@@ -257,7 +279,6 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
                           uint64_t message_seq,
                           const nlohmann::json& message) {
     if (session == nullptr || panel_id.empty() ||
-        !session->bridge_enabled ||
         session->teardown_requested.load(std::memory_order_acquire)) {
         return false;
     }
@@ -272,7 +293,9 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
     Microsoft::WRL::ComPtr<ICoreWebView2> view;
     {
         std::lock_guard<std::mutex> guard(session->mutex);
-        if (session->teardown_started || session->window == nullptr) {
+        if (session->teardown_started || session->window == nullptr ||
+            !session->bridge_enabled || session->bridge_generation == 0 ||
+            session->bridge_generation != session->navigation_generation) {
             return false;
         }
         ui_thread_id = session->ui_thread_id;
@@ -280,7 +303,9 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
         if (ui_thread_id == current_thread_id) {
             view = session->view;
         } else {
-            session->pending_posts.emplace(request.get(), request);
+            request->ticket = allocate_post_ticket_locked(*session);
+            if (request->ticket == 0) return false;
+            session->pending_posts.emplace(request->ticket, request);
         }
     }
     if (ui_thread_id == current_thread_id) {
@@ -297,7 +322,7 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
         }
     }
     if (!PostMessageW(window, kPostWebMessage, 0,
-                      reinterpret_cast<LPARAM>(request.get()))) {
+                      static_cast<LPARAM>(request->ticket))) {
         remove_pending_post(session.get(), request);
         return false;
     }
@@ -309,8 +334,8 @@ bool post_webview_message(const std::shared_ptr<WebViewSession>& session,
         request->cancelled = true;
         request->completed = true;
         lock.unlock();
-        request->ready.notify_all();
         remove_pending_post(session.get(), request);
+        request->ready.notify_all();
         return false;
     }
     return request->accepted;
@@ -528,6 +553,14 @@ bool resize_surface_on_owner_thread(
     const int old_height = capture->height();
     const RECT old_rect{0, 0, old_width, old_height};
     const RECT new_rect{0, 0, width, height};
+    if (!capture->resize(width, height)) {
+        publish_bridge_diagnostic(
+            session, "resize_rejected",
+            nlohmann::json{{"width", width}, {"height", height},
+                           {"reason", "capture_preflight"},
+                           {"retryable", true}});
+        return false;
+    }
     if (!::SetWindowPos(target, nullptr, -32000, -32000, width, height,
                         SWP_NOACTIVATE | SWP_NOZORDER)) {
         publish_bridge_diagnostic(
@@ -549,19 +582,6 @@ bool resize_surface_on_owner_thread(
                            {"reason", "controller"},
                            {"status", static_cast<int32_t>(bounds_hr)},
                            {"retryable", true}});
-        return false;
-    }
-    if (!capture->resize(width, height)) {
-        const bool rolled_back =
-            capture->width() == old_width && capture->height() == old_height;
-        (void)::SetWindowPos(target, nullptr, -32000, -32000, old_width,
-                             old_height, SWP_NOACTIVATE | SWP_NOZORDER);
-        (void)controller->put_Bounds(old_rect);
-        publish_bridge_diagnostic(
-            session, "resize_failed",
-            nlohmann::json{{"width", width}, {"height", height},
-                           {"reason", "capture"}, {"retryable", true},
-                           {"rolledBack", rolled_back}});
         return false;
     }
     session->pending_resize_width = 0;
@@ -587,6 +607,35 @@ private:
     NativeRuntime* runtime_ = nullptr;
 };
 
+bool navigate_controlled_html(
+    const std::shared_ptr<WebViewSession>& session,
+    const Microsoft::WRL::ComPtr<ICoreWebView2>& view,
+    std::wstring_view html) {
+    if (session == nullptr || view == nullptr || html.empty()) return false;
+    uint64_t navigation_token = 0;
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        if (session->teardown_started || !session->bridge_requested) return false;
+        ++session->controlled_navigation_token;
+        if (session->controlled_navigation_token == 0)
+            ++session->controlled_navigation_token;
+        navigation_token = session->controlled_navigation_token;
+        session->pending_controlled_navigation_tokens.push_back(navigation_token);
+    }
+    const std::wstring document(html);
+    const HRESULT hr = view->NavigateToString(document.c_str());
+    if (FAILED(hr)) {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        const auto pending = std::find(
+            session->pending_controlled_navigation_tokens.begin(),
+            session->pending_controlled_navigation_tokens.end(),
+            navigation_token);
+        if (pending != session->pending_controlled_navigation_tokens.end())
+            session->pending_controlled_navigation_tokens.erase(pending);
+    }
+    return SUCCEEDED(hr);
+}
+
 bool clear_materialized_registry_panel(
     const std::shared_ptr<WebViewSession>& session,
     const Microsoft::WRL::ComPtr<ICoreWebView2>& view) {
@@ -610,7 +659,7 @@ bool clear_materialized_registry_panel(
             L"<html><body></body></html>";
         succeeded = SUCCEEDED(view->ExecuteScript(
                          kClearActivePanelScript, nullptr)) &&
-                    SUCCEEDED(view->NavigateToString(kBlankHtml));
+                    navigate_controlled_html(session, view, kBlankHtml);
     }
     if (controller != nullptr &&
         FAILED(controller->put_IsVisible(FALSE))) {
@@ -665,6 +714,10 @@ bool materialize_registry_panel(
         session->runtime_handle == nullptr) {
         return false;
     }
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        if (!session->bridge_requested) return false;
+    }
     RuntimeLease lease(session->runtime_handle);
     NativeRuntime* runtime = lease.get();
     if (runtime == nullptr) return false;
@@ -691,7 +744,7 @@ bool materialize_registry_panel(
     if (!changed) {
         return apply_webview_theme(session, view, theme);
     }
-    const std::string script = "window.__saoSetActivePanel(" +
+    const std::string script = "window.__saoBridgeEnabled=true;window.__saoSetActivePanel(" +
                                nlohmann::json(active->panel_id).dump() +
                                ");" +
                                (applied_theme == static_cast<int32_t>(theme)
@@ -705,7 +758,7 @@ bool materialize_registry_panel(
     }
     if (!detail::apply_webview_document_update(
             html_changed,
-            [&]() { return SUCCEEDED(view->NavigateToString(wide_html.c_str())); },
+            [&]() { return navigate_controlled_html(session, view, wide_html); },
             [&]() { return SUCCEEDED(view->ExecuteScript(wide_script.c_str(), nullptr)); })) {
         return false;
     }
@@ -845,6 +898,158 @@ private:
     std::shared_ptr<WebViewSession> session_;
 };
 
+class NavigationStartingHandler : public ICoreWebView2NavigationStartingEventHandler {
+public:
+    explicit NavigationStartingHandler(std::shared_ptr<WebViewSession> session)
+        : session_(std::move(session)) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (out == nullptr) return E_POINTER;
+        if (iid == IID_IUnknown ||
+            iid == __uuidof(ICoreWebView2NavigationStartingEventHandler)) {
+            *out = this;
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ref_.fetch_add(1) + 1; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = ref_.fetch_sub(1) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(
+        ICoreWebView2* sender,
+        ICoreWebView2NavigationStartingEventArgs* args) override;
+private:
+    std::atomic<ULONG> ref_{1};
+    std::shared_ptr<WebViewSession> session_;
+};
+
+HRESULT NavigationStartingHandler::Invoke(
+    ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) {
+    (void)sender;
+    CallbackLease callback(session_);
+    if (!callback || args == nullptr ||
+        session_->teardown_requested.load(std::memory_order_acquire)) {
+        return E_ABORT;
+    }
+    UINT64 navigation_id = 0;
+    if (FAILED(args->get_NavigationId(&navigation_id)) || navigation_id == 0) {
+        return E_INVALIDARG;
+    }
+    ScopedCoTaskString navigation_uri;
+    if (FAILED(args->get_Uri(navigation_uri.addressof())) ||
+        navigation_uri.get() == nullptr) {
+        return E_INVALIDARG;
+    }
+    bool cancel = false;
+    {
+        std::lock_guard<std::mutex> guard(session_->mutex);
+        ++session_->navigation_generation;
+        if (session_->navigation_generation == 0) {
+            ++session_->navigation_generation;
+        }
+        const uint64_t generation = session_->navigation_generation;
+        const bool controlled =
+            _wcsicmp(navigation_uri.get(), L"about:blank") == 0 &&
+            !session_->pending_controlled_navigation_tokens.empty();
+        session_->current_navigation_id = navigation_id;
+        session_->current_navigation_generation = generation;
+        session_->current_navigation_controlled = controlled;
+        if (controlled) {
+            session_->pending_controlled_navigation_tokens.pop_front();
+            session_->controlled_navigation_id = navigation_id;
+            session_->controlled_navigation_generation = generation;
+            session_->bridge_enabled = session_->bridge_requested;
+            session_->bridge_generation = session_->bridge_enabled
+                ? generation : 0;
+        } else {
+            cancel = session_->bridge_requested;
+            session_->bridge_enabled = false;
+            session_->bridge_generation = 0;
+            session_->controlled_navigation_id = 0;
+            session_->controlled_navigation_generation = 0;
+        }
+    }
+    if (cancel) {
+        (void)args->put_Cancel(TRUE);
+    }
+    return S_OK;
+}
+
+class NavigationCompletedHandler : public ICoreWebView2NavigationCompletedEventHandler {
+public:
+    explicit NavigationCompletedHandler(std::shared_ptr<WebViewSession> session)
+        : session_(std::move(session)) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (out == nullptr) return E_POINTER;
+        if (iid == IID_IUnknown ||
+            iid == __uuidof(ICoreWebView2NavigationCompletedEventHandler)) {
+            *out = this;
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ref_.fetch_add(1) + 1; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = ref_.fetch_sub(1) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(
+        ICoreWebView2* sender,
+        ICoreWebView2NavigationCompletedEventArgs* args) override {
+        (void)sender;
+        CallbackLease callback(session_);
+        if (!callback || args == nullptr ||
+            session_->teardown_requested.load(std::memory_order_acquire)) {
+            return E_ABORT;
+        }
+        BOOL success = FALSE;
+        UINT64 navigation_id = 0;
+        if (FAILED(args->get_IsSuccess(&success)) ||
+            FAILED(args->get_NavigationId(&navigation_id))) {
+            return E_FAIL;
+        }
+        Microsoft::WRL::ComPtr<ICoreWebView2> view;
+        bool initialize = false;
+        {
+            std::lock_guard<std::mutex> guard(session_->mutex);
+            const bool navigation_matches =
+                session_->current_navigation_controlled &&
+                navigation_id == session_->current_navigation_id &&
+                navigation_id == session_->controlled_navigation_id &&
+                session_->current_navigation_generation != 0 &&
+                session_->current_navigation_generation ==
+                    session_->controlled_navigation_generation &&
+                session_->bridge_generation ==
+                    session_->controlled_navigation_generation;
+            if (!navigation_matches) {
+                return S_OK;
+            }
+            initialize = success != FALSE && session_->bridge_enabled;
+            if (!initialize) {
+                session_->bridge_enabled = false;
+                session_->bridge_generation = 0;
+            }
+            view = session_->view;
+        }
+        if (initialize && view != nullptr) {
+            static constexpr wchar_t kBridgeInit[] =
+                L"window.__saoBridgeEnabled=true;";
+            (void)view->ExecuteScript(kBridgeInit, nullptr);
+        }
+        return S_OK;
+    }
+private:
+    std::atomic<ULONG> ref_{1};
+    std::shared_ptr<WebViewSession> session_;
+};
+
 HRESULT EnvironmentReadyHandler::Invoke(HRESULT hr,
                                         ICoreWebView2Environment* environment) {
     CallbackLease callback(session_);
@@ -923,7 +1128,31 @@ HRESULT ControllerReadyHandler::Invoke(
         std::lock_guard<std::mutex> guard(session_->mutex);
         session_->view = view_snapshot;
     }
-    if (session_->bridge_enabled) {
+    {
+        auto* navigation_handler = new NavigationStartingHandler(session_);
+        EventRegistrationToken navigation_token{};
+        setup_hr = view_snapshot->add_NavigationStarting(navigation_handler, &navigation_token);
+        navigation_handler->Release();
+        if (SUCCEEDED(setup_hr)) { std::lock_guard<std::mutex> guard(session_->mutex); session_->navigation_starting_token = navigation_token; }
+        if (FAILED(setup_hr)) { session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED); return setup_hr; }
+    }
+    {
+        auto* navigation_handler = new NavigationCompletedHandler(session_);
+        EventRegistrationToken navigation_token{};
+        setup_hr = view_snapshot->add_NavigationCompleted(navigation_handler, &navigation_token);
+        navigation_handler->Release();
+        if (SUCCEEDED(setup_hr)) {
+            std::lock_guard<std::mutex> guard(session_->mutex);
+            session_->navigation_completed_token = navigation_token;
+        }
+        if (FAILED(setup_hr)) { session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED); return setup_hr; }
+    }
+    bool bridge_requested = false;
+    {
+        std::lock_guard<std::mutex> guard(session_->mutex);
+        bridge_requested = session_->bridge_requested;
+    }
+    if (bridge_requested && session_->runtime_handle != nullptr) {
         auto* handler = new WebMessageReceivedHandler(session_);
         EventRegistrationToken web_message_token{};
         setup_hr = view_snapshot->add_WebMessageReceived(
@@ -945,6 +1174,7 @@ HRESULT ControllerReadyHandler::Invoke(
     // same-document panel switches).
     static const wchar_t kAcquireShim[] =
         L"(function(){\n"
+        L"  if (window.top !== window) { return; }\n"
         L"  if (window.__saoVscodeApiRegistered) { return; }\n"
         L"  window.__saoVscodeApiRegistered = true;\n"
         L"  let nextRequestId = 1;\n"
@@ -1017,29 +1247,50 @@ HRESULT ControllerReadyHandler::Invoke(
         L"    window.__saoActivePanelId = id;\n"
         L"  };\n"
         L"})();\n";
-    const wchar_t* bridge_state = session_->bridge_enabled
-        ? L"window.__saoBridgeEnabled = true;"
-        : L"window.__saoBridgeEnabled = false;";
-    setup_hr = view_snapshot->AddScriptToExecuteOnDocumentCreated(
-        bridge_state, nullptr);
-    if (FAILED(setup_hr)) {
-        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
-        return setup_hr;
+    if (bridge_requested) {
+        bool bridge_enabled = false;
+        {
+            std::lock_guard<std::mutex> guard(session_->mutex);
+            bridge_enabled = session_->bridge_enabled;
+        }
+        const wchar_t* bridge_state = bridge_enabled
+            ? L"if (window.top === window) { window.__saoBridgeEnabled = true; }"
+            : L"if (window.top === window) { window.__saoBridgeEnabled = false; }";
+        setup_hr = view_snapshot->AddScriptToExecuteOnDocumentCreated(
+            bridge_state, nullptr);
+        if (FAILED(setup_hr)) {
+            session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+            return setup_hr;
+        }
+        setup_hr = view_snapshot->AddScriptToExecuteOnDocumentCreated(
+            kAcquireShim, nullptr);
+        if (FAILED(setup_hr)) {
+            session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+            return setup_hr;
+        }
     }
-    setup_hr = view_snapshot->AddScriptToExecuteOnDocumentCreated(
-        kAcquireShim, nullptr);
-    if (FAILED(setup_hr)) {
-        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
-        return setup_hr;
+    bool use_registry_panel = false;
+    std::wstring navigate_url;
+    {
+        std::lock_guard<std::mutex> guard(session_->mutex);
+        use_registry_panel = session_->bridge_requested;
+        navigate_url = session_->navigate_url;
     }
-    if (materialize_registry_panel(session_, view_snapshot, true)) { } else if (!session_->navigate_url.empty()) {
-        setup_hr = view_snapshot->Navigate(session_->navigate_url.c_str());
+    if (use_registry_panel && materialize_registry_panel(session_, view_snapshot, true)) { } else if (!navigate_url.empty()) {
+        setup_hr = view_snapshot->Navigate(navigate_url.c_str());
     } else {
         const std::wstring fallback_html = utf8_to_wide(
             detail::materialized_html_for_theme("<h1>SAO AI Editor</h1>", current_webview_theme()));
-        setup_hr = fallback_html.empty()
-            ? E_FAIL
-            : view_snapshot->NavigateToString(fallback_html.c_str());
+        if (fallback_html.empty()) {
+            setup_hr = E_FAIL;
+        } else if (bridge_requested) {
+            setup_hr = navigate_controlled_html(
+                            session_, view_snapshot, fallback_html)
+                ? S_OK
+                : E_FAIL;
+        } else {
+            setup_hr = view_snapshot->NavigateToString(fallback_html.c_str());
+        }
     }
     if (FAILED(setup_hr)) {
         session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
@@ -1058,6 +1309,14 @@ HRESULT WebMessageReceivedHandler::Invoke(
     }
     if (sender == nullptr || args == nullptr) {
         return E_POINTER;
+    }
+    ScopedCoTaskString message_source;
+    ScopedCoTaskString top_level_source;
+    if (FAILED(args->get_Source(message_source.addressof())) ||
+        FAILED(sender->get_Source(top_level_source.addressof())) ||
+        message_source.get() == nullptr || top_level_source.get() == nullptr ||
+        _wcsicmp(message_source.get(), top_level_source.get()) != 0) {
+        return E_ACCESSDENIED;
     }
     Microsoft::WRL::ComPtr<ICoreWebView2> sender_snapshot = sender;
     auto post_reply = [sender_snapshot](const nlohmann::json& reply) {
@@ -1079,6 +1338,13 @@ HRESULT WebMessageReceivedHandler::Invoke(
     const std::string utf8 = wide_to_utf8(payload.get());
     if (utf8.empty()) {
         return E_INVALIDARG;
+    }
+    {
+        std::lock_guard<std::mutex> guard(session_->mutex);
+        if (!session_->bridge_enabled || session_->bridge_generation == 0 ||
+            session_->bridge_generation != session_->navigation_generation) {
+            return E_ACCESSDENIED;
+        }
     }
     nlohmann::json request_id(nullptr);
     try {
@@ -1189,6 +1455,12 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         if (controller != nullptr) {
             RECT rect{};
             GetClientRect(window, &rect);
+            const int width = rect.right - rect.left;
+            const int height = rect.bottom - rect.top;
+            if (!sao::ai_editor::WindowCaptureToMmf::dimensions_within_budget(
+                    width, height)) {
+                return 0;
+            }
             const HRESULT hr = controller->put_Bounds(rect);
             if (FAILED(hr)) {
                 const auto shared_session = session->self.lock();
@@ -1423,7 +1695,7 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         {
             std::lock_guard<std::mutex> guard(session->mutex);
             const auto found = session->pending_posts.find(
-                reinterpret_cast<WebviewPostRequest*>(lparam));
+                static_cast<uint64_t>(lparam));
             if (found != session->pending_posts.end() &&
                 !session->teardown_started) {
                 request = found->second;
@@ -1484,10 +1756,16 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         Microsoft::WRL::ComPtr<ICoreWebView2> view;
         Microsoft::WRL::ComPtr<ICoreWebView2Environment> environment;
         EventRegistrationToken web_message_token{};
+        EventRegistrationToken navigation_starting_token{};
+        EventRegistrationToken navigation_completed_token{};
         {
             std::lock_guard<std::mutex> lock(session->mutex);
             web_message_token = session->web_message_token;
             session->web_message_token = {};
+            navigation_starting_token = session->navigation_starting_token;
+            session->navigation_starting_token = {};
+            navigation_completed_token = session->navigation_completed_token;
+            session->navigation_completed_token = {};
             controller = session->controller;
             session->controller.Reset();
             view = session->view;
@@ -1497,6 +1775,12 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
         }
         if (view != nullptr && web_message_token.value != 0) {
             view->remove_WebMessageReceived(web_message_token);
+        }
+        if (view != nullptr && navigation_starting_token.value != 0) {
+            view->remove_NavigationStarting(navigation_starting_token);
+        }
+        if (view != nullptr && navigation_completed_token.value != 0) {
+            view->remove_NavigationCompleted(navigation_completed_token);
         }
         if (controller != nullptr) {
             controller->Close();
@@ -1717,13 +2001,14 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         !valid_utf8(config.sao_input_ring_name_utf8)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    if (config.bridge_native_runtime &&
-        config.runtime_handle == nullptr) {
+    const bool bridge_requested =
+        config.bridge_native_runtime && config.url.empty();
+    if (bridge_requested && config.runtime_handle == nullptr) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     RuntimeLease runtime_lease(config.runtime_handle);
     NativeRuntime* runtime = runtime_lease.get();
-    if (config.bridge_native_runtime && runtime == nullptr) {
+    if (bridge_requested && runtime == nullptr) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     ScopedCoInitialize apartment;
@@ -1761,9 +2046,13 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     auto session = std::make_shared<WebViewSession>();
     session->self = session;
     session->runtime_handle = config.runtime_handle;
-    session->bridge_enabled = config.bridge_native_runtime;
-    session->navigate_url = utf8_to_wide(config.url);
-    if (runtime != nullptr && config.bridge_native_runtime) {
+    {
+        std::lock_guard<std::mutex> guard(session->mutex);
+        session->bridge_requested = bridge_requested;
+        session->bridge_enabled = bridge_requested;
+        session->navigate_url = utf8_to_wide(config.url);
+    }
+    if (runtime != nullptr && bridge_requested) {
         const std::weak_ptr<WebViewSession> weak_session = session;
         runtime->set_webview_post_message_handler(
             [weak_session](std::string_view panel_id, uint64_t message_seq,
@@ -1773,7 +2062,8 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
                                             message);
             });
     }
-            ScopedWebviewHandler handler_guard(runtime);
+    ScopedWebviewHandler handler_guard(
+        bridge_requested ? runtime : nullptr);
 
     const std::wstring title = config.window_title.empty()
         ? std::wstring()

@@ -110,12 +110,11 @@ class Owner final {
     sao_status_t require_owner_thread() const noexcept;
     sao_status_t begin_operation() noexcept;
     void end_operation() noexcept;
-    bool begin_callback() noexcept;
-    void end_callback() noexcept;
     void handle_panel_event(std::int32_t event_kind) noexcept;
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
     sao_status_t run_activation(std::string key) noexcept;
+    static void stop_background_threads(State& state) noexcept;
 
     static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
                                                   const std::uint8_t* payload_json_utf8,

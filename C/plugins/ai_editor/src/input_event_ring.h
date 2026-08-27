@@ -34,6 +34,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -87,6 +88,17 @@ struct InputEvent {
 };
 static_assert(sizeof(InputEvent) == kInputEventBytes, "InputEvent must be 64 bytes");
 
+inline void copy_input_event_payload(InputEvent& destination,
+                                     const InputEvent& source) noexcept {
+    constexpr size_t marker_offset = offsetof(InputEvent, sequence);
+    ::memcpy(&destination, &source, marker_offset);
+    ::memcpy(reinterpret_cast<uint8_t*>(&destination) + marker_offset +
+                 sizeof(source.sequence),
+             reinterpret_cast<const uint8_t*>(&source) + marker_offset +
+                 sizeof(source.sequence),
+             sizeof(InputEvent) - marker_offset - sizeof(source.sequence));
+}
+
 struct InputRingHeader {
     uint32_t magic;
     uint32_t version;
@@ -137,6 +149,11 @@ public:
         if (handle_ == nullptr) {
             return false;
         }
+        if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+            ::CloseHandle(handle_);
+            handle_ = nullptr;
+            return false;
+        }
         view_ = static_cast<uint8_t*>(::MapViewOfFile(
             handle_, FILE_MAP_WRITE, 0, 0, total));
         if (view_ == nullptr) {
@@ -151,6 +168,7 @@ public:
         header_->version = kInputRingVersion;
         header_->event_count = event_count;
         header_->event_size = kInputEventBytes;
+        header_->reserved[0] = 1u;
         event_count_ = event_count;
         seq_ = 0u;
         return true;
@@ -177,10 +195,14 @@ public:
         if (header_ == nullptr) {
             return false;
         }
-        InputEvent local = ev;
-        local.sequence = static_cast<uint32_t>(seq_ & 0xFFFFFFFFu);
         const uint32_t slot = static_cast<uint32_t>(seq_ & (event_count_ - 1u));
-        events_[slot] = local;
+        const uint32_t stable_sequence =
+            static_cast<uint32_t>((seq_ << 1u) + 2u);
+        const uint32_t writing_sequence = stable_sequence - 1u;
+        std::atomic_ref<uint32_t> slot_sequence(events_[slot].sequence);
+        slot_sequence.store(writing_sequence, std::memory_order_release);
+        copy_input_event_payload(events_[slot], ev);
+        slot_sequence.store(stable_sequence, std::memory_order_release);
         std::atomic_ref<uint64_t> write_seq_ref(header_->write_seq);
         seq_ += 1ull;
         write_seq_ref.store(seq_, std::memory_order_release);
@@ -229,7 +251,7 @@ public:
         ::UnmapViewOfFile(header_only);
         if (hdr.magic != kInputRingMagic ||
             hdr.version != kInputRingVersion ||
-            hdr.event_size != kInputEventBytes ||
+            hdr.event_size != kInputEventBytes || hdr.reserved[0] != 1u ||
             !detail::is_power_of_two(hdr.event_count) ||
             hdr.event_count > kInputRingMaxSlots) {
             ::CloseHandle(handle_);
@@ -248,7 +270,15 @@ public:
         events_ = reinterpret_cast<const InputEvent*>(
             view_ + kInputRingHeaderBytes);
         event_count_ = hdr.event_count;
-        read_seq_ = 0u;
+        std::atomic_ref<uint64_t> write_seq_ref(header_->write_seq);
+        const uint64_t write_seq =
+            write_seq_ref.load(std::memory_order_acquire);
+        std::atomic_ref<uint64_t> read_seq_ref(header_->read_seq);
+        read_seq_ = read_seq_ref.load(std::memory_order_acquire);
+        if (read_seq_ > write_seq) {
+            read_seq_ = write_seq;
+            read_seq_ref.store(read_seq_, std::memory_order_release);
+        }
         return true;
     }
 
@@ -298,7 +328,28 @@ public:
         for (uint64_t s = start; s < end && count < max_events; ++s) {
             const uint32_t slot =
                 static_cast<uint32_t>(s & (event_count_ - 1u));
-            out[count++] = events_[slot];
+            std::atomic_ref<uint32_t> slot_sequence(const_cast<uint32_t&>(events_[slot].sequence));
+            InputEvent local{};
+            bool stable = false;
+            for (uint32_t attempt = 0u; attempt < 8u; ++attempt) {
+                const uint32_t before =
+                    slot_sequence.load(std::memory_order_acquire);
+                if ((before & 1u) != 0u) {
+                    continue;
+                }
+                copy_input_event_payload(local, events_[slot]);
+                const uint32_t after =
+                    slot_sequence.load(std::memory_order_acquire);
+                if (before == after && (after & 1u) == 0u) {
+                    local.sequence = after;
+                    stable = true;
+                    break;
+                }
+            }
+            if (!stable) {
+                break;
+            }
+            out[count++] = local;
         }
         read_seq_ = start + count;
         std::atomic_ref<uint64_t> read_seq_ref(header_->read_seq);

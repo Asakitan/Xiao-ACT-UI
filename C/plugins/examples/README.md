@@ -20,11 +20,10 @@
   register_hotkey / notify / register_timer
 - ``README.md`` — 语言特定的写法说明
 
-## 如何测试
+## 历史手工观察流程（2026-08-23 测试删除前）
 
-启动 C++ 平台, 把 ``plugins/examples/`` 加进 ``scan_config.builtin_roots``,
-5 个 sample plugin 应该都被发现 (但默认 ``enabled: false``)。手动在 UI 里
-打开开关, 走一遍加载/激活/UI panel 显示/hotkey 触发全流程。
+旧流程曾把 ``plugins/examples/`` 加进 ``scan_config.builtin_roots``，再观察5个sample plugin
+的发现/加载/UI/hotkey行为。该流程仅作历史记录，不是当前测试或产品运行指令。
 
 ## 交叉验证
 

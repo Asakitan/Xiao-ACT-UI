@@ -18,6 +18,8 @@
 #include <shlobj.h>
 
 #include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -26,6 +28,8 @@
 #include <cwchar>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "shlwapi.lib")
@@ -45,11 +49,20 @@ struct ChildRecord {
     HANDLE   process = nullptr;  // may be null; owned
 };
 
+struct ResolvedConfig {
+    sao_dual_run_config legacy{};
+    std::wstring python_exe_path;
+    std::wstring python_main_py_path;
+    std::wstring cpp_exe_path;
+};
+
 struct DualRunState {
     std::mutex mtx;
     sao_launcher_dual_run_mode_t mode = SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK;
     std::vector<ChildRecord> children;
     std::wstring fallback_reason;
+    sao_dual_run_handoff_snapshot expected_handoff{};
+    bool expected_handoff_valid = false;
     sao_dual_run_test_spawn_hook_t spawn_hook = nullptr;
     sao_dual_run_test_probe_hook_t probe_hook = nullptr;
     sao_dual_run_test_force_cpp_fail_hook_t force_cpp_fail_hook = nullptr;
@@ -80,10 +93,65 @@ void widen_ascii(const char* src, wchar_t* dst, size_t dst_cap) {
     dst[i] = L'\0';
 }
 
-void wcs_copy_to_fixed(wchar_t* dst, size_t dst_cap_elems, const wchar_t* src) {
-    if (!dst || dst_cap_elems == 0) return;
-    if (!src) { dst[0] = L'\0'; return; }
-    ::lstrcpynW(dst, src, static_cast<int>(dst_cap_elems));
+bool wcs_copy_to_fixed(wchar_t* dst, size_t dst_cap_elems, const wchar_t* src) {
+    if (!dst || dst_cap_elems == 0 || src == nullptr)
+        return false;
+    const size_t length = std::wcslen(src);
+    if (length + 1u > dst_cap_elems)
+        return false;
+    std::wmemcpy(dst, src, length + 1u);
+    return true;
+}
+
+void set_legacy_path(wchar_t* dst, size_t capacity, const std::wstring& value) {
+    if (dst == nullptr || capacity == 0) return;
+    dst[0] = L'\0';
+    if (value.size() + 1u <= capacity)
+        std::wmemcpy(dst, value.c_str(), value.size() + 1u);
+}
+
+ResolvedConfig resolved_config_from_legacy(const sao_dual_run_config& cfg) {
+    ResolvedConfig resolved;
+    resolved.legacy = cfg;
+    resolved.python_exe_path = cfg.python_exe_path;
+    resolved.python_main_py_path = cfg.python_main_py_path;
+    resolved.cpp_exe_path = cfg.cpp_exe_path;
+    return resolved;
+}
+
+ResolvedConfig resolved_config_from_v2(const sao_dual_run_config_v2& cfg) {
+    ResolvedConfig resolved;
+    resolved.legacy = cfg.legacy;
+    resolved.python_exe_path = cfg.python_exe_path;
+    resolved.python_main_py_path = cfg.python_main_py_path;
+    resolved.cpp_exe_path = cfg.cpp_exe_path;
+    return resolved;
+}
+
+bool copy_v2_path(wchar_t* dst, std::size_t capacity, const std::wstring& value) {
+    if (dst == nullptr || capacity == 0u || value.size() + 1u > capacity)
+        return false;
+    std::wmemcpy(dst, value.c_str(), value.size() + 1u);
+    return true;
+}
+bool valid_config_v2(const sao_dual_run_config_v2* cfg) noexcept {
+    return cfg != nullptr && cfg->abi_version == SAO_DUAL_RUN_CONFIG_ABI_VERSION_2 &&
+        cfg->struct_size >= sizeof(sao_dual_run_config_v2);
+}
+
+sao_status_t copy_dynamic_path(const std::wstring& value,
+                               wchar_t* out_path,
+                               uint32_t* inout_char_count) {
+    if (inout_char_count == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+    if (value.size() >= UINT32_MAX) return SAO_STATUS_INTERNAL;
+    const uint32_t required = static_cast<uint32_t>(value.size() + 1u);
+    if (out_path == nullptr || *inout_char_count < required) {
+        *inout_char_count = required;
+        return out_path == nullptr ? SAO_STATUS_OK : SAO_STATUS_INVALID_ARGUMENT;
+    }
+    std::wmemcpy(out_path, value.c_str(), required);
+    *inout_char_count = required;
+    return SAO_STATUS_OK;
 }
 
 // UTF-8 -> UTF-16 helper for JSON parsing.
@@ -114,22 +182,25 @@ std::string wide_to_utf8(const std::wstring& in) {
 // %APPDATA% path resolution — %APPDATA%\SaoAuto\dual_run.json
 // ---------------------------------------------------------------------------
 
-bool default_dual_run_config_path(wchar_t* out, size_t out_cap) {
-    if (!out || out_cap == 0) return false;
+bool default_dual_run_config_path(std::wstring& out) {
+    out.clear();
     PWSTR appdata = nullptr;
     HRESULT hr = ::SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata);
     if (FAILED(hr) || !appdata) {
         if (appdata) ::CoTaskMemFree(appdata);
         return false;
     }
-    // The persistent folder name/leaf stay compatible with existing user
-    // installs — we only wrap the literal in SAO_ENC_STR so it does not
-    // linger in .rdata plaintext.  If we ever rev the storage layout we
-    // will bump the leaf here without touching the API surface.
     const auto suffix = SAO_ENC_STR("\\SaoAuto\\dual_run.json");
     wchar_t wide_suffix[64]{};
     widen_ascii(suffix.decrypt(), wide_suffix, std::size(wide_suffix));
-    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s%s", appdata, wide_suffix);
+    try {
+        out.assign(appdata);
+        out += wide_suffix;
+    } catch (...) {
+        out.clear();
+        ::CoTaskMemFree(appdata);
+        return false;
+    }
     ::CoTaskMemFree(appdata);
     return true;
 }
@@ -288,8 +359,9 @@ const char* mode_to_string(sao_launcher_dual_run_mode_t m) {
 // ---------------------------------------------------------------------------
 
 bool read_file_bytes(const wchar_t* path, std::string& out) {
-    HANDLE h = ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
-                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = ::CreateFileW(path, GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz{};
     if (!::GetFileSizeEx(h, &sz) || sz.QuadPart > 4 * 1024 * 1024) {
@@ -310,11 +382,17 @@ bool read_file_bytes(const wchar_t* path, std::string& out) {
 }
 
 bool write_file_bytes(const wchar_t* path, const std::string& in) {
-    // Ensure parent dir exists.
-    wchar_t parent[MAX_PATH]{};
-    ::lstrcpynW(parent, path, MAX_PATH);
-    ::PathRemoveFileSpecW(parent);
-    sao::launcher::ensureDirectoryExists(parent);
+    try {
+        std::wstring parent(path ? path : L"");
+        const size_t separator = parent.find_last_of(L"\\/");
+        if (separator == std::wstring::npos)
+            return false;
+        parent.resize(separator);
+        if (!sao::launcher::ensureDirectoryExists(parent.c_str()))
+            return false;
+    } catch (...) {
+        return false;
+    }
 
     HANDLE h = ::CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -327,6 +405,193 @@ bool write_file_bytes(const wchar_t* path, const std::string& in) {
     }
     ::CloseHandle(h);
     return ok == TRUE && written == in.size();
+}
+
+class RolloutSharedFileLock final {
+  public:
+    RolloutSharedFileLock() noexcept {
+        const auto opaque = SAO_ENC_STR("Local\\4F5A.rollout");
+        wchar_t name[64]{};
+        widen_ascii(opaque.decrypt(), name, std::size(name));
+        ::SetLastError(ERROR_SUCCESS);
+        handle_ = ::CreateMutexW(nullptr, FALSE, name);
+        if (handle_ != nullptr) {
+            const DWORD wait_result = ::WaitForSingleObject(handle_, INFINITE);
+            acquired_ = wait_result == WAIT_OBJECT_0 ||
+                wait_result == WAIT_ABANDONED;
+        }
+    }
+
+    ~RolloutSharedFileLock() noexcept {
+        if (acquired_) ::ReleaseMutex(handle_);
+        if (handle_ != nullptr) ::CloseHandle(handle_);
+    }
+
+    bool acquired() const noexcept { return acquired_; }
+
+  private:
+    HANDLE handle_ = nullptr;
+    bool acquired_ = false;
+};
+
+bool default_handoff_result_path(std::wstring& out) {
+    out.clear();
+    PWSTR appdata = nullptr;
+    const HRESULT hr = ::SHGetKnownFolderPath(
+        FOLDERID_RoamingAppData, 0, nullptr, &appdata);
+    if (FAILED(hr) || appdata == nullptr) {
+        if (appdata) ::CoTaskMemFree(appdata);
+        return false;
+    }
+    try {
+        out.assign(appdata);
+        out += L"\\SaoAuto\\dual_run_result.json";
+    } catch (...) {
+        out.clear();
+        ::CoTaskMemFree(appdata);
+        return false;
+    }
+    ::CoTaskMemFree(appdata);
+    return true;
+}
+
+bool write_file_bytes_atomic(const wchar_t* path, const std::string& in) {
+    try {
+        std::wstring parent(path ? path : L"");
+        const std::size_t separator = parent.find_last_of(L"\\/");
+        if (separator == std::wstring::npos) return false;
+        parent.resize(separator);
+        if (!sao::launcher::ensureDirectoryExists(parent.c_str())) return false;
+
+        std::wstring temp(path);
+        temp += L".tmp.";
+        temp += std::to_wstring(::GetCurrentProcessId());
+        temp += L".";
+        temp += std::to_wstring(::GetTickCount64());
+        HANDLE handle = ::CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr,
+                                       CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return false;
+        DWORD written = 0;
+        const BOOL wrote = in.empty() ||
+            (::WriteFile(handle, in.data(), static_cast<DWORD>(in.size()),
+                         &written, nullptr) && written == in.size());
+        const BOOL flushed = wrote ? ::FlushFileBuffers(handle) : FALSE;
+        ::CloseHandle(handle);
+        if (!wrote || !flushed) {
+            ::DeleteFileW(temp.c_str());
+            return false;
+        }
+        if (!::MoveFileExW(temp.c_str(), path,
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            ::DeleteFileW(temp.c_str());
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string serialise_handoff_result(
+    const sao_dual_run_handoff_snapshot& snapshot) {
+    return "{\"pid\":" + std::to_string(snapshot.pid) +
+        ",\"start_time_qpc\":" + std::to_string(snapshot.start_time_qpc) +
+        ",\"generation\":" + std::to_string(snapshot.generation) +
+        ",\"state\":" + std::to_string(snapshot.state) +
+        ",\"exit_code\":" + std::to_string(snapshot.exit_code) + "}\n";
+}
+
+bool parse_handoff_result(const std::string& blob,
+                          sao_dual_run_handoff_snapshot& snapshot) {
+    unsigned long pid = 0;
+    long long start_time_qpc = 0;
+    unsigned long long generation = 0;
+    int state = 0;
+    int exit_code = 0;
+    const int matched = std::sscanf(
+        blob.c_str(),
+        "{\"pid\":%lu,\"start_time_qpc\":%lld,\"generation\":%llu,\"state\":%d,\"exit_code\":%d}",
+        &pid, &start_time_qpc, &generation, &state, &exit_code);
+    if (matched != 5 || pid == 0u || pid > UINT32_MAX ||
+        start_time_qpc <= 0 || generation == 0u ||
+        state < SAO_DUAL_RUN_HANDOFF_NONE ||
+        state > SAO_DUAL_RUN_HANDOFF_FAILED) {
+        return false;
+    }
+    snapshot.pid = static_cast<DWORD>(pid);
+    snapshot.start_time_qpc = static_cast<int64_t>(start_time_qpc);
+    snapshot.generation = static_cast<uint64_t>(generation);
+    snapshot.state = state;
+    snapshot.exit_code = exit_code;
+    return true;
+}
+
+std::uint64_t next_handoff_generation(const sao_dual_run_spawn_result& result) {
+    LARGE_INTEGER counter{};
+    ::QueryPerformanceCounter(&counter);
+    std::uint64_t generation = static_cast<std::uint64_t>(counter.QuadPart);
+    generation ^= static_cast<std::uint64_t>(result.pid) << 32u;
+    generation ^= static_cast<std::uint64_t>(::GetCurrentProcessId());
+    return generation == 0u ? 1u : generation;
+}
+
+bool write_handoff_result(const sao_dual_run_handoff_snapshot& snapshot) {
+    std::wstring path;
+    if (!default_handoff_result_path(path)) return false;
+    RolloutSharedFileLock file_lock;
+    if (!file_lock.acquired()) return false;
+    return write_file_bytes_atomic(path.c_str(), serialise_handoff_result(snapshot));
+}
+
+constexpr DWORD kHandoffTerminationTimeoutMs = 2000u;
+
+bool close_spawn_result_handles(sao_dual_run_spawn_result& result) noexcept {
+    bool closed = true;
+    if (result.thread != nullptr) {
+        if (!::CloseHandle(result.thread)) closed = false;
+        result.thread = nullptr;
+    }
+    if (result.process != nullptr) {
+        if (!::CloseHandle(result.process)) closed = false;
+        result.process = nullptr;
+    }
+    return closed;
+}
+
+bool terminate_and_close_spawn_result(
+    sao_dual_run_spawn_result& result) noexcept {
+    bool terminated = true;
+    if (result.process != nullptr) {
+        const DWORD initial_wait = ::WaitForSingleObject(result.process, 0u);
+        if (initial_wait == WAIT_TIMEOUT) {
+            (void)::TerminateProcess(result.process, ERROR_PROCESS_ABORTED);
+            const DWORD final_wait = ::WaitForSingleObject(
+                result.process, kHandoffTerminationTimeoutMs);
+            terminated = final_wait == WAIT_OBJECT_0;
+        } else {
+            terminated = initial_wait == WAIT_OBJECT_0;
+        }
+    }
+    const bool closed = close_spawn_result_handles(result);
+    return terminated && closed;
+}
+
+bool begin_handoff_result(sao_dual_run_spawn_result& result,
+                          sao_dual_run_handoff_snapshot& snapshot) {
+    if (result.pid == 0u || result.start_time_qpc <= 0) {
+        (void)terminate_and_close_spawn_result(result);
+        return false;
+    }
+    snapshot = {};
+    snapshot.pid = result.pid;
+    snapshot.start_time_qpc = result.start_time_qpc;
+    snapshot.generation = next_handoff_generation(result);
+    snapshot.state = SAO_DUAL_RUN_HANDOFF_PENDING;
+    if (!write_handoff_result(snapshot)) {
+        (void)terminate_and_close_spawn_result(result);
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,12 +622,12 @@ void json_emit_string(std::string& out, const std::string& in) {
     out.push_back('"');
 }
 
-std::string serialize_config(const sao_dual_run_config& cfg) {
+std::string serialize_config(const ResolvedConfig& cfg) {
     std::string s;
     s.reserve(512);
     s += "{\n";
     s += "  \"mode\": ";
-    json_emit_string(s, mode_to_string(cfg.mode));
+    json_emit_string(s, mode_to_string(cfg.legacy.mode));
     s += ",\n";
     s += "  \"python_exe_path\": ";
     json_emit_string(s, wide_to_utf8(cfg.python_exe_path));
@@ -374,14 +639,14 @@ std::string serialize_config(const sao_dual_run_config& cfg) {
     json_emit_string(s, wide_to_utf8(cfg.cpp_exe_path));
     s += ",\n";
     s += "  \"env_overrides\": {";
-    for (int32_t i = 0; i < cfg.env_overrides_count && i < 16; ++i) {
+    for (int32_t i = 0; i < cfg.legacy.env_overrides_count && i < 16; ++i) {
         if (i > 0) s += ",";
         s += "\n    ";
-        json_emit_string(s, wide_to_utf8(cfg.env_overrides[i].key));
+        json_emit_string(s, wide_to_utf8(cfg.legacy.env_overrides[i].key));
         s += ": ";
-        json_emit_string(s, wide_to_utf8(cfg.env_overrides[i].value));
+        json_emit_string(s, wide_to_utf8(cfg.legacy.env_overrides[i].value));
     }
-    if (cfg.env_overrides_count > 0) s += "\n  ";
+    if (cfg.legacy.env_overrides_count > 0) s += "\n  ";
     s += "}\n";
     s += "}\n";
     return s;
@@ -470,6 +735,8 @@ std::vector<wchar_t> build_env_block(const sao_dual_run_config& cfg,
     // or the role env var (we'll re-add).
     std::vector<std::wstring> skip_prefixes;
     skip_prefixes.emplace_back(std::wstring(SAO_DUAL_RUN_ENV_VAR_NAME) + L"=");
+    skip_prefixes.emplace_back(
+        std::wstring(SAO_DUAL_RUN_HANDOFF_RESULT_ENV_VAR_NAME) + L"=");
     for (int32_t i = 0; i < cfg.env_overrides_count && i < 16; ++i) {
         skip_prefixes.emplace_back(std::wstring(cfg.env_overrides[i].key) + L"=");
     }
@@ -498,6 +765,18 @@ std::vector<wchar_t> build_env_block(const sao_dual_run_config& cfg,
     if (role && *role) role_line += role;
     else               role_line += L"cpp";
     block.insert(block.end(), role_line.c_str(), role_line.c_str() + role_line.size() + 1);
+
+    if (role != nullptr && _wcsnicmp(role, L"python", 6) == 0) {
+        std::wstring result_path;
+        if (default_handoff_result_path(result_path)) {
+            std::wstring result_line =
+                SAO_DUAL_RUN_HANDOFF_RESULT_ENV_VAR_NAME;
+            result_line += L"=";
+            result_line += result_path;
+            block.insert(block.end(), result_line.c_str(),
+                         result_line.c_str() + result_line.size() + 1);
+        }
+    }
 
     // Append overrides.
     for (int32_t i = 0; i < cfg.env_overrides_count && i < 16; ++i) {
@@ -584,19 +863,40 @@ sao_status_t do_spawn(const sao_dual_run_config& cfg,
 // Python probe internals
 // ---------------------------------------------------------------------------
 
-bool run_python_version_check(const wchar_t* python_exe,
-                               std::wstring& version_out,
-                               int& major, int& minor, int& patch) {
-    // Set up an anonymous pipe for stdout.
+using ProbeClock = std::chrono::steady_clock;
+using ProbeDeadline = ProbeClock::time_point;
+
+bool probe_deadline_expired(ProbeDeadline deadline) noexcept {
+    return ProbeClock::now() >= deadline;
+}
+
+DWORD probe_remaining_ms(ProbeDeadline deadline) noexcept {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - ProbeClock::now()).count();
+    if (remaining <= 0) return 0u;
+    return static_cast<DWORD>(std::min<long long>(remaining, INFINITE - 1LL));
+}
+
+bool run_captured_process(const wchar_t* exe_path,
+                          const std::wstring& command_line,
+                          ProbeDeadline deadline,
+                          std::string& output,
+                          DWORD& exit_code) {
+    if (probe_deadline_expired(deadline)) return false;
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
-
     HANDLE read_end = nullptr;
     HANDLE write_end = nullptr;
+    HANDLE reader_done = nullptr;
     if (!::CreatePipe(&read_end, &write_end, &sa, 0)) return false;
-    // Only write_end must be inheritable.
     ::SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0);
+    reader_done = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!reader_done) {
+        ::CloseHandle(read_end);
+        ::CloseHandle(write_end);
+        return false;
+    }
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -605,119 +905,105 @@ bool run_python_version_check(const wchar_t* python_exe,
     si.hStdError = write_end;
     si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
     PROCESS_INFORMATION pi{};
-
-    std::wstring cmd = L"\"";
-    cmd += python_exe;
-    cmd += L"\" --version";
-    std::vector<wchar_t> cmd_buf(cmd.begin(), cmd.end());
+    std::vector<wchar_t> cmd_buf(command_line.begin(), command_line.end());
     cmd_buf.push_back(L'\0');
-
-    BOOL ok = ::CreateProcessW(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE,
-                                CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    const BOOL created = ::CreateProcessW(
+        exe_path, cmd_buf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+        nullptr, nullptr, &si, &pi);
     ::CloseHandle(write_end);
-    if (!ok) {
+    if (!created) {
         ::CloseHandle(read_end);
+        ::CloseHandle(reader_done);
         return false;
     }
 
-    // Read what the child wrote.
-    std::string blob;
-    char buf[512];
-    DWORD read_n = 0;
-    while (::ReadFile(read_end, buf, sizeof(buf), &read_n, nullptr) && read_n > 0) {
-        blob.append(buf, buf + read_n);
-    }
-    ::CloseHandle(read_end);
+    std::string captured;
+    std::thread reader([&] {
+        char buffer[512];
+        DWORD read_count = 0;
+        try {
+            while (::ReadFile(read_end, buffer, sizeof(buffer), &read_count, nullptr) &&
+                   read_count != 0) {
+                captured.append(buffer, buffer + read_count);
+            }
+        } catch (...) {
+        }
+        ::SetEvent(reader_done);
+    });
 
-    ::WaitForSingleObject(pi.hProcess, 5000);
-    DWORD exit_code = 1;
-    ::GetExitCodeProcess(pi.hProcess, &exit_code);
+    HANDLE waits[] = {pi.hProcess, reader_done};
+    const DWORD wait_result = ::WaitForMultipleObjects(
+        2, waits, TRUE, probe_remaining_ms(deadline));
+    const bool timed_out = wait_result != WAIT_OBJECT_0;
+    if (timed_out) {
+        (void)::TerminateProcess(pi.hProcess, ERROR_TIMEOUT);
+        (void)::CancelSynchronousIo(reader.native_handle());
+        ::CloseHandle(read_end);
+        read_end = nullptr;
+    }
+    if (reader.joinable()) reader.join();
+    if (read_end != nullptr) ::CloseHandle(read_end);
+
+    DWORD observed_exit_code = 1;
+    (void)::GetExitCodeProcess(pi.hProcess, &observed_exit_code);
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
-
-    if (exit_code != 0) return false;
-
-    // Parse "Python X.Y.Z" — Python 3.4+ writes to stdout.
-    // Some old versions wrote to stderr; we merged both above.
-    auto pos = blob.find("Python ");
-    if (pos == std::string::npos) return false;
-    const char* p = blob.c_str() + pos + 7;
-    int mj = 0, mi = 0, pt = 0;
-    if (sscanf_s(p, "%d.%d.%d", &mj, &mi, &pt) < 2) return false;
-    major = mj;
-    minor = mi;
-    patch = pt;
-
-    wchar_t vbuf[32]{};
-    _snwprintf_s(vbuf, 32, _TRUNCATE, L"%d.%d.%d", mj, mi, pt);
-    version_out = vbuf;
+    ::CloseHandle(reader_done);
+    if (timed_out) return false;
+    output = std::move(captured);
+    exit_code = observed_exit_code;
     return true;
 }
 
-// ``where python.exe`` — reads the first line of stdout.
-bool where_python(std::wstring& out_path) {
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-
-    HANDLE read_end = nullptr;
-    HANDLE write_end = nullptr;
-    if (!::CreatePipe(&read_end, &write_end, &sa, 0)) return false;
-    ::SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = write_end;
-    si.hStdError = write_end;
-    si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
-    PROCESS_INFORMATION pi{};
-
-    wchar_t cmd[] = L"cmd.exe /c where python.exe";
-    std::vector<wchar_t> cmd_buf(std::begin(cmd), std::end(cmd));
-
-    BOOL ok = ::CreateProcessW(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE,
-                                CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    ::CloseHandle(write_end);
-    if (!ok) {
-        ::CloseHandle(read_end);
-        return false;
-    }
-
+bool run_python_version_check(const wchar_t* python_exe,
+                              ProbeDeadline deadline,
+                              std::wstring& version_out,
+                              int& major, int& minor, int& patch) {
+    if (!python_exe || !*python_exe || probe_deadline_expired(deadline)) return false;
+    std::wstring command_line;
+    append_quoted_arg(command_line, python_exe);
+    command_line += L" --version";
     std::string blob;
-    char buf[512];
-    DWORD read_n = 0;
-    while (::ReadFile(read_end, buf, sizeof(buf), &read_n, nullptr) && read_n > 0) {
-        blob.append(buf, buf + read_n);
-    }
-    ::CloseHandle(read_end);
-    ::WaitForSingleObject(pi.hProcess, 5000);
     DWORD exit_code = 1;
-    ::GetExitCodeProcess(pi.hProcess, &exit_code);
-    ::CloseHandle(pi.hProcess);
-    ::CloseHandle(pi.hThread);
+    if (!run_captured_process(nullptr, command_line, deadline, blob, exit_code) ||
+        exit_code != 0)
+        return false;
+    const auto pos = blob.find("Python ");
+    if (pos == std::string::npos) return false;
+    const char* text = blob.c_str() + pos + 7;
+    int mj = 0, mi = 0, pt = 0;
+    if (sscanf_s(text, "%d.%d.%d", &mj, &mi, &pt) < 2) return false;
+    major = mj;
+    minor = mi;
+    patch = pt;
+    wchar_t version[32]{};
+    _snwprintf_s(version, 32, _TRUNCATE, L"%d.%d.%d", mj, mi, pt);
+    version_out = version;
+    return true;
+}
 
-    if (exit_code != 0 || blob.empty()) return false;
+bool where_python(ProbeDeadline deadline, std::wstring& out_path) {
+    if (probe_deadline_expired(deadline)) return false;
+    std::string blob;
+    DWORD exit_code = 1;
+    if (!run_captured_process(nullptr, L"cmd.exe /c where python.exe", deadline,
+                              blob, exit_code) ||
+        exit_code != 0 || blob.empty())
+        return false;
 
-    // Take the first line.  Prefer a non-WindowsApps stub — the App Execution
-    // Alias `%LocalAppData%\Microsoft\WindowsApps\python.exe` returns
-    // "not installed" popups instead of running Python.
     std::wstring wide = utf8_to_wide(blob);
     size_t start = 0;
     std::wstring chosen;
     while (start < wide.size()) {
-        size_t end = wide.find_first_of(L"\r\n", start);
-        std::wstring line = (end == std::wstring::npos)
-            ? wide.substr(start)
-            : wide.substr(start, end - start);
-        // trim
+        const size_t end = wide.find_first_of(L"\r\n", start);
+        std::wstring line = end == std::wstring::npos
+            ? wide.substr(start) : wide.substr(start, end - start);
         while (!line.empty() && (line.back() == L' ' || line.back() == L'\t'))
             line.pop_back();
         while (!line.empty() && (line.front() == L' ' || line.front() == L'\t'))
             line.erase(line.begin());
         if (!line.empty()) {
             if (chosen.empty()) chosen = line;
-            // If we find a non-WindowsApps entry, prefer it.
             if (::wcsstr(line.c_str(), L"\\WindowsApps\\") == nullptr &&
                 ::wcsstr(line.c_str(), L"/WindowsApps/") == nullptr) {
                 chosen = line;
@@ -727,7 +1013,6 @@ bool where_python(std::wstring& out_path) {
         if (end == std::wstring::npos) break;
         start = end + 1;
     }
-
     if (chosen.empty()) return false;
     out_path = std::move(chosen);
     return true;
@@ -745,31 +1030,56 @@ extern "C" void sao_launcher_dual_run_config_default(sao_dual_run_config* cfg) {
     cfg->mode = SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK;
 }
 
-extern "C" sao_status_t sao_launcher_dual_run_config_load(sao_dual_run_config* cfg_out) {
-    wchar_t path[MAX_PATH]{};
-    if (!default_dual_run_config_path(path, MAX_PATH)) {
-        // Fall back to defaults; that path is not fatal.
-        sao_launcher_dual_run_config_default(cfg_out);
-        return SAO_STATUS_OK;
-    }
-    return sao_launcher_dual_run_config_load_from_path(path, cfg_out);
+extern "C" void sao_launcher_dual_run_config_v2_default(
+    sao_dual_run_config_v2* cfg) {
+    if (!cfg) return;
+    std::memset(cfg, 0, sizeof(*cfg));
+    sao_launcher_dual_run_config_default(&cfg->legacy);
+    cfg->struct_size = sizeof(*cfg);
+    cfg->abi_version = SAO_DUAL_RUN_CONFIG_ABI_VERSION_2;
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_load(
+    sao_dual_run_config* cfg_out) {
+    if (!cfg_out) return SAO_STATUS_INVALID_ARGUMENT;
+    sao_dual_run_config_v2 resolved{};
+    const sao_status_t status = sao_launcher_dual_run_config_v2_load(&resolved);
+    if (status == SAO_STATUS_OK)
+        *cfg_out = resolved.legacy;
+    return status;
 }
 
 extern "C" sao_status_t sao_launcher_dual_run_config_load_from_path(
     const wchar_t* path, sao_dual_run_config* cfg_out) {
     if (!cfg_out) return SAO_STATUS_INVALID_ARGUMENT;
-    sao_launcher_dual_run_config_default(cfg_out);
+    sao_dual_run_config_v2 resolved{};
+    const sao_status_t status =
+        sao_launcher_dual_run_config_v2_load_from_path(path, &resolved);
+    if (status == SAO_STATUS_OK)
+        *cfg_out = resolved.legacy;
+    return status;
+}
 
-    if (!path || !*path) return SAO_STATUS_INVALID_ARGUMENT;
-
-    // Missing file — treat as "user hasn't chosen".
-    if (::GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_load(
+    sao_dual_run_config_v2* cfg_out) {
+    std::wstring path;
+    if (!default_dual_run_config_path(path)) {
+        sao_launcher_dual_run_config_v2_default(cfg_out);
         return SAO_STATUS_OK;
     }
+    return sao_launcher_dual_run_config_v2_load_from_path(path.c_str(), cfg_out);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_load_from_path(
+    const wchar_t* path, sao_dual_run_config_v2* cfg_out) {
+    if (!cfg_out) return SAO_STATUS_INVALID_ARGUMENT;
+    sao_launcher_dual_run_config_v2_default(cfg_out);
+    if (!path || !*path) return SAO_STATUS_INVALID_ARGUMENT;
+    if (::GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+        return SAO_STATUS_OK;
 
     std::string blob;
     if (!read_file_bytes(path, blob)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-
     JsonParser jp;
     jp.p = blob.data();
     jp.end = blob.data() + blob.size();
@@ -779,70 +1089,90 @@ extern "C" sao_status_t sao_launcher_dual_run_config_load_from_path(
         jp.skip_ws();
         if (jp.peek('}')) { ++jp.p; break; }
         std::string key;
-        if (!jp.parse_string(key)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-        if (!jp.expect(':')) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-
+        if (!jp.parse_string(key) || !jp.expect(':'))
+            return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
         if (key == "mode") {
             std::string val;
             if (!jp.parse_string(val)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-            cfg_out->mode = mode_from_string(val);
-        } else if (key == "python_exe_path") {
+            cfg_out->legacy.mode = mode_from_string(val);
+        } else if (key == "python_exe_path" || key == "python_main_py_path" ||
+                   key == "cpp_exe_path") {
             std::string val;
             if (!jp.parse_string(val)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-            wcs_copy_to_fixed(cfg_out->python_exe_path, 260,
-                              utf8_to_wide(val).c_str());
-        } else if (key == "python_main_py_path") {
-            std::string val;
-            if (!jp.parse_string(val)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-            wcs_copy_to_fixed(cfg_out->python_main_py_path, 260,
-                              utf8_to_wide(val).c_str());
-        } else if (key == "cpp_exe_path") {
-            std::string val;
-            if (!jp.parse_string(val)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
-            wcs_copy_to_fixed(cfg_out->cpp_exe_path, 260,
-                              utf8_to_wide(val).c_str());
+            const std::wstring resolved = utf8_to_wide(val);
+            wchar_t* destination = key == "python_exe_path"
+                ? cfg_out->python_exe_path
+                : key == "python_main_py_path"
+                    ? cfg_out->python_main_py_path : cfg_out->cpp_exe_path;
+            if (!copy_v2_path(destination, SAO_DUAL_RUN_CONFIG_V2_PATH_CAPACITY,
+                               resolved))
+                return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
+            wchar_t* legacy_destination = key == "python_exe_path"
+                ? cfg_out->legacy.python_exe_path
+                : key == "python_main_py_path"
+                    ? cfg_out->legacy.python_main_py_path
+                    : cfg_out->legacy.cpp_exe_path;
+            set_legacy_path(legacy_destination, 260, resolved);
         } else if (key == "env_overrides") {
             std::vector<std::pair<std::string, std::string>> kv;
             if (!jp.parse_object_of_strings(kv)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
             int32_t n = 0;
-            for (auto& e : kv) {
+            for (auto& entry : kv) {
                 if (n >= 16) break;
-                wcs_copy_to_fixed(cfg_out->env_overrides[n].key, 64,
-                                  utf8_to_wide(e.first).c_str());
-                wcs_copy_to_fixed(cfg_out->env_overrides[n].value, 512,
-                                  utf8_to_wide(e.second).c_str());
+                const std::wstring name = utf8_to_wide(entry.first);
+                const std::wstring value = utf8_to_wide(entry.second);
+                if (!wcs_copy_to_fixed(cfg_out->legacy.env_overrides[n].key, 64,
+                                       name.c_str()) ||
+                    !wcs_copy_to_fixed(cfg_out->legacy.env_overrides[n].value, 512,
+                                       value.c_str()))
+                    return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
                 ++n;
             }
-            cfg_out->env_overrides_count = n;
+            cfg_out->legacy.env_overrides_count = n;
         } else {
-            // Unknown key — accept a string value and drop it.
-            std::string val;
-            if (!jp.parse_string_or_int(val)) return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
+            std::string ignored;
+            if (!jp.parse_string_or_int(ignored))
+                return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
         }
-
         jp.skip_ws();
         if (jp.peek(',')) { ++jp.p; continue; }
         if (jp.peek('}')) { ++jp.p; break; }
         return SAO_LAUNCHER_CONFIG_PARSE_FAILED;
     }
-
     return jp.ok ? SAO_STATUS_OK : SAO_LAUNCHER_CONFIG_PARSE_FAILED;
 }
 
-extern "C" sao_status_t sao_launcher_dual_run_config_save(const sao_dual_run_config* cfg) {
+extern "C" sao_status_t sao_launcher_dual_run_config_save(
+    const sao_dual_run_config* cfg) {
     if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
-    wchar_t path[MAX_PATH]{};
-    if (!default_dual_run_config_path(path, MAX_PATH)) {
+    std::wstring path;
+    if (!default_dual_run_config_path(path))
         return SAO_LAUNCHER_CONFIG_WRITE_FAILED;
-    }
-    return sao_launcher_dual_run_config_save_to_path(path, cfg);
+    return sao_launcher_dual_run_config_save_to_path(path.c_str(), cfg);
 }
 
 extern "C" sao_status_t sao_launcher_dual_run_config_save_to_path(
     const wchar_t* path, const sao_dual_run_config* cfg) {
     if (!path || !cfg) return SAO_STATUS_INVALID_ARGUMENT;
-    std::string blob = serialize_config(*cfg);
-    if (!write_file_bytes(path, blob)) return SAO_LAUNCHER_CONFIG_WRITE_FAILED;
+    if (!write_file_bytes(path, serialize_config(resolved_config_from_legacy(*cfg))))
+        return SAO_LAUNCHER_CONFIG_WRITE_FAILED;
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_save(
+    const sao_dual_run_config_v2* cfg) {
+    if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
+    std::wstring path;
+    if (!default_dual_run_config_path(path))
+        return SAO_LAUNCHER_CONFIG_WRITE_FAILED;
+    return sao_launcher_dual_run_config_v2_save_to_path(path.c_str(), cfg);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_save_to_path(
+    const wchar_t* path, const sao_dual_run_config_v2* cfg) {
+    if (!path || !valid_config_v2(cfg)) return SAO_STATUS_INVALID_ARGUMENT;
+    if (!write_file_bytes(path, serialize_config(resolved_config_from_v2(*cfg))))
+        return SAO_LAUNCHER_CONFIG_WRITE_FAILED;
     return SAO_STATUS_OK;
 }
 
@@ -853,9 +1183,103 @@ extern "C" sao_launcher_dual_run_mode_t sao_launcher_dual_run_mode(void) {
     return cfg.mode;
 }
 
+extern "C" sao_status_t sao_launcher_dual_run_copy_python_exe_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count) {
+    return copy_dynamic_path(cfg ? std::wstring(cfg->python_exe_path) : std::wstring{},
+                             out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_copy_python_main_py_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count) {
+    return copy_dynamic_path(cfg ? std::wstring(cfg->python_main_py_path) : std::wstring{},
+                             out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_copy_cpp_exe_path(
+    const sao_dual_run_config* cfg, wchar_t* out_path, uint32_t* inout_char_count) {
+    return copy_dynamic_path(cfg ? std::wstring(cfg->cpp_exe_path) : std::wstring{},
+                             out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_copy_python_exe_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count) {
+    if (!valid_config_v2(cfg)) return SAO_STATUS_INVALID_ARGUMENT;
+    return copy_dynamic_path(std::wstring(cfg->python_exe_path), out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_copy_python_main_py_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count) {
+    if (!valid_config_v2(cfg)) return SAO_STATUS_INVALID_ARGUMENT;
+    return copy_dynamic_path(std::wstring(cfg->python_main_py_path), out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_config_v2_copy_cpp_exe_path(
+    const sao_dual_run_config_v2* cfg, wchar_t* out_path,
+    uint32_t* inout_char_count) {
+    if (!valid_config_v2(cfg)) return SAO_STATUS_INVALID_ARGUMENT;
+    return copy_dynamic_path(std::wstring(cfg->cpp_exe_path), out_path, inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_copy_probe_path(
+    const sao_dual_run_python_probe* probe, wchar_t* out_path,
+    uint32_t* inout_char_count) {
+    return copy_dynamic_path(probe ? std::wstring(probe->path) : std::wstring{},
+                             out_path, inout_char_count);
+}
+
 // ===========================================================================
 // Public API — Python probe
 // ===========================================================================
+
+namespace {
+
+bool resolve_python_candidate(const ResolvedConfig& cfg,
+                              std::wstring& resolved,
+                              std::wstring& version,
+                              int& major, int& minor, int& patch) {
+    const auto supported = [](int candidate_major, int candidate_minor) noexcept {
+        return candidate_major == 3 && candidate_minor >= 11;
+    };
+    resolved.clear();
+    const ProbeDeadline deadline = ProbeClock::now() + std::chrono::seconds(5);
+    if (!cfg.python_exe_path.empty() &&
+        ::GetFileAttributesW(cfg.python_exe_path.c_str()) != INVALID_FILE_ATTRIBUTES &&
+        run_python_version_check(cfg.python_exe_path.c_str(), deadline, version,
+                                 major, minor, patch) && supported(major, minor)) {
+        resolved = cfg.python_exe_path;
+    }
+    if (resolved.empty() && !probe_deadline_expired(deadline)) {
+        std::wstring candidate;
+        if (where_python(deadline, candidate) &&
+            run_python_version_check(candidate.c_str(), deadline, version, major,
+                                     minor, patch) && supported(major, minor)) {
+            resolved = std::move(candidate);
+        }
+    }
+    if (resolved.empty() && !probe_deadline_expired(deadline)) {
+        const wchar_t* candidates[] = {
+            L"E:\\Py\\python.exe",
+            L"C:\\Python311\\python.exe",
+            L"C:\\Python312\\python.exe",
+            L"C:\\Program Files\\Python311\\python.exe",
+        };
+        for (const wchar_t* candidate : candidates) {
+            if (probe_deadline_expired(deadline)) break;
+            if (::GetFileAttributesW(candidate) == INVALID_FILE_ATTRIBUTES)
+                continue;
+            if (run_python_version_check(candidate, deadline, version, major,
+                                         minor, patch) && supported(major, minor)) {
+                resolved = candidate;
+                break;
+            }
+        }
+    }
+    return !resolved.empty();
+}
+
+} // namespace
 
 extern "C" sao_status_t sao_launcher_dual_run_probe_python(
     const sao_dual_run_config* cfg,
@@ -863,7 +1287,6 @@ extern "C" sao_status_t sao_launcher_dual_run_probe_python(
     if (!probe_out) return SAO_STATUS_INVALID_ARGUMENT;
     std::memset(probe_out, 0, sizeof(*probe_out));
 
-    // Test hook always wins.
     sao_dual_run_test_probe_hook_t hook = nullptr;
     {
         std::lock_guard<std::mutex> g(S().mtx);
@@ -874,68 +1297,93 @@ extern "C" sao_status_t sao_launcher_dual_run_probe_python(
         return SAO_STATUS_OK;
     }
 
+    const ResolvedConfig resolved_cfg = cfg
+        ? resolved_config_from_legacy(*cfg) : ResolvedConfig{};
     std::wstring resolved;
     std::wstring version;
     int major = 0, minor = 0, patch = 0;
-
-    // 1. Explicit config path?
-    if (cfg && cfg->python_exe_path[0]) {
-        if (::GetFileAttributesW(cfg->python_exe_path) != INVALID_FILE_ATTRIBUTES) {
-            if (run_python_version_check(cfg->python_exe_path, version,
-                                          major, minor, patch)) {
-                resolved = cfg->python_exe_path;
-            }
-        }
-    }
-
-    // 2. `where python`
-    if (resolved.empty()) {
-        std::wstring w;
-        if (where_python(w)) {
-            if (run_python_version_check(w.c_str(), version, major, minor, patch)) {
-                resolved = std::move(w);
-            }
-        }
-    }
-
-    // 3. Well-known fallbacks.
-    if (resolved.empty()) {
-        const wchar_t* candidates[] = {
-            L"E:\\Py\\python.exe",
-            L"C:\\Python311\\python.exe",
-            L"C:\\Python312\\python.exe",
-            L"C:\\Program Files\\Python311\\python.exe",
-        };
-        for (auto* c : candidates) {
-            if (::GetFileAttributesW(c) == INVALID_FILE_ATTRIBUTES) continue;
-            if (run_python_version_check(c, version, major, minor, patch)) {
-                resolved = c;
-                break;
-            }
-        }
-    }
-
-    if (resolved.empty()) {
-        probe_out->available = 0;
+    if (!resolve_python_candidate(resolved_cfg, resolved, version,
+                                  major, minor, patch)) {
         return SAO_STATUS_OK;
     }
-
-    if (!(major == 3 && minor >= 11)) {
-        probe_out->available = 0;
-        wcs_copy_to_fixed(probe_out->path, 260, resolved.c_str());
-        wcs_copy_to_fixed(probe_out->version, 32, version.c_str());
-        probe_out->major = major;
-        probe_out->minor = minor;
-        probe_out->patch = patch;
-        return SAO_STATUS_OK;
+    set_legacy_path(probe_out->path, 260, resolved);
+    if (!wcs_copy_to_fixed(probe_out->version, 32, version.c_str())) {
+        return SAO_LAUNCHER_PYTHON_UNAVAILABLE;
     }
-
-    probe_out->available = 1;
-    wcs_copy_to_fixed(probe_out->path, 260, resolved.c_str());
-    wcs_copy_to_fixed(probe_out->version, 32, version.c_str());
+    probe_out->available = major == 3 && minor >= 11 ? 1 : 0;
     probe_out->major = major;
     probe_out->minor = minor;
     probe_out->patch = patch;
+    return SAO_STATUS_OK;
+}
+
+extern "C" void sao_launcher_dual_run_python_probe_v2_default(
+    sao_dual_run_python_probe_v2* probe) {
+    if (probe == nullptr) return;
+    std::memset(probe, 0, sizeof(*probe));
+    probe->struct_size = sizeof(*probe);
+    probe->abi_version = SAO_DUAL_RUN_PYTHON_PROBE_ABI_VERSION_2;
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_copy_probe_path_v2(
+    const sao_dual_run_python_probe_v2* probe, wchar_t* out_path,
+    uint32_t* inout_char_count) {
+    if (probe == nullptr || probe->struct_size < sizeof(*probe) ||
+        probe->abi_version != SAO_DUAL_RUN_PYTHON_PROBE_ABI_VERSION_2) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    return copy_dynamic_path(std::wstring(probe->path), out_path,
+                             inout_char_count);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_probe_python_v2(
+    const sao_dual_run_config_v2* cfg,
+    sao_dual_run_python_probe_v2* probe_out) {
+    if (!valid_config_v2(cfg) || probe_out == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    sao_launcher_dual_run_python_probe_v2_default(probe_out);
+
+    sao_dual_run_test_probe_hook_t hook = nullptr;
+    {
+        std::lock_guard<std::mutex> g(S().mtx);
+        hook = S().probe_hook;
+    }
+    if (hook) {
+        hook(&probe_out->legacy);
+        probe_out->available = probe_out->legacy.available;
+        std::wmemcpy(probe_out->path, probe_out->legacy.path,
+                     std::size(probe_out->legacy.path));
+        std::wmemcpy(probe_out->version, probe_out->legacy.version,
+                     std::size(probe_out->legacy.version));
+        probe_out->major = probe_out->legacy.major;
+        probe_out->minor = probe_out->legacy.minor;
+        probe_out->patch = probe_out->legacy.patch;
+        return SAO_STATUS_OK;
+    }
+
+    std::wstring resolved;
+    std::wstring version;
+    int major = 0, minor = 0, patch = 0;
+    if (!resolve_python_candidate(resolved_config_from_v2(*cfg), resolved,
+                                  version, major, minor, patch)) {
+        return SAO_STATUS_OK;
+    }
+    if (!copy_v2_path(probe_out->path,
+                      SAO_DUAL_RUN_PYTHON_PROBE_V2_PATH_CAPACITY, resolved) ||
+        !wcs_copy_to_fixed(probe_out->version, 32, version.c_str())) {
+        return SAO_LAUNCHER_PYTHON_UNAVAILABLE;
+    }
+    probe_out->available = major == 3 && minor >= 11 ? 1 : 0;
+    probe_out->major = major;
+    probe_out->minor = minor;
+    probe_out->patch = patch;
+    probe_out->legacy.available = probe_out->available;
+    set_legacy_path(probe_out->legacy.path, 260, resolved);
+    std::wmemcpy(probe_out->legacy.version, probe_out->version,
+                 std::size(probe_out->legacy.version));
+    probe_out->legacy.major = major;
+    probe_out->legacy.minor = minor;
+    probe_out->legacy.patch = patch;
     return SAO_STATUS_OK;
 }
 
@@ -943,43 +1391,98 @@ extern "C" sao_status_t sao_launcher_dual_run_probe_python(
 // Public API — spawn
 // ===========================================================================
 
+namespace {
+
+sao_status_t spawn_python_resolved(const ResolvedConfig& cfg,
+                                   const wchar_t* role,
+                                   sao_dual_run_spawn_result* result_out) {
+    std::wstring python_path;
+    std::wstring version;
+    int major = 0, minor = 0, patch = 0;
+    if (!resolve_python_candidate(cfg, python_path, version, major, minor, patch) ||
+        major != 3 || minor < 11)
+        return SAO_LAUNCHER_PYTHON_UNAVAILABLE;
+
+    std::wstring main_py = cfg.python_main_py_path;
+    if (main_py.empty()) {
+        std::wstring exe;
+        if (!sao::launcher::getCurrentModulePath(exe))
+            return SAO_LAUNCHER_SPAWN_FAILED;
+        main_py = exe + L"\\..\\..\\..\\..\\sao_auto\\python\\main.py";
+    }
+    std::wstring cmdline;
+    append_quoted_arg(cmdline, python_path.c_str());
+    cmdline += L" ";
+    append_quoted_arg(cmdline, main_py.c_str());
+    return do_spawn(cfg.legacy, python_path.c_str(), cmdline.c_str(),
+                    role && *role ? role : L"python", result_out);
+}
+
+sao_status_t spawn_cpp_resolved(const ResolvedConfig& cfg,
+                                const wchar_t* role,
+                                sao_dual_run_spawn_result* result_out) {
+    std::wstring exe = cfg.cpp_exe_path;
+    if (exe.empty() && !sao::launcher::getCurrentModulePath(exe))
+        return SAO_LAUNCHER_SPAWN_FAILED;
+    const auto parent_argv = snapshot_parent_argv();
+    std::vector<const wchar_t*> parent_argv_view;
+    parent_argv_view.reserve(parent_argv.size());
+    for (const auto& argument : parent_argv)
+        parent_argv_view.push_back(argument.c_str());
+    const auto cmdline = build_cpp_command_line(
+        exe.c_str(), static_cast<int>(parent_argv_view.size()),
+        parent_argv_view.empty() ? nullptr : parent_argv_view.data());
+    return do_spawn(cfg.legacy, exe.c_str(), cmdline.c_str(),
+                    role && *role ? role : L"cpp", result_out);
+}
+
+bool prepare_python_handoff(sao_dual_run_spawn_result& result,
+                            const wchar_t* role, bool handoff) {
+    sao_dual_run_handoff_snapshot snapshot{};
+    if (!begin_handoff_result(result, snapshot))
+        return false;
+    if (handoff) {
+        {
+            std::lock_guard<std::mutex> guard(S().mtx);
+            S().expected_handoff = snapshot;
+            S().expected_handoff_valid = true;
+        }
+        snapshot.state = SAO_DUAL_RUN_HANDOFF_SUCCEEDED;
+        snapshot.exit_code = 0;
+        if (!write_handoff_result(snapshot)) {
+            {
+                std::lock_guard<std::mutex> guard(S().mtx);
+                if (S().expected_handoff_valid &&
+                    S().expected_handoff.pid == snapshot.pid &&
+                    S().expected_handoff.start_time_qpc == snapshot.start_time_qpc &&
+                    S().expected_handoff.generation == snapshot.generation) {
+                    S().expected_handoff = {};
+                    S().expected_handoff_valid = false;
+                }
+            }
+            (void)terminate_and_close_spawn_result(result);
+            return false;
+        }
+    }
+    sao_launcher_dual_run_register_child(result.pid,
+                                          role && *role ? role : L"python",
+                                          result.start_time_qpc, result.process);
+    result.process = nullptr;
+    if (result.thread != nullptr) {
+        (void)::CloseHandle(result.thread);
+        result.thread = nullptr;
+    }
+    return true;
+}
+
+} // namespace
+
 extern "C" sao_status_t sao_launcher_dual_run_spawn_python(
     const sao_dual_run_config* cfg,
     const wchar_t* role,
     sao_dual_run_spawn_result* result_out) {
     if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
-
-    sao_dual_run_python_probe probe{};
-    sao_status_t s = sao_launcher_dual_run_probe_python(cfg, &probe);
-    if (s != SAO_STATUS_OK || !probe.available) {
-        return SAO_LAUNCHER_PYTHON_UNAVAILABLE;
-    }
-
-    // Resolve main.py.  If the config didn't say, fall back to the standard
-    // sao_auto/python/main.py location beside the base dir.
-    std::wstring main_py;
-    if (cfg->python_main_py_path[0]) {
-        main_py = cfg->python_main_py_path;
-    } else {
-        // Derive from GetModuleFileNameW → parent (base_dir) → \..\python\main.py
-        wchar_t exe[MAX_PATH]{};
-        ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        ::PathRemoveFileSpecW(exe);
-        // If we're in build/windows-debug/bin/Debug, walk up 4.  Otherwise
-        // walk up 2 (the runtime/ layout).  Cheap heuristic — if the path
-        // doesn't resolve, the caller sees SAO_LAUNCHER_SPAWN_FAILED.
-        main_py = exe;
-        main_py += L"\\..\\..\\..\\..\\sao_auto\\python\\main.py";
-    }
-
-    std::wstring cmdline;
-    append_quoted_arg(cmdline, probe.path);
-    cmdline += L" ";
-    append_quoted_arg(cmdline, main_py.c_str());
-
-    return do_spawn(*cfg, probe.path, cmdline.c_str(),
-                    role && *role ? role : L"python",
-                    result_out);
+    return spawn_python_resolved(resolved_config_from_legacy(*cfg), role, result_out);
 }
 
 extern "C" sao_status_t sao_launcher_dual_run_spawn_cpp(
@@ -987,27 +1490,7 @@ extern "C" sao_status_t sao_launcher_dual_run_spawn_cpp(
     const wchar_t* role,
     sao_dual_run_spawn_result* result_out) {
     if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
-
-    wchar_t exe[MAX_PATH]{};
-    if (cfg->cpp_exe_path[0]) {
-        ::lstrcpynW(exe, cfg->cpp_exe_path, MAX_PATH);
-    } else {
-        ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    }
-
-    const auto parent_argv = snapshot_parent_argv();
-    std::vector<const wchar_t*> parent_argv_view;
-    parent_argv_view.reserve(parent_argv.size());
-    for (const auto& argument : parent_argv) {
-        parent_argv_view.push_back(argument.c_str());
-    }
-    const auto cmdline = build_cpp_command_line(
-        exe, static_cast<int>(parent_argv_view.size()),
-        parent_argv_view.empty() ? nullptr : parent_argv_view.data());
-
-    return do_spawn(*cfg, exe, cmdline.c_str(),
-                    role && *role ? role : L"cpp",
-                    result_out);
+    return spawn_cpp_resolved(resolved_config_from_legacy(*cfg), role, result_out);
 }
 
 extern "C" sao_status_t sao_launcher_dual_run_build_cpp_command_line(
@@ -1104,6 +1587,8 @@ extern "C" void sao_launcher_dual_run_reset_for_test(void) {
     }
     S().children.clear();
     S().fallback_reason.clear();
+    S().expected_handoff = {};
+    S().expected_handoff_valid = false;
     S().spawn_hook = nullptr;
     S().probe_hook = nullptr;
     S().force_cpp_fail_hook = nullptr;
@@ -1125,6 +1610,7 @@ extern "C" sao_status_t sao_launcher_dual_run_acquire_driver_mutex(HANDLE* mutex
     const auto opaque = SAO_ENC_STR("Local\\4F5A.dr");
     wchar_t name[32]{};
     widen_ascii(opaque.decrypt(), name, std::size(name));
+    ::SetLastError(ERROR_SUCCESS);
     HANDLE m = ::CreateMutexW(nullptr, FALSE, name);
     if (!m) return SAO_STATUS_INTERNAL;
     if (::GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -1139,123 +1625,162 @@ extern "C" void sao_launcher_dual_run_release_driver_mutex(HANDLE mutex) {
     if (mutex) ::CloseHandle(mutex);
 }
 
+extern "C" sao_status_t sao_launcher_dual_run_take_handoff_result(
+    sao_dual_run_handoff_snapshot* out) {
+    if (out == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+    std::memset(out, 0, sizeof(*out));
+    std::wstring path;
+    if (!default_handoff_result_path(path)) return SAO_STATUS_INTERNAL;
+    RolloutSharedFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_STATUS_INTERNAL;
+    if (::GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return SAO_STATUS_INTERNAL;
+    std::string blob;
+    if (!read_file_bytes(path.c_str(), blob) || !parse_handoff_result(blob, *out))
+        return SAO_STATUS_INTERNAL;
+    {
+        std::lock_guard<std::mutex> guard(S().mtx);
+        if (S().expected_handoff_valid) {
+            const auto& expected = S().expected_handoff;
+            const bool matches = out->pid == expected.pid &&
+                out->start_time_qpc == expected.start_time_qpc &&
+                out->generation == expected.generation;
+            S().expected_handoff = {};
+            S().expected_handoff_valid = false;
+            if (!matches)
+                return SAO_STATUS_INTERNAL;
+        }
+    }
+    if (out->state == SAO_DUAL_RUN_HANDOFF_SUCCEEDED ||
+        out->state == SAO_DUAL_RUN_HANDOFF_FAILED) {
+        (void)::DeleteFileW(path.c_str());
+    }
+    return SAO_STATUS_OK;
+}
+
 // ===========================================================================
 // Public API — step zero
 // ===========================================================================
 
-extern "C" sao_status_t sao_launcher_dual_run_step_zero(
-    const sao_dual_run_config* cfg,
-    int32_t* continue_out,
-    int32_t* exit_code_out) {
+namespace {
+
+sao_status_t step_zero_resolved(const ResolvedConfig& cfg,
+                                int32_t* continue_out,
+                                int32_t* exit_code_out) {
     if (continue_out) *continue_out = 1;
     if (exit_code_out) *exit_code_out = 0;
-    if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
 
-    // If the parent already spawned us as a peer child (SAO_DUAL_RUN_ROLE is
-    // set to any non-empty value), we're not the dual-run driver; we act as
-    // the CPP peer and skip the whole mode-dispatch dance.
     wchar_t role_env[64]{};
-    if (::GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, role_env, 64) > 0) {
-        if (role_env[0]) {
-            if (continue_out) *continue_out = 1;
-            return SAO_STATUS_OK;
-        }
-    }
+    if (::GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, role_env, 64) > 0 &&
+        role_env[0] != L'\0')
+        return SAO_STATUS_OK;
 
-    // Remember the effective mode for status queries.
     {
         std::lock_guard<std::mutex> g(S().mtx);
-        S().mode = cfg->mode;
+        S().mode = cfg.legacy.mode;
     }
 
-    switch (cfg->mode) {
+    switch (cfg.legacy.mode) {
         case SAO_DUAL_RUN_MODE_CPP_ONLY:
-            if (continue_out) *continue_out = 1;
             return SAO_STATUS_OK;
-
         case SAO_DUAL_RUN_MODE_PYTHON_ONLY: {
-            sao_dual_run_spawn_result r{};
-            sao_status_t s = sao_launcher_dual_run_spawn_python(cfg, L"python", &r);
-            if (s != SAO_STATUS_OK) return s;
-            sao_launcher_dual_run_register_child(r.pid, L"python",
-                                                  r.start_time_qpc, r.process);
-            if (r.thread) ::CloseHandle(r.thread);
+            sao_dual_run_spawn_result result{};
+            const sao_status_t status = spawn_python_resolved(cfg, L"python", &result);
+            if (status != SAO_STATUS_OK) return status;
+            if (!prepare_python_handoff(result, L"python", true))
+                return SAO_LAUNCHER_SPAWN_FAILED;
             if (continue_out) *continue_out = 0;
             if (exit_code_out) *exit_code_out = SAO_EXIT_HANDOFF_TO_PYTHON;
             return SAO_STATUS_OK;
         }
-
         case SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK: {
-            // Test hook can force us into the fallback branch.
             sao_dual_run_test_force_cpp_fail_hook_t force = nullptr;
             {
                 std::lock_guard<std::mutex> g(S().mtx);
                 force = S().force_cpp_fail_hook;
             }
             if (force && force() != 0) {
-                sao_launcher_dual_run_record_fallback_reason(
-                    L"forced_cpp_fail_test_hook");
-                sao_dual_run_spawn_result r{};
-                sao_status_t s = sao_launcher_dual_run_spawn_python(cfg,
-                                                                     L"python_fallback",
-                                                                     &r);
-                if (s != SAO_STATUS_OK) return s;
-                sao_launcher_dual_run_register_child(r.pid, L"python_fallback",
-                                                      r.start_time_qpc, r.process);
-                if (r.thread) ::CloseHandle(r.thread);
+                sao_launcher_dual_run_record_fallback_reason(L"forced_cpp_fail_test_hook");
+                sao_dual_run_spawn_result result{};
+                const sao_status_t status =
+                    spawn_python_resolved(cfg, L"python_fallback", &result);
+                if (status != SAO_STATUS_OK) return status;
+                if (!prepare_python_handoff(result, L"python_fallback", true))
+                    return SAO_LAUNCHER_SPAWN_FAILED;
                 if (continue_out) *continue_out = 0;
                 if (exit_code_out) *exit_code_out = SAO_EXIT_HANDOFF_TO_PYTHON;
-                return SAO_STATUS_OK;
             }
-            // Normal path: keep going with CPP.  The 10-step pipeline calls
-            // maybe_fallback_to_python() on any fatal error.
-            if (continue_out) *continue_out = 1;
             return SAO_STATUS_OK;
         }
-
         case SAO_DUAL_RUN_MODE_PYTHON_PREFERRED_CPP_FALLBACK: {
-            // Spawn Python; if that fails, continue with CPP.
-            sao_dual_run_spawn_result r{};
-            sao_status_t s = sao_launcher_dual_run_spawn_python(cfg,
-                                                                 L"python",
-                                                                 &r);
-            if (s == SAO_STATUS_OK) {
-                sao_launcher_dual_run_register_child(r.pid, L"python",
-                                                      r.start_time_qpc, r.process);
-                if (r.thread) ::CloseHandle(r.thread);
+            sao_dual_run_spawn_result result{};
+            const sao_status_t status = spawn_python_resolved(cfg, L"python", &result);
+            if (status == SAO_STATUS_OK) {
+                if (!prepare_python_handoff(result, L"python", true))
+                    return SAO_LAUNCHER_SPAWN_FAILED;
                 if (continue_out) *continue_out = 0;
                 if (exit_code_out) *exit_code_out = SAO_EXIT_HANDOFF_TO_PYTHON;
                 return SAO_STATUS_OK;
             }
             sao_launcher_dual_run_record_fallback_reason(
                 L"python_spawn_failed_falling_back_to_cpp");
-            if (continue_out) *continue_out = 1;
             return SAO_STATUS_OK;
         }
-
         case SAO_DUAL_RUN_MODE_DUAL_SIDE_BY_SIDE: {
-            // Spawn Python as a peer + continue with CPP.
-            sao_dual_run_spawn_result rp{};
-            sao_status_t sp = sao_launcher_dual_run_spawn_python(cfg,
-                                                                  L"python",
-                                                                  &rp);
-            if (sp == SAO_STATUS_OK) {
-                sao_launcher_dual_run_register_child(rp.pid, L"python",
-                                                      rp.start_time_qpc,
-                                                      rp.process);
-                if (rp.thread) ::CloseHandle(rp.thread);
+            sao_dual_run_spawn_result result{};
+            if (spawn_python_resolved(cfg, L"python", &result) == SAO_STATUS_OK) {
+                if (!prepare_python_handoff(result, L"python", false))
+                    return SAO_LAUNCHER_SPAWN_FAILED;
             } else {
                 sao_launcher_dual_run_record_fallback_reason(
                     L"side_by_side_python_spawn_failed_cpp_only");
             }
-            if (continue_out) *continue_out = 1;
             return SAO_STATUS_OK;
         }
-
         default:
-            if (continue_out) *continue_out = 1;
             return SAO_STATUS_OK;
     }
+}
+
+int32_t maybe_fallback_resolved(const ResolvedConfig& cfg,
+                                int cpp_step_exit_code,
+                                const wchar_t* failing_step_name,
+                                int32_t* exit_code_out) {
+    if (cfg.legacy.mode != SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK ||
+        cpp_step_exit_code == 0)
+        return 0;
+    wchar_t reason[256]{};
+    _snwprintf_s(reason, 256, _TRUNCATE, L"cpp_step_failed:%ls:exit=%d",
+                 failing_step_name ? failing_step_name : L"unknown",
+                 cpp_step_exit_code);
+    sao_launcher_dual_run_record_fallback_reason(reason);
+    sao_dual_run_spawn_result result{};
+    if (spawn_python_resolved(cfg, L"python_fallback", &result) != SAO_STATUS_OK)
+        return 0;
+    if (!prepare_python_handoff(result, L"python_fallback", true))
+        return 0;
+    if (exit_code_out) *exit_code_out = SAO_EXIT_HANDOFF_TO_PYTHON;
+    return 1;
+}
+
+} // namespace
+
+extern "C" sao_status_t sao_launcher_dual_run_step_zero(
+    const sao_dual_run_config* cfg,
+    int32_t* continue_out,
+    int32_t* exit_code_out) {
+    if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
+    return step_zero_resolved(resolved_config_from_legacy(*cfg), continue_out,
+                              exit_code_out);
+}
+
+extern "C" sao_status_t sao_launcher_dual_run_step_zero_v2(
+    const sao_dual_run_config_v2* cfg,
+    int32_t* continue_out,
+    int32_t* exit_code_out) {
+    if (!valid_config_v2(cfg)) return SAO_STATUS_INVALID_ARGUMENT;
+    return step_zero_resolved(resolved_config_from_v2(*cfg), continue_out,
+                              exit_code_out);
 }
 
 extern "C" int32_t sao_launcher_dual_run_maybe_fallback_to_python(
@@ -1264,27 +1789,20 @@ extern "C" int32_t sao_launcher_dual_run_maybe_fallback_to_python(
     const wchar_t* failing_step_name,
     int32_t* exit_code_out) {
     if (!cfg) return 0;
-    if (cfg->mode != SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK) return 0;
-    if (cpp_step_exit_code == 0) return 0;
+    return maybe_fallback_resolved(resolved_config_from_legacy(*cfg),
+                                   cpp_step_exit_code, failing_step_name,
+                                   exit_code_out);
+}
 
-    wchar_t reason[256]{};
-    _snwprintf_s(reason, 256, _TRUNCATE,
-                 L"cpp_step_failed:%ls:exit=%d",
-                 failing_step_name ? failing_step_name : L"unknown",
-                 cpp_step_exit_code);
-    sao_launcher_dual_run_record_fallback_reason(reason);
-
-    sao_dual_run_spawn_result r{};
-    sao_status_t s = sao_launcher_dual_run_spawn_python(cfg, L"python_fallback", &r);
-    if (s != SAO_STATUS_OK) {
-        // Python unavailable — propagate the original CPP error.
-        return 0;
-    }
-    sao_launcher_dual_run_register_child(r.pid, L"python_fallback",
-                                          r.start_time_qpc, r.process);
-    if (r.thread) ::CloseHandle(r.thread);
-    if (exit_code_out) *exit_code_out = SAO_EXIT_HANDOFF_TO_PYTHON;
-    return 1;
+extern "C" int32_t sao_launcher_dual_run_maybe_fallback_to_python_v2(
+    const sao_dual_run_config_v2* cfg,
+    int cpp_step_exit_code,
+    const wchar_t* failing_step_name,
+    int32_t* exit_code_out) {
+    if (!valid_config_v2(cfg)) return 0;
+    return maybe_fallback_resolved(resolved_config_from_v2(*cfg),
+                                   cpp_step_exit_code, failing_step_name,
+                                   exit_code_out);
 }
 
 // ===========================================================================

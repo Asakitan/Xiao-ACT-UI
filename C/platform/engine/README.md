@@ -67,9 +67,10 @@ does not compile.  Its dead base-ABI section contains seven
 `SAO_STATUS_ERR_NOT_IMPLEMENTED` returns; the same file also contains an
 obsolete priority-dispatch implementation and a real destroy function, but
 none of that file is part of the shipping DLL.  Keep those seven returns unchanged as audit
-inventory.  Static occurrence counts for this dead file must not be reported
-as runtime completeness; executable tests against the linked engine target
-define production behavior.
+inventory. Static occurrence counts for this dead file must not be reported
+as runtime completeness; current production behavior is bounded by the linked
+target implementation and v4.08 compiler/link/artifact evidence. The former
+executable tests were deleted on 2026-08-23.
 
 The other engine primitives (`state`, `ui_spec`, `render_hook`, and `runtime`)
 also have production implementations in the source files selected by this

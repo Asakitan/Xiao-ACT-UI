@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,32 @@ std::vector<int16_t> synthesize_levelup() {
 }
 
 #if defined(_WIN32)
+constexpr size_t kMaximumUtf8PathBytes = 64u * 1024u;
+
+bool bounded_utf8_to_wide(const char* value, std::wstring* out) {
+    if (out == nullptr || value == nullptr) return false;
+    size_t byte_length = 0u;
+    for (; byte_length < kMaximumUtf8PathBytes; ++byte_length) {
+        if (value[byte_length] == '\0') break;
+    }
+    if (byte_length == 0u || byte_length == kMaximumUtf8PathBytes ||
+        byte_length > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    const int wide_length = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
+        nullptr, 0);
+    if (wide_length <= 0) return false;
+    out->assign(static_cast<size_t>(wide_length), L'\0');
+    if (MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
+            out->data(), wide_length) != wide_length) {
+        out->clear();
+        return false;
+    }
+    return true;
+}
+
 // Write a mono 16-bit PCM RIFF header + samples to a temp .wav file, then play.
 bool play_pcm_samples(const std::vector<int16_t>& samples) {
     wchar_t tmp_dir[MAX_PATH];
@@ -109,50 +136,57 @@ bool play_pcm_samples(const std::vector<int16_t>& samples) {
 
 extern "C" sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_procedural(
     const SaoSdkContext* /*ctx*/, sao_sdk_sound_kind_t kind) {
+    try {
 #if defined(_WIN32)
-    if (kind == SAO_SDK_SOUND_BEEP_LEVELUP) {
-        auto samples = synthesize_levelup();
-        return play_pcm_samples(samples) ? SAO_SDK_OK : SAO_SDK_ERR_UNSUPPORTED;
-    }
-    // Other kinds: emit a short winmm Beep for now.
-    Beep(1200, 120);
-    return SAO_SDK_OK;
+        if (kind == SAO_SDK_SOUND_BEEP_LEVELUP) {
+            auto samples = synthesize_levelup();
+            return play_pcm_samples(samples) ? SAO_SDK_OK : SAO_SDK_ERR_UNSUPPORTED;
+        }
+        Beep(1200, 120);
+        return SAO_SDK_OK;
 #else
-    (void)kind;
-    return SAO_SDK_ERR_UNSUPPORTED;
+        (void)kind;
+        return SAO_SDK_ERR_UNSUPPORTED;
 #endif
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }
 
 extern "C" sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_play_wav(
     const SaoSdkContext* /*ctx*/, const char* path_utf8) {
+    try {
 #if defined(_WIN32)
-    if (path_utf8 == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, nullptr, 0);
-    if (wlen <= 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
-    std::wstring wide(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, wide.data(), wlen);
-    return PlaySoundW(wide.c_str(), nullptr, SND_ASYNC | SND_FILENAME) ? SAO_SDK_OK
-                                                                        : SAO_SDK_ERR_UNSUPPORTED;
+        std::wstring wide;
+        if (!bounded_utf8_to_wide(path_utf8, &wide))
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return PlaySoundW(wide.c_str(), nullptr, SND_ASYNC | SND_FILENAME)
+                   ? SAO_SDK_OK : SAO_SDK_ERR_UNSUPPORTED;
 #else
-    (void)path_utf8;
-    return SAO_SDK_ERR_UNSUPPORTED;
+        (void)path_utf8;
+        return SAO_SDK_ERR_UNSUPPORTED;
 #endif
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }
 
 extern "C" sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_load_font(
     const SaoSdkContext* /*ctx*/, const char* font_path_utf8) {
+    try {
 #if defined(_WIN32)
-    if (font_path_utf8 == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, font_path_utf8, -1, nullptr, 0);
-    if (wlen <= 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
-    std::wstring wide(static_cast<size_t>(wlen), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, font_path_utf8, -1, wide.data(), wlen);
-    int added = AddFontResourceExW(wide.c_str(), FR_PRIVATE, nullptr);
-    return added > 0 ? SAO_SDK_OK : SAO_SDK_ERR_UNSUPPORTED;
+        std::wstring wide;
+        if (!bounded_utf8_to_wide(font_path_utf8, &wide))
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        int added = AddFontResourceExW(wide.c_str(), FR_PRIVATE, nullptr);
+        return added > 0 ? SAO_SDK_OK : SAO_SDK_ERR_UNSUPPORTED;
 #else
-    (void)font_path_utf8;
-    return SAO_SDK_ERR_UNSUPPORTED;
+        (void)font_path_utf8;
+        return SAO_SDK_ERR_UNSUPPORTED;
 #endif
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }
 
 // Forward — impl in platform/ui/src/level_up_effect_overlay.cpp.
@@ -164,6 +198,10 @@ extern "C" sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_flash_overlay(
     // Route to the overlay renderer. If the launcher hasn't bound a
     // compositor via sao_ui_level_up_effect_overlay_set_compositor yet, the
     // call is a silent no-op (safe on plugin load pre-UI).
-    sao_ui_level_up_effect_overlay_flash(duration_ms);
-    return SAO_SDK_OK;
+    try {
+        sao_ui_level_up_effect_overlay_flash(duration_ms);
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
 }

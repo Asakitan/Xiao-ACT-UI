@@ -20,6 +20,14 @@ SAO_CORE_API sao_status_t SAO_CORE_CALL sao_memprobe_anchor_load(
     const char* plugin_id_utf8, const char* anchor_name_utf8,
     sao_memprobe_ptr_chain_t* out_chain);
 
+SAO_CORE_API sao_status_t SAO_CORE_CALL sao_memprobe_anchor_save_v2(
+    const char* plugin_id_utf8, const char* anchor_name_utf8,
+    const sao_memprobe_ptr_chain_v2_t* chain);
+
+SAO_CORE_API sao_status_t SAO_CORE_CALL sao_memprobe_anchor_load_v2(
+    const char* plugin_id_utf8, const char* anchor_name_utf8,
+    sao_memprobe_ptr_chain_v2_t* out_chain);
+
 SAO_CORE_API sao_status_t SAO_CORE_CALL sao_memprobe_anchor_delete(
     const char* plugin_id_utf8, const char* anchor_name_utf8);
 

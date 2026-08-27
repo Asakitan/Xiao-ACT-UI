@@ -11,10 +11,13 @@
 #include "sao/plugins/angel_host/as_error.h"
 #include "sao/plugins/angel_host/as_module_bridge.h"
 #include "sao/plugins/angel_host/as_stdlib.h"
+#include "sao/plugins/loader/plugin_manifest.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -29,67 +32,18 @@ namespace sao::plugins::angel_host {
 
 #if defined(SAO_HAS_ANGELSCRIPT)
 
-// ── 极简 JSON reader: 只支持读顶层 {"key": "value"} 拿 entry 字段 ────
-namespace {
-std::string extract_json_string_field(const std::string& src, const std::string& key) {
-    // 找 "key" — 简单朴素: 找 "key" 后接可选 whitespace + ':' 后接可选 ws + '"...'"
-    std::string needle = "\"" + key + "\"";
-    auto pos = src.find(needle);
-    if (pos == std::string::npos)
-        return {};
-    pos += needle.size();
-    while (pos < src.size() &&
-           (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r'))
-        ++pos;
-    if (pos >= src.size() || src[pos] != ':')
-        return {};
-    ++pos;
-    while (pos < src.size() &&
-           (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r'))
-        ++pos;
-    if (pos >= src.size() || src[pos] != '"')
-        return {};
-    ++pos;
-    std::string out;
-    while (pos < src.size() && src[pos] != '"') {
-        char c = src[pos++];
-        if (c == '\\' && pos < src.size()) {
-            char e = src[pos++];
-            switch (e) {
-            case 'n':
-                out += '\n';
-                break;
-            case 't':
-                out += '\t';
-                break;
-            case 'r':
-                out += '\r';
-                break;
-            case '\\':
-                out += '\\';
-                break;
-            case '"':
-                out += '"';
-                break;
-            default:
-                out += e;
-                break;
-            }
-        } else
-            out += c;
-    }
-    return out;
+std::atomic_uint64_t g_next_legacy_module_generation{1};
+
+std::string next_legacy_module_name(const std::string& plugin_id) {
+    uint64_t generation = g_next_legacy_module_generation.fetch_add(1, std::memory_order_relaxed);
+    if (generation == 0)
+        generation = g_next_legacy_module_generation.fetch_add(1, std::memory_order_relaxed);
+    return (plugin_id.empty() ? std::string("hello_angel") : plugin_id) +
+           "_g" + std::to_string(generation);
 }
 
-std::string parent_dir(const std::string& p) {
-    auto pos = p.find_last_of("\\/");
-    if (pos == std::string::npos)
-        return ".";
-    return p.substr(0, pos);
-}
-
-std::string read_file(const std::string& p) {
-    std::ifstream f(p, std::ios::binary);
+std::string read_file(const std::filesystem::path& path) {
+    std::ifstream f(path, std::ios::binary);
     if (!f.is_open())
         return {};
     std::stringstream ss;
@@ -118,6 +72,7 @@ int32_t take_execution_error(asIScriptContext* context, char** output, const cha
 void release_plugin_runtime(as_plugin_s* plugin) noexcept {
     if (plugin == nullptr)
         return;
+    engine_execution_guard engine_lock;
     if (plugin->context != nullptr) {
         plugin->context->SetUserData(nullptr, kPluginContextUserDataSlot);
         plugin->context->Release();
@@ -151,41 +106,47 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
     }
 
 #if defined(SAO_HAS_ANGELSCRIPT)
+    const shared_host_state host_state = acquire_host(host);
+    if (!host_state)
+        return SAO_ERR_HANDLE_INVALID;
+    host_instance_lease host_instance;
+    const int32_t admission_status = host_instance.acquire(host_state);
+    if (admission_status != SAO_OK)
+        return admission_status;
     asIScriptEngine* engine = sao_plugins_ashost_engine(host);
     if (engine == nullptr)
         return SAO_ERR_HANDLE_INVALID;
+    engine_execution_guard engine_lock;
 
-    std::string manifest_path = plugin_json_path_utf8;
-    std::string manifest_body = read_file(manifest_path);
-    if (manifest_body.empty()) {
-        const char* m = "cannot read plugin.json";
-        if (out_error_utf8) {
-            *out_error_utf8 = static_cast<char*>(std::malloc(std::strlen(m) + 1));
-            if (*out_error_utf8)
-                std::strcpy(*out_error_utf8, m);
-        }
-        return SAO_ERR_HANDLE_INVALID;
+    const std::filesystem::path manifest_path = std::filesystem::u8path(plugin_json_path_utf8);
+    sao::plugins::loader::plugin_manifest manifest;
+    int32_t manifest_status = sao::plugins::loader::sao_plugins_manifest_load_from_file(
+        manifest_path.wstring().c_str(), &manifest);
+    if (manifest_status != SAO_OK) {
+        const std::string error = manifest.parse_error.empty()
+                                      ? "cannot read plugin.json"
+                                      : manifest.parse_error;
+        (void)copy_error(error, out_error_utf8, manifest_status);
+        return manifest_status;
     }
-    std::string plugin_id = extract_json_string_field(manifest_body, "id");
-    std::string entry = extract_json_string_field(manifest_body, "entry");
-    if (entry.empty())
-        entry = "main.as";
+    manifest_status = sao::plugins::loader::validate_manifest(manifest);
+    if (manifest_status != SAO_OK ||
+        manifest.language != sao::plugins::loader::engine_kind::angelscript) {
+        const int32_t status = manifest_status == SAO_OK ? SAO_ERR_INVALID_ARGUMENT
+                                                         : manifest_status;
+        (void)copy_error("AngelScript manifest failed canonical validation", out_error_utf8,
+                         status);
+        return status;
+    }
 
-    std::string dir = parent_dir(manifest_path);
-    std::string entry_path = dir + "/" + entry;
-    std::string entry_body = read_file(entry_path);
+    const auto entry_path = std::filesystem::u8path(manifest.source_path) /
+                            std::filesystem::u8path(manifest.entry);
+    const std::string entry_body = read_file(entry_path);
     if (entry_body.empty()) {
-        std::string m = "cannot read entry script: " + entry_path;
-        if (out_error_utf8) {
-            *out_error_utf8 = static_cast<char*>(std::malloc(m.size() + 1));
-            if (*out_error_utf8) {
-                std::memcpy(*out_error_utf8, m.data(), m.size());
-                (*out_error_utf8)[m.size()] = '\0';
-            }
-        }
+        const std::string error = "cannot read entry script: " + manifest.entry;
+        (void)copy_error(error, out_error_utf8, SAO_ERR_HANDLE_INVALID);
         return SAO_ERR_HANDLE_INVALID;
     }
-
     const int32_t registration_status = register_sdk_on_engine(engine);
     if (registration_status != SAO_OK)
         return registration_status;
@@ -195,11 +156,11 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
     }
 
     // 建 module — 每 plugin 一个独立 module
-    std::string module_name = plugin_id.empty() ? std::string("hello_angel") : plugin_id;
+    std::string module_name = next_legacy_module_name(manifest.plugin_id);
     asIScriptModule* mod = engine->GetModule(module_name.c_str(), asGM_ALWAYS_CREATE);
     if (mod == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
-    int r = mod->AddScriptSection(entry.c_str(), entry_body.c_str(), entry_body.size());
+    int r = mod->AddScriptSection(manifest.entry.c_str(), entry_body.c_str(), entry_body.size());
     if (r < 0) {
         const char* m = "AddScriptSection failed";
         if (out_error_utf8) {
@@ -223,9 +184,11 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
     }
 
     auto plugin = std::make_shared<as_plugin_s>();
+    plugin->host_state = host_state;
+    plugin->host_instance = std::move(host_instance);
     plugin->engine = engine;
     plugin->module = mod;
-    plugin->plugin_id = std::move(plugin_id);
+    plugin->plugin_id = manifest.plugin_id;
     plugin->module_name = module_name;
 
     // 分配 ctx (每 plugin 一个 context, 复用调 on_load/on_tick/on_unload)
@@ -270,6 +233,7 @@ sao_plugins_ashost_tick_plugin(as_plugin_handle_t plugin, char** out_error_utf8)
     if (!state)
         return SAO_ERR_HANDLE_INVALID;
     std::lock_guard lock(state->call_mutex);
+    engine_execution_guard engine_lock;
     if (state->lifecycle != plugin_runtime_state::ready || state->module == nullptr ||
         state->context == nullptr) {
         return SAO_ERR_HANDLE_INVALID;
@@ -347,6 +311,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_read_glob
     if (!state)
         return SAO_ERR_HANDLE_INVALID;
     std::lock_guard lock(state->call_mutex);
+    engine_execution_guard engine_lock;
     if (state->lifecycle != plugin_runtime_state::ready || state->module == nullptr)
         return SAO_ERR_HANDLE_INVALID;
     int idx = state->module->GetGlobalVarIndexByName(global_var_name_utf8);

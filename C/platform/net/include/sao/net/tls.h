@@ -19,6 +19,12 @@ extern "C" {
 
 typedef struct sao_net_tls_pin_set_s* sao_net_tls_pin_set_handle_t;
 
+#define SAO_NET_TLS_SCOPE_LICENSE "license"
+#define SAO_NET_TLS_SCOPE_UPDATE "update"
+#define SAO_NET_TLS_SCOPE_WORKSHOP "workshop"
+#define SAO_NET_TLS_SCOPE_CLOUD "cloud"
+#define SAO_NET_TLS_SCOPE_DEFAULT "default"
+
 // Pin the accepted server SPKI hashes for the License channel so a MITM
 // (corp proxy, malicious wifi) can't hand us a fresh RootCA.
 SAO_NET_API sao_status_t SAO_NET_CALL sao_net_tls_pin_set_create(

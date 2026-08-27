@@ -194,16 +194,22 @@ extern "C" sao_status_t SAO_NET_CALL sao_net_protobuf_decode_varint(
                           "buffer is empty", __FILE__, __LINE__);
     }
 
-    // protobuf varints are little-endian base-128 with the MSB acting as
-    // a continuation bit.  Max legal length is 10 bytes for a 64-bit
-    // integer (7*9 = 63 bits, plus the final byte contributing the
-    // 64th).
+    // The tenth byte contributes exactly one bit and must terminate the
+    // uint64 varint.
     uint64_t result = 0;
     for (size_t index = 0; index < size && index < 10; ++index) {
         const uint8_t byte = buf[index];
+        if (index == 9) {
+            if ((byte & 0x80u) != 0 || (byte & 0x7eu) != 0) {
+                return fail_proto(SAO_STATUS_ERR_INVALID_ARGUMENT,
+                                  "varint overflows uint64", __FILE__, __LINE__);
+            }
+            result |= static_cast<uint64_t>(byte & 0x01u) << 63u;
+            *value_out = result;
+            *consumed_out = 10;
+            return SAO_STATUS_OK;
+        }
         const uint64_t chunk = static_cast<uint64_t>(byte & 0x7F);
-        // Shift may reach 63 for the 10th byte, which is still legal.
-        // 64+ would overflow, but we cap the loop at 10 bytes.
         result |= chunk << (7u * index);
         if ((byte & 0x80) == 0) {
             *value_out = result;

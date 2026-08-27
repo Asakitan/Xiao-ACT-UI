@@ -8,6 +8,7 @@ namespace sao::launcher {
 
 struct LauncherLifecycleDecision {
     sao_dual_run_config dual_config{};
+    sao_dual_run_config_v2 dual_config_v2{};
     sao_launcher_dual_run_mode_t selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
     int64_t start_qpc = 0;
     bool active = false;

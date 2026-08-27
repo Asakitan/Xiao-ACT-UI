@@ -60,17 +60,15 @@ option(SAO_PLUGINS_ANGEL_MAX_PORTABILITY
 set(SAO_ANGELSCRIPT_SOURCE_DIR "" CACHE PATH
     "AngelScript SDK 根目录（包含 angelscript/ 与 add_on/）")
 
-# Auto-fetch upstream AngelScript SDK if no local runtime is available.
-# Enabled by default for the windows-tests preset via cache-var; disable when
-# building shipping/hardened targets that must not contact the network.
 option(SAO_PLUGINS_ANGEL_AUTO_FETCH
-    "Download AngelScript 2.36.1 tarball on demand (FetchContent) when no runtime is found." OFF)
-set(SAO_ANGELSCRIPT_FETCH_URL
-    "https://www.angelcode.com/angelscript/sdk/files/angelscript_2.36.1.zip"
-    CACHE STRING "URL from which the SDK zip is fetched when auto-fetch is enabled")
-set(SAO_ANGELSCRIPT_FETCH_SHA256
-    ""
-    CACHE STRING "SHA256 of the fetched SDK zip (empty = skip integrity check; set for reproducible builds)")
+    "Legacy compatibility switch; runtime downloads are disabled." OFF)
+if (SAO_PLUGINS_ANGEL_AUTO_FETCH)
+    message(WARNING
+        "SAO_PLUGINS_ANGEL_AUTO_FETCH is deprecated and ignored; AngelScript resolution remains offline.")
+    set(SAO_PLUGINS_ANGEL_AUTO_FETCH OFF)
+    set(SAO_PLUGINS_ANGEL_AUTO_FETCH OFF CACHE BOOL
+        "Legacy compatibility switch; runtime downloads are disabled." FORCE)
+endif()
 
 if (SAO_PLUGINS_ANGEL_REQUIRE_RUNTIME AND SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
     message(FATAL_ERROR
@@ -80,8 +78,6 @@ endif()
 # AngelScript SDK resolution order:
 #   1. vcpkg unofficial-angelscript / upstream Angelscript CONFIG package
 #   2. Operator-supplied SAO_ANGELSCRIPT_SOURCE_DIR (offline vendored source)
-#   3. FetchContent from angelcode.com when SAO_PLUGINS_ANGEL_AUTO_FETCH=ON
-# Auto-fetch is opt-in so shipping / air-gapped builds stay reproducible.
 function(_sao_add_angelscript_runtime sdk_root)
     # Isolate upstream CMake deprecation messages and remove its unscoped
     # /MP option, which MSBuild otherwise forwards to ml64 as A4018.
@@ -138,32 +134,6 @@ if (NOT SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
         _sao_add_angelscript_runtime("${SAO_ANGELSCRIPT_SOURCE_DIR}")
         if (TARGET angelscript)
             set(_sao_angel_target angelscript)
-        endif()
-    endif()
-    if (NOT _sao_angel_target AND SAO_PLUGINS_ANGEL_AUTO_FETCH)
-        include(FetchContent)
-        set(_sao_angel_fetch_args
-            angelscript_source
-            URL      "${SAO_ANGELSCRIPT_FETCH_URL}")
-        if (SAO_ANGELSCRIPT_FETCH_SHA256)
-            list(APPEND _sao_angel_fetch_args
-                URL_HASH "SHA256=${SAO_ANGELSCRIPT_FETCH_SHA256}")
-        endif()
-        FetchContent_Declare(${_sao_angel_fetch_args})
-        FetchContent_MakeAvailable(angelscript_source)
-        if (EXISTS
-            "${angelscript_source_SOURCE_DIR}/angelscript/projects/cmake/CMakeLists.txt")
-            set(AS_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-            _sao_add_angelscript_runtime("${angelscript_source_SOURCE_DIR}")
-            if (TARGET angelscript)
-                set(_sao_angel_target angelscript)
-                set(SAO_ANGELSCRIPT_SOURCE_DIR
-                    "${angelscript_source_SOURCE_DIR}" CACHE PATH "" FORCE)
-                message(STATUS "plugins/angel_host: fetched AngelScript source into ${angelscript_source_SOURCE_DIR}")
-            endif()
-        else()
-            message(WARNING
-                "plugins/angel_host: fetched archive missing angelscript/projects/cmake/CMakeLists.txt")
         endif()
     endif()
 endif()

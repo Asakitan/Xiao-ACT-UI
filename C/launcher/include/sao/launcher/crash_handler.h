@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <windows.h>
 
 namespace sao::launcher {
@@ -30,6 +31,7 @@ void setCrashDumpDirectory(const wchar_t* dir) noexcept;
 // Copy the current crash directory, including the terminator. Returns false
 // when the output buffer is null or too small.
 bool getCrashDumpDirectory(wchar_t* out_dir, size_t capacity) noexcept;
+bool getCrashDumpDirectory(std::wstring& out_dir) noexcept;
 
 // Testable form: write a minidump to `path` from the given exception info.
 // Returns true on success.

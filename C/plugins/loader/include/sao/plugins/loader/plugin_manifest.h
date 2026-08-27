@@ -25,6 +25,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -133,6 +134,10 @@ sao_plugins_manifest_load_from_file(const wchar_t* manifest_path,
 
 // 校验 manifest 完整性 (id 合法, entry 存在, 语言可识别, ...)。
 int32_t validate_manifest(const plugin_manifest& m);
+
+int32_t resolve_contained_existing_path(const std::filesystem::path& root,
+                                        const std::filesystem::path& candidate,
+                                        std::filesystem::path& out_resolved) noexcept;
 
 // engine_kind 枚举 <-> 字符串 (对齐 Python _normalize_engine_name)。
 // 兼容别名: "as" → angelscript, "cs"/"c#" → csharp, "engine" 字段 → language。

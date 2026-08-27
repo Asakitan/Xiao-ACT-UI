@@ -52,7 +52,7 @@ Python 平台的 ``.emma`` 脚本, 只要放进 ``plugins/<id>/plugin.emma``,
 
 **无**。零依赖是设计目标。
 
-## 测试
+## 历史测试（2026-08-23 已删除）
 
-见 ``tests/``。lex → parse → execute 全链路小步走单测, 每个语法特性
-一条测例, 对齐 python 版本的现成 selftests。
+旧 ``tests/``、Catch2 与 CTest 注册已删除；此前 lex → parse → execute 与
+Python selftest 对齐结果只保留为历史证据。

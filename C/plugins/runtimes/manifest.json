@@ -1,12 +1,11 @@
 {
-    "$comment": "Shared runtime manifest consumed by build-time FetchContent gates and the launcher-side runtime installer. Each entry describes a downloadable payload that carries the minimal binaries required to bring a plugin runtime online without a pre-installed SDK. Empty sha256 fields indicate that integrity checking is deferred to the primary URL host; set a value to make the download reproducible.",
+    "$comment": "Build-time runtime requirements only. This file is not a runtime-installer manifest, is never installed or shipped, and does not trigger downloads or claim to contain canonical runtime payloads.",
     "schema_version": 1,
     "runtimes": [
         {
             "kind": "dotnet_runtime",
             "version": "8.0.11",
             "url": "https://www.nuget.org/api/v2/package/Microsoft.NETCore.App.Runtime.win-x64/8.0.11",
-            "sha256": "",
             "extract_dir": "dotnet_runtime/8.0.11",
             "primary_binary": "runtimes/win-x64/native/hostfxr.dll",
             "auxiliary_binaries": [
@@ -16,50 +15,47 @@
             ],
             "shared_root": "shared/Microsoft.NETCore.App/8.0.11",
             "cmake_cache_var": "SAO_CSHARP_EMBEDDED_RUNTIME_DIR",
-            "env_promotion": ["DOTNET_ROOT"]
+            "env_promotion": [
+                "DOTNET_ROOT"
+            ]
         },
         {
             "kind": "lua_source",
             "version": "5.4.8",
             "url": "https://www.lua.org/ftp/lua-5.4.8.tar.gz",
-            "sha256": "",
             "extract_dir": "lua_source/5.4.8",
-            "primary_binary": "src/lua.h",
-            "cmake_cache_var": "SAO_LUA_FETCH_URL"
+            "primary_binary": "src/lua.h"
         },
         {
             "kind": "angelscript_source",
             "version": "2.36.1",
             "url": "https://www.angelcode.com/angelscript/sdk/files/angelscript_2.36.1.zip",
-            "sha256": "",
             "extract_dir": "angelscript_source/2.36.1",
-            "primary_binary": "angelscript/include/angelscript.h",
-            "cmake_cache_var": "SAO_ANGELSCRIPT_FETCH_URL"
+            "primary_binary": "angelscript/include/angelscript.h"
         },
         {
             "kind": "python3_embed",
             "version": "3.11.8",
             "url": "https://www.python.org/ftp/python/3.11.8/python-3.11.8-embed-amd64.zip",
-            "sha256": "",
             "extract_dir": "python3_embed/3.11.8",
             "primary_binary": "python311.dll",
             "auxiliary_binaries": [
                 "python3.dll",
                 "python311.zip"
-            ],
-            "cmake_cache_var": "SAO_PYTHON_EMBED_FETCH_URL"
+            ]
         },
         {
             "kind": "python3_headers",
             "version": "3.11.8",
             "url": "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.zip",
-            "sha256": "",
             "extract_dir": "python3_headers/3.11.8",
             "primary_binary": "Include/Python.h",
             "auxiliary_binaries": [
                 "libs/python311.lib"
-            ],
-            "cmake_cache_var": "SAO_PYTHON_HEADERS_FETCH_URL"
+            ]
         }
-    ]
+    ],
+    "schema_kind": "build_time_runtime_requirements",
+    "runtime_installer_compatible": false,
+    "ship_install": false
 }

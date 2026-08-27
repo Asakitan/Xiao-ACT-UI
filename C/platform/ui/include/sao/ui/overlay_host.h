@@ -65,6 +65,10 @@
 #include "sao/core/status.h"
 #include "sao/ui/abi.h"
 
+#ifndef SAO_UI_STATUS_ERR_BUSY
+#define SAO_UI_STATUS_ERR_BUSY ((sao_status_t)-102)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -177,6 +181,13 @@ SAO_UI_API void* SAO_UI_CALL sao_ui_overlay_host_owner_hwnd(sao_ui_overlay_host_
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_require_owner_thread(sao_ui_overlay_host_handle_t handle);
 
+// Acquire an owner-thread host lease and return the current hRender HWND.
+// The opaque lease must remain held across thread-affine DComp creation.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_acquire_lease(
+    sao_ui_overlay_host_handle_t handle, void* expected_hwnd, void** out_lease,
+    void** out_hwnd);
+
+SAO_UI_API void SAO_UI_CALL sao_ui_overlay_host_release_lease(void* lease);
 // Borrowed DC-mutation coordinator configured at host creation, or NULL.
 // The host owns only its HWND registration; it does not own the coordinator.
 SAO_UI_API void* SAO_UI_CALL

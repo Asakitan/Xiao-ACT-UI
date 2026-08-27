@@ -193,6 +193,7 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
 endif()
 target_link_libraries(sao_ai_editor PRIVATE
     sao::plugin_ai_editor
+    nlohmann_json::nlohmann_json
     sao::legacy_core
     sao::security::anti_screencap
     comctl32
@@ -205,6 +206,13 @@ endif()
 if (TARGET SaoKernelMapMcpServer)
     add_dependencies(sao_ai_editor SaoKernelMapMcpServer)
 endif()
+add_custom_command(TARGET sao_ai_editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:sao_ai_editor>/assets/ai_editor"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
+        "$<TARGET_FILE_DIR:sao_ai_editor>/assets/ai_editor/extension_host_shim.js"
+    VERBATIM)
 
 install(TARGETS sao_ai_editor sao_plugin_ai_editor
     RUNTIME DESTINATION "bin"

@@ -26,6 +26,7 @@
 #include <shlwapi.h>
 #include <bcrypt.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "shlwapi.lib")
@@ -55,6 +57,29 @@ RolloutState& S() {
     static RolloutState s;
     return s;
 }
+
+class RolloutFileLock final {
+  public:
+    RolloutFileLock() noexcept {
+        ::SetLastError(ERROR_SUCCESS);
+        handle_ = ::CreateMutexW(nullptr, FALSE, L"Local\\4F5A.rollout");
+        if (handle_ != nullptr) {
+            const DWORD wait_result = ::WaitForSingleObject(handle_, INFINITE);
+            acquired_ = wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED;
+        }
+    }
+
+    ~RolloutFileLock() noexcept {
+        if (acquired_) ::ReleaseMutex(handle_);
+        if (handle_ != nullptr) ::CloseHandle(handle_);
+    }
+
+    bool acquired() const noexcept { return acquired_; }
+
+  private:
+    HANDLE handle_{};
+    bool acquired_{};
+};
 
 // ---------------------------------------------------------------------------
 // Time helper
@@ -96,11 +121,12 @@ std::wstring utf8_to_wide(const std::string& in) {
 // ---------------------------------------------------------------------------
 // AppData paths
 // ---------------------------------------------------------------------------
-bool default_appdata_dir(wchar_t* out, size_t out_cap) {
+bool default_appdata_dir(std::wstring& out) {
+    out.clear();
     {
         std::lock_guard<std::mutex> g(S().mtx);
         if (!S().appdata_override.empty()) {
-            ::lstrcpynW(out, S().appdata_override.c_str(), static_cast<int>(out_cap));
+            out = S().appdata_override;
             return true;
         }
     }
@@ -110,22 +136,27 @@ bool default_appdata_dir(wchar_t* out, size_t out_cap) {
         if (appdata) ::CoTaskMemFree(appdata);
         return false;
     }
-    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s\\SaoAuto", appdata);
+    try {
+        out.assign(appdata);
+        out += L"\\SaoAuto";
+    } catch (...) {
+        out.clear();
+        ::CoTaskMemFree(appdata);
+        return false;
+    }
     ::CoTaskMemFree(appdata);
     return true;
 }
 
-bool default_rollout_config_path(wchar_t* out, size_t out_cap) {
-    wchar_t base[MAX_PATH]{};
-    if (!default_appdata_dir(base, MAX_PATH)) return false;
-    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s\\rollout.json", base);
+bool default_rollout_config_path(std::wstring& out) {
+    if (!default_appdata_dir(out)) return false;
+    out += L"\\rollout.json";
     return true;
 }
 
-bool default_rollout_stats_path(wchar_t* out, size_t out_cap) {
-    wchar_t base[MAX_PATH]{};
-    if (!default_appdata_dir(base, MAX_PATH)) return false;
-    _snwprintf_s(out, out_cap, _TRUNCATE, L"%s\\rollout_stats.json", base);
+bool default_rollout_stats_path(std::wstring& out) {
+    if (!default_appdata_dir(out)) return false;
+    out += L"\\rollout_stats.json";
     return true;
 }
 
@@ -133,8 +164,9 @@ bool default_rollout_stats_path(wchar_t* out, size_t out_cap) {
 // File I/O (small files only; 1 MiB cap).
 // ---------------------------------------------------------------------------
 bool read_file_bytes(const wchar_t* path, std::string& out) {
-    HANDLE h = ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
-                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = ::CreateFileW(path, GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz{};
     if (!::GetFileSizeEx(h, &sz) || sz.QuadPart > 1 * 1024 * 1024) {
@@ -154,23 +186,53 @@ bool read_file_bytes(const wchar_t* path, std::string& out) {
     return true;
 }
 
-bool write_file_bytes(const wchar_t* path, const std::string& in) {
-    wchar_t parent[MAX_PATH]{};
-    ::lstrcpynW(parent, path, MAX_PATH);
-    ::PathRemoveFileSpecW(parent);
-    if (parent[0]) sao::launcher::ensureDirectoryExists(parent);
+bool write_file_bytes_atomic(const wchar_t* path, const std::string& in) {
+    try {
+        std::wstring parent(path ? path : L"");
+        const size_t separator = parent.find_last_of(L"\\/");
+        if (separator == std::wstring::npos)
+            return false;
+        parent.resize(separator);
+        if (!parent.empty() && !sao::launcher::ensureDirectoryExists(parent.c_str()))
+            return false;
 
-    HANDLE h = ::CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD written = 0;
-    BOOL ok = TRUE;
-    if (!in.empty()) {
-        ok = ::WriteFile(h, in.data(), static_cast<DWORD>(in.size()),
-                          &written, nullptr);
+        std::wstring temp = path;
+        temp += L".tmp.";
+        temp += std::to_wstring(::GetCurrentProcessId());
+        temp += L".";
+        temp += std::to_wstring(::GetTickCount64());
+        HANDLE h = ::CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr,
+                                 CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE)
+            return false;
+        bool ok = true;
+        size_t offset = 0;
+        while (offset < in.size()) {
+            const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+                in.size() - offset, static_cast<std::size_t>(0x40000000u)));
+            DWORD written = 0;
+            if (!::WriteFile(h, in.data() + offset, chunk, &written, nullptr) ||
+                written == 0) {
+                ok = false;
+                break;
+            }
+            offset += written;
+        }
+        if (ok && !::FlushFileBuffers(h)) ok = false;
+        ::CloseHandle(h);
+        if (!ok || offset != in.size()) {
+            ::DeleteFileW(temp.c_str());
+            return false;
+        }
+        if (!::MoveFileExW(temp.c_str(), path,
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            ::DeleteFileW(temp.c_str());
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
     }
-    ::CloseHandle(h);
-    return ok == TRUE && written == in.size();
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +269,13 @@ std::string int64_to_string(int64_t v) {
 std::string int32_to_string(int32_t v) {
     char buf[16]{};
     _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", v);
+    return buf;
+}
+
+std::string uint64_to_string(uint64_t v) {
+    char buf[32]{};
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%llu",
+                static_cast<unsigned long long>(v));
     return buf;
 }
 
@@ -369,6 +438,8 @@ std::string serialise_config(const sao_rollout_config& cfg) {
         s += int32_to_string(cfg.retreat_history[i].new_percent);
         s += ", \"reason\": ";
         json_emit_string(s, std::string(cfg.retreat_history[i].reason));
+        s += ", \"watermark\": ";
+        s += uint64_to_string(cfg.retreat_history[i].watermark);
         s += "}";
     }
     if (cfg.retreat_history_count > 0) s += "\n  ";
@@ -400,6 +471,8 @@ bool parse_retreat_entry(JsonLexer& lx, sao_rollout_retreat_entry& out) {
             out.new_percent = static_cast<int32_t>(v.nval);
         } else if (k.sval == "reason" && v.kind == JsonToken::KString) {
             ::lstrcpynA(out.reason, v.sval.c_str(), sizeof(out.reason));
+        } else if (k.sval == "watermark" && v.kind == JsonToken::KNumber) {
+            out.watermark = static_cast<uint64_t>(v.nval);
         }
         auto next_or_end = lx.peek();
         if (!lx.ok) return false;
@@ -571,6 +644,30 @@ void push_recent_stat(sao_rollout_stats& st,
     st.recent[SAO_ROLLOUT_MAX_RECENT_RESULTS - 1] = e;
 }
 
+uint64_t stats_watermark(const sao_rollout_stats& st) {
+    uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](uint64_t value) {
+        for (int index = 0; index < 8; ++index) {
+            hash ^= static_cast<unsigned char>(value & 0xffu);
+            hash *= 1099511628211ULL;
+            value >>= 8u;
+        }
+    };
+    mix(static_cast<uint64_t>(st.recent_count));
+    mix(static_cast<uint64_t>(st.total_successes));
+    mix(static_cast<uint64_t>(st.total_failures));
+    for (int32_t index = 0; index < st.recent_count &&
+         index < SAO_ROLLOUT_MAX_RECENT_RESULTS; ++index) {
+        const auto& entry = st.recent[index];
+        mix(static_cast<uint64_t>(entry.ts_ms));
+        mix(static_cast<uint64_t>(entry.mode));
+        mix(static_cast<uint64_t>(entry.success));
+        mix(static_cast<uint64_t>(entry.duration_ms));
+        mix(static_cast<uint64_t>(entry.reason_code));
+    }
+    return hash & 0x7fffffffffffffffULL;
+}
+
 } // namespace
 
 // ===========================================================================
@@ -586,12 +683,12 @@ extern "C" void sao_rollout_config_default(sao_rollout_config* cfg) {
 }
 
 extern "C" sao_status_t sao_rollout_config_load(sao_rollout_config* cfg_out) {
-    wchar_t path[MAX_PATH]{};
-    if (!default_rollout_config_path(path, MAX_PATH)) {
+    std::wstring path;
+    if (!default_rollout_config_path(path)) {
         sao_rollout_config_default(cfg_out);
         return SAO_STATUS_OK;
     }
-    return sao_rollout_config_load_from_path(path, cfg_out);
+    return sao_rollout_config_load_from_path(path.c_str(), cfg_out);
 }
 
 extern "C" sao_status_t sao_rollout_config_load_from_path(
@@ -704,18 +801,20 @@ extern "C" sao_status_t sao_rollout_config_load_from_path(
 
 extern "C" sao_status_t sao_rollout_config_save(const sao_rollout_config* cfg) {
     if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
-    wchar_t path[MAX_PATH]{};
-    if (!default_rollout_config_path(path, MAX_PATH)) {
+    std::wstring path;
+    if (!default_rollout_config_path(path)) {
         return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
     }
-    return sao_rollout_config_save_to_path(path, cfg);
+    return sao_rollout_config_save_to_path(path.c_str(), cfg);
 }
 
 extern "C" sao_status_t sao_rollout_config_save_to_path(
     const wchar_t* path, const sao_rollout_config* cfg) {
     if (!path || !cfg) return SAO_STATUS_INVALID_ARGUMENT;
+    RolloutFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
     std::string blob = serialise_config(*cfg);
-    if (!write_file_bytes(path, blob)) return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
+    if (!write_file_bytes_atomic(path, blob)) return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
     return SAO_STATUS_OK;
 }
 
@@ -723,12 +822,12 @@ extern "C" sao_status_t sao_rollout_config_save_to_path(
 // Public API - stats
 // ===========================================================================
 extern "C" sao_status_t sao_rollout_stats_load(sao_rollout_stats* stats_out) {
-    wchar_t path[MAX_PATH]{};
-    if (!default_rollout_stats_path(path, MAX_PATH)) {
+    std::wstring path;
+    if (!default_rollout_stats_path(path)) {
         if (stats_out) std::memset(stats_out, 0, sizeof(*stats_out));
         return SAO_STATUS_OK;
     }
-    return sao_rollout_stats_load_from_path(path, stats_out);
+    return sao_rollout_stats_load_from_path(path.c_str(), stats_out);
 }
 
 extern "C" sao_status_t sao_rollout_stats_load_from_path(
@@ -800,18 +899,20 @@ extern "C" sao_status_t sao_rollout_stats_load_from_path(
 
 extern "C" sao_status_t sao_rollout_stats_save(const sao_rollout_stats* stats) {
     if (!stats) return SAO_STATUS_INVALID_ARGUMENT;
-    wchar_t path[MAX_PATH]{};
-    if (!default_rollout_stats_path(path, MAX_PATH)) {
+    std::wstring path;
+    if (!default_rollout_stats_path(path)) {
         return SAO_ROLLOUT_STATS_WRITE_FAILED;
     }
-    return sao_rollout_stats_save_to_path(path, stats);
+    return sao_rollout_stats_save_to_path(path.c_str(), stats);
 }
 
 extern "C" sao_status_t sao_rollout_stats_save_to_path(
     const wchar_t* path, const sao_rollout_stats* stats) {
     if (!path || !stats) return SAO_STATUS_INVALID_ARGUMENT;
+    RolloutFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_ROLLOUT_STATS_WRITE_FAILED;
     std::string blob = serialise_stats(*stats);
-    if (!write_file_bytes(path, blob)) return SAO_ROLLOUT_STATS_WRITE_FAILED;
+    if (!write_file_bytes_atomic(path, blob)) return SAO_ROLLOUT_STATS_WRITE_FAILED;
     return SAO_STATUS_OK;
 }
 
@@ -895,8 +996,13 @@ std::string build_props(const std::pair<const char*, std::string> kvs[], size_t 
 
 extern "C" sao_status_t sao_rollout_record_success(
     sao_launcher_dual_run_mode_t mode, int32_t duration_ms) {
+    RolloutFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_ROLLOUT_STATS_WRITE_FAILED;
+    std::wstring path;
+    if (!default_rollout_stats_path(path)) return SAO_ROLLOUT_STATS_WRITE_FAILED;
     sao_rollout_stats st{};
-    (void)sao_rollout_stats_load(&st);
+    sao_status_t status = sao_rollout_stats_load_from_path(path.c_str(), &st);
+    if (status != SAO_STATUS_OK) return status;
     st.total_successes += 1;
     sao_rollout_stats_entry e{};
     e.ts_ms = now_ms_impl();
@@ -905,12 +1011,13 @@ extern "C" sao_status_t sao_rollout_record_success(
     e.duration_ms = duration_ms;
     e.reason_code = 0;
     push_recent_stat(st, e);
-    (void)sao_rollout_stats_save(&st);
+    if (!write_file_bytes_atomic(path.c_str(), serialise_stats(st)))
+        return SAO_ROLLOUT_STATS_WRITE_FAILED;
 
     std::string mode_quoted = "\"" + mode_name(mode) + "\"";
     std::pair<const char*, std::string> kv[] = {
-        {"mode",         mode_quoted},
-        {"duration_ms",  int32_to_string(duration_ms)},
+        {"mode", mode_quoted},
+        {"duration_ms", int32_to_string(duration_ms)},
     };
     emit_telemetry("sao.rollout.launch_success", build_props(kv, 2));
     return SAO_STATUS_OK;
@@ -919,8 +1026,13 @@ extern "C" sao_status_t sao_rollout_record_success(
 extern "C" sao_status_t sao_rollout_record_failure(
     sao_launcher_dual_run_mode_t mode, int32_t reason_code,
     const char* stack_hint) {
+    RolloutFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_ROLLOUT_STATS_WRITE_FAILED;
+    std::wstring path;
+    if (!default_rollout_stats_path(path)) return SAO_ROLLOUT_STATS_WRITE_FAILED;
     sao_rollout_stats st{};
-    (void)sao_rollout_stats_load(&st);
+    sao_status_t status = sao_rollout_stats_load_from_path(path.c_str(), &st);
+    if (status != SAO_STATUS_OK) return status;
     st.total_failures += 1;
     sao_rollout_stats_entry e{};
     e.ts_ms = now_ms_impl();
@@ -929,17 +1041,16 @@ extern "C" sao_status_t sao_rollout_record_failure(
     e.duration_ms = 0;
     e.reason_code = reason_code;
     push_recent_stat(st, e);
-    (void)sao_rollout_stats_save(&st);
+    if (!write_file_bytes_atomic(path.c_str(), serialise_stats(st)))
+        return SAO_ROLLOUT_STATS_WRITE_FAILED;
 
     std::string mode_quoted = "\"" + mode_name(mode) + "\"";
-    std::string reason_quoted = int32_to_string(reason_code);
-    std::string hint_str;
-    hint_str.reserve(80);
-    json_emit_string(hint_str, stack_hint ? stack_hint : "");
+    std::string hint_json;
+    json_emit_string(hint_json, stack_hint ? stack_hint : "");
     std::pair<const char*, std::string> kv[] = {
-        {"mode",         mode_quoted},
-        {"reason_code",  reason_quoted},
-        {"stack_hint",   hint_str},
+        {"mode", mode_quoted},
+        {"reason_code", int32_to_string(reason_code)},
+        {"stack_hint", hint_json},
     };
     emit_telemetry("sao.rollout.launch_failure", build_props(kv, 3));
     return SAO_STATUS_OK;
@@ -950,53 +1061,57 @@ extern "C" sao_status_t sao_rollout_record_failure(
 // ===========================================================================
 extern "C" int32_t sao_rollout_check_auto_retreat(int32_t* new_percent_out) {
     if (new_percent_out) *new_percent_out = -1;
+    RolloutFileLock file_lock;
+    if (!file_lock.acquired()) return SAO_ROLLOUT_STATS_WRITE_FAILED;
 
+    std::wstring stats_path;
+    std::wstring config_path;
+    if (!default_rollout_stats_path(stats_path) ||
+        !default_rollout_config_path(config_path))
+        return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
     sao_rollout_stats st{};
-    (void)sao_rollout_stats_load(&st);
+    sao_status_t status = sao_rollout_stats_load_from_path(stats_path.c_str(), &st);
+    if (status != SAO_STATUS_OK) return status;
     if (st.recent_count < 3) return 0;
 
-    // Only count CPP-flavoured runs.  A pure PYTHON_ONLY run failing has no
-    // bearing on the CPP ramp.
     int32_t cpp_failures = 0;
-    int32_t cpp_total    = 0;
-    for (int32_t i = 0; i < st.recent_count; ++i) {
+    int32_t cpp_total = 0;
+    for (int32_t i = 0; i < st.recent_count && i < SAO_ROLLOUT_MAX_RECENT_RESULTS; ++i) {
         if (!is_cpp_mode(st.recent[i].mode)) continue;
         ++cpp_total;
         if (!st.recent[i].success) ++cpp_failures;
     }
-    if (cpp_total < 3) return 0;
-    if (cpp_failures < 3) return 0;
+    if (cpp_total < 3 || cpp_failures < 3) return 0;
 
-    // Load, halve, save.
+    const uint64_t watermark = stats_watermark(st);
     sao_rollout_config cfg{};
-    (void)sao_rollout_config_load(&cfg);
-    int32_t old_percent = cfg.cpp_percent;
-    int32_t new_percent = old_percent / 2;
-    if (new_percent < 0) new_percent = 0;
-    if (old_percent == new_percent) {
-        // Already at 0; nothing to retreat.
+    status = sao_rollout_config_load_from_path(config_path.c_str(), &cfg);
+    if (status != SAO_STATUS_OK) return status;
+    if (cfg.retreat_history_count > 0 &&
+        cfg.retreat_history[cfg.retreat_history_count - 1].watermark == watermark)
         return 0;
-    }
-    cfg.cpp_percent = new_percent;
 
+    const int32_t old_percent = cfg.cpp_percent;
+    const int32_t new_percent = old_percent / 2;
+    if (old_percent == new_percent) return 0;
+    cfg.cpp_percent = new_percent;
     sao_rollout_retreat_entry re{};
     re.ts_ms = now_ms_impl();
     re.old_percent = old_percent;
     re.new_percent = new_percent;
     ::lstrcpynA(re.reason, "3_of_5_failed", sizeof(re.reason));
+    re.watermark = watermark;
     push_retreat_history(cfg, re);
+    if (!write_file_bytes_atomic(config_path.c_str(), serialise_config(cfg)))
+        return SAO_ROLLOUT_CONFIG_WRITE_FAILED;
 
-    (void)sao_rollout_config_save(&cfg);
-
-    std::string old_pct = int32_to_string(old_percent);
-    std::string new_pct = int32_to_string(new_percent);
     std::pair<const char*, std::string> kv[] = {
-        {"old_percent", old_pct},
-        {"new_percent", new_pct},
-        {"reason",      std::string("\"3_of_5_failed\"")},
+        {"old_percent", int32_to_string(old_percent)},
+        {"new_percent", int32_to_string(new_percent)},
+        {"reason", std::string("\"3_of_5_failed\"")},
+        {"watermark", uint64_to_string(watermark)},
     };
-    emit_telemetry("sao.rollout.auto_retreat", build_props(kv, 3));
-
+    emit_telemetry("sao.rollout.auto_retreat", build_props(kv, 4));
     if (new_percent_out) *new_percent_out = new_percent;
     return 1;
 }
