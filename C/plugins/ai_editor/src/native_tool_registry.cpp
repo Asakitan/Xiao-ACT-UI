@@ -3,12 +3,15 @@
 #include "gpu_hunt_bridge.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cwctype>
 #include <filesystem>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include "tool_result_filter.h"
 
@@ -64,6 +67,126 @@ void append_error(Json& errors, std::string_view path, std::string_view reason) 
                           {"reason", std::string(reason)}});
 }
 
+enum class NumericOrder : int8_t {
+    less = -1,
+    equal = 0,
+    greater = 1,
+};
+
+NumericOrder invert_numeric_order(NumericOrder order) noexcept {
+    if (order == NumericOrder::less) return NumericOrder::greater;
+    if (order == NumericOrder::greater) return NumericOrder::less;
+    return NumericOrder::equal;
+}
+
+NumericOrder compare_unsigned_to_double(uint64_t value,
+                                        double limit) noexcept {
+    if (std::isnan(limit)) return NumericOrder::equal;
+    if (limit < 0.0) return NumericOrder::greater;
+    constexpr double kTwoTo64 = 18446744073709551616.0;
+    if (limit >= kTwoTo64) return NumericOrder::less;
+    const double integral = std::floor(limit);
+    const uint64_t integral_value = static_cast<uint64_t>(integral);
+    if (value < integral_value) return NumericOrder::less;
+    if (value > integral_value) return NumericOrder::greater;
+    return integral == limit ? NumericOrder::equal : NumericOrder::less;
+}
+
+NumericOrder compare_signed_to_double(int64_t value,
+                                      double limit) noexcept {
+    if (std::isnan(limit)) return NumericOrder::equal;
+    if (value >= 0) {
+        return compare_unsigned_to_double(static_cast<uint64_t>(value), limit);
+    }
+    if (limit >= 0.0) return NumericOrder::less;
+    const uint64_t magnitude = 0u - static_cast<uint64_t>(value);
+    return invert_numeric_order(
+        compare_unsigned_to_double(magnitude, -limit));
+}
+
+NumericOrder compare_numbers(const Json& left, const Json& right) noexcept {
+    if (left.is_number_unsigned()) {
+        const uint64_t value = left.get<uint64_t>();
+        if (right.is_number_unsigned()) {
+            const uint64_t other = right.get<uint64_t>();
+            return value < other ? NumericOrder::less
+                                 : value > other ? NumericOrder::greater
+                                                 : NumericOrder::equal;
+        }
+        if (right.is_number_integer()) {
+            const int64_t other = right.get<int64_t>();
+            if (other < 0) return NumericOrder::greater;
+            const uint64_t converted = static_cast<uint64_t>(other);
+            return value < converted ? NumericOrder::less
+                                     : value > converted ? NumericOrder::greater
+                                                         : NumericOrder::equal;
+        }
+        return compare_unsigned_to_double(value, right.get<double>());
+    }
+    if (left.is_number_integer()) {
+        const int64_t value = left.get<int64_t>();
+        if (right.is_number_unsigned()) {
+            if (value < 0) return NumericOrder::less;
+            const uint64_t converted = static_cast<uint64_t>(value);
+            const uint64_t other = right.get<uint64_t>();
+            return converted < other ? NumericOrder::less
+                                     : converted > other ? NumericOrder::greater
+                                                         : NumericOrder::equal;
+        }
+        if (right.is_number_integer()) {
+            const int64_t other = right.get<int64_t>();
+            return value < other ? NumericOrder::less
+                                 : value > other ? NumericOrder::greater
+                                                 : NumericOrder::equal;
+        }
+        return compare_signed_to_double(value, right.get<double>());
+    }
+    const double value = left.get<double>();
+    if (right.is_number_unsigned()) {
+        return invert_numeric_order(
+            compare_unsigned_to_double(right.get<uint64_t>(), value));
+    }
+    if (right.is_number_integer()) {
+        return invert_numeric_order(
+            compare_signed_to_double(right.get<int64_t>(), value));
+    }
+    const double other = right.get<double>();
+    if (value < other) return NumericOrder::less;
+    if (value > other) return NumericOrder::greater;
+    return NumericOrder::equal;
+}
+
+bool parse_schema_size_limit(const Json& schema, std::string_view key,
+                            const std::string& path, Json& errors,
+                            uint64_t& output) {
+    const Json& value = schema[std::string(key)];
+    if (!value.is_number_integer()) {
+        append_error(errors, path,
+                     "schema " + std::string(key) +
+                         " must be a non-negative integer");
+        return false;
+    }
+    if (value.is_number_unsigned()) {
+        output = value.get<uint64_t>();
+    } else {
+        const int64_t signed_value = value.get<int64_t>();
+        if (signed_value < 0) {
+            append_error(errors, path,
+                         "schema " + std::string(key) +
+                             " must be a non-negative integer");
+            return false;
+        }
+        output = static_cast<uint64_t>(signed_value);
+    }
+    if (output > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        append_error(errors, path,
+                     "schema " + std::string(key) +
+                         " exceeds the platform size limit");
+        return false;
+    }
+    return true;
+}
+
 void validate_recursive(const Json& value,
                         const Json& schema,
                         const std::string& path,
@@ -73,6 +196,27 @@ void validate_recursive(const Json& value,
         // not falsely reject callers that hand us a permissive schema stub.
         return;
     }
+
+    uint64_t minimum_items = 0u;
+    uint64_t maximum_items = 0u;
+    uint64_t minimum_length = 0u;
+    uint64_t maximum_length = 0u;
+    const bool valid_minimum_items =
+        !schema.contains("minItems") ||
+        parse_schema_size_limit(schema, "minItems", path, errors,
+                                minimum_items);
+    const bool valid_maximum_items =
+        !schema.contains("maxItems") ||
+        parse_schema_size_limit(schema, "maxItems", path, errors,
+                                maximum_items);
+    const bool valid_minimum_length =
+        !schema.contains("minLength") ||
+        parse_schema_size_limit(schema, "minLength", path, errors,
+                                minimum_length);
+    const bool valid_maximum_length =
+        !schema.contains("maxLength") ||
+        parse_schema_size_limit(schema, "maxLength", path, errors,
+                                maximum_length);
 
     // `type` may be a single string or an array of strings ("value must match
     // at least one of these").  Draft-07 permits both forms; treat other
@@ -110,19 +254,68 @@ void validate_recursive(const Json& value,
         }
     }
 
-    // `enum` — the value must appear in the enum array using nlohmann's ==
-    // (which handles number-vs-string ties correctly).
+    // `enum` — numeric equality uses the same lossless cross-type comparator
+    // as minimum/maximum; other JSON types retain exact structural equality.
     if (schema.contains("enum") && schema["enum"].is_array()) {
         const auto& allowed = schema["enum"];
         bool matched = false;
         for (const auto& candidate : allowed) {
-            if (candidate == value) {
+            const bool numeric_match = candidate.is_number() && value.is_number() &&
+                (!candidate.is_number_float() ||
+                 std::isfinite(candidate.get<double>())) &&
+                (!value.is_number_float() || std::isfinite(value.get<double>())) &&
+                compare_numbers(candidate, value) == NumericOrder::equal;
+            if (numeric_match ||
+                (!candidate.is_number() && !value.is_number() && candidate == value)) {
                 matched = true;
                 break;
             }
         }
         if (!matched) {
             append_error(errors, path, "value not in enum");
+        }
+    }
+
+    if (value.is_number() && schema.contains("minimum") &&
+        schema["minimum"].is_number()) {
+        if (compare_numbers(value, schema["minimum"]) == NumericOrder::less) {
+            append_error(errors, path, "number below minimum");
+        }
+    }
+    if (value.is_number() && schema.contains("maximum") &&
+        schema["maximum"].is_number()) {
+        if (compare_numbers(value, schema["maximum"]) == NumericOrder::greater) {
+            append_error(errors, path, "number above maximum");
+        }
+    }
+    if (schema.contains("minItems")) {
+        if (valid_minimum_items &&
+            value.is_array() &&
+            static_cast<uint64_t>(value.size()) < minimum_items) {
+            append_error(errors, path, "array shorter than minItems");
+        }
+    }
+    if (schema.contains("maxItems")) {
+        if (valid_maximum_items &&
+            value.is_array() &&
+            static_cast<uint64_t>(value.size()) > maximum_items) {
+            append_error(errors, path, "array longer than maxItems");
+        }
+    }
+    if (schema.contains("minLength")) {
+        if (valid_minimum_length &&
+            value.is_string() &&
+            static_cast<uint64_t>(value.get_ref<const std::string&>().size()) <
+                minimum_length) {
+            append_error(errors, path, "string shorter than minLength");
+        }
+    }
+    if (schema.contains("maxLength")) {
+        if (valid_maximum_length &&
+            value.is_string() &&
+            static_cast<uint64_t>(value.get_ref<const std::string&>().size()) >
+                maximum_length) {
+            append_error(errors, path, "string longer than maxLength");
         }
     }
 
@@ -141,8 +334,20 @@ void validate_recursive(const Json& value,
         }
     }
 
-    // `properties` — recurse for each field present in the value.  Unlisted
-    // properties are ignored (no additionalProperties support).
+    if (value.is_object() && schema.contains("additionalProperties") &&
+        schema["additionalProperties"].is_boolean() &&
+        !schema["additionalProperties"].get<bool>()) {
+        const Json properties = schema.value("properties", Json::object());
+        for (const auto& entry : value.items()) {
+            if (!properties.is_object() || !properties.contains(entry.key())) {
+                const std::string child_path =
+                    path + (path == "$" ? "." : ".") + entry.key();
+                append_error(errors, child_path, "additional property not allowed");
+            }
+        }
+    }
+
+    // `properties` — recurse for each field present in the value.
     if (value.is_object() && schema.contains("properties") &&
         schema["properties"].is_object()) {
         for (auto entry = schema["properties"].begin();
@@ -346,6 +551,9 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
                             {"readOnly", entry.second.read_only},
                             {"parameters", entry.second.parameters},
                             {"custom", true}};
+            if (entry.second.explicit_confirmation_required) {
+                descriptor["explicitConfirmationRequired"] = true;
+            }
             custom_snapshot.push_back(std::move(descriptor));
         }
         alias_snapshot.reserve(aliases_.size());
@@ -369,6 +577,9 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
                     descriptor["readOnly"] = found->second.read_only;
                     descriptor["parameters"] = found->second.parameters;
                     descriptor["custom"] = true;
+                    if (found->second.explicit_confirmation_required) {
+                        descriptor["explicitConfirmationRequired"] = true;
+                    }
                 }
                 // A dangling alias whose target was unregistered simply
                 // surfaces name + aliasOf; execute() will return NOT_FOUND
@@ -414,6 +625,7 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     bool custom_read_only = true;
     CustomExecuteFn custom_execute_fn = nullptr;
     void* custom_execute_user = nullptr;
+    std::shared_ptr<void> custom_execute_lifetime;
     bool found_tool = false;
     bool is_gpu_hunt = false;
     if (is_builtin_name(resolved_name)) {
@@ -443,6 +655,7 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
                 custom_read_only = found->second.read_only;
                 custom_execute_fn = found->second.execute_fn;
                 custom_execute_user = found->second.execute_user;
+                custom_execute_lifetime = found->second.execute_lifetime;
                 is_custom = true;
                 found_tool = true;
             }
@@ -587,7 +800,8 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
                                             const Json& parameters,
                                             bool read_only,
                                             CustomExecuteFn execute_fn,
-                                            void* execute_user) {
+                                            void* execute_user,
+                                            bool explicit_confirmation_required) {
     if (name.empty() || !valid_utf8(name)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -615,6 +829,9 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     tool.read_only = read_only;
     tool.execute_fn = execute_fn;
     tool.execute_user = execute_user;
+    tool.execute_lifetime = {};
+    tool.explicit_confirmation_required = explicit_confirmation_required;
+    tool.owner = nullptr;
     std::lock_guard<std::mutex> lock(custom_mutex_);
     // Reject a custom-tool registration whose name collides with an existing
     // alias.  Re-registering an existing custom name still updates the
@@ -623,7 +840,98 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     if (aliases_.find(std::string(name)) != aliases_.end()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
+    const auto existing = custom_tools_.find(std::string(name));
+    if (existing != custom_tools_.end() && existing->second.owner != nullptr) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
     custom_tools_[std::string(name)] = std::move(tool);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::upsert_custom_batch(
+    const std::vector<CustomToolDescriptor>& descriptors,
+    CustomToolOwner owner) {
+    if (owner == nullptr || descriptors.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::unordered_set<std::string> names;
+    names.reserve(descriptors.size());
+    for (const auto& descriptor : descriptors) {
+        if (descriptor.name.empty() || !valid_utf8(descriptor.name) ||
+            is_builtin_name(descriptor.name) ||
+            is_gpu_hunt_tool_name(descriptor.name) ||
+            !names.emplace(descriptor.name).second) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (!descriptor.parameters.is_null() &&
+            !descriptor.parameters.is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    for (const auto& descriptor : descriptors) {
+        if (aliases_.find(descriptor.name) != aliases_.end()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const auto existing = custom_tools_.find(descriptor.name);
+        if (existing != custom_tools_.end() &&
+            existing->second.owner != owner) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+    }
+
+    std::unordered_map<std::string, CustomTool> next = custom_tools_;
+    for (const auto& descriptor : descriptors) {
+        CustomTool tool;
+        tool.description = descriptor.description;
+        tool.parameters = descriptor.parameters.is_null()
+                              ? Json{{"type", "object"},
+                                     {"properties", Json::object()}}
+                              : descriptor.parameters;
+        tool.read_only = descriptor.read_only;
+        tool.execute_fn = descriptor.execute_fn;
+        tool.execute_user = descriptor.execute_user;
+        tool.execute_lifetime = descriptor.execute_lifetime;
+        tool.explicit_confirmation_required =
+            descriptor.explicit_confirmation_required;
+        tool.owner = owner;
+        next[descriptor.name] = std::move(tool);
+    }
+    custom_tools_.swap(next);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::remove_custom_batch(
+    const std::vector<std::string>& names, CustomToolOwner owner) {
+    if (owner == nullptr || names.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::unordered_set<std::string> unique_names;
+    unique_names.reserve(names.size());
+    for (const auto& name : names) {
+        if (name.empty() || !valid_utf8(name) ||
+            !unique_names.emplace(name).second) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    for (const auto& name : names) {
+        const auto found = custom_tools_.find(name);
+        if (found == custom_tools_.end()) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        if (found->second.owner != owner) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+    }
+
+    std::unordered_map<std::string, CustomTool> next = custom_tools_;
+    for (const auto& name : names) {
+        next.erase(name);
+    }
+    custom_tools_.swap(next);
     return SAO_AI_EDITOR_OK;
 }
 
@@ -635,6 +943,9 @@ int32_t NativeToolRegistry::unregister_custom(std::string_view name) {
     const auto found = custom_tools_.find(std::string(name));
     if (found == custom_tools_.end()) {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    if (found->second.owner != nullptr) {
+        return SAO_AI_EDITOR_ERR_BUSY;
     }
     custom_tools_.erase(found);
     return SAO_AI_EDITOR_OK;

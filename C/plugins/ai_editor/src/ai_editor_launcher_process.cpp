@@ -22,7 +22,7 @@ constexpr uint32_t kDefaultRequestTimeoutMs = 5000U;
 constexpr char kHandshakeRequest[] = "SAO_AI_EDITOR_HELLO 1";
 constexpr char kHandshakeResponse[] = "SAO_AI_EDITOR_READY 1";
 constexpr char kShutdownRequest[] = "shutdown";
-constexpr uint32_t kMaximumPayload = 1024U * 1024U;
+constexpr uint32_t kMaximumPayload = 4U * 1024U * 1024U;
 
 bool copy_string(char* destination, size_t capacity, const std::string& source) {
     if (destination == nullptr || capacity == 0 || source.size() + 1 > capacity) {

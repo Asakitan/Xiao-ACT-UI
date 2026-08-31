@@ -86,10 +86,13 @@ int32_t tools_schema(sao_ai_editor_runtime_t runtime, Json& out) {
             input_schema = Json{{"type", "object"}, {"properties", Json::object()}};
         }
         const bool read_only = descriptor.value("readOnly", false);
+        const bool destructive_hint =
+            descriptor.value("explicitConfirmationRequired", false);
         out.push_back(Json{{"name", descriptor["name"]},
                            {"description", descriptor.value("description", std::string{})},
                            {"inputSchema", std::move(input_schema)},
-                           {"annotations", {{"readOnlyHint", read_only}}}});
+                           {"annotations", { {"readOnlyHint", read_only},
+                                               {"destructiveHint", destructive_hint}}}});
     }
     return SAO_AI_EDITOR_OK;
 }
@@ -168,9 +171,13 @@ int32_t handle_message(sao_ai_editor_runtime_t runtime, const Json& request,
             return finish(SAO_AI_EDITOR_OK);
         }
         if (inner.contains("error")) {
-            const std::string message =
-                inner["error"].value("message", "tool failed");
-            response = error_envelope(id, -32000, message);
+            if (inner["error"].is_object()) {
+                response = Json{{"jsonrpc", "2.0"},
+                                {"id", id},
+                                {"error", inner["error"]}};
+            } else {
+                response = error_envelope(id, -32000, "tool failed");
+            }
             return finish(SAO_AI_EDITOR_OK);
         }
         response = result_envelope(

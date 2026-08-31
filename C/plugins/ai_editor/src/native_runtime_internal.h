@@ -29,6 +29,10 @@
 #include "winhttp_chat.h"
 #include "workflow_engine.h"
 
+namespace sao::ai_editor::vt {
+class Bridge;
+}  // namespace sao::ai_editor::vt
+
 namespace sao::ai_editor::native {
 
 struct RuntimeOptions final {
@@ -212,6 +216,7 @@ private:
     ScopeStore scopes_;
     RuntimeOptions options_;
     ConversationStore conversations_;
+    std::shared_ptr<sao::ai_editor::vt::Bridge> vt_bridge_;
     NativeToolRegistry tools_;
     // Session-memory dedup cache for read-only tool calls.  Owns its own
     // mutex; safe to call from the dispatch thread without holding

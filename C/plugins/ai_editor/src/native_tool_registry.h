@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -14,8 +15,9 @@ namespace sao::ai_editor::native {
 class ToolResultFilterRegistry;
 
 // Best-effort JSON Schema draft-07 subset validator.  Supports type / properties
-// / required / items / enum and skips fields it does not recognise (pattern,
-// format, oneOf/anyOf/allOf/not, $ref, additionalProperties, …) so early
+// / required / items / enum / additionalProperties:false / minimum / maximum /
+// minItems / maxItems / minLength / maxLength and skips fields it does not
+// recognise (pattern, format, oneOf/anyOf/allOf/not, $ref, …) so early
 // adoption never rejects a request the runtime would otherwise accept.  On
 // success returns SAO_AI_EDITOR_OK; on failure returns
 // SAO_AI_EDITOR_ERR_INVALID_ARGUMENT and populates `errors` with an array of
@@ -29,6 +31,19 @@ class NativeToolRegistry final {
 public:
     using CustomExecuteFn =
         int32_t (*)(const Json& arguments, Json& result, void* user);
+
+    using CustomToolOwner = const void*;
+
+    struct CustomToolDescriptor final {
+        std::string name;
+        std::string description;
+        Json parameters;
+        bool read_only = true;
+        CustomExecuteFn execute_fn = nullptr;
+        void* execute_user = nullptr;
+        std::shared_ptr<void> execute_lifetime;
+        bool explicit_confirmation_required = false;
+    };
 
     NativeToolRegistry(const ScopeStore& scopes,
                        uint32_t maximum_file_bytes,
@@ -58,7 +73,15 @@ public:
                             const Json& parameters,
                             bool read_only,
                             CustomExecuteFn execute_fn = nullptr,
-                            void* execute_user = nullptr);
+                            void* execute_user = nullptr,
+                            bool explicit_confirmation_required = false);
+
+    int32_t upsert_custom_batch(
+        const std::vector<CustomToolDescriptor>& descriptors,
+        CustomToolOwner owner);
+    int32_t remove_custom_batch(const std::vector<std::string>& names,
+                                CustomToolOwner owner);
+
     // Remove a previously registered custom tool.  Returning NOT_FOUND lets
     // callers distinguish "already gone" from "argument was rubbish".
     int32_t unregister_custom(std::string_view name);
@@ -122,6 +145,9 @@ private:
         bool read_only = true;
         CustomExecuteFn execute_fn = nullptr;
         void* execute_user = nullptr;
+        std::shared_ptr<void> execute_lifetime;
+        bool explicit_confirmation_required = false;
+        CustomToolOwner owner = nullptr;
     };
 
     struct AliasEntry final {

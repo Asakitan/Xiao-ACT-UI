@@ -16,7 +16,7 @@
 namespace {
 
 constexpr const char* kDefaultPipePrefix = "\\\\.\\pipe\\sao_ai_editor_ipc_";
-constexpr uint32_t kMaximumPayload = 1024U * 1024U;
+constexpr uint32_t kMaximumPayload = 4U * 1024U * 1024U;
 constexpr uint32_t kIoTimeoutMs = 5000U;
 
 class ScopedHandle final {

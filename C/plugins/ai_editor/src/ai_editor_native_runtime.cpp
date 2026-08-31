@@ -10,6 +10,9 @@
 #include "plugin_contributions.h"
 #include "sao/ai_editor/kernel_map_bridge.h"
 #include "sha256_helper.h"
+#include "vt_bridge.h"
+#include "vt_commands.h"
+#include "vt_tools.h"
 
 #include <windows.h>
 #include <commdlg.h>
@@ -705,6 +708,16 @@ int32_t prepare_tool_execution(const RuntimePolicySnapshot& policy,
     }
     plan.mode = policy.effective_mode;
     plan.arguments = arguments;
+    const bool explicit_confirmation_required =
+        descriptor != nullptr && descriptor->is_object() &&
+        descriptor->value("explicitConfirmationRequired", false);
+    const bool confirmed =
+        plan.arguments.contains("confirmed") &&
+        plan.arguments["confirmed"].is_boolean() &&
+        plan.arguments["confirmed"].get<bool>();
+    if (explicit_confirmation_required && !confirmed) {
+        return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+    }
     const int32_t status = resolve_tool_permission(
         policy, requested_name, resolved_name, descriptor,
         plan.permission, plan.category);
@@ -720,10 +733,6 @@ int32_t prepare_tool_execution(const RuntimePolicySnapshot& policy,
     }
 
     plan.mode = "plan";
-    const bool confirmed =
-        plan.arguments.contains("confirmed") &&
-        plan.arguments["confirmed"].is_boolean() &&
-        plan.arguments["confirmed"].get<bool>();
     if (!confirmed && !auto_approves(policy.effective_approval)) {
         return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
     }
@@ -946,6 +955,7 @@ Json panel_state_to_json(const WebviewPanelState& state) {
 NativeRuntime::NativeRuntime(RuntimeOptions options)
         : options_(std::move(options)),
             conversations_(scopes_),
+    vt_bridge_(nullptr),
       tools_(scopes_, options.maximum_file_bytes,
              options.maximum_search_results),
       maximum_event_queue_(std::clamp(options.maximum_event_queue, 8U, 4096U)) {
@@ -1017,6 +1027,25 @@ NativeRuntime::~NativeRuntime() {
         std::lock_guard<std::mutex> lock(workflow_mutex_);
         workflow_executions_.clear();
     }
+
+    if (extension_host_ != nullptr) {
+        const int32_t vt_command_status =
+            sao::ai_editor::vt::unregister_vt_commands(*extension_host_);
+        if (vt_command_status != SAO_AI_EDITOR_OK &&
+            vt_command_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            sao::ai_editor::vt::abandon_vt_commands(*extension_host_);
+        }
+    }
+    if (vt_bridge_ != nullptr) {
+        const int32_t vt_status = sao::ai_editor::vt::unregister_vt_tools(
+            tools_, vt_bridge_);
+        if (vt_status == SAO_AI_EDITOR_OK ||
+            vt_status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            vt_bridge_.reset();
+        } else {
+            sao::ai_editor::vt::abandon_vt_tools(tools_);
+        }
+    }
     mcp_client_.reset();
 
     if (extension_host_ != nullptr) {
@@ -1070,6 +1099,31 @@ std::optional<WebviewPanelState> NativeRuntime::active_webview_panel() const {
 }
 
 int32_t NativeRuntime::initialize() {
+    auto cleanup_vt = [&]() -> int32_t {
+        if (extension_host_ != nullptr) {
+            const int32_t command_status =
+                sao::ai_editor::vt::unregister_vt_commands(*extension_host_);
+            if (command_status != SAO_AI_EDITOR_OK &&
+                command_status != SAO_AI_EDITOR_ERR_NOT_FOUND)
+                return command_status;
+        }
+        if (vt_bridge_ != nullptr) {
+            const int32_t tool_status = sao::ai_editor::vt::unregister_vt_tools(
+                tools_, vt_bridge_);
+            if (tool_status == SAO_AI_EDITOR_OK ||
+                tool_status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                vt_bridge_.reset();
+            } else {
+                return tool_status;
+            }
+        }
+        return SAO_AI_EDITOR_OK;
+    };
+    const int32_t vt_cleanup_status = cleanup_vt();
+    if (vt_cleanup_status != SAO_AI_EDITOR_OK &&
+        vt_cleanup_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+        return vt_cleanup_status;
+    }
     const auto kernel_map_bridge =
         sao::ai_editor::kernel_map::shared_bridge_handle();
     auto cleanup_kernel_map = [&] {
@@ -1216,6 +1270,35 @@ int32_t NativeRuntime::initialize() {
         return rollback_status != SAO_AI_EDITOR_OK &&
                        rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
                    ? rollback_status
+                   : registration_status;
+    }
+    vt_bridge_ = std::make_shared<sao::ai_editor::vt::Bridge>();
+    registration_status = sao::ai_editor::vt::register_vt_tools(
+        tools_, vt_bridge_);
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t vt_rollback_status = cleanup_vt();
+        if (vt_rollback_status != SAO_AI_EDITOR_OK &&
+            vt_rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            return vt_rollback_status;
+        }
+        const int32_t kernel_map_rollback_status = cleanup_kernel_map();
+        return kernel_map_rollback_status != SAO_AI_EDITOR_OK &&
+                       kernel_map_rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? kernel_map_rollback_status
+                   : registration_status;
+    }
+    registration_status = sao::ai_editor::vt::register_vt_commands(
+        *extension_host_, vt_bridge_);
+    if (registration_status != SAO_AI_EDITOR_OK) {
+        const int32_t vt_rollback_status = cleanup_vt();
+        if (vt_rollback_status != SAO_AI_EDITOR_OK &&
+            vt_rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            return vt_rollback_status;
+        }
+        const int32_t kernel_map_rollback_status = cleanup_kernel_map();
+        return kernel_map_rollback_status != SAO_AI_EDITOR_OK &&
+                       kernel_map_rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
+                   ? kernel_map_rollback_status
                    : registration_status;
     }
     return SAO_AI_EDITOR_OK;
@@ -1506,6 +1589,19 @@ int32_t NativeRuntime::invoke(std::string_view method,
             events_.pop_front();
         }
         return SAO_AI_EDITOR_OK;
+    }
+    if (method.starts_with("sao.vt.")) {
+        if (vt_bridge_ == nullptr) {
+            result = Json{{"ok", false},
+                          {"available", false},
+                          {"statusCode", SAO_AI_EDITOR_ERR_NOT_INITIALIZED},
+                          {"reason", "not_initialized"},
+                          {"unknown", false},
+                          {"partial", false}};
+            return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        }
+        return sao::ai_editor::vt::dispatch_vt_command(
+            *vt_bridge_, method, params, result);
     }
     if (method == "runtime.initialize") {
         Json config;

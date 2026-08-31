@@ -30,7 +30,7 @@
 
 namespace {
 
-constexpr uint32_t kMaximumPayload = 1024U * 1024U;
+constexpr uint32_t kMaximumPayload = 4U * 1024U * 1024U;
 constexpr DWORD kConnectTimeoutMs = 5000U;
 constexpr UINT_PTR kEventTimerId = 1;
 constexpr UINT_PTR kAutoExitTimerId = 2;

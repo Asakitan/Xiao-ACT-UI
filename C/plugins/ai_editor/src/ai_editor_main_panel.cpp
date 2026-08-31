@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -40,10 +41,10 @@ using json = nlohmann::json;
 namespace {
 
 constexpr uint32_t kRequestTimeoutMs = 5000U;
-constexpr size_t kMaximumRequestBytes = 256U * 1024U;
+constexpr size_t kMaximumRequestBytes = 4U * 1024U * 1024U;
 constexpr size_t kInitialResponseBytes = 256U * 1024U;
 constexpr size_t kMaximumResponseBytes = 4U * 1024U * 1024U;
-constexpr size_t kMaximumActionPayloadBytes = 64U * 1024U;
+constexpr size_t kMaximumActionPayloadBytes = 4U * 1024U * 1024U;
 constexpr size_t kMaximumComposerBytes = 48U * 1024U;
 constexpr size_t kOutputTrimBytes = 128U * 1024U;
 constexpr size_t kUiTextChunkBytes = 3600U;
@@ -65,6 +66,8 @@ constexpr size_t kMaximumUiNodeTextBytes = 4096U;
 constexpr size_t kMaximumUiTitleBytes = 512U;
 constexpr std::chrono::milliseconds kEventDrainInterval{75};
 constexpr std::chrono::milliseconds kRunPollInterval{250};
+constexpr std::chrono::milliseconds kVtDashboardPollInterval{250};
+constexpr std::chrono::milliseconds kVtDashboardBackoffInterval{1000};
 constexpr std::chrono::milliseconds kBootstrapRetryInterval{2000};
 constexpr int32_t kDialogCloseAdvanceMs = 1000;
 constexpr int32_t kDefaultPanelWidth = 1120;
@@ -76,6 +79,7 @@ constexpr int32_t kWorkbenchMinimumWidth = 300;
 
 enum class RpcTaskKind {
     Bootstrap,
+    VtDashboard,
     Generic,
     NewConversation,
     RefreshHistory,
@@ -288,6 +292,10 @@ struct AiEditorMainPanelState {
     bool control_last_destructive{};
     bool control_last_advanced{};
     bool control_developer_advanced{};
+    json vt_dashboard{json::object()};
+    std::string vt_dashboard_last_error;
+    std::chrono::steady_clock::time_point next_vt_dashboard_poll{};
+    bool vt_dashboard_stale{true};
     std::string pending_control_method;
     std::string pending_control_label;
     std::string pending_control_group;
@@ -329,6 +337,7 @@ struct AiEditorMainPanelState {
     bool event_drain_pending{};
     bool event_drain_unavailable{};
     bool run_poll_pending{};
+    bool vt_dashboard_pending{};
     bool history_task_pending{};
     bool worker_active{};
     bool worker_stop_requested{};
@@ -827,7 +836,7 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
     if (request_body.size() > kMaximumRequestBytes ||
         request_body.size() > std::numeric_limits<uint32_t>::max()) {
         response.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        response.error = "request exceeds the 256 KiB main-panel limit";
+        response.error = "request exceeds the 4 MiB main-panel limit";
         return response;
     }
 
@@ -952,6 +961,12 @@ bool queue_orphan_cancel_locked(AiEditorMainPanelState& state, uint64_t generati
     return true;
 }
 
+bool vt_dashboard_poll_eligible_locked(const AiEditorMainPanelState& state) {
+    return state.accepting && state.launcher != nullptr && state.bootstrap_loaded &&
+           state.backend_connected && state.visible && state.selected_view == "control" &&
+           (state.control_group_filter == "all" || state.control_group_filter == "VT");
+}
+
 RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
     RpcCompletion completion;
     completion.task = std::move(task);
@@ -969,6 +984,16 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
         (void)append("workflows.list_defs");
         (void)append("conversation.list", {{"scope", "all"}, {"limit", completion.task.history_limit}});
         (void)append("conversation.stats", {{"scope", "all"}});
+        break;
+    case RpcTaskKind::VtDashboard:
+        {
+            std::lock_guard lock(state.mutex);
+            if (!vt_dashboard_poll_eligible_locked(state)) {
+                completion.cancelled = true;
+                break;
+            }
+        }
+        (void)append("sao.vt.status");
         break;
     case RpcTaskKind::Generic:
         (void)append(completion.task.method, completion.task.params);
@@ -1838,7 +1863,45 @@ bool apply_run_event(AiEditorMainPanelState& state, const json& envelope,
     return true;
 }
 
+std::string redact_control_text(std::string text);
+
 void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
+    if (completion.task.kind == RpcTaskKind::VtDashboard) {
+        std::lock_guard lock(state.mutex);
+        state.vt_dashboard_pending = false;
+        if (completion.cancelled) {
+            state.next_vt_dashboard_poll = std::chrono::steady_clock::time_point{};
+            return;
+        }
+        if (completion.steps.empty()) {
+            state.vt_dashboard_stale = true;
+            state.vt_dashboard_last_error = "sao.vt.status returned no response";
+            state.next_vt_dashboard_poll =
+                std::chrono::steady_clock::now() + kVtDashboardBackoffInterval;
+            return;
+        }
+        const RpcStepResult& step = completion.steps.back();
+        update_backend_status(state, step.method, step.response);
+        if (step.response.ok && step.response.result.is_object()) {
+            state.vt_dashboard = step.response.result;
+            state.vt_dashboard_stale = false;
+            state.vt_dashboard_last_error.clear();
+            state.next_vt_dashboard_poll =
+                std::chrono::steady_clock::now() + kVtDashboardPollInterval;
+        } else {
+            state.vt_dashboard_stale = true;
+            state.vt_dashboard_last_error = redact_control_text(
+                step.response.ok
+                    ? "sao.vt.status returned an invalid object"
+                    : compact_text(step.response.error.empty()
+                                       ? transport_message(step.response.status)
+                                       : step.response.error,
+                                   1200U));
+            state.next_vt_dashboard_poll =
+                std::chrono::steady_clock::now() + kVtDashboardBackoffInterval;
+        }
+        return;
+    }
     if (completion.task.history_operation) {
         std::lock_guard lock(state.mutex);
         state.history_task_pending = false;
@@ -1959,6 +2022,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                        : "Connected · some chat metadata requests failed; see output";
         break;
     }
+    case RpcTaskKind::VtDashboard:
+        break;
     case RpcTaskKind::Generic:
         if (completion.task.control_action)
             apply_control_completion(state, completion);
@@ -2537,6 +2602,14 @@ const std::vector<ControlActionSpec>& control_action_catalog() {
         {"Runtime & Extensions", "extensions.deactivate", "Deactivate extension", "extensions.deactivate", R"({"extensionId":""})", false, true, false},
         {"Runtime & Extensions", "extensions.execute_command", "Execute extension command", "extensions.execute_command", R"({"command":"","arguments":[]})", false, true, false},
         {"Runtime & Extensions", "commands.execute", "Execute command", "vscode.commands.executeCommand", R"({"command":"","arguments":[]})", false, true, false},
+        {"VT", "platform.vt.status", "VT status", "sao.vt.status", R"({})", true, false, false},
+        {"VT", "platform.vt.capabilities", "VT capabilities", "sao.vt.capabilities", R"({})", true, false, false},
+        {"VT", "platform.vt.probe", "VT probe", "sao.vt.probe", R"({"items":"0x0"})", true, false, false},
+        {"VT", "platform.vt.hookPage", "Hook page", "sao.vt.hookPage", R"({"gva":"0xffff800000000000","patchBytes":"","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.hideRegion", "Hide region", "sao.vt.hideRegion", R"({"gva":"0xffff800000000000","pageCount":1,"decoyMode":"zero","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.unhook", "Unhook", "sao.vt.unhook", R"({"hookId":"0x0","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.readPhys", "Read physical", "sao.vt.readPhys", R"({"gpa":"0x0","length":1})", true, false, false},
+        {"VT", "platform.vt.writePhys", "Write physical", "sao.vt.writePhys", R"({"gpa":"0x0","length":1,"dataHex":"00","confirmed":false})", false, true, false},
     };
     return actions;
 }
@@ -2732,7 +2805,8 @@ bool control_matches(const AiEditorMainPanelState& state, const ControlActionSpe
         return false;
     if (state.control_palette_query.empty())
         return true;
-    std::string haystack = std::string(action.group) + " " + action.label + " " + action.method;
+    std::string haystack = std::string(action.group) + " " + action.id + " " +
+                           action.label + " " + action.method;
     std::string query = state.control_palette_query;
     std::ranges::transform(haystack, haystack.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
@@ -2752,6 +2826,267 @@ std::string control_group_key(std::string_view group) {
     });
     return key;
 }
+
+const json* vt_field(const json& object, std::string_view key) {
+    if (!object.is_object())
+        return nullptr;
+    const auto found = object.find(std::string(key));
+    return found == object.end() ? nullptr : &*found;
+}
+
+const json* vt_field(const json* object, std::string_view key) {
+    return object == nullptr ? nullptr : vt_field(*object, key);
+}
+
+bool vt_generated_hook_id(std::string_view text) noexcept {
+    if (text.size() < 3U || text.size() > 18U || text[0] != '0' || text[1] != 'x')
+        return false;
+    text.remove_prefix(2U);
+    uint64_t value = 0U;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+        return false;
+    const uint64_t slot = value & 0x7FU;
+    return value != 0U && (value >> 7U) != 0U && slot >= 1U && slot <= 64U;
+}
+
+const json* vt_dashboard_field(const json& dashboard, std::string_view key) {
+    if (const json* value = vt_field(dashboard, key); value != nullptr)
+        return value;
+    const json* status = vt_field(dashboard, "status");
+    return status == nullptr ? nullptr : vt_field(*status, key);
+}
+
+std::string vt_scalar_text(const json* value, std::string fallback = "-") {
+    if (value == nullptr)
+        return fallback;
+    if (value->is_string())
+        return compact_text(value->get_ref<const std::string&>(), 180U);
+    if (value->is_boolean())
+        return value->get<bool>() ? "true" : "false";
+    if (value->is_number_unsigned())
+        return std::to_string(value->get<uint64_t>());
+    if (value->is_number_integer())
+        return std::to_string(value->get<int64_t>());
+    if (value->is_number_float())
+        return std::to_string(value->get<double>());
+    return fallback;
+}
+
+std::string vt_dashboard_text(const json& dashboard, std::string_view key,
+                              std::string fallback = "-") {
+    return vt_scalar_text(vt_dashboard_field(dashboard, key), std::move(fallback));
+}
+
+bool vt_bool_value(const json* value, bool fallback = false) {
+    return value != nullptr && value->is_boolean() ? value->get<bool>() : fallback;
+}
+
+bool vt_dashboard_bool(const json& dashboard, std::string_view key,
+                       bool fallback = false) {
+    return vt_bool_value(vt_dashboard_field(dashboard, key), fallback);
+}
+
+const json* vt_component_field(const json& dashboard, std::string_view component,
+                               std::string_view key) {
+    const json* object = vt_field(dashboard, component);
+    return object == nullptr ? nullptr : vt_field(*object, key);
+}
+
+std::string vt_array_summary(const json* value, size_t maximum = 12U) {
+    if (value == nullptr || !value->is_array())
+        return "-";
+    if (value->empty())
+        return "none";
+    std::string output;
+    size_t shown = 0;
+    for (const auto& item : *value) {
+        if (!item.is_string())
+            continue;
+        if (shown == maximum)
+            break;
+        if (!output.empty())
+            output.append(", ");
+        output.append(compact_text(item.get_ref<const std::string&>(), 120U));
+        ++shown;
+    }
+    if (shown == 0U)
+        return "none";
+    if (shown < value->size())
+        output.append(", ...");
+    return output;
+}
+
+std::string vt_probe_summary(const json& dashboard) {
+    const json* probe = vt_field(dashboard, "probe");
+    if (probe == nullptr || !probe->is_object())
+        return "unavailable";
+    const json* items = vt_field(*probe, "items");
+    if (items == nullptr || !items->is_object())
+        return "unavailable";
+    std::string output;
+    for (const std::string_view name : {"status", "capabilities", "perf", "hooks"}) {
+        const json* item = vt_field(*items, name);
+        if (!item || !item->is_object())
+            continue;
+        if (!output.empty())
+            output.append(" · ");
+        output.append(std::string(name));
+        output.append(vt_bool_value(vt_field(*item, "ready")) ? "=ready" : "=pending");
+        output.append("/");
+        output.append(vt_scalar_text(vt_field(*item, "statusCode"), "-"));
+    }
+    return output.empty() ? "unavailable" : output;
+}
+
+json vt_hook_row(const json& hook, bool include_unhook,
+                 bool disabled, std::string_view prefix) {
+    if (!hook.is_object())
+        return row_node(json::array({text_node("Invalid VT hook row", "warn", 28)}));
+    const json* hook_id_value = vt_field(hook, "hookId");
+    const std::string raw_hook_id =
+        hook_id_value != nullptr && hook_id_value->is_string()
+            ? hook_id_value->get<std::string>()
+            : std::string{};
+    const bool hook_id_available = vt_generated_hook_id(raw_hook_id);
+    const std::string hook_id = hook_id_available
+                                    ? compact_text(raw_hook_id, 120U)
+                                    : "-";
+    json children = json::array({
+        badge_node("hookId: " + hook_id, "accent"),
+        badge_node("GPA: " + vt_scalar_text(vt_field(hook, "gpa"))),
+        badge_node("backend: " + vt_scalar_text(vt_field(hook, "backend"))),
+        badge_node("state: " + vt_scalar_text(vt_field(hook, "state"))),
+        badge_node("writeCount: " + vt_scalar_text(vt_field(hook, "writeCount"))),
+        badge_node(vt_bool_value(vt_field(hook, "hidden")) ? "hidden" : "visible",
+                   vt_bool_value(vt_field(hook, "hidden")) ? "warn" : "muted"),
+        badge_node("patchSize: " + vt_scalar_text(vt_field(hook, "patchSize")))});
+    if (include_unhook) {
+        children.push_back(button_node(
+            std::string(prefix) + ".unhook", "Unhook", "control.vt.unhook",
+            {{"hookId", raw_hook_id}}, "danger", disabled || !hook_id_available));
+    }
+    return row_node(std::move(children));
+}
+
+json vt_dashboard_section(const AiEditorMainPanelState& state,
+                          bool launcher_bound) {
+    const json& dashboard = state.vt_dashboard;
+    json children = json::array();
+    json toolbar = json::array();
+    toolbar.push_back(button_node("control.vt.refresh", "Refresh", "control.vt.refresh",
+                                  {}, "default", !launcher_bound));
+    toolbar.push_back(badge_node(state.vt_dashboard_pending ? "poll: pending"
+                                                             : state.vt_dashboard_stale
+                                                                   ? "poll: stale"
+                                                                   : "poll: live",
+                                 state.vt_dashboard_pending
+                                     ? "accent"
+                                     : state.vt_dashboard_stale ? "bad" : "ok"));
+    children.push_back(row_node(std::move(toolbar)));
+    if (!state.vt_dashboard_last_error.empty())
+        children.push_back(text_node("Last error: " + state.vt_dashboard_last_error,
+                                     "bad", 34));
+
+    if (!dashboard.is_object() || dashboard.empty()) {
+        children.push_back(text_node("No VT dashboard snapshot yet. Use Refresh when the backend is ready.",
+                                     "muted", 36));
+        return card_node("VT Dashboard", std::move(children), "cyan");
+    }
+
+    const std::string state_name = vt_dashboard_text(dashboard, "state", "unknown");
+    const std::string engine_state = vt_dashboard_text(dashboard, "engineState", "unknown");
+    const bool available = vt_dashboard_bool(dashboard, "available");
+    const bool guest_readonly = vt_dashboard_bool(dashboard, "guestReadonly");
+    const bool recovery_required = vt_dashboard_bool(dashboard, "recoveryRequired");
+    const bool deadman_degraded = vt_dashboard_bool(dashboard, "deadmanDegraded");
+    json badges = json::array({
+        badge_node("state: " + state_name, state_name == "active" ? "ok" : "warn"),
+        badge_node("engineState: " + engine_state,
+                   engine_state == "active" ? "ok" : "warn"),
+        badge_node(available ? "available" : "unavailable", available ? "ok" : "warn"),
+        badge_node(guest_readonly ? "guestReadonly" : "guestWritable",
+                   guest_readonly ? "warn" : "ok"),
+        badge_node(recovery_required ? "recoveryRequired" : "recovery clear",
+                   recovery_required ? "bad" : "ok"),
+        badge_node(deadman_degraded ? "deadmanDegraded" : "deadman nominal",
+                   deadman_degraded ? "warn" : "ok"),
+        badge_node("roots: " + vt_dashboard_text(dashboard, "roots")),
+        badge_node("hooks: " + vt_dashboard_text(dashboard, "hooks")),
+        badge_node("hidden: " + vt_dashboard_text(dashboard, "hiddenHookCount"))});
+    children.push_back(row_node(std::move(badges)));
+
+    json summaries = json::array();
+    summaries.push_back(text_node(
+        "Status: " + state_name + " · engineState=" + engine_state +
+            " · available=" + (available ? "true" : "false") +
+            " · reason=" + vt_dashboard_text(dashboard, "reason"),
+        available ? "value" : "warn", 32));
+    summaries.push_back(text_node(
+        "Capabilities: supported=" +
+            vt_array_summary(vt_component_field(dashboard, "capabilities", "supported")) +
+            " · active=" +
+            vt_array_summary(vt_component_field(dashboard, "capabilities", "active")),
+        "muted", 42));
+    summaries.push_back(text_node("Probe: " + vt_probe_summary(dashboard), "muted", 32));
+    children.push_back(card_node("Status / capabilities / probe", std::move(summaries),
+                                 available ? "cyan" : "gold"));
+
+    const json* perf = vt_field(dashboard, "perf");
+    json perf_children = json::array();
+    perf_children.push_back(text_node(
+        "vmexit cumulative: " + vt_scalar_text(vt_field(perf, "vmexitCumulative")) +
+            " · vmexitRatePerSec: " + vt_scalar_text(vt_field(perf, "vmexitRatePerSec")),
+        "value", 32));
+    perf_children.push_back(row_node(json::array({
+        badge_node("sampled: " + vt_scalar_text(vt_field(perf, "sampled"))),
+        badge_node("stale: " + std::string(state.vt_dashboard_stale ? "true" : "false"),
+                   state.vt_dashboard_stale ? "bad" : "ok")})));
+    children.push_back(card_node("VT performance", std::move(perf_children), "gold"));
+
+    constexpr size_t kMaximumVtDashboardRows = 64U;
+    size_t rows_left = kMaximumVtDashboardRows;
+    const json* hooks = vt_field(dashboard, "hookList");
+    json hook_rows = json::array();
+    if (hooks != nullptr && hooks->is_array()) {
+        const size_t count = std::min(hooks->size(), kMaximumVtDashboardRows);
+        for (size_t index = 0; index < count && rows_left != 0U; ++index) {
+            if (!(*hooks)[index].is_object())
+                continue;
+            hook_rows.push_back(vt_hook_row(
+                (*hooks)[index], true, !launcher_bound,
+                "vt.hook." + std::to_string(index)));
+            --rows_left;
+        }
+    }
+    if (hook_rows.empty())
+        hook_rows.push_back(text_node("No VT hooks reported.", "muted", 30));
+    children.push_back(section_node("Hooks", std::move(hook_rows)));
+
+    const json* hidden_hooks = vt_field(dashboard, "hiddenHooks");
+    json hidden_rows = json::array();
+    if (hidden_hooks != nullptr && hidden_hooks->is_array()) {
+        const size_t count = std::min(hidden_hooks->size(), kMaximumVtDashboardRows);
+        for (size_t index = 0; index < count && rows_left != 0U; ++index) {
+            if (!(*hidden_hooks)[index].is_object())
+                continue;
+            hidden_rows.push_back(vt_hook_row(
+                (*hidden_hooks)[index], false, !launcher_bound,
+                "vt.hidden." + std::to_string(index)));
+            --rows_left;
+        }
+    }
+    if (hidden_rows.empty())
+        hidden_rows.push_back(text_node(
+            hidden_hooks != nullptr && hidden_hooks->is_array() && !hidden_hooks->empty()
+                ? "Additional hidden hooks omitted by the 64-row dashboard limit."
+                : "No hidden hooks / hide regions reported.",
+            "muted", 30));
+    children.push_back(section_node("Hidden hooks / hide list", std::move(hidden_rows)));
+    return card_node("VT Dashboard", std::move(children),
+                     state.vt_dashboard_stale ? "bad" : "cyan");
+}
+
 json control_center_section(const AiEditorMainPanelState& state, bool launcher_bound) {
     json children = json::array();
     children.push_back(text_node(
@@ -2768,6 +3103,8 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
                                   state.control_last_method.empty() || !launcher_bound));
     toolbar.push_back(button_node("control.copy", "Copy result", "control.copy", {}, "ghost",
                                   state.control_last_result.empty()));
+    toolbar.push_back(button_node("control.vt.refresh", "Refresh VT", "control.vt.refresh",
+                                  {}, "default", !launcher_bound));
     children.push_back(row_node(std::move(toolbar)));
     children.push_back(row_node(json::array({
         badge_node("Status: " + state.control_status,
@@ -2782,7 +3119,7 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
     groups.push_back(button_node("control.group.all", "All", "control.group", {{"group", "all"}},
                                  state.control_group_filter == "all" ? "primary" : "ghost"));
     for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
-                              "Providers & Usage", "Runtime & Extensions"}) {
+                              "Providers & Usage", "Runtime & Extensions", "VT"}) {
         groups.push_back(button_node("control.group." + control_group_key(group), group,
                                      "control.group", {{"group", group}},
                                      state.control_group_filter == group ? "primary" : "ghost"));
@@ -2791,7 +3128,7 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
     if (!state.control_palette_query.empty())
         children.push_back(text_node("Search: " + state.control_palette_query, "accent", 28));
     for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
-                              "Providers & Usage", "Runtime & Extensions"}) {
+                              "Providers & Usage", "Runtime & Extensions", "VT"}) {
         json buttons = json::array();
         size_t visible = 0;
         for (const auto& action : control_action_catalog()) {
@@ -2811,6 +3148,8 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
                                          std::string_view(group) == "Tools" ? "gold" : "cyan"));
         }
     }
+    if (state.control_group_filter == "all" || state.control_group_filter == "VT")
+        children.push_back(vt_dashboard_section(state, launcher_bound));
     if (!state.control_tools.empty() &&
         (state.control_group_filter == "all" || state.control_group_filter == "Tools")) {
         json tools = json::array();
@@ -3642,6 +3981,7 @@ void show_control_confirm_dialog(AiEditorMainPanelState& state);
 void queue_control_request(AiEditorMainPanelState& state, std::string method,
                            std::string label, std::string group, json params,
                            bool read_only, bool destructive, bool advanced);
+void queue_vt_dashboard_poll_if_due(AiEditorMainPanelState& state);
 void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* input_text_utf8,
                                         size_t input_text_len, void* user_data);
 void show_control_confirm_dialog(AiEditorMainPanelState& state) {
@@ -4269,6 +4609,14 @@ void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* i
                     arguments = json::object();
                 arguments["confirmed"] = true;
                 control_execution_params["arguments"] = std::move(arguments);
+            } else if (intent == DialogIntent::ControlConfirm &&
+                       (control_method == "sao.vt.hookPage" ||
+                        control_method == "sao.vt.hideRegion" ||
+                        control_method == "sao.vt.unhook" ||
+                        control_method == "sao.vt.writePhys")) {
+                if (!control_execution_params.is_object())
+                    control_execution_params = json::object();
+                control_execution_params["confirmed"] = true;
             }
             if (control_method.empty()) {
                 state->run_error = "Control Center request is missing a canonical method.";
@@ -4843,6 +5191,26 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
             show_control_action_dialog(*state, json{{"id", canonical->id}, {"method", canonical->method},
                                                     {"name", payload_string(payload, "name")},
                                                     {"arguments", payload.value("arguments", json::object())}});
+    } else if (action == "control.vt.refresh") {
+        {
+            std::lock_guard lock(state->mutex);
+            state->next_vt_dashboard_poll = std::chrono::steady_clock::now();
+        }
+        queue_vt_dashboard_poll_if_due(*state);
+    } else if (action == "control.vt.unhook") {
+        const ControlActionSpec* canonical = find_control_action("platform.vt.unhook");
+        const std::string hook_id = payload_string(payload, "hookId");
+        if (canonical == nullptr || !vt_generated_hook_id(hook_id)) {
+            append_output_line(*state, "[error] Control Center rejected an invalid VT hook action.");
+        } else {
+            const json params{{"hookId", hook_id}, {"confirmed", false}};
+            show_control_action_dialog(
+                *state,
+                json{{"id", canonical->id},
+                     {"method", canonical->method},
+                     {"default", params.dump()},
+                     {"executionParams", params}});
+        }
     } else if (action == "control.retry") {
         std::string method;
         std::string tool_name;
@@ -5185,6 +5553,38 @@ void queue_event_drain_if_due(AiEditorMainPanelState& state) {
     }
 }
 
+void queue_vt_dashboard_poll_if_due(AiEditorMainPanelState& state) {
+    RpcTask task;
+    {
+        std::lock_guard lock(state.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (!vt_dashboard_poll_eligible_locked(state) || state.vt_dashboard_pending ||
+            now < state.next_vt_dashboard_poll) {
+            return;
+        }
+        state.vt_dashboard_pending = true;
+        task.kind = RpcTaskKind::VtDashboard;
+    }
+    std::string error;
+    if (!queue_rpc_task(state, std::move(task), &error)) {
+        bool log_error = false;
+        std::string redacted_error;
+        {
+            std::lock_guard lock(state.mutex);
+            redacted_error = redact_control_text(compact_text(error, 1200U));
+            log_error = !state.vt_dashboard_stale ||
+                        state.vt_dashboard_last_error != redacted_error;
+            state.vt_dashboard_pending = false;
+            state.vt_dashboard_stale = true;
+            state.vt_dashboard_last_error = redacted_error;
+            state.next_vt_dashboard_poll =
+                std::chrono::steady_clock::now() + kVtDashboardBackoffInterval;
+        }
+        if (log_error)
+            append_output_line(state, "[warn] sao.vt.status not queued: " + redacted_error);
+    }
+}
+
 int32_t hide_child_panels(AiEditorMainPanelState& state) {
     int32_t first_error = SAO_AI_EDITOR_OK;
     const int32_t dialog_status = hide_active_dialog(state);
@@ -5490,6 +5890,7 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
         return dialog_status;
     drain_completions(lease.state());
     queue_bootstrap_if_needed(lease.state());
+    queue_vt_dashboard_poll_if_due(lease.state());
     queue_event_drain_if_due(lease.state());
     queue_run_poll_if_due(lease.state());
     const sao_status_t refresh_status = refresh_body(lease.state(), false);
