@@ -1,0 +1,13 @@
+#include "sound_assets.h"
+
+SAO_UI_SOUND_ASSET_CLICK RCDATA "../assets/sounds/Feedback.SAO.Click.wav"
+SAO_UI_SOUND_ASSET_MENU_OPEN RCDATA "../assets/sounds/Popup.SAO.Launcher.wav"
+SAO_UI_SOUND_ASSET_MENU_CLOSE RCDATA "../assets/sounds/Dismiss.SAO.Launcher.wav"
+SAO_UI_SOUND_ASSET_PANEL RCDATA "../assets/sounds/Popup.SAO.Panel.wav"
+SAO_UI_SOUND_ASSET_SUBMENU RCDATA "../assets/sounds/Popup.SAO.Menu.wav"
+SAO_UI_SOUND_ASSET_ALERT RCDATA "../assets/sounds/Popup.SAO.Alert.wav"
+SAO_UI_SOUND_ASSET_ALERT_CLOSE RCDATA "../assets/sounds/Dismiss.SAO.Message.wav"
+SAO_UI_SOUND_ASSET_WELCOME RCDATA "../assets/sounds/Popup.SAO.Welcome.wav"
+SAO_UI_SOUND_ASSET_ALO_WELCOME RCDATA "../assets/sounds/Popup.ALO.Welcome.wav"
+SAO_UI_SOUND_ASSET_LINK_START RCDATA "../assets/sounds/LinkStart.SAO.Kirito.wav"
+SAO_UI_SOUND_ASSET_NERVEGEAR RCDATA "../assets/sounds/Startup.SAO.NerveGear.wav"

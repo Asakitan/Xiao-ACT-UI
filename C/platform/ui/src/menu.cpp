@@ -37,6 +37,7 @@
 
 #include "sao/ui/menu.h"
 #include "sao/ui/animator.h"
+#include "sao/ui/sound.h"
 
 #include "sao/ui/subpixel.h"
 
@@ -205,7 +206,9 @@ struct sao_ui_menu_s {
     bool reduced_motion{};
     bool fps_pressure{};
     int32_t menu_open_sound_debounce_ms{};
+    int32_t menu_close_sound_debounce_ms{};
     int32_t root_select_sound_debounce_ms{};
+    int32_t submenu_sound_debounce_ms{};
     int32_t child_activate_sound_debounce_ms{};
 
     // Callback.
@@ -410,7 +413,14 @@ SaoUiMenuButtonRect compute_cascade_rect(const SaoUiMenuLayout& layout, int32_t 
 // Callback dispatch is captured while locked and invoked after unlocking.
 // ---------------------------------------------------------------------------
 
-enum class MenuSoundCue : uint8_t { None, MenuOpen, RootSelect, ChildActivate };
+enum class MenuSoundCue : uint8_t {
+    None,
+    MenuOpen,
+    MenuClose,
+    RootClick,
+    Submenu,
+    ChildActivate,
+};
 
 struct PendingMenuEvent {
     sao_ui_menu_event_callback_t callback{};
@@ -420,36 +430,46 @@ struct PendingMenuEvent {
     int32_t secondary{-1};
     int32_t action_id{};
     MenuSoundCue sound{MenuSoundCue::None};
+    MenuSoundCue secondary_sound{MenuSoundCue::None};
     bool play_sound{};
+    bool play_secondary_sound{};
 };
 
 PendingMenuEvent capture_event_locked(sao_ui_menu_s* menu, SaoUiMenuEvent event, int32_t primary,
                                       int32_t secondary, int32_t action_id) {
-    return {menu->callback, menu->callback_user_data, event, primary, secondary, action_id,
-            MenuSoundCue::None, false};
+    PendingMenuEvent pending{};
+    pending.callback = menu->callback;
+    pending.user_data = menu->callback_user_data;
+    pending.event = event;
+    pending.primary = primary;
+    pending.secondary = secondary;
+    pending.action_id = action_id;
+    return pending;
 }
 
 void emit_menu_sound(MenuSoundCue cue) noexcept {
-#if defined(_WIN32)
     if (cue == MenuSoundCue::MenuOpen)
-        (void)MessageBeep(MB_ICONASTERISK);
-    else if (cue == MenuSoundCue::RootSelect)
-        (void)MessageBeep(MB_OK);
+        (void)sao_ui_sound_play(SAO_UI_SOUND_MENU_OPEN, 70);
+    else if (cue == MenuSoundCue::MenuClose)
+        (void)sao_ui_sound_play(SAO_UI_SOUND_MENU_CLOSE, 70);
+    else if (cue == MenuSoundCue::RootClick)
+        (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+    else if (cue == MenuSoundCue::Submenu)
+        (void)sao_ui_sound_play(SAO_UI_SOUND_SUBMENU, 50);
     else if (cue == MenuSoundCue::ChildActivate)
-        (void)MessageBeep(MB_ICONEXCLAMATION);
-#else
-    (void)cue;
-#endif
+        (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
 }
 
 bool consume_sound_locked(sao_ui_menu_s* menu, MenuSoundCue cue) {
-    if (menu->fps_pressure && cue != MenuSoundCue::MenuOpen)
-        return false;
     int32_t* debounce = nullptr;
     if (cue == MenuSoundCue::MenuOpen)
         debounce = &menu->menu_open_sound_debounce_ms;
-    else if (cue == MenuSoundCue::RootSelect)
+    else if (cue == MenuSoundCue::MenuClose)
+        debounce = &menu->menu_close_sound_debounce_ms;
+    else if (cue == MenuSoundCue::RootClick)
         debounce = &menu->root_select_sound_debounce_ms;
+    else if (cue == MenuSoundCue::Submenu)
+        debounce = &menu->submenu_sound_debounce_ms;
     else if (cue == MenuSoundCue::ChildActivate)
         debounce = &menu->child_activate_sound_debounce_ms;
     if (debounce == nullptr || *debounce > 0)
@@ -467,9 +487,23 @@ PendingMenuEvent capture_sound_event_locked(sao_ui_menu_s* menu, SaoUiMenuEvent 
     return pending;
 }
 
+void append_sound_locked(sao_ui_menu_s* menu, PendingMenuEvent* pending, MenuSoundCue cue) {
+    if (pending == nullptr || cue == MenuSoundCue::None)
+        return;
+    if (pending->sound == MenuSoundCue::None) {
+        pending->sound = cue;
+        pending->play_sound = consume_sound_locked(menu, cue);
+    } else if (pending->secondary_sound == MenuSoundCue::None) {
+        pending->secondary_sound = cue;
+        pending->play_secondary_sound = consume_sound_locked(menu, cue);
+    }
+}
+
 void dispatch_event_noexcept(const PendingMenuEvent& pending) noexcept {
     if (pending.play_sound)
         emit_menu_sound(pending.sound);
+    if (pending.play_secondary_sound)
+        emit_menu_sound(pending.secondary_sound);
     if (pending.callback == nullptr)
         return;
     try {
@@ -997,11 +1031,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_show(sao_ui_menu_handle_t handle
                 handle->transition_eased_t = 1.0F;
                 handle->center_diffusion_t = 1.0F;
                 handle->backdrop_lens_t = 1.0F;
-                pending = capture_sound_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0,
-                                                     MenuSoundCue::MenuOpen);
+                pending = capture_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0);
             } else {
                 handle->phase = SAO_UI_MENU_PHASE_OPENING;
             }
+            append_sound_locked(handle, &pending, MenuSoundCue::MenuOpen);
             mark_visual_changed_locked(handle);
         }
         handle->hud_bounds = SaoUiMenuHudBounds{};
@@ -1015,15 +1049,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_show(sao_ui_menu_handle_t handle
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_hide(sao_ui_menu_handle_t handle) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    std::lock_guard<std::mutex> lock(handle->mtx);
-    if (handle->phase == SAO_UI_MENU_PHASE_CLOSED)
-        return SAO_STATUS_OK;
-    capture_close_start_rows_locked(handle);
-    handle->close_start_t = std::clamp(handle->transition_eased_t, 0.0F, 1.0F);
-    handle->phase = SAO_UI_MENU_PHASE_CLOSING;
-    handle->phase_elapsed_ms = 0;
-    handle->close_suction_t = 0.0F;
-    mark_visual_changed_locked(handle);
+    PendingMenuEvent pending{};
+    {
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        if (handle->phase == SAO_UI_MENU_PHASE_CLOSED ||
+            handle->phase == SAO_UI_MENU_PHASE_CLOSING)
+            return SAO_STATUS_OK;
+        capture_close_start_rows_locked(handle);
+        handle->close_start_t = std::clamp(handle->transition_eased_t, 0.0F, 1.0F);
+        handle->phase = SAO_UI_MENU_PHASE_CLOSING;
+        handle->phase_elapsed_ms = 0;
+        handle->close_suction_t = 0.0F;
+        append_sound_locked(handle, &pending, MenuSoundCue::MenuClose);
+        mark_visual_changed_locked(handle);
+    }
+    dispatch_event_noexcept(pending);
     return SAO_STATUS_OK;
 }
 
@@ -1127,6 +1167,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_hover(sao_ui_menu_handle_t h
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t handle,
                                                          int32_t menu_idx) {
+    return sao::ui::menu_visual::activate_root(handle, menu_idx, true);
+}
+
+sao_status_t sao::ui::menu_visual::activate_root(sao_ui_menu_handle_t handle,
+                                                  int32_t menu_idx,
+                                                  bool emit_interaction) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     PendingMenuEvent pending{};
@@ -1140,6 +1186,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
         if (item_disabled(it))
             return SAO_STATUS_OK;
         const bool toggle_off = handle->active_idx == menu_idx;
+        bool opens_child = false;
         if (toggle_off) {
             it.state = handle->hover_idx == menu_idx ? SAO_UI_MENU_BTN_HOVER
                                                      : SAO_UI_MENU_BTN_IDLE;
@@ -1157,8 +1204,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
             handle->active_idx = menu_idx;
             it.state = SAO_UI_MENU_BTN_ACTIVE;
             const auto* child_menu = find_child_menu_locked(handle, it.name);
-            begin_child_transition_locked(
-                handle, child_menu != nullptr && !child_menu->items.empty() ? it.name : "");
+            opens_child = child_menu != nullptr && !child_menu->items.empty();
+            begin_child_transition_locked(handle, opens_child ? it.name : "");
         }
         handle->selection_trail_idx = menu_idx;
         handle->selection_trail_t = 1.0F;
@@ -1167,8 +1214,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
         handle->selection_spark_t = handle->reduced_motion || handle->fps_pressure ? 0.0F : 1.0F;
         handle->selection_spark_count = handle->reduced_motion || handle->fps_pressure ? 0U : 8U;
         mark_visual_changed_locked(handle);
-        pending = capture_sound_event_locked(handle, SAO_UI_MENU_EV_ITEM_ACTIVATED, menu_idx, -1,
-                                             it.action_id, MenuSoundCue::RootSelect);
+        if (emit_interaction) {
+            pending = capture_event_locked(handle, SAO_UI_MENU_EV_ITEM_ACTIVATED, menu_idx, -1,
+                                           it.action_id);
+            append_sound_locked(handle, &pending, MenuSoundCue::RootClick);
+            if (opens_child)
+                append_sound_locked(handle, &pending, MenuSoundCue::Submenu);
+        }
     }
     dispatch_event_noexcept(pending);
     return SAO_STATUS_OK;
@@ -1653,8 +1705,12 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             std::min<int64_t>(next_elapsed, static_cast<int64_t>(INT32_MAX)));
         handle->menu_open_sound_debounce_ms =
             std::max(0, handle->menu_open_sound_debounce_ms - dt_ms);
+        handle->menu_close_sound_debounce_ms =
+            std::max(0, handle->menu_close_sound_debounce_ms - dt_ms);
         handle->root_select_sound_debounce_ms =
             std::max(0, handle->root_select_sound_debounce_ms - dt_ms);
+        handle->submenu_sound_debounce_ms =
+            std::max(0, handle->submenu_sound_debounce_ms - dt_ms);
         handle->child_activate_sound_debounce_ms =
             std::max(0, handle->child_activate_sound_debounce_ms - dt_ms);
         bool transient_changed = false;
@@ -1711,8 +1767,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             if (handle->phase_elapsed_ms >= duration) {
                 handle->phase = SAO_UI_MENU_PHASE_OPEN;
                 handle->phase_elapsed_ms = 0;
-                pending = capture_sound_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0,
-                                                      MenuSoundCue::MenuOpen);
+                pending = capture_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0);
             }
             break;
         }

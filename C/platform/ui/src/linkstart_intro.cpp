@@ -2,6 +2,7 @@
 
 #include "sao/ui/d2d_widgets.h"
 #include "sao/ui/particle_system.h"
+#include "sao/ui/sound.h"
 
 #include <algorithm>
 #include <atomic>
@@ -86,6 +87,8 @@ struct sao_ui_linkstart_s {
     int32_t elapsed_ms{};
     bool active{};
     bool burst_spawned{};
+    bool nervegear_sound_played{};
+    bool welcome_sound_played{};
     std::vector<uint8_t> pixels;
     std::mutex mutex;
 };
@@ -396,6 +399,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
             handle->elapsed_ms = 0;
             handle->active = true;
             handle->burst_spawned = false;
+            handle->nervegear_sound_played = false;
+            handle->welcome_sound_played = false;
             sao_status_t status = sao_ui_particle_emitter_reset(handle->tunnel, handle->seed);
             if (status == SAO_STATUS_OK) {
                 status = sao_ui_particle_emitter_reset(handle->burst, handle->seed ^ 0xa5a5a5a5u);
@@ -415,7 +420,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
             nervegear = handle->nervegear;
             timeline = handle->timeline;
         }
-        return reset_nervegear_for_show(nervegear, timeline);
+        const sao_status_t status = reset_nervegear_for_show(nervegear, timeline);
+        if (status == SAO_STATUS_OK)
+            (void)sao_ui_sound_play(SAO_UI_SOUND_LINK_START, 80);
+        return status;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -431,6 +439,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss(sao_ui_linkstart_ha
         handle->active = false;
         handle->elapsed_ms = 0;
         handle->burst_spawned = false;
+        handle->nervegear_sound_played = false;
+        handle->welcome_sound_played = false;
         status = sao_ui_layer_set_visible(handle->layer, false);
         nervegear = handle->nervegear;
     }
@@ -459,6 +469,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     sao_ui_nervegear_handle_t nervegear = nullptr;
     bool completed = false;
+    bool play_nervegear_sound = false;
+    bool play_welcome_sound = false;
     try {
         {
             std::lock_guard lock(handle->mutex);
@@ -491,6 +503,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
                 status = render_frame_locked(handle);
             if (status != SAO_STATUS_OK)
                 return status;
+            if (!handle->nervegear_sound_played && handle->elapsed_ms >= 1500) {
+                handle->nervegear_sound_played = true;
+                play_nervegear_sound = true;
+            }
+            if (!handle->welcome_sound_played && seconds >= handle->timeline.p3_start) {
+                handle->welcome_sound_played = true;
+                play_welcome_sound = true;
+            }
             completed = seconds >= handle->timeline.total_duration;
             if (completed) {
                 handle->active = false;
@@ -500,6 +520,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
             }
             nervegear = handle->nervegear;
         }
+        if (play_nervegear_sound)
+            (void)sao_ui_sound_play(SAO_UI_SOUND_NERVEGEAR, 80);
+        if (play_welcome_sound)
+            (void)sao_ui_sound_play(SAO_UI_SOUND_ALO_WELCOME, 80);
         if (nervegear != nullptr)
             return sao_ui_nervegear_tick(nervegear, delta_ms);
         return SAO_STATUS_OK;

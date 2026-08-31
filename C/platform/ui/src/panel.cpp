@@ -3,6 +3,7 @@
 #include "sao/ui/panel.h"
 
 #include "sao/engine/ui_spec.h"
+#include "sao/ui/sound.h"
 #include "sao/ui/theme.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
@@ -2830,12 +2831,14 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
         if (status == SAO_STATUS_OK && hit_status != SAO_STATUS_OK)
             status = hit_status;
         if (hit_status == SAO_STATUS_OK && pressed == hit) {
+            (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
             const sao_status_t action_status = dispatch_action_at(panel, ix, iy);
             if (status == SAO_STATUS_OK && action_status != SAO_STATUS_OK)
                 status = action_status;
         }
     }
     if (close && mode == 0) {
+        (void)sao_ui_sound_play(SAO_UI_SOUND_ALERT_CLOSE, 70);
         const sao_status_t event_status = notify(panel, SAO_UI_PANEL_EVENT_CLOSE);
         if (status == SAO_STATUS_OK && event_status != SAO_STATUS_OK)
             status = event_status;
@@ -3614,6 +3617,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_visible(sao_ui_panel_handle
             std::scoped_lock lock(panel->mutex);
             panel->state.visible = visible;
         }
+        if (changed && visible)
+            (void)sao_ui_sound_play(SAO_UI_SOUND_PANEL, 70);
         if (changed)
             notify(panel, visible ? SAO_UI_PANEL_EVENT_SHOW : SAO_UI_PANEL_EVENT_HIDE);
         return SAO_STATUS_OK;

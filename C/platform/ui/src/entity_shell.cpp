@@ -1544,7 +1544,8 @@ sao_status_t apply_visible_roots_locked(sao_ui_entity_shell_s* shell) {
                 sao::ui::menu_visual::Snapshot snapshot{};
                 status = sao::ui::menu_visual::get_snapshot(shell->menu, &snapshot);
                 if (status == SAO_STATUS_OK && snapshot.active_root_idx != physical_index)
-                    status = sao_ui_menu_activate(shell->menu, physical_index);
+                    status = sao::ui::menu_visual::activate_root(shell->menu, physical_index,
+                                                                 false);
                 if (status != SAO_STATUS_OK)
                     return status;
             }
