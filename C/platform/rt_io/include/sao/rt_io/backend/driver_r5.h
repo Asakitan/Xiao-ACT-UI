@@ -157,9 +157,12 @@ SAO_RT_IO_API sao_status_t SAO_RT_IO_CALL sao_rt_io_hid_nt_path(
 // Tests use these to inspect what the load orchestration touched.  In
 // production these entrypoints are called during helper startup only.
 
-// Reset the R5 module state (handle cache + ready flag + latched
-// hooks).  Tests call this at the start of every case; production
-// calls it during helper shutdown.
+// Legacy best-effort reset of the R5 ready flag and latched hooks.  If the
+// resolver cannot be terminally cleared, this void ABI silently retains all
+// R5 process-global state.  A pending exact-owned clear receipt also keeps
+// all resolver and process-global state unchanged; only the matching V2 owner
+// reset consumes that receipt.  Tests call this at the start of every case;
+// production calls it during helper shutdown.
 SAO_RT_IO_API void SAO_RT_IO_CALL sao_rt_io_r5_reset(void);
 
 // Return 1 iff `_r5_ready` is set — i.e. the load orchestration
@@ -266,6 +269,7 @@ typedef sao_status_t (SAO_RT_IO_CALL *sao_rt_io_va_to_pa_fn_t)(
     void*      user);
 
 #define SAO_RT_IO_R5_VA_RESOLVER_DEFAULT_RUNDOWN_TIMEOUT_MS 2000u
+#define SAO_RT_IO_R5_VA_RESOLVER_SNAPSHOT_V2_ABI_VERSION 2u
 
 typedef enum SaoRtIoR5VaResolverMode {
     SAO_RT_IO_R5_VA_RESOLVER_MODE_NONE = 0u,
@@ -292,6 +296,29 @@ static_assert(offsetof(SaoRtIoR5VaResolverSnapshot, owner_identity) == 24);
 static_assert(offsetof(SaoRtIoR5VaResolverSnapshot, owner_generation) == 32);
 static_assert(offsetof(SaoRtIoR5VaResolverSnapshot, revision) == 40);
 
+typedef struct SaoRtIoR5VaResolverSnapshotV2 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t installed;
+    uint32_t mode;
+    uint64_t function;
+    uint64_t user;
+    uint64_t owner_identity;
+    uint64_t owner_generation;
+    uint64_t revision;
+} SaoRtIoR5VaResolverSnapshotV2;
+
+static_assert(sizeof(SaoRtIoR5VaResolverSnapshotV2) == 56);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, abi_version) == 0);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, struct_size) == 4);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, installed) == 8);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, mode) == 12);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, function) == 16);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, user) == 24);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, owner_identity) == 32);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, owner_generation) == 40);
+static_assert(offsetof(SaoRtIoR5VaResolverSnapshotV2, revision) == 48);
+
 SAO_RT_IO_API void SAO_RT_IO_CALL sao_rt_io_r5_set_va_resolver(
     sao_rt_io_va_to_pa_fn_t fn,
     void*                   user);
@@ -310,8 +337,23 @@ sao_rt_io_r5_clear_va_resolver_if_owner_v2(
     uint32_t    timeout_ms,
     int32_t*    out_cleared);
 
+// Reset the R5 ready flag and hooks only after the exact owner-bound V2
+// resolver clear for this owner and generation completed.  The implementation
+// keeps a one-shot monotonic clear receipt in the resolver slot; an absent or
+// foreign resolver is not sufficient authorization.
+SAO_RT_IO_API sao_status_t SAO_RT_IO_CALL
+sao_rt_io_r5_reset_if_va_resolver_clear_owned_v2(
+    const void* owner_identity,
+    uint64_t    owner_generation);
+
 SAO_RT_IO_API void SAO_RT_IO_CALL sao_rt_io_r5_va_resolver_snapshot(
     SaoRtIoR5VaResolverSnapshot* out_snapshot);
+
+SAO_RT_IO_API sao_status_t SAO_RT_IO_CALL
+sao_rt_io_r5_va_resolver_snapshot_v2(
+    SaoRtIoR5VaResolverSnapshotV2* out_snapshot,
+    size_t                         out_capacity,
+    size_t*                        out_bytes_written);
 
 // ── DeviceIoControl / NtLoadDriver hooks ─────────────────────────
 //

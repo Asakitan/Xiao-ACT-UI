@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -102,6 +103,19 @@ struct R5VaResolverSlot {
     bool admission_open = false;
     uint32_t in_flight = 0u;
     bool installed = false;
+    enum class MutationPhase : uint32_t {
+        idle = 0u,
+        admission_closed = 1u,
+        waiting_rundown = 2u,
+        validating = 3u,
+        committing = 4u,
+        recovery = 5u,
+    } mutation_phase = MutationPhase::idle;
+    std::atomic<bool> recovery_pending{false};
+    const void* clear_receipt_owner_identity = nullptr;
+    uint64_t clear_receipt_owner_generation = 0u;
+    uint64_t clear_receipt_revision = 0u;
+    bool clear_receipt_valid = false;
 };
 
 struct R5State {
@@ -120,21 +134,29 @@ R5State& state() {
 }
 
 struct HookSnapshot {
-    sao_rt_io_r5_ioctl_hook_t ioctl_hook;
-    sao_rt_io_r5_load_hook_t  load_hook;
-    sao_rt_io_r5_syscall_hook_t syscall_hook;
-    void*                     user;
+    sao_rt_io_r5_ioctl_hook_t ioctl_hook = nullptr;
+    sao_rt_io_r5_load_hook_t load_hook = nullptr;
+    sao_rt_io_r5_syscall_hook_t syscall_hook = nullptr;
+    void* user = nullptr;
 };
 
-HookSnapshot snapshot_hooks() {
-    HookSnapshot h{};
-    R5State& s = state();
-    std::lock_guard<std::mutex> lk(s.hook_mutex);
-    h.ioctl_hook = s.ioctl_hook;
-    h.load_hook  = s.load_hook;
-    h.syscall_hook = s.syscall_hook;
-    h.user       = s.hook_user;
-    return h;
+bool snapshot_hooks(HookSnapshot* out) noexcept {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = {};
+    try {
+        R5State& s = state();
+        std::lock_guard<std::mutex> lk(s.hook_mutex);
+        out->ioctl_hook = s.ioctl_hook;
+        out->load_hook = s.load_hook;
+        out->syscall_hook = s.syscall_hook;
+        out->user = s.hook_user;
+        return true;
+    } catch (...) {
+        *out = {};
+        return false;
+    }
 }
 
 thread_local R5VaResolverSlot* g_active_r5_va_resolver_slot = nullptr;
@@ -151,20 +173,40 @@ struct R5VaResolverStateSnapshot {
     uint32_t mode = SAO_RT_IO_R5_VA_RESOLVER_MODE_NONE;
     bool admission_open = false;
     bool installed = false;
+    uint32_t in_flight = 0u;
+    R5VaResolverSlot::MutationPhase mutation_phase =
+        R5VaResolverSlot::MutationPhase::idle;
+    bool recovery_pending = false;
+    const void* clear_receipt_owner_identity = nullptr;
+    uint64_t clear_receipt_owner_generation = 0u;
+    uint64_t clear_receipt_revision = 0u;
+    bool clear_receipt_valid = false;
 };
 
 R5VaResolverStateSnapshot snapshot_va_resolver_state(
     const R5VaResolverSlot& slot) noexcept {
-    return {slot.fn,
-            slot.user,
-            slot.owner_identity,
-            slot.owner_generation,
-            slot.generation_high_water,
-            slot.revision,
-            slot.revision_high_water,
-            slot.mode,
-            slot.admission_open,
-            slot.installed};
+    R5VaResolverStateSnapshot snapshot{};
+    snapshot.fn = slot.fn;
+    snapshot.user = slot.user;
+    snapshot.owner_identity = slot.owner_identity;
+    snapshot.owner_generation = slot.owner_generation;
+    snapshot.generation_high_water = slot.generation_high_water;
+    snapshot.revision = slot.revision;
+    snapshot.revision_high_water = slot.revision_high_water;
+    snapshot.mode = slot.mode;
+    snapshot.admission_open = slot.admission_open;
+    snapshot.installed = slot.installed;
+    snapshot.in_flight = slot.in_flight;
+    snapshot.mutation_phase = slot.mutation_phase;
+    snapshot.recovery_pending =
+        slot.recovery_pending.load(std::memory_order_acquire);
+    snapshot.clear_receipt_owner_identity =
+        slot.clear_receipt_owner_identity;
+    snapshot.clear_receipt_owner_generation =
+        slot.clear_receipt_owner_generation;
+    snapshot.clear_receipt_revision = slot.clear_receipt_revision;
+    snapshot.clear_receipt_valid = slot.clear_receipt_valid;
+    return snapshot;
 }
 
 void restore_va_resolver_state(
@@ -180,6 +222,14 @@ void restore_va_resolver_state(
     slot.mode = snapshot.mode;
     slot.admission_open = snapshot.admission_open;
     slot.installed = snapshot.installed;
+    slot.in_flight = snapshot.in_flight;
+    slot.mutation_phase = snapshot.mutation_phase;
+    slot.recovery_pending.store(snapshot.recovery_pending,
+                                std::memory_order_release);
+    slot.clear_receipt_owner_identity = snapshot.clear_receipt_owner_identity;
+    slot.clear_receipt_owner_generation = snapshot.clear_receipt_owner_generation;
+    slot.clear_receipt_revision = snapshot.clear_receipt_revision;
+    slot.clear_receipt_valid = snapshot.clear_receipt_valid;
 }
 
 bool va_resolver_tuple_matches(
@@ -193,7 +243,94 @@ bool va_resolver_tuple_matches(
            slot.revision == snapshot.revision &&
            slot.revision_high_water == snapshot.revision_high_water &&
            slot.mode == snapshot.mode &&
-           slot.installed == snapshot.installed;
+           slot.admission_open == snapshot.admission_open &&
+           slot.installed == snapshot.installed &&
+           slot.recovery_pending.load(std::memory_order_acquire) ==
+               snapshot.recovery_pending &&
+           slot.clear_receipt_owner_identity ==
+               snapshot.clear_receipt_owner_identity &&
+           slot.clear_receipt_owner_generation ==
+               snapshot.clear_receipt_owner_generation &&
+           slot.clear_receipt_revision == snapshot.clear_receipt_revision &&
+           slot.clear_receipt_valid == snapshot.clear_receipt_valid;
+}
+
+bool va_resolver_state_matches(
+    const R5VaResolverSlot& slot,
+    const R5VaResolverStateSnapshot& snapshot) noexcept {
+    return va_resolver_tuple_matches(slot, snapshot) &&
+           slot.in_flight == snapshot.in_flight &&
+           slot.mutation_phase == snapshot.mutation_phase;
+}
+
+void latch_r5_va_resolver_recovery(
+    R5VaResolverSlot& slot) noexcept {
+    slot.admission_open = false;
+    slot.mutation_phase = R5VaResolverSlot::MutationPhase::recovery;
+    slot.recovery_pending.store(true, std::memory_order_release);
+}
+
+bool rollback_r5_va_resolver_if_exact(
+    R5VaResolverSlot& slot,
+    const R5VaResolverStateSnapshot& prior,
+    const R5VaResolverStateSnapshot& expected) noexcept {
+    if (slot.recovery_pending.load(std::memory_order_acquire) ||
+        slot.in_flight != expected.in_flight ||
+        !va_resolver_tuple_matches(slot, expected)) {
+        latch_r5_va_resolver_recovery(slot);
+        return false;
+    }
+    restore_va_resolver_state(slot, prior);
+    if (!va_resolver_state_matches(slot, prior)) {
+        latch_r5_va_resolver_recovery(slot);
+        return false;
+    }
+    return true;
+}
+
+void mark_r5_va_resolver_recovery_without_lock(
+    R5VaResolverSlot& slot) noexcept {
+    slot.recovery_pending.store(true, std::memory_order_release);
+}
+
+const void* visible_r5_va_resolver_owner_identity(
+    const R5VaResolverSlot& slot) noexcept {
+    if (slot.owner_identity != nullptr) {
+        return slot.owner_identity;
+    }
+    if (slot.recovery_pending.load(std::memory_order_acquire) &&
+        slot.clear_receipt_valid) {
+        return slot.clear_receipt_owner_identity;
+    }
+    return nullptr;
+}
+
+uint64_t visible_r5_va_resolver_owner_generation(
+    const R5VaResolverSlot& slot) noexcept {
+    if (slot.owner_identity != nullptr) {
+        return slot.owner_generation;
+    }
+    if (slot.recovery_pending.load(std::memory_order_acquire) &&
+        slot.clear_receipt_valid) {
+        return slot.clear_receipt_owner_generation;
+    }
+    return 0u;
+}
+
+void invalidate_r5_va_resolver_clear_receipt(
+    R5VaResolverSlot& slot) noexcept {
+    slot.clear_receipt_owner_identity = nullptr;
+    slot.clear_receipt_owner_generation = 0u;
+    slot.clear_receipt_revision = 0u;
+    slot.clear_receipt_valid = false;
+}
+
+void reset_r5_process_global_state(R5State& s) noexcept {
+    s.ready.store(0, std::memory_order_release);
+    s.ioctl_hook = nullptr;
+    s.load_hook = nullptr;
+    s.syscall_hook = nullptr;
+    s.hook_user = nullptr;
 }
 
 bool next_counter(uint64_t high_water, uint64_t* out_value) noexcept {
@@ -206,6 +343,27 @@ bool next_counter(uint64_t high_water, uint64_t* out_value) noexcept {
     }
     *out_value = candidate;
     return true;
+}
+
+enum class R5VaResolverRundownResult {
+    drained,
+    timed_out,
+    failed,
+};
+
+R5VaResolverRundownResult wait_for_r5_va_resolver_rundown(
+    R5VaResolverSlot& slot, uint32_t timeout_ms) noexcept {
+    try {
+        std::unique_lock<std::mutex> wait_lock(slot.state_mutex);
+        const bool drained = slot.cv.wait_for(
+            wait_lock,
+            std::chrono::milliseconds(timeout_ms),
+            [&slot] { return slot.in_flight == 0u; });
+        return drained ? R5VaResolverRundownResult::drained
+                       : R5VaResolverRundownResult::timed_out;
+    } catch (...) {
+        return R5VaResolverRundownResult::failed;
+    }
 }
 
 uint64_t function_bits(sao_rt_io_va_to_pa_fn_t fn) noexcept {
@@ -221,7 +379,10 @@ class R5VaResolverLease {
         try {
             R5VaResolverSlot& slot = state().va_resolver;
             std::lock_guard<std::mutex> lock(slot.state_mutex);
-            if (!slot.installed || !slot.admission_open || slot.fn == nullptr) {
+            if (slot.recovery_pending.load(std::memory_order_acquire) ||
+                slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle ||
+                !slot.installed || !slot.admission_open || slot.fn == nullptr ||
+                slot.in_flight == std::numeric_limits<uint32_t>::max()) {
                 return;
             }
             fn_ = slot.fn;
@@ -245,7 +406,7 @@ class R5VaResolverLease {
     R5VaResolverLease& operator=(const R5VaResolverLease&) = delete;
 
     ~R5VaResolverLease() noexcept {
-        release();
+        (void)finish();
     }
 
     explicit operator bool() const noexcept {
@@ -268,31 +429,37 @@ class R5VaResolverLease {
         return owner_generation_;
     }
 
-  private:
-    void release() noexcept {
+    sao_status_t finish() noexcept {
         if (!acquired_ || slot_ == nullptr) {
-            return;
+            return SAO_STATUS_OK;
         }
-        if (g_active_r5_va_resolver_slot == slot_ &&
-            g_active_r5_va_resolver_depth != 0u) {
+        try {
+            {
+                std::lock_guard<std::mutex> lock(slot_->state_mutex);
+                if (g_active_r5_va_resolver_slot != slot_ ||
+                    g_active_r5_va_resolver_depth == 0u ||
+                    slot_->in_flight == 0u) {
+                    latch_r5_va_resolver_recovery(*slot_);
+                    return SAO_RT_IO_ERR_INTERNAL_ERROR;
+                }
+                --slot_->in_flight;
+                if (slot_->in_flight == 0u) {
+                    slot_->cv.notify_all();
+                }
+            }
             --g_active_r5_va_resolver_depth;
             if (g_active_r5_va_resolver_depth == 0u) {
                 g_active_r5_va_resolver_slot = nullptr;
             }
-        }
-        try {
-            std::lock_guard<std::mutex> lock(slot_->state_mutex);
-            if (slot_->in_flight != 0u) {
-                --slot_->in_flight;
-            }
-            if (slot_->in_flight == 0u) {
-                slot_->cv.notify_all();
-            }
+            acquired_ = false;
+            return SAO_STATUS_OK;
         } catch (...) {
+            mark_r5_va_resolver_recovery_without_lock(*slot_);
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
         }
-        acquired_ = false;
     }
 
+  private:
     R5VaResolverSlot* slot_ = nullptr;
     sao_rt_io_va_to_pa_fn_t fn_ = nullptr;
     void* user_ = nullptr;
@@ -303,33 +470,53 @@ class R5VaResolverLease {
 
 sao_status_t invoke_va_resolver(
     uint32_t pid, uint64_t va, uint64_t* out_pa) noexcept {
-    if (out_pa == nullptr) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-    *out_pa = 0u;
-    R5VaResolverLease lease;
-    if (!lease) {
+    try {
+        if (out_pa == nullptr) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        *out_pa = 0u;
+        R5VaResolverLease lease;
+        if (!lease) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        uint64_t candidate_pa = 0u;
+        sao_status_t callback_status = SAO_RT_IO_ERR_INTERNAL_ERROR;
+        try {
+            callback_status =
+                lease.fn()(pid, va, &candidate_pa, lease.user());
+        } catch (...) {
+            callback_status = SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        const sao_status_t finish_status = lease.finish();
+        if (finish_status != SAO_STATUS_OK) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        if (callback_status != SAO_STATUS_OK) {
+            return callback_status;
+        }
+        *out_pa = candidate_pa;
+        return SAO_STATUS_OK;
+    } catch (...) {
         return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
-    try {
-        return lease.fn()(pid, va, out_pa, lease.user());
-    } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
 }
-
 sao_status_t r5_rebind_va_resolver(
     sao_rt_io_va_to_pa_fn_t fn,
     void* user,
     const void* owner_identity,
     uint64_t owner_generation,
-    bool legacy) noexcept {
+    bool legacy,
+    uint64_t* out_revision) noexcept {
     R5VaResolverSlot* slot_ptr = nullptr;
     std::unique_lock<std::mutex> mutation_lock;
     std::unique_lock<std::mutex> state_lock;
     R5VaResolverStateSnapshot prior{};
-    bool admission_changed = false;
+    R5VaResolverStateSnapshot closed{};
+    R5VaResolverStateSnapshot post_mutation{};
+    bool mutation_started = false;
+    bool post_mutation_valid = false;
     try {
+        if (out_revision != nullptr) *out_revision = 0u;
         slot_ptr = &state().va_resolver;
         R5VaResolverSlot& slot = *slot_ptr;
         if (g_active_r5_va_resolver_slot == slot_ptr &&
@@ -339,6 +526,10 @@ sao_status_t r5_rebind_va_resolver(
 
         mutation_lock = std::unique_lock<std::mutex>(slot.mutation_mutex);
         state_lock = std::unique_lock<std::mutex>(slot.state_mutex);
+        if (slot.recovery_pending.load(std::memory_order_acquire) ||
+            slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
 
         if (legacy) {
             if (slot.installed && slot.mode == SAO_RT_IO_R5_VA_RESOLVER_MODE_OWNED) {
@@ -347,11 +538,17 @@ sao_status_t r5_rebind_va_resolver(
             if (fn != nullptr && slot.installed &&
                 slot.mode == SAO_RT_IO_R5_VA_RESOLVER_MODE_LEGACY &&
                 slot.admission_open && slot.fn == fn && slot.user == user) {
+                if (out_revision != nullptr) *out_revision = slot.revision;
                 return SAO_STATUS_OK;
             }
-            if (fn == nullptr && (!slot.installed ||
-                                  slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_LEGACY)) {
-                return SAO_STATUS_OK;
+            if (fn == nullptr) {
+                if (!slot.installed) {
+                    if (out_revision != nullptr) *out_revision = slot.revision;
+                    return SAO_STATUS_OK;
+                }
+                if (slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_LEGACY) {
+                    return SAO_STATUS_ERR_ALREADY_EXISTS;
+                }
             }
         } else {
             if (fn == nullptr || owner_identity == nullptr || owner_generation == 0u) {
@@ -364,6 +561,7 @@ sao_status_t r5_rebind_va_resolver(
                     return SAO_STATUS_ERR_ALREADY_EXISTS;
                 }
                 if (slot.fn == fn && slot.user == user && slot.admission_open) {
+                    if (out_revision != nullptr) *out_revision = slot.revision;
                     return SAO_STATUS_OK;
                 }
                 return SAO_STATUS_ERR_ALREADY_EXISTS;
@@ -389,22 +587,35 @@ sao_status_t r5_rebind_va_resolver(
         }
 
         prior = snapshot_va_resolver_state(slot);
+        mutation_started = true;
         slot.admission_open = false;
-        admission_changed = true;
-        if (!slot.cv.wait_for(
-                state_lock,
-                std::chrono::milliseconds(kR5VaResolverRundownTimeoutMs),
-                [&slot] { return slot.in_flight == 0u; })) {
-            restore_va_resolver_state(slot, prior);
-            admission_changed = false;
-            return SAO_STATUS_ERR_TIMEOUT;
-        }
-        if (!va_resolver_tuple_matches(slot, prior)) {
-            restore_va_resolver_state(slot, prior);
-            admission_changed = false;
-            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::admission_closed;
+        closed = prior;
+        closed.admission_open = false;
+        closed.in_flight = prior.in_flight;
+        closed.recovery_pending = false;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::waiting_rundown;
+        state_lock.unlock();
+        const R5VaResolverRundownResult rundown =
+            wait_for_r5_va_resolver_rundown(
+                slot, SAO_RT_IO_R5_VA_RESOLVER_DEFAULT_RUNDOWN_TIMEOUT_MS);
+        state_lock.lock();
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::validating;
+        if (rundown != R5VaResolverRundownResult::drained ||
+            slot.in_flight != 0u || !va_resolver_tuple_matches(slot, closed)) {
+            const bool restored =
+                rollback_r5_va_resolver_if_exact(slot, prior, closed);
+            mutation_started = false;
+            if (restored && rundown == R5VaResolverRundownResult::timed_out) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
+            return restored ? SAO_RT_IO_ERR_INTERNAL_ERROR
+                            : (rundown == R5VaResolverRundownResult::timed_out
+                                   ? SAO_STATUS_ERR_TIMEOUT
+                                   : SAO_RT_IO_ERR_INTERNAL_ERROR);
         }
 
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::committing;
         slot.revision = candidate_revision;
         slot.revision_high_water = candidate_revision;
         if (fn == nullptr) {
@@ -426,35 +637,53 @@ sao_status_t r5_rebind_va_resolver(
             slot.installed = true;
             slot.admission_open = true;
         }
-        admission_changed = false;
+        if (fn != nullptr) {
+            invalidate_r5_va_resolver_clear_receipt(slot);
+        }
+        post_mutation = snapshot_va_resolver_state(slot);
+        post_mutation_valid = true;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::idle;
+        if (out_revision != nullptr) *out_revision = slot.revision;
+        mutation_started = false;
         return SAO_STATUS_OK;
     } catch (...) {
-        if (slot_ptr != nullptr && state_lock.owns_lock() && admission_changed) {
-            restore_va_resolver_state(*slot_ptr, prior);
+        if (slot_ptr != nullptr && mutation_started) {
+            try {
+                if (!state_lock.owns_lock()) {
+                    state_lock.lock();
+                }
+                const R5VaResolverStateSnapshot& expected =
+                    post_mutation_valid ? post_mutation : closed;
+                (void)rollback_r5_va_resolver_if_exact(
+                    *slot_ptr, prior, expected);
+            } catch (...) {
+                mark_r5_va_resolver_recovery_without_lock(*slot_ptr);
+            }
         }
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
 }
-
 sao_status_t r5_clear_va_resolver_if_owner(
     const void* owner_identity,
     uint64_t owner_generation,
     uint32_t timeout_ms,
     int32_t* out_cleared) noexcept {
-    if (out_cleared != nullptr) {
-        *out_cleared = 0;
-    }
-    if (owner_identity == nullptr || owner_generation == 0u ||
-        timeout_ms > kR5VaResolverRundownTimeoutMs) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-
     R5VaResolverSlot* slot_ptr = nullptr;
     std::unique_lock<std::mutex> mutation_lock;
     std::unique_lock<std::mutex> state_lock;
     R5VaResolverStateSnapshot prior{};
-    bool admission_changed = false;
+    R5VaResolverStateSnapshot closed{};
+    R5VaResolverStateSnapshot post_mutation{};
+    bool mutation_started = false;
+    bool post_mutation_valid = false;
     try {
+        if (out_cleared != nullptr) {
+            *out_cleared = 0;
+        }
+        if (owner_identity == nullptr || owner_generation == 0u ||
+            timeout_ms > SAO_RT_IO_R5_VA_RESOLVER_DEFAULT_RUNDOWN_TIMEOUT_MS) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
         slot_ptr = &state().va_resolver;
         R5VaResolverSlot& slot = *slot_ptr;
         if (g_active_r5_va_resolver_slot == slot_ptr &&
@@ -464,6 +693,10 @@ sao_status_t r5_clear_va_resolver_if_owner(
 
         mutation_lock = std::unique_lock<std::mutex>(slot.mutation_mutex);
         state_lock = std::unique_lock<std::mutex>(slot.state_mutex);
+        if (slot.recovery_pending.load(std::memory_order_acquire) ||
+            slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
         if (!slot.installed || slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_OWNED ||
             slot.owner_identity != owner_identity ||
             slot.owner_generation != owner_generation) {
@@ -475,22 +708,38 @@ sao_status_t r5_clear_va_resolver_if_owner(
         }
 
         prior = snapshot_va_resolver_state(slot);
+        mutation_started = true;
         slot.admission_open = false;
-        admission_changed = true;
-        if (!slot.cv.wait_for(
-                state_lock,
-                std::chrono::milliseconds(timeout_ms),
-                [&slot] { return slot.in_flight == 0u; })) {
-            restore_va_resolver_state(slot, prior);
-            admission_changed = false;
-            return SAO_STATUS_ERR_TIMEOUT;
-        }
-        if (!va_resolver_tuple_matches(slot, prior)) {
-            restore_va_resolver_state(slot, prior);
-            admission_changed = false;
-            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::admission_closed;
+        closed = prior;
+        closed.admission_open = false;
+        closed.in_flight = prior.in_flight;
+        closed.recovery_pending = false;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::waiting_rundown;
+        state_lock.unlock();
+        const R5VaResolverRundownResult rundown =
+            wait_for_r5_va_resolver_rundown(slot, timeout_ms);
+        state_lock.lock();
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::validating;
+        if (rundown != R5VaResolverRundownResult::drained ||
+            slot.in_flight != 0u || !va_resolver_tuple_matches(slot, closed)) {
+            const bool restored =
+                rollback_r5_va_resolver_if_exact(slot, prior, closed);
+            mutation_started = false;
+            if (restored && rundown == R5VaResolverRundownResult::timed_out) {
+                return SAO_STATUS_ERR_TIMEOUT;
+            }
+            return restored ? SAO_RT_IO_ERR_INTERNAL_ERROR
+                            : (rundown == R5VaResolverRundownResult::timed_out
+                                   ? SAO_STATUS_ERR_TIMEOUT
+                                   : SAO_RT_IO_ERR_INTERNAL_ERROR);
         }
 
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::committing;
+        slot.clear_receipt_owner_identity = owner_identity;
+        slot.clear_receipt_owner_generation = owner_generation;
+        slot.clear_receipt_revision = candidate_revision;
+        slot.clear_receipt_valid = true;
         slot.fn = nullptr;
         slot.user = nullptr;
         slot.owner_identity = nullptr;
@@ -500,19 +749,31 @@ sao_status_t r5_clear_va_resolver_if_owner(
         slot.admission_open = false;
         slot.revision = candidate_revision;
         slot.revision_high_water = candidate_revision;
-        admission_changed = false;
+        post_mutation = snapshot_va_resolver_state(slot);
+        post_mutation_valid = true;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::idle;
+        mutation_started = false;
         if (out_cleared != nullptr) {
             *out_cleared = 1;
         }
         return SAO_STATUS_OK;
     } catch (...) {
-        if (slot_ptr != nullptr && state_lock.owns_lock() && admission_changed) {
-            restore_va_resolver_state(*slot_ptr, prior);
+        if (slot_ptr != nullptr && mutation_started) {
+            try {
+                if (!state_lock.owns_lock()) {
+                    state_lock.lock();
+                }
+                const R5VaResolverStateSnapshot& expected =
+                    post_mutation_valid ? post_mutation : closed;
+                (void)rollback_r5_va_resolver_if_exact(
+                    *slot_ptr, prior, expected);
+            } catch (...) {
+                mark_r5_va_resolver_recovery_without_lock(*slot_ptr);
+            }
         }
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
 }
-
 // Gate helper — Python's `_r5p_write` guard.  A latched debug gate
 // means every future write is denied.  Reads are also denied so a
 // compromised process cannot exfiltrate memory via a poked handle.
@@ -527,22 +788,15 @@ bool real_ioctl(void* driver_handle,
                 const void* in_buf, uint32_t in_size,
                 void* out_buf, uint32_t out_size,
                 uint32_t* out_returned) {
+    try {
 #if defined(_WIN32)
     if (driver_handle == nullptr) return false;
-    // 2026-07 hardening: shape R5 (SIVX64) IOCTL burst.  SIV UI drives
-    // both reads and writes so classify as OTHER (op-weight table in
-    // the SIV_LIKE profile is uniform).
     sao_rt_io_ioctl_pacer_before_default(SAO_RT_IO_IOCTL_PACER_ROLE_R5,
                                          SAO_RT_IO_IOCTL_OP_OTHER);
     uint32_t returned = 0u;
     const int32_t ok = sao_rt_io_dispatch_d2(
-        driver_handle,
-        ioctl_code,
-        const_cast<void*>(in_buf),
-        in_size,
-        out_buf,
-        out_size,
-        &returned);
+        driver_handle, ioctl_code, const_cast<void*>(in_buf), in_size,
+        out_buf, out_size, &returned);
     sao_rt_io_ioctl_pacer_after_default(SAO_RT_IO_IOCTL_PACER_ROLE_R5,
                                         SAO_RT_IO_IOCTL_OP_OTHER);
     if (out_returned != nullptr) *out_returned = returned;
@@ -552,27 +806,36 @@ bool real_ioctl(void* driver_handle,
     (void)out_buf; (void)out_size; (void)out_returned;
     return false;
 #endif
+    } catch (...) {
+        return false;
+    }
 }
 
-// Dispatch — hook first, real syscall second.
 bool dispatch_ioctl(void* driver_handle,
                     uint32_t ioctl_code,
                     const void* in_buf, uint32_t in_size,
                     void* out_buf, uint32_t out_size,
                     uint32_t* out_returned) {
-    const auto h = snapshot_hooks();
-    if (h.ioctl_hook != nullptr) {
-        const int32_t rc = h.ioctl_hook(
-            driver_handle, ioctl_code, in_buf, in_size,
-            out_buf, out_size, out_returned, h.user);
-        return rc != 0;
+    try {
+        if (out_returned != nullptr) *out_returned = 0u;
+        HookSnapshot h{};
+        if (!snapshot_hooks(&h)) return false;
+        if (h.ioctl_hook != nullptr) {
+            const int32_t rc = h.ioctl_hook(
+                driver_handle, ioctl_code, in_buf, in_size,
+                out_buf, out_size, out_returned, h.user);
+            return rc != 0;
+        }
+        return real_ioctl(driver_handle, ioctl_code,
+                          in_buf, in_size, out_buf, out_size, out_returned);
+    } catch (...) {
+        return false;
     }
-    return real_ioctl(driver_handle, ioctl_code,
-                      in_buf, in_size, out_buf, out_size, out_returned);
 }
 
 int32_t real_r5_syscall(uint64_t* counter_frequency,
                        SaoRtIoR5CommandPacket* packet) {
+    try {
 #if defined(_WIN32)
     if (counter_frequency == nullptr || packet == nullptr) {
         return static_cast<int32_t>(0xC000007Au);
@@ -584,16 +847,24 @@ int32_t real_r5_syscall(uint64_t* counter_frequency,
     (void)packet;
     return -1;
 #endif
+    } catch (...) {
+        return -1;
+    }
 }
 
 int32_t dispatch_r5_syscall(SaoRtIoR5CommandPacket* packet) {
-    uint64_t counter_frequency = 0;
-    const auto hooks = snapshot_hooks();
-    if (hooks.syscall_hook != nullptr) {
-        return hooks.syscall_hook(
-            &counter_frequency, packet, hooks.user);
+    try {
+        uint64_t counter_frequency = 0;
+        HookSnapshot hooks{};
+        if (!snapshot_hooks(&hooks)) return -1;
+        if (hooks.syscall_hook != nullptr) {
+            return hooks.syscall_hook(
+                &counter_frequency, packet, hooks.user);
+        }
+        return real_r5_syscall(&counter_frequency, packet);
+    } catch (...) {
+        return -1;
     }
-    return real_r5_syscall(&counter_frequency, packet);
 }
 
 // Compose the R5P write payload buffer.  Mirrors `_r5p_write`'s
@@ -644,30 +915,48 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_device_name(
     char*  out_utf8,
     size_t out_capacity,
     size_t* out_bytes_written) {
-    // Active R5 user-mode writer filename.
-    const auto s = SAO_ENC_STR("SIVX64.sys");
-    const char* src = s.decrypt();
-    return emit_string_out(src, s.size(), out_utf8, out_capacity, out_bytes_written);
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        const auto s = SAO_ENC_STR("SIVX64.sys");
+        const char* src = s.decrypt();
+        return emit_string_out(src, s.size(), out_utf8, out_capacity,
+                               out_bytes_written);
+    } catch (...) {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
+    }
 }
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5p_device_name(
-    char*  out_utf8,
+    char* out_utf8,
     size_t out_capacity,
     size_t* out_bytes_written) {
-    // Python `_R5P_F() = "SIVX64.sys"`.
-    const auto s = SAO_ENC_STR("SIVX64.sys");
-    const char* src = s.decrypt();
-    return emit_string_out(src, s.size(), out_utf8, out_capacity, out_bytes_written);
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        const auto s = SAO_ENC_STR("SIVX64.sys");
+        const char* src = s.decrypt();
+        return emit_string_out(src, s.size(), out_utf8, out_capacity,
+                               out_bytes_written);
+    } catch (...) {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
+    }
 }
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5p_dev_path(
-    char*  out_utf8,
+    char* out_utf8,
     size_t out_capacity,
     size_t* out_bytes_written) {
-    // Python `_R5P_DEV() = "SIVDRIVER"`.
-    const auto s = SAO_ENC_STR("SIVDRIVER");
-    const char* src = s.decrypt();
-    return emit_string_out(src, s.size(), out_utf8, out_capacity, out_bytes_written);
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        const auto s = SAO_ENC_STR("SIVDRIVER");
+        const char* src = s.decrypt();
+        return emit_string_out(src, s.size(), out_utf8, out_capacity,
+                               out_bytes_written);
+    } catch (...) {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
+    }
 }
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_dev_nt_path(
@@ -675,26 +964,30 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_dev_nt_path(
     char*       out_utf8,
     size_t      out_capacity,
     size_t*     out_bytes_written) {
-    if (dos_name_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    // Python `_dev_nt_path(dos_name) = "\??\" + dos_name`.
-    const auto prefix = SAO_ENC_STR("\\??\\");
-    const char* prefix_ptr = prefix.decrypt();
-    const size_t prefix_len = prefix.size();
-    const size_t dos_len    = std::strlen(dos_name_utf8);
-    const size_t total_len  = prefix_len + dos_len;
-
-    if (out_utf8 == nullptr || out_capacity == 0) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-    if (out_capacity < total_len + 1) {
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        if (dos_name_utf8 == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const auto prefix = SAO_ENC_STR("\\??\\");
+        const char* prefix_ptr = prefix.decrypt();
+        const size_t prefix_len = prefix.size();
+        const size_t dos_len = std::strlen(dos_name_utf8);
+        const size_t total_len = prefix_len + dos_len;
+        if (out_utf8 == nullptr || out_capacity == 0) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        if (out_capacity < total_len + 1) {
+            if (out_bytes_written != nullptr) *out_bytes_written = total_len;
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
+        std::memcpy(out_utf8, prefix_ptr, prefix_len);
+        std::memcpy(out_utf8 + prefix_len, dos_name_utf8, dos_len);
+        out_utf8[total_len] = '\0';
         if (out_bytes_written != nullptr) *out_bytes_written = total_len;
-        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
-    std::memcpy(out_utf8, prefix_ptr, prefix_len);
-    std::memcpy(out_utf8 + prefix_len, dos_name_utf8, dos_len);
-    out_utf8[total_len] = '\0';
-    if (out_bytes_written != nullptr) *out_bytes_written = total_len;
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_hid_nt_path(
@@ -703,104 +996,209 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_hid_nt_path(
     char*     out_utf8,
     size_t    out_capacity,
     size_t*   out_bytes_written) {
-    if (is_mouse != 0 && is_mouse != 1) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-    if (out_utf8 == nullptr || out_capacity == 0) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-
-    // Python `_hid_nt_path`:
-    //   prefix = "\\Device\\"
-    //   cls    = "PointerClass" or "KeyboardClass"
-    //   suffix = str(idx)
-    const auto prefix = SAO_ENC_STR("\\Device\\");
-    const char* prefix_ptr = prefix.decrypt();
-    const size_t prefix_len = prefix.size();
-
-    // Materialise the class token via SAO_ENC_STR so it never appears
-    // as a plaintext ".rdata" literal.
-    const char*  cls_ptr  = nullptr;
-    size_t       cls_len  = 0;
-    // The two SaoEncStrBuf instances must both stay alive past the
-    // subsequent copy, so we capture pointers up-front.
-    const auto ptr_cls = SAO_ENC_STR("PointerClass");
-    const auto kbd_cls = SAO_ENC_STR("KeyboardClass");
-    if (is_mouse == 1) {
-        cls_ptr = ptr_cls.decrypt();
-        cls_len = ptr_cls.size();
-    } else {
-        cls_ptr = kbd_cls.decrypt();
-        cls_len = kbd_cls.size();
-    }
-
-    // idx → decimal.  A 32-bit value never needs more than 10 chars.
-    char idx_buf[16];
-    const int idx_written = std::snprintf(idx_buf, sizeof(idx_buf), "%u",
-                                          static_cast<unsigned int>(idx));
-    if (idx_written <= 0) return SAO_STATUS_ERR_UNKNOWN;
-    const size_t idx_len = static_cast<size_t>(idx_written);
-
-    const size_t total_len = prefix_len + cls_len + idx_len;
-    if (out_capacity < total_len + 1) {
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        if (is_mouse != 0 && is_mouse != 1) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        if (out_utf8 == nullptr || out_capacity == 0) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const auto prefix = SAO_ENC_STR("\\Device\\");
+        const char* prefix_ptr = prefix.decrypt();
+        const size_t prefix_len = prefix.size();
+        const char* cls_ptr = nullptr;
+        size_t cls_len = 0;
+        const auto ptr_cls = SAO_ENC_STR("PointerClass");
+        const auto kbd_cls = SAO_ENC_STR("KeyboardClass");
+        if (is_mouse == 1) {
+            cls_ptr = ptr_cls.decrypt();
+            cls_len = ptr_cls.size();
+        } else {
+            cls_ptr = kbd_cls.decrypt();
+            cls_len = kbd_cls.size();
+        }
+        char idx_buf[16];
+        const int idx_written = std::snprintf(
+            idx_buf, sizeof(idx_buf), "%u", static_cast<unsigned int>(idx));
+        if (idx_written <= 0) return SAO_STATUS_ERR_UNKNOWN;
+        const size_t idx_len = static_cast<size_t>(idx_written);
+        const size_t total_len = prefix_len + cls_len + idx_len;
+        if (out_capacity < total_len + 1) {
+            if (out_bytes_written != nullptr) *out_bytes_written = total_len;
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
+        size_t off = 0;
+        std::memcpy(out_utf8 + off, prefix_ptr, prefix_len); off += prefix_len;
+        std::memcpy(out_utf8 + off, cls_ptr, cls_len); off += cls_len;
+        std::memcpy(out_utf8 + off, idx_buf, idx_len); off += idx_len;
+        out_utf8[off] = '\0';
         if (out_bytes_written != nullptr) *out_bytes_written = total_len;
-        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
-    size_t off = 0;
-    std::memcpy(out_utf8 + off, prefix_ptr, prefix_len); off += prefix_len;
-    std::memcpy(out_utf8 + off, cls_ptr,    cls_len);    off += cls_len;
-    std::memcpy(out_utf8 + off, idx_buf,    idx_len);    off += idx_len;
-    out_utf8[off] = '\0';
-    if (out_bytes_written != nullptr) *out_bytes_written = total_len;
-    return SAO_STATUS_OK;
 }
 
 // ── R5 ready flag ─────────────────────────────────────────────────
 
 extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_reset(void) {
+    R5VaResolverStateSnapshot resolver_prior{};
+    R5VaResolverStateSnapshot resolver_closed{};
+    R5VaResolverStateSnapshot resolver_post_clear{};
+    R5State* state_ptr = nullptr;
+    bool resolver_mutation_started = false;
+    bool resolver_post_clear_valid = false;
+    std::unique_lock<std::mutex> mutation_lock;
+    std::unique_lock<std::mutex> state_lock;
+    std::unique_lock<std::mutex> hook_lock;
     try {
         R5State& s = state();
-        (void)r5_rebind_va_resolver(nullptr, nullptr, nullptr, 0u, true);
-        s.ready.store(0, std::memory_order_release);
-        std::lock_guard<std::mutex> lk(s.hook_mutex);
-        s.ioctl_hook = nullptr;
-        s.load_hook  = nullptr;
-        s.syscall_hook = nullptr;
-        s.hook_user  = nullptr;
+        state_ptr = &s;
+        R5VaResolverSlot& slot = s.va_resolver;
+        if (g_active_r5_va_resolver_slot == &slot &&
+            g_active_r5_va_resolver_depth != 0u) {
+            return;
+        }
+
+        mutation_lock = std::unique_lock<std::mutex>(slot.mutation_mutex);
+        state_lock = std::unique_lock<std::mutex>(slot.state_mutex);
+        hook_lock = std::unique_lock<std::mutex>(s.hook_mutex);
+        if (slot.recovery_pending.load(std::memory_order_acquire) ||
+            slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle) {
+            return;
+        }
+
+        resolver_prior = snapshot_va_resolver_state(slot);
+        if (slot.clear_receipt_valid) {
+            return;
+        }
+        if (!slot.installed) {
+            if (slot.admission_open || slot.fn != nullptr || slot.user != nullptr ||
+                slot.owner_identity != nullptr || slot.owner_generation != 0u ||
+                slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_NONE ||
+                slot.in_flight != 0u) {
+                latch_r5_va_resolver_recovery(slot);
+                return;
+            }
+            reset_r5_process_global_state(s);
+            return;
+        }
+        if (slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_LEGACY) {
+            return;
+        }
+
+        uint64_t resolver_revision = 0u;
+        if (!next_counter(slot.revision_high_water, &resolver_revision)) {
+            return;
+        }
+        resolver_mutation_started = true;
+        slot.admission_open = false;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::admission_closed;
+        resolver_closed = resolver_prior;
+        resolver_closed.admission_open = false;
+        resolver_closed.in_flight = resolver_prior.in_flight;
+        resolver_closed.recovery_pending = false;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::waiting_rundown;
+        state_lock.unlock();
+        const R5VaResolverRundownResult rundown =
+            wait_for_r5_va_resolver_rundown(
+                slot, SAO_RT_IO_R5_VA_RESOLVER_DEFAULT_RUNDOWN_TIMEOUT_MS);
+        state_lock.lock();
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::validating;
+        if (rundown != R5VaResolverRundownResult::drained ||
+            slot.in_flight != 0u ||
+            !va_resolver_tuple_matches(slot, resolver_closed)) {
+            (void)rollback_r5_va_resolver_if_exact(
+                slot, resolver_prior, resolver_closed);
+            resolver_mutation_started = false;
+            return;
+        }
+
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::committing;
+        slot.fn = nullptr;
+        slot.user = nullptr;
+        slot.owner_identity = nullptr;
+        slot.owner_generation = 0u;
+        slot.mode = SAO_RT_IO_R5_VA_RESOLVER_MODE_NONE;
+        slot.installed = false;
+        slot.admission_open = false;
+        slot.revision = resolver_revision;
+        slot.revision_high_water = resolver_revision;
+        resolver_post_clear = snapshot_va_resolver_state(slot);
+        resolver_post_clear_valid = true;
+        if (slot.in_flight != resolver_post_clear.in_flight ||
+            !va_resolver_tuple_matches(slot, resolver_post_clear)) {
+            (void)rollback_r5_va_resolver_if_exact(
+                slot, resolver_prior, resolver_post_clear);
+            resolver_mutation_started = false;
+            return;
+        }
+        reset_r5_process_global_state(s);
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::idle;
+        resolver_mutation_started = false;
     } catch (...) {
+        if (state_ptr != nullptr && resolver_mutation_started) {
+            try {
+                if (!state_lock.owns_lock()) {
+                    state_lock.lock();
+                }
+                const R5VaResolverStateSnapshot& expected =
+                    resolver_post_clear_valid ? resolver_post_clear
+                                               : resolver_closed;
+                (void)rollback_r5_va_resolver_if_exact(
+                    state_ptr->va_resolver, resolver_prior, expected);
+            } catch (...) {
+                mark_r5_va_resolver_recovery_without_lock(
+                    state_ptr->va_resolver);
+            }
+        }
+    }
+}
+extern "C" int32_t SAO_RT_IO_CALL sao_rt_io_r5_is_ready(void) {
+    try {
+        return state().ready.load(std::memory_order_acquire);
+    } catch (...) {
+        return 0;
     }
 }
 
-extern "C" int32_t SAO_RT_IO_CALL sao_rt_io_r5_is_ready(void) {
-    return state().ready.load(std::memory_order_acquire);
-}
-
 extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_set_ready(int32_t ready) {
-    state().ready.store(ready ? 1 : 0, std::memory_order_release);
+    try {
+        state().ready.store(ready ? 1 : 0, std::memory_order_release);
+    } catch (...) {
+    }
 }
 
 // ── Load orchestration ────────────────────────────────────────────
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_load_orchestration(
     int32_t* out_used_fallback) {
-    if (out_used_fallback != nullptr) *out_used_fallback = 0;
-
-    if (!sao_rt_io_gate_run_all()) {
-        return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
+    try {
+        if (out_used_fallback != nullptr) *out_used_fallback = 0;
+        if (!sao_rt_io_gate_run_all()) {
+            return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
+        }
+        HookSnapshot h{};
+        if (!snapshot_hooks(&h)) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        if (h.load_hook == nullptr) {
+            return SAO_RT_IO_ERR_HELPER_NOT_LAUNCHED;
+        }
+        void* handle = nullptr;
+        const sao_status_t status =
+            h.load_hook(/*legacy_is_fallback=*/0, &handle, h.user);
+        if (status == SAO_STATUS_OK && handle != nullptr) {
+            state().ready.store(1, std::memory_order_release);
+            return SAO_STATUS_OK;
+        }
+        return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+    } catch (...) {
+        if (out_used_fallback != nullptr) *out_used_fallback = 0;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
-
-    const auto h = snapshot_hooks();
-    if (h.load_hook == nullptr) {
-        return SAO_RT_IO_ERR_HELPER_NOT_LAUNCHED;
-    }
-
-    void* handle = nullptr;
-    const sao_status_t status = h.load_hook(/*legacy_is_fallback=*/0, &handle, h.user);
-    if (status == SAO_STATUS_OK && handle != nullptr) {
-        state().ready.store(1, std::memory_order_release);
-        return SAO_STATUS_OK;
-    }
-    return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
 }
 
 // ── R5P read / write ──────────────────────────────────────────────
@@ -811,32 +1209,30 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5p_read_phys(
     uint8_t*    out_buf,
     size_t      size,
     size_t*     out_bytes) {
-    if (out_bytes != nullptr) *out_bytes = 0;
-    if (out_buf == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
-    if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
-
-    // Python `_r5p_read` allocates `max(size, 0x1000)` for the output.
-    const size_t out_sz = (size < kR5PMinReadBuf) ? kR5PMinReadBuf : size;
-    std::vector<uint8_t> scratch(out_sz, 0u);
-
-    // Input payload = 8-byte little-endian phys address.
-    uint8_t in_buf[8];
-    std::memcpy(in_buf, &phys_addr, sizeof(uint64_t));
-
-    uint32_t returned = 0;
-    const bool ok = dispatch_ioctl(driver_handle,
-                                   kSaoRtIoR5PhysReadIoctl,
-                                   in_buf, 8,
-                                   scratch.data(),
-                                   static_cast<uint32_t>(out_sz),
-                                   &returned);
-    if (!ok) return SAO_RT_IO_ERR_READ_FAILED;
-    if (returned < size) return SAO_RT_IO_ERR_READ_FAILED;
-
-    std::memcpy(out_buf, scratch.data(), size);
-    if (out_bytes != nullptr) *out_bytes = size;
-    return SAO_STATUS_OK;
+    try {
+        if (out_bytes != nullptr) *out_bytes = 0;
+        if (out_buf == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+        if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
+        const size_t out_sz =
+            (size < kR5PMinReadBuf) ? kR5PMinReadBuf : size;
+        std::vector<uint8_t> scratch(out_sz, 0u);
+        uint8_t in_buf[8];
+        std::memcpy(in_buf, &phys_addr, sizeof(uint64_t));
+        uint32_t returned = 0;
+        const bool ok = dispatch_ioctl(driver_handle,
+                                       kSaoRtIoR5PhysReadIoctl,
+                                       in_buf, 8, scratch.data(),
+                                       static_cast<uint32_t>(out_sz),
+                                       &returned);
+        if (!ok || returned < size) return SAO_RT_IO_ERR_READ_FAILED;
+        std::memcpy(out_buf, scratch.data(), size);
+        if (out_bytes != nullptr) *out_bytes = size;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (out_bytes != nullptr) *out_bytes = 0;
+        return SAO_RT_IO_ERR_READ_FAILED;
+    }
 }
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5p_write_phys(
@@ -844,89 +1240,77 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5p_write_phys(
     uint64_t     phys_addr,
     const uint8_t* data,
     size_t       size) {
-    if (data == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
-    if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
-
-    size_t off = 0;
-    while (off < size) {
-        const uint64_t page_pa  = (phys_addr + off) & ~kPageMask;
-        const uint64_t page_off = (phys_addr + off) & kPageMask;
-        const size_t chunk_hi   = kPageSize - static_cast<size_t>(page_off);
-        const size_t remaining  = size - off;
-        const size_t chunk      = (remaining < chunk_hi) ? remaining : chunk_hi;
-
-        // Build the entry list.  Python packs one entry per 4 / 2 / 1
-        // byte slice.  For the fully-aligned fast path we only emit
-        // DWORD entries; sub-DWORD tails read the current DWORD via
-        // `_r5p_read`, patch, and write back.
-        std::vector<R5PWriteEntry> entries;
-        size_t pos = 0;
-        while (pos < chunk) {
-            const size_t remain = chunk - pos;
-            R5PWriteEntry ent{};
-            ent.offset = static_cast<uint32_t>(page_off + pos);
-            ent.mask   = 0u;
-            if (remain >= 4) {
-                uint32_t v = 0;
-                std::memcpy(&v, data + off + pos, sizeof(uint32_t));
-                ent.value = v;
-                entries.push_back(ent);
-                pos += 4;
-            } else if (remain >= 2) {
-                uint16_t v = 0;
-                std::memcpy(&v, data + off + pos, sizeof(uint16_t));
-                uint8_t cur[4] = {0};
-                size_t got = 0;
-                const sao_status_t rs = sao_rt_io_r5p_read_phys(
-                    driver_handle,
-                    page_pa + page_off + pos,
-                    cur, 4, &got);
-                if (rs != SAO_STATUS_OK || got != 4) {
-                    return SAO_RT_IO_ERR_READ_FAILED;
+    try {
+        if (data == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+        if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
+        size_t off = 0;
+        while (off < size) {
+            const uint64_t page_pa = (phys_addr + off) & ~kPageMask;
+            const uint64_t page_off = (phys_addr + off) & kPageMask;
+            const size_t chunk_hi =
+                kPageSize - static_cast<size_t>(page_off);
+            const size_t remaining = size - off;
+            const size_t chunk =
+                (remaining < chunk_hi) ? remaining : chunk_hi;
+            std::vector<R5PWriteEntry> entries;
+            size_t pos = 0;
+            while (pos < chunk) {
+                const size_t remain = chunk - pos;
+                R5PWriteEntry ent{};
+                ent.offset = static_cast<uint32_t>(page_off + pos);
+                ent.mask = 0u;
+                if (remain >= 4) {
+                    uint32_t v = 0;
+                    std::memcpy(&v, data + off + pos, sizeof(uint32_t));
+                    ent.value = v;
+                    entries.push_back(ent);
+                    pos += 4;
+                } else if (remain >= 2) {
+                    uint16_t v = 0;
+                    std::memcpy(&v, data + off + pos, sizeof(uint16_t));
+                    uint8_t cur[4] = {0};
+                    size_t got = 0;
+                    const sao_status_t rs = sao_rt_io_r5p_read_phys(
+                        driver_handle, page_pa + page_off + pos, cur, 4, &got);
+                    if (rs != SAO_STATUS_OK || got != 4) {
+                        return SAO_RT_IO_ERR_WRITE_FAILED;
+                    }
+                    uint32_t cur_v = 0;
+                    std::memcpy(&cur_v, cur, sizeof(uint32_t));
+                    ent.value = (cur_v & 0xFFFF0000u) | v;
+                    entries.push_back(ent);
+                    pos += 2;
+                } else {
+                    uint8_t cur[4] = {0};
+                    size_t got = 0;
+                    const sao_status_t rs = sao_rt_io_r5p_read_phys(
+                        driver_handle, page_pa + page_off + pos, cur, 4, &got);
+                    if (rs != SAO_STATUS_OK || got != 4) {
+                        return SAO_RT_IO_ERR_WRITE_FAILED;
+                    }
+                    uint32_t cur_v = 0;
+                    std::memcpy(&cur_v, cur, sizeof(uint32_t));
+                    ent.value = (cur_v & 0xFFFFFF00u)
+                              | static_cast<uint32_t>(data[off + pos]);
+                    entries.push_back(ent);
+                    pos += 1;
                 }
-                uint32_t cur_v = 0;
-                std::memcpy(&cur_v, cur, sizeof(uint32_t));
-                const uint32_t new_v = (cur_v & 0xFFFF0000u) | v;
-                ent.value = new_v;
-                entries.push_back(ent);
-                pos += 2;
-            } else {
-                uint8_t cur[4] = {0};
-                size_t got = 0;
-                const sao_status_t rs = sao_rt_io_r5p_read_phys(
-                    driver_handle,
-                    page_pa + page_off + pos,
-                    cur, 4, &got);
-                if (rs != SAO_STATUS_OK || got != 4) {
-                    return SAO_RT_IO_ERR_READ_FAILED;
-                }
-                uint32_t cur_v = 0;
-                std::memcpy(&cur_v, cur, sizeof(uint32_t));
-                const uint32_t new_v = (cur_v & 0xFFFFFF00u)
-                                     | static_cast<uint32_t>(data[off + pos]);
-                ent.value = new_v;
-                entries.push_back(ent);
-                pos += 1;
             }
+            const std::vector<uint8_t> buf = pack_write_buffer(page_pa, entries);
+            std::vector<uint8_t> reply(buf.size(), 0u);
+            uint32_t returned = 0;
+            const bool ok = dispatch_ioctl(
+                driver_handle, kSaoRtIoR5PhysWriteIoctl,
+                buf.data(), static_cast<uint32_t>(buf.size()),
+                reply.data(), static_cast<uint32_t>(reply.size()), &returned);
+            if (!ok) return SAO_RT_IO_ERR_WRITE_FAILED;
+            off += chunk;
         }
-
-        const std::vector<uint8_t> buf = pack_write_buffer(page_pa, entries);
-        std::vector<uint8_t> reply(buf.size(), 0u);
-        uint32_t returned = 0;
-        const bool ok = dispatch_ioctl(
-            driver_handle,
-            kSaoRtIoR5PhysWriteIoctl,
-            buf.data(),
-            static_cast<uint32_t>(buf.size()),
-            reply.data(),
-            static_cast<uint32_t>(reply.size()),
-            &returned);
-        if (!ok) return SAO_RT_IO_ERR_WRITE_FAILED;
-
-        off += chunk;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_RT_IO_ERR_WRITE_FAILED;
     }
-    return SAO_STATUS_OK;
 }
 
 // ── R5 read / write via VA resolver ───────────────────────────────
@@ -938,33 +1322,43 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_read_virtual(
     uint8_t*    out_buf,
     size_t      size,
     size_t*     out_bytes) {
-    if (out_bytes != nullptr) *out_bytes = 0;
-    if (out_buf == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
-    if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
     try {
+        if (out_bytes != nullptr) *out_bytes = 0;
+        if (out_buf == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+        if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
+        std::vector<uint8_t> candidate(size, 0u);
         size_t remaining = size;
-        size_t written   = 0;
-        uint64_t cur     = va;
+        size_t written = 0;
+        uint64_t cur = va;
         while (remaining > 0) {
             uint64_t pa = 0;
             const sao_status_t st = invoke_va_resolver(pid, cur, &pa);
-            if (st != SAO_STATUS_OK) return st;
+            if (st != SAO_STATUS_OK) {
+                return st == SAO_RT_IO_ERR_INTERNAL_ERROR
+                    ? SAO_RT_IO_ERR_READ_FAILED : st;
+            }
             const uint64_t page_off = cur & kPageMask;
-            const size_t chunk_hi   = kPageSize - static_cast<size_t>(page_off);
-            const size_t chunk      = (remaining < chunk_hi) ? remaining : chunk_hi;
+            const size_t chunk_hi =
+                kPageSize - static_cast<size_t>(page_off);
+            const size_t chunk =
+                (remaining < chunk_hi) ? remaining : chunk_hi;
             size_t got = 0;
             const sao_status_t rs = sao_rt_io_r5p_read_phys(
-                driver_handle, pa, out_buf + written, chunk, &got);
-            if (rs != SAO_STATUS_OK || got != chunk) return rs;
-            written   += chunk;
+                driver_handle, pa, candidate.data() + written, chunk, &got);
+            if (rs != SAO_STATUS_OK || got != chunk) {
+                return rs == SAO_STATUS_OK ? SAO_RT_IO_ERR_READ_FAILED : rs;
+            }
+            written += chunk;
             remaining -= chunk;
-            cur       += chunk;
+            cur += chunk;
         }
+        std::memcpy(out_buf, candidate.data(), size);
         if (out_bytes != nullptr) *out_bytes = written;
         return SAO_STATUS_OK;
     } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        if (out_bytes != nullptr) *out_bytes = 0;
+        return SAO_RT_IO_ERR_READ_FAILED;
     }
 }
 
@@ -974,30 +1368,38 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_write_virtual(
     uint64_t     va,
     const uint8_t* data,
     size_t       size) {
-    if (data == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
-    if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
     try {
+        if (data == nullptr || size == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (driver_handle == nullptr) return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+        if (!gate_permits()) return SAO_RT_IO_ERR_HELPER_BOOTSTRAP_AUTH;
         size_t remaining = size;
-        size_t off       = 0;
-        uint64_t cur     = va;
+        size_t off = 0;
+        uint64_t cur = va;
         while (remaining > 0) {
             uint64_t pa = 0;
             const sao_status_t st = invoke_va_resolver(pid, cur, &pa);
-            if (st != SAO_STATUS_OK) return st;
+            if (st != SAO_STATUS_OK) {
+                return st == SAO_RT_IO_ERR_INTERNAL_ERROR
+                    ? SAO_RT_IO_ERR_WRITE_FAILED : st;
+            }
             const uint64_t page_off = cur & kPageMask;
-            const size_t chunk_hi   = kPageSize - static_cast<size_t>(page_off);
-            const size_t chunk      = (remaining < chunk_hi) ? remaining : chunk_hi;
+            const size_t chunk_hi =
+                kPageSize - static_cast<size_t>(page_off);
+            const size_t chunk =
+                (remaining < chunk_hi) ? remaining : chunk_hi;
             const sao_status_t rs = sao_rt_io_r5p_write_phys(
                 driver_handle, pa, data + off, chunk);
-            if (rs != SAO_STATUS_OK) return rs;
-            off       += chunk;
+            if (rs != SAO_STATUS_OK) {
+                return rs == SAO_RT_IO_ERR_READ_FAILED
+                    ? SAO_RT_IO_ERR_WRITE_FAILED : rs;
+            }
+            off += chunk;
             remaining -= chunk;
-            cur       += chunk;
+            cur += chunk;
         }
         return SAO_STATUS_OK;
     } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return SAO_RT_IO_ERR_WRITE_FAILED;
     }
 }
 
@@ -1005,70 +1407,71 @@ extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_write_virtual(
 
 extern "C" sao_status_t SAO_RT_IO_CALL sao_rt_io_r5_open_probe(
     void** out_handle) {
-    if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    *out_handle = nullptr;
-
-    // Compose the NT path via the shared helper — same call the
-    // Python `_r5p_load` uses.
-    char dev_name[64] = {0};
-    size_t written = 0;
-    sao_status_t st = sao_rt_io_r5p_dev_path(dev_name, sizeof(dev_name), &written);
-    if (st != SAO_STATUS_OK) return st;
-
-    char nt_path[128] = {0};
-    st = sao_rt_io_dev_nt_path(dev_name, nt_path, sizeof(nt_path), &written);
-    if (st != SAO_STATUS_OK) return st;
-
+    try {
+        if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        *out_handle = nullptr;
+        char dev_name[64] = {0};
+        size_t written = 0;
+        sao_status_t st = sao_rt_io_r5p_dev_path(
+            dev_name, sizeof(dev_name), &written);
+        if (st != SAO_STATUS_OK) return st;
+        char nt_path[128] = {0};
+        st = sao_rt_io_dev_nt_path(
+            dev_name, nt_path, sizeof(nt_path), &written);
+        if (st != SAO_STATUS_OK) return st;
 #if defined(_WIN32)
-    // Convert the NT path to the DOS form `\\.\<name>` for CreateFileW.
-    // Python uses NtCreateFile with the raw "\\??\\<name>" path — the
-    // `\\.\<name>` DOS equivalent goes through the same object
-    // manager symlink so we use it here for CreateFileW compatibility.
-    std::wstring w = L"\\\\.\\";
-    for (const char* p = dev_name; *p != '\0'; ++p) {
-        w.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
-    }
-    HANDLE h = reinterpret_cast<HANDLE>(sao_rt_io_native_route_create_file_w(
-        w.c_str(), GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL));
-    if (h == INVALID_HANDLE_VALUE) {
+        std::wstring w = L"\\\\.\\";
+        for (const char* p = dev_name; *p != '\0'; ++p) {
+            w.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
+        }
+        HANDLE h = reinterpret_cast<HANDLE>(sao_rt_io_native_route_create_file_w(
+            w.c_str(), GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL));
+        if (h == INVALID_HANDLE_VALUE) {
+            return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+        }
+        *out_handle = static_cast<void*>(h);
+        return SAO_STATUS_OK;
+#else
+        return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
+#endif
+    } catch (...) {
+        if (out_handle != nullptr) *out_handle = nullptr;
         return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
     }
-    *out_handle = static_cast<void*>(h);
-    return SAO_STATUS_OK;
-#else
-    return SAO_RT_IO_ERR_DRIVER_NOT_LOADED;
-#endif
 }
 
 extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_close(void* handle) {
+    try {
 #if defined(_WIN32)
-    if (handle == nullptr) return;
-    (void)sao_rt_io_native_route_close(handle);
+        if (handle == nullptr) return;
+        (void)sao_rt_io_native_route_close(handle);
 #else
-    (void)handle;
+        (void)handle;
 #endif
+    } catch (...) {
+    }
 }
 
 extern "C" int32_t SAO_RT_IO_CALL sao_rt_io_r5_hid_ring_query(void) {
-    if (!gate_permits()) return -1;
-
-    SaoRtIoR5HidRingQueryPacket request{};
-    request.abi_version = kSaoRtIoR5HidRingAbiVersion;
-    request.struct_size = sizeof(request);
-    request.outcome = kSaoRtIoR5HidRingOutcomeSentinel;
-    request.consumed = kSaoRtIoR5HidRingOutcomeSentinel;
-    SaoRtIoR5CommandPacket packet{
-        &request,
-        sizeof(request),
-        kSaoRtIoR5CommandHidRingQuery,
-        0u,
-    };
+    try {
+        if (!gate_permits()) return -1;
+        SaoRtIoR5HidRingQueryPacket request{};
+        request.abi_version = kSaoRtIoR5HidRingAbiVersion;
+        request.struct_size = sizeof(request);
+        request.outcome = kSaoRtIoR5HidRingOutcomeSentinel;
+        request.consumed = kSaoRtIoR5HidRingOutcomeSentinel;
+        SaoRtIoR5CommandPacket packet{
+            &request, sizeof(request), kSaoRtIoR5CommandHidRingQuery, 0u};
         const int32_t status = dispatch_r5_syscall(&packet);
         return status >= 0 &&
-            request.outcome == SAO_RT_IO_R5_HID_RING_NOT_SUBMITTED &&
-           request.consumed == 0u ? 1 : -1;
+                   request.outcome == SAO_RT_IO_R5_HID_RING_NOT_SUBMITTED &&
+                   request.consumed == 0u
+            ? 1 : -1;
+    } catch (...) {
+        return -1;
+    }
 }
 
 extern "C" int32_t SAO_RT_IO_CALL
@@ -1077,39 +1480,37 @@ sao_rt_io_r5_hid_ring_direct_dispatch(
     uint64_t class_service_callback_va,
     const void* packet_bytes,
     uint32_t packet_size) {
-    if (!gate_permits() || class_devobj_va == 0u ||
-        class_service_callback_va == 0u || packet_bytes == nullptr ||
-        (packet_size != kSaoRtIoR5HidRingKeyboardPacketSize &&
-         packet_size != kSaoRtIoR5HidRingMousePacketSize)) {
+    try {
+        if (!gate_permits() || class_devobj_va == 0u ||
+            class_service_callback_va == 0u || packet_bytes == nullptr ||
+            (packet_size != kSaoRtIoR5HidRingKeyboardPacketSize &&
+             packet_size != kSaoRtIoR5HidRingMousePacketSize)) {
+            return -1;
+        }
+        SaoRtIoR5HidRingDispatchPacket request{};
+        request.abi_version = kSaoRtIoR5HidRingAbiVersion;
+        request.struct_size = sizeof(request);
+        request.class_devobj_va = class_devobj_va;
+        request.class_service_callback_va = class_service_callback_va;
+        request.user_packet_va = reinterpret_cast<uint64_t>(packet_bytes);
+        request.packet_size = packet_size;
+        request.outcome = kSaoRtIoR5HidRingOutcomeSentinel;
+        request.consumed = kSaoRtIoR5HidRingOutcomeSentinel;
+        request.reserved = 0u;
+        SaoRtIoR5CommandPacket syscall_packet{
+            &request, sizeof(request), kSaoRtIoR5CommandHidRingDispatch, 0u};
+        const int32_t status = dispatch_r5_syscall(&syscall_packet);
+        if (request.outcome == kSaoRtIoR5HidRingOutcomeSentinel) return -1;
+        if (request.outcome == SAO_RT_IO_R5_HID_RING_NOT_SUBMITTED) {
+            return status >= 0 && request.consumed == 0u ? 0 : -1;
+        }
+        if (request.outcome == SAO_RT_IO_R5_HID_RING_COMMITTED) {
+            return status >= 0 && request.consumed == 1u ? 1 : -1;
+        }
+        return -1;
+    } catch (...) {
         return -1;
     }
-
-    SaoRtIoR5HidRingDispatchPacket request{};
-    request.abi_version = kSaoRtIoR5HidRingAbiVersion;
-    request.struct_size = sizeof(request);
-    request.class_devobj_va = class_devobj_va;
-    request.class_service_callback_va = class_service_callback_va;
-    request.user_packet_va = reinterpret_cast<uint64_t>(packet_bytes);
-    request.packet_size = packet_size;
-    request.outcome = kSaoRtIoR5HidRingOutcomeSentinel;
-    request.consumed = kSaoRtIoR5HidRingOutcomeSentinel;
-    request.reserved = 0u;
-    SaoRtIoR5CommandPacket syscall_packet{
-        &request,
-        sizeof(request),
-        kSaoRtIoR5CommandHidRingDispatch,
-        0u,
-    };
-    const int32_t status = dispatch_r5_syscall(&syscall_packet);
-
-    if (request.outcome == kSaoRtIoR5HidRingOutcomeSentinel) return -1;
-    if (request.outcome == SAO_RT_IO_R5_HID_RING_NOT_SUBMITTED) {
-        return status >= 0 && request.consumed == 0u ? 0 : -1;
-    }
-    if (request.outcome == SAO_RT_IO_R5_HID_RING_COMMITTED) {
-        return status >= 0 && request.consumed == 1u ? 1 : -1;
-    }
-    return -1;
 }
 
 // ── VA→PA resolver hook ───────────────────────────────────────────
@@ -1118,7 +1519,7 @@ extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_set_va_resolver(
     sao_rt_io_va_to_pa_fn_t fn,
     void*                   user) {
     try {
-        (void)r5_rebind_va_resolver(fn, user, nullptr, 0u, true);
+        (void)r5_rebind_va_resolver(fn, user, nullptr, 0u, true, nullptr);
     } catch (...) {
     }
 }
@@ -1131,9 +1532,9 @@ sao_rt_io_r5_install_va_resolver_owned_v2(
     uint64_t                owner_generation) {
     try {
         return r5_rebind_va_resolver(
-            fn, user, owner_identity, owner_generation, false);
+            fn, user, owner_identity, owner_generation, false, nullptr);
     } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
 }
 
@@ -1144,19 +1545,102 @@ sao_rt_io_r5_clear_va_resolver_if_owner_v2(
     uint32_t    timeout_ms,
     int32_t*    out_cleared) {
     try {
+        if (out_cleared != nullptr) *out_cleared = 0;
         return r5_clear_va_resolver_if_owner(
             owner_identity, owner_generation, timeout_ms, out_cleared);
     } catch (...) {
         if (out_cleared != nullptr) *out_cleared = 0;
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
 }
 
+extern "C" sao_status_t SAO_RT_IO_CALL
+sao_rt_io_r5_reset_if_va_resolver_clear_owned_v2(
+    const void* owner_identity,
+    uint64_t    owner_generation) {
+    R5State* state_ptr = nullptr;
+    R5VaResolverStateSnapshot prior{};
+    R5VaResolverStateSnapshot post_reset{};
+    std::unique_lock<std::mutex> mutation_lock;
+    std::unique_lock<std::mutex> state_lock;
+    std::unique_lock<std::mutex> hook_lock;
+    bool mutation_started = false;
+    try {
+        if (owner_identity == nullptr || owner_generation == 0u) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        R5State& s = state();
+        state_ptr = &s;
+        R5VaResolverSlot& slot = s.va_resolver;
+        if (g_active_r5_va_resolver_slot == &slot &&
+            g_active_r5_va_resolver_depth != 0u) {
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        mutation_lock = std::unique_lock<std::mutex>(slot.mutation_mutex);
+        state_lock = std::unique_lock<std::mutex>(slot.state_mutex);
+        hook_lock = std::unique_lock<std::mutex>(s.hook_mutex);
+        if (slot.recovery_pending.load(std::memory_order_acquire) ||
+            slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle) {
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        if (slot.installed || slot.admission_open || slot.fn != nullptr ||
+            slot.user != nullptr || slot.owner_identity != nullptr ||
+            slot.owner_generation != 0u ||
+            slot.mode != SAO_RT_IO_R5_VA_RESOLVER_MODE_NONE ||
+            slot.in_flight != 0u) {
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        if (!slot.clear_receipt_valid ||
+            slot.clear_receipt_owner_identity != owner_identity ||
+            slot.clear_receipt_owner_generation != owner_generation ||
+            slot.clear_receipt_revision == 0u ||
+            slot.revision != slot.clear_receipt_revision) {
+            return SAO_STATUS_ERR_NOT_FOUND;
+        }
+
+        prior = snapshot_va_resolver_state(slot);
+        post_reset = prior;
+        post_reset.clear_receipt_owner_identity = nullptr;
+        post_reset.clear_receipt_owner_generation = 0u;
+        post_reset.clear_receipt_revision = 0u;
+        post_reset.clear_receipt_valid = false;
+        post_reset.mutation_phase =
+            R5VaResolverSlot::MutationPhase::committing;
+        mutation_started = true;
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::committing;
+        invalidate_r5_va_resolver_clear_receipt(slot);
+        if (slot.in_flight != post_reset.in_flight ||
+            !va_resolver_tuple_matches(slot, post_reset)) {
+            (void)rollback_r5_va_resolver_if_exact(
+                slot, prior, post_reset);
+            mutation_started = false;
+            return SAO_RT_IO_ERR_INTERNAL_ERROR;
+        }
+        reset_r5_process_global_state(s);
+        slot.mutation_phase = R5VaResolverSlot::MutationPhase::idle;
+        mutation_started = false;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (state_ptr != nullptr && mutation_started) {
+            try {
+                if (!state_lock.owns_lock()) {
+                    state_lock.lock();
+                }
+                (void)rollback_r5_va_resolver_if_exact(
+                    state_ptr->va_resolver, prior, post_reset);
+            } catch (...) {
+                mark_r5_va_resolver_recovery_without_lock(
+                    state_ptr->va_resolver);
+            }
+        }
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
+    }
+}
 extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_va_resolver_snapshot(
     SaoRtIoR5VaResolverSnapshot* out_snapshot) {
-    if (out_snapshot == nullptr) return;
-    std::memset(out_snapshot, 0, sizeof(*out_snapshot));
     try {
+        if (out_snapshot == nullptr) return;
+        std::memset(out_snapshot, 0, sizeof(*out_snapshot));
         R5VaResolverSlot& slot = state().va_resolver;
         std::lock_guard<std::mutex> lock(slot.state_mutex);
         out_snapshot->installed = slot.installed ? 1u : 0u;
@@ -1165,10 +1649,67 @@ extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_va_resolver_snapshot(
         out_snapshot->user = static_cast<uint64_t>(
             reinterpret_cast<uintptr_t>(slot.user));
         out_snapshot->owner_identity = static_cast<uint64_t>(
-            reinterpret_cast<uintptr_t>(slot.owner_identity));
-        out_snapshot->owner_generation = slot.owner_generation;
+            reinterpret_cast<uintptr_t>(
+                visible_r5_va_resolver_owner_identity(slot)));
+        out_snapshot->owner_generation =
+            visible_r5_va_resolver_owner_generation(slot);
         out_snapshot->revision = slot.revision;
     } catch (...) {
+        if (out_snapshot != nullptr) {
+            std::memset(out_snapshot, 0, sizeof(*out_snapshot));
+        }
+    }
+}
+
+extern "C" sao_status_t SAO_RT_IO_CALL
+sao_rt_io_r5_va_resolver_snapshot_v2(
+    SaoRtIoR5VaResolverSnapshotV2* out_snapshot,
+    size_t                         out_capacity,
+    size_t*                        out_bytes_written) {
+    try {
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        if (out_snapshot == nullptr || out_capacity == 0u) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const size_t zero_bytes =
+            out_capacity < sizeof(*out_snapshot)
+                ? out_capacity : sizeof(*out_snapshot);
+        std::memset(out_snapshot, 0, zero_bytes);
+        if (out_capacity < sizeof(*out_snapshot)) {
+            if (out_bytes_written != nullptr) {
+                *out_bytes_written = sizeof(*out_snapshot);
+            }
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        }
+        R5VaResolverSlot& slot = state().va_resolver;
+        std::lock_guard<std::mutex> lock(slot.state_mutex);
+        out_snapshot->abi_version =
+            SAO_RT_IO_R5_VA_RESOLVER_SNAPSHOT_V2_ABI_VERSION;
+        out_snapshot->struct_size = static_cast<uint32_t>(sizeof(*out_snapshot));
+        out_snapshot->installed = slot.installed ? 1u : 0u;
+        out_snapshot->mode = slot.mode;
+        out_snapshot->function = function_bits(slot.fn);
+        out_snapshot->user = static_cast<uint64_t>(
+            reinterpret_cast<uintptr_t>(slot.user));
+        out_snapshot->owner_identity = static_cast<uint64_t>(
+            reinterpret_cast<uintptr_t>(
+                visible_r5_va_resolver_owner_identity(slot)));
+        out_snapshot->owner_generation =
+            visible_r5_va_resolver_owner_generation(slot);
+        out_snapshot->revision = slot.revision;
+        if (out_bytes_written != nullptr) {
+            *out_bytes_written = sizeof(*out_snapshot);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        if (out_snapshot != nullptr && out_capacity != 0u) {
+            const size_t zero_bytes =
+                out_capacity < sizeof(*out_snapshot)
+                    ? out_capacity : sizeof(*out_snapshot);
+            std::memset(out_snapshot, 0, zero_bytes);
+        }
+        if (out_bytes_written != nullptr) *out_bytes_written = 0u;
+        return SAO_RT_IO_ERR_INTERNAL_ERROR;
     }
 }
 
@@ -1176,17 +1717,20 @@ extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_va_resolver_snapshot(
 
 extern "C" void SAO_RT_IO_CALL sao_rt_io_r5_install_hooks(
     const struct SaoRtIoR5HookBlock* hooks) {
-    R5State& s = state();
-    std::lock_guard<std::mutex> lk(s.hook_mutex);
-    if (hooks == nullptr) {
-        s.ioctl_hook = nullptr;
-        s.load_hook  = nullptr;
-        s.syscall_hook = nullptr;
-        s.hook_user  = nullptr;
-        return;
+    try {
+        HookSnapshot candidate{};
+        if (hooks != nullptr) {
+            candidate.ioctl_hook = hooks->ioctl_hook;
+            candidate.load_hook = hooks->load_hook;
+            candidate.syscall_hook = hooks->syscall_hook;
+            candidate.user = hooks->user;
+        }
+        R5State& s = state();
+        std::lock_guard<std::mutex> lk(s.hook_mutex);
+        s.ioctl_hook = candidate.ioctl_hook;
+        s.load_hook = candidate.load_hook;
+        s.syscall_hook = candidate.syscall_hook;
+        s.hook_user = candidate.user;
+    } catch (...) {
     }
-    s.ioctl_hook = hooks->ioctl_hook;
-    s.load_hook  = hooks->load_hook;
-    s.syscall_hook = hooks->syscall_hook;
-    s.hook_user  = hooks->user;
 }
