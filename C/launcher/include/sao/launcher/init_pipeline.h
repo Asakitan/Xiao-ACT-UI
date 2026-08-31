@@ -155,6 +155,15 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                                    intptr_t l_param, int32_t* out_handled);
 sao_status_t sao_platform_bind_user_menu(sao_platform_ctx* ctx, void* user_menu);
 sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_menu);
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx,
+                                                int32_t* out_presented);
+sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx* ctx);
+
+// Link Start 开场衔接：UI 上线时自动播放，tick 驱动完成。
+// 轮询接口每次只报告一次“刚完成”边沿（读到后即清零）。
+// 非生产 provider 恒返回 *out_just_finished = 0。
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx,
+                                            int32_t* out_just_finished);
 
 // ---------------------------------------------------------------------------
 // RT I/O operator flow.
@@ -197,7 +206,20 @@ enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
     SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE = 1u << 4u,
     SAO_LAUNCHER_RT_IO_CAP_OB = 1u << 5u,
     SAO_LAUNCHER_RT_IO_CAP_WATCHDOG = 1u << 6u,
+    SAO_LAUNCHER_RT_IO_CAP_VT_READY = 1u << 7u,
 };
+
+#ifdef __cplusplus
+static_assert((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
+               SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT |
+               SAO_LAUNCHER_RT_IO_CAP_MF |
+               SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
+               SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE |
+               SAO_LAUNCHER_RT_IO_CAP_OB |
+               SAO_LAUNCHER_RT_IO_CAP_WATCHDOG) &
+                  SAO_LAUNCHER_RT_IO_CAP_VT_READY) == 0u,
+              "VT capability bit collides with an existing capability bit");
+#endif
 
 enum sao_launcher_rt_io_operator_restore_bit_e : uint32_t {
     SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED = 1u << 0u,

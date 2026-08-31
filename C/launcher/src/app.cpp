@@ -15,6 +15,8 @@
 #include "sao/launcher/provider_config.h"
 #include "sao/launcher/shutdown.h"
 #include "sao/launcher/single_instance.h"
+#include "sao/launcher/user_guide_webview.h"
+#include "sao/launcher/user_menu.h"
 #include "sao/launcher/working_dir.h"
 
 #include "launcher_lifecycle.h"
@@ -316,6 +318,12 @@ int App::run() {
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"platform_bringup", "platform_bringup");
     }
+    int32_t user_guide_presented = 1;
+    first_run_ =
+        sao_platform_user_guide_presented(
+            static_cast<sao_platform_ctx*>(state_.platform_ctx),
+            &user_guide_presented) == SAO_STATUS_OK &&
+        user_guide_presented == 0;
     smokePrint(state_, "STAGE_PLATFORM");
 
     if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) !=
@@ -603,6 +611,22 @@ int App::runMessageLoop() {
             handled = 1;
             status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                  kUiFrameIntervalMs);
+            // Link Start 开场衔接：动画播完后，首次运行自动打开用户指南一次。
+            if (status == SAO_STATUS_OK && first_run_) {
+                int32_t linkstart_finished = 0;
+                if (sao_ui_linkstart_poll_finished(
+                        static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                        &linkstart_finished) == SAO_STATUS_OK &&
+                    linkstart_finished != 0) {
+                    const bool guide_opened =
+                        openUserDocsIndex(state_.base_dir.c_str(), nullptr);
+                    first_run_ = false;
+                    if (guide_opened) {
+                        (void)sao_platform_mark_user_guide_presented(
+                            static_cast<sao_platform_ctx*>(state_.platform_ctx));
+                    }
+                }
+            }
         } else {
             status = sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                            msg.message, msg.wParam, msg.lParam, &handled);
@@ -652,7 +676,7 @@ bool App::shutdown() noexcept {
     }
     constexpr int kMaximumShutdownAttempts = 3;
     for (int attempt = 0; attempt < kMaximumShutdownAttempts; ++attempt) {
-        if (stopAutoUpdate()) {
+        if (stopAutoUpdate() && shutdownUserGuideWebView()) {
             if (state_.platform_ctx != nullptr) {
                 (void)sao_platform_unbind_user_menu(
                     static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);

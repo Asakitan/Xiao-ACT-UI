@@ -86,6 +86,11 @@ void open_config_panel(Owner* owner) {
     (void)owner;
 }
 
+sao_status_t open_config_panel_status(Owner* owner) noexcept {
+    (void)owner;
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+
 void close_config_panel(Owner* owner) {
     (void)owner;
 }

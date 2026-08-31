@@ -135,6 +135,7 @@ class App {
 
     AppState state_{};
     UserMenu user_menu_{};
+    bool first_run_ = false;
     bool stopAutoUpdate() noexcept;
     HANDLE single_instance_mutex_ = nullptr;
     HANDLE dual_run_driver_mutex_ = nullptr;

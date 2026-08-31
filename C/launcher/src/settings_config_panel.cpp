@@ -3,6 +3,7 @@
 #include "settings_owner_internal.h"
 #include "settings_profiles.h"
 #include "settings_theme_internal.h"
+#include "sao/ui/sound.h"
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) || defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #define SAO_SETTINGS_PANEL_UI 1
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
@@ -233,12 +235,16 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     }
     section_children[1].push_back(build_theme_row(theme));
 
+    bool has_sound_enabled = false;
+    bool has_sound_volume = false;
     if (snapshot.is_object()) {
         for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
             const std::string key = it.key();
             const Json& value = it.value();
             if (key == "panel_themes")
                 continue;
+            has_sound_enabled = has_sound_enabled || key == "sound_enabled";
+            has_sound_volume = has_sound_volume || key == "sound_volume";
             const int index = section_index(key, value);
             if (value.is_boolean()) {
                 section_children[index].push_back(row_node(Json::array({
@@ -260,6 +266,23 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
                 section_children[index].push_back(text_node(key + ": " + summary(value), "muted", 32));
             }
         }
+    }
+    if (!has_sound_enabled) {
+        section_children[3].push_back(row_node(Json::array({
+            button_node("settings.bool.sound_enabled", "sound_enabled: ON",
+                        kSettingsActionToggle, {{"key", "sound_enabled"}}, "primary", true),
+        })));
+    }
+    if (!has_sound_volume) {
+        Json controls = Json::array();
+        controls.push_back(text_node("sound_volume: 70", "value", 28));
+        controls.push_back(button_node("settings.num.down.sound_volume", "−",
+                                      kSettingsActionNumericAdjust,
+                                      {{"key", "sound_volume"}, {"delta", -5}}, "ghost"));
+        controls.push_back(button_node("settings.num.up.sound_volume", "+",
+                                      kSettingsActionNumericAdjust,
+                                      {{"key", "sound_volume"}, {"delta", 5}}, "ghost"));
+        section_children[3].push_back(row_node(std::move(controls)));
     }
 
     Json profiles = Json::array();
@@ -584,6 +607,33 @@ sao_status_t restore_runtime_theme(const Json& snapshot) noexcept {
 #endif
 }
 
+sao_status_t restore_runtime_sound(const Json& snapshot) noexcept {
+#if defined(SAO_SETTINGS_PANEL_UI)
+    try {
+        bool enabled = true;
+        int32_t volume = 70;
+        const auto enabled_value = snapshot.find("sound_enabled");
+        if (enabled_value != snapshot.end() && enabled_value->is_boolean())
+            enabled = enabled_value->get<bool>();
+        const auto volume_value = snapshot.find("sound_volume");
+        if (volume_value != snapshot.end() && volume_value->is_number()) {
+            const double numeric = volume_value->get<double>();
+            if (std::isfinite(numeric))
+                volume = static_cast<int32_t>(std::clamp(numeric, 0.0, 100.0));
+        }
+        sao_status_t status = sao_ui_sound_set_enabled(enabled);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_sound_set_volume(volume);
+        return status;
+    } catch (...) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+#else
+    (void)snapshot;
+    return SAO_STATUS_OK;
+#endif
+}
+
 #if defined(SAO_SETTINGS_PANEL_UI)
 sao_status_t publish() noexcept {
     Json snapshot;
@@ -795,6 +845,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         }
         if (status == SAO_STATUS_OK)
             (void)restore_runtime_theme(committed);
+        if (status == SAO_STATUS_OK)
+            (void)restore_runtime_sound(committed);
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled" : "Cancel failed");
     }
 
@@ -806,6 +858,7 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_dirty = true;
         }
         (void)restore_runtime_theme(Json::object());
+        (void)restore_runtime_sound(Json::object());
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Defaults restored in draft" : "Restore defaults failed");
     }
 
@@ -816,13 +869,23 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
         key = value->get<std::string>();
         const auto current = snapshot.find(key);
-        if (current == snapshot.end() || !current->is_boolean())
+        if (current != snapshot.end() && !current->is_boolean())
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
-        status = owner_lease->set_value(key, !current->get<bool>());
+        if (current == snapshot.end() && key != "sound_enabled")
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
+        const bool next = !(current == snapshot.end() ? true : current->get<bool>());
+        status = owner_lease->set_value(key, next);
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
-            std::lock_guard lock(state().mutex);
-            state().draft_dirty = true;
+            {
+                std::lock_guard lock(state().mutex);
+                state().draft_dirty = true;
+            }
+            if (key == "sound_enabled") {
+                (void)sao_ui_sound_set_enabled(next);
+                if (next)
+                    (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+            }
         }
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
     }
@@ -836,14 +899,21 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
         key = key_value->get<std::string>();
         const auto current = snapshot.find(key);
-        if (current == snapshot.end() || !current->is_number())
+        if (current != snapshot.end() && !current->is_number())
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
-        const double next = std::clamp(current->get<double>() + delta->get<double>(), 0.0, 100.0);
+        if (current == snapshot.end() && key != "sound_volume")
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
+        const double current_value = current == snapshot.end() ? 70.0 : current->get<double>();
+        const double next = std::clamp(current_value + delta->get<double>(), 0.0, 100.0);
         status = owner_lease->set_value(key, next);
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
-            std::lock_guard lock(state().mutex);
-            state().draft_dirty = true;
+            {
+                std::lock_guard lock(state().mutex);
+                state().draft_dirty = true;
+            }
+            if (key == "sound_volume")
+                (void)sao_ui_sound_set_volume(static_cast<int32_t>(next));
         }
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
     }
@@ -923,6 +993,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_initialized = true;
             state().draft_dirty = true;
         }
+        if (status == SAO_STATUS_OK)
+            (void)restore_runtime_sound(profile_copy);
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Profile loaded into draft" : profile_failure_text(status, "Load profile"));
     }
     return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_FOUND, "Unknown settings action");
@@ -946,6 +1018,9 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
         auto* next = reinterpret_cast<settings_owner::SettingsOwner*>(owner_opaque);
         if (next != nullptr)
             next->resume_after_retire();
+        Json runtime_snapshot = Json::object();
+        if (next != nullptr && next->snapshot(runtime_snapshot) != SAO_STATUS_OK)
+            runtime_snapshot = Json::object();
         {
             std::lock_guard lock(state().mutex);
             state().owner = next;
@@ -956,7 +1031,7 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
             state().profile_preview.clear();
             state().accepting = next != nullptr;
         }
-        return SAO_STATUS_OK;
+        return next == nullptr ? SAO_STATUS_OK : restore_runtime_sound(runtime_snapshot);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

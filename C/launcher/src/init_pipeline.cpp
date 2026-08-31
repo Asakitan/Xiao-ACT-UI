@@ -82,11 +82,13 @@
 #include "sao/ui/dc_mutation.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/linkstart_intro.h"
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
 #include "sao/ui/fisheye_backdrop.h"
 #include "sao/ui/panel_sdk.h"
 #endif
 #include "sao/ui/overlay_host.h"
+#include "sao/ui/sound.h"
 #include "sao/ui/streaming_flow.h"
 #include "sao/ui/theme.h"
 #include "hotkey_config_panel.h"
@@ -2133,6 +2135,13 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     }
     return g_composition_test_hooks.ui_take_offline(ctx, g_composition_test_hooks.user_data);
 }
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*,
+                                            int32_t* out_just_finished) {
+    if (out_just_finished == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_just_finished = 0;
+    return SAO_STATUS_OK;
+}
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     return g_composition_test_hooks.ui_tick
                ? g_composition_test_hooks.ui_tick(ctx, elapsed_ms,
@@ -2151,6 +2160,16 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
 }
 sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
 sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*,
+                                                int32_t* out_presented) {
+    if (out_presented == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_presented = 1;
+    return SAO_STATUS_OK;
+}
+sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx*) {
+    return SAO_STATUS_OK;
+}
 
 sao_status_t sao_platform_rt_io_operator_preflight(
     sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
@@ -2169,6 +2188,7 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     return g_composition_test_hooks.rt_io_operator_preflight(
         ctx, options, out_report, g_composition_test_hooks.user_data);
 }
+
 sao_status_t sao_platform_rt_io_operator_init(
     sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
     sao_launcher_rt_io_operator_report_t* out_report) {
@@ -2278,6 +2298,9 @@ struct sao_platform_ctx {
 #endif
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
+    // 自动播的 Link Start 开场；tick 驱动，结束时打 just_finished 边沿。
+    sao_ui_linkstart_handle_t linkstart = nullptr;
+    bool linkstart_just_finished = false;
 };
 
 void clear_settings_bindings() noexcept {
@@ -3508,6 +3531,31 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     out_report->operation_status = response.operation_status;
     rt_io_operator_copy_call(call, out_report);
     rt_io_operator_copy_state(response.production, out_report);
+
+    SaoRtIoProductionCapabilitiesV2Resp capabilities{};
+    SaoRtIoCallResult capabilities_call{};
+    const sao_status_t capabilities_status =
+        sao_rt_io_proxy_production_capabilities_v2(
+            ctx->rt_io_proxy, options->timeout_ms, &capabilities, &capabilities_call);
+    const bool capabilities_response_valid =
+        capabilities_call.authenticated != 0u &&
+        capabilities_call.transport_complete != 0u &&
+        capabilities_call.request_id_matched != 0u &&
+        capabilities_call.payload_bytes == sizeof(capabilities) &&
+        std::memcmp(capabilities.header.magic,
+                    SAO_RT_IO_PRODUCTION_CAPABILITIES_V2_RESPONSE_MAGIC, 4u) == 0 &&
+        capabilities.header.version == SAO_RT_IO_PRODUCTION_CAPABILITIES_V2_VERSION &&
+        capabilities.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
+        capabilities.header.struct_size == sizeof(capabilities) &&
+        capabilities.header.reserved == 0u &&
+        capabilities.capabilities.abi_version ==
+            SAO_RT_IO_PRODUCTION_HID_CAPABILITIES_ABI_VERSION_V2 &&
+        capabilities.capabilities.struct_size == sizeof(capabilities.capabilities) &&
+        capabilities.capabilities.reserved0 == 0u &&
+        capabilities.capabilities.vt_readiness <= SAO_RT_IO_PRODUCTION_VT_READINESS_READY;
+    const bool capabilities_operation_ok =
+        capabilities_response_valid && capabilities.operation_status == SAO_STATUS_OK;
+
     out_report->residue_gate = response.residue_gate;
     out_report->residue_count = response.residue_count;
     out_report->unknown_count = response.unknown_count;
@@ -3520,10 +3568,39 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     out_report->hvci_enabled = response.hvci_enabled;
     out_report->vbs_enabled = response.vbs_enabled;
     out_report->provider_observable = response.provider_observable;
+
+    if (capabilities_operation_ok &&
+        capabilities.capabilities.vt_readiness ==
+            SAO_RT_IO_PRODUCTION_VT_READINESS_UNKNOWN)
+        ++out_report->unknown_count;
+    if (capabilities_operation_ok &&
+        capabilities.capabilities.vt_readiness ==
+            SAO_RT_IO_PRODUCTION_VT_READINESS_READY)
+        out_report->capability_mask |= SAO_LAUNCHER_RT_IO_CAP_VT_READY;
+
     const bool observations_complete = rtIoOperatorPreflightObservationsComplete(
         response.is_admin, response.is_elevated, response.load_driver_privilege_present,
         response.load_driver_privilege_enabled, response.hvci_enabled, response.vbs_enabled,
         response.provider_observable);
+    const bool capability_call_failed =
+        capabilities_status != SAO_STATUS_OK || !capabilities_response_valid ||
+        !capabilities_operation_ok;
+    if (capability_call_failed) {
+        const sao_status_t exact_capability_status =
+            capabilities_status != SAO_STATUS_OK
+                ? capabilities_status
+                : (capabilities_response_valid
+                       ? capabilities.operation_status
+                       : SAO_RT_IO_ERR_PAYLOAD_MALFORMED);
+        out_report->status = exact_capability_status;
+        out_report->operation_status = exact_capability_status;
+        rt_io_operator_copy_call(capabilities_call, out_report);
+        out_report->complete = 0u;
+        out_report->success = 0u;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+        return exact_capability_status;
+    }
+
     const bool complete = status == SAO_STATUS_OK &&
         response.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&
@@ -4149,6 +4226,13 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
             return entity_status;
         ctx->entity_shell = nullptr;
     }
+    if (ctx->linkstart != nullptr) {
+        sao_ui_linkstart_destroy(ctx->linkstart);
+        ctx->linkstart = nullptr;
+    }
+    const sao_status_t sound_status = sao_ui_sound_shutdown();
+    if (sound_status != SAO_STATUS_OK)
+        return sound_status;
     if (ctx->sdk_compositor_bound) {
         const sao_sdk_status_t unbind_status = sao_sdk_platform_unbind_ui_compositor();
         if (unbind_status != SAO_SDK_OK)
@@ -4305,6 +4389,34 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+
+    // Link Start 开场：UI 上线后自动播放。结束边沿由 sao_ui_tick 打标，
+    // launcher 轮询 sao_ui_linkstart_poll_finished 后做衔接动作。
+    if (ctx->linkstart == nullptr) {
+        bool linkstart_started = false;
+        SaoOverlayHostClientRect host_bounds{};
+        if (sao_ui_overlay_host_get_client_rect(ctx->overlay_host, &host_bounds) == SAO_STATUS_OK &&
+            host_bounds.width > 0 && host_bounds.height > 0) {
+            SaoUiLinkStartConfig linkstart_config{};
+            linkstart_config.struct_size = sizeof(linkstart_config);
+            linkstart_config.width_px = static_cast<uint32_t>(host_bounds.width);
+            linkstart_config.height_px = static_cast<uint32_t>(host_bounds.height);
+            sao_ui_linkstart_handle_t linkstart = nullptr;
+            if (sao_ui_linkstart_create(ctx->compositor, nullptr, &linkstart_config,
+                                        &linkstart) == SAO_STATUS_OK &&
+                linkstart != nullptr) {
+                if (sao_ui_linkstart_show(linkstart) == SAO_STATUS_OK) {
+                    ctx->linkstart = linkstart;
+                    ctx->linkstart_just_finished = false;
+                    linkstart_started = true;
+                } else {
+                    sao_ui_linkstart_destroy(linkstart);
+                }
+            }
+        }
+        if (!linkstart_started)
+            ctx->linkstart_just_finished = true;
+    }
     return SAO_STATUS_OK;
 }
 
@@ -4414,8 +4526,40 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     const sao_status_t fisheye_status = tick_shared_fisheye(ctx);
     if (status == SAO_STATUS_OK && fisheye_status != SAO_STATUS_OK)
         status = fisheye_status;
+    // Link Start 开场：驱动完成边沿。 show() 已由 sao_ui_bring_online 开头调用；
+    // tick 内部自己推进到 total_duration 后转入 inactive 并隐藏图层。
+    if (ctx->linkstart != nullptr) {
+        bool was_active = false;
+        (void)sao_ui_linkstart_is_active(ctx->linkstart, &was_active);
+        const sao_status_t linkstart_status =
+            sao_ui_linkstart_tick(ctx->linkstart, static_cast<int32_t>(elapsed_ms));
+        if (linkstart_status != SAO_STATUS_OK &&
+            linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED &&
+            status == SAO_STATUS_OK) {
+            status = linkstart_status;
+        }
+        bool now_active = false;
+        (void)sao_ui_linkstart_is_active(ctx->linkstart, &now_active);
+        if (was_active && !now_active) {
+            ctx->linkstart_just_finished = true;
+        }
+    }
     const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     return status == SAO_STATUS_OK ? compositor_status : status;
+}
+
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx,
+                                            int32_t* out_just_finished) {
+    if (out_just_finished == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_just_finished = 0;
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (ctx->linkstart_just_finished) {
+        ctx->linkstart_just_finished = false;
+        *out_just_finished = 1;
+    }
+    return SAO_STATUS_OK;
 }
 
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
@@ -4461,6 +4605,27 @@ sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_men
     }
     return SAO_STATUS_OK;
 }
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx,
+                                                int32_t* out_presented) {
+    if (ctx == nullptr || out_presented == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_presented = 0;
+    if (!ctx->settings_owner)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    bool presented = false;
+    const sao_status_t status = ctx->settings_owner->get_truthy(
+        "user_guide_presented", false, presented);
+    if (status == SAO_STATUS_OK)
+        *out_presented = presented ? 1 : 0;
+    return status;
+}
+sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx* ctx) {
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return ctx->settings_owner
+        ? ctx->settings_owner->set_value_and_save("user_guide_presented", true)
+        : SAO_STATUS_ERR_NOT_INITIALIZED;
+}
 #else
 sao_status_t sao_platform_bringup(const sao_platform_config*, sao_platform_ctx**) {
     return SAO_STATUS_NOT_IMPLEMENTED;
@@ -4480,6 +4645,13 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx*) {
 sao_status_t sao_ui_tick(sao_platform_ctx*, uint32_t) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*,
+                                            int32_t* out_just_finished) {
+    if (out_just_finished == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_just_finished = 0;
+    return SAO_STATUS_OK;
+}
 sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t, intptr_t,
                                    int32_t* out_handled) {
     if (out_handled)
@@ -4490,6 +4662,16 @@ sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*,
+                                                int32_t* out_presented) {
+    if (out_presented == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_presented = 1;
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_platform_rt_io_operator_preflight(

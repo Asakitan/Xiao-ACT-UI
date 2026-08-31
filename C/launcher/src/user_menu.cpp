@@ -4,6 +4,7 @@
 #include "sao/launcher/app.h"
 #include "sao/launcher/args.h"
 #include "sao/launcher/single_instance.h"
+#include "sao/launcher/user_guide_webview.h"
 #include "sao/launcher/working_dir.h"
 
 #include "hotkey_config_panel.h"
@@ -47,19 +48,27 @@ sao_ui_compositor_handle_t borrow_platform_compositor() noexcept {
 
 sao_status_t g_settings_menu_status = SAO_STATUS_OK;
 sao_status_t g_hotkey_menu_status = SAO_STATUS_OK;
+const char* menu_status_text(sao_status_t status) noexcept {
+#if defined(SAO_LAUNCHER_UI_OFF_LINK_SMOKE)
+    (void)status;
+    return "unavailable";
+#else
+    return sao_status_str(status);
+#endif
+}
 std::wstring menu_status_suffix(sao_status_t status) {
     if (status == SAO_STATUS_OK) return {};
     std::wstring result = L" [";
-    const char* text = sao_status_str(status);
+    const char* text = menu_status_text(status);
     while (text != nullptr && *text != '\0') result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*text++)));
     result += L" " + std::to_wstring(status) + L"]";
     return result;
 }
 void show_menu_open_failure(HWND owner, const char* panel, sao_status_t status) noexcept {
     char buffer[256]{};
-    std::snprintf(buffer, sizeof(buffer), "launcher menu open %s failed: %s (%d)\n", panel, sao_status_str(status), status);
+    std::snprintf(buffer, sizeof(buffer), "launcher menu open %s failed: %s (%d)\n", panel, menu_status_text(status), status);
     OutputDebugStringA(buffer);
-    std::string message = std::string(panel) + ": " + sao_status_str(status) + " (" + std::to_string(status) + ")";
+    std::string message = std::string(panel) + ": " + menu_status_text(status) + " (" + std::to_string(status) + ")";
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
     if (sao_ui_compositor_handle_t compositor = borrow_platform_compositor()) {
         (void)sao_ui_dialog_show_error(compositor, nullptr, "SAO Auto", message.c_str(), nullptr, nullptr);
@@ -118,6 +127,10 @@ bool openExistingUserDocsIndex(const wchar_t* docs_index_path,
     if (attributes == INVALID_FILE_ATTRIBUTES ||
         (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
         return false;
+    }
+    // 优先用程序内 WebView2 打开；不可用时退回默认浏览器。
+    if (openUserGuideInWebView(docs_index_path)) {
+        return true;
     }
     const HINSTANCE result =
         ShellExecuteW(owner, L"open", docs_index_path, nullptr, nullptr,

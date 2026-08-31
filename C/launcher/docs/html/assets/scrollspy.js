@@ -18,11 +18,8 @@
 
   /* ── 滚动统一处理：进度条 + 目录高亮 ── */
   var fill = document.getElementById('progress-fill');
-  var ticking = false;
 
   var update = function () {
-    ticking = false;
-
     if (fill) {
       var doc = document.documentElement;
       var max = doc.scrollHeight - window.innerHeight;
@@ -31,8 +28,8 @@
     }
 
     if (sections.length > 0 && tocLinks.length > 0) {
-      // 激活线：视口顶部往下 40% 处作为“当前阅读位置”
-      var probe = window.scrollY + window.innerHeight * 0.4;
+      // 激活线：视口顶部往下 25% 处作为“当前阅读位置”
+      var probe = window.scrollY + window.innerHeight * 0.25;
       var currentId = sections[0].id;
       for (var i = 0; i < sections.length; i++) {
         if (sections[i].offsetTop <= probe) {
@@ -45,19 +42,51 @@
     }
   };
 
-  window.addEventListener('scroll', function () {
-    if (!ticking) {
-      ticking = true;
-      window.requestAnimationFrame(update);
-    }
-  }, { passive: true });
-  window.addEventListener('resize', function () {
-    if (!ticking) {
-      ticking = true;
-      window.requestAnimationFrame(update);
-    }
-  }, { passive: true });
+  // 直接响应 scroll/resize（函数很轻），不依赖 rAF 或定时器（部分 WebView 会节流或停派发）。
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update, { passive: true });
   update();
+
+  /* ── 章节 popup 跳转（点击锚点 → 弹出目标章节） ── */
+  var popupLabel = null;
+  var popupTimer = 0;
+  function showSectionPopup(section) {
+    // 漂浮章节标签
+    if (!popupLabel) {
+      popupLabel = document.createElement('div');
+      popupLabel.className = 'section-popup-label';
+      popupLabel.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(popupLabel);
+    }
+    var num = section.querySelector('.section-number');
+    var title = section.querySelector('.section-heading h2');
+    popupLabel.innerHTML =
+      '<b>' + (num ? num.textContent : '') + '</b><span>' +
+      (title ? title.textContent : '') + '</span>';
+    popupLabel.classList.remove('show');
+    void popupLabel.offsetWidth;
+    popupLabel.classList.add('show');
+    window.clearTimeout(popupTimer);
+    popupTimer = window.setTimeout(function () {
+      popupLabel.classList.remove('show');
+    }, 1600);
+  }
+
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href^="#"]') : null;
+    if (!a) { return; }
+    var id = a.getAttribute('href').slice(1);
+    if (!id) { return; }
+    var section = document.getElementById(id);
+    if (!section || !section.classList || !section.classList.contains('manual-section')) { return; }
+    section.classList.remove('pop-target');
+    void section.offsetWidth;
+    section.classList.add('pop-target');
+    showSectionPopup(section);
+    window.setTimeout(function () {
+      section.classList.remove('pop-target');
+    }, 700);
+  }, { passive: true });
 
   /* ── 章节入场动画 ── */
   var revealAll = function () {

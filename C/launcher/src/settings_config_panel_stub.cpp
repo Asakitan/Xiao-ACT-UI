@@ -4,6 +4,10 @@ namespace sao::launcher::settings {
 
 void open_config_panel() {}
 
+sao_status_t open_config_panel_status() noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+
 sao_status_t rebind_owner_for_testing(void* owner_opaque) noexcept {
     (void)owner_opaque;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;

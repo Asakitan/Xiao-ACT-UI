@@ -4,13 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="description" content="SAO Auto 用户指南：启动、托盘菜单、快捷键、面板与插件、AI Editor、GPU Hunt、启动参数和常见问题。">
   <title>SAO Auto 用户指南</title>
   <link rel="stylesheet" href="assets/style.css">
   <script src="assets/theme.js"></script>
 </head>
 <body>
+  <div id="linkstart-overlay" class="linkstart-overlay" aria-hidden="false">
+    <div class="ls-veil"></div>
+    <div class="ls-center">
+      <div class="ls-ring ls-ring-a"></div>
+      <div class="ls-ring ls-ring-b"></div>
+      <div class="ls-hex"></div>
+      <h2 class="ls-title"><span>L</span><span>I</span><span>N</span><span>K</span><i> </i><span>S</span><span>T</span><span>A</span><span>R</span><span>T</span></h2>
+      <p class="ls-sub">SAO Auto ─ 用户指南 接入中</p>
+    </div>
+    <div class="ls-flash"></div>
+    <p class="ls-skip">点击任意位置或按 Esc 跳过</p>
+  </div>
   <div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div>
   <a class="skip-link" href="#quick-start">跳到正文</a>
 
@@ -26,6 +38,10 @@
     </nav>
     <div class="header-actions">
       <span class="offline-badge"><i aria-hidden="true"></i>离线可用</span>
+      <button type="button" id="sound-toggle" class="theme-switch sound-toggle" aria-label="关闭音效" title="音效开 / 关" aria-pressed="true">
+        <svg class="icon-on" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm11.4 3a3.5 3.5 0 0 0 0-4.5v4.5Zm0-6.5A7 7 0 0 1 17 12a7 7 0 0 1-1.6 4.5L14 15a5 5 0 0 0 0-6l1.4-1.5Z"/></svg>
+        <svg class="icon-off" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm11.4 3 3.1 3.1-1.4 1.4L14 13.4l-3.1 3.1-1.4-1.4L12.6 12 9.5 8.9l1.4-1.4L14 10.6l3.1-3.1 1.4 1.4L15.4 12Z"/></svg>
+      </button>
       <button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式" title="切换浅色 / 深色模式">
         <svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0-4a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1Zm7 7h2a1 1 0 1 1 0 2h-2a1 1 0 1 1 0-2ZM1 12a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2H2a1 1 0 0 1-1-1Zm16.9-7.9a1 1 0 0 1 0 1.4l-1.4 1.4a1 1 0 1 1-1.4-1.4l1.4-1.4a1 1 0 0 1 1.4 0ZM6.9 17.1a1 1 0 0 1 0 1.4l-1.4 1.4a1 1 0 0 1-1.4-1.4l1.4-1.4a1 1 0 0 1 1.4 0Zm12.6 1.4-1.4-1.4a1 1 0 0 0-1.4 1.4l1.4 1.4a1 1 0 0 0 1.4-1.4ZM6.9 6.9a1 1 0 0 0-1.4-1.4L4.1 6.9a1 1 0 0 0 1.4 1.4l1.4-1.4Z"/></svg>
         <svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg>
@@ -38,11 +54,11 @@
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="hero-inner">
         <div class="hero-copy">
-          <p class="hero-tag">SAO AUTO · 使用说明</p>
+          <p class="hero-tag">LINK START · 用户指南接入</p>
           <h1 id="hero-title">SAO Auto<br>用户指南</h1>
-          <p class="hero-lede">启动之后，屏幕左上角会出现一个 NerveGear 圆形悬浮按钮，点它或者按 <kbd>HOME</kbd> 打开主菜单，功能都从这里进。这份手册讲启动、托盘菜单、快捷键，以及 AI Editor、GPU Hunt 这些自带功能怎么用。</p>
+          <p class="hero-lede">连接完成。启动后屏幕左上角会挂一个 NerveGear 悬浮按钮，点它或者按 <kbd>HOME</kbd> 打开主菜单。这份手册覆盖启动、托盘菜单、快捷键，以及 AI Editor、GPU Hunt 的完整用法。</p>
           <div class="hero-actions">
-            <a class="action-primary" href="#quick-start">开始使用 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 10h11.5l-4-4 1.4-1.4L17.3 10l-5.4 5.4-1.4-1.4 4-4H3z"/></svg></a>
+            <a class="action-primary" href="#quick-start">进入指南 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 10h11.5l-4-4 1.4-1.4L17.3 10l-5.4 5.4-1.4-1.4 4-4H3z"/></svg></a>
             <a class="action-secondary" href="#hotkeys">快捷键一览</a>
           </div>
           <dl class="hero-meta">
@@ -55,13 +71,13 @@
           <div class="hero-visual-glow"></div>
           <div class="orbit orbit-outer"></div>
           <div class="orbit orbit-inner"></div>
+          <div class="orbit orbit-hex"></div>
           <div class="visual-core">
             <span>SAO</span>
             <strong>AUTO</strong>
             <i></i>
-            <small>USER GUIDE</small>
+            <small>MENU</small>
           </div>
-          <b class="orbit-label label-top">READY</b><b class="orbit-label label-right">TRAY</b><b class="orbit-label label-bottom">PANEL</b>
         </div>
       </div>
     </section>
@@ -92,10 +108,10 @@
           <header class="section-heading"><span class="section-number">01</span><div><p>FIRST TIME</p><h2 id="quick-title">快速开始</h2></div></header>
           <p class="section-intro">第一次用按下面的顺序来。游戏里具体有哪些功能可用，取决于你装了哪些插件。</p>
           <ol class="step-list">
-            <li><span class="step-index">01</span><div><h3>启动</h3><p>双击安装目录里的 <kbd>SaoAuto.exe</kbd>。启动后屏幕左上角出现 NerveGear 悬浮按钮，右下角托盘里多一个 SAO Auto 图标。</p></div></li>
-            <li><span class="step-index">02</span><div><h3>打开菜单</h3><p>左键点悬浮按钮，或者按 <kbd>HOME</kbd>。主菜单里能进插件、面板和各个工具。</p></div></li>
-            <li><span class="step-index">03</span><div><h3>启用插件</h3><p>在主菜单的"插件"页面，把你正在玩的游戏对应的插件启用。暂时用不上的可以保持停用，之后随时改。</p></div></li>
-            <li><span class="step-index">04</span><div><h3>打开面板</h3><p>从主菜单或插件界面打开需要的面板。识别功能怎么启动，以插件界面上的提示为准。</p></div></li>
+            <li data-detail="q1"><span class="step-index">01</span><div><h3>启动</h3><p>双击安装目录里的 <kbd>SaoAuto.exe</kbd>。启动后屏幕左上角出现 NerveGear 悬浮按钮，右下角托盘里多一个 SAO Auto 图标。</p></div></li>
+            <li data-detail="q2"><span class="step-index">02</span><div><h3>打开菜单</h3><p>左键点悬浮按钮，或者按 <kbd>HOME</kbd>。主菜单里能进插件、面板和各个工具。</p></div></li>
+            <li data-detail="q3"><span class="step-index">03</span><div><h3>启用插件</h3><p>在主菜单的"插件"页面，把你正在玩的游戏对应的插件启用。暂时用不上的可以保持停用，之后随时改。</p></div></li>
+            <li data-detail="q4"><span class="step-index">04</span><div><h3>打开面板</h3><p>从主菜单或插件界面打开需要的面板。识别功能怎么启动，以插件界面上的提示为准。</p></div></li>
           </ol>
           <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>第一次使用</strong><p>建议先用默认键位熟悉一下。需要改键：右键托盘图标 → "快捷键"。</p></div></aside>
         </section>
@@ -107,18 +123,18 @@
           <div class="interaction-board">
             <div class="button-demo" aria-hidden="true"><span class="demo-ring ring-one"></span><span class="demo-ring ring-two"></span><span class="demo-button">SA</span><span class="demo-caption">SAO AUTO</span></div>
             <dl class="gesture-list">
-              <div><dt><span>左键 / 右键</span>托盘图标</dt><dd>弹出 SAO Auto 菜单。</dd></div>
-              <div><dt><span>设置</span>打开设置</dt><dd>启动选项、显示、面板主题等常规设置。</dd></div>
-              <div><dt><span>快捷键</span>打开快捷键</dt><dd>查看和修改当前生效的全局快捷键，改完需要保存。</dd></div>
-              <div><dt><span>关于 / 用户指南</span>打开本指南</dt><dd>用默认浏览器打开这份离线手册。</dd></div>
-              <div><dt><span>退出</span>退出</dt><dd>关闭 SAO Auto，面板、快捷键和托盘图标会一并清理。</dd></div>
+              <div data-detail="t1"><dt><span>左键 / 右键</span>托盘图标</dt><dd>弹出 SAO Auto 菜单。</dd></div>
+              <div data-detail="t2"><dt><span>设置</span>打开设置</dt><dd>启动选项、显示、面板主题等常规设置。</dd></div>
+              <div data-detail="t3"><dt><span>快捷键</span>打开快捷键</dt><dd>查看和修改当前生效的全局快捷键，改完需要保存。</dd></div>
+              <div data-detail="t4"><dt><span>关于 / 用户指南</span>打开本指南</dt><dd>在程序内打开离线手册；组件不可用时改用默认浏览器。</dd></div>
+              <div data-detail="t5"><dt><span>退出</span>退出</dt><dd>关闭 SAO Auto，面板、快捷键和托盘图标会一并清理。</dd></div>
             </dl>
           </div>
           <div class="menu-route" aria-label="托盘菜单项概览">
-            <div><span>设置</span><strong>常规设置</strong><small>启动、显示、面板主题</small></div>
-            <div><span>快捷键</span><strong>修改快捷键</strong><small>改完记得保存</small></div>
-            <div><span>关于 / 用户指南</span><strong>版本信息和本手册</strong><small>在浏览器里打开</small></div>
-            <div><span>退出</span><strong>退出 SAO Auto</strong><small>面板和托盘图标一并关闭</small></div>
+            <div data-detail="t2"><span>设置</span><strong>常规设置</strong><small>启动、显示、面板主题</small></div>
+            <div data-detail="t3"><span>快捷键</span><strong>修改快捷键</strong><small>改完记得保存</small></div>
+            <div data-detail="t4"><span>关于 / 用户指南</span><strong>打开本手册</strong><small>程序内打开，浏览器备用</small></div>
+            <div data-detail="t5"><span>退出</span><strong>退出 SAO Auto</strong><small>面板和托盘图标一并关闭</small></div>
           </div>
         </section>
 
@@ -130,8 +146,8 @@
             <table class="hotkey-table">
               <thead><tr><th scope="col">按键</th><th scope="col">动作</th><th scope="col">说明</th></tr></thead>
               <tbody>
-                <tr><td><kbd>HOME</kbd></td><td>开关主菜单</td><td>按一下打开，再按一下关闭</td></tr>
-                <tr><td><kbd>INSERT</kbd></td><td>隐藏 / 显示悬浮按钮</td><td>嫌按钮挡画面可以藏起来；部分显示模式下覆盖层会一起隐藏</td></tr>
+                <tr data-detail="h1"><td><kbd>HOME</kbd></td><td>开关主菜单</td><td>按一下打开，再按一下关闭</td></tr>
+                <tr data-detail="h2"><td><kbd>INSERT</kbd></td><td>隐藏 / 显示悬浮按钮</td><td>嫌按钮挡画面可以藏起来；部分显示模式下覆盖层会一起隐藏</td></tr>
               </tbody>
             </table>
           </div>
@@ -144,8 +160,18 @@
           <header class="section-heading"><span class="section-number">04</span><div><p>PANELS &amp; PLUGINS</p><h2 id="panels-title">面板和插件</h2></div></header>
           <p class="section-intro">插件提供功能，面板负责显示。一般的顺序是：先在插件里启用功能，再从菜单里打开对应的面板。</p>
           <div class="split-guide">
-            <section><span class="guide-tag">PLUGIN</span><h3>插件</h3><ul><li>玩哪个游戏就启用哪个游戏的插件。</li><li>用不到的插件可以停用，之后随时能再启用。</li><li>插件启用或停用后，它带的菜单项、面板和快捷键会跟着变化。</li><li>插件的统一管理在主菜单的"插件"页面。</li></ul></section>
-            <section><span class="guide-tag">PANEL</span><h3>面板</h3><ul><li>面板从主菜单或插件界面打开。</li><li>不需要的面板可以单独关掉。</li><li>面板被游戏窗口挡住时，用面板自带的置顶或透明选项。</li><li>面板里显示什么内容，由对应插件决定。</li></ul></section>
+            <section data-detail="p0"><span class="guide-tag">PLUGIN</span><h3>插件</h3><ul>
+              <li data-detail="p1">玩哪个游戏就启用哪个游戏的插件。</li>
+              <li data-detail="p2">用不到的插件可以停用，之后随时能再启用。</li>
+              <li data-detail="p3">插件启用或停用后，它带的菜单项、面板和快捷键会跟着变化。</li>
+              <li data-detail="p4">插件的统一管理在主菜单的"插件"页面。</li>
+            </ul></section>
+            <section data-detail="pn0"><span class="guide-tag">PANEL</span><h3>面板</h3><ul>
+              <li data-detail="pn1">面板从主菜单或插件界面打开。</li>
+              <li data-detail="pn2">不需要的面板可以单独关掉。</li>
+              <li data-detail="pn3">面板被游戏窗口挡住时，用面板自带的置顶或透明选项。</li>
+              <li data-detail="pn4">面板里显示什么内容，由对应插件决定。</li>
+            </ul></section>
           </div>
           <div class="flow-strip" aria-label="推荐操作顺序"><span>打开菜单</span><i aria-hidden="true">→</i><span>启用插件</span><i aria-hidden="true">→</i><span>打开面板</span><i aria-hidden="true">→</i><span>按插件提示启动识别</span></div>
         </section>
@@ -158,7 +184,12 @@
               <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>ACT</span><b>›</b><span>AI Editor (LLM)</span></p>
               <h3>内置的 AI 对话编辑器</h3>
               <p>AI Editor 分两部分：左边是文件编辑区，右边是 AI 对话区。第一次用需要先在设置里配置模型服务，之后就可以打开文件、在对话区提问或让它改代码。</p>
-              <ol><li>第一次打开先进设置，配置要用的模型服务。</li><li>选好模型和对话模式，确认当前打开的工作区。</li><li>在对话框里描述要做什么；涉及改文件时，先检查它列出的改动再确认。</li><li>重要文件建议先备份；使用在线服务时，不要发送不方便外发的内容。</li></ol>
+              <ol>
+                <li data-detail="a1">第一次打开先进设置，配置要用的模型服务。</li>
+                <li data-detail="a2">选好模型和对话模式，确认当前打开的工作区。</li>
+                <li data-detail="a3">在对话框里描述要做什么；涉及改文件时，先检查它列出的改动再确认。</li>
+                <li data-detail="a4">重要文件建议先备份；使用在线服务时，不要发送不方便外发的内容。</li>
+              </ol>
             </div>
             <div class="editor-sketch" aria-hidden="true">
               <div class="sketch-title"><i></i><i></i><i></i><span>AI EDITOR</span></div>
@@ -174,22 +205,15 @@
             <div class="ai-copy">
               <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>工具</span><b>›</b><span>GPU Hunt</span></p>
               <h3>输入 PID，自动定位相机矩阵和骨骼数据</h3>
-              <p>GPU Hunt 是一个独立小工具，用来从游戏显存的上传堆里读出当前帧的相机 view × projection 矩阵和骨骼坐标。整个过程不注入游戏进程，也不 hook 游戏。</p>
+              <p>GPU Hunt 是一个独立小工具，用来定位当前场景的相机与骨骼数据，并把结果集中显示在面板上。</p>
               <ol>
-                <li>在面板顶部的输入框填游戏进程的 PID（任务管理器 → "详细信息"里可以看到）。</li>
-                <li>点 <strong>Attach</strong>，状态变成 <em>attached</em>；再把 <strong>Auto Tick: OFF</strong> 点成 <em>ON</em>，让它以 60Hz 运行。</li>
-                <li>状态变成 <em>locked</em> 表示锁定成功，矩阵和骨骼坐标会显示在面板上。游戏正在渲染 3D 画面时，一般几秒内就能锁定。</li>
-                <li>切场景、换地图或游戏重启后，点 <strong>Invalidate</strong> 重新定位；不用了点 <strong>Detach</strong>。</li>
+                <li data-detail="g1">在面板顶部的输入框填游戏进程的 PID（任务管理器 → "详细信息"里可以看到）。</li>
+                <li data-detail="g2">点 <strong>Attach</strong>，状态变成 <em>attached</em>；再把 <strong>Auto Tick: OFF</strong> 点成 <em>ON</em>，让它以 60Hz 运行。</li>
+                <li data-detail="g3">状态变成 <em>locked</em> 表示锁定成功，矩阵和骨骼坐标会显示在面板上。游戏正在渲染 3D 画面时，一般几秒内就能锁定。</li>
+                <li data-detail="g4">切场景、换地图或游戏重启后，点 <strong>Invalidate</strong> 重新定位；不用了点 <strong>Detach</strong>。</li>
               </ol>
-              <p class="route-label" style="margin-top:14px">工作原理</p>
-              <ul>
-                <li><strong>先找上传堆</strong>：面板左下会列出所有 <em>PAGE_WRITECOMBINE + MEM_COMMIT + MEM_PRIVATE</em> 内存页，这是 D3D12 上传堆的特征，列表按分数排序。</li>
-                <li><strong>识别矩阵</strong>：透视投影矩阵有固定规律（<code>m[3][3]≈0</code>、<code>|m[2][3]|≈1</code>），先扫出候选，再用连续 30 帧对比锁定唯一解。</li>
-                <li><strong>识别骨骼</strong>：同时尝试 Vec3 数组（UE5 Skin Cache）和 4×3 矩阵数组（传统 CBV）两种排布，用正交基特征区分。</li>
-                <li><strong>锁定后开销很小</strong>：每帧只读 64 字节（4×4 float 矩阵）；骨骼默认每秒刷新一次。</li>
-              </ul>
-              <p class="route-label" style="margin-top:14px">与 AI Editor / 脚本的联动</p>
-              <p>GPU Hunt 的操作通过 <code>gpuHunt.*</code> 注册进了 AI Editor，也通过 AngelScript 的 <code>gpu_hunt</code> 命名空间暴露给脚本。面板、AI、脚本操作的是同一个 tracker。</p>
+              <p class="route-label" style="margin-top:14px">结果使用</p>
+              <p>锁定后，面板会持续显示场景状态与已识别对象。AI Editor 和兼容脚本可以使用同一份会话结果；切换场景后按上面的步骤重新定位即可。</p>
             </div>
             <div class="editor-sketch" aria-hidden="true">
               <div class="sketch-title"><i></i><i></i><i></i><span>GPU HUNT</span></div>
@@ -200,33 +224,26 @@
               </div>
             </div>
           </div>
-          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>一直锁不上？先检查这三项</strong><p>1) 游戏是不是停在加载画面或主菜单，2) PID 是不是填成了启动器而不是游戏本体，3) 状态栏的 helper 有没有提示 rt_io proxy 不可用。</p></div></aside>
+          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>一直锁不上？先检查这三项</strong><p>1) 游戏是不是停在加载画面或主菜单，2) PID 是不是填成了启动器而不是游戏本体，3) 面板状态栏有没有提示连接组件不可用。</p></div></aside>
         </section>
 
         <!-- 07 启动参数 -->
         <section class="manual-section" id="cli" aria-labelledby="cli-title">
           <header class="section-heading"><span class="section-number">07</span><div><p>COMMAND LINE</p><h2 id="cli-title">启动参数</h2></div></header>
-          <p class="section-intro">日常使用直接双击 <kbd>SaoAuto.exe</kbd> 即可。下面这些参数主要用于排障，在命令行里运行 <code>--help</code> 也能看到同样的列表。</p>
+          <p class="section-intro">日常使用直接双击 <kbd>SaoAuto.exe</kbd> 即可。下面列出常用公开参数；运行 <code>--help</code> 会打开内置帮助窗口，显示更多可用选项。</p>
           <div class="hotkey-table-wrap">
             <table class="hotkey-table">
               <thead><tr><th scope="col">参数</th><th scope="col">类别</th><th scope="col">说明</th></tr></thead>
               <tbody>
-                <tr><td><code>--safe-mode</code></td><td>常规</td><td>不加载插件和 RT I/O，只启动核心界面，排查问题时先用它</td></tr>
-                <tr><td><code>--config=&lt;path&gt;</code></td><td>常规</td><td>指定用哪个配置文件，默认用安装目录下的</td></tr>
-                <tr><td><code>--log-level=&lt;lvl&gt;</code></td><td>常规</td><td>日志级别：trace / debug / info / warn / error / critical</td></tr>
-                <tr><td><code>--version</code> / <code>-v</code></td><td>常规</td><td>显示版本号后退出</td></tr>
-                <tr><td><code>--help</code> / <code>-h</code></td><td>常规</td><td>显示帮助后退出</td></tr>
-                <tr><td><code>--rt-io-operator</code></td><td>诊断</td><td>跑完整的 HYPERVISOR RT I/O 链路（R5 必选）</td></tr>
-                <tr><td><code>--rt-io-preflight-only</code></td><td>诊断</td><td>只做一次只读预检，做完就退出</td></tr>
-                <tr><td><code>--rt-io-input-checks</code></td><td>诊断</td><td>附加鼠标零点和 F24 键 down/up 检测</td></tr>
-                <tr><td><code>--rt-io-r5-check</code></td><td>诊断</td><td>输出 R5 细节（仅诊断；严格链路里 R5 本来就必选）</td></tr>
-                <tr><td><code>--rt-io-mf-check</code></td><td>诊断</td><td>附加 MF 回退诊断</td></tr>
-                <tr><td><code>--rt-io-exit-after-validation</code></td><td>诊断</td><td>验证完就退出，不进主循环</td></tr>
-                <tr><td><code>--rt-io-status-page</code></td><td>诊断</td><td>就算开着 <code>--rt-io-operator</code>，也保留 helper 的 F12 状态页</td></tr>
+                <tr data-detail="c1"><td><code>--safe-mode</code></td><td>常规</td><td>跳过插件和扩展组件，只启动核心界面，排查问题时先用它</td></tr>
+                <tr data-detail="c2"><td><code>--config=&lt;path&gt;</code></td><td>常规</td><td>指定用哪个配置文件，默认用安装目录下的</td></tr>
+                <tr data-detail="c3"><td><code>--log-level=&lt;lvl&gt;</code></td><td>常规</td><td>日志级别：trace / debug / info / warn / error / critical</td></tr>
+                <tr data-detail="c4"><td><code>--version</code> / <code>-v</code></td><td>常规</td><td>在版本窗口显示当前版本，然后退出</td></tr>
+                <tr data-detail="c5"><td><code>--help</code> / <code>-h</code></td><td>常规</td><td>打开内置帮助窗口，然后退出</td></tr>
               </tbody>
             </table>
           </div>
-          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>常用组合</strong><p>怀疑程序异常：<code>SaoAuto.exe --safe-mode --log-level=debug</code>。只想确认 RT I/O 环境是否正常：<code>--rt-io-preflight-only</code>，全程只读，不改动系统。</p></div></aside>
+          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>常用组合</strong><p>怀疑程序异常时，先运行 <code>SaoAuto.exe --safe-mode --log-level=debug</code>，确认核心界面能否正常启动，再逐项恢复扩展功能。</p></div></aside>
         </section>
 
         <!-- 08 常见问题 -->
@@ -239,7 +256,7 @@
             <details><summary><span>面板被游戏窗口挡住</span><i aria-hidden="true">+</i></summary><p>大多数面板自带置顶或透明选项。也可以按 <kbd>HOME</kbd> 关掉主菜单，或关掉暂时不用的覆盖层。</p></details>
             <details><summary><span>插件界面和手册描述不一致</span><i aria-hidden="true">+</i></summary><p>本手册只讲平台通用的部分。插件随版本和游戏不同，菜单、面板、快捷键会有差异，以程序里实际显示的为准。</p></details>
             <details><summary><span>AI Editor 没有回复</span><i aria-hidden="true">+</i></summary><p>先检查模型的连接设置；使用在线服务时确认网络可用。还不行的话新开一个对话重试，单次提问不要塞入过多内容。</p></details>
-            <details><summary><span>怀疑安装损坏，怎么排查</span><i aria-hidden="true">+</i></summary><p>先用 <code>--safe-mode</code> 启动，确认核心功能正常；要验证 RT I/O 环境就运行 <code>--rt-io-preflight-only</code>，只读操作，不会改动系统。</p></details>
+            <details><summary><span>怀疑安装损坏，怎么排查</span><i aria-hidden="true">+</i></summary><p>先用 <code>--safe-mode --log-level=debug</code> 启动，确认核心功能正常并查看日志；如果核心文件缺失，重新安装或使用更新程序修复。</p></details>
           </div>
         </section>
 
@@ -247,9 +264,9 @@
         <section class="manual-section privacy-section" id="privacy" aria-labelledby="privacy-title">
           <header class="section-heading"><span class="section-number">09</span><div><p>PRIVACY</p><h2 id="privacy-title">隐私说明</h2></div></header>
           <div class="privacy-grid">
-            <div><span class="privacy-icon">01</span><h3>数据保存在本机</h3><p>配置和日志都存储在你的电脑上，是否保留、查看或删除由你决定。</p></div>
-            <div><span class="privacy-icon">02</span><h3>发送内容由你决定</h3><p>使用在线 AI 服务时，只有你主动提交的内容会被发出；各服务如何处理数据，以其隐私政策为准。</p></div>
-            <div><span class="privacy-icon">03</span><h3>手册只覆盖操作</h3><p>本手册只包含用户能接触到的操作说明，不涉及实现细节和内部资料。</p></div>
+            <div data-detail="v1"><span class="privacy-icon">01</span><h3>数据保存在本机</h3><p>配置和日志都存储在你的电脑上，是否保留、查看或删除由你决定。</p></div>
+            <div data-detail="v2"><span class="privacy-icon">02</span><h3>联网范围清楚可控</h3><p>正常启动可能进行许可校验和更新检查；使用在线 AI 时，还会发送你主动提交的内容。</p></div>
+            <div data-detail="v3"><span class="privacy-icon">03</span><h3>手册只覆盖操作</h3><p>本手册只包含用户能接触到的操作说明，不涉及实现细节和内部资料。</p></div>
           </div>
           <p class="privacy-note">本手册的作用是说明界面上可用的功能怎么用，不负责解释技术实现。</p>
         </section>
@@ -263,6 +280,17 @@
     <a class="footer-top" href="#top">回顶部 ↑</a>
   </footer>
 
+  <!-- 每次点击的局部折射滤镜会动态放入这里；原页面本身从不挂滤镜。 -->
+  <svg class="sao-filter-defs" aria-hidden="true" focusable="false">
+    <defs id="sao-wave-runtime-defs"></defs>
+  </svg>
+
   <script src="assets/scrollspy.js"></script>
+  <script src="assets/particles.js"></script>
+  <script src="assets/gpu_ripple.js"></script>
+  <script src="assets/sfx.js"></script>
+  <script src="assets/sc_cursor.js"></script>
+  <script src="assets/detail_popup.js"></script>
+  <script src="assets/linkstart.js"></script>
 </body>
 </html>
