@@ -84,7 +84,7 @@ proceed if the ABI mismatches.
 | net         | `sao_net_abi_version()`      | 1.0     |
 | engine      | `sao_engine_abi_version()`   | 1.0     |
 | rt_io       | `sao_rt_io_abi_version()`    | 1.1     |
-| ui          | `sao_ui_abi_version()`       | 1.2     |
+| ui          | `sao_ui_abi_version()`       | 1.10    |
 | sdk         | `sao_sdk_abi_version()`      | 1.0     |
 | scripting   | `sao_scripting_abi_version()`| 1.0     |
 

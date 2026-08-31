@@ -25,6 +25,7 @@ if (NOT IS_DIRECTORY "${_sao_ship_bin_directory}")
     message(FATAL_ERROR "Staged install tree is missing bin/: ${_sao_ship_bin_directory}")
 endif()
 
+set(_sao_expected_relative_files "")
 foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
     if (IS_ABSOLUTE "${_sao_expected_file}" OR
         "${_sao_expected_file}" MATCHES "(^|/)\\.\\.?(/|$)")
@@ -35,7 +36,14 @@ foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
         message(FATAL_ERROR
             "Required staged release inventory entry is missing: ${_sao_expected_file}")
     endif()
+    cmake_path(CONVERT "${_sao_expected_file}" TO_CMAKE_PATH_LIST
+        _sao_expected_file_normalized NORMALIZE)
+    list(APPEND _sao_expected_relative_files
+        "${_sao_expected_file_normalized}")
 endforeach()
+list(REMOVE_DUPLICATES _sao_expected_relative_files)
+list(SORT _sao_expected_relative_files)
+set(SAO_AUDIT_EXPECTED_FILES "${_sao_expected_relative_files}")
 
 foreach (_sao_project_owned_pe IN LISTS SAO_AUDIT_PROJECT_OWNED_PES)
     if (IS_ABSOLUTE "${_sao_project_owned_pe}" OR
@@ -127,6 +135,29 @@ foreach (_sao_manifest_entry IN LISTS _sao_install_manifest_entries)
 endforeach()
 list(REMOVE_DUPLICATES _sao_manifest_relative_files)
 list(SORT _sao_manifest_relative_files)
+
+set(_sao_expected_not_manifest "")
+foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
+    list(FIND _sao_manifest_relative_files "${_sao_expected_file}"
+        _sao_expected_manifest_index)
+    if (_sao_expected_manifest_index EQUAL -1)
+        list(APPEND _sao_expected_not_manifest "${_sao_expected_file}")
+    endif()
+endforeach()
+set(_sao_manifest_not_expected "")
+foreach (_sao_manifest_file IN LISTS _sao_manifest_relative_files)
+    list(FIND SAO_AUDIT_EXPECTED_FILES "${_sao_manifest_file}"
+        _sao_manifest_expected_index)
+    if (_sao_manifest_expected_index EQUAL -1)
+        list(APPEND _sao_manifest_not_expected "${_sao_manifest_file}")
+    endif()
+endforeach()
+if (_sao_expected_not_manifest OR _sao_manifest_not_expected)
+    message(FATAL_ERROR
+        "Canonical release inventory and install manifest differ. "
+        "expected-not-manifest=[${_sao_expected_not_manifest}] "
+        "manifest-not-expected=[${_sao_manifest_not_expected}]")
+endif()
 
 foreach (_sao_project_owned_pe IN LISTS SAO_AUDIT_PROJECT_OWNED_PES)
     list(FIND _sao_manifest_relative_files
@@ -384,7 +415,7 @@ set(_SAO_WINDOWS_SYSTEM_DLLS
     ole32.dll oleaut32.dll psapi.dll rpcrt4.dll sechost.dll setupapi.dll shell32.dll
     shcore.dll shlwapi.dll user32.dll userenv.dll uxtheme.dll version.dll winhttp.dll
     wininet.dll winmm.dll wintrust.dll windowsapp.dll ws2_32.dll wtsapi32.dll
-    normaliz.dll mswsock.dll nsi.dll ucrtbase.dll)
+    normaliz.dll mswsock.dll nsi.dll ucrtbase.dll xaudio2_9.dll)
 
 function(sao_audit_is_system_dependency dependency out_is_system)
     string(TOLOWER "${dependency}" _sao_dependency)
@@ -537,9 +568,11 @@ endforeach()
 
 file(GLOB_RECURSE _sao_ship_regular_files LIST_DIRECTORIES false
     "${SAO_AUDIT_SHIP_DIRECTORY}/*")
+set(_sao_ship_relative_files "")
 foreach (_sao_ship_file IN LISTS _sao_ship_regular_files)
     file(RELATIVE_PATH _sao_ship_file_relative "${SAO_AUDIT_SHIP_DIRECTORY}" "${_sao_ship_file}")
     cmake_path(CONVERT "${_sao_ship_file_relative}" TO_CMAKE_PATH_LIST _sao_ship_file_relative NORMALIZE)
+    list(APPEND _sao_ship_relative_files "${_sao_ship_file_relative}")
     list(FIND _sao_manifest_relative_files "${_sao_ship_file_relative}" _sao_manifest_file_index)
     if (_sao_manifest_file_index EQUAL -1)
         message(FATAL_ERROR "Ship directory contains an unexpected file outside install manifest: ${_sao_ship_file_relative}")
@@ -550,6 +583,30 @@ foreach (_sao_manifest_relative IN LISTS _sao_manifest_relative_files)
         message(FATAL_ERROR "Install manifest contains a non-staged file: ${_sao_manifest_relative}")
     endif()
 endforeach()
+list(REMOVE_DUPLICATES _sao_ship_relative_files)
+list(SORT _sao_ship_relative_files)
+set(_sao_expected_not_ship "")
+foreach (_sao_expected_file IN LISTS SAO_AUDIT_EXPECTED_FILES)
+    list(FIND _sao_ship_relative_files "${_sao_expected_file}"
+        _sao_expected_ship_index)
+    if (_sao_expected_ship_index EQUAL -1)
+        list(APPEND _sao_expected_not_ship "${_sao_expected_file}")
+    endif()
+endforeach()
+set(_sao_ship_not_expected "")
+foreach (_sao_ship_file IN LISTS _sao_ship_relative_files)
+    list(FIND SAO_AUDIT_EXPECTED_FILES "${_sao_ship_file}"
+        _sao_ship_expected_index)
+    if (_sao_ship_expected_index EQUAL -1)
+        list(APPEND _sao_ship_not_expected "${_sao_ship_file}")
+    endif()
+endforeach()
+if (_sao_expected_not_ship OR _sao_ship_not_expected)
+    message(FATAL_ERROR
+        "Canonical release inventory and ship tree differ. "
+        "expected-not-ship=[${_sao_expected_not_ship}] "
+        "ship-not-expected=[${_sao_ship_not_expected}]")
+endif()
 
 set(_sao_pe_index 0)
 list(LENGTH _sao_ship_pe_binaries _sao_pe_total)

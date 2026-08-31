@@ -438,7 +438,22 @@ if (TARGET SaoAuto)
         "bin/docs/html/index.html"
         "bin/docs/html/assets/style.css"
         "bin/docs/html/assets/theme.js"
-        "bin/docs/html/assets/scrollspy.js")
+        "bin/docs/html/assets/scrollspy.js"
+        "bin/docs/html/assets/particles.js"
+        "bin/docs/html/assets/sfx.js"
+        "bin/docs/html/assets/sc_cursor.js"
+        "bin/docs/html/assets/linkstart.js"
+        "bin/docs/html/assets/gpu_ripple.js"
+        "bin/docs/html/assets/detail_popup.js"
+        "bin/docs/html/assets/sounds/Dismiss.SAO.Launcher.mp3"
+        "bin/docs/html/assets/sounds/Dismiss.SAO.Message.mp3"
+        "bin/docs/html/assets/sounds/Feedback.SAO.Click.mp3"
+        "bin/docs/html/assets/sounds/LinkStart.SAO.Kirito.mp3"
+        "bin/docs/html/assets/sounds/Popup.SAO.Alert.mp3"
+        "bin/docs/html/assets/sounds/Popup.SAO.Launcher.mp3"
+        "bin/docs/html/assets/sounds/Popup.SAO.Menu.mp3"
+        "bin/docs/html/assets/sounds/Popup.SAO.Panel.mp3"
+        "bin/docs/html/assets/sounds/Startup.SAO.NerveGear.mp3")
     set(_SAO_RELEASE_PLUGIN_ROOT "bin/plugins")
     set(_SAO_RELEASE_EXPECTED_DIRECTORIES
         "${_SAO_RELEASE_PLUGIN_ROOT}")
@@ -482,13 +497,17 @@ if (TARGET SaoAuto)
             list(APPEND _SAO_RELEASE_EXPECTED_FILES "bin/assets/ai_editor/${_sao_ai_editor_asset}")
         endforeach()
     endif()
-    if (TARGET SaoKernelMapMcpServer)
+    if (WIN32 AND SAO_BUILD_PLATFORM AND SAO_BUILD_TOOLS)
+        if (NOT TARGET SaoKernelMapMcpServer)
+            message(FATAL_ERROR
+                "SaoKernelMapMcpServer is required when the RTIO tools graph is enabled.")
+        endif()
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
             SaoKernelMapMcpServer)
         list(APPEND _SAO_RELEASE_EXPECTED_FILES
             "bin/$<TARGET_FILE_NAME:SaoKernelMapMcpServer>")
     endif()
-    if (SAO_BUILD_WEBVIEW_BRIDGE)
+    if (SAO_BUILD_WEBVIEW_BRIDGE OR SAO_LAUNCHER_GUIDE_WEBVIEW2_ENABLED)
         list(APPEND _SAO_RELEASE_EXPECTED_FILES
             "bin/WebView2Loader.dll")
     endif()

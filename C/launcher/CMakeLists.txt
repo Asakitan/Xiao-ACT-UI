@@ -38,6 +38,7 @@ set(SAO_LAUNCHER_HEADERS
     include/sao/launcher/provider_config.h
     include/sao/launcher/auto_update.h
     include/sao/launcher/user_menu.h
+    include/sao/launcher/user_guide_webview.h
 )
 
 set(SAO_LAUNCHER_SOURCES
@@ -62,11 +63,56 @@ set(SAO_LAUNCHER_SOURCES
     src/provider_config.cpp
     src/launcher_lifecycle.cpp
     src/user_menu.cpp
+    # WebView2-hosted user guide (dynamic loader, ShellExecute fallback).
+    src/user_guide_webview.cpp
     # Phase 12 (Python parity closure): hotkey manager.
     src/hotkey_manager.cpp
     # Phase 14: install_npcap + native comdlg32 file picker fallback.
     src/install_npcap.cpp
 )
+
+# ---------------------------------------------------------------------------
+# WebView2 (user guide host).  Mirrors the AI Editor probe: NuGet layout
+# %USERPROFILE%/.nuget/packages/microsoft.web.webview2/<ver>/build/native.
+# When absent the guide falls back to ShellExecute (default browser).
+# ---------------------------------------------------------------------------
+set(_SAO_GUIDE_WEBVIEW2_CANDIDATE_DIRS
+    "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
+    "$ENV{ProgramFiles}/Microsoft.Web.WebView2"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/webview2")
+set(_SAO_GUIDE_WEBVIEW2_ROOT "")
+foreach (_candidate IN LISTS _SAO_GUIDE_WEBVIEW2_CANDIDATE_DIRS)
+    file(GLOB _children LIST_DIRECTORIES true "${_candidate}/*")
+    list(SORT _children ORDER DESCENDING)
+    foreach (_child IN LISTS _children)
+        if (IS_DIRECTORY "${_child}" AND
+            EXISTS "${_child}/build/native/include/WebView2.h")
+            set(_SAO_GUIDE_WEBVIEW2_ROOT "${_child}/build/native")
+            break()
+        endif()
+    endforeach()
+    if (_SAO_GUIDE_WEBVIEW2_ROOT)
+        break()
+    endif()
+endforeach()
+if (_SAO_GUIDE_WEBVIEW2_ROOT)
+    file(TO_CMAKE_PATH "${_SAO_GUIDE_WEBVIEW2_ROOT}" _SAO_GUIDE_WEBVIEW2_ROOT)
+    set(_SAO_GUIDE_WEBVIEW2_DLL "${_SAO_GUIDE_WEBVIEW2_ROOT}/x64/WebView2Loader.dll")
+    if (NOT EXISTS "${_SAO_GUIDE_WEBVIEW2_DLL}")
+        set(_SAO_GUIDE_WEBVIEW2_ROOT "")
+    endif()
+endif()
+if (_SAO_GUIDE_WEBVIEW2_ROOT)
+    message(STATUS "sao_launcher: WebView2 SDK at ${_SAO_GUIDE_WEBVIEW2_ROOT}")
+else()
+    message(STATUS "sao_launcher: WebView2 SDK not located; user guide falls back to default browser")
+endif()
+set(SAO_LAUNCHER_GUIDE_WEBVIEW2_ENABLED FALSE CACHE INTERNAL
+    "Whether the native launcher guide host stages WebView2Loader" FORCE)
+if (_SAO_GUIDE_WEBVIEW2_ROOT)
+    set(SAO_LAUNCHER_GUIDE_WEBVIEW2_ENABLED TRUE CACHE INTERNAL
+        "Whether the native launcher guide host stages WebView2Loader" FORCE)
+endif()
 
 set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)
 if (TARGET sao::ui AND TARGET sao::rt_io AND TARGET sao::sdk AND
@@ -108,8 +154,14 @@ else()
         ${CMAKE_SOURCE_DIR}/platform/ui/include)
 
     add_library(sao_launcher_ui_off_link_smoke SHARED EXCLUDE_FROM_ALL
-        src/user_menu.cpp)
+        src/args.cpp
+        src/single_instance.cpp
+        src/user_menu.cpp
+        src/user_guide_webview.cpp
+        src/working_dir.cpp)
     target_compile_features(sao_launcher_ui_off_link_smoke PRIVATE cxx_std_20)
+    target_compile_definitions(sao_launcher_ui_off_link_smoke PRIVATE
+        SAO_LAUNCHER_UI_OFF_LINK_SMOKE=1)
     target_include_directories(sao_launcher_ui_off_link_smoke PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -120,6 +172,13 @@ else()
         sao_launcher_ui_off_stubs
         user32
         shell32)
+    if (_SAO_GUIDE_WEBVIEW2_ROOT)
+        target_include_directories(sao_launcher_ui_off_link_smoke PRIVATE
+            "${_SAO_GUIDE_WEBVIEW2_ROOT}/include")
+        target_compile_definitions(sao_launcher_ui_off_link_smoke PRIVATE
+            SAO_LAUNCHER_HAS_WEBVIEW2=1)
+        target_link_libraries(sao_launcher_ui_off_link_smoke PRIVATE ole32)
+    endif()
 endif()
 
 if (TARGET sao::plugins::loader AND TARGET sao::rt_io AND TARGET sao::ui)
@@ -234,6 +293,12 @@ target_include_directories(SaoAuto
     # SAO_ENC_STR() header-only compile-time string encryption; no link dep.
     ${CMAKE_SOURCE_DIR}/security/obfuscation/include
 )
+if (_SAO_GUIDE_WEBVIEW2_ROOT)
+    target_include_directories(SaoAuto PRIVATE
+        "${_SAO_GUIDE_WEBVIEW2_ROOT}/include")
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_HAS_WEBVIEW2=1)
+endif()
 target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi)
 if (TARGET sao::core)
     target_link_libraries(SaoAuto PRIVATE sao::core)
@@ -417,15 +482,59 @@ set(SAO_LAUNCHER_DOCS_THEME
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/theme.js")
 set(SAO_LAUNCHER_DOCS_SCROLLSPY
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/scrollspy.js")
+set(SAO_LAUNCHER_DOCS_PARTICLES
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/particles.js")
+set(SAO_LAUNCHER_DOCS_SFX
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/sfx.js")
+set(SAO_LAUNCHER_DOCS_SC_CURSOR
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/sc_cursor.js")
+set(SAO_LAUNCHER_DOCS_LINKSTART
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/linkstart.js")
+set(SAO_LAUNCHER_DOCS_GPU_RIPPLE
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/gpu_ripple.js")
+set(SAO_LAUNCHER_DOCS_DETAIL_POPUP
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/detail_popup.js")
+set(SAO_LAUNCHER_DOCS_SOUNDS_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/sounds")
+set(SAO_LAUNCHER_DOCS_SOUND_NAMES
+    "Dismiss.SAO.Launcher.mp3"
+    "Dismiss.SAO.Message.mp3"
+    "Feedback.SAO.Click.mp3"
+    "LinkStart.SAO.Kirito.mp3"
+    "Popup.SAO.Alert.mp3"
+    "Popup.SAO.Launcher.mp3"
+    "Popup.SAO.Menu.mp3"
+    "Popup.SAO.Panel.mp3"
+    "Startup.SAO.NerveGear.mp3")
+set(SAO_LAUNCHER_DOCS_SOUND_FILES "")
+foreach (_sao_launcher_guide_sound IN LISTS SAO_LAUNCHER_DOCS_SOUND_NAMES)
+    set(_sao_launcher_guide_sound_path
+        "${SAO_LAUNCHER_DOCS_SOUNDS_DIR}/${_sao_launcher_guide_sound}")
+    if (NOT EXISTS "${_sao_launcher_guide_sound_path}" OR
+        IS_DIRECTORY "${_sao_launcher_guide_sound_path}")
+        message(FATAL_ERROR
+            "launcher: required guide sound is missing: ${_sao_launcher_guide_sound_path}")
+    endif()
+    list(APPEND SAO_LAUNCHER_DOCS_SOUND_FILES
+        "${_sao_launcher_guide_sound_path}")
+endforeach()
 if (NOT EXISTS "${SAO_LAUNCHER_DOCS_INDEX}" OR
     NOT EXISTS "${SAO_LAUNCHER_DOCS_STYLE}" OR
     NOT EXISTS "${SAO_LAUNCHER_DOCS_THEME}" OR
-    NOT EXISTS "${SAO_LAUNCHER_DOCS_SCROLLSPY}")
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_SCROLLSPY}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_PARTICLES}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_SFX}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_SC_CURSOR}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_LINKSTART}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_GPU_RIPPLE}" OR
+    NOT EXISTS "${SAO_LAUNCHER_DOCS_DETAIL_POPUP}")
     message(FATAL_ERROR
         "launcher: required packaged user guide files are missing")
 endif()
 
 add_custom_command(TARGET SaoAuto POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -440,6 +549,29 @@ add_custom_command(TARGET SaoAuto POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${SAO_LAUNCHER_DOCS_SCROLLSPY}"
         "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/scrollspy.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_PARTICLES}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/particles.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_SFX}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/sfx.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_SC_CURSOR}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/sc_cursor.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_LINKSTART}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/linkstart.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_GPU_RIPPLE}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/gpu_ripple.js"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${SAO_LAUNCHER_DOCS_DETAIL_POPUP}"
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/detail_popup.js"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/sounds"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        ${SAO_LAUNCHER_DOCS_SOUND_FILES}
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/sounds"
     COMMENT "Copying packaged launcher user guide"
     VERBATIM
 )
@@ -479,6 +611,20 @@ install(TARGETS SaoAuto
     RUNTIME DESTINATION bin
     COMPONENT ship
 )
+if (_SAO_GUIDE_WEBVIEW2_ROOT)
+    add_custom_command(TARGET SaoAuto POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_SAO_GUIDE_WEBVIEW2_DLL}"
+            "$<TARGET_FILE_DIR:SaoAuto>/WebView2Loader.dll"
+        COMMENT "Copying WebView2Loader.dll for user guide host"
+        VERBATIM
+    )
+    install(FILES "${_SAO_GUIDE_WEBVIEW2_DLL}"
+        DESTINATION bin
+        COMPONENT ship
+    )
+endif()
+
 install(FILES "${SAO_LAUNCHER_DOCS_INDEX}"
     DESTINATION bin/docs/html
     COMPONENT ship
@@ -490,6 +636,16 @@ install(FILES "${SAO_LAUNCHER_DOCS_STYLE}"
 install(FILES
     "${SAO_LAUNCHER_DOCS_THEME}"
     "${SAO_LAUNCHER_DOCS_SCROLLSPY}"
+    "${SAO_LAUNCHER_DOCS_PARTICLES}"
+    "${SAO_LAUNCHER_DOCS_GPU_RIPPLE}"
+    "${SAO_LAUNCHER_DOCS_SFX}"
+    "${SAO_LAUNCHER_DOCS_SC_CURSOR}"
+    "${SAO_LAUNCHER_DOCS_LINKSTART}"
+    "${SAO_LAUNCHER_DOCS_DETAIL_POPUP}"
     DESTINATION bin/docs/html/assets
+    COMPONENT ship
+)
+install(FILES ${SAO_LAUNCHER_DOCS_SOUND_FILES}
+    DESTINATION bin/docs/html/assets/sounds
     COMPONENT ship
 )

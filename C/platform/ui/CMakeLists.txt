@@ -81,6 +81,7 @@ add_library(sao_platform_ui SHARED
     # ── Automation capabilities ───────────────────────────────
     src/auto_key.cpp           # game-agnostic SendInput / hold ledger
     src/alerts.cpp             # SAPI TTS + banner queue + winmm sound
+    src/sound.cpp              # embedded Python-parity UI sound catalog
     src/input_arbitration.cpp  # per-VK policy + reservation + conflict
 
     # ── Streaming-mode flow control ────────────────────────────
@@ -117,6 +118,7 @@ target_link_libraries(sao_platform_ui
 if (WIN32)
     target_sources(sao_platform_ui PRIVATE
         src/entity_authority_frames.rc
+        src/sound_assets.rc
         src/entity_text_renderer_win.cpp
     )
 
@@ -134,6 +136,7 @@ if (WIN32)
             gdi32
             dwmapi
             winmm
+            xaudio2
             # SAPI TTS (sapi.lib) uses IIDs / CLSIDs
             # via the system SDK.  Every modern Windows SDK ships the
             # link import lib as `sapi.lib`.  No runtime dependency

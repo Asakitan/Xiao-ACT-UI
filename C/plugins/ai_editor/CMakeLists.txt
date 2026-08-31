@@ -116,6 +116,9 @@ add_library(sao_plugin_ai_editor SHARED
     src/tool_execution_monitor.cpp
     src/tool_result_cache.cpp
     src/tool_result_filter.cpp
+    src/vt_bridge.cpp
+    src/vt_commands.cpp
+    src/vt_tools.cpp
     src/webview_panel_registry.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
