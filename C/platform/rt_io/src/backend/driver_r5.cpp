@@ -530,6 +530,9 @@ sao_status_t r5_rebind_va_resolver(
             slot.mutation_phase != R5VaResolverSlot::MutationPhase::idle) {
             return SAO_RT_IO_ERR_INTERNAL_ERROR;
         }
+        if (slot.clear_receipt_valid) {
+            return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
 
         if (legacy) {
             if (slot.installed && slot.mode == SAO_RT_IO_R5_VA_RESOLVER_MODE_OWNED) {
@@ -636,9 +639,6 @@ sao_status_t r5_rebind_va_resolver(
                                : SAO_RT_IO_R5_VA_RESOLVER_MODE_OWNED;
             slot.installed = true;
             slot.admission_open = true;
-        }
-        if (fn != nullptr) {
-            invalidate_r5_va_resolver_clear_receipt(slot);
         }
         post_mutation = snapshot_va_resolver_state(slot);
         post_mutation_valid = true;
@@ -1594,7 +1594,9 @@ sao_rt_io_r5_reset_if_va_resolver_clear_owned_v2(
             slot.clear_receipt_owner_identity != owner_identity ||
             slot.clear_receipt_owner_generation != owner_generation ||
             slot.clear_receipt_revision == 0u ||
-            slot.revision != slot.clear_receipt_revision) {
+            slot.revision != slot.clear_receipt_revision ||
+            slot.revision_high_water != slot.clear_receipt_revision ||
+            slot.generation_high_water != owner_generation) {
             return SAO_STATUS_ERR_NOT_FOUND;
         }
 
