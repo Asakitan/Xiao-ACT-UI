@@ -39,6 +39,8 @@ set(SAO_LAUNCHER_HEADERS
     include/sao/launcher/auto_update.h
     include/sao/launcher/user_menu.h
     include/sao/launcher/user_guide_webview.h
+    # Boot-residency restart UX (W6.9 state machine + executor).
+    include/sao/launcher/boot_residency.h
 )
 
 set(SAO_LAUNCHER_SOURCES
@@ -69,6 +71,8 @@ set(SAO_LAUNCHER_SOURCES
     src/hotkey_manager.cpp
     # Phase 14: install_npcap + native comdlg32 file picker fallback.
     src/install_npcap.cpp
+    # Boot-residency restart UX (W6.9 state machine + executor).
+    src/boot_residency.cpp
 )
 
 # ---------------------------------------------------------------------------

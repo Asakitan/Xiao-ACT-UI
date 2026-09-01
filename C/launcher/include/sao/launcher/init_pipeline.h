@@ -210,7 +210,7 @@ enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
 };
 
 #ifdef __cplusplus
-static_assert((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
+static_assert(((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
                SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT |
                SAO_LAUNCHER_RT_IO_CAP_MF |
                SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |

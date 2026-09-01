@@ -6,6 +6,7 @@
 
 #include "sao/launcher/app.h"
 #include "sao/launcher/args.h"
+#include "sao/launcher/boot_residency.h"
 #if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
 #include "sao/launcher/auto_update.h"
 #endif
@@ -369,6 +370,23 @@ int App::run() {
         return fail(rc, L"ui_bring_online", "ui_bring_online");
     }
 
+    // Boot-residency restart UX (W6.9).  After the UI is online, offer the
+    // one-shot restart prompt when the helper armed a boot-start promotion
+    // this session and the machine has not yet performed the real restart.
+    // Skipped in smoke/acceptance/operator runs and safe mode (the probe
+    // suppresses safe mode internally).
+    if (!state_.smoke_mode && !state_.exit_after_init && !state_.rt_io_operator) {
+        const int32_t prompt_result =
+            sao::launcher::boot_residency_prompt_if_required(nullptr);
+        if (prompt_result == sao::launcher::BOOT_RESIDENCY_ERROR) {
+            // A failed restart scheduling is non-fatal: the latch survives
+            // and the prompt reappears on the next launch.
+            consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULE_FAILED");
+        } else if (prompt_result == sao::launcher::BOOT_RESIDENCY_RESTART_ACCEPTED) {
+            consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULED");
+        }
+    }
+
 #if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
     if (!state_.smoke_mode && !state_.exit_after_init &&
         !state_.rt_io_operator && provider_configuration.update.enabled) {
@@ -440,6 +458,11 @@ int App::acquireSingleInstance() {
     const auto acquire_result =
         ::sao::launcher::acquireSingleInstance(single_instance_mutex_);
     if (acquire_result == SingleInstanceAcquireResult::already_running) {
+        // Boot-residency UX: the restart prompt offers "run this program
+        // again to cancel the 30-second restart".  A second launch reaches
+        // exactly this path, so cancel any pending reboot before the
+        // command line is forwarded to the running instance.
+        abort_machine_restart();
         // Forward our command line to the running instance before we die.
         forwardCommandLineToRunningInstance(GetCommandLineW());
         return SAO_EXIT_ALREADY_RUNNING;
