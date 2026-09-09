@@ -659,7 +659,10 @@ sao_status_t create(Renderer** out_renderer) noexcept {
 void destroy(Renderer* renderer) noexcept {
     if (renderer == nullptr)
         return;
-    release_device(*renderer);
+    {
+        std::lock_guard lock(renderer->mutex);
+        release_device(*renderer);
+    }
     delete renderer;
 }
 

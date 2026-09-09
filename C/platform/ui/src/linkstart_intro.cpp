@@ -98,6 +98,14 @@ struct sao_ui_linkstart_s {
 
 namespace {
 
+void release_sound_group(sao_ui_linkstart_s* handle) noexcept {
+    if (handle == nullptr)
+        return;
+    const sao_ui_sound_group_t group = std::exchange(handle->sound_group, 0);
+    if (group != 0)
+        (void)sao_ui_sound_group_destroy(group);
+}
+
 void destroy_resources(sao_ui_linkstart_s* handle) {
     if (handle == nullptr)
         return;
@@ -109,10 +117,7 @@ void destroy_resources(sao_ui_linkstart_s* handle) {
     handle->gpu_layer = nullptr;
     sao::ui::linkstart_gpu::destroy(handle->gpu_renderer);
     handle->gpu_renderer = nullptr;
-    if (handle->sound_group != 0) {
-        (void)sao_ui_sound_group_destroy(handle->sound_group);
-        handle->sound_group = 0;
-    }
+    release_sound_group(handle);
 }
 
 sao_status_t centered_text(sao_ui_paint_ctx_handle_t ctx, float cx, float y, const char* text,
@@ -553,8 +558,7 @@ extern "C" void SAO_UI_CALL sao_ui_linkstart_destroy(sao_ui_linkstart_handle_t h
         handle->active = false;
         (void)sao_ui_layer_set_visible(handle->layer, false);
         (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-        if (handle->sound_group != 0)
-            (void)sao_ui_sound_group_stop(handle->sound_group);
+        release_sound_group(handle);
     }
     if (nervegear != nullptr)
         (void)sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
@@ -579,21 +583,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
                 (void)sao_ui_sound_group_destroy(handle->sound_group);
                 handle->sound_group = 0;
             }
-            sao_status_t status = sao_ui_sound_group_create(&handle->sound_group);
-            if (status == SAO_STATUS_OK)
-                status = render_frame_locked(handle);
+            (void)sao_ui_sound_group_create(&handle->sound_group);
+            sao_status_t status = render_frame_locked(handle);
             if (status == SAO_STATUS_OK)
                 status = sao_ui_layer_set_visible(handle->gpu_layer, true);
             if (status == SAO_STATUS_OK)
                 status = sao_ui_layer_set_visible(handle->layer, true);
-            if (status == SAO_STATUS_OK)
+            if (status == SAO_STATUS_OK && handle->sound_group != 0)
                 (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_LINK_START, 80, handle->sound_group);
             if (status != SAO_STATUS_OK) {
                 handle->active = false;
                 (void)sao_ui_layer_set_visible(handle->layer, false);
                 (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-                if (handle->sound_group != 0)
-                    (void)sao_ui_sound_group_stop(handle->sound_group);
+                release_sound_group(handle);
                 return status;
             }
             nervegear = handle->nervegear;
@@ -605,11 +607,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
             handle->active = false;
             (void)sao_ui_layer_set_visible(handle->layer, false);
             (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-            if (handle->sound_group != 0)
-                (void)sao_ui_sound_group_stop(handle->sound_group);
+            release_sound_group(handle);
         }
         return status;
     } catch (...) {
+        sao_ui_nervegear_handle_t failed_nervegear = nullptr;
+        {
+            std::lock_guard lock(handle->mutex);
+            handle->active = false;
+            handle->elapsed_ms = 0;
+            handle->nervegear_sound_played = false;
+            handle->welcome_sound_played = false;
+            (void)sao_ui_layer_set_visible(handle->layer, false);
+            (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
+            release_sound_group(handle);
+            failed_nervegear = handle->nervegear;
+        }
+        if (failed_nervegear != nullptr)
+            (void)sao_ui_nervegear_transition(failed_nervegear, SAO_UI_NG_STATE_IDLE);
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
@@ -628,8 +643,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss(sao_ui_linkstart_ha
         status = sao_ui_layer_set_visible(handle->layer, false);
         if (status == SAO_STATUS_OK)
             status = sao_ui_layer_set_visible(handle->gpu_layer, false);
-        if (handle->sound_group != 0)
-            (void)sao_ui_sound_group_stop(handle->sound_group);
+        release_sound_group(handle);
         nervegear = handle->nervegear;
     }
     if (status != SAO_STATUS_OK)
@@ -656,10 +670,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
     if (delta_ms < 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     sao_ui_nervegear_handle_t nervegear = nullptr;
-    bool completed = false;
-    bool play_nervegear_sound = false;
-    bool play_welcome_sound = false;
-    sao_ui_sound_group_t sound_group = 0;
     int32_t nervegear_delta_ms = 0;
     try {
         {
@@ -691,32 +701,28 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
                 return status;
             if (!handle->nervegear_sound_played && scene_seconds >= 1.5F) {
                 handle->nervegear_sound_played = true;
-                play_nervegear_sound = true;
+                if (handle->sound_group != 0)
+                    (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_NERVEGEAR, 80,
+                                                      handle->sound_group);
             }
-            if (!handle->welcome_sound_played && scene_seconds >= handle->timeline.p4_start) {
+            if (!handle->welcome_sound_played && scene_seconds >= handle->timeline.p3_start) {
                 handle->welcome_sound_played = true;
-                play_welcome_sound = true;
+                if (handle->sound_group != 0)
+                    (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_ALO_WELCOME, 80,
+                                                      handle->sound_group);
             }
-            completed = scene_seconds >= handle->timeline.total_duration;
-            if (completed) {
+            if (scene_seconds >= handle->timeline.total_duration) {
                 handle->active = false;
                 const sao_status_t hide_status = sao_ui_layer_set_visible(handle->layer, false);
-                if (hide_status != SAO_STATUS_OK)
-                    return hide_status;
                 const sao_status_t hide_gpu_status =
                     sao_ui_layer_set_visible(handle->gpu_layer, false);
+                if (hide_status != SAO_STATUS_OK)
+                    return hide_status;
                 if (hide_gpu_status != SAO_STATUS_OK)
                     return hide_gpu_status;
             }
             nervegear = handle->nervegear;
-            sound_group = handle->sound_group;
         }
-        if (play_nervegear_sound)
-            (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_NERVEGEAR, 80, sound_group);
-        if (play_welcome_sound)
-            (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_WELCOME, 80, sound_group);
-        if (completed && sound_group != 0)
-            (void)sao_ui_sound_group_stop(sound_group);
         if (nervegear != nullptr && nervegear_delta_ms > 0)
             return sao_ui_nervegear_tick(nervegear, nervegear_delta_ms);
         return SAO_STATUS_OK;
