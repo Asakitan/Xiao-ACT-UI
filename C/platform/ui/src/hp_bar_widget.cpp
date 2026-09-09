@@ -1,15 +1,10 @@
 #include "hp_bar_widget_internal.h"
 
-#include "widget_raster_internal.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <mutex>
 
 namespace {
-
-using namespace sao::ui::raster;
 
 uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
     const float t = std::clamp(amount, 0.0F, 1.0F);
@@ -23,28 +18,43 @@ uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
            channel(from & 0xffu, to & 0xffu);
 }
 
-bool inside_rounded_rect(float pixel_x, float pixel_y, Rect rect, float radius) {
-    radius = std::clamp(radius, 0.0F, std::min(rect.width, rect.height) * 0.5F);
-    if (radius <= 0.0F)
-        return pixel_x >= rect.x && pixel_y >= rect.y && pixel_x < rect.x + rect.width &&
-               pixel_y < rect.y + rect.height;
-    const float nearest_x = std::clamp(pixel_x, rect.x + radius, rect.x + rect.width - radius);
-    const float nearest_y = std::clamp(pixel_y, rect.y + radius, rect.y + rect.height - radius);
-    const float dx = pixel_x - nearest_x;
-    const float dy = pixel_y - nearest_y;
-    return dx * dx + dy * dy <= radius * radius;
-}
-
-bool inside_skew_fill(float pixel_x, float pixel_y, Rect rect, float ratio, float skew) {
-    const float clamped_ratio = std::clamp(ratio, 0.0F, 1.0F);
-    if (clamped_ratio <= 0.0F)
+// Return the visible vertical interval at one x sample.  This is the analytic
+// intersection of the bar's rounded outer silhouette and its slanted leading
+// edge.  Painting a bounded set of adjacent strips keeps the HP ramp in the
+// shared primitive stream: recording contexts store commands and GPU contexts
+// issue D2D draws directly, with no widget-sized CPU bitmap or raster lock.
+bool visible_vertical_span(float sample_x, float left, float top, float width, float height,
+                           float ratio, float radius, float skew, float* out_top,
+                           float* out_bottom) noexcept {
+    if (out_top == nullptr || out_bottom == nullptr || ratio <= 0.0F)
         return false;
-    const float fill_end = rect.x + rect.width * clamped_ratio;
-    const float normalized_y =
-        rect.height <= 0.0F ? 0.0F : std::clamp((pixel_y - rect.y) / rect.height, 0.0F, 1.0F);
-    const float effective_skew = std::min(std::max(0.0F, skew), rect.width * clamped_ratio);
-    const float front = fill_end - effective_skew * (1.0F - normalized_y);
-    return pixel_x >= rect.x && pixel_x < front;
+
+    const float right = left + width;
+    const float bottom = top + height;
+    const float fill_end = left + width * ratio;
+    if (sample_x < left || sample_x >= fill_end)
+        return false;
+
+    float visible_top = top;
+    float visible_bottom = bottom;
+    if (radius > 0.0F && (sample_x < left + radius || sample_x > right - radius)) {
+        const float center_x = sample_x < left + radius ? left + radius : right - radius;
+        const float dx = std::clamp(sample_x - center_x, -radius, radius);
+        const float dy = std::sqrt(std::max(0.0F, radius * radius - dx * dx));
+        visible_top = std::max(visible_top, top + radius - dy);
+        visible_bottom = std::min(visible_bottom, bottom - radius + dy);
+    }
+
+    const float effective_skew = std::min(std::max(0.0F, skew), width * ratio);
+    if (effective_skew > 0.0F) {
+        // sample_x < fill_end - skew * (1 - normalized_y)
+        const float normalized_threshold =
+            (sample_x - (fill_end - effective_skew)) / effective_skew;
+        visible_top = std::max(visible_top, top + height * normalized_threshold);
+    }
+    *out_top = std::clamp(visible_top, top, bottom);
+    *out_bottom = std::clamp(visible_bottom, top, bottom);
+    return *out_bottom > *out_top;
 }
 
 } // namespace
@@ -64,49 +74,56 @@ sao_status_t sao::ui::detail::paint_hp_bar(sao_ui_paint_ctx_handle_t context, in
                                            float trail_ratio, uint32_t low_argb, uint32_t mid_argb,
                                            uint32_t high_argb, uint32_t trail_argb,
                                            int32_t radius_px, int32_t leading_skew_px) noexcept {
-    if (context == nullptr || context->raster == nullptr || width <= 0 || height <= 0 ||
-        !std::isfinite(fill_ratio) || !std::isfinite(trail_ratio) || radius_px < 0) {
+    if (context == nullptr || width <= 0 || height <= 0 || !std::isfinite(fill_ratio) ||
+        !std::isfinite(trail_ratio) || radius_px < 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        std::scoped_lock lock(context->raster->mutex);
-        const Rect bounds{static_cast<float>(x), static_cast<float>(y), static_cast<float>(width),
-                          static_cast<float>(height)};
-        const Rect draw = intersect(bounds, clip_bounds(*context));
-        if (!valid_rect(draw.width, draw.height))
-            return SAO_STATUS_OK;
         const float fill = std::clamp(fill_ratio, 0.0F, 1.0F);
         const float trail = std::clamp(std::max(fill, trail_ratio), 0.0F, 1.0F);
-        const float radius = static_cast<float>(radius_px);
+        const float left = static_cast<float>(x);
+        const float top = static_cast<float>(y);
+        const float bar_width = static_cast<float>(width);
+        const float bar_height = static_cast<float>(height);
+        const float radius =
+            std::clamp(static_cast<float>(radius_px), 0.0F, std::min(bar_width, bar_height) * 0.5F);
         const float skew = static_cast<float>(std::max(0, leading_skew_px));
-        const BgraPixel trail_color =
-            premultiply(apply_opacity(trail_argb, current_opacity(*context)));
-        const int32_t left = static_cast<int32_t>(std::floor(draw.x));
-        const int32_t top = static_cast<int32_t>(std::floor(draw.y));
-        const int32_t right = static_cast<int32_t>(std::ceil(draw.x + draw.width));
-        const int32_t bottom = static_cast<int32_t>(std::ceil(draw.y + draw.height));
-        for (int32_t py = top; py < bottom; ++py) {
-            for (int32_t px = left; px < right; ++px) {
-                const float pixel_x = static_cast<float>(px) + 0.5F;
-                const float pixel_y = static_cast<float>(py) + 0.5F;
-                if (!inside_rounded_rect(pixel_x, pixel_y, bounds, radius))
+
+        // One strip per pixel for ordinary controls, capped for abnormally wide
+        // bars so malformed/SDK content cannot explode the immutable list.
+        constexpr int32_t kMaxStrips = 512;
+        const int32_t strip_count = std::max(1, std::min(width, kMaxStrips));
+        const float strip_width = bar_width / static_cast<float>(strip_count);
+        const auto paint_ratio = [&](float ratio, bool ramp, uint32_t solid) -> sao_status_t {
+            if (ratio <= 0.0F || (!ramp && (solid & 0xff000000U) == 0U))
+                return SAO_STATUS_OK;
+            for (int32_t strip = 0; strip < strip_count; ++strip) {
+                const float strip_left = left + static_cast<float>(strip) * strip_width;
+                const float strip_right = left + static_cast<float>(strip + 1) * strip_width;
+                const float sample_x = (strip_left + strip_right) * 0.5F;
+                float visible_top = 0.0F;
+                float visible_bottom = 0.0F;
+                if (!visible_vertical_span(sample_x, left, top, bar_width, bar_height, ratio,
+                                           radius, skew, &visible_top, &visible_bottom)) {
                     continue;
-                const bool in_fill = inside_skew_fill(pixel_x, pixel_y, bounds, fill, skew);
-                const bool in_trail = inside_skew_fill(pixel_x, pixel_y, bounds, trail, skew);
-                if (!in_fill && in_trail && trail_color.a != 0u) {
-                    blend_pixel(*context->raster, px, py, trail_color);
                 }
-                if (!in_fill)
-                    continue;
-                const float gradient_ratio =
-                    std::clamp((pixel_x - bounds.x) / bounds.width, 0.0F, 1.0F);
                 const uint32_t color =
-                    hp_bar_ramp_color(low_argb, mid_argb, high_argb, gradient_ratio);
-                blend_pixel(*context->raster, px, py,
-                            premultiply(apply_opacity(color, current_opacity(*context))));
+                    ramp ? hp_bar_ramp_color(low_argb, mid_argb, high_argb,
+                                             std::clamp((sample_x - left) / bar_width, 0.0F, 1.0F))
+                         : solid;
+                const sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                    context, strip_left, visible_top, strip_right - strip_left,
+                    visible_bottom - visible_top, color);
+                if (status != SAO_STATUS_OK)
+                    return status;
             }
-        }
-        return SAO_STATUS_OK;
+            return SAO_STATUS_OK;
+        };
+
+        sao_status_t status = paint_ratio(trail, false, trail_argb);
+        if (status == SAO_STATUS_OK)
+            status = paint_ratio(fill, true, 0U);
+        return status;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

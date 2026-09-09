@@ -1,16 +1,17 @@
 #include "settings_config_panel.h"
 #include "sao/launcher/user_guide_webview.h"
 
+#include "sao/ui/sound.h"
 #include "settings_owner_internal.h"
 #include "settings_profiles.h"
 #include "settings_theme_internal.h"
-#include "sao/ui/sound.h"
 
-#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) || defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) ||                                         \
+    defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #define SAO_SETTINGS_PANEL_UI 1
+#include "sao/ui/dialog.h"
 #include "sao/ui/panel.h"
 #include "sao/ui/panel_sdk.h"
-#include "sao/ui/dialog.h"
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #endif
@@ -137,15 +138,15 @@ std::string wide_to_utf8(const std::wstring& value) {
 #if defined(_WIN32)
     if (value.empty())
         return {};
-    const int required = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                                               static_cast<int>(value.size()), nullptr, 0,
-                                               nullptr, nullptr);
+    const int required =
+        ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                              static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     if (required <= 0)
         return {};
     std::string result(static_cast<std::size_t>(required), '\0');
     if (::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                              static_cast<int>(value.size()), result.data(), required,
-                              nullptr, nullptr) != required)
+                              static_cast<int>(value.size()), result.data(), required, nullptr,
+                              nullptr) != required)
         return {};
     return result;
 #else
@@ -154,8 +155,10 @@ std::string wide_to_utf8(const std::wstring& value) {
 }
 
 Json text_node(std::string text, std::string_view style = "value", int height = 24) {
-    return Json{{"type", "text"}, {"text", bounded(std::move(text), 4096U)},
-                {"style", style}, {"height", height}};
+    return Json{{"type", "text"},
+                {"text", bounded(std::move(text), 4096U)},
+                {"style", style},
+                {"height", height}};
 }
 
 Json badge_node(std::string text, std::string_view style = "muted") {
@@ -167,8 +170,12 @@ Json badge_node(std::string text, std::string_view style = "muted") {
 
 Json button_node(std::string id, std::string label, std::string action, Json payload,
                  std::string_view style = "default", bool active = false, bool disabled = false) {
-    Json node{{"type", "button"}, {"id", std::move(id)}, {"label", std::move(label)},
-              {"action", std::move(action)}, {"style", style}, {"active", active},
+    Json node{{"type", "button"},
+              {"id", std::move(id)},
+              {"label", std::move(label)},
+              {"action", std::move(action)},
+              {"style", style},
+              {"active", active},
               {"height", 30}};
     if (!payload.empty())
         node["payload"] = std::move(payload);
@@ -182,7 +189,9 @@ Json row_node(Json children) {
 }
 
 Json section_node(std::string title, Json children, std::string_view accent = "cyan") {
-    return Json{{"type", "section"}, {"title", std::move(title)}, {"accent", accent},
+    return Json{{"type", "section"},
+                {"title", std::move(title)},
+                {"accent", accent},
                 {"children", std::move(children)}};
 }
 
@@ -230,7 +239,8 @@ int section_index(std::string_view key, const Json& value) {
 
 std::string summary(const Json& value) {
     if (value.is_string())
-        return "\"" + bounded(value.get<std::string>(), 240U) + "\" — configure in the settings file.";
+        return "\"" + bounded(value.get<std::string>(), 240U) +
+               "\" — configure in the settings file.";
     if (value.is_object())
         return "object (" + std::to_string(value.size()) +
                " keys) — configure in the settings file or a dedicated panel.";
@@ -288,8 +298,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
         overview.push_back(text_node("Path: " + std::string(path), "mono", 24));
 
     settings_theme::PanelTheme theme = settings_theme::PanelTheme::light;
-    if (const auto panel_themes = snapshot.find("panel_themes"); panel_themes != snapshot.end() &&
-        panel_themes->is_object()) {
+    if (const auto panel_themes = snapshot.find("panel_themes");
+        panel_themes != snapshot.end() && panel_themes->is_object()) {
         const auto act = panel_themes->find("act");
         if (act != panel_themes->end() && act->is_string())
             (void)settings_theme::parse_panel_theme(act->get_ref<const std::string&>(), theme);
@@ -333,7 +343,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
                           {"value", std::clamp(value.get<double>() / 100.0, 0.0, 1.0)}}});
                 section_children[index].push_back(row_node(std::move(controls)));
             } else {
-                section_children[index].push_back(text_node(key + ": " + summary(value), "muted", 32));
+                section_children[index].push_back(
+                    text_node(key + ": " + summary(value), "muted", 32));
             }
         }
     }
@@ -421,8 +432,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
         button_node("settings.defaults", "恢复默认", "settings.defaults", Json::object(), "ghost"));
     actions.push_back(button_node("settings.refresh", "Refresh", kSettingsActionRefresh,
                                   Json::object(), "ghost"));
-    actions.push_back(button_node("settings.close", "Close", kSettingsActionClose,
-                                  Json::object(), "ghost"));
+    actions.push_back(
+        button_node("settings.close", "Close", kSettingsActionClose, Json::object(), "ghost"));
     Json footer = row_node(std::move(actions));
     footer["id"] = "settings-footer";
     footer["dock"] = "bottom";
@@ -543,7 +554,10 @@ class OperationGuard final {
         std::lock_guard lock(state().mutex);
         --state().operations;
     }
-    explicit operator bool() const noexcept { return acquired_; }
+    explicit operator bool() const noexcept {
+        return acquired_;
+    }
+
   private:
     bool acquired_{};
 };
@@ -569,8 +583,12 @@ void SAO_UI_CALL panel_action_callback(const char* action, const std::uint8_t* b
                                        std::size_t length, void*) noexcept {
     if (action == nullptr || (bytes == nullptr && length != 0U) || !begin_callback())
         return;
-    const std::string_view payload(bytes == nullptr ? "" : reinterpret_cast<const char*>(bytes), length);
-    try { (void)dispatch_action_impl(action, payload); } catch (...) {}
+    const std::string_view payload(bytes == nullptr ? "" : reinterpret_cast<const char*>(bytes),
+                                   length);
+    try {
+        (void)dispatch_action_impl(action, payload);
+    } catch (...) {
+    }
     end_callback();
 }
 
@@ -682,15 +700,22 @@ sao_status_t ensure_panel() noexcept {
 }
 #endif
 
-sao_status_t owner_snapshot(Json& out, settings_owner::SettingsOwner::Lease& owner_lease, bool& dirty, std::string& path) noexcept {
+sao_status_t owner_snapshot(Json& out, settings_owner::SettingsOwner::Lease& owner_lease,
+                            bool& dirty, std::string& path) noexcept {
     settings_owner::SettingsOwner* owner = nullptr;
-    { std::lock_guard lock(state().mutex); owner = state().owner; }
-    if (owner == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
+    {
+        std::lock_guard lock(state().mutex);
+        owner = state().owner;
+    }
+    if (owner == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
     owner_lease = owner->acquire_lease();
-    if (!owner_lease) return SAO_UI_PANEL_STATUS_ERR_BUSY;
+    if (!owner_lease)
+        return SAO_UI_PANEL_STATUS_ERR_BUSY;
     Json owner_document;
     const sao_status_t status = owner_lease->snapshot(owner_document);
-    if (status != SAO_STATUS_OK) return status;
+    if (status != SAO_STATUS_OK)
+        return status;
     {
         std::lock_guard lock(state().mutex);
         if (!state().draft_initialized || !state().draft_dirty) {
@@ -703,7 +728,8 @@ sao_status_t owner_snapshot(Json& out, settings_owner::SettingsOwner::Lease& own
         dirty = state().draft_dirty;
     }
     std::wstring wide_path;
-    if (owner_lease->path(wide_path) == SAO_STATUS_OK) path = wide_to_utf8(wide_path);
+    if (owner_lease->path(wide_path) == SAO_STATUS_OK)
+        path = wide_to_utf8(wide_path);
     return SAO_STATUS_OK;
 }
 void sync_draft_snapshot(const settings_owner::SettingsOwner::Lease& owner_lease) noexcept {
@@ -727,7 +753,6 @@ sao_status_t update_status(sao_status_t status, std::string text) noexcept {
     }
 }
 
-
 sao_status_t publish_after_draft_mutation(sao_status_t status, std::string text) noexcept {
     update_status(status, std::move(text));
 #if defined(SAO_SETTINGS_PANEL_UI)
@@ -748,8 +773,8 @@ sao_status_t restore_runtime_theme(const Json& snapshot) noexcept {
         if (active != themes->end() && active->is_string())
             (void)settings_theme::parse_panel_theme(active->get_ref<const std::string&>(), theme);
     }
-    return sao_ui_theme_set_active_id(theme == settings_theme::PanelTheme::light
-                                          ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
+    return sao_ui_theme_set_active_id(
+        theme == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
 #else
     (void)snapshot;
     return SAO_STATUS_OK;
@@ -791,8 +816,7 @@ sao_status_t publish() noexcept {
     settings_owner::SettingsOwner::Lease owner_lease;
     bool dirty = false;
     std::string path;
-    const sao_status_t snapshot_status =
-        owner_snapshot(snapshot, owner_lease, dirty, path);
+    const sao_status_t snapshot_status = owner_snapshot(snapshot, owner_lease, dirty, path);
     std::string status;
     std::string profile_preview;
     std::vector<std::string> profile_names;
@@ -816,7 +840,8 @@ sao_status_t publish() noexcept {
     std::string spec = make_spec(snapshot, status, status_code, dirty, path, profile_preview,
                                  profile_names, selected_section);
     if (spec.size() > kMaximumSpecBytes)
-        return update_status(SAO_STATUS_ERR_BUFFER_TOO_SMALL, "Settings panel exceeded its size limit");
+        return update_status(SAO_STATUS_ERR_BUFFER_TOO_SMALL,
+                             "Settings panel exceeded its size limit");
     sao_ui_panel_body_handle_t body = nullptr;
     {
         std::lock_guard lock(state().mutex);
@@ -844,7 +869,6 @@ sao_status_t publish() noexcept {
 }
 #endif
 
-
 sao_status_t profile_document(const std::string& name, Json& out) noexcept {
     std::wstring path;
     const sao_status_t path_status = profile_path(name, path);
@@ -865,10 +889,14 @@ sao_status_t profile_document(const std::string& name, Json& out) noexcept {
 
 std::string profile_failure_text(sao_status_t status, std::string_view operation) {
     switch (status) {
-    case SAO_STATUS_ERR_NOT_FOUND: return std::string(operation) + ": profile does not exist";
-    case SAO_STATUS_ERR_INVALID_ARGUMENT: return std::string(operation) + ": profile parse failed";
-    case SAO_STATUS_ERR_ACCESS_DENIED: return std::string(operation) + ": permission denied";
-    default: return std::string(operation) + ": save failed";
+    case SAO_STATUS_ERR_NOT_FOUND:
+        return std::string(operation) + ": profile does not exist";
+    case SAO_STATUS_ERR_INVALID_ARGUMENT:
+        return std::string(operation) + ": profile parse failed";
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return std::string(operation) + ": permission denied";
+    default:
+        return std::string(operation) + ": save failed";
     }
 }
 
@@ -880,7 +908,7 @@ struct ProfileDialogContext {
 };
 
 void SAO_UI_CALL profile_dialog_callback(SaoUiDialogButton pressed, const char* input,
-                                          std::size_t length, void* user_data) noexcept {
+                                         std::size_t length, void* user_data) noexcept {
     std::unique_ptr<ProfileDialogContext> context(static_cast<ProfileDialogContext*>(user_data));
     if (context == nullptr)
         return;
@@ -950,8 +978,7 @@ sao_status_t show_profile_delete_dialog(std::string name) noexcept {
     context->name = std::move(name);
     const std::string message = "Delete profile " + context->name + "?";
     const sao_status_t status = sao_ui_dialog_show_ask(
-        compositor, nullptr, "Delete profile", message.c_str(),
-        &profile_dialog_callback, context);
+        compositor, nullptr, "Delete profile", message.c_str(), &profile_dialog_callback, context);
     if (status != SAO_STATUS_OK)
         delete context;
     return status;
@@ -1023,7 +1050,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().committed_snapshot = state().draft_snapshot;
             state().draft_dirty = false;
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Saved just now" : "Save failed");
+        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Saved just now"
+                                                                            : "Save failed");
     }
 
     if (action == "settings.cancel") {
@@ -1042,7 +1070,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             (void)restore_runtime_theme(committed);
         if (status == SAO_STATUS_OK)
             (void)restore_runtime_sound(committed);
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled" : "Cancel failed");
+        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled"
+                                                                            : "Cancel failed");
     }
 
     if (action == "settings.defaults") {
@@ -1054,7 +1083,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         }
         (void)restore_runtime_theme(Json::object());
         (void)restore_runtime_sound(Json::object());
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Defaults restored in draft" : "Restore defaults failed");
+        return publish_after_draft_mutation(status, status == SAO_STATUS_OK
+                                                        ? "Defaults restored in draft"
+                                                        : "Restore defaults failed");
     }
 
     if (action == kSettingsActionToggle) {
@@ -1083,7 +1114,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                     (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
             }
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
+        return publish_after_draft_mutation(
+            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
     }
 
     if (action == "settings.volume.set") {
@@ -1115,15 +1147,19 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         std::string key;
         const auto key_value = data.find("key");
         const auto delta = data.find("delta");
-        if (key_value == data.end() || !key_value->is_string() || !is_numeric_control(key_value->get<std::string>()) ||
-            delta == data.end() || !delta->is_number())
-            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
+        if (key_value == data.end() || !key_value->is_string() ||
+            !is_numeric_control(key_value->get<std::string>()) || delta == data.end() ||
+            !delta->is_number())
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT,
+                                                "Invalid numeric setting");
         key = key_value->get<std::string>();
         const auto current = snapshot.find(key);
         if (current != snapshot.end() && !current->is_number())
-            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT,
+                                                "Invalid numeric setting");
         if (current == snapshot.end() && key != "sound_volume")
-            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid numeric setting");
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT,
+                                                "Invalid numeric setting");
         const double current_value = current == snapshot.end() ? 70.0 : current->get<double>();
         const double next = std::clamp(current_value + delta->get<double>(), 0.0, 100.0);
         status = owner_lease->set_value(key, next);
@@ -1137,32 +1173,37 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 (void)sao_ui_sound_set_volume(static_cast<int32_t>(next));
             sao::launcher::refreshUserGuideSoundPolicy();
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
+        return publish_after_draft_mutation(
+            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
     }
 
     if (action == kSettingsActionTheme || action == "settings.theme.select") {
         std::string requested;
         if (!payload_string(data, action == "settings.theme.select" ? "value" : "theme", requested))
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid theme");
-        const settings_theme::PanelTheme next = requested == "light" ? settings_theme::PanelTheme::light
-                                                    : requested == "dark" ? settings_theme::PanelTheme::dark
-                                                                          : static_cast<settings_theme::PanelTheme>(255);
+        const settings_theme::PanelTheme next =
+            requested == "light"  ? settings_theme::PanelTheme::light
+            : requested == "dark" ? settings_theme::PanelTheme::dark
+                                  : static_cast<settings_theme::PanelTheme>(255);
         if (next != settings_theme::PanelTheme::light && next != settings_theme::PanelTheme::dark)
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid theme");
         Json themes = snapshot.value("panel_themes", Json::object());
         if (!themes.is_object())
             themes = Json::object();
         const char* value = next == settings_theme::PanelTheme::light ? "light" : "dark";
-        for (const std::string_view key : {"dps", "hp", "bosshp", "skillfx", "alert", "act", "buffmon"})
+        for (const std::string_view key :
+             {"dps", "hp", "bosshp", "skillfx", "alert", "act", "buffmon"})
             themes[std::string(key)] = value;
         status = owner_lease->set_value("panel_themes", std::move(themes));
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
-            (void)sao_ui_theme_set_active_id(next == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
+            (void)sao_ui_theme_set_active_id(
+                next == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
             std::lock_guard lock(state().mutex);
             state().draft_dirty = true;
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Draft changes pending" : "Theme change failed");
+        return publish_after_draft_mutation(
+            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Theme change failed");
     }
 
     if (action == "settings.profile.save_as") {
@@ -1177,14 +1218,16 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         const bool saved = save_profile(std::string(kQuickBackupProfileName));
         refresh_profile_names();
         status = saved ? SAO_STATUS_OK : SAO_STATUS_ERR_OS_CALL_FAILED;
-        return publish_after_draft_mutation(status, saved ? "Profile saved" : "Profile save failed");
+        return publish_after_draft_mutation(status,
+                                            saved ? "Profile saved" : "Profile save failed");
     }
 
     if (action == "settings.profile.load_preview" || action == kSettingsActionProfileLoad ||
         action == kSettingsActionProfileDelete) {
         std::string name;
         if (!payload_string(data, "name", name))
-            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid profile name");
+            return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT,
+                                                "Invalid profile name");
         if (action == "settings.profile.load_preview") {
             Json profile;
             status = profile_document(name, profile);
@@ -1218,7 +1261,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         }
         if (status == SAO_STATUS_OK)
             (void)restore_runtime_sound(profile_copy);
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Profile loaded into draft" : profile_failure_text(status, "Load profile"));
+        return publish_after_draft_mutation(
+            status, status == SAO_STATUS_OK ? "Profile loaded into draft"
+                                            : profile_failure_text(status, "Load profile"));
     }
     return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_FOUND, "Unknown settings action");
 }
@@ -1253,6 +1298,7 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
             state().draft_dirty = false;
             state().profile_preview.clear();
             state().profile_names.clear();
+            state().selected_section = 0U;
             state().accepting = next != nullptr;
         }
         if (next == nullptr)
@@ -1329,7 +1375,9 @@ void open_config_panel() {
     (void)open_config_panel_status();
 }
 #else
-sao_status_t open_config_panel_status() noexcept { return SAO_STATUS_ERR_CAPABILITY_MISSING; }
+sao_status_t open_config_panel_status() noexcept {
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+}
 void open_config_panel() {}
 #endif
 
@@ -1513,8 +1561,10 @@ void fail_next_handler_restore_for_testing(sao_status_t action_status,
 sao_status_t snapshot_for_testing(std::string& out_json) noexcept {
     try {
         std::lock_guard lock(state().mutex);
-        Json result{{"panel_id", kSettingsPanelId}, {"visible", state().visible},
-                    {"last_status", state().last_status}, {"status", state().status_text},
+        Json result{{"panel_id", kSettingsPanelId},
+                    {"visible", state().visible},
+                    {"last_status", state().last_status},
+                    {"status", state().status_text},
                     {"spec", state().rendered_spec}};
         out_json = result.dump();
         return SAO_STATUS_OK;

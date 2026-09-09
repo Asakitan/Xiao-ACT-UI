@@ -260,11 +260,64 @@ add_executable(SaoAuto WIN32
     ${SAO_LAUNCHER_SOURCES}
     ${SAO_LAUNCHER_RESOURCES}
 )
-if(WIN32 AND TARGET sao::ui AND TARGET sao::plugin_ai_editor)
-    add_executable(sao_ui_preview WIN32 EXCLUDE_FROM_ALL preview/production_ui_host.cpp)
+if(WIN32 AND TARGET sao::ui AND TARGET sao::sdk AND TARGET sao::plugin_ai_editor AND
+   TARGET sao::rt_io AND TARGET sao::server::freetier::workshop_client)
+    # The preview is a production-compositor developer shell.  Compile the
+    # launcher owners into it so their real factories can run without starting
+    # the full launcher pipeline; an AI backend remains an explicit CLI opt-in.
+    add_executable(sao_ui_preview WIN32 EXCLUDE_FROM_ALL
+        preview/production_ui_host.cpp
+        src/settings_codec.cpp
+        src/settings_json_internal.cpp
+        src/settings_owner.cpp
+        src/settings_theme_internal.cpp
+        src/settings_profiles.cpp
+        src/settings_config_panel.cpp
+        src/hotkey_manager.cpp
+        src/hotkey_config_panel.cpp
+        src/user_guide_webview.cpp
+        src/user_menu.cpp
+        src/args.cpp
+        src/single_instance.cpp
+        src/working_dir.cpp
+        src/plugin_manager_panel_internal.cpp
+        src/process_selector_panel_internal.cpp
+        src/workshop_panel_internal.cpp
+    )
     target_compile_features(sao_ui_preview PRIVATE cxx_std_20)
-    target_compile_definitions(sao_ui_preview PRIVATE UNICODE _UNICODE)
-    target_link_libraries(sao_ui_preview PRIVATE sao::ui sao::plugin_ai_editor user32 gdi32 ole32 shell32)
+    target_compile_definitions(sao_ui_preview PRIVATE
+        UNICODE
+        _UNICODE
+        SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER=1
+        SAO_LAUNCHER_SHARED_PANEL_COMPOSITION=1
+    )
+    target_include_directories(sao_ui_preview PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/platform/core/include
+        ${CMAKE_SOURCE_DIR}/platform/sdk/include
+    )
+    target_link_libraries(sao_ui_preview PRIVATE
+        nlohmann_json::nlohmann_json
+        sao::ui
+        sao::sdk
+        sao::plugin_ai_editor
+        sao::rt_io
+        sao::server::freetier::workshop_client
+        user32
+        gdi32
+        ole32
+        shell32
+        advapi32
+        crypt32
+        bcrypt
+        shlwapi
+    )
+    if(TARGET sao::license::sdk AND TARGET sao::license::client)
+        target_sources(sao_ui_preview PRIVATE src/license_panel_internal.cpp)
+        target_link_libraries(sao_ui_preview PRIVATE sao::license::sdk sao::license::client)
+        target_compile_definitions(sao_ui_preview PRIVATE SAO_LAUNCHER_LICENSE_PANEL=1)
+    endif()
     if(TARGET SaoAiEditor)
         add_dependencies(sao_ui_preview SaoAiEditor)
     endif()
@@ -314,6 +367,11 @@ if (_SAO_GUIDE_WEBVIEW2_ROOT)
         "${_SAO_GUIDE_WEBVIEW2_ROOT}/include")
     target_compile_definitions(SaoAuto PRIVATE
         SAO_LAUNCHER_HAS_WEBVIEW2=1)
+    if(TARGET sao_ui_preview)
+        target_include_directories(sao_ui_preview PRIVATE
+            "${_SAO_GUIDE_WEBVIEW2_ROOT}/include")
+        target_compile_definitions(sao_ui_preview PRIVATE SAO_LAUNCHER_HAS_WEBVIEW2=1)
+    endif()
 endif()
 target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi)
 if (TARGET sao::core)

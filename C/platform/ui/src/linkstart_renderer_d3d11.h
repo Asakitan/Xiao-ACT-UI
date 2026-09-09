@@ -14,8 +14,19 @@ struct FrameState {
     float phase_progress{};
     float phase{};
     float connected_alpha{};
+    float startup_prelude{};
+    float p1_end{};
+    float p2_start{};
+    float p2_end{};
+    float p3_start{};
+    float p3_end{};
+    float p4_start{};
+    float p4_hold_end{};
+    float p4_fade_end{};
+    float total_duration{};
     uint32_t seed{};
     bool reduced_motion{};
+    bool scene_timeline{};
 };
 
 sao_status_t create(Renderer** out_renderer) noexcept;

@@ -138,12 +138,40 @@
       "source": "generated:classic-sao-geometry",
       "license": "CC0-1.0",
       "sha256": "01202341e6b99e785dc8aa54186816e1e1f4866c6fccfd25db63199f074f6c5d"
+    },
+    {
+      "id": "chat",
+      "file": "chat.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "6e5f3a84b36d6fc3801b2251cbe4fbf5636a46f3a433339038f171a3b687ed1e"
+    },
+    {
+      "id": "keyboard",
+      "file": "keyboard.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "4cede4a365defc181315de78d709401be8af2247152a143df00fb7d5da7aaedd"
+    },
+    {
+      "id": "workshop",
+      "file": "workshop.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "a33ea231f8d4ee7dc5bbc82a920ff8d837e2c80e482d67a6fbf9ab3fed3d3021"
+    },
+    {
+      "id": "process",
+      "file": "process.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "1d2108814d6861af1ddd103300a5525fe4b35e1ae680e835f2ce957d908bd567"
     }
   ],
   "native_helper": {
     "file": "classic_icons.h",
     "source": "generated:classic-sao-geometry",
     "license": "CC0-1.0",
-    "sha256": "9c836f48e095fbd89949ee5ab738f3f2c24aba91dd83651a373c4455158f9ecf"
+    "sha256": "92e40d65ef6bfb6c2c556aa5d92ec36a119b5e93e072537c1fb274fb656b09db"
   }
 }

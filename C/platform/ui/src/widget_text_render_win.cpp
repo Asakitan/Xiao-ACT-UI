@@ -10,8 +10,8 @@
 #pragma push_macro("NTDDI_VERSION")
 #undef NTDDI_VERSION
 #define NTDDI_VERSION 0x0A000003
-#include "widget_raster_internal.h"
 #include "classic_text_roles.h"
+#include "widget_raster_internal.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -110,14 +110,13 @@ struct DwriteBackend {
             b.owns_com = b.com_result == S_OK || b.com_result == S_FALSE;
             if (FAILED(b.com_result) && b.com_result != RPC_E_CHANGED_MODE)
                 return b;
-            if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                                        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&b.wic))))
+            if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                        IID_PPV_ARGS(&b.wic))))
                 return b;
-            if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED,
-                                         __uuidof(ID2D1Factory), &b.d2d)))
+            if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, __uuidof(ID2D1Factory),
+                                         &b.d2d)))
                 return b;
-            if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                                           __uuidof(IDWriteFactory),
+            if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                            reinterpret_cast<IUnknown**>(b.dwrite.GetAddressOf()))))
                 return b;
             try {
@@ -138,13 +137,12 @@ bool utf8_to_utf16(const char* text, std::wstring* output) noexcept {
         return false;
     // MB_ERR_INVALID_CHARS fails the conversion for malformed UTF-8 so the
     // caller can use the procedural fallback instead of rendering garbage.
-    const int length =
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
     if (length <= 0)
         return false;
     std::wstring converted(static_cast<size_t>(length), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1,
-                            converted.data(), length) != length)
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, converted.data(), length) !=
+        length)
         return false;
     converted.resize(static_cast<size_t>(length - 1));
     *output = std::move(converted);
@@ -380,10 +378,9 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
             return false;
 
         ComPtr<IDWriteTextLayout> layout;
-        if (FAILED(backend.dwrite->CreateTextLayout(
-                text.data(), static_cast<UINT32>(text.size()), format.Get(),
-                std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                &layout)))
+        if (FAILED(backend.dwrite->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()),
+                                                    format.Get(), std::numeric_limits<float>::max(),
+                                                    std::numeric_limits<float>::max(), &layout)))
             return false;
 
         DWRITE_TEXT_METRICS metrics{};
@@ -392,8 +389,8 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
             return false;
         const double width_value = std::ceil(static_cast<double>(metrics.width));
         const double height_value = std::ceil(static_cast<double>(metrics.height));
-        if (!std::isfinite(width_value) || !std::isfinite(height_value) ||
-            width_value > 4096.0 || height_value > 4096.0)
+        if (!std::isfinite(width_value) || !std::isfinite(height_value) || width_value > 4096.0 ||
+            height_value > 4096.0)
             return false;
         const uint32_t width = std::max(1U, static_cast<uint32_t>(width_value));
         const uint32_t height = std::max(1U, static_cast<uint32_t>(height_value));
@@ -401,9 +398,8 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
             return false;
 
         ComPtr<IWICBitmap> bitmap;
-        if (FAILED(backend.wic->CreateBitmap(
-                width, height, GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapCacheOnDemand, &bitmap)))
+        if (FAILED(backend.wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
+                                             WICBitmapCacheOnDemand, &bitmap)))
             return false;
 
         D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
@@ -426,15 +422,14 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
 
         const uint64_t row_bytes = static_cast<uint64_t>(width) * 4u;
         if (row_bytes > std::numeric_limits<UINT>::max() ||
-            static_cast<uint64_t>(height) >
-                std::numeric_limits<size_t>::max() / row_bytes)
+            static_cast<uint64_t>(height) > std::numeric_limits<size_t>::max() / row_bytes)
             return false;
         const size_t total_bytes = static_cast<size_t>(row_bytes) * height;
-        if (total_bytes > std::numeric_limits<UINT>::max()) return false;
+        if (total_bytes > std::numeric_limits<UINT>::max())
+            return false;
         const UINT stride = static_cast<UINT>(row_bytes);
         out_pixels->resize(total_bytes);
-        if (FAILED(bitmap->CopyPixels(nullptr, stride,
-                                      static_cast<UINT>(total_bytes),
+        if (FAILED(bitmap->CopyPixels(nullptr, stride, static_cast<UINT>(total_bytes),
                                       out_pixels->data())))
             return false;
         *out_w = width;
@@ -448,11 +443,40 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
 
 } // namespace
 
+bool prepare_gpu_text_dwrite(const char* text_utf8, float size_px, std::wstring* out_text,
+                             void** out_format) noexcept {
+    if (out_text == nullptr || out_format == nullptr)
+        return false;
+    out_text->clear();
+    *out_format = nullptr;
+    if (text_utf8 == nullptr || *text_utf8 == '\0' || !std::isfinite(size_px) || size_px <= 0.0F)
+        return false;
+    DwriteBackend& backend = DwriteBackend::instance();
+    if (!backend.ready() || !utf8_to_utf16(text_utf8, out_text) ||
+        out_text->size() > std::numeric_limits<UINT32>::max())
+        return false;
+    const ClassicTextStyle style = resolved_text_style(*out_text);
+    if (style.role == ClassicTextRole::Display) {
+        for (wchar_t& character : *out_text)
+            if (character >= L'a' && character <= L'z')
+                character -= L'a' - L'A';
+    }
+    IDWriteTextFormat* format = nullptr;
+    if (FAILED(create_text_format(backend, size_px, style, &format)))
+        return false;
+    if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP))) {
+        format->Release();
+        return false;
+    }
+    *out_format = format;
+    return true;
+}
+
 // Render true-font text into the shared raster.  Returns false when the
 // DirectWrite path is unavailable so the caller can use the procedural
 // fallback.  Honors clip rects and the opacity stack.
-bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
-                      const char* text_utf8, float size_px, uint32_t argb) noexcept {
+bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y, const char* text_utf8,
+                      float size_px, uint32_t argb) noexcept {
     if (context.raster == nullptr || text_utf8 == nullptr || *text_utf8 == '\0' ||
         !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(size_px) || size_px <= 0.0F)
         return false;
@@ -500,8 +524,8 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
     height = cached->height;
     const uint8_t* pixels = cached->pixels.data();
 
-    const Rect destination = intersect({x, y, static_cast<float>(width), static_cast<float>(height)},
-                                       clip_bounds(context));
+    const Rect destination = intersect(
+        {x, y, static_cast<float>(width), static_cast<float>(height)}, clip_bounds(context));
     if (!valid_rect(destination.width, destination.height))
         return true; // Fully clipped — nothing to do, but the render succeeded.
 
@@ -571,10 +595,9 @@ bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
         if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
             return false;
         ComPtr<IDWriteTextLayout> layout;
-        if (FAILED(backend.dwrite->CreateTextLayout(
-                wide.data(), static_cast<UINT32>(wide.size()), format.Get(),
-                std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                &layout)))
+        if (FAILED(backend.dwrite->CreateTextLayout(wide.data(), static_cast<UINT32>(wide.size()),
+                                                    format.Get(), std::numeric_limits<float>::max(),
+                                                    std::numeric_limits<float>::max(), &layout)))
             return false;
         DWRITE_TEXT_METRICS metrics{};
         if (FAILED(layout->GetMetrics(&metrics)) || !std::isfinite(metrics.width) ||

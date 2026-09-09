@@ -222,8 +222,10 @@ sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t
             const bool double_click = message == kLeftButtonDoubleClick ||
                                       message == kRightButtonDoubleClick ||
                                       message == kMiddleButtonDoubleClick;
-            const bool released = message == kLeftButtonUp || message == kRightButtonUp ||
-                                  message == kMiddleButtonUp;
+            const bool released =
+                message == kLeftButtonUp || message == kRightButtonUp || message == kMiddleButtonUp;
+            if (!double_click && !released && next.suppressed_button_up == button)
+                next.suppressed_button_up = -1;
             if (double_click) {
                 next.suppressed_button_up = button;
                 release_capture(false);
@@ -231,9 +233,8 @@ sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t
                 next.suppressed_button_up = -1;
                 release_capture(false);
             } else {
-                void* route_target = released && next.captured_layer != nullptr
-                                         ? next.captured_layer
-                                         : hit_layer;
+                void* route_target =
+                    released && next.captured_layer != nullptr ? next.captured_layer : hit_layer;
                 if (!released && route_target != nullptr) {
                     next.captured_layer = route_target;
                     next.captured_button = button;
@@ -241,8 +242,7 @@ sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t
                 if (route_target != nullptr &&
                     !append_action(&actions, &action_count,
                                    {LayerInputActionKind::button, route_target, hit_x, hit_y, 0.0F,
-                                    0.0F, button, released ? 0 : 1,
-                                    route_target != hit_layer})) {
+                                    0.0F, button, released ? 0 : 1, route_target != hit_layer})) {
                     return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
                 }
                 if (released) {

@@ -4,12 +4,13 @@
 #include "sao/ui/sao_ui_scriptable_canvas.h"
 #include "sao/ui/widget_kit.h"
 
+#include "classic_text_roles.h"
+#include "gpu_paint_internal.h"
+#include "native_text_edit.h"
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
 #include "widget_raster_internal.h"
 #include "widget_typed_internal.h"
-#include "native_text_edit.h"
-#include "classic_text_roles.h"
 
 #include <nlohmann/json.hpp>
 
@@ -110,6 +111,8 @@ constexpr uint64_t kMaxRasterPrimitivePixels = uint64_t{1} << 28U;
 constexpr uint64_t kMaxPolygonEdgeIterations = uint64_t{1} << 30U;
 constexpr uint64_t kMaxScanlineIterations = uint64_t{1} << 20U;
 constexpr long double kMaxExactIterationIndex = 9007199254740992.0L;
+constexpr size_t kMaxPaintStackDepth = 1024U;
+constexpr size_t kMaxLocalBgraBytes = size_t{64U} * 1024U * 1024U;
 
 struct FiniteRasterClip {
     double left{};
@@ -124,6 +127,10 @@ struct FiniteRasterClip {
 
 bool finite_rect_inputs(float x, float y, float width, float height) noexcept {
     return std::isfinite(x) && std::isfinite(y) && valid_rect(width, height);
+}
+
+bool has_paint_target(const sao_ui_paint_ctx_s* context) noexcept {
+    return context != nullptr && (context->raster != nullptr || context->gpu_state != nullptr);
 }
 
 bool finite_float_rect(float x, float y, float width, float height) noexcept {
@@ -173,8 +180,8 @@ bool clip_line_parameter(double p, double q, double* start, double* end) noexcep
     return true;
 }
 
-bool clip_line_to_rect(double* x1, double* y1, double* x2, double* y2,
-                       const FiniteRasterClip& clip, bool* out_visible) noexcept {
+bool clip_line_to_rect(double* x1, double* y1, double* x2, double* y2, const FiniteRasterClip& clip,
+                       bool* out_visible) noexcept {
     *out_visible = false;
     const double delta_x = *x2 - *x1;
     const double delta_y = *y2 - *y1;
@@ -273,9 +280,19 @@ extern "C" void SAO_UI_CALL sao_ui_widget_chart_family_destroy(sao_ui_widget_han
 extern "C" void SAO_UI_CALL sao_ui_widget_table_family_destroy(sao_ui_widget_handle_t handle);
 
 void fill_rounded_rect(sao_ui_paint_ctx_s& context, Rect rect, float radius, uint32_t argb) {
-    if (context.raster == nullptr || !valid_rect(rect.width, rect.height))
+    if (!finite_float_rect(rect.x, rect.y, rect.width, rect.height) || !std::isfinite(radius))
         return;
     radius = std::clamp(radius, 0.0F, std::min(rect.width, rect.height) * 0.5F);
+    if (context.gpu_state != nullptr && context.gpu_dispatch != nullptr &&
+        context.gpu_dispatch->fill_rounded_rect != nullptr) {
+        if (!context.gpu_dispatch->fill_rounded_rect(context.gpu_state, rect, radius, argb,
+                                                     current_opacity(context)) &&
+            context.backend_status == SAO_STATUS_OK)
+            context.backend_status = SAO_STATUS_ERR_UNKNOWN;
+        return;
+    }
+    if (context.raster == nullptr)
+        return;
     if (radius <= 0.0F) {
         fill_rect(context, rect, argb);
         return;
@@ -306,7 +323,17 @@ void fill_rounded_rect(sao_ui_paint_ctx_s& context, Rect rect, float radius, uin
 }
 
 void fill_ellipse(sao_ui_paint_ctx_s& context, Rect rect, uint32_t argb) {
-    if (context.raster == nullptr || !finite_rect_inputs(rect.x, rect.y, rect.width, rect.height))
+    if (!finite_float_rect(rect.x, rect.y, rect.width, rect.height))
+        return;
+    if (context.gpu_state != nullptr && context.gpu_dispatch != nullptr &&
+        context.gpu_dispatch->fill_ellipse != nullptr) {
+        if (!context.gpu_dispatch->fill_ellipse(context.gpu_state, rect, argb,
+                                                current_opacity(context)) &&
+            context.backend_status == SAO_STATUS_OK)
+            context.backend_status = SAO_STATUS_ERR_UNKNOWN;
+        return;
+    }
+    if (context.raster == nullptr)
         return;
     FiniteRasterClip clip{};
     if (!finite_raster_clip(context, &clip) || clip.empty())
@@ -336,10 +363,8 @@ void fill_ellipse(sao_ui_paint_ctx_s& context, Rect rect, uint32_t argb) {
     const BgraPixel color = premultiply(apply_opacity(argb, current_opacity(context)));
     for (int32_t y = top; y < bottom; ++y) {
         for (int32_t x = left; x < right; ++x) {
-            const float dx =
-                (static_cast<float>(x) + 0.5F - center_x_value) / radius_x_value;
-            const float dy =
-                (static_cast<float>(y) + 0.5F - center_y_value) / radius_y_value;
+            const float dx = (static_cast<float>(x) + 0.5F - center_x_value) / radius_x_value;
+            const float dy = (static_cast<float>(y) + 0.5F - center_y_value) / radius_y_value;
             if (dx * dx + dy * dy <= 1.0F)
                 blend_pixel(*context.raster, x, y, color);
         }
@@ -348,8 +373,21 @@ void fill_ellipse(sao_ui_paint_ctx_s& context, Rect rect, uint32_t argb) {
 
 bool stroke_line(sao_ui_paint_ctx_s& context, float x1, float y1, float x2, float y2, float width,
                  uint32_t argb) {
-    if (context.raster == nullptr || !std::isfinite(x1) || !std::isfinite(y1) ||
-        !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(width) || width <= 0.0F) {
+    if (context.raster == nullptr && context.gpu_state == nullptr)
+        return false;
+    if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) ||
+        !std::isfinite(width) || width <= 0.0F) {
+        return false;
+    }
+    if (context.gpu_state != nullptr && context.gpu_dispatch != nullptr &&
+        context.gpu_dispatch->stroke_line != nullptr) {
+        const bool ok = context.gpu_dispatch->stroke_line(context.gpu_state, x1, y1, x2, y2, width,
+                                                          argb, current_opacity(context));
+        if (!ok && context.backend_status == SAO_STATUS_OK)
+            context.backend_status = SAO_STATUS_ERR_UNKNOWN;
+        return ok;
+    }
+    if (context.raster == nullptr) {
         return false;
     }
     FiniteRasterClip clip{};
@@ -358,8 +396,7 @@ bool stroke_line(sao_ui_paint_ctx_s& context, float x1, float y1, float x2, floa
     if (clip.empty())
         return true;
     const double checked_diameter = static_cast<double>(width) * 1.41421356;
-    if (!std::isfinite(checked_diameter) ||
-        checked_diameter > std::numeric_limits<float>::max()) {
+    if (!std::isfinite(checked_diameter) || checked_diameter > std::numeric_limits<float>::max()) {
         return false;
     }
     const float diameter = width * 1.41421356F;
@@ -393,17 +430,16 @@ bool stroke_line(sao_ui_paint_ctx_s& context, float x1, float y1, float x2, floa
     const float delta_y = safe_y2 - safe_y1;
     if (!std::isfinite(delta_x) || !std::isfinite(delta_y))
         return false;
-    const double step_count =
-        std::ceil(std::max(std::fabs(static_cast<double>(delta_x)),
-                           std::fabs(static_cast<double>(delta_y))));
+    const double step_count = std::ceil(
+        std::max(std::fabs(static_cast<double>(delta_x)), std::fabs(static_cast<double>(delta_y))));
     if (!std::isfinite(step_count) || step_count > kMaxStrokeSteps)
         return false;
     const int32_t steps = std::max(1, static_cast<int32_t>(step_count));
     for (int32_t step = 0; step <= steps; ++step) {
         const float ratio = static_cast<float>(step) / static_cast<float>(steps);
         fill_ellipse(context,
-                     {safe_x1 + delta_x * ratio - radius,
-                      safe_y1 + delta_y * ratio - radius, diameter, diameter},
+                     {safe_x1 + delta_x * ratio - radius, safe_y1 + delta_y * ratio - radius,
+                      diameter, diameter},
                      argb);
     }
     return true;
@@ -423,20 +459,20 @@ uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
 
 uint32_t lighten_argb(uint32_t color, float amount) {
     return (color & 0xff000000U) |
-           (blend_argb(color | 0xff000000U,
-                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE), amount) &
+           (blend_argb(color | 0xff000000U, sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE),
+                       amount) &
             0x00ffffffU);
 }
 
 uint32_t darken_argb(uint32_t color, float amount) {
     return (color & 0xff000000U) |
-           (blend_argb(color | 0xff000000U,
-                       sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK), amount) &
+           (blend_argb(color | 0xff000000U, sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK),
+                       amount) &
             0x00ffffffU);
 }
 
-static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y,
-                                      float width, float height, float radius, bool rounded,
+static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y, float width,
+                                      float height, float radius, bool rounded,
                                       uint32_t argb) noexcept;
 
 bool contains(Rect rect, float x, float y) {
@@ -477,7 +513,9 @@ ScrollbarGeometry scrollbar_geometry(float bounds_x, float bounds_y, float bound
         geometry.track_hit = {bounds.x, bounds.y + arrow_extent, bounds.width,
                               std::max(0.0F, bounds.height - arrow_extent * 2.0F)};
     }
-    const float track_thickness = std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
+    const float track_thickness =
+        std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(
+                                           SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
         geometry.track = {geometry.track_hit.x, bounds.y + (bounds.height - track_thickness) * 0.5F,
                           geometry.track_hit.width, track_thickness};
@@ -485,17 +523,21 @@ ScrollbarGeometry scrollbar_geometry(float bounds_x, float bounds_y, float bound
         geometry.track = {bounds.x + (bounds.width - track_thickness) * 0.5F, geometry.track_hit.y,
                           track_thickness, geometry.track_hit.height};
     }
-    geometry.page_fraction = content_size <= 0.0F
-                                 ? 1.0F
-                                 : std::clamp(page_size / content_size, 0.0F, 1.0F);
+    geometry.page_fraction =
+        content_size <= 0.0F ? 1.0F : std::clamp(page_size / content_size, 0.0F, 1.0F);
     const float track_major =
         geometry.horizontal ? geometry.track_hit.width : geometry.track_hit.height;
-    const float minimum_thumb = std::min(track_major, std::max(static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)), cross * 0.75F));
+    const float minimum_thumb =
+        std::min(track_major, std::max(static_cast<float>(sao::ui::detail::panel_theme_metric(
+                                           SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)),
+                                       cross * 0.75F));
     const float thumb_major =
         std::clamp(track_major * geometry.page_fraction, minimum_thumb, track_major);
     geometry.travel = std::max(0.0F, track_major - thumb_major);
     const float offset = geometry.travel * std::clamp(value, 0.0F, 1.0F);
-    const float thumb_cross = std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
+    const float thumb_cross =
+        std::min(cross, std::max(2.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(
+                                           SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
         geometry.thumb = {geometry.track_hit.x + offset,
                           bounds.y + (bounds.height - thumb_cross) * 0.5F, thumb_major,
@@ -574,16 +616,15 @@ WideScrollbarGeometry scrollbar_geometry_wide(float bounds_x, float bounds_y, fl
     if (geometry.horizontal) {
         geometry.decrement_arrow = {x, y, arrow_extent, height};
         geometry.increment_arrow = {x + width - arrow_extent, y, arrow_extent, height};
-        geometry.track_hit = {x + arrow_extent, y,
-                              std::max(0.0L, width - arrow_extent * 2.0L), height};
+        geometry.track_hit = {x + arrow_extent, y, std::max(0.0L, width - arrow_extent * 2.0L),
+                              height};
     } else {
         geometry.decrement_arrow = {x, y, width, arrow_extent};
         geometry.increment_arrow = {x, y + height - arrow_extent, width, arrow_extent};
         geometry.track_hit = {x, y + arrow_extent, width,
                               std::max(0.0L, height - arrow_extent * 2.0L)};
     }
-    const long double track_thickness =
-        std::clamp(cross * 0.32L, 2.0L, std::max(2.0L, cross));
+    const long double track_thickness = std::clamp(cross * 0.32L, 2.0L, std::max(2.0L, cross));
     if (geometry.horizontal) {
         geometry.track = {geometry.track_hit.x, y + (height - track_thickness) * 0.5L,
                           geometry.track_hit.width, track_thickness};
@@ -594,18 +635,23 @@ WideScrollbarGeometry scrollbar_geometry_wide(float bounds_x, float bounds_y, fl
     geometry.page_fraction = std::clamp(page / content, 0.0L, 1.0L);
     const long double track_major =
         geometry.horizontal ? geometry.track_hit.width : geometry.track_hit.height;
-    const long double minimum_thumb = std::min(track_major, std::max(static_cast<long double>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)), cross * 0.75L));
+    const long double minimum_thumb =
+        std::min(track_major, std::max(static_cast<long double>(sao::ui::detail::panel_theme_metric(
+                                           SAO_UI_METRIC_SCROLLBAR_MIN_THUMB)),
+                                       cross * 0.75L));
     const long double thumb_major =
         std::clamp(track_major * geometry.page_fraction, minimum_thumb, track_major);
     geometry.travel = std::max(0.0L, track_major - thumb_major);
     const long double offset = geometry.travel * std::clamp(position, 0.0L, 1.0L);
-    const long double thumb_cross = std::min(cross, std::max(2.0L, static_cast<long double>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_SCROLLBAR_WIDTH))));
+    const long double thumb_cross =
+        std::min(cross, std::max(2.0L, static_cast<long double>(sao::ui::detail::panel_theme_metric(
+                                           SAO_UI_METRIC_SCROLLBAR_WIDTH))));
     if (geometry.horizontal) {
-        geometry.thumb = {geometry.track_hit.x + offset,
-                          y + (height - thumb_cross) * 0.5L, thumb_major, thumb_cross};
+        geometry.thumb = {geometry.track_hit.x + offset, y + (height - thumb_cross) * 0.5L,
+                          thumb_major, thumb_cross};
     } else {
-        geometry.thumb = {x + (width - thumb_cross) * 0.5L,
-                          geometry.track_hit.y + offset, thumb_cross, thumb_major};
+        geometry.thumb = {x + (width - thumb_cross) * 0.5L, geometry.track_hit.y + offset,
+                          thumb_cross, thumb_major};
     }
     return geometry;
 }
@@ -622,9 +668,8 @@ bool copy_scrollbar_geometry_wide(const WideScrollbarGeometry& source,
     };
     if (target == nullptr || !valid_rect(source.decrement_arrow) ||
         !valid_rect(source.increment_arrow) || !valid_rect(source.track_hit) ||
-        !valid_rect(source.track) || !valid_rect(source.thumb) ||
-        !valid_value(source.travel) || source.travel < 0.0L ||
-        !valid_value(source.page_fraction) || source.page_fraction < 0.0L ||
+        !valid_rect(source.track) || !valid_rect(source.thumb) || !valid_value(source.travel) ||
+        source.travel < 0.0L || !valid_value(source.page_fraction) || source.page_fraction < 0.0L ||
         source.page_fraction > 1.0L) {
         return false;
     }
@@ -659,18 +704,18 @@ bool copy_scrollbar_geometry_wide(const WideScrollbarGeometry& source,
         candidate.increment_width,  candidate.increment_height, candidate.track_hit_x,
         candidate.track_hit_y,      candidate.track_hit_width,  candidate.track_hit_height,
         candidate.track_x,          candidate.track_y,          candidate.track_width,
-        candidate.track_height,     candidate.thumb_x,         candidate.thumb_y,
-        candidate.thumb_width,      candidate.thumb_height,    candidate.travel,
+        candidate.track_height,     candidate.thumb_x,          candidate.thumb_y,
+        candidate.thumb_width,      candidate.thumb_height,     candidate.travel,
         candidate.page_fraction};
     for (float value : values) {
         if (!std::isfinite(value))
             return false;
     }
-    const float dimensions[] = {candidate.decrement_width, candidate.decrement_height,
-                                candidate.increment_width, candidate.increment_height,
-                                candidate.track_hit_width, candidate.track_hit_height,
-                                candidate.track_width, candidate.track_height, candidate.thumb_width,
-                                candidate.thumb_height, candidate.travel, candidate.page_fraction};
+    const float dimensions[] = {
+        candidate.decrement_width,  candidate.decrement_height, candidate.increment_width,
+        candidate.increment_height, candidate.track_hit_width,  candidate.track_hit_height,
+        candidate.track_width,      candidate.track_height,     candidate.thumb_width,
+        candidate.thumb_height,     candidate.travel,           candidate.page_fraction};
     for (float dimension : dimensions) {
         if (dimension < 0.0F)
             return false;
@@ -703,6 +748,13 @@ void paint_chevron(sao_ui_paint_ctx_s& context, Rect bounds, bool horizontal, bo
 void draw_text(sao_ui_paint_ctx_s& context, float x, float y, const char* text, float size,
                uint32_t argb) {
     if (text == nullptr || size <= 0.0F)
+        return;
+    if (context.gpu_state != nullptr && context.gpu_dispatch != nullptr &&
+        context.gpu_dispatch->draw_utf8 != nullptr &&
+        context.gpu_dispatch->draw_utf8(
+            context.gpu_state, x, y, text, size, argb, current_opacity(context),
+            static_cast<uint8_t>(sao::ui::detail::active_classic_text_style().role),
+            static_cast<uint8_t>(sao::ui::detail::active_classic_text_style().weight)))
         return;
     // Prefer the true-font DirectWrite path; fall back to procedural glyphs
     // when DWrite/D2D/WIC is unavailable so a paint pass never crashes.
@@ -767,8 +819,8 @@ size_t utf8_codepoint_bytes(std::string_view text, size_t offset) noexcept {
 }
 
 float fallback_text_width(std::string_view text, float size) noexcept {
-    const float glyph_width = static_cast<float>(
-        std::max(1, static_cast<int32_t>(std::floor(size / 5.0F))) * 6);
+    const float glyph_width =
+        static_cast<float>(std::max(1, static_cast<int32_t>(std::floor(size / 5.0F))) * 6);
     size_t codepoints = 0U;
     for (size_t offset = 0U; offset < text.size();) {
         offset += utf8_codepoint_bytes(text, offset);
@@ -860,9 +912,13 @@ void draw_widget_text(sao_ui_paint_ctx_s& context, Rect widget_bounds, float x, 
     const std::string display = ellipsize_utf8(text, size, available_width);
     if (display.empty())
         return;
-    context.clips.push_back(widget_bounds);
+    if (sao_ui_paint_ctx_push_clip(&context, widget_bounds.x, widget_bounds.y, widget_bounds.width,
+                                   widget_bounds.height) != SAO_STATUS_OK)
+        return;
     draw_text(context, x, y, display.c_str(), size, argb);
-    context.clips.pop_back();
+    const sao_status_t pop_status = sao_ui_paint_ctx_pop_clip(&context);
+    if (pop_status != SAO_STATUS_OK && context.backend_status == SAO_STATUS_OK)
+        context.backend_status = pop_status;
 }
 uint32_t widget_color(const sao_ui_widget_s& widget, const char* name, uint32_t fallback) {
     if (sao::ui::detail::panel_theme_high_contrast())
@@ -913,8 +969,7 @@ uint32_t style_color(std::string_view style, const char* role, uint32_t fallback
 
 bool is_filled_semantic_control(const sao_ui_widget_s& widget) noexcept {
     if (widget.kind != SAO_UI_WIDGET_ACTION_BUTTON &&
-        widget.kind != SAO_UI_WIDGET_DROPDOWN_BUTTON &&
-        widget.kind != SAO_UI_WIDGET_STATUS_BADGE)
+        widget.kind != SAO_UI_WIDGET_DROPDOWN_BUTTON && widget.kind != SAO_UI_WIDGET_STATUS_BADGE)
         return false;
     return widget.style == "primary" || widget.style == "accent" || widget.style == "ok" ||
            widget.style == "warn" || widget.style == "bad" || widget.style == "danger";
@@ -923,12 +978,11 @@ bool is_filled_semantic_control(const sao_ui_widget_s& widget) noexcept {
 float relative_luminance(uint32_t argb) noexcept {
     const auto channel = [](uint32_t value) {
         const float normalized = static_cast<float>(value) / 255.0F;
-        return normalized <= 0.04045F
-                   ? normalized / 12.92F
-                   : std::pow((normalized + 0.055F) / 1.055F, 2.4F);
+        return normalized <= 0.04045F ? normalized / 12.92F
+                                      : std::pow((normalized + 0.055F) / 1.055F, 2.4F);
     };
-    return 0.2126F * channel((argb >> 16U) & 0xffU) +
-           0.7152F * channel((argb >> 8U) & 0xffU) + 0.0722F * channel(argb & 0xffU);
+    return 0.2126F * channel((argb >> 16U) & 0xffU) + 0.7152F * channel((argb >> 8U) & 0xffU) +
+           0.0722F * channel(argb & 0xffU);
 }
 
 uint32_t contrast_foreground(uint32_t fill) noexcept {
@@ -936,8 +990,8 @@ uint32_t contrast_foreground(uint32_t fill) noexcept {
     const float amount = static_cast<float>((fill >> 24U) & 0xffU) / 255.0F;
     const auto composite = [amount](uint32_t foreground, uint32_t background) {
         const auto channel = [amount](uint32_t first, uint32_t second) {
-            return static_cast<uint32_t>(std::lround(
-                static_cast<float>(first) * amount + static_cast<float>(second) * (1.0F - amount)));
+            return static_cast<uint32_t>(std::lround(static_cast<float>(first) * amount +
+                                                     static_cast<float>(second) * (1.0F - amount)));
         };
         return 0xff000000U |
                (channel((foreground >> 16U) & 0xffU, (background >> 16U) & 0xffU) << 16U) |
@@ -948,10 +1002,10 @@ uint32_t contrast_foreground(uint32_t fill) noexcept {
     const uint32_t black = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_BLACK);
     const uint32_t white = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE);
     const auto contrast = [visible_fill](uint32_t foreground) {
-        const float light = std::max(relative_luminance(visible_fill),
-                                     relative_luminance(foreground));
-        const float dark = std::min(relative_luminance(visible_fill),
-                                    relative_luminance(foreground));
+        const float light =
+            std::max(relative_luminance(visible_fill), relative_luminance(foreground));
+        const float dark =
+            std::min(relative_luminance(visible_fill), relative_luminance(foreground));
         return (light + 0.05F) / (dark + 0.05F);
     };
     return contrast(black) >= contrast(white) ? black : white;
@@ -997,13 +1051,13 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     uint32_t accent = widget_color(
-        widget, "accent", style_color(style, "accent",
-                                      sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)));
+        widget, "accent",
+        style_color(style, "accent", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_ACCENT)));
     uint32_t fill = widget_color(
-        widget, "fill", style_color(style, "fill", widget.active
-                                                    ? accent
-                                                    : sao::ui::detail::panel_theme_color(
-                                                          SAO_UI_TOKEN_APP_CARD)));
+        widget, "fill",
+        style_color(style, "fill",
+                    widget.active ? accent
+                                  : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)));
     uint32_t border =
         widget_color(widget, "border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
     const SaoUiColorToken foreground_token =
@@ -1011,42 +1065,44 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             ? SAO_UI_TOKEN_APP_TEXT_2
             : SAO_UI_TOKEN_APP_TEXT;
     uint32_t foreground = widget_color(
-        widget, "fg", style_color(style, "fg", sao::ui::detail::panel_theme_color(
-                                                   widget.enabled ? foreground_token
-                                                                  : SAO_UI_TOKEN_DISABLED_FG)));
+        widget, "fg",
+        style_color(style, "fg",
+                    sao::ui::detail::panel_theme_color(widget.enabled ? foreground_token
+                                                                      : SAO_UI_TOKEN_DISABLED_FG)));
     const bool hovered = widget.enabled && widget.hovered;
     const bool pressed = widget.enabled && widget.pressed;
     const bool focused = widget.enabled && widget.focused;
-    const auto visual_state = sao::ui::detail::resolve_control_visual_state(widget.enabled, hovered, pressed, focused);
+    const auto visual_state =
+        sao::ui::detail::resolve_control_visual_state(widget.enabled, hovered, pressed, focused);
     if (visual_state == sao::ui::detail::ControlVisualState::Disabled) {
-        fill = widget_color(widget, "disabled_bg", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BG));
-        border = widget_color(widget, "disabled_border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BORDER));
-        foreground = widget_color(widget, "disabled_fg", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_FG));
+        fill = widget_color(widget, "disabled_bg",
+                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BG));
+        border = widget_color(widget, "disabled_border",
+                              sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_BORDER));
+        foreground = widget_color(widget, "disabled_fg",
+                                  sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_DISABLED_FG));
     } else if (visual_state == sao::ui::detail::ControlVisualState::Pressed) {
-        fill = widget_color(widget, "pressed", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE));
+        fill = widget_color(widget, "pressed",
+                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE));
     } else if (visual_state == sao::ui::detail::ControlVisualState::Hover) {
-        fill = widget_color(widget, "hover", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE));
+        fill = widget_color(widget, "hover",
+                            sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_HOVER_SURFACE));
     }
-    const bool has_foreground_override =
-        !high_contrast && (widget.theme_overrides.contains("fg") ||
-                           widget.prop_colors.contains("fg"));
+    const bool has_foreground_override = !high_contrast && (widget.theme_overrides.contains("fg") ||
+                                                            widget.prop_colors.contains("fg"));
     const bool active_highlight_control =
         high_contrast && widget.active &&
         (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
-         widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
-         widget.kind == SAO_UI_WIDGET_STATUS_BADGE);
+         widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON || widget.kind == SAO_UI_WIDGET_STATUS_BADGE);
     if (visual_state != sao::ui::detail::ControlVisualState::Disabled &&
         (is_filled_semantic_control(widget) || active_highlight_control) &&
         !has_foreground_override)
-        foreground = high_contrast
-                         ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)
-                         : contrast_foreground(fill);
-    const bool rounded = widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL ||
-                         widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
-                         widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
-                         widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
-                         widget.kind == SAO_UI_WIDGET_TOOLTIP ||
-                         widget.kind == SAO_UI_WIDGET_ICON;
+        foreground = high_contrast ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)
+                                   : contrast_foreground(fill);
+    const bool rounded =
+        widget.kind == SAO_UI_WIDGET_ROUNDED_PANEL || widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+        widget.kind == SAO_UI_WIDGET_STATUS_BADGE || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
+        widget.kind == SAO_UI_WIDGET_TOOLTIP || widget.kind == SAO_UI_WIDGET_ICON;
     if (focused) {
         (void)paint_focus_ring_unlocked(
             context, bounds.x, bounds.y, bounds.width, bounds.height, widget.radius, rounded,
@@ -1068,7 +1124,9 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         fill_rounded_rect(context, inner, 2.0F, fill);
         const Rect text_clip{bounds.x + 8, bounds.y + 4, std::max(0.0F, bounds.width - 16),
                              std::max(0.0F, bounds.height - 8)};
-        context.clips.push_back(text_clip);
+        if (sao_ui_paint_ctx_push_clip(&context, text_clip.x, text_clip.y, text_clip.width,
+                                       text_clip.height) != SAO_STATUS_OK)
+            return;
         std::string display = widget.text;
         if (widget.password) {
             display.clear();
@@ -1110,8 +1168,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                 const float shift = line == caret_line && focused
                                         ? std::max(0.0F, caret_width - text_clip.width + 3)
                                         : 0;
-                if (focused && !widget.password && line == caret_line &&
-                    widget.selection_start != widget.selection_end) {
+                if (focused && !widget.password && widget.selection_start != widget.selection_end) {
                     const size_t a = std::min(widget.selection_start, widget.selection_end);
                     const size_t b = std::max(widget.selection_start, widget.selection_end);
                     const size_t row_end = end == std::string::npos ? widget.text.size() : end;
@@ -1146,18 +1203,25 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             begin = end + 1;
             ++line;
         } while (line < first_line + visible_lines);
-        context.clips.pop_back();
+        const sao_status_t pop_status = sao_ui_paint_ctx_pop_clip(&context);
+        if (pop_status != SAO_STATUS_OK && context.backend_status == SAO_STATUS_OK)
+            context.backend_status = pop_status;
         return;
     }
 
     if (widget.kind == SAO_UI_WIDGET_SCROLLBAR) {
         const ScrollbarGeometry geometry = scrollbar_geometry(widget, bounds);
-        const uint32_t track = widget_color(widget, "track", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_TRACK));
-        uint32_t thumb = widget_color(widget, "thumb", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_THUMB));
+        const uint32_t track = widget_color(
+            widget, "track", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_TRACK));
+        uint32_t thumb = widget_color(
+            widget, "thumb", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_THUMB));
         if (pressed)
-            thumb = widget_color(widget, "thumb_active", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_PRESSED));
+            thumb =
+                widget_color(widget, "thumb_active",
+                             sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_PRESSED));
         else if (hovered)
-            thumb = widget_color(widget, "thumb_hover", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_HOVER));
+            thumb = widget_color(widget, "thumb_hover",
+                                 sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_HOVER));
         const uint32_t arrow = widget_color(widget, "arrow", foreground);
         fill_rounded_rect(context, geometry.track,
                           std::min(geometry.track.width, geometry.track.height) * 0.5F, track);
@@ -1171,7 +1235,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     }
 
     if (widget.kind == SAO_UI_WIDGET_CHECKBOX) {
-        const float max_box = std::max(1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
+        const float max_box = std::max(
+            1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
         const float box = std::min(max_box, std::max(1.0F, bounds.height - 4.0F));
         const Rect box_bounds{bounds.x, bounds.y + (bounds.height - box) * 0.5F, box, box};
         fill_rounded_rect(context, box_bounds, std::min(widget.radius, box * 0.25F), border);
@@ -1191,14 +1256,15 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (!widget.text.empty()) {
             const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
             draw_widget_text(context, bounds, box_bounds.x + box + 4.0F,
-                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
-                             widget.text, text_size, foreground);
+                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F), widget.text,
+                             text_size, foreground);
         }
         return;
     }
 
     if (widget.kind == SAO_UI_WIDGET_RADIO) {
-        const float max_ring = std::max(1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
+        const float max_ring = std::max(
+            1.0F, static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_ICON_SIZE)));
         const float ring = std::min(max_ring, std::max(1.0F, bounds.height - 4.0F));
         const Rect ring_bounds{bounds.x, bounds.y + (bounds.height - ring) * 0.5F, ring, ring};
         fill_ellipse(context, ring_bounds, border);
@@ -1215,8 +1281,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (!widget.text.empty()) {
             const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
             draw_widget_text(context, bounds, ring_bounds.x + ring + 4.0F,
-                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F),
-                             widget.text, text_size, foreground);
+                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F), widget.text,
+                             text_size, foreground);
         }
         return;
     }
@@ -1239,7 +1305,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_ellipse(context,
                          {center - thumb_size * 0.5F,
                           bounds.y + (bounds.height - thumb_size) * 0.5F, thumb_size, thumb_size},
-                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE) : foreground);
+                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE)
+                                 : foreground);
         } else {
             const float track_x = bounds.x + (bounds.width - thickness) * 0.5F;
             fill_rounded_rect(context, {track_x, bounds.y, thickness, bounds.height},
@@ -1253,7 +1320,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_ellipse(context,
                          {bounds.x + (bounds.width - thumb_size) * 0.5F, center - thumb_size * 0.5F,
                           thumb_size, thumb_size},
-                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE) : foreground);
+                         pressed ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PRESSED_SURFACE)
+                                 : foreground);
         }
         return;
     }
@@ -1287,9 +1355,10 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_HEADER_HEIGHT));
         fill_rect(context, {bounds.x, bounds.y, bounds.width, header_height},
                   sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD));
-        fill_rect(context, {bounds.x, bounds.y + header_height - 1.0F, bounds.width, 1.0F},
-                  border);
-        for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height; row += static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT)))
+        fill_rect(context, {bounds.x, bounds.y + header_height - 1.0F, bounds.width, 1.0F}, border);
+        for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height;
+             row += static_cast<float>(
+                 sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT)))
             fill_rect(context, {bounds.x, row, bounds.width, 1.0F}, border);
     }
     if (!widget.text.empty()) {
@@ -1317,6 +1386,20 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
 
 sao_status_t paint_widget_group_opacity(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context,
                                         Rect bounds, float opacity) {
+    if (context.gpu_state != nullptr) {
+        const size_t opacity_depth = context.opacity_stack.size();
+        try {
+            context.opacity_stack.push_back(current_opacity(context) *
+                                            std::clamp(opacity, 0.0F, 1.0F));
+            paint_widget(widget, context, bounds);
+            context.opacity_stack.pop_back();
+            return SAO_STATUS_OK;
+        } catch (...) {
+            if (context.opacity_stack.size() > opacity_depth)
+                context.opacity_stack.pop_back();
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
     const Rect visible = intersect(bounds, clip_bounds(context));
     if (!valid_rect(visible.width, visible.height)) {
         widget.bounds = bounds;
@@ -1398,7 +1481,8 @@ sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len
         candidate.radius = static_cast<float>(
             sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_MEDIUM));
         for (const char* key : {"fill", "border", "fg", "accent", "canvas_bg", "track", "thumb",
-                                "thumb_hover", "thumb_active", "arrow", "focus", "hover", "pressed", "disabled_fg", "disabled_bg", "disabled_border"}) {
+                                "thumb_hover", "thumb_active", "arrow", "focus", "hover", "pressed",
+                                "disabled_fg", "disabled_bg", "disabled_border"}) {
             const auto property = document.find(key);
             if (property == document.end())
                 continue;
@@ -1671,8 +1755,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(sao_ui_widget_hand
     std::scoped_lock lock(handle->mutex);
     // Preserve transient interaction snapshots across ordinary property
     // updates; they reset only when enabled/active semantics change.
-    const bool state_change = handle->active != candidate.active ||
-                              handle->enabled != candidate.enabled;
+    const bool state_change =
+        handle->active != candidate.active || handle->enabled != candidate.enabled;
     handle->active = candidate.active;
     handle->enabled = candidate.enabled;
     if (state_change) {
@@ -1729,9 +1813,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_clear_theme_token(sao_ui_widge
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint(sao_ui_widget_handle_t handle,
                                                         sao_ui_paint_ctx_handle_t context, float x,
                                                         float y, float width, float height) {
-    if (handle == nullptr || context == nullptr || context->raster == nullptr ||
-        !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
-        !std::isfinite(height) || !valid_rect(width, height))
+    if (handle == nullptr || !has_paint_target(context) || !std::isfinite(x) || !std::isfinite(y) ||
+        !std::isfinite(width) || !std::isfinite(height) || !valid_rect(width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         sao::ui::detail::WidgetHandleMetadata metadata{};
@@ -1743,10 +1826,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint(sao_ui_widget_handle_t h
         GenericLifecycleLease lifecycle(handle);
         if (!lifecycle || sao_ui_widget_generic_backing_get_kind(handle, nullptr) != SAO_STATUS_OK)
             return SAO_STATUS_ERR_HANDLE_INVALID;
-        std::scoped_lock lock(handle->mutex, context->raster->mutex);
-        if (!handle->enabled)
-            return paint_widget_group_opacity(*handle, *context, {x, y, width, height}, 0.4F);
-        paint_widget(*handle, *context, {x, y, width, height});
+        if (context->gpu_state != nullptr) {
+            std::scoped_lock lock(handle->mutex);
+            if (!handle->enabled)
+                return paint_widget_group_opacity(*handle, *context, {x, y, width, height}, 0.4F);
+            paint_widget(*handle, *context, {x, y, width, height});
+        } else {
+            if (context->raster == nullptr)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            std::scoped_lock lock(handle->mutex, context->raster->mutex);
+            if (!handle->enabled)
+                return paint_widget_group_opacity(*handle, *context, {x, y, width, height}, 0.4F);
+            paint_widget(*handle, *context, {x, y, width, height});
+        }
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1989,9 +2081,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_scrollbar_geometry_compute(
         (show_arrows != 0 && show_arrows != 1)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    const WideScrollbarGeometry geometry = scrollbar_geometry_wide(
-        bounds_x, bounds_y, bounds_width, bounds_height, page_size, content_size, value,
-        show_arrows != 0);
+    const WideScrollbarGeometry geometry =
+        scrollbar_geometry_wide(bounds_x, bounds_y, bounds_width, bounds_height, page_size,
+                                content_size, value, show_arrows != 0);
     return copy_scrollbar_geometry_wide(geometry, out_geometry) ? SAO_STATUS_OK
                                                                 : SAO_STATUS_ERR_INVALID_ARGUMENT;
 }
@@ -2073,15 +2165,17 @@ extern "C" SAO_UI_API bool SAO_UI_CALL sao_ui_widget_test_props_state(sao_ui_wid
     return true;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create(void*, void*,
+extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create(void* d2d_render_target,
+                                                            void* dwrite_factory,
                                                             sao_ui_paint_ctx_handle_t* out_ctx) {
-    if (out_ctx == nullptr)
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    *out_ctx = nullptr;
-    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    return sao::ui::detail::create_borrowed_d2d_paint_context(d2d_render_target, dwrite_factory,
+                                                              out_ctx);
 }
 
 extern "C" void SAO_UI_CALL sao_ui_paint_ctx_destroy(sao_ui_paint_ctx_handle_t context) {
+    if (context != nullptr && context->gpu_state != nullptr && context->gpu_dispatch != nullptr &&
+        context->gpu_dispatch->destroy != nullptr)
+        context->gpu_dispatch->destroy(context->gpu_state);
     delete context;
 }
 
@@ -2089,6 +2183,18 @@ extern "C" sao_status_t SAO_UI_CALL
 sao_ui_paint_ctx_begin_frame(sao_ui_paint_ctx_handle_t context) {
     if (context == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->in_frame)
+        return SAO_UI_STATUS_ERR_BUSY;
+    if (!context->clips.empty() || context->opacity_stack.size() != 1U)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (context->gpu_state != nullptr) {
+        if (context->gpu_dispatch == nullptr || context->gpu_dispatch->begin_frame == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        const sao_status_t status = context->gpu_dispatch->begin_frame(context->gpu_state);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+    context->backend_status = SAO_STATUS_OK;
     context->in_frame = true;
     return SAO_STATUS_OK;
 }
@@ -2096,19 +2202,54 @@ sao_ui_paint_ctx_begin_frame(sao_ui_paint_ctx_handle_t context) {
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_end_frame(sao_ui_paint_ctx_handle_t context) {
     if (context == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!context->in_frame)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const bool unbalanced = !context->clips.empty() || context->opacity_stack.size() != 1U;
+    sao_status_t status = context->backend_status;
+    if (context->gpu_state != nullptr) {
+        if (context->gpu_dispatch == nullptr || context->gpu_dispatch->end_frame == nullptr) {
+            if (status == SAO_STATUS_OK)
+                status = SAO_STATUS_ERR_NOT_INITIALIZED;
+        } else {
+            // Always close the native draw even after an unmatched clip/opacity.
+            // Both D2D and the recorder unwind their private state here, keeping
+            // a bad frame from poisoning the render thread's next frame.
+            const sao_status_t end_status = context->gpu_dispatch->end_frame(context->gpu_state);
+            if (status == SAO_STATUS_OK || end_status == SAO_STATUS_ERR_DEVICE_LOST)
+                status = end_status;
+        }
+    }
+    if (status == SAO_STATUS_OK && unbalanced)
+        status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+    context->clips.clear();
+    context->opacity_stack.resize(1U);
+    context->opacity_stack.front() = 1.0F;
     context->in_frame = false;
-    return SAO_STATUS_OK;
+    context->backend_status = SAO_STATUS_OK;
+    return status;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_push_clip(sao_ui_paint_ctx_handle_t context,
                                                                float x, float y, float width,
                                                                float height) {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height)) {
+    if (context == nullptr || (context->raster == nullptr && context->gpu_state == nullptr) ||
+        !finite_float_rect(x, y, width, height) || context->clips.size() >= kMaxPaintStackDepth) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        context->clips.push_back({x, y, width, height});
+        const Rect clip{x, y, width, height};
+        if (context->gpu_state != nullptr) {
+            const sao_status_t status = context->gpu_dispatch->push_clip(context->gpu_state, clip);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        try {
+            context->clips.push_back(clip);
+        } catch (...) {
+            if (context->gpu_state != nullptr)
+                (void)context->gpu_dispatch->pop_clip(context->gpu_state);
+            throw;
+        }
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -2118,6 +2259,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_push_clip(sao_ui_paint_ctx_
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_pop_clip(sao_ui_paint_ctx_handle_t context) {
     if (context == nullptr || context->clips.empty())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->gpu_state != nullptr) {
+        const sao_status_t status = context->gpu_dispatch->pop_clip(context->gpu_state);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
     context->clips.pop_back();
     return SAO_STATUS_OK;
 }
@@ -2125,7 +2271,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_pop_clip(sao_ui_paint_ctx_h
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_push_opacity(sao_ui_paint_ctx_handle_t context,
                                                                   float opacity_0_to_1) {
     if (context == nullptr || !std::isfinite(opacity_0_to_1) || opacity_0_to_1 < 0.0F ||
-        opacity_0_to_1 > 1.0F) {
+        opacity_0_to_1 > 1.0F || context->opacity_stack.size() >= kMaxPaintStackDepth) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -2222,9 +2368,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_create_offscreen(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_handle_t context,
                                                                float x, float y, float width,
                                                                float height, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height))
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->gpu_state != nullptr) {
+        fill_rect(*context, {x, y, width, height}, argb);
+        return SAO_STATUS_OK;
+    }
     std::scoped_lock lock(context->raster->mutex);
     fill_rect(*context, {x, y, width, height}, argb);
     return SAO_STATUS_OK;
@@ -2233,11 +2382,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_
 sao_status_t sao::ui::detail::paint_rounded_rect(sao_ui_paint_ctx_handle_t context, float x,
                                                  float y, float width, float height, float radius,
                                                  uint32_t argb) noexcept {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height) || !std::isfinite(radius) || radius < 0.0F) {
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height) ||
+        !std::isfinite(radius) || radius < 0.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
+        if (context->gpu_state != nullptr) {
+            fill_rounded_rect(*context, {x, y, width, height}, radius, argb);
+            return SAO_STATUS_OK;
+        }
         std::scoped_lock lock(context->raster->mutex);
         fill_rounded_rect(*context, {x, y, width, height}, radius, argb);
         return SAO_STATUS_OK;
@@ -2246,23 +2399,38 @@ sao_status_t sao::ui::detail::paint_rounded_rect(sao_ui_paint_ctx_handle_t conte
     }
 }
 
-bool stroke_rounded_outline(sao_ui_paint_ctx_s& context, Rect rect, float radius, float width, uint32_t argb) {
-    if (!valid_rect(rect.width, rect.height) || !std::isfinite(radius) || radius < 0.0F || width <= 0.0F) return false;
+bool stroke_rounded_outline(sao_ui_paint_ctx_s& context, Rect rect, float radius, float width,
+                            uint32_t argb) {
+    if (!valid_rect(rect.width, rect.height) || !std::isfinite(radius) || radius < 0.0F ||
+        width <= 0.0F)
+        return false;
     radius = std::clamp(radius, 0.0F, std::min(rect.width, rect.height) * 0.5F);
+    if (context.gpu_state != nullptr && context.gpu_dispatch != nullptr &&
+        context.gpu_dispatch->stroke_rounded_rect != nullptr) {
+        const bool ok = context.gpu_dispatch->stroke_rounded_rect(
+            context.gpu_state, rect, radius, width, argb, current_opacity(context));
+        if (!ok && context.backend_status == SAO_STATUS_OK)
+            context.backend_status = SAO_STATUS_ERR_UNKNOWN;
+        return ok;
+    }
     if (radius <= 0.0F) {
         return stroke_line(context, rect.x, rect.y, rect.x + rect.width, rect.y, width, argb) &&
-               stroke_line(context, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, width, argb) &&
-               stroke_line(context, rect.x + rect.width, rect.y + rect.height, rect.x, rect.y + rect.height, width, argb) &&
+               stroke_line(context, rect.x + rect.width, rect.y, rect.x + rect.width,
+                           rect.y + rect.height, width, argb) &&
+               stroke_line(context, rect.x + rect.width, rect.y + rect.height, rect.x,
+                           rect.y + rect.height, width, argb) &&
                stroke_line(context, rect.x, rect.y + rect.height, rect.x, rect.y, width, argb);
     }
     const float left = rect.x + radius;
     const float right = rect.x + rect.width - radius;
     const float top = rect.y + radius;
     const float bottom = rect.y + rect.height - radius;
-    bool ok = stroke_line(context, left, rect.y, right, rect.y, width, argb) &&
-               stroke_line(context, rect.x + rect.width, top, rect.x + rect.width, bottom, width, argb) &&
-               stroke_line(context, right, rect.y + rect.height, left, rect.y + rect.height, width, argb) &&
-               stroke_line(context, rect.x, bottom, rect.x, top, width, argb);
+    bool ok =
+        stroke_line(context, left, rect.y, right, rect.y, width, argb) &&
+        stroke_line(context, rect.x + rect.width, top, rect.x + rect.width, bottom, width, argb) &&
+        stroke_line(context, right, rect.y + rect.height, left, rect.y + rect.height, width,
+                    argb) &&
+        stroke_line(context, rect.x, bottom, rect.x, top, width, argb);
     constexpr int kArcSteps = 8;
     const float pi = 3.14159265358979323846F;
     const float centers[4][2] = {{left, top}, {right, top}, {right, bottom}, {left, bottom}};
@@ -2271,52 +2439,74 @@ bool stroke_rounded_outline(sao_ui_paint_ctx_s& context, Rect rect, float radius
         for (int step = 0; step < kArcSteps && ok; ++step) {
             const float a0 = starts[corner] + pi * 0.5F * static_cast<float>(step) / kArcSteps;
             const float a1 = starts[corner] + pi * 0.5F * static_cast<float>(step + 1) / kArcSteps;
-            ok = stroke_line(context, centers[corner][0] + std::cos(a0) * radius, centers[corner][1] + std::sin(a0) * radius, centers[corner][0] + std::cos(a1) * radius, centers[corner][1] + std::sin(a1) * radius, width, argb);
+            ok = stroke_line(context, centers[corner][0] + std::cos(a0) * radius,
+                             centers[corner][1] + std::sin(a0) * radius,
+                             centers[corner][0] + std::cos(a1) * radius,
+                             centers[corner][1] + std::sin(a1) * radius, width, argb);
         }
     }
     return ok;
 }
 
-sao_status_t sao::ui::detail::paint_rounded_rect_stroke(sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius, float stroke_width, uint32_t argb) noexcept {
-    if (context == nullptr || context->raster == nullptr || !finite_float_rect(x, y, width, height) || !std::isfinite(radius) || !std::isfinite(stroke_width) || radius < 0.0F || stroke_width <= 0.0F) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    try { std::scoped_lock lock(context->raster->mutex); return stroke_rounded_outline(*context, {x, y, width, height}, radius, stroke_width, argb) ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT; } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
+sao_status_t sao::ui::detail::paint_rounded_rect_stroke(sao_ui_paint_ctx_handle_t context, float x,
+                                                        float y, float width, float height,
+                                                        float radius, float stroke_width,
+                                                        uint32_t argb) noexcept {
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height) ||
+        !std::isfinite(radius) || !std::isfinite(stroke_width) || radius < 0.0F ||
+        stroke_width <= 0.0F)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        if (context->gpu_state != nullptr)
+            return stroke_rounded_outline(*context, {x, y, width, height}, radius, stroke_width,
+                                          argb)
+                       ? SAO_STATUS_OK
+                       : SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::scoped_lock lock(context->raster->mutex);
+        return stroke_rounded_outline(*context, {x, y, width, height}, radius, stroke_width, argb)
+                   ? SAO_STATUS_OK
+                   : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
-static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y,
-                                      float width, float height, float radius, bool rounded,
+static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y, float width,
+                                      float height, float radius, bool rounded,
                                       uint32_t argb) noexcept {
     const uint32_t alpha = (argb >> 24U) & 0xffU;
     const uint32_t halo = (argb & 0x00ffffffU) | ((alpha / 3U) << 24U);
     const Rect halo_rect{x - 3.0F, y - 3.0F, width + 6.0F, height + 6.0F};
     const Rect ring_rect{x - 2.0F, y - 2.0F, width + 4.0F, height + 4.0F};
-    const bool halo_ok =
-        rounded ? stroke_rounded_outline(context, halo_rect, radius + 3.0F, 1.0F, halo)
-                : stroke_line(context, halo_rect.x, halo_rect.y,
-                              halo_rect.x + halo_rect.width, halo_rect.y, 1.0F, halo);
+    const bool halo_ok = rounded
+                             ? stroke_rounded_outline(context, halo_rect, radius + 3.0F, 1.0F, halo)
+                             : stroke_line(context, halo_rect.x, halo_rect.y,
+                                           halo_rect.x + halo_rect.width, halo_rect.y, 1.0F, halo);
     if (!halo_ok)
         return false;
     if (rounded)
         return stroke_rounded_outline(context, ring_rect, radius + 2.0F, 2.0F, argb);
-    return stroke_line(context, ring_rect.x, ring_rect.y,
-                       ring_rect.x + ring_rect.width, ring_rect.y, 2.0F, argb) &&
+    return stroke_line(context, ring_rect.x, ring_rect.y, ring_rect.x + ring_rect.width,
+                       ring_rect.y, 2.0F, argb) &&
            stroke_line(context, ring_rect.x + ring_rect.width, ring_rect.y,
-                       ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height, 2.0F,
-                       argb) &&
-           stroke_line(context, ring_rect.x + ring_rect.width,
-                       ring_rect.y + ring_rect.height, ring_rect.x,
-                       ring_rect.y + ring_rect.height, 2.0F, argb) &&
+                       ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height, 2.0F, argb) &&
+           stroke_line(context, ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height,
+                       ring_rect.x, ring_rect.y + ring_rect.height, 2.0F, argb) &&
            stroke_line(context, ring_rect.x, ring_rect.y + ring_rect.height, ring_rect.x,
                        ring_rect.y, 2.0F, argb);
 }
 
-sao_status_t sao::ui::detail::paint_focus_ring(
-    sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height,
-    float radius, bool rounded, uint32_t argb) noexcept {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height)) {
+sao_status_t sao::ui::detail::paint_focus_ring(sao_ui_paint_ctx_handle_t context, float x, float y,
+                                               float width, float height, float radius,
+                                               bool rounded, uint32_t argb) noexcept {
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
+        if (context->gpu_state != nullptr)
+            return paint_focus_ring_unlocked(*context, x, y, width, height, radius, rounded, argb)
+                       ? SAO_STATUS_OK
+                       : SAO_STATUS_ERR_INVALID_ARGUMENT;
         std::scoped_lock lock(context->raster->mutex);
         return paint_focus_ring_unlocked(*context, x, y, width, height, radius, rounded, argb)
                    ? SAO_STATUS_OK
@@ -2326,16 +2516,42 @@ sao_status_t sao::ui::detail::paint_focus_ring(
     }
 }
 
-sao_status_t sao::ui::detail::paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius, int32_t elevation, uint32_t argb) noexcept {
-    if (context == nullptr || context->raster == nullptr || !finite_float_rect(x, y, width, height) || elevation < 0 || elevation > 3) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (sao::ui::detail::panel_theme_high_contrast() || (argb & 0xff000000U) == 0U) return SAO_STATUS_OK;
-    const SaoUiShadowPreset preset = sao::ui::kSaoThemeElevationPresets[elevation]; if (preset.alpha == 0) return SAO_STATUS_OK;
-    try { std::scoped_lock lock(context->raster->mutex); for (int32_t layer = 0; layer < 3; ++layer) { const float spread = static_cast<float>(preset.spread + layer); const uint32_t alpha = static_cast<uint32_t>(preset.alpha) / static_cast<uint32_t>(layer + 1); const uint32_t shadow = (argb & 0x00ffffffU) | (alpha << 24U); fill_rounded_rect(*context, {x + static_cast<float>(preset.offset_x) - spread, y + static_cast<float>(preset.offset_y) - spread, width + spread * 2.0F, height + spread * 2.0F}, radius + spread, shadow); } return SAO_STATUS_OK; } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
+sao_status_t sao::ui::detail::paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x,
+                                                     float y, float width, float height,
+                                                     float radius, int32_t elevation,
+                                                     uint32_t argb) noexcept {
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height) || elevation < 0 ||
+        elevation > 3)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (sao::ui::detail::panel_theme_high_contrast() || (argb & 0xff000000U) == 0U)
+        return SAO_STATUS_OK;
+    const SaoUiShadowPreset preset = sao::ui::kSaoThemeElevationPresets[elevation];
+    if (preset.alpha == 0)
+        return SAO_STATUS_OK;
+    try {
+        std::unique_lock<std::mutex> lock;
+        if (context->raster != nullptr)
+            lock = std::unique_lock(context->raster->mutex);
+        for (int32_t layer = 0; layer < 3; ++layer) {
+            const float spread = static_cast<float>(preset.spread + layer);
+            const uint32_t alpha =
+                static_cast<uint32_t>(preset.alpha) / static_cast<uint32_t>(layer + 1);
+            const uint32_t shadow = (argb & 0x00ffffffU) | (alpha << 24U);
+            fill_rounded_rect(*context,
+                              {x + static_cast<float>(preset.offset_x) - spread,
+                               y + static_cast<float>(preset.offset_y) - spread,
+                               width + spread * 2.0F, height + spread * 2.0F},
+                              radius + spread, shadow);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rounded_rect(
-    sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height, float radius,
-    uint32_t argb) {
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_paint_ctx_fill_rounded_rect(sao_ui_paint_ctx_handle_t context, float x, float y, float width,
+                                   float height, float radius, uint32_t argb) {
     return sao::ui::detail::paint_rounded_rect(context, x, y, width, height, radius, argb);
 }
 
@@ -2343,22 +2559,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_stroke_line(sao_ui_paint_ct
                                                                  float x1, float y1, float x2,
                                                                  float y2, float width,
                                                                  uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || !std::isfinite(x1) ||
-        !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(width) ||
-        width <= 0.0F)
+    if (!has_paint_target(context) || !std::isfinite(x1) || !std::isfinite(y1) ||
+        !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(width) || width <= 0.0F)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->gpu_state != nullptr)
+        return stroke_line(*context, x1, y1, x2, y2, width, argb) ? SAO_STATUS_OK
+                                                                  : SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::scoped_lock lock(context->raster->mutex);
-    return stroke_line(*context, x1, y1, x2, y2, width, argb)
-               ? SAO_STATUS_OK
-               : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return stroke_line(*context, x1, y1, x2, y2, width, argb) ? SAO_STATUS_OK
+                                                              : SAO_STATUS_ERR_INVALID_ARGUMENT;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_ellipse(sao_ui_paint_ctx_handle_t context,
                                                                   float x, float y, float width,
                                                                   float height, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height))
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->gpu_state != nullptr) {
+        fill_ellipse(*context, {x, y, width, height}, argb);
+        return SAO_STATUS_OK;
+    }
     std::scoped_lock lock(context->raster->mutex);
     fill_ellipse(*context, {x, y, width, height}, argb);
     return SAO_STATUS_OK;
@@ -2368,12 +2588,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_polygon(sao_ui_paint_c
                                                                   const int32_t* points_xy,
                                                                   size_t point_count,
                                                                   uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || points_xy == nullptr ||
-        point_count < 3U || point_count > kMaxPolygonPoints ||
-        point_count > std::numeric_limits<size_t>::max() / 2U) {
+    if (!has_paint_target(context) || points_xy == nullptr || point_count < 3U ||
+        point_count > kMaxPolygonPoints || point_count > std::numeric_limits<size_t>::max() / 2U) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
+        if (context->gpu_state != nullptr && context->gpu_dispatch != nullptr &&
+            context->gpu_dispatch->fill_polygon != nullptr) {
+            return context->gpu_dispatch->fill_polygon(context->gpu_state, points_xy, point_count,
+                                                       argb, current_opacity(*context))
+                       ? SAO_STATUS_OK
+                       : SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
         int32_t min_x = points_xy[0];
         int32_t max_x = points_xy[0];
         int32_t min_y = points_xy[1];
@@ -2392,10 +2618,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_polygon(sao_ui_paint_c
             return SAO_STATUS_OK;
         const int64_t left = std::max<int64_t>(min_x, static_cast<int64_t>(std::ceil(clip.left)));
         const int64_t top = std::max<int64_t>(min_y, static_cast<int64_t>(std::ceil(clip.top)));
-        const int64_t right = std::min<int64_t>(
-            max_x, static_cast<int64_t>(std::ceil(clip.right)) - 1);
-        const int64_t bottom = std::min<int64_t>(
-            max_y, static_cast<int64_t>(std::ceil(clip.bottom)) - 1);
+        const int64_t right =
+            std::min<int64_t>(max_x, static_cast<int64_t>(std::ceil(clip.right)) - 1);
+        const int64_t bottom =
+            std::min<int64_t>(max_y, static_cast<int64_t>(std::ceil(clip.bottom)) - 1);
         if (right < left || bottom < top)
             return SAO_STATUS_OK;
         const uint64_t clipped_width = static_cast<uint64_t>(right - left) + 1U;
@@ -2418,10 +2644,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_polygon(sao_ui_paint_c
                     const float current_y = static_cast<float>(current_y_integer);
                     const float previous_x = static_cast<float>(points_xy[previous * 2U]);
                     const float previous_y = static_cast<float>(previous_y_integer);
-                    const float crossing =
-                        (previous_x - current_x) * (static_cast<float>(y) - current_y) /
-                            (previous_y - current_y) +
-                        current_x;
+                    const float crossing = (previous_x - current_x) *
+                                               (static_cast<float>(y) - current_y) /
+                                               (previous_y - current_y) +
+                                           current_x;
                     if (!std::isfinite(crossing))
                         return SAO_STATUS_ERR_INVALID_ARGUMENT;
                     crossings.push_back(crossing);
@@ -2429,13 +2655,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_polygon(sao_ui_paint_c
             }
             std::sort(crossings.begin(), crossings.end());
             const auto fill_span = [&](double start, double end) {
-                const int64_t span_left = std::max<int64_t>(
-                    left, static_cast<int64_t>(std::ceil(start)));
-                const int64_t span_right = std::min<int64_t>(
-                    right, static_cast<int64_t>(std::ceil(end)) - 1);
+                const int64_t span_left =
+                    std::max<int64_t>(left, static_cast<int64_t>(std::ceil(start)));
+                const int64_t span_right =
+                    std::min<int64_t>(right, static_cast<int64_t>(std::ceil(end)) - 1);
                 for (int64_t x = span_left; x <= span_right; ++x) {
-                    blend_pixel(*context->raster, static_cast<int32_t>(x),
-                                static_cast<int32_t>(y), color);
+                    blend_pixel(*context->raster, static_cast<int32_t>(x), static_cast<int32_t>(y),
+                                color);
                 }
             };
             size_t crossing_index = 0U;
@@ -2457,10 +2683,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_utf8(sao_ui_paint_ctx_
                                                                float x, float y,
                                                                const char* text_utf8, float size_px,
                                                                uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || text_utf8 == nullptr ||
-        !std::isfinite(size_px) || size_px <= 0.0F)
+    if (!has_paint_target(context) || text_utf8 == nullptr || !std::isfinite(size_px) ||
+        size_px <= 0.0F)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
+        if (context->gpu_state != nullptr) {
+            draw_text(*context, x, y, text_utf8, size_px, argb);
+            return SAO_STATUS_OK;
+        }
         std::scoped_lock lock(context->raster->mutex);
         draw_text(*context, x, y, text_utf8, size_px, argb);
         return SAO_STATUS_OK;
@@ -2473,10 +2703,23 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_blit_premultiplied_bgra(
     sao_ui_paint_ctx_handle_t context, const uint8_t* bgra_pixels, uint32_t source_width_px,
     uint32_t source_height_px, uint32_t source_stride_bytes, float x, float y, float width,
     float height) {
-    if (context == nullptr || context->raster == nullptr || bgra_pixels == nullptr ||
-        source_width_px == 0U || source_height_px == 0U ||
-        source_stride_bytes < source_width_px * sizeof(BgraPixel) || !valid_rect(width, height))
+    if (!has_paint_target(context) || bgra_pixels == nullptr || source_width_px == 0U ||
+        source_height_px == 0U ||
+        source_width_px > std::numeric_limits<uint32_t>::max() / sizeof(BgraPixel) ||
+        source_stride_bytes < source_width_px * sizeof(BgraPixel) ||
+        static_cast<size_t>(source_stride_bytes) >
+            std::numeric_limits<size_t>::max() / source_height_px ||
+        static_cast<size_t>(source_stride_bytes) * source_height_px > kMaxLocalBgraBytes ||
+        !finite_float_rect(x, y, width, height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (context->gpu_state != nullptr && context->gpu_dispatch != nullptr &&
+        context->gpu_dispatch->blit_bgra != nullptr) {
+        return context->gpu_dispatch->blit_bgra(context->gpu_state, bgra_pixels, source_width_px,
+                                                source_height_px, source_stride_bytes,
+                                                {x, y, width, height}, current_opacity(*context))
+                   ? SAO_STATUS_OK
+                   : SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
     std::scoped_lock lock(context->raster->mutex);
     const Rect destination = intersect({x, y, width, height}, clip_bounds(*context));
     for (int32_t py = static_cast<int32_t>(std::floor(destination.y));
@@ -2504,33 +2747,43 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_blit_premultiplied_bgra(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_corner_brackets(
     sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height,
     float arm_length, float stroke_width, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || !valid_rect(width, height) ||
-        !std::isfinite(arm_length) || !std::isfinite(stroke_width) || arm_length <= 0.0F ||
-        stroke_width <= 0.0F) {
+    if (!has_paint_target(context) || !valid_rect(width, height) || !std::isfinite(arm_length) ||
+        !std::isfinite(stroke_width) || arm_length <= 0.0F || stroke_width <= 0.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const float arm = std::min(arm_length, std::min(width, height) * 0.5F);
-    std::scoped_lock lock(context->raster->mutex);
+    std::unique_lock<std::mutex> lock;
+    if (context->raster != nullptr)
+        lock = std::unique_lock(context->raster->mutex);
     stroke_line(*context, x, y, x + arm, y, stroke_width, argb);
     stroke_line(*context, x, y, x, y + arm, stroke_width, argb);
     stroke_line(*context, x + width - arm, y, x + width, y, stroke_width, argb);
     stroke_line(*context, x + width, y, x + width, y + arm, stroke_width, argb);
     stroke_line(*context, x, y + height - arm, x, y + height, stroke_width, argb);
     stroke_line(*context, x, y + height, x + arm, y + height, stroke_width, argb);
-    stroke_line(*context, x + width, y + height - arm, x + width, y + height, stroke_width,
-                argb);
-    stroke_line(*context, x + width - arm, y + height, x + width, y + height, stroke_width,
-                argb);
+    stroke_line(*context, x + width, y + height - arm, x + width, y + height, stroke_width, argb);
+    stroke_line(*context, x + width - arm, y + height, x + width, y + height, stroke_width, argb);
     return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_scanlines(
-    sao_ui_paint_ctx_handle_t context, float x, float y, float width, float height,
-    float spacing, float line_height, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr ||
-        !finite_float_rect(x, y, width, height) || !std::isfinite(spacing) ||
-        !std::isfinite(line_height) || spacing <= 0.0F || line_height <= 0.0F) {
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_paint_ctx_draw_scanlines(sao_ui_paint_ctx_handle_t context, float x, float y, float width,
+                                float height, float spacing, float line_height, uint32_t argb) {
+    if (!has_paint_target(context) || !finite_float_rect(x, y, width, height) ||
+        !std::isfinite(spacing) || !std::isfinite(line_height) || spacing <= 0.0F ||
+        line_height <= 0.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (context->gpu_state != nullptr) {
+        const long double end = std::ceil(static_cast<long double>(height) / spacing);
+        if (!std::isfinite(end) || end > kMaxScanlineIterations)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        for (uint64_t index = 0; index < static_cast<uint64_t>(end); ++index) {
+            const float line_y = y + static_cast<float>(index) * spacing;
+            fill_rect(*context, {x, line_y, width, std::min(line_height, y + height - line_y)},
+                      argb);
+        }
+        return SAO_STATUS_OK;
     }
     std::scoped_lock lock(context->raster->mutex);
     FiniteRasterClip clip{};
@@ -2546,8 +2799,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_scanlines(
     long double first_index =
         std::floor((static_cast<long double>(clip.top) - line_height - y) / spacing) + 1.0L;
     first_index = std::max(0.0L, first_index);
-    const long double end_index =
-        std::ceil((draw_bottom - static_cast<long double>(y)) / spacing);
+    const long double end_index = std::ceil((draw_bottom - static_cast<long double>(y)) / spacing);
     if (!std::isfinite(first_index) || !std::isfinite(end_index) ||
         first_index > kMaxExactIterationIndex || end_index > kMaxExactIterationIndex) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -2579,41 +2831,40 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_scanlines(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_clock_pulse(
     sao_ui_paint_ctx_handle_t context, float center_x, float center_y, float radius,
     float phase_0_to_1, float stroke_width, uint32_t argb) {
-    if (context == nullptr || context->raster == nullptr || !std::isfinite(center_x) ||
-        !std::isfinite(center_y) || !std::isfinite(radius) ||
-        !std::isfinite(phase_0_to_1) || !std::isfinite(stroke_width) || radius <= 0.0F ||
-        phase_0_to_1 < 0.0F || phase_0_to_1 > 1.0F || stroke_width <= 0.0F) {
+    if (!has_paint_target(context) || !std::isfinite(center_x) || !std::isfinite(center_y) ||
+        !std::isfinite(radius) || !std::isfinite(phase_0_to_1) || !std::isfinite(stroke_width) ||
+        radius <= 0.0F || phase_0_to_1 < 0.0F || phase_0_to_1 > 1.0F || stroke_width <= 0.0F) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const float pulse_radius = std::max(stroke_width, radius * phase_0_to_1);
     const uint32_t source_alpha = (argb >> 24U) & 0xffU;
-    const uint32_t pulse_alpha = static_cast<uint32_t>(std::lround(
-        static_cast<float>(source_alpha) * (1.0F - phase_0_to_1)));
+    const uint32_t pulse_alpha = static_cast<uint32_t>(
+        std::lround(static_cast<float>(source_alpha) * (1.0F - phase_0_to_1)));
     const uint32_t pulse_color = (argb & 0x00ffffffU) | (pulse_alpha << 24U);
     constexpr int32_t segments = 64;
     constexpr float pi = 3.14159265358979323846F;
-    std::scoped_lock lock(context->raster->mutex);
+    std::unique_lock<std::mutex> lock;
+    if (context->raster != nullptr)
+        lock = std::unique_lock(context->raster->mutex);
     float previous_x = center_x + pulse_radius;
     float previous_y = center_y;
     for (int32_t segment = 1; segment <= segments; ++segment) {
-        const float angle = 2.0F * pi * static_cast<float>(segment) /
-                            static_cast<float>(segments);
+        const float angle = 2.0F * pi * static_cast<float>(segment) / static_cast<float>(segments);
         const float next_x = center_x + std::cos(angle) * pulse_radius;
         const float next_y = center_y + std::sin(angle) * pulse_radius;
-        stroke_line(*context, previous_x, previous_y, next_x, next_y, stroke_width,
-                    pulse_color);
+        stroke_line(*context, previous_x, previous_y, next_x, next_y, stroke_width, pulse_color);
         previous_x = next_x;
         previous_y = next_y;
     }
     const float tick = std::max(2.0F, radius * 0.12F);
     stroke_line(*context, center_x, center_y - pulse_radius - tick, center_x,
                 center_y - pulse_radius + tick, stroke_width, pulse_color);
-    stroke_line(*context, center_x + pulse_radius - tick, center_y,
-                center_x + pulse_radius + tick, center_y, stroke_width, pulse_color);
+    stroke_line(*context, center_x + pulse_radius - tick, center_y, center_x + pulse_radius + tick,
+                center_y, stroke_width, pulse_color);
     stroke_line(*context, center_x, center_y + pulse_radius - tick, center_x,
                 center_y + pulse_radius + tick, stroke_width, pulse_color);
-    stroke_line(*context, center_x - pulse_radius - tick, center_y,
-                center_x - pulse_radius + tick, center_y, stroke_width, pulse_color);
+    stroke_line(*context, center_x - pulse_radius - tick, center_y, center_x - pulse_radius + tick,
+                center_y, stroke_width, pulse_color);
     return SAO_STATUS_OK;
 }
 

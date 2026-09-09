@@ -4,52 +4,151 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
-
 #include <objbase.h>
 #include <shellapi.h>
+#include <windows.h>
+#include <windowsx.h>
 
+#include "hotkey_config_panel.h"
+#include "hotkey_manager.h"
+#include "plugin_manager_panel_internal.h"
+#include "process_selector_panel_internal.h"
+#include "settings_config_panel.h"
+#include "settings_owner_internal.h"
+#include "settings_profiles.h"
+#include "workshop_panel_internal.h"
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+#include "license_panel_internal.h"
+#endif
 #include "sao/ai_editor/ai_editor_launcher.h"
 #include "sao/ai_editor/ai_editor_main_panel.h"
 #include "sao/ai_editor/ai_editor_settings_panel.h"
+#include "sao/launcher/user_menu.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/server/freetier/workshop_client/workshop_client.h"
+#include "sao/ui/entity_shell.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
 #include "sao/ui/overlay_host.h"
-#include "sao/ui/panel.h"
 #include "sao/ui/sound.h"
+#include "sao/ui/theme.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
+#include <iterator>
+#include <memory>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 
+namespace sao::launcher::settings {
+// Production entry point with a status result; the public wrapper is intentionally void.
+sao_status_t open_config_panel_status() noexcept;
+} // namespace sao::launcher::settings
+
 namespace {
 constexpr UINT_PTR kUiService = 1;
-void require(int32_t status) {
-    if (status != 0)
-        throw std::runtime_error("Production UI API status " + std::to_string(status));
+constexpr int32_t kOpenLauncherSettings = 1000;
+constexpr int32_t kOpenHotkeys = 1001;
+constexpr int32_t kOpenAiMain = 1002;
+constexpr int32_t kOpenAiSettings = 1003;
+constexpr int32_t kOpenPluginManager = 1004;
+constexpr int32_t kOpenWorkshop = 1005;
+constexpr int32_t kOpenProcessSelector = 1006;
+constexpr int32_t kOpenLicense = 1007;
+constexpr int32_t kOpenUserMenu = 1008;
+constexpr int32_t kOpenAboutGuide = 1009;
+
+void require(sao_status_t status,
+             const std::source_location source = std::source_location::current()) {
+    if (status != SAO_STATUS_OK)
+        throw std::runtime_error("Production UI API status " + std::to_string(status) + " at " +
+                                 source.function_name() + ":" + std::to_string(source.line()));
 }
+void require_sdk(sao_sdk_status_t status) {
+    if (status != SAO_SDK_OK)
+        throw std::runtime_error("Production SDK API status " + std::to_string(status));
+}
+void require_active(sao_status_t status,
+                    const std::source_location source = std::source_location::current()) {
+    if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_INITIALIZED)
+        require(status, source);
+}
+
+enum class InitialSurface {
+    root,
+    ai_main,
+    ai_settings,
+    settings,
+    hotkeys,
+    plugins,
+    workshop,
+    process,
+    license
+};
+struct Options {
+    InitialSurface initial_surface{InitialSurface::root};
+    bool offline{};
+    bool offline_explicit{};
+    bool backend_explicit{};
+    bool intro{};
+    std::filesystem::path workspace{std::filesystem::current_path()};
+    std::filesystem::path backend;
+    std::filesystem::path settings;
+};
+
 std::string utf8(const std::filesystem::path& path) {
     const auto bytes = path.u8string();
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
-struct Options {
-    bool offline{};
-    bool main_panel{};
-    bool intro{};
-    std::filesystem::path workspace{std::filesystem::current_path()};
-    std::filesystem::path backend;
-};
+
+// The Workshop owner remains the production page.  This provider only reads
+// the real client configuration and deliberately exposes a detached backend
+// state, so opening the page never schedules a network request in the shell.
+sao_status_t detached_workshop_status() noexcept {
+    char endpoint[512]{};
+    size_t written = 0;
+    (void)sao_workshop_client_get_base_url(endpoint, std::size(endpoint), &written);
+    return SAO_STATUS_ERR_NOT_INITIALIZED;
+}
+
+sao::launcher::workshop_panel::Operations detached_workshop_operations() {
+    using namespace sao::launcher::workshop_panel;
+    Operations operations;
+    operations.list = [](std::stop_token stop, std::uint32_t, std::uint32_t, PluginPage& output) {
+        output = {};
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    operations.detail = [](std::stop_token stop, std::string_view, PluginDetail& output) {
+        output = {};
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    operations.download = [](std::stop_token stop, std::string_view, const std::filesystem::path&,
+                             std::filesystem::path& output) {
+        output.clear();
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    operations.verify = [](std::stop_token stop, const std::filesystem::path&, std::string_view) {
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    operations.install = [](std::stop_token stop, const std::filesystem::path&,
+                            const std::filesystem::path&) {
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    operations.uninstall = [](std::stop_token stop, std::string_view, const std::filesystem::path&,
+                              bool) {
+        return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : detached_workshop_status();
+    };
+    return operations;
+}
+
 Options options() {
     Options value;
-    wchar_t module[32768]{};
-    const DWORD length = GetModuleFileNameW(nullptr, module, 32768);
-    if (!length || length >= 32768)
-        throw std::runtime_error("Executable path unavailable");
-    value.backend = std::filesystem::path(module).parent_path() / L"SaoAiEditor.exe";
     int count = 0;
     LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count);
-    if (!args)
+    if (args == nullptr)
         throw std::runtime_error("Arguments unavailable");
     struct ArgsRelease {
         LPWSTR* value;
@@ -57,119 +156,295 @@ Options options() {
             LocalFree(value);
         }
     } release{args};
-    for (int i = 1; i < count; ++i) {
-        const std::wstring arg = args[i];
-        if (arg == L"--offline")
+    for (int index = 1; index < count; ++index) {
+        const std::wstring arg = args[index];
+        if (arg == L"--offline") {
             value.offline = true;
-        else if (arg == L"--main")
-            value.main_panel = true;
-        else if (arg == L"--intro")
-            value.intro = true;
-        else if ((arg == L"--workspace" || arg == L"--backend") && i + 1 < count) {
-            auto path = std::filesystem::absolute(args[++i]);
-            if (arg == L"--workspace")
-                value.workspace = std::move(path);
+            value.offline_explicit = true;
+        } else if (arg == L"--ai-main" || arg == L"--main")
+            value.initial_surface = InitialSurface::ai_main;
+        else if (arg == L"--ai-settings")
+            value.initial_surface = InitialSurface::ai_settings;
+        else if (arg == L"--page" && index + 1 < count) {
+            const std::wstring page = args[++index];
+            if (page == L"root")
+                value.initial_surface = InitialSurface::root;
+            else if (page == L"settings")
+                value.initial_surface = InitialSurface::settings;
+            else if (page == L"hotkeys")
+                value.initial_surface = InitialSurface::hotkeys;
+            else if (page == L"plugins")
+                value.initial_surface = InitialSurface::plugins;
+            else if (page == L"workshop")
+                value.initial_surface = InitialSurface::workshop;
+            else if (page == L"process")
+                value.initial_surface = InitialSurface::process;
+            else if (page == L"license")
+                value.initial_surface = InitialSurface::license;
+            else if (page == L"ai-main")
+                value.initial_surface = InitialSurface::ai_main;
+            else if (page == L"ai-settings")
+                value.initial_surface = InitialSurface::ai_settings;
             else
-                value.backend = std::move(path);
+                throw std::runtime_error("Unknown production UI page");
+        } else if (arg == L"--intro")
+            value.intro = true;
+        else if (arg == L"--workspace" && index + 1 < count)
+            value.workspace = std::filesystem::absolute(args[++index]);
+        else if (arg == L"--settings" && index + 1 < count)
+            value.settings = std::filesystem::absolute(args[++index]);
+        else if (arg == L"--backend" && index + 1 < count) {
+            value.backend = std::filesystem::absolute(args[++index]);
+            value.backend_explicit = true;
         } else
-            throw std::runtime_error("Usage: sao_ui_preview [--main] [--intro] [--offline] "
-                                     "[--workspace PATH] [--backend EXE]");
+            throw std::runtime_error(
+                "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--offline] [--backend "
+                "EXE] [--intro] [--workspace PATH] [--settings PATH]");
     }
+    if (value.backend_explicit && !value.offline_explicit)
+        value.offline = false;
     return value;
 }
 
-// This host uses the real overlay/D3D compositor and real panel factories.
-// Online mode borrows a production headless launcher; it has no mock RPC data.
+// One production DComp/compositor owner. The shell intentionally does not run
+// the launcher pipeline, driver, or plugin discovery; AI backend launch occurs
+// only when the caller explicitly supplies --backend without --offline.
 struct Host {
     Options config;
     HWND window{};
     sao_ui_overlay_host_handle_t overlay{};
     sao_ui_compositor_handle_t compositor{};
-    sao_ai_editor_launcher_t backend{};
-    sao_ai_editor_settings_panel_t settings{};
-    sao_ai_editor_main_panel_t main{};
-    sao_ui_panel_handle_t panel{};
+    sao_ui_entity_shell_handle_t entity{};
     sao_ui_input_router_deep_handle_t keyboard{};
     sao_ui_linkstart_handle_t intro{};
+    sao_ai_editor_settings_panel_t ai_settings{};
+    sao_ai_editor_main_panel_t ai_main{};
+    sao_ai_editor_launcher_t backend{};
+    std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
+    std::unique_ptr<sao::launcher::hotkey::Owner> hotkey_owner;
+    std::unique_ptr<sao::launcher::plugin_manager_panel::Owner> plugin_manager;
+    std::unique_ptr<sao::launcher::process_selector_panel::Owner> process_selector;
+    std::unique_ptr<sao::launcher::workshop_panel::Owner> workshop;
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+    std::unique_ptr<sao::launcher::license_panel::Owner> license;
+#endif
+    sao::launcher::UserMenu user_menu;
+    bool user_menu_created{};
     ULONGLONG last_tick{};
     ULONGLONG last_service{};
-    bool closing{};
-    bool panel_hidden{};
     ULONGLONG close_started{};
+    bool sdk_bound{};
+    bool closing{};
 
     explicit Host(Options value) : config(std::move(value)) {}
     ~Host() {
         (void)close();
         (void)sao_ui_sound_shutdown();
     }
+
+    static sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data) {
+        auto* host = static_cast<Host*>(user_data);
+        if (host == nullptr)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        switch (static_cast<int32_t>(action)) {
+        case kOpenLauncherSettings:
+            return host->open_launcher_settings();
+        case kOpenHotkeys:
+            return host->open_hotkeys();
+        case kOpenAiMain:
+            return host->open_ai_main();
+        case kOpenAiSettings:
+            return host->open_ai_settings();
+        case kOpenPluginManager:
+            return host->open_plugin_manager();
+        case kOpenWorkshop:
+            return host->open_workshop();
+        case kOpenProcessSelector:
+            return host->open_process_selector();
+        case kOpenLicense:
+            return host->open_license();
+        case kOpenUserMenu:
+            return host->open_user_menu();
+        case kOpenAboutGuide:
+            return host->open_about_guide();
+        case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+            return sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT);
+        case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+            return sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
+        case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
+            return host->settings_owner ? host->settings_owner->save()
+                                        : SAO_STATUS_ERR_NOT_INITIALIZED;
+        default:
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    sao_status_t open_launcher_settings() noexcept {
+        return sao::launcher::settings::open_config_panel_status();
+    }
+    sao_status_t open_hotkeys() noexcept {
+        return hotkey_owner ? hotkey_owner->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t open_ai_settings() noexcept {
+        if (ai_settings == nullptr) {
+            const sao_status_t status =
+                sao_ai_editor_settings_panel_create(compositor, backend, &ai_settings);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        sao_status_t status = sao_ai_editor_settings_panel_show(ai_settings);
+        if (status == SAO_STATUS_OK)
+            status = sao_ai_editor_settings_panel_tick(ai_settings);
+        return status;
+    }
+    sao_status_t open_ai_main() noexcept {
+        if (ai_main == nullptr) {
+            const sao_status_t status =
+                sao_ai_editor_main_panel_create(compositor, backend, &ai_main);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        sao_status_t status = sao_ai_editor_main_panel_show(ai_main);
+        if (status == SAO_STATUS_OK)
+            status = sao_ai_editor_main_panel_tick(ai_main);
+        return status;
+    }
+    sao_status_t open_plugin_manager() noexcept {
+        return plugin_manager ? plugin_manager->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t open_workshop() noexcept {
+        return workshop ? workshop->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t open_process_selector() noexcept {
+        return process_selector ? process_selector->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t open_license() noexcept {
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+        return license ? license->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+#else
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+#endif
+    }
+    sao_status_t open_user_menu() noexcept {
+        if (!user_menu_created)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        user_menu.processCommandLine(L"", true);
+        return SAO_STATUS_OK;
+    }
+    sao_status_t open_about_guide() noexcept {
+        return sao::launcher::openUserDocsIndex(config.workspace.c_str(), window)
+                   ? SAO_STATUS_OK
+                   : SAO_STATUS_ERR_NOT_FOUND;
+    }
+
     int32_t close() noexcept {
-        if (intro) {
+        if (intro != nullptr) {
             sao_ui_linkstart_destroy(intro);
             intro = nullptr;
         }
-        // Do not hide a main panel with an active run: the operator still
-        // needs its Stop action if retirement takes longer than the deadline.
-        if (main) {
-            const auto status = sao_ai_editor_main_panel_try_destroy(main);
-            if (status)
+        if (ai_main != nullptr) {
+            const sao_status_t status = sao_ai_editor_main_panel_try_destroy(ai_main);
+            if (status != SAO_STATUS_OK)
                 return status;
-            main = nullptr;
-            panel = nullptr;
+            ai_main = nullptr;
         }
-        if (!panel_hidden) {
-            if (settings) {
-                const auto status = sao_ai_editor_settings_panel_hide(settings);
-                if (status)
-                    return status;
-            }
-            if (main) {
-                const auto status = sao_ai_editor_main_panel_hide(main);
-                if (status)
-                    return status;
-            }
-            panel_hidden = true;
-        }
-        if (settings) {
-            const auto status = sao_ai_editor_settings_panel_try_destroy(settings);
-            if (status)
+        if (ai_settings != nullptr) {
+            const sao_status_t status = sao_ai_editor_settings_panel_try_destroy(ai_settings);
+            if (status != SAO_STATUS_OK)
                 return status;
-            settings = nullptr;
-            panel = nullptr;
+            ai_settings = nullptr;
         }
-        if (main) {
-            const auto status = sao_ai_editor_main_panel_try_destroy(main);
-            if (status)
+        if (user_menu_created) {
+            user_menu.unbind_hotkey_owner(hotkey_owner.get());
+            user_menu.destroy();
+            user_menu_created = false;
+        }
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+        if (license != nullptr) {
+            const sao_status_t status = license->take_offline();
+            if (status != SAO_STATUS_OK)
                 return status;
-            main = nullptr;
-            panel = nullptr;
+            license.reset();
         }
-        if (keyboard) {
-            const auto status = sao_ui_input_router_deep_try_destroy(keyboard);
-            if (status)
+#endif
+        if (workshop != nullptr) {
+            const sao_status_t status = workshop->try_take_offline();
+            if (status != SAO_STATUS_OK)
+                return status;
+            workshop.reset();
+        }
+        if (process_selector != nullptr) {
+            const sao_status_t status = process_selector->take_offline();
+            if (status != SAO_STATUS_OK)
+                return status;
+            process_selector.reset();
+        }
+        if (plugin_manager != nullptr) {
+            const sao_status_t status = plugin_manager->take_offline();
+            if (status != SAO_STATUS_OK)
+                return status;
+            plugin_manager.reset();
+        }
+        if (hotkey_owner != nullptr) {
+            const sao_status_t status = hotkey_owner->take_offline();
+            if (status != SAO_STATUS_OK)
+                return status;
+            hotkey_owner.reset();
+        }
+        const sao_status_t settings_panel_status =
+            sao::launcher::settings::take_offline_for_testing();
+        if (settings_panel_status != SAO_STATUS_OK)
+            return settings_panel_status;
+        (void)sao::launcher::hotkey::unregister_all();
+        sao::launcher::hotkey::clear_callbacks();
+        (void)sao_launcher_hotkey_set_settings_owner(nullptr);
+        (void)sao::launcher::settings::settings_profiles_unbind_owner(nullptr);
+        (void)sao::launcher::settings::settings_panel_unbind_owner(nullptr);
+        if (settings_owner != nullptr) {
+            const sao_status_t status = settings_owner->save();
+            if (status != SAO_STATUS_OK)
+                return status;
+            settings_owner.reset();
+        }
+        if (entity != nullptr) {
+            const sao_status_t status = sao_ui_entity_shell_try_destroy(entity);
+            if (status != SAO_STATUS_OK)
+                return status;
+            entity = nullptr;
+        }
+        if (keyboard != nullptr) {
+            const sao_status_t status = sao_ui_input_router_deep_try_destroy(keyboard);
+            if (status != SAO_STATUS_OK)
                 return status;
             keyboard = nullptr;
         }
-        if (compositor) {
-            const auto status = sao_ui_compositor_try_destroy(compositor);
-            if (status)
+        if (sdk_bound) {
+            if (sao_sdk_platform_unbind_ui_compositor() != SAO_SDK_OK)
+                return SAO_STATUS_ERR_UNKNOWN;
+            sdk_bound = false;
+        }
+        if (compositor != nullptr) {
+            const sao_status_t status = sao_ui_compositor_try_destroy(compositor);
+            if (status != SAO_STATUS_OK)
                 return status;
             compositor = nullptr;
         }
-        if (overlay) {
+        if (overlay != nullptr) {
             if (!sao_ui_overlay_host_destroy(overlay))
                 return SAO_UI_STATUS_ERR_BUSY;
             overlay = nullptr;
         }
-        if (backend) {
+        if (backend != nullptr) {
             int32_t exit_code = 0;
             (void)sao_ai_editor_shutdown(backend, 2000, &exit_code);
             sao_ai_editor_destroy(backend);
             backend = nullptr;
         }
-        return 0;
+        return SAO_STATUS_OK;
     }
+
     void resize() {
-        if (!overlay)
+        if (overlay == nullptr)
             return;
         if (IsIconic(window)) {
             require(sao_ui_overlay_host_set_visible(overlay, false));
@@ -177,20 +452,134 @@ struct Host {
         }
         RECT rect{};
         POINT origin{};
-        if (!GetClientRect(window, &rect) || !ClientToScreen(window, &origin))
-            return;
-        if (rect.right < 1 || rect.bottom < 1)
+        if (!GetClientRect(window, &rect) || !ClientToScreen(window, &origin) || rect.right < 1 ||
+            rect.bottom < 1)
             return;
         require(
             sao_ui_overlay_host_set_bounds(overlay, origin.x, origin.y, rect.right, rect.bottom));
-        if (panel)
-            require(sao_ui_panel_set_geometry(panel, 0, 0, rect.right, rect.bottom));
         require(sao_ui_overlay_host_set_visible(overlay, true));
     }
+
+    void initialize_settings() {
+        // A visual preview must not save over the production workspace's
+        // settings on close. Seed its independent profile once from real data.
+        if (config.settings.empty()) {
+            config.settings = config.workspace / L".sao" / L"ui-preview" / L"settings.json";
+            std::filesystem::create_directories(config.settings.parent_path());
+            const auto source = config.workspace / L"settings.json";
+            if (!std::filesystem::exists(config.settings) &&
+                std::filesystem::is_regular_file(source))
+                std::filesystem::copy_file(source, config.settings);
+        }
+        const auto settings_path = config.settings.wstring();
+        const auto profiles_path = (config.settings.parent_path() / L"profiles").wstring();
+        sao::launcher::settings::set_profiles_directory_for_testing(profiles_path);
+        require(
+            sao::launcher::settings_owner::SettingsOwner::create(settings_path, settings_owner));
+        sao::launcher::settings_owner::LoadInfo load_info{};
+        require(settings_owner->load(load_info));
+        require(sao::launcher::settings::settings_panel_bind_owner(settings_owner.get()));
+        require(sao::launcher::settings::settings_profiles_bind_owner(settings_owner.get()));
+        require(sao_launcher_hotkey_set_settings_owner(settings_owner.get()));
+    }
+
+    void initialize_entity() {
+        static constexpr SaoUiMenuItem control[] = {
+            {"设置", "sao:settings", kOpenLauncherSettings, true, {false, false, false}},
+            {"快捷键", "sao:keyboard", kOpenHotkeys, true, {false, false, false}},
+            {"保存设置",
+             "sao:settings",
+             SAO_UI_ENTITY_ACTION_SAVE_SETTINGS,
+             true,
+             {false, false, false}},
+        };
+        static constexpr SaoUiMenuItem tools[] = {
+            {"AI 工作台", "sao:chat", kOpenAiMain, true, {false, false, false}},
+            {"AI 设置", "sao:settings", kOpenAiSettings, true, {false, false, false}},
+            {"创意工坊", "sao:workshop", kOpenWorkshop, true, {false, false, false}},
+            {"进程选择", "sao:process", kOpenProcessSelector, true, {false, false, false}},
+        };
+        static constexpr SaoUiMenuItem plugins[] = {
+            {"插件管理", "sao:plugins", kOpenPluginManager, true, {false, false, false}},
+            {"许可", "sao:license", kOpenLicense, true, {false, false, false}},
+        };
+        static constexpr SaoUiMenuItem appearance[] = {
+            {"经典浅色",
+             "sao:home",
+             SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT,
+             true,
+             {false, false, false}},
+            {"经典深色",
+             "sao:lock",
+             SAO_UI_ENTITY_ACTION_SET_ALL_DARK,
+             true,
+             {false, false, false}},
+        };
+        static constexpr SaoUiMenuItem user[] = {
+            {"用户菜单", "sao:user", kOpenUserMenu, true, {false, false, false}},
+            {"关于与使用指南", "sao:info", kOpenAboutGuide, true, {false, false, false}},
+        };
+        static constexpr SaoUiEntityRootItem roots[] = {
+            {sizeof(SaoUiEntityRootItem),
+             "Control",
+             "设置",
+             "sao:settings",
+             10,
+             true,
+             {0, 0, 0},
+             control,
+             std::size(control)},
+            {sizeof(SaoUiEntityRootItem),
+             "Tools",
+             "工具",
+             "sao:tools",
+             11,
+             true,
+             {0, 0, 0},
+             tools,
+             std::size(tools)},
+            {sizeof(SaoUiEntityRootItem),
+             "Plugins",
+             "插件",
+             "sao:plugins",
+             12,
+             true,
+             {0, 0, 0},
+             plugins,
+             std::size(plugins)},
+            {sizeof(SaoUiEntityRootItem),
+             "Skins",
+             "外观",
+             "sao:home",
+             13,
+             true,
+             {0, 0, 0},
+             appearance,
+             std::size(appearance)},
+            {sizeof(SaoUiEntityRootItem),
+             "User",
+             "用户",
+             "sao:user",
+             14,
+             true,
+             {0, 0, 0},
+             user,
+             std::size(user)},
+        };
+        SaoUiEntityShellConfig entity_config{};
+        entity_config.action_fn = &Host::entity_action;
+        entity_config.action_user_data = this;
+        require(sao_ui_entity_shell_create_on_compositor(compositor, &entity_config, &entity));
+        bool nervgear_enabled = true;
+        require(settings_owner->get_truthy("nervgear_mode", true, nervgear_enabled));
+        require(sao_ui_entity_shell_set_nervgear_mode(entity, nervgear_enabled));
+        require(sao_ui_entity_shell_set_roots(entity, roots, std::size(roots)));
+    }
+
     void initialize() {
-        if (!config.offline) {
-            const auto executable = utf8(config.backend);
-            const auto workspace = utf8(config.workspace);
+        if (config.backend_explicit && !config.offline) {
+            const std::string executable = utf8(config.backend);
+            const std::string workspace = utf8(config.workspace);
             const std::string extra = "--headless --workspace \"" + workspace + "\"";
             SaoAiEditorLaunchConfig launch{};
             launch.executable_utf8 = executable.c_str();
@@ -204,21 +593,62 @@ struct Host {
         SaoOverlayHostConfig host{};
         host.width = 1280;
         host.height = 820;
-        host.title_utf16 = L"SAO Classic — production compositor";
+        host.title_utf16 = L"SAO Classic — production UI shell";
         require(sao_ui_overlay_host_create(&host, &overlay));
         require(sao_ui_compositor_create(overlay, nullptr, &compositor));
-        if (config.main_panel) {
-            require(sao_ai_editor_main_panel_create(compositor, backend, &main));
-            require(sao_ai_editor_main_panel_show(main));
-        } else {
-            require(sao_ai_editor_settings_panel_create(compositor, backend, &settings));
-            require(sao_ai_editor_settings_panel_show(settings));
-        }
-        require(sao_ui_panel_find_by_id(compositor,
-                                        config.main_panel ? SAO_AI_EDITOR_MAIN_PANEL_ID
-                                                          : SAO_AI_EDITOR_SETTINGS_PANEL_ID,
-                                        &panel));
+        require_sdk(sao_sdk_platform_bind_ui_compositor(compositor));
+        sdk_bound = true;
+        initialize_settings();
+        hotkey_owner = std::make_unique<sao::launcher::hotkey::Owner>(compositor);
+        require(hotkey_owner->set_owner_wake_window(window));
+        plugin_manager = std::make_unique<sao::launcher::plugin_manager_panel::Owner>(compositor);
+        process_selector =
+            std::make_unique<sao::launcher::process_selector_panel::Owner>(compositor, nullptr);
+        workshop = std::make_unique<sao::launcher::workshop_panel::Owner>(
+            compositor, config.workspace, detached_workshop_operations());
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+        license = std::make_unique<sao::launcher::license_panel::Owner>(compositor);
+#endif
+        if (!user_menu.create(config.workspace.c_str()))
+            throw std::runtime_error("Production user menu unavailable");
+        user_menu.bind_hotkey_owner(hotkey_owner.get());
+        user_menu_created = true;
+        initialize_entity();
+        require(sao_ui_entity_shell_bring_online(entity));
+        sao::launcher::hotkey::clear_callbacks();
+        sao::launcher::hotkey::set_callback("toggle_sao_menu", [this] {
+            if (sao_ui_entity_shell_home(entity) == SAO_STATUS_OK)
+                (void)sao_ui_compositor_tick(compositor);
+        });
+        sao::launcher::hotkey::set_callback("toggle_float_button", [this] {
+            if (sao_ui_entity_shell_insert(entity) == SAO_STATUS_OK)
+                (void)sao_ui_compositor_tick(compositor);
+        });
+        sao::launcher::hotkey::load_or_default({
+            {"toggle_sao_menu", "Home", VK_HOME, MOD_NOREPEAT},
+            {"toggle_float_button", "Insert", VK_INSERT, MOD_NOREPEAT},
+        });
+        if (!sao::launcher::hotkey::register_all().empty())
+            throw std::runtime_error("Production hotkey registration unavailable");
         require(sao_ui_input_router_deep_create(compositor, &keyboard));
+        if (config.initial_surface == InitialSurface::ai_main)
+            require(open_ai_main());
+        if (config.initial_surface == InitialSurface::ai_settings)
+            require(open_ai_settings());
+        if (config.initial_surface == InitialSurface::settings)
+            require(open_launcher_settings());
+        if (config.initial_surface == InitialSurface::hotkeys)
+            require(open_hotkeys());
+        if (config.initial_surface == InitialSurface::plugins)
+            require(open_plugin_manager());
+        if (config.initial_surface == InitialSurface::workshop)
+            require(open_workshop());
+        if (config.initial_surface == InitialSurface::process)
+            require(open_process_selector());
+        if (config.initial_surface == InitialSurface::license)
+            require(open_license());
+        if (config.initial_surface == InitialSurface::root)
+            require(sao_ui_entity_shell_home(entity));
         resize();
         if (config.intro) {
             RECT rect{};
@@ -233,70 +663,104 @@ struct Host {
         if (!SetTimer(window, kUiService, 16, nullptr))
             throw std::runtime_error("UI timer unavailable");
     }
+
     void service() {
-        const auto now = GetTickCount64();
+        const ULONGLONG now = GetTickCount64();
         if (closing) {
             if (close_started == 0)
                 close_started = now;
-            if (close() == 0) {
+            if (close() == SAO_STATUS_OK) {
                 DestroyWindow(window);
                 return;
             }
             if (now - close_started > 5000) {
                 closing = false;
                 close_started = 0;
-                panel_hidden = false;
-                if (settings)
-                    (void)sao_ai_editor_settings_panel_show(settings);
-                SetWindowTextW(window, L"SAO Classic · 后台任务尚未结束，请停止任务后再关闭");
+                SetWindowTextW(window, L"SAO Classic · 页面仍在收口，请完成当前操作后再关闭");
             }
-            // Retrying a busy owner must drain RPC completions, just like the
-            // production process owner. Nothing is freed until retirement.
-        }
-        if (now - last_service >= 50) {
-            if (settings)
-                require(sao_ai_editor_settings_panel_tick(settings));
-            if (main)
-                require(sao_ai_editor_main_panel_tick(main));
-            last_service = now;
-        }
-        if (closing) {
             return;
         }
-        if (intro) {
+        const uint32_t elapsed =
+            static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, UINT32_MAX));
+        require(sao_ui_entity_shell_tick(entity, elapsed));
+        if (now - last_service >= 50) {
+            if (ai_settings != nullptr)
+                require(sao_ai_editor_settings_panel_tick(ai_settings));
+            if (ai_main != nullptr)
+                require(sao_ai_editor_main_panel_tick(ai_main));
+            if (plugin_manager != nullptr)
+                require_active(plugin_manager->service_ui());
+            if (process_selector != nullptr)
+                require_active(process_selector->service_ui());
+            if (workshop != nullptr)
+                require_active(workshop->service_ui());
+#if defined(SAO_LAUNCHER_LICENSE_PANEL)
+            if (license != nullptr)
+                require_active(license->service_ui());
+#endif
+            last_service = now;
+        }
+        if (intro != nullptr) {
             bool active = false;
             require(sao_ui_linkstart_is_active(intro, &active));
-            if (active && sao_ui_linkstart_tick(intro, static_cast<int32_t>(std::min<ULONGLONG>(
-                                                           now - last_tick, INT32_MAX))) != 0)
+            if (active &&
+                sao_ui_linkstart_tick(intro, static_cast<int32_t>(elapsed)) != SAO_STATUS_OK)
                 (void)sao_ui_linkstart_dismiss(intro);
         }
         last_tick = now;
         if (!IsIconic(window)) {
-            auto status = sao_ui_compositor_tick(compositor);
-            if (status && intro) {
+            sao_status_t status = sao_ui_compositor_tick(compositor);
+            if (status != SAO_STATUS_OK && intro != nullptr) {
                 (void)sao_ui_linkstart_dismiss(intro);
                 status = sao_ui_compositor_tick(compositor);
             }
             if (status != SAO_STATUS_ERR_DEVICE_LOST)
                 require(status);
         }
-        SaoPanelState state{};
-        if (panel && sao_ui_panel_get_state(panel, &state) == 0 && !state.visible)
-            closing = true;
     }
+
+    void mouse(UINT message, WPARAM wp, LPARAM lp) noexcept {
+        if (entity == nullptr)
+            return;
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ClientToScreen(window, &point);
+        int32_t button = -1;
+        if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)
+            button = 0;
+        else if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
+            button = 1;
+        else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP)
+            button = 2;
+        const int32_t wheel = message == WM_MOUSEWHEEL ? GET_WHEEL_DELTA_WPARAM(wp) : 0;
+        (void)sao_ui_entity_shell_handle_mouse(entity, message, point.x, point.y, button, wheel);
+    }
+
     bool key(const MSG& message) {
-        if (!keyboard ||
-            (message.message != WM_KEYDOWN && message.message != WM_KEYUP &&
-             message.message != WM_CHAR && message.message != SAO_UI_NATIVE_TEXT_TAB_MESSAGE))
+        if (message.message == WM_HOTKEY)
+            return sao::launcher::hotkey::dispatch_by_native_id(static_cast<int>(message.wParam));
+        if (message.message == sao::launcher::hotkey::kCaptureCompletionMessage &&
+            hotkey_owner != nullptr) {
+            require(hotkey_owner->drain_capture_for_owner());
+            return true;
+        }
+        if (message.message != WM_KEYDOWN && message.message != WM_KEYUP &&
+            message.message != WM_CHAR && message.message != SAO_UI_NATIVE_TEXT_TAB_MESSAGE)
             return false;
         const HWND render = static_cast<HWND>(sao_ui_compositor_host_hwnd(compositor));
         if (GetFocus() != render && GetFocus() != window)
             return false;
         bool consumed = false;
-        const auto status = sao_ui_input_router_feed_raw_win32(
+        const sao_status_t status = sao_ui_input_router_feed_raw_win32(
             keyboard, message.message, message.wParam, message.lParam, &consumed);
         if (status != SAO_STATUS_ERR_NOT_FOUND)
             require(status);
+        if (!consumed && message.message == WM_KEYDOWN && entity != nullptr) {
+            const sao_status_t shell_status =
+                sao_ui_entity_shell_handle_key(entity, static_cast<uint32_t>(message.wParam), 0);
+            if (shell_status != SAO_STATUS_ERR_NOT_FOUND)
+                require(shell_status);
+            consumed = shell_status == SAO_STATUS_OK;
+        }
         return consumed;
     }
 };
@@ -308,13 +772,24 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         host->window = window;
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(host));
     }
-    if (!host)
+    if (host == nullptr)
         return DefWindowProcW(window, message, wp, lp);
     try {
         switch (message) {
         case WM_SIZE:
         case WM_MOVE:
             host->resize();
+            return 0;
+        case WM_MOUSEMOVE:
+        case WM_MOUSELEAVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_MOUSEWHEEL:
+            host->mouse(message, wp, lp);
             return 0;
         case WM_TIMER:
             if (wp == kUiService)
@@ -336,8 +811,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         default:
             break;
         }
-    } catch (const std::exception& ex) {
-        SetWindowTextA(window, ex.what());
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "Production UI message %u: %s\n", message, error.what());
+        std::fflush(stderr);
+        SetWindowTextA(window, error.what());
         host->closing = true;
     }
     return DefWindowProcW(window, message, wp, lp);
@@ -346,8 +823,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     (void)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)))
+    const HRESULT com_status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(com_status)) {
+        const std::wstring message =
+            L"STA COM initialization failed: " + std::to_wstring(com_status);
+        MessageBoxW(nullptr, message.c_str(), L"Production UI host", MB_OK | MB_ICONERROR);
         return 1;
+    }
     int code = 1;
     try {
         Host host(options());
@@ -359,13 +841,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         cls.lpszClassName = L"SaoProductionUiHost";
         if (!RegisterClassW(&cls))
             throw std::runtime_error("Window class unavailable");
-        const wchar_t* title = host.config.offline
-                                   ? L"SAO Classic · 生产渲染 / 离线模式（未连接后端）"
-                                   : L"SAO Classic · 生产渲染与真实 AI Editor 后端";
-        HWND window =
-            CreateWindowExW(0, cls.lpszClassName, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                            CW_USEDEFAULT, 1280, 860, nullptr, nullptr, instance, &host);
-        if (!window)
+        HWND window = CreateWindowExW(0, cls.lpszClassName, L"SAO Classic · production UI shell",
+                                      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860,
+                                      nullptr, nullptr, instance, &host);
+        if (window == nullptr)
             throw std::runtime_error("Window creation failed");
         try {
             host.initialize();
@@ -386,8 +865,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             DestroyWindow(window);
             throw;
         }
-    } catch (const std::exception& ex) {
-        MessageBoxA(nullptr, ex.what(), "Production UI host", MB_OK | MB_ICONERROR);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "Production UI startup: %s\n", error.what());
+        std::fflush(stderr);
+        MessageBoxA(nullptr, error.what(), "Production UI host", MB_OK | MB_ICONERROR);
     }
     CoUninitialize();
     return code;

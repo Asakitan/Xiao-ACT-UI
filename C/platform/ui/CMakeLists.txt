@@ -36,6 +36,8 @@ add_library(sao_platform_ui SHARED
 
     # ── Widgets / theme / panels ──────────────────
     src/d2d_widgets.cpp
+    src/gpu_paint.cpp
+    src/paint_display_list.cpp
     src/d2d_effects.cpp
     src/particle_system.cpp
     src/hp_bar_widget.cpp

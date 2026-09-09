@@ -67,6 +67,8 @@ struct Snapshot {
     bool visible{};
     bool loading{};
     FilterMode filter{FilterMode::all};
+    std::size_t page_index{};
+    bool attach_available{};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text;
     std::vector<ProcessRecord> all_processes;
@@ -99,7 +101,8 @@ class Owner final {
     // registered panel and callback ownership for a later retry.
     sao_status_t take_offline() noexcept;
     void fail_next_unregister_for_testing(sao_status_t status) noexcept;
-    void fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept;
+    void fail_next_handler_restore_for_testing(sao_status_t action_status,
+                                               sao_status_t event_status) noexcept;
     static void drain_deferred_cleanup_for_owner() noexcept;
     static void drain_deferred_cleanup_for_testing() noexcept;
     sao_status_t refresh() noexcept;
@@ -124,13 +127,13 @@ class Owner final {
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
     sao_status_t enqueue_refresh() noexcept;
+    sao_status_t set_page(std::size_t page_index) noexcept;
 
     static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
                                                   const std::uint8_t* payload_json_utf8,
                                                   std::size_t payload_len,
                                                   void* user_data) noexcept;
-    static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
-                                                 void* user_data) noexcept;
+    static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind, void* user_data) noexcept;
 
     static void defer_state(std::unique_ptr<State> state) noexcept;
     static void drain_deferred_cleanup() noexcept;

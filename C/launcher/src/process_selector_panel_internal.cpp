@@ -12,9 +12,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -40,6 +40,9 @@ constexpr std::size_t kMaximumStatusBytes = 1024U;
 constexpr std::size_t kMaximumPanelSpecBytes = 256U * 1024U;
 constexpr std::size_t kMaximumImagePathBytes = SAO_PROCESS_IMAGE_PATH_MAX - 1U;
 constexpr std::size_t kMaximumBaseNameBytes = 1024U;
+constexpr std::size_t kProcessesPerPage = 32U;
+constexpr std::string_view kPreviousPageAction = "process_selector.page.previous";
+constexpr std::string_view kNextPageAction = "process_selector.page.next";
 constexpr int kEnumerationAttempts = 3;
 
 bool valid_utf8(std::string_view value) noexcept {
@@ -89,18 +92,16 @@ bool valid_text(std::string_view value, std::size_t maximum, bool required) noex
            value.find('\0') == std::string_view::npos && valid_utf8(value);
 }
 
-std::optional<std::string_view> bounded_c_text(const char* value,
-                                               std::size_t maximum) noexcept {
+std::optional<std::string_view> bounded_c_text(const char* value, std::size_t maximum) noexcept {
     if (value == nullptr)
         return std::nullopt;
     const void* terminator = std::memchr(value, '\0', maximum + 1U);
     if (terminator == nullptr)
         return std::nullopt;
-    const auto length =
-        static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
+    const auto length = static_cast<std::size_t>(static_cast<const char*>(terminator) - value);
     const std::string_view result(value, length);
     return valid_text(result, maximum, true) ? std::optional<std::string_view>(result)
-                                              : std::nullopt;
+                                             : std::nullopt;
 }
 
 struct CoreProcessCloser {
@@ -153,11 +154,16 @@ SnapshotState snapshot_state(const Snapshot& snapshot) {
 
 std::string_view snapshot_state_label(SnapshotState state) {
     switch (state) {
-    case SnapshotState::loading: return "loading";
-    case SnapshotState::fresh: return "fresh";
-    case SnapshotState::stale: return "stale";
-    case SnapshotState::failed: return "failed";
-    case SnapshotState::empty: return "empty";
+    case SnapshotState::loading:
+        return "loading";
+    case SnapshotState::fresh:
+        return "fresh";
+    case SnapshotState::stale:
+        return "stale";
+    case SnapshotState::failed:
+        return "failed";
+    case SnapshotState::empty:
+        return "empty";
     }
     return "failed";
 }
@@ -213,6 +219,12 @@ std::vector<ProcessRecord> select_visible(const std::vector<ProcessRecord>& proc
     return visible;
 }
 
+std::size_t selected_process_count(const std::vector<ProcessRecord>& processes, FilterMode filter) {
+    if (filter == FilterMode::all)
+        return processes.size();
+    return static_cast<std::size_t>(std::ranges::count_if(processes, is_likely_game_process));
+}
+
 Json text_node(std::string text, std::string_view style = "value", int height = 24) {
     return Json{{"type", "text"},
                 {"text", bounded_text(std::move(text), 4096U)},
@@ -247,13 +259,17 @@ Json row_node(Json children) {
 }
 
 Json card_node(std::string title, Json children, std::string_view accent = "cyan") {
-    return Json{{"type", "card"}, {"title", bounded_text(std::move(title), 512U)},
-                {"accent", accent}, {"children", std::move(children)}};
+    return Json{{"type", "card"},
+                {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent},
+                {"children", std::move(children)}};
 }
 
 Json section_node(std::string title, Json children, std::string_view accent = "cyan") {
-    return Json{{"type", "section"}, {"title", bounded_text(std::move(title), 512U)},
-                {"accent", accent}, {"children", std::move(children)}};
+    return Json{{"type", "section"},
+                {"title", bounded_text(std::move(title), 512U)},
+                {"accent", accent},
+                {"children", std::move(children)}};
 }
 
 Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
@@ -279,9 +295,12 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
 }
 
 std::string_view snapshot_accent(SnapshotState state) noexcept {
-    if (state == SnapshotState::fresh) return "ok";
-    if (state == SnapshotState::loading || state == SnapshotState::stale) return "gold";
-    if (state == SnapshotState::failed) return "danger";
+    if (state == SnapshotState::fresh)
+        return "ok";
+    if (state == SnapshotState::loading || state == SnapshotState::stale)
+        return "gold";
+    if (state == SnapshotState::failed)
+        return "danger";
     return "cyan";
 }
 
@@ -304,7 +323,13 @@ Json status_strip_node(SnapshotState state) {
 }
 std::string build_panel_spec(const Snapshot& snapshot) {
     const SnapshotState state = snapshot_state(snapshot);
-    const bool attach_allowed = state == SnapshotState::fresh;
+    const bool attach_allowed = state == SnapshotState::fresh && snapshot.attach_available;
+    const std::size_t filtered_count = snapshot.visible_processes.size();
+    const std::size_t page_count =
+        filtered_count == 0U ? 1U : (filtered_count + kProcessesPerPage - 1U) / kProcessesPerPage;
+    const std::size_t page_index = std::min(snapshot.page_index, page_count - 1U);
+    const std::size_t page_begin = std::min(page_index * kProcessesPerPage, filtered_count);
+    const std::size_t page_end = std::min(page_begin + kProcessesPerPage, filtered_count);
     Json nodes = Json::array();
     nodes.push_back(status_strip_node(state));
     Json filters = Json::array();
@@ -318,21 +343,46 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                     snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
     filters.push_back(row_node(std::move(actions)));
     Json badges = Json::array();
-    badges.push_back(Json{{"type", "badge"}, {"text", std::string(snapshot_state_label(state))},
-                          {"style", state == SnapshotState::fresh ? "ok" : state == SnapshotState::stale ? "warn" : state == SnapshotState::failed ? "bad" : "accent"}, {"height", 22}});
     badges.push_back(Json{{"type", "badge"},
-                          {"text", std::to_string(snapshot.visible_processes.size()) + " shown"},
-                          {"style", "accent"}, {"height", 22}});
+                          {"text", std::string(snapshot_state_label(state))},
+                          {"style", state == SnapshotState::fresh    ? "ok"
+                                    : state == SnapshotState::stale  ? "warn"
+                                    : state == SnapshotState::failed ? "bad"
+                                                                     : "accent"},
+                          {"height", 22}});
+    badges.push_back(
+        Json{{"type", "badge"},
+             {"text", filtered_count == 0U
+                          ? "0 shown"
+                          : std::to_string(page_begin + 1U) + "-" + std::to_string(page_end) +
+                                " of " + std::to_string(filtered_count) + " shown"},
+             {"style", "accent"},
+             {"height", 22}});
     badges.push_back(Json{{"type", "badge"},
                           {"text", std::to_string(snapshot.all_processes.size()) + " available"},
-                          {"style", "muted"}, {"height", 22}});
+                          {"style", "muted"},
+                          {"height", 22}});
+    badges.push_back(
+        badge_node(snapshot.attach_available ? "Attach on / 可附加" : "Attach off / 未连接",
+                   snapshot.attach_available ? "ok" : "muted"));
     filters.push_back(row_node(std::move(badges)));
+    Json paging = Json::array();
+    paging.push_back(button_node("process.page.previous", "上一页",
+                                 std::string(kPreviousPageAction), Json::object(), "ghost",
+                                 snapshot.loading || page_index == 0U));
+    paging.push_back(badge_node(
+        "Page " + std::to_string(page_index + 1U) + " / " + std::to_string(page_count), "muted"));
+    paging.push_back(button_node("process.page.next", "下一页", std::string(kNextPageAction),
+                                 Json::object(), "ghost",
+                                 snapshot.loading || page_index + 1U >= page_count));
+    filters.push_back(row_node(std::move(paging)));
     nodes.push_back(section_node("Filters / 筛选", std::move(filters)));
     if (snapshot.attached_process.has_value()) {
         const ProcessRecord& process = *snapshot.attached_process;
         Json details = Json::array();
-        details.push_back(row_node(Json::array({badge_node("Attached / 已附加", "ok"),
-                                                badge_node("PID " + std::to_string(process.pid), "cyan")})));
+        details.push_back(
+            row_node(Json::array({badge_node("Attached / 已附加", "ok"),
+                                  badge_node("PID " + std::to_string(process.pid), "cyan")})));
         details.push_back(text_node(process.image_path_utf8, "mono", 34));
         nodes.push_back(section_node(
             "Attached / 已附加",
@@ -353,21 +403,26 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         Json empty = Json::array();
         empty.push_back(text_node(state == SnapshotState::loading
                                       ? "Scanning running processes... / 正在扫描运行中的进程..."
-                                      : snapshot.filter == FilterMode::likely_game
-                                            ? "No likely game processes matched. Switch to Show all or refresh. / 未匹配到可能的游戏进程，请切换全部或刷新。"
-                                            : "No queryable processes are available. Refresh to try again. / 没有可查询的进程，请刷新重试。",
+                                  : snapshot.filter == FilterMode::likely_game
+                                      ? "No likely game processes matched. Switch to Show all or "
+                                        "refresh. / 未匹配到可能的游戏进程，请切换全部或刷新。"
+                                      : "No queryable processes are available. Refresh to try "
+                                        "again. / 没有可查询的进程，请刷新重试。",
                                   "muted", 44));
         empty.push_back(button_node("process.empty-refresh", "刷新", kRefreshAction, Json::object(),
                                     "primary", snapshot.loading));
         nodes.push_back(section_node("Process List / 进程列表", std::move(empty)));
     } else {
         Json cards = Json::array();
-        for (const ProcessRecord& process : snapshot.visible_processes) {
+        for (std::size_t index = page_begin; index < page_end; ++index) {
+            const ProcessRecord& process = snapshot.visible_processes[index];
             Json details = Json::array();
-            details.push_back(row_node(Json::array({
-                badge_node("PID " + std::to_string(process.pid),
-                           is_likely_game_process(process) ? "ok" : "muted"),
-                badge_node(is_likely_game_process(process) ? "Likely game / 可能的游戏" : "Process / 进程", "muted")})));
+            details.push_back(row_node(
+                Json::array({badge_node("PID " + std::to_string(process.pid),
+                                        is_likely_game_process(process) ? "ok" : "muted"),
+                             badge_node(is_likely_game_process(process) ? "Likely game / 可能的游戏"
+                                                                        : "Process / 进程",
+                                        "muted")})));
             details.push_back(text_node(process.image_path_utf8, "mono", 34));
             details.push_back(button_node(
                 "process.attach." + std::to_string(process.pid), "选择并附加", kAttachAction,
@@ -382,8 +437,8 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
     Json compact = Json::array();
-    compact.push_back(text_node("The process list exceeded the panel budget. Use Likely games to narrow it.",
-                                "bad", 48));
+    compact.push_back(text_node(
+        "The process list exceeded the panel budget. Use Likely games to narrow it.", "bad", 48));
     compact.push_back(button_node("process.refresh.compact", "Refresh", kRefreshAction,
                                   Json::object(), "primary"));
     compact.push_back(button_node("process.filter.compact", "Likely games", kFilterAction,
@@ -412,8 +467,8 @@ sao_status_t query_with_core(std::uint32_t pid, ProcessRecord& out) {
         const void* terminator = std::memchr(image_path.data(), '\0', image_path.size());
         if (terminator == nullptr)
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
-        const auto length = static_cast<std::size_t>(
-            static_cast<const char*>(terminator) - image_path.data());
+        const auto length =
+            static_cast<std::size_t>(static_cast<const char*>(terminator) - image_path.data());
         candidate.image_path_utf8.assign(image_path.data(), length);
         if (!valid_text(candidate.image_path_utf8, kMaximumImagePathBytes, true))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -594,8 +649,8 @@ struct Owner::State {
                             std::vector<ProcessRecord>{std::move(candidate)}, current_process_id);
                         const bool process_missing =
                             normalized.empty() || normalized.front().pid != item.identity.pid;
-                        if (process_missing || normalized.front().start_time_100ns !=
-                                                   item.identity.start_time_100ns) {
+                        if (process_missing ||
+                            normalized.front().start_time_100ns != item.identity.start_time_100ns) {
                             completion.status = SAO_STATUS_ERR_PROCESS_GONE;
                             completion.status_text =
                                 process_missing
@@ -605,9 +660,9 @@ struct Owner::State {
                             ProcessRecord validated = std::move(normalized.front());
                             completion.status = attach_operation(item.identity.pid);
                             if (completion.status == SAO_STATUS_OK) {
-                                completion.status_text =
-                                    "Attached PID " + std::to_string(validated.pid) + " · " +
-                                    validated.base_name_utf8;
+                                completion.status_text = "Attached PID " +
+                                                         std::to_string(validated.pid) + " · " +
+                                                         validated.base_name_utf8;
                                 completion.attached_process = std::move(validated);
                             } else {
                                 completion.status_text =
@@ -670,6 +725,7 @@ struct Owner::State {
     bool refresh_authoritative{};
     std::uint64_t requested_generation{};
     FilterMode filter{FilterMode::all};
+    std::size_t page_index{};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text{"Not refreshed yet."};
     std::vector<ProcessRecord> processes;
@@ -681,13 +737,52 @@ struct Owner::State {
 std::mutex Owner::deferred_mutex_;
 std::vector<std::unique_ptr<Owner::State>> Owner::deferred_cleanup_;
 
-void Owner::defer_state(std::unique_ptr<State> state) noexcept { if (state == nullptr) return; state->owner = nullptr; { std::lock_guard lock(state->mutex); state->accepting = false; state->retiring = false; } std::lock_guard lock(deferred_mutex_); deferred_cleanup_.push_back(std::move(state)); }
+void Owner::defer_state(std::unique_ptr<State> state) noexcept {
+    if (state == nullptr)
+        return;
+    state->owner = nullptr;
+    {
+        std::lock_guard lock(state->mutex);
+        state->accepting = false;
+        state->retiring = false;
+    }
+    std::lock_guard lock(deferred_mutex_);
+    deferred_cleanup_.push_back(std::move(state));
+}
 
-void Owner::drain_deferred_cleanup() noexcept { std::vector<std::unique_ptr<State>> pending; { std::lock_guard lock(deferred_mutex_); pending.swap(deferred_cleanup_); } std::vector<std::unique_ptr<State>> retry; for (auto& state : pending) { auto owner = std::unique_ptr<Owner>(new (std::nothrow) Owner(std::move(state), AdoptStateTag{})); if (owner == nullptr) { retry.push_back(std::move(state)); continue; } const sao_status_t status = owner->take_offline(); state = std::move(owner->state_); if (status != SAO_STATUS_OK) retry.push_back(std::move(state)); } if (!retry.empty()) { std::lock_guard lock(deferred_mutex_); for (auto& state : retry) deferred_cleanup_.push_back(std::move(state)); } }
+void Owner::drain_deferred_cleanup() noexcept {
+    std::vector<std::unique_ptr<State>> pending;
+    {
+        std::lock_guard lock(deferred_mutex_);
+        pending.swap(deferred_cleanup_);
+    }
+    std::vector<std::unique_ptr<State>> retry;
+    for (auto& state : pending) {
+        auto owner =
+            std::unique_ptr<Owner>(new (std::nothrow) Owner(std::move(state), AdoptStateTag{}));
+        if (owner == nullptr) {
+            retry.push_back(std::move(state));
+            continue;
+        }
+        const sao_status_t status = owner->take_offline();
+        state = std::move(owner->state_);
+        if (status != SAO_STATUS_OK)
+            retry.push_back(std::move(state));
+    }
+    if (!retry.empty()) {
+        std::lock_guard lock(deferred_mutex_);
+        for (auto& state : retry)
+            deferred_cleanup_.push_back(std::move(state));
+    }
+}
 
-void Owner::drain_deferred_cleanup_for_owner() noexcept { drain_deferred_cleanup(); }
+void Owner::drain_deferred_cleanup_for_owner() noexcept {
+    drain_deferred_cleanup();
+}
 
-void Owner::drain_deferred_cleanup_for_testing() noexcept { drain_deferred_cleanup_for_owner(); }
+void Owner::drain_deferred_cleanup_for_testing() noexcept {
+    drain_deferred_cleanup_for_owner();
+}
 
 struct Owner::OperationGuard {
     explicit OperationGuard(Owner& value) noexcept
@@ -710,11 +805,11 @@ Operations make_default_operations(sao_rt_io_proxy_handle_t proxy) {
     operations.current_process_id = GetCurrentProcessId();
     operations.enumerate_snapshot = &enumerate_with_core;
     operations.query_process = &query_with_core;
-    operations.attach = [proxy](std::uint32_t pid) -> sao_status_t {
-        if (proxy == nullptr)
-            return SAO_STATUS_ERR_NOT_INITIALIZED;
-        return sao_rt_io_proxy_attach(proxy, pid);
-    };
+    if (proxy != nullptr) {
+        operations.attach = [proxy](std::uint32_t pid) {
+            return sao_rt_io_proxy_attach(proxy, pid);
+        };
+    }
     return operations;
 }
 
@@ -749,9 +844,14 @@ Owner::Owner(sao_ui_compositor_handle_t compositor, sao_rt_io_proxy_handle_t pro
     : Owner(compositor, make_default_operations(proxy)) {}
 
 Owner::Owner(sao_ui_compositor_handle_t compositor, Operations operations)
-    : state_(std::make_unique<State>(compositor, std::move(operations))) { state_->owner = this; }
+    : state_(std::make_unique<State>(compositor, std::move(operations))) {
+    state_->owner = this;
+}
 
-Owner::Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept : state_(std::move(state)) { if (state_) state_->owner = this; }
+Owner::Owner(std::unique_ptr<State> state, AdoptStateTag) noexcept : state_(std::move(state)) {
+    if (state_)
+        state_->owner = this;
+}
 
 Owner::~Owner() noexcept {
     if (!state_)
@@ -797,9 +897,21 @@ bool Owner::begin_callback() noexcept {
     return true;
 }
 
-void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept { if (state_) { std::lock_guard lock(state_->mutex); state_->fail_next_unregister_status = status; } }
+void Owner::fail_next_unregister_for_testing(sao_status_t status) noexcept {
+    if (state_) {
+        std::lock_guard lock(state_->mutex);
+        state_->fail_next_unregister_status = status;
+    }
+}
 
-void Owner::fail_next_handler_restore_for_testing(sao_status_t action_status, sao_status_t event_status) noexcept { if (state_) { std::lock_guard lock(state_->mutex); state_->fail_next_action_restore_status = action_status; state_->fail_next_event_restore_status = event_status; } }
+void Owner::fail_next_handler_restore_for_testing(sao_status_t action_status,
+                                                  sao_status_t event_status) noexcept {
+    if (state_) {
+        std::lock_guard lock(state_->mutex);
+        state_->fail_next_action_restore_status = action_status;
+        state_->fail_next_event_restore_status = event_status;
+    }
+}
 
 void Owner::end_callback() noexcept {
     if (!state_)
@@ -811,8 +923,7 @@ void Owner::end_callback() noexcept {
 
 void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
                                               const std::uint8_t* payload_json_utf8,
-                                              std::size_t payload_len,
-                                              void* user_data) noexcept {
+                                              std::size_t payload_len, void* user_data) noexcept {
     auto* state = static_cast<State*>(user_data);
     Owner* owner = state == nullptr ? nullptr : state->owner;
     const auto action = bounded_c_text(action_id_utf8, kMaximumActionIdBytes);
@@ -835,8 +946,7 @@ void SAO_UI_CALL Owner::panel_action_callback(const char* action_id_utf8,
     }
 }
 
-void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind,
-                                             void* user_data) noexcept {
+void SAO_UI_CALL Owner::panel_event_callback(std::int32_t event_kind, void* user_data) noexcept {
     auto* state = static_cast<State*>(user_data);
     Owner* owner = state == nullptr ? nullptr : state->owner;
     if (owner == nullptr || !owner->begin_callback())
@@ -986,6 +1096,8 @@ sao_status_t Owner::publish() noexcept {
             view.visible = state_->visible;
             view.loading = state_->loading;
             view.filter = state_->filter;
+            view.page_index = state_->page_index;
+            view.attach_available = state_->operations.query_process && state_->operations.attach;
             view.last_status = state_->last_status;
             view.status_text = state_->status_text;
             view.all_processes = state_->processes;
@@ -1068,6 +1180,11 @@ sao_status_t Owner::service_ui() noexcept {
                     state_->refresh_authoritative = completion.status == SAO_STATUS_OK;
                     if (completion.status == SAO_STATUS_OK) {
                         state_->processes = std::move(completion.processes);
+                        const std::size_t count =
+                            selected_process_count(state_->processes, state_->filter);
+                        const std::size_t maximum_page =
+                            count == 0U ? 0U : (count - 1U) / kProcessesPerPage;
+                        state_->page_index = std::min(state_->page_index, maximum_page);
                         state_->status_text =
                             "Refresh complete: " + std::to_string(state_->processes.size()) +
                             " queryable processes.";
@@ -1076,10 +1193,10 @@ sao_status_t Owner::service_ui() noexcept {
                             status_description(completion.status, "Refresh failed");
                     }
                 } else {
-                    state_->status_text = completion.status_text.empty()
-                                              ? status_description(completion.status,
-                                                                   "Attach failed")
-                                              : std::move(completion.status_text);
+                    state_->status_text =
+                        completion.status_text.empty()
+                            ? status_description(completion.status, "Attach failed")
+                            : std::move(completion.status_text);
                     if (completion.status == SAO_STATUS_OK)
                         state_->attached_process = std::move(completion.attached_process);
                 }
@@ -1178,7 +1295,10 @@ sao_status_t Owner::take_offline() noexcept {
     }
     if (status == SAO_STATUS_OK) {
         sao_status_t injected = SAO_STATUS_OK;
-        { std::lock_guard lock(state_->mutex); injected = std::exchange(state_->fail_next_unregister_status, SAO_STATUS_OK); }
+        {
+            std::lock_guard lock(state_->mutex);
+            injected = std::exchange(state_->fail_next_unregister_status, SAO_STATUS_OK);
+        }
         status = injected == SAO_STATUS_OK ? sao_ui_panel_unregister(panel) : injected;
     }
 
@@ -1208,9 +1328,9 @@ sao_status_t Owner::take_offline() noexcept {
             injected = std::exchange(state_->fail_next_action_restore_status, SAO_STATUS_OK);
         }
         const sao_status_t restore_status =
-            injected == SAO_STATUS_OK
-                ? sao_ui_panel_set_action_handler(panel, &Owner::panel_action_callback, state_.get())
-                : injected;
+            injected == SAO_STATUS_OK ? sao_ui_panel_set_action_handler(
+                                            panel, &Owner::panel_action_callback, state_.get())
+                                      : injected;
         action_attached = restore_status == SAO_STATUS_OK;
         rollback_ok = rollback_ok && action_attached;
     }
@@ -1291,9 +1411,32 @@ sao_status_t Owner::set_filter(FilterMode filter) noexcept {
     {
         std::lock_guard lock(state_->mutex);
         state_->filter = filter;
+        state_->page_index = 0U;
         state_->status_text = filter == FilterMode::all
                                   ? "Filter changed: showing all queryable processes."
                                   : "Filter changed: showing likely game processes.";
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::set_page(std::size_t page_index) noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    {
+        std::lock_guard lock(state_->mutex);
+        const std::size_t count = selected_process_count(state_->processes, state_->filter);
+        const std::size_t page_count =
+            count == 0U ? 1U : (count + kProcessesPerPage - 1U) / kProcessesPerPage;
+        if (page_index >= page_count)
+            return SAO_STATUS_ERR_NOT_FOUND;
+        if (state_->page_index == page_index)
+            return SAO_STATUS_OK;
+        state_->page_index = page_index;
         state_->dirty = true;
     }
     return publish();
@@ -1316,8 +1459,7 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (!state_->refresh_authoritative) {
             state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
-            state_->status_text =
-                "Attach rejected: stale snapshot; refresh before attaching.";
+            state_->status_text = "Attach rejected: stale snapshot; refresh before attaching.";
             state_->dirty = true;
             enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
         } else {
@@ -1381,10 +1523,24 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
             return set_filter(FilterMode::likely_game);
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
+    if (action_id == kPreviousPageAction || action_id == kNextPageAction) {
+        if (!payload.empty())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::size_t page_index = 0U;
+        {
+            std::lock_guard lock(state_->mutex);
+            page_index = state_->page_index;
+        }
+        if (action_id == kPreviousPageAction) {
+            if (page_index == 0U)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            return set_page(page_index - 1U);
+        }
+        return set_page(page_index + 1U);
+    }
     if (action_id == kAttachAction) {
         const std::optional<std::uint64_t> pid = json_unsigned(payload, "pid");
-        const std::optional<std::uint64_t> start_time =
-            json_unsigned(payload, "start_time_100ns");
+        const std::optional<std::uint64_t> start_time = json_unsigned(payload, "start_time_100ns");
         if (!pid.has_value() || !start_time.has_value() ||
             *pid > (std::numeric_limits<std::uint32_t>::max)()) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1407,6 +1563,8 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
             copy.visible = state_->visible;
             copy.loading = state_->loading;
             copy.filter = state_->filter;
+            copy.page_index = state_->page_index;
+            copy.attach_available = state_->operations.query_process && state_->operations.attach;
             copy.last_status = state_->last_status;
             copy.status_text = state_->status_text;
             copy.all_processes = state_->processes;

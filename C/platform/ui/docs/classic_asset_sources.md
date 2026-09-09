@@ -4,7 +4,7 @@ This directory contains a small, dependency-free monochrome SVG set for the clas
 
 ## Included assets
 
-`menu`, `confirm`, `cancel`, `settings`, `tools`, `plugins`, `user`, `notification`, `back`, `home`, `folder`, `search`, `lock`, `info`, `download`, `expand`, `refresh`, and `close`.
+`menu`, `confirm`, `cancel`, `settings`, `tools`, `plugins`, `user`, `notification`, `back`, `home`, `folder`, `search`, `lock`, `info`, `download`, `expand`, `refresh`, `close`, `chat`, `keyboard`, `workshop`, and `process`.
 
 Use the `manifest.json` file beside the SVGs as the source-of-truth inventory. It records the generated source, license, and SHA-256 for every asset.
 
@@ -24,4 +24,4 @@ Use the `manifest.json` file beside the SVGs as the source-of-truth inventory. I
 
 ## Native path consumer
 
-`C/platform/ui/assets/classic/classic_icons.h` contains the same line geometry as the SVG set. Its `paint_classic_icon(ctx, id, x, y, size, argb)` helper emits the strokes through the existing `sao_ui_paint_ctx_stroke_line` ABI. `entity_shell.cpp` uses the shared table for its BGRA raster path, mapping built-in root/child action IDs to vector symbols while leaving non-empty plugin-provided icon strings on the text path.
+`C/platform/ui/assets/classic/classic_icons.h` contains the same line geometry as the SVG set, including the four semantic additions `Chat`, `Keyboard`, `Workshop`, and `Process`. Its `paint_classic_icon(ctx, id, x, y, size, argb)` helper emits the strokes through the existing `sao_ui_paint_ctx_stroke_line` ABI. `entity_shell.cpp` uses the shared table for its BGRA raster path, mapping built-in root/child action IDs to vector symbols while leaving non-empty plugin-provided icon strings on the text path.

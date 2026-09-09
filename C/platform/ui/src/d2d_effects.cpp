@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <vector>
 
 #if defined(_WIN32)
@@ -518,6 +519,235 @@ void set_identity_matrix(float* matrix) {
 }
 
 } // namespace
+
+#if defined(_WIN32)
+struct sao::ui::effects::GpuEffectGraph {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID2D1Factory1> factory;
+    Microsoft::WRL::ComPtr<ID2D1Device> d2d_device;
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext> context;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> master;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backdrop_copy;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_bitmap;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> backdrop_bitmap;
+    Microsoft::WRL::ComPtr<ID2D1Effect> blur;
+    Microsoft::WRL::ComPtr<ID2D1Effect> matrix;
+    Microsoft::WRL::ComPtr<ID2D1Effect> shadow;
+    uint32_t width{};
+    uint32_t height{};
+
+    HRESULT wrap(ID3D11Texture2D* texture, D2D1_BITMAP_OPTIONS options,
+                 ID2D1Bitmap1** out_bitmap) noexcept {
+        Microsoft::WRL::ComPtr<IDXGISurface> surface;
+        HRESULT hr = texture->QueryInterface(IID_PPV_ARGS(&surface));
+        if (FAILED(hr))
+            return hr;
+        const auto properties = D2D1::BitmapProperties1(
+            options, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0F, 96.0F);
+        return context->CreateBitmapFromDxgiSurface(surface.Get(), properties, out_bitmap);
+    }
+
+    HRESULT initialize(ID3D11Device* source_device) noexcept {
+        if (device.Get() == source_device && context != nullptr)
+            return S_OK;
+        if (context != nullptr)
+            context->SetTarget(nullptr);
+        *this = {};
+        device = source_device;
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
+        HRESULT hr = device.As(&dxgi);
+        D2D1_FACTORY_OPTIONS options{};
+        if (SUCCEEDED(hr))
+            hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
+                                   &options, reinterpret_cast<void**>(factory.GetAddressOf()));
+        if (SUCCEEDED(hr))
+            hr = factory->CreateDevice(dxgi.Get(), &d2d_device);
+        if (SUCCEEDED(hr))
+            hr = d2d_device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &context);
+        if (SUCCEEDED(hr))
+            hr = context->CreateEffect(CLSID_D2D1GaussianBlur, &blur);
+        if (SUCCEEDED(hr))
+            hr = context->CreateEffect(CLSID_D2D1ColorMatrix, &matrix);
+        if (SUCCEEDED(hr))
+            hr = context->CreateEffect(CLSID_D2D1Shadow, &shadow);
+        if (FAILED(hr))
+            *this = {};
+        return hr;
+    }
+
+    HRESULT select_master(ID3D11Texture2D* texture) noexcept {
+        if (master.Get() == texture && target_bitmap != nullptr && backdrop_bitmap != nullptr)
+            return S_OK;
+        context->SetTarget(nullptr);
+        blur->SetInput(0, nullptr);
+        matrix->SetInput(0, nullptr);
+        target_bitmap.Reset();
+        backdrop_bitmap.Reset();
+        backdrop_copy.Reset();
+        master = texture;
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        width = desc.Width;
+        height = desc.Height;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = 0;
+        desc.CPUAccessFlags = 0;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        HRESULT hr = device->CreateTexture2D(&desc, nullptr, &backdrop_copy);
+        if (SUCCEEDED(hr))
+            hr = wrap(texture, D2D1_BITMAP_OPTIONS_TARGET, &target_bitmap);
+        if (SUCCEEDED(hr))
+            hr = wrap(backdrop_copy.Get(), D2D1_BITMAP_OPTIONS_NONE, &backdrop_bitmap);
+        return hr;
+    }
+
+    HRESULT apply(ID3D11DeviceContext* immediate, ID3D11Texture2D* layer_texture, int32_t x,
+                  int32_t y, float opacity, const SaoUiLayerEffects& effects) noexcept {
+        const bool backdrop = (effects.flags & (SAO_UI_LAYER_EFFECT_BACKDROP_BLUR |
+                                                SAO_UI_LAYER_EFFECT_COLOR_MATRIX)) != 0;
+        const bool cast_shadow = (effects.flags & SAO_UI_LAYER_EFFECT_SHADOW) != 0;
+        const bool modal = (effects.flags & SAO_UI_LAYER_EFFECT_MODAL_BACKDROP) != 0;
+        D3D11_TEXTURE2D_DESC layer_desc{};
+        layer_texture->GetDesc(&layer_desc);
+        Microsoft::WRL::ComPtr<ID2D1Image> backdrop_output = backdrop_bitmap;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> layer_bitmap;
+        Microsoft::WRL::ComPtr<ID2D1BitmapBrush> opacity_brush;
+        HRESULT hr = S_OK;
+        immediate->OMSetRenderTargets(0, nullptr, nullptr);
+        if (backdrop) {
+            // A GPU-only copy breaks the read/write dependency on the master.
+            immediate->CopyResource(backdrop_copy.Get(), master.Get());
+            if ((effects.flags & SAO_UI_LAYER_EFFECT_BACKDROP_BLUR) != 0) {
+                blur->SetInput(0, backdrop_bitmap.Get());
+                hr = blur->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, effects.blur_sigma);
+                if (SUCCEEDED(hr))
+                    hr = blur->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_HARD);
+                if (SUCCEEDED(hr))
+                    hr = blur->SetValue(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION,
+                                        D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED);
+                backdrop_output.Reset();
+                blur->GetOutput(&backdrop_output);
+            }
+            if (SUCCEEDED(hr) && (effects.flags & SAO_UI_LAYER_EFFECT_COLOR_MATRIX) != 0) {
+                matrix->SetInput(0, backdrop_output.Get());
+                D2D1_MATRIX_5X4_F values{};
+                std::memcpy(&values, effects.color_matrix, sizeof(values));
+                hr = matrix->SetValue(D2D1_COLORMATRIX_PROP_COLOR_MATRIX, values);
+                if (SUCCEEDED(hr))
+                    hr = matrix->SetValue(D2D1_COLORMATRIX_PROP_ALPHA_MODE,
+                                          D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED);
+                backdrop_output.Reset();
+                matrix->GetOutput(&backdrop_output);
+            }
+        }
+        if (SUCCEEDED(hr) && (cast_shadow || (backdrop && !modal)))
+            hr = wrap(layer_texture, D2D1_BITMAP_OPTIONS_NONE, &layer_bitmap);
+        if (SUCCEEDED(hr) && backdrop && !modal) {
+            const auto bitmap_properties =
+                D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
+                                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            const auto brush_properties = D2D1::BrushProperties(
+                1.0F, D2D1::Matrix3x2F::Translation(static_cast<float>(x), static_cast<float>(y)));
+            hr = context->CreateBitmapBrush(layer_bitmap.Get(), bitmap_properties, brush_properties,
+                                            &opacity_brush);
+        }
+        if (SUCCEEDED(hr) && cast_shadow) {
+            shadow->SetInput(0, layer_bitmap.Get());
+            const auto channel = [&effects](uint32_t shift) {
+                return static_cast<float>((effects.shadow_argb >> shift) & 0xffu) / 255.0F;
+            };
+            const D2D1_VECTOR_4F color{channel(16), channel(8), channel(0), channel(24) * opacity};
+            hr = shadow->SetValue(D2D1_SHADOW_PROP_COLOR, color);
+            if (SUCCEEDED(hr))
+                hr = shadow->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
+                                      effects.shadow_sigma);
+        }
+        if (SUCCEEDED(hr)) {
+            context->SetTarget(target_bitmap.Get());
+            context->SetTransform(D2D1::Matrix3x2F::Identity());
+            context->BeginDraw();
+            if (backdrop) {
+                const auto rect =
+                    modal ? D2D1::RectF(0, 0, static_cast<float>(width), static_cast<float>(height))
+                          : D2D1::RectF(static_cast<float>(std::max(0, x)),
+                                        static_cast<float>(std::max(0, y)),
+                                        std::min(static_cast<float>(width),
+                                                 static_cast<float>(x) + layer_desc.Width),
+                                        std::min(static_cast<float>(height),
+                                                 static_cast<float>(y) + layer_desc.Height));
+                if (rect.right > rect.left && rect.bottom > rect.top) {
+                    // Clip the backdrop to the source's actual alpha footprint,
+                    // not its rectangular layer extent. Floating circles and
+                    // disconnected menu strips must not leave a blurred box.
+                    context->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                    const auto parameters = D2D1::LayerParameters1(
+                        rect, nullptr, D2D1_ANTIALIAS_MODE_ALIASED, D2D1::Matrix3x2F::Identity(),
+                        opacity, opacity_brush.Get());
+                    context->PushLayer(parameters, nullptr);
+                    const D2D1_POINT_2F origin{};
+                    context->DrawImage(backdrop_output.Get(), &origin, nullptr,
+                                       D2D1_INTERPOLATION_MODE_LINEAR,
+                                       D2D1_COMPOSITE_MODE_SOURCE_OVER);
+                    context->PopLayer();
+                    context->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+                }
+            }
+            if (cast_shadow) {
+                Microsoft::WRL::ComPtr<ID2D1Image> output;
+                shadow->GetOutput(&output);
+                context->DrawImage(output.Get(),
+                                   D2D1::Point2F(static_cast<float>(x) + effects.shadow_offset_x,
+                                                 static_cast<float>(y) + effects.shadow_offset_y));
+            }
+            hr = context->EndDraw();
+            context->SetTarget(nullptr);
+        }
+        // Effects must not retain a retired layer texture after its destruction.
+        shadow->SetInput(0, nullptr);
+        return hr;
+    }
+};
+#endif
+
+sao_status_t sao::ui::effects::apply_gpu_precompose(GpuEffectGraph** graph, void* d3d11_device,
+                                                    void* d3d11_context, void* master_texture,
+                                                    void* layer_texture, int32_t layer_x,
+                                                    int32_t layer_y, float layer_alpha,
+                                                    const SaoUiLayerEffects& effects) noexcept {
+    if (graph == nullptr || d3d11_device == nullptr || d3d11_context == nullptr ||
+        master_texture == nullptr || layer_texture == nullptr || !validate(effects))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (effects.flags == SAO_UI_LAYER_EFFECT_NONE)
+        return SAO_STATUS_OK;
+#if defined(_WIN32)
+    if (*graph == nullptr)
+        *graph = new (std::nothrow) GpuEffectGraph();
+    if (*graph == nullptr)
+        return SAO_STATUS_ERR_UNKNOWN;
+    auto* device = static_cast<ID3D11Device*>(d3d11_device);
+    HRESULT hr = (*graph)->initialize(device);
+    if (SUCCEEDED(hr))
+        hr = (*graph)->select_master(static_cast<ID3D11Texture2D*>(master_texture));
+    if (SUCCEEDED(hr))
+        hr = (*graph)->apply(static_cast<ID3D11DeviceContext*>(d3d11_context),
+                             static_cast<ID3D11Texture2D*>(layer_texture), layer_x, layer_y,
+                             layer_alpha, effects);
+    if (hr == D2DERR_RECREATE_TARGET || FAILED(device->GetDeviceRemovedReason()))
+        return SAO_STATUS_ERR_DEVICE_LOST;
+    return SUCCEEDED(hr) ? SAO_STATUS_OK : SAO_STATUS_ERR_UNKNOWN;
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+void sao::ui::effects::destroy_gpu_effect_graph(GpuEffectGraph* graph) noexcept {
+#if defined(_WIN32)
+    delete graph;
+#else
+    (void)graph;
+#endif
+}
 
 bool sao::ui::effects::validate(const SaoUiLayerEffects& effects) noexcept {
     const uint32_t declared =

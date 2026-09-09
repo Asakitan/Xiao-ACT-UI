@@ -222,9 +222,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_scrollbar_geometry_compute(
 
 // ── Paint context ────────────────────────────────────────────
 
-// The real ID2D1RenderTarget backend is not implemented yet, so this entry
-// point returns SAO_STATUS_ERR_NOT_IMPLEMENTED and leaves out_ctx null.
-// Headless/native software callers use sao_ui_paint_ctx_create_offscreen().
+// Wraps a caller-owned ID2D1RenderTarget for direct native drawing.  The
+// context and every begin/draw/end call must stay on the creating thread.  It
+// retains COM references to the supplied objects until context destruction.
+// Headless snapshots and explicit exports use sao_ui_paint_ctx_create_offscreen().
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_paint_ctx_create(void* d2d_render_target, // ID2D1RenderTarget*
                         void* dwrite_factory,    // IDWriteFactory*
@@ -270,9 +271,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rect(sao_ui_paint_ctx_
                                                                float x, float y, float width,
                                                                float height, uint32_t argb);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_fill_rounded_rect(
-    sao_ui_paint_ctx_handle_t ctx, float x, float y, float width, float height, float radius,
-    uint32_t argb);
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_paint_ctx_fill_rounded_rect(sao_ui_paint_ctx_handle_t ctx, float x, float y, float width,
+                                   float height, float radius, uint32_t argb);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_stroke_line(sao_ui_paint_ctx_handle_t ctx,
                                                                  float x1, float y1, float x2,
@@ -299,16 +300,18 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_blit_premultiplied_bgra(
     float height);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_corner_brackets(
-    sao_ui_paint_ctx_handle_t ctx, float x, float y, float width, float height,
-    float arm_length, float stroke_width, uint32_t argb);
+    sao_ui_paint_ctx_handle_t ctx, float x, float y, float width, float height, float arm_length,
+    float stroke_width, uint32_t argb);
 
-SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_scanlines(
-    sao_ui_paint_ctx_handle_t ctx, float x, float y, float width, float height,
-    float spacing, float line_height, uint32_t argb);
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_scanlines(sao_ui_paint_ctx_handle_t ctx,
+                                                                    float x, float y, float width,
+                                                                    float height, float spacing,
+                                                                    float line_height,
+                                                                    uint32_t argb);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_clock_pulse(
-    sao_ui_paint_ctx_handle_t ctx, float center_x, float center_y, float radius,
-    float phase_0_to_1, float stroke_width, uint32_t argb);
+    sao_ui_paint_ctx_handle_t ctx, float center_x, float center_y, float radius, float phase_0_to_1,
+    float stroke_width, uint32_t argb);
 
 #ifdef __cplusplus
 } // extern "C"

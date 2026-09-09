@@ -1,42 +1,93 @@
 cbuffer Constants : register(b0) {
-    float2 resolution; float time; float progress;
-    float scenePhase; float connectedAlpha; float reducedMotion; float padding0;
-    float2 blurDirection; float2 padding1;
+    float2 resolution; float time; float sceneTime;
+    float phaseProgress; float scenePhase; float connectedAlpha; float reducedMotion;
+    float cameraZ; float alphaMul; float radiusMul; float energy;
+    float flash; float startupBurst; float startupWave; float motionMix;
+    float coolMix; float2 blurDirection; float padding0;
+    float3 backgroundColor; float padding1;
+    float3 effectTint; float padding2;
 };
 
-float hash21(float2 p) {
-    p = frac(p * float2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return frac(p.x * p.y);
+float hash11(float p) {
+    p = frac(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return frac(p);
 }
 
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
-    const float t = reducedMotion > 0.5 ? 0.0 : time;
-    const float2 q = (uv - 0.5) * float2(resolution.x / resolution.y, 1.0);
-    const float radius = length(q);
-    const float angle = atan2(q.y, q.x);
-    const float tunnel = saturate(1.0 - abs(scenePhase - 1.0));
-    const float reveal = saturate(1.0 - abs(scenePhase - 2.0));
-    const float burst = saturate(1.0 - abs(scenePhase - 3.0));
-    const float pulse = 0.5 + 0.5 * sin(t * 2.1);
-    const float rings = pow(saturate(1.0 - abs(frac(radius * (7.0 + burst * 5.0) -
-        t * (0.42 + burst * 0.25)) - 0.5) * 13.0), 3.0);
-    const float spokes = pow(saturate(0.5 + 0.5 * cos(angle * (20.0 + burst * 12.0) +
-        t * 0.35)), 24.0) * saturate(radius * 2.0);
-    const float star = step(0.994, hash21(floor(uv * resolution / 7.0) + floor(t * 0.12))) *
-        (1.0 - saturate(radius));
-    const float burstRing = pow(saturate(1.0 - abs(radius - progress * 0.72) * 22.0), 3.0) * burst;
-    const float3 deep = lerp(float3(0.012, 0.02, 0.038), float3(0.035, 0.075, 0.095),
-                             saturate(1.0 - radius));
-    const float3 cyan = float3(0.18, 0.78, 1.0);
-    const float3 gold = float3(1.0, 0.63, 0.12);
-    float3 color = deep + cyan * (rings * (0.06 + 0.11 * tunnel) +
-                                  spokes * (0.035 + 0.08 * burst)) +
-                   lerp(cyan, gold, pulse) * star * 0.65;
-    color += cyan * pow(saturate(1.0 - radius * 1.8), 4.0) * (0.06 + 0.05 * pulse) +
-             gold * burstRing * 0.72;
-    color += gold * reveal * pow(saturate(1.0 - radius * 2.4), 6.0) * 0.08;
-    color += float3(0.72, 0.92, 1.0) * connectedAlpha * saturate(scenePhase - 3.5) *
-             pow(saturate(1.0 - radius * 1.5), 5.0) * 0.14;
-    return float4(color, 1.0);
+    const float2 centered = uv - 0.5;
+    const float aspect = resolution.x / max(1.0, resolution.y);
+    const float2 lens = float2(centered.x * aspect, centered.y);
+    const float radius = length(lens);
+    const float angle = atan2(lens.y, lens.x);
+    const float liveTime = reducedMotion > 0.5 ? 0.0 : time;
+    const float liveEnergy = saturate(energy);
+    const float liveFlash = saturate(flash);
+    const float start = saturate(startupWave);
+    const float burst = saturate(startupBurst);
+
+    const float apertureOpen = pow(smoothstep(0.02, 0.42, start), 0.78);
+    const float apertureFade = 1.0 - smoothstep(0.56, 0.96, start);
+    const float slitX = lerp(0.10, 1.25, apertureOpen);
+    const float slitY = lerp(0.008, 0.56, apertureOpen);
+    const float2 apertureUv = float2(lens.x / max(slitX, 0.001),
+                                     centered.y / max(slitY, 0.001));
+    const float apertureMask = 1.0 - smoothstep(0.90, 1.10, dot(apertureUv, apertureUv));
+    const float shutterMask = (1.0 - apertureMask) * apertureFade;
+    float valveLine = exp(-abs(centered.y) * lerp(300.0, 56.0, apertureOpen));
+    valveLine *= 1.0 - smoothstep(slitX * 0.10, slitX * 0.92, abs(lens.x));
+    valveLine *= 0.08 + burst * 0.56 + (1.0 - apertureFade) * 0.10;
+
+    const float spokeCount = lerp(16.0, 28.0, liveEnergy);
+    const float angular = (angle / 6.2831853 + 0.5) * spokeCount;
+    const float cell = floor(angular);
+    const float ray = abs(frac(angular + liveTime * (0.18 + liveEnergy * 0.42)) - 0.5);
+    const float jitter = hash11(cell + floor(liveTime * 18.0)) * 0.22;
+    const float rayMask = smoothstep(0.22 + jitter, 0.03 + radius * 0.08, ray);
+    const float rayFade = smoothstep(1.08, 0.08, radius) *
+                          pow(max(0.0, 1.0 - radius), 1.65);
+    const float rays = rayMask * rayFade * (0.08 + liveEnergy * 0.22);
+
+    const float core = smoothstep(0.16, 0.0, radius);
+    const float halo = smoothstep(0.48, 0.05, radius);
+    float flareLine = exp(-abs(centered.y) * (96.0 - liveEnergy * 24.0));
+    flareLine *= smoothstep(0.72, 0.02, abs(centered.x));
+    flareLine *= 0.05 + liveFlash * 0.12 + liveEnergy * 0.08;
+
+    const float contract = smoothstep(0.0, 0.18, start) *
+                           (1.0 - smoothstep(0.18, 0.36, start));
+    const float explode = smoothstep(0.18, 0.44, start);
+    const float scan = smoothstep(0.38, 0.78, start) *
+                       (1.0 - smoothstep(0.78, 1.0, start));
+    const float waveRadius = lerp(0.010, 0.64, explode);
+    const float waveWidth = lerp(0.018, 0.070, burst);
+    float shock = smoothstep(waveWidth, 0.0, abs(radius - waveRadius));
+    shock *= 1.0 - smoothstep(0.70, 1.0, start);
+    const float startupCore = smoothstep(0.24 - contract * 0.08, 0.0, radius) * burst;
+    const float startupFlare = exp(-abs(centered.y) * 128.0) *
+                               smoothstep(0.82, 0.0, abs(centered.x)) *
+                               (0.10 + burst * 0.42);
+    const float scanRing = smoothstep(0.015, 0.0,
+                                      abs(radius - lerp(0.06, 0.72, scan))) * scan * 0.65;
+    const float ripple = smoothstep(0.022, 0.0,
+                                    abs(radius - lerp(0.05, 0.56, explode))) *
+                         (1.0 - smoothstep(0.52, 0.92, start)) *
+                         (0.18 + burst * 0.34);
+
+    float3 color = backgroundColor;
+    const float3 shutterColor = lerp(float3(0.005, 0.010, 0.018),
+                                     backgroundColor * 0.16, apertureOpen * 0.34);
+    color += effectTint * (core * (0.08 + liveFlash * 0.12));
+    color += effectTint * (halo * 0.08 + rays + flareLine);
+    color += float3(1.0, 0.94, 0.82) * startupCore * (0.22 + burst * 0.38);
+    color += effectTint * shock * (0.16 + burst * 0.34);
+    color += float3(0.92, 0.98, 1.0) * startupFlare;
+    color += float3(0.70, 0.95, 1.0) * scanRing;
+    color += effectTint * ripple;
+    color += float3(1.0, 0.97, 0.88) * valveLine;
+    color = lerp(shutterColor, color,
+                 max(apertureMask * (0.22 + apertureOpen * 0.78), 1.0 - apertureFade));
+    color += float3(0.86, 0.96, 1.0) * shutterMask * 0.032;
+    return float4(saturate(color), 1.0);
 }
