@@ -1216,6 +1216,8 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
                 std::lock_guard lock(state_->mutex);
                 state_->license_key = std::move(key);
                 state_->last_status = SAO_STATUS_OK;
+                state_->status_text = "Ready to activate.";
+                state_->error_text.clear();
                 state_->publish_pending = true;
             }
             return publish();

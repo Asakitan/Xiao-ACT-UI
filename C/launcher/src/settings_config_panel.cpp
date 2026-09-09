@@ -1067,9 +1067,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_dirty = false;
         }
         if (status == SAO_STATUS_OK)
-            (void)restore_runtime_theme(committed);
+            status = restore_runtime_theme(committed);
         if (status == SAO_STATUS_OK)
-            (void)restore_runtime_sound(committed);
+            status = restore_runtime_sound(committed);
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled"
                                                                             : "Cancel failed");
     }
@@ -1081,8 +1081,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_snapshot = Json::object();
             state().draft_dirty = true;
         }
-        (void)restore_runtime_theme(Json::object());
-        (void)restore_runtime_sound(Json::object());
+        if (status == SAO_STATUS_OK)
+            status = restore_runtime_theme(Json::object());
+        if (status == SAO_STATUS_OK)
+            status = restore_runtime_sound(Json::object());
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK
                                                         ? "Defaults restored in draft"
                                                         : "Restore defaults failed");
@@ -1108,9 +1110,11 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 state().draft_dirty = true;
             }
             if (key == "sound_enabled") {
-                (void)sao_ui_sound_set_enabled(next);
+                const sao_status_t runtime_status = sao_ui_sound_set_enabled(next);
                 sao::launcher::refreshUserGuideSoundPolicy();
-                if (next)
+                if (runtime_status != SAO_STATUS_OK)
+                    status = runtime_status;
+                else if (next)
                     (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
             }
         }
@@ -1133,8 +1137,11 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
             if (key == "sound_volume") {
-                (void)sao_ui_sound_set_volume(static_cast<int32_t>(next));
+                const sao_status_t runtime_status =
+                    sao_ui_sound_set_volume(static_cast<int32_t>(next));
                 sao::launcher::refreshUserGuideSoundPolicy();
+                if (runtime_status != SAO_STATUS_OK)
+                    status = runtime_status;
             }
             std::lock_guard lock(state().mutex);
             state().draft_dirty = true;
@@ -1169,8 +1176,12 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 std::lock_guard lock(state().mutex);
                 state().draft_dirty = true;
             }
-            if (key == "sound_volume")
-                (void)sao_ui_sound_set_volume(static_cast<int32_t>(next));
+            if (key == "sound_volume") {
+                const sao_status_t runtime_status =
+                    sao_ui_sound_set_volume(static_cast<int32_t>(next));
+                if (runtime_status != SAO_STATUS_OK)
+                    status = runtime_status;
+            }
             sao::launcher::refreshUserGuideSoundPolicy();
         }
         return publish_after_draft_mutation(
@@ -1197,8 +1208,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         status = owner_lease->set_value("panel_themes", std::move(themes));
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
-            (void)sao_ui_theme_set_active_id(
+            const sao_status_t runtime_status = sao_ui_theme_set_active_id(
                 next == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
+            if (runtime_status != SAO_STATUS_OK)
+                status = runtime_status;
             std::lock_guard lock(state().mutex);
             state().draft_dirty = true;
         }
@@ -1260,7 +1273,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_dirty = true;
         }
         if (status == SAO_STATUS_OK)
-            (void)restore_runtime_sound(profile_copy);
+            status = restore_runtime_theme(profile_copy);
+        if (status == SAO_STATUS_OK)
+            status = restore_runtime_sound(profile_copy);
         return publish_after_draft_mutation(
             status, status == SAO_STATUS_OK ? "Profile loaded into draft"
                                             : profile_failure_text(status, "Load profile"));

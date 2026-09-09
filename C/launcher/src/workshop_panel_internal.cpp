@@ -756,8 +756,14 @@ class Owner::Impl final {
         status = sync_visibility(panel);
         if (status != SAO_STATUS_OK)
             return status;
-        if (!was_visible)
-            return enqueue_list(1);
+        if (!was_visible) {
+            std::uint32_t page = 1;
+            {
+                std::lock_guard lock(mutex_);
+                page = current_page_;
+            }
+            return enqueue_list(page);
+        }
         return SAO_STATUS_OK;
     }
 
@@ -1205,6 +1211,7 @@ class Owner::Impl final {
             status_text_ = "Operation queued";
             progress_text_ = "Waiting to start";
             progress_percent_ = 0;
+            last_status_ = SAO_STATUS_OK;
             error_text_.clear();
             dirty_ = true;
         }
@@ -1332,8 +1339,14 @@ class Owner::Impl final {
             last_status_ = completion.status;
             progress_percent_ = completion.status == SAO_STATUS_OK ? 100U : progress_percent_;
             if (completion.status != SAO_STATUS_OK) {
-                if (completion.task.kind == TaskKind::List)
+                if (completion.task.kind == TaskKind::List) {
                     catalog_connected_ = false;
+                    items_.clear();
+                    detail_.reset();
+                    total_ = 0;
+                } else if (completion.task.kind == TaskKind::Detail) {
+                    detail_.reset();
+                }
                 error_text_ =
                     operation_name(completion.task) + " failed: " + status_text(completion.status);
                 status_text_ = "Workshop operation failed";
@@ -1388,9 +1401,10 @@ class Owner::Impl final {
         const bool busy = worker_active_ || !tasks_.empty() || !completions_.empty();
         const bool connecting = busy && !catalog_connected_;
         const bool interaction_disabled = busy || !catalog_connected_;
+        const bool has_error = !error_text_.empty() || last_status_ != SAO_STATUS_OK;
         json controls = json::array();
-        const std::string_view status_accent = !error_text_.empty() ? "danger"
-                                               : busy               ? "gold"
+        const std::string_view status_accent = has_error          ? "danger"
+                                               : busy              ? "gold"
                                                : catalog_connected_ ? "ok"
                                                                     : "muted";
         controls.push_back(text_node("浏览、查看并管理插件包。", "muted", 30));
@@ -1410,7 +1424,8 @@ class Owner::Impl final {
                                                               : "目录未连接",
                                            catalog_connected_ ? "ok"
                                            : connecting       ? "gold"
-                                                              : "danger"));
+                                           : has_error        ? "danger"
+                                                              : "muted"));
         status_badges.push_back(badge_node(
             has_pages ? "Page " + std::to_string(current_page_) + " of " +
                             std::to_string((total_ + page_size_ - 1U) / page_size_) + " / 第" +
@@ -1439,12 +1454,13 @@ class Owner::Impl final {
 
         json catalog = json::array();
         if (items_.empty()) {
-            catalog.push_back(text_node(connecting ? "正在连接并加载插件目录…"
+            catalog.push_back(text_node(!error_text_.empty() ? error_text_
+                                        : connecting ? "正在连接并加载插件目录…"
                                         : !catalog_connected_
                                             ? "插件目录未连接，请查看上方状态后重试。"
                                         : busy ? "正在加载插件目录…"
                                                : "此页暂无插件",
-                                        catalog_connected_ ? "value" : "muted", 32));
+                                        has_error ? "bad" : catalog_connected_ ? "value" : "muted", 32));
             if (!busy && catalog_connected_)
                 catalog.push_back(
                     text_node("可刷新目录，或通过上方分页浏览其他页面。", "muted", 34));
@@ -1476,15 +1492,15 @@ class Owner::Impl final {
                 details.push_back(row_node(std::move(metrics)));
                 const json payload{{"id", item.id}};
                 json actions = json::array();
-                actions.push_back(button_node("detail." + std::to_string(index), "查看",
+                actions.push_back(button_node("detail." + item.id, "查看",
                                               "workshop.plugin.detail", payload, "default",
                                               interaction_disabled));
                 if (!installed)
-                    actions.push_back(button_node("install." + std::to_string(index), "安装",
+                    actions.push_back(button_node("install." + item.id, "安装",
                                                   "workshop.plugin.install", payload, "primary",
                                                   interaction_disabled));
                 if (installed)
-                    actions.push_back(button_node("uninstall." + std::to_string(index), "移除",
+                    actions.push_back(button_node("uninstall." + item.id, "移除",
                                                   "workshop.plugin.uninstall", payload, "danger",
                                                   interaction_disabled));
                 details.push_back(row_node(std::move(actions)));
@@ -1554,7 +1570,8 @@ class Owner::Impl final {
                                                               : "Disconnected / 未连接",
                                          busy                 ? "warn"
                                          : catalog_connected_ ? "ok"
-                                                              : "bad"));
+                                         : has_error          ? "bad"
+                                                              : "muted"));
         task_badges.push_back(
             badge_node(std::to_string(completed_operations_) + " completed", "accent"));
         const std::uint64_t remaining = queued_operations_ > completed_operations_
@@ -1574,7 +1591,7 @@ class Owner::Impl final {
                                      busy ? "gold"
                                      : catalog_connected_ && last_status_ == SAO_STATUS_OK
                                          ? "ok"
-                                         : "danger"));
+                                         : has_error ? "danger" : "muted"));
         std::string spec = dock_document(std::move(nodes), "workshop-content").dump();
         if (spec.size() <= kMaximumPanelSpecBytes)
             return spec;

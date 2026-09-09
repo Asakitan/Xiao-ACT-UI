@@ -46,8 +46,9 @@
       if (!value || value.type !== 'sao-guide-sfx-policy') { return; }
       nativePolicyConnected = true;
       nativePolicy.enabled = value.enabled === true;
-      nativePolicy.volume = typeof value.volume === 'number' && Number.isFinite(value.volume)
-        ? Math.min(1, Math.max(0, value.volume)) : 1;
+      var nativeVolume = typeof value.volume === 'number' && Number.isFinite(value.volume)
+        ? value.volume : 100;
+      nativePolicy.volume = Math.min(1, Math.max(0, nativeVolume / 100));
       if (!nativePolicy.enabled || nativePolicy.volume <= 0) { stopAll(); }
     });
     requestNativePolicy();

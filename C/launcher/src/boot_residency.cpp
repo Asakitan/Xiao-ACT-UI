@@ -4,9 +4,9 @@
 #include "sao/launcher/boot_residency.h"
 
 #include "sao/core/status.h"
-#include "sao/rt_io/backend/helper_load_stack.h"
 #include "sao_security/obfuscation/enc_str.h"
 
+#include <cstdio>
 #include <cstring>
 
 #if defined(_WIN32)
@@ -25,6 +25,37 @@ namespace {
 #if defined(_WIN32)
 
 constexpr char kServicesPath[] = "SYSTEM\\CurrentControlSet\\Services";
+
+bool current_boot_id(char out[64]) {
+    if (out == nullptr)
+        return false;
+    out[0] = '\0';
+    using NtQuerySystemInformationFn = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
+    const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    const auto query = ntdll != nullptr
+        ? reinterpret_cast<NtQuerySystemInformationFn>(
+              ::GetProcAddress(ntdll, "NtQuerySystemInformation"))
+        : nullptr;
+    if (query == nullptr)
+        return false;
+    uint8_t raw[32]{};
+    ULONG returned = 0u;
+    if (query(90u, raw, static_cast<ULONG>(sizeof(raw)), &returned) < 0 ||
+        returned < 16u) {
+        return false;
+    }
+    uint32_t d1 = 0u;
+    uint16_t d2 = 0u;
+    uint16_t d3 = 0u;
+    std::memcpy(&d1, raw, sizeof(d1));
+    std::memcpy(&d2, raw + 4u, sizeof(d2));
+    std::memcpy(&d3, raw + 6u, sizeof(d3));
+    const int written = std::snprintf(
+        out, 64u, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        d1, d2, d3, raw[8], raw[9], raw[10], raw[11], raw[12], raw[13],
+        raw[14], raw[15]);
+    return written == 36;
+}
 
 bool reg_key_exists(HKEY root, const char* path) {
     HKEY key = nullptr;
@@ -85,10 +116,7 @@ bool latch_matches_current_boot(HKEY service_key) {
         return true; // Malformed latch: fail closed as required.
     stored_boot[sizeof(stored_boot) - 1u] = '\0';
     char current_boot[64]{};
-    size_t current_length = 0u;
-    if (sao_rt_io_helper_boot_id(current_boot, sizeof(current_boot), &current_length) !=
-            SAO_STATUS_OK ||
-        current_length == 0u)
+    if (!current_boot_id(current_boot))
         return true; // Boot id unavailable: fail closed as required.
     return std::strcmp(stored_boot, current_boot) == 0;
 }

@@ -181,6 +181,8 @@ std::string_view source_label(PluginSource source) noexcept {
 enum class ManagerState : std::uint8_t { initializing, loading, ready, empty, unavailable, error };
 
 ManagerState manager_state(const Snapshot& snapshot) {
+    if (snapshot.busy)
+        return ManagerState::loading;
     if (!snapshot.loader_available) {
         if (snapshot.error_message.find("Loading") != std::string::npos)
             return ManagerState::initializing;
@@ -548,8 +550,12 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
-            const bool row_busy = reload_all_busy ||
+            const bool row_busy = reload_all_busy || snapshot.busy ||
                                   busy_plugins.find(plugin.plugin_id) != busy_plugins.end();
+            const std::string widget_suffix =
+                valid_text(plugin.plugin_id, kMaximumPluginIdBytes, true)
+                    ? plugin.plugin_id
+                    : std::to_string(index);
             Json details = Json::array();
             Json metadata = Json::array();
             metadata.push_back(badge_node("v" + plugin.version, "cyan"));
@@ -566,11 +572,11 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                                            "mono", 30));
             Json actions = Json::array();
             actions.push_back(button_node(
-                "plugin-manager.toggle." + std::to_string(index), active ? "禁用" : "启用",
+                "plugin-manager.toggle." + widget_suffix, active ? "禁用" : "启用",
                 active ? std::string(kActionDisable) : std::string(kActionEnable),
                 Json(plugin.plugin_id), active ? "danger" : "primary",
                 row_busy || transitioning || !plugin_state_allows_enable(plugin.state)));
-            actions.push_back(button_node("plugin-manager.reload." + std::to_string(index), "重载",
+            actions.push_back(button_node("plugin-manager.reload." + widget_suffix, "重载",
                                           std::string(kActionReload), Json(plugin.plugin_id),
                                           "default",
                                           row_busy || !plugin_state_allows_reload(plugin.state)));

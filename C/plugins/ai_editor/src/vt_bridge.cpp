@@ -39,6 +39,7 @@ constexpr uint32_t kStatusExtPriorHypervisor = 0x00000002u;
 constexpr uint32_t kStatusExtStale = 0x00000020u;
 constexpr uint32_t kStatusExtRemoved = 0x00000040u;
 constexpr uint32_t kStatusExtDeadmanRestartFailed = 0x00000080u;
+constexpr uint32_t kStatusExtTscCompensationUnavailable = 0x00000100u;
 constexpr size_t kCapabilityCount = 23u;
 
 constexpr std::array<std::string_view, kCapabilityCount> kCapabilityNames{
@@ -499,12 +500,15 @@ Json status_component_json(const SaoRtIoVtProxyStatusResponse& response,
 				{"roots", hex_u64(value.root_cpu_count)},
 				{"hooks", hex_u64(value.armed_hooks)},
 				{"heartbeat", hex_u64(value.heartbeat_age_ms)},
+				{"statusFlags", hex_u64(value.status_flags)},
 				{"guestReadonly", guest_readonly},
 				{"recoveryRequired", recovery},
 				{"deadmanRestartFailed",
 				 (value.status_flags & kStatusExtDeadmanRestartFailed) != 0u},
 				{"deadmanDegraded",
 				 (value.status_flags & kStatusExtDeadmanRestartFailed) != 0u || recovery},
+				{"tscCompensationUnavailable",
+				 (value.status_flags & kStatusExtTscCompensationUnavailable) != 0u},
 				{"availability", Json{{"reason", availability_reason_name(value.availability_reason)},
 									   {"reasonCode", value.availability_reason}}},
 				{"priorHypervisor", Json{{"kind", prior_hypervisor_name(value.prior_hypervisor_kind)},
