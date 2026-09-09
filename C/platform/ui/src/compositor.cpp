@@ -54,6 +54,7 @@
 #include "sao/ui/z_order.h"
 
 #include "d2d_effects_internal.h"
+#include "dcomp_bridge_internal.h"
 
 #include "input_router_internal.h"
 #include "layer_paint_internal.h"
@@ -118,6 +119,8 @@ static_assert(offsetof(SaoLayerConfig, z_order) ==
 static_assert(sizeof(sao_ui_compositor_handle_t) == sizeof(void*),
               "compositor handle must be pointer-width");
 static_assert(sizeof(sao_ui_layer_handle_t) == sizeof(void*), "layer handle must be pointer-width");
+static_assert(sizeof(sao_ui_composition_slot_handle_t) == sizeof(void*),
+              "composition slot handle must be pointer-width");
 
 // ---------------------------------------------------------------------------
 // Internal types.
@@ -130,6 +133,7 @@ struct PendingFadeCall {
 
 struct sao_ui_layer_s;
 struct sao_ui_compositor_s;
+struct sao_ui_composition_slot_s;
 
 template <typename T>
 concept CompleteType = requires { sizeof(T); };
@@ -137,7 +141,7 @@ concept CompleteType = requires { sizeof(T); };
 static_assert(!CompleteType<sao::ui::input_router_detail::LayerInputState>);
 
 struct InputCallbackInvocation {
-    enum class Kind { cursor, leave, button, scroll } kind{};
+    enum class Kind { cursor, leave, button, scroll, raw_mouse } kind{};
     sao_ui_compositor_s* compositor{};
     sao_ui_layer_s* layer{};
     uint64_t generation{};
@@ -146,12 +150,16 @@ struct InputCallbackInvocation {
     sao_ui_layer_cursor_leave_fn_t leave{};
     sao_ui_layer_button_fn_t button{};
     sao_ui_layer_scroll_fn_t scroll{};
+    sao_ui_composition_slot_mouse_fn_t raw_mouse{};
     float x{};
     float y{};
     float scroll_dx{};
     float scroll_dy{};
     int32_t button_id{-1};
     int32_t action{};
+    uint32_t message{};
+    uint32_t key_state{};
+    int32_t wheel_delta{};
 };
 
 struct PostInputTask {
@@ -245,6 +253,10 @@ struct sao_ui_layer_s {
     std::unordered_map<uint64_t, size_t> input_callbacks_by_generation;
     bool detached_payload_released{false};
     bool input_proxy_enabled{false};
+    int32_t composition_band{0};
+    bool composition_input_proxy{false};
+    sao_ui_composition_slot_mouse_fn_t composition_mouse_fn{nullptr};
+    sao_ui_composition_slot_s* composition_slot{nullptr};
     SaoUiLayerEffects effects{};
 
     // Back-pointer to the owning compositor -- used by
@@ -253,6 +265,16 @@ struct sao_ui_layer_s {
 
     // Insertion sequence for stable ordering across equal z values.
     uint64_t creation_seq{0};
+};
+
+struct sao_ui_composition_slot_s {
+    sao_ui_compositor_s* owner{};
+    std::string name;
+    SaoUiCompositionSlotConfig config{};
+    sao_ui_layer_s* input_proxy{};
+    sao::ui::detail::DcompExternalVisual* visual{};
+    uint64_t target_generation{};
+    bool active{true};
 };
 
 struct sao_ui_compositor_s {
@@ -264,6 +286,8 @@ struct sao_ui_compositor_s {
     // rearrange the underlying storage and invalidate caller pointers.
     std::vector<std::unique_ptr<sao_ui_layer_s>> layers;
     std::vector<std::unique_ptr<sao_ui_layer_s>> pending_layer_destroys;
+    std::vector<std::unique_ptr<sao_ui_composition_slot_s>> composition_slots;
+    std::vector<std::unique_ptr<sao_ui_composition_slot_s>> retired_composition_slots;
     // Keep detached handle shells alive until compositor teardown. Public
     // handles are raw pointers, so freeing a detached layer during present
     // would make later stale-handle validation dereference freed memory.
@@ -411,9 +435,51 @@ constexpr uint32_t kMiddleButtonDown = 0x0207;
 constexpr uint32_t kMiddleButtonUp = 0x0208;
 constexpr uint32_t kMiddleButtonDoubleClick = 0x0209;
 constexpr uint32_t kMouseWheel = 0x020A;
+constexpr uint32_t kXButtonDown = 0x020B;
+constexpr uint32_t kXButtonUp = 0x020C;
+constexpr uint32_t kXButtonDoubleClick = 0x020D;
 constexpr uint32_t kCaptureChanged = 0x0215;
 constexpr uint32_t kMouseLeave = 0x02A3;
 constexpr uint32_t kCancelMode = 0x001F;
+
+uint32_t current_mouse_key_state(uint32_t message, int32_t button) noexcept {
+#if defined(_WIN32)
+    uint32_t state = 0;
+    if ((::GetKeyState(VK_LBUTTON) & 0x8000) != 0)
+        state |= MK_LBUTTON;
+    if ((::GetKeyState(VK_RBUTTON) & 0x8000) != 0)
+        state |= MK_RBUTTON;
+    if ((::GetKeyState(VK_MBUTTON) & 0x8000) != 0)
+        state |= MK_MBUTTON;
+    if ((::GetKeyState(VK_XBUTTON1) & 0x8000) != 0)
+        state |= MK_XBUTTON1;
+    if ((::GetKeyState(VK_XBUTTON2) & 0x8000) != 0)
+        state |= MK_XBUTTON2;
+    if ((::GetKeyState(VK_SHIFT) & 0x8000) != 0)
+        state |= MK_SHIFT;
+    if ((::GetKeyState(VK_CONTROL) & 0x8000) != 0)
+        state |= MK_CONTROL;
+    const auto force_button = [&](uint32_t bit, uint32_t down, uint32_t up, uint32_t dbl) {
+        if (message == down || message == dbl)
+            state |= bit;
+        else if (message == up)
+            state &= ~bit;
+    };
+    force_button(MK_LBUTTON, kLeftButtonDown, kLeftButtonUp, kLeftButtonDoubleClick);
+    force_button(MK_RBUTTON, kRightButtonDown, kRightButtonUp, kRightButtonDoubleClick);
+    force_button(MK_MBUTTON, kMiddleButtonDown, kMiddleButtonUp, kMiddleButtonDoubleClick);
+    if (message == kXButtonDown || message == kXButtonDoubleClick) {
+        state |= button == 3 ? MK_XBUTTON1 : MK_XBUTTON2;
+    } else if (message == kXButtonUp) {
+        state &= ~(button == 3 ? MK_XBUTTON1 : MK_XBUTTON2);
+    }
+    return state;
+#else
+    (void)message;
+    (void)button;
+    return 0;
+#endif
+}
 
 struct ActiveInputCallback {
     sao_ui_layer_s* layer{};
@@ -472,6 +538,11 @@ bool capture_input_callback_locked(sao_ui_compositor_s* compositor, sao_ui_layer
         if (invocation.scroll == nullptr)
             return false;
         break;
+    case InputCallbackInvocation::Kind::raw_mouse:
+        invocation.raw_mouse = layer->composition_mouse_fn;
+        if (!layer->composition_input_proxy || invocation.raw_mouse == nullptr)
+            return false;
+        break;
     }
     const auto generation = layer->input_callbacks_by_generation.find(invocation.generation);
     if (generation == layer->input_callbacks_by_generation.end())
@@ -502,6 +573,11 @@ bool invoke_input_callback(const InputCallbackInvocation& invocation) noexcept {
             break;
         case InputCallbackInvocation::Kind::scroll:
             invocation.scroll(invocation.scroll_dx, invocation.scroll_dy, invocation.user_data);
+            break;
+        case InputCallbackInvocation::Kind::raw_mouse:
+            invocation.raw_mouse(invocation.message, invocation.key_state, invocation.x,
+                                 invocation.y, invocation.button_id, invocation.wheel_delta,
+                                 invocation.user_data);
             break;
         }
     } catch (...) {
@@ -602,6 +678,16 @@ bool capture_router_action_locked(sao_ui_compositor_s* compositor,
         out->scroll_dx = action.scroll_dx;
         out->scroll_dy = action.scroll_dy;
         return true;
+    case sao::ui::input_router_detail::LayerInputActionKind::raw_mouse:
+        if (!capture_input_callback_locked(compositor, layer,
+                                           InputCallbackInvocation::Kind::raw_mouse, layer_x,
+                                           layer_y, action.button, 0, out)) {
+            return false;
+        }
+        out->message = action.message;
+        out->key_state = action.key_state;
+        out->wheel_delta = action.wheel_delta;
+        return true;
     }
     return false;
 }
@@ -646,9 +732,15 @@ sao_status_t mutate_input_layer(sao_ui_layer_handle_t layer, Fn&& fn) noexcept {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     auto* compositor = layer->owner;
     std::vector<InputCallbackInvocation> invocations;
+    bool queued_for_owner = false;
     try {
+        invocations.reserve(1u);
         {
             std::lock_guard lock(compositor->mtx);
+            if (std::this_thread::get_id() != compositor->render_thread) {
+                compositor->pending_owner_input_callbacks.reserve(
+                    compositor->pending_owner_input_callbacks.size() + 1u);
+            }
             const auto active =
                 std::find_if(compositor->layers.begin(), compositor->layers.end(),
                              [layer](const std::unique_ptr<sao_ui_layer_s>& candidate) {
@@ -663,15 +755,18 @@ sao_status_t mutate_input_layer(sao_ui_layer_handle_t layer, Fn&& fn) noexcept {
                 detach_invalid_input_layer_locked(compositor, layer, &invocations);
             if (input_status != SAO_STATUS_OK)
                 return input_status;
+            if (!invocations.empty() &&
+                std::this_thread::get_id() != compositor->render_thread) {
+                compositor->pending_owner_input_callbacks.insert(
+                    compositor->pending_owner_input_callbacks.end(),
+                    std::make_move_iterator(invocations.begin()),
+                    std::make_move_iterator(invocations.end()));
+                invocations.clear();
+                queued_for_owner = true;
+            }
         }
-        if (!invocations.empty() && std::this_thread::get_id() != compositor->render_thread) {
-            std::lock_guard lock(compositor->mtx);
-            compositor->pending_owner_input_callbacks.insert(
-                compositor->pending_owner_input_callbacks.end(),
-                std::make_move_iterator(invocations.begin()),
-                std::make_move_iterator(invocations.end()));
+        if (queued_for_owner)
             return SAO_STATUS_OK;
-        }
         bool callback_failed = false;
         for (const auto& invocation : invocations)
             callback_failed = !invoke_input_callback(invocation) || callback_failed;
@@ -755,11 +850,17 @@ sao_status_t screen_to_host(sao_ui_compositor_s* compositor, int32_t screen_x, i
 }
 
 sao_ui_layer_s* top_input_layer_locked(sao_ui_compositor_s* compositor, int32_t host_x,
-                                       int32_t host_y, float* out_layer_x, float* out_layer_y) {
+                                       int32_t host_y, float* out_layer_x, float* out_layer_y,
+                                       bool* out_uses_raw_input = nullptr) {
     for (auto it = compositor->layers.rbegin(); it != compositor->layers.rend(); ++it) {
-        if (layer_accepts_input_at_locked(it->get(), host_x, host_y, out_layer_x, out_layer_y))
+        if (layer_accepts_input_at_locked(it->get(), host_x, host_y, out_layer_x, out_layer_y)) {
+            if (out_uses_raw_input != nullptr)
+                *out_uses_raw_input = (*it)->composition_input_proxy;
             return it->get();
+        }
     }
+    if (out_uses_raw_input != nullptr)
+        *out_uses_raw_input = false;
     return nullptr;
 }
 
@@ -768,6 +869,25 @@ bool SAO_UI_CALL compositor_host_hit_test(int32_t screen_x, int32_t screen_y, vo
     return sao_ui_compositor_hit_test(static_cast<sao_ui_compositor_handle_t>(user_data), screen_x,
                                       screen_y, &hit) == SAO_STATUS_OK &&
            hit;
+}
+
+bool SAO_UI_CALL compositor_host_activation_hit_test(int32_t screen_x, int32_t screen_y,
+                                                     void* user_data) {
+    auto* compositor = static_cast<sao_ui_compositor_handle_t>(user_data);
+    if (compositor == nullptr)
+        return false;
+    int32_t host_x = 0;
+    int32_t host_y = 0;
+    if (screen_to_host(compositor, screen_x, screen_y, &host_x, &host_y) != SAO_STATUS_OK)
+        return false;
+    try {
+        std::lock_guard lock(compositor->mtx);
+        auto* layer = top_input_layer_locked(compositor, host_x, host_y, nullptr, nullptr);
+        return layer != nullptr && layer->composition_input_proxy &&
+               layer->composition_slot != nullptr && layer->composition_slot->config.focusable;
+    } catch (...) {
+        return false;
+    }
 }
 
 void SAO_UI_CALL compositor_host_mouse(uint32_t message, int32_t screen_x, int32_t screen_y,
@@ -784,6 +904,8 @@ constexpr size_t kMaxBgraBufferBytes = static_cast<size_t>(SAO_UI_SOPF_MMF_MAX_M
 struct LayerLess {
     bool operator()(const std::unique_ptr<sao_ui_layer_s>& a,
                     const std::unique_ptr<sao_ui_layer_s>& b) const {
+        if (a->composition_band != b->composition_band)
+            return a->composition_band < b->composition_band;
         if (a->z_order != b->z_order)
             return a->z_order < b->z_order;
         return a->creation_seq < b->creation_seq;
@@ -919,6 +1041,8 @@ void release_detached_layer_payload(sao_ui_layer_s* layer) {
     layer->cursor_leave_fn = nullptr;
     layer->button_fn = nullptr;
     layer->scroll_fn = nullptr;
+    layer->composition_mouse_fn = nullptr;
+    layer->composition_slot = nullptr;
     layer->input_user_data = nullptr;
     layer->detached_payload_released = true;
 }
@@ -1239,7 +1363,7 @@ bool has_visible_native_layer_locked(const sao_ui_compositor_s* compositor) {
     if (compositor->d3d11_device == nullptr)
         return false;
     return std::ranges::any_of(compositor->layers, [](const auto& layer) {
-        return layer->visible && layer->alpha > 0.0F &&
+        return !layer->composition_input_proxy && layer->visible && layer->alpha > 0.0F &&
                (is_native_gpu_layer(layer.get()) || !layer->bgra_pixels.empty());
     });
 }
@@ -1249,7 +1373,7 @@ bool gpu_composition_extent_locked(const sao_ui_compositor_s* compositor, uint32
     int64_t right = 0;
     int64_t bottom = 0;
     for (const auto& layer : compositor->layers) {
-        if (!layer->visible || layer->alpha <= 0.0F)
+        if (layer->composition_input_proxy || !layer->visible || layer->alpha <= 0.0F)
             continue;
         const uint32_t width = layer->paint_commands != nullptr ? layer->paint_width
                                : layer->d3d11_render_fn != nullptr
@@ -1346,7 +1470,7 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
     for (size_t index = 0; index < compositor->layers.size(); ++index) {
         const auto& owned = compositor->layers[index];
         sao_ui_layer_s* layer = owned.get();
-        if (!layer->visible || layer->alpha <= 0.0F)
+        if (layer->composition_input_proxy || !layer->visible || layer->alpha <= 0.0F)
             continue;
         uint32_t layer_width = layer->bgra_width;
         uint32_t layer_height = layer->bgra_height;
@@ -1796,6 +1920,187 @@ bool valid_composition_extent(int32_t x, int32_t y, int64_t width, int64_t heigh
                                     &ignored_size);
 }
 
+auto find_composition_slot_it(sao_ui_compositor_s* compositor,
+                              sao_ui_composition_slot_handle_t slot) {
+    return std::find_if(compositor->composition_slots.begin(), compositor->composition_slots.end(),
+                        [slot](const auto& candidate) { return candidate.get() == slot; });
+}
+
+void advance_composition_target_generation(sao_ui_composition_slot_s* slot) noexcept {
+    ++slot->target_generation;
+    if (slot->target_generation == 0)
+        ++slot->target_generation;
+}
+
+sao::ui::detail::DcompExternalVisualConfig dcomp_visual_config(
+    const SaoUiCompositionSlotConfig& config) noexcept {
+    return {config.x,       config.y,    config.width,   config.height,
+            config.z_order, config.band, config.opacity, config.visible};
+}
+
+sao_status_t detach_composition_visual_locked(sao_ui_composition_slot_s* slot) noexcept {
+    if (slot == nullptr || slot->visual == nullptr)
+        return SAO_STATUS_OK;
+    const sao_status_t status = sao::ui::detail::destroy_dcomp_external_visual(slot->visual);
+    if (status != SAO_STATUS_OK)
+        return status;
+    slot->visual = nullptr;
+    advance_composition_target_generation(slot);
+    return SAO_STATUS_OK;
+}
+
+void abandon_composition_visual_locked(sao_ui_composition_slot_s* slot) noexcept {
+    if (slot == nullptr || slot->visual == nullptr)
+        return;
+    sao::ui::detail::abandon_dcomp_external_visual(slot->visual);
+    slot->visual = nullptr;
+    advance_composition_target_generation(slot);
+}
+
+sao_status_t bind_composition_visual_locked(sao_ui_compositor_s* compositor,
+                                            sao_ui_composition_slot_s* slot) noexcept {
+    if (compositor == nullptr || slot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (slot->visual != nullptr)
+        return SAO_STATUS_OK;
+    if (compositor->dcomp_bridge == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    sao::ui::detail::DcompExternalVisual* visual = nullptr;
+    const sao_status_t status = sao::ui::detail::create_dcomp_external_visual(
+        compositor->dcomp_bridge, dcomp_visual_config(slot->config), &visual);
+    if (status != SAO_STATUS_OK)
+        return status;
+    slot->visual = visual;
+    advance_composition_target_generation(slot);
+    return SAO_STATUS_OK;
+}
+
+void release_all_composition_visuals_locked(sao_ui_compositor_s* compositor) noexcept {
+    for (const auto& slot : compositor->composition_slots)
+        abandon_composition_visual_locked(slot.get());
+}
+
+sao_status_t bind_all_composition_visuals_locked(sao_ui_compositor_s* compositor) noexcept {
+    for (const auto& slot : compositor->composition_slots) {
+        const sao_status_t status = bind_composition_visual_locked(compositor, slot.get());
+        if (status != SAO_STATUS_OK) {
+            release_all_composition_visuals_locked(compositor);
+            return status;
+        }
+    }
+    return SAO_STATUS_OK;
+}
+
+void invalidate_presentation_bridge_after_device_loss(
+    sao_ui_compositor_s* compositor) noexcept {
+    if (compositor == nullptr)
+        return;
+    sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
+    try {
+        {
+            std::lock_guard lock(compositor->mtx);
+            release_all_composition_visuals_locked(compositor);
+#if defined(_WIN32)
+            for (const auto& layer : compositor->layers) {
+                release_shared_texture_objects(layer.get());
+                release_layer_gpu_surface(layer.get());
+            }
+            release_master_gpu_resources(compositor);
+#endif
+            failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+        }
+        sao_ui_dcomp_bridge_destroy(failed_bridge);
+    } catch (...) {
+    }
+}
+
+bool valid_composition_slot_config(const SaoUiCompositionSlotConfig& config) noexcept {
+    return config._reserved0 == 0 && config._reserved1 == 0 && config.width > 0 &&
+           config.height > 0 && valid_composition_extent(config.x, config.y, config.width,
+                                                          config.height) &&
+           (config.band == SAO_UI_COMPOSITION_BAND_BELOW_NATIVE ||
+            config.band == SAO_UI_COMPOSITION_BAND_ABOVE_NATIVE) &&
+           std::isfinite(config.opacity) && config.opacity >= 0.0F && config.opacity <= 1.0F;
+}
+
+void apply_composition_proxy_config_locked(sao_ui_composition_slot_s* slot) noexcept {
+    auto* proxy = slot->input_proxy;
+    if (proxy == nullptr)
+        return;
+    proxy->x = slot->config.x;
+    proxy->y = slot->config.y;
+    proxy->width = slot->config.width;
+    proxy->height = slot->config.height;
+    proxy->z_order = slot->config.z_order;
+    proxy->composition_band = slot->config.band;
+    proxy->visible = slot->config.visible;
+    proxy->alpha = slot->config.opacity;
+    proxy->input_enabled = slot->config.input_enabled;
+    mark_layer_dirty(proxy);
+}
+
+template <typename Mutate>
+sao_status_t mutate_composition_slot(sao_ui_composition_slot_handle_t slot,
+                                     Mutate&& mutate) noexcept {
+    if (slot == nullptr || slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* compositor = slot->owner;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    std::vector<InputCallbackInvocation> invocations;
+    sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
+    try {
+        invocations.reserve(1u);
+        {
+            std::lock_guard lock(compositor->mtx);
+            if (find_composition_slot_it(compositor, slot) ==
+                compositor->composition_slots.end()) {
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            }
+            SaoUiCompositionSlotConfig candidate = slot->config;
+            std::forward<Mutate>(mutate)(candidate);
+            if (!valid_composition_slot_config(candidate))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (slot->visual != nullptr) {
+                const sao_status_t visual_status = sao::ui::detail::update_dcomp_external_visual(
+                    slot->visual, dcomp_visual_config(candidate));
+                if (visual_status == SAO_STATUS_ERR_DEVICE_LOST) {
+                    release_all_composition_visuals_locked(compositor);
+                    failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+                } else if (visual_status != SAO_STATUS_OK) {
+                    return visual_status;
+                }
+            }
+            if (failed_bridge == nullptr) {
+                slot->config = candidate;
+                slot->config.name_utf8 = slot->name.c_str();
+                apply_composition_proxy_config_locked(slot);
+                std::sort(compositor->layers.begin(), compositor->layers.end(), LayerLess{});
+                const sao_status_t input_status =
+                    detach_invalid_input_layer_locked(compositor, slot->input_proxy, &invocations);
+                if (input_status != SAO_STATUS_OK)
+                    return input_status;
+            }
+        }
+        if (failed_bridge != nullptr) {
+            sao_ui_dcomp_bridge_destroy(failed_bridge);
+            return SAO_STATUS_ERR_DEVICE_LOST;
+        }
+        bool callback_failed = false;
+        for (const auto& invocation : invocations)
+            callback_failed = !invoke_input_callback(invocation) || callback_failed;
+        const sao_status_t input_mode_status =
+            compositor->host != nullptr ? sao_ui_compositor_sync_host_input_mode(compositor)
+                                        : SAO_STATUS_OK;
+        if (input_mode_status != SAO_STATUS_OK)
+            return input_mode_status;
+        return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
     struct RenderCall {
         sao_ui_layer_render_fn_t fn;
@@ -1809,7 +2114,12 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(comp->mtx);
-        done.swap(comp->pending_fade_callbacks);
+        renders.reserve(comp->layers.size());
+        input_invocations.reserve(comp->layers.size());
+        done.reserve(comp->pending_fade_callbacks.size() + comp->layers.size());
+        done.insert(done.end(), std::make_move_iterator(comp->pending_fade_callbacks.begin()),
+                std::make_move_iterator(comp->pending_fade_callbacks.end()));
+        comp->pending_fade_callbacks.clear();
         for (const auto& entry : comp->layers) {
             sao_ui_layer_s* layer = entry.get();
             refresh_mmf_source_locked(layer);
@@ -1891,7 +2201,8 @@ bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3
     *out_has_visible_alpha = false;
     for (size_t index = bounded_begin; index < bounded_end; ++index) {
         const auto& layer = comp->layers[index];
-        if (!layer->visible || layer->bgra_pixels.empty() || layer->bgra_width == 0 ||
+        if (layer->composition_input_proxy || !layer->visible || layer->bgra_pixels.empty() ||
+            layer->bgra_width == 0 ||
             layer->bgra_height == 0) {
             continue;
         }
@@ -1933,7 +2244,8 @@ bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3
 
     for (size_t index = bounded_begin; index < bounded_end; ++index) {
         const auto& layer = comp->layers[index];
-        if (!layer->visible || layer->bgra_pixels.empty() || layer->bgra_width == 0 ||
+        if (layer->composition_input_proxy || !layer->visible || layer->bgra_pixels.empty() ||
+            layer->bgra_width == 0 ||
             layer->bgra_height == 0 || layer->alpha <= 0.0f) {
             continue;
         }
@@ -2065,9 +2377,13 @@ sao_ui_compositor_create(sao_ui_overlay_host_handle_t host, const SaoCompositorC
             }
             status = sao_ui_overlay_host_set_hit_test(host, &compositor_host_hit_test, comp.get());
             if (status == SAO_STATUS_OK)
+                status = sao_ui_overlay_host_set_activation_hit_test(
+                    host, &compositor_host_activation_hit_test, comp.get());
+            if (status == SAO_STATUS_OK)
                 status = sao_ui_overlay_host_set_mouse(host, &compositor_host_mouse, comp.get());
             if (status != SAO_STATUS_OK) {
                 (void)sao_ui_overlay_host_set_mouse(host, nullptr, nullptr);
+                (void)sao_ui_overlay_host_set_activation_hit_test(host, nullptr, nullptr);
                 (void)sao_ui_overlay_host_set_hit_test(host, nullptr, nullptr);
                 sao_ui_z_order_manager_destroy(comp->z_order);
                 sao_ui_dcomp_bridge_destroy(comp->dcomp_bridge);
@@ -2133,9 +2449,16 @@ sao_ui_compositor_try_destroy(sao_ui_compositor_handle_t handle) {
                 sao::ui::input_router_detail::reset_host_input(handle->host);
             if (status != SAO_STATUS_OK)
                 return status;
+            const sao_status_t activation_status =
+                sao_ui_overlay_host_set_activation_enabled(handle->host, false);
+            if (activation_status != SAO_STATUS_OK)
+                return activation_status;
         }
         if (handle->host_callbacks_bound) {
             sao_status_t status = sao_ui_overlay_host_set_mouse(handle->host, nullptr, nullptr);
+            if (status != SAO_STATUS_OK)
+                return status;
+            status = sao_ui_overlay_host_set_activation_hit_test(handle->host, nullptr, nullptr);
             if (status != SAO_STATUS_OK)
                 return status;
             status = sao_ui_overlay_host_set_hit_test(handle->host, nullptr, nullptr);
@@ -2148,6 +2471,7 @@ sao_ui_compositor_try_destroy(sao_ui_compositor_handle_t handle) {
         sao_ui_z_order_manager_destroy(handle->z_order);
         flush_pending_layer_destroys_locked(handle);
 #if defined(_WIN32)
+    release_all_composition_visuals_locked(handle);
         for (const auto& layer : handle->layers) {
             release_shared_texture_objects(layer.get());
             release_layer_gpu_surface(layer.get());
@@ -2156,6 +2480,8 @@ sao_ui_compositor_try_destroy(sao_ui_compositor_handle_t handle) {
 #endif
         handle->layers.clear();
         handle->pending_layer_destroys.clear();
+        handle->composition_slots.clear();
+        handle->retired_composition_slots.clear();
         handle->released_pending_count = 0;
         dcomp_bridge = std::exchange(handle->dcomp_bridge, nullptr);
         d3d11_device = std::exchange(handle->d3d11_device, nullptr);
@@ -2210,6 +2536,469 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_host_dpi(
     if (out_dpi_y != nullptr)
         *out_dpi_y = dpi;
     return SAO_STATUS_OK;
+}
+
+// ---------------------------------------------------------------------------
+// External DirectComposition visual slots.
+// ---------------------------------------------------------------------------
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_create(
+    sao_ui_compositor_handle_t compositor, const SaoUiCompositionSlotConfig* config,
+    sao_ui_composition_slot_handle_t* out_slot) {
+    if (out_slot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_slot = nullptr;
+    if (compositor == nullptr || config == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const uint32_t declared = config->struct_size == 0u
+                                  ? SAO_UI_COMPOSITION_SLOT_CONFIG_V1_SIZE
+                                  : config->struct_size;
+    if (declared < SAO_UI_COMPOSITION_SLOT_CONFIG_V1_SIZE ||
+        declared > sizeof(SaoUiCompositionSlotConfig)) {
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    }
+    if (config->name_utf8 == nullptr || config->name_utf8[0] == '\0' ||
+        !valid_composition_slot_config(*config)) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    if (compositor->host == nullptr || compositor->dcomp_bridge == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    try {
+        auto slot = std::make_unique<sao_ui_composition_slot_s>();
+        auto proxy = std::make_unique<sao_ui_layer_s>();
+        slot->owner = compositor;
+        slot->name = config->name_utf8;
+        slot->config = *config;
+        slot->config.struct_size = sizeof(SaoUiCompositionSlotConfig);
+        slot->config.name_utf8 = slot->name.c_str();
+
+        proxy->name = std::string{"\x1f" "composition:"} + slot->name;
+        proxy->click_through = false;
+        proxy->rect_hit = true;
+        proxy->bgra_swizzle = true;
+        proxy->effects.struct_size = sizeof(SaoUiLayerEffects);
+        proxy->owner = compositor;
+        proxy->composition_input_proxy = true;
+        proxy->composition_slot = slot.get();
+        slot->input_proxy = proxy.get();
+
+        std::lock_guard lock(compositor->mtx);
+        for (const auto& active : compositor->composition_slots) {
+            if (active->name == slot->name)
+                return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        for (const auto& layer : compositor->layers) {
+            if (layer->name == proxy->name)
+                return SAO_STATUS_ERR_ALREADY_EXISTS;
+        }
+        compositor->composition_slots.reserve(compositor->composition_slots.size() + 1u);
+        compositor->layers.reserve(compositor->layers.size() + 1u);
+        proxy->creation_seq = ++compositor->seq;
+        apply_composition_proxy_config_locked(slot.get());
+        const sao_status_t bind_status = bind_composition_visual_locked(compositor, slot.get());
+        if (bind_status != SAO_STATUS_OK) {
+            if (bind_status == SAO_STATUS_ERR_DEVICE_LOST) {
+                release_all_composition_visuals_locked(compositor);
+                auto* failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+                sao_ui_dcomp_bridge_destroy(failed_bridge);
+            }
+            return bind_status;
+        }
+        sao_ui_composition_slot_handle_t result = slot.get();
+        compositor->layers.push_back(std::move(proxy));
+        compositor->composition_slots.push_back(std::move(slot));
+        std::sort(compositor->layers.begin(), compositor->layers.end(), LayerLess{});
+        *out_slot = result;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_composition_slot_try_destroy(sao_ui_composition_slot_handle_t slot) {
+    if (slot == nullptr)
+        return SAO_STATUS_OK;
+    if (slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* compositor = slot->owner;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    std::vector<InputCallbackInvocation> invocations;
+    sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
+    try {
+        invocations.reserve(1u);
+        {
+            std::lock_guard lock(compositor->mtx);
+            const auto slot_it = find_composition_slot_it(compositor, slot);
+            if (slot_it == compositor->composition_slots.end())
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            auto* proxy = slot->input_proxy;
+            const auto proxy_it = find_layer_it(compositor, proxy);
+            if (proxy_it == compositor->layers.end())
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            if (proxy->input_callbacks_in_flight != 0 ||
+                std::ranges::any_of(compositor->pending_owner_input_callbacks,
+                                    [proxy](const InputCallbackInvocation& invocation) {
+                                        return invocation.layer == proxy;
+                                    })) {
+                return SAO_STATUS_ERR_CANCELLED;
+            }
+            proxy->visible = false;
+            proxy->input_enabled = false;
+            proxy->alpha = 0.0F;
+            mark_layer_dirty(proxy);
+        }
+
+        sao_status_t convergence_status = SAO_STATUS_OK;
+        if (compositor->host != nullptr) {
+            convergence_status = sao_ui_compositor_sync_host_rgn(compositor);
+            if (convergence_status == SAO_STATUS_OK)
+                convergence_status = sao_ui_compositor_sync_host_rgn(compositor);
+            if (convergence_status == SAO_STATUS_OK)
+                convergence_status = sao_ui_compositor_sync_host_input_mode(compositor);
+        }
+        if (convergence_status != SAO_STATUS_OK) {
+            {
+                std::lock_guard lock(compositor->mtx);
+                if (find_composition_slot_it(compositor, slot) !=
+                    compositor->composition_slots.end()) {
+                    apply_composition_proxy_config_locked(slot);
+                }
+            }
+            if (compositor->host != nullptr) {
+                (void)sao_ui_compositor_sync_host_rgn(compositor);
+                (void)sao_ui_compositor_sync_host_input_mode(compositor);
+            }
+            return convergence_status;
+        }
+
+        sao_status_t invalidate_status = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(compositor->mtx);
+            const auto slot_it = find_composition_slot_it(compositor, slot);
+            if (slot_it == compositor->composition_slots.end()) {
+                invalidate_status = SAO_STATUS_ERR_HANDLE_INVALID;
+            } else {
+                auto* proxy = slot->input_proxy;
+                const auto proxy_it = find_layer_it(compositor, proxy);
+                if (proxy_it == compositor->layers.end()) {
+                    invalidate_status = SAO_STATUS_ERR_HANDLE_INVALID;
+                } else {
+                    invalidate_status =
+                        detach_invalid_input_layer_locked(compositor, proxy, &invocations);
+                }
+            }
+        }
+        if (invalidate_status != SAO_STATUS_OK) {
+            {
+                std::lock_guard lock(compositor->mtx);
+                if (find_composition_slot_it(compositor, slot) !=
+                    compositor->composition_slots.end()) {
+                    apply_composition_proxy_config_locked(slot);
+                }
+            }
+            if (compositor->host != nullptr) {
+                (void)sao_ui_compositor_sync_host_rgn(compositor);
+                (void)sao_ui_compositor_sync_host_input_mode(compositor);
+            }
+            return invalidate_status;
+        }
+        for (const auto& invocation : invocations)
+            (void)invoke_input_callback(invocation);
+        invocations.clear();
+
+        sao_status_t restage_status = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(compositor->mtx);
+            const auto slot_it = find_composition_slot_it(compositor, slot);
+            if (slot_it == compositor->composition_slots.end()) {
+                restage_status = SAO_STATUS_ERR_HANDLE_INVALID;
+            } else {
+                auto* proxy = slot->input_proxy;
+                if (find_layer_it(compositor, proxy) == compositor->layers.end()) {
+                    restage_status = SAO_STATUS_ERR_HANDLE_INVALID;
+                } else if (proxy->input_callbacks_in_flight != 0 ||
+                           std::ranges::any_of(
+                               compositor->pending_owner_input_callbacks,
+                               [proxy](const InputCallbackInvocation& invocation) {
+                                   return invocation.layer == proxy;
+                               })) {
+                    restage_status = SAO_STATUS_ERR_CANCELLED;
+                    apply_composition_proxy_config_locked(slot);
+                } else {
+                    proxy->visible = false;
+                    proxy->input_enabled = false;
+                    proxy->alpha = 0.0F;
+                    mark_layer_dirty(proxy);
+                }
+            }
+        }
+        if (restage_status != SAO_STATUS_OK) {
+            if (compositor->host != nullptr) {
+                (void)sao_ui_compositor_sync_host_rgn(compositor);
+                (void)sao_ui_compositor_sync_host_input_mode(compositor);
+            }
+            return restage_status;
+        }
+        convergence_status = SAO_STATUS_OK;
+        if (compositor->host != nullptr) {
+            convergence_status = sao_ui_compositor_sync_host_rgn(compositor);
+            if (convergence_status == SAO_STATUS_OK)
+                convergence_status = sao_ui_compositor_sync_host_rgn(compositor);
+            if (convergence_status == SAO_STATUS_OK)
+                convergence_status = sao_ui_compositor_sync_host_input_mode(compositor);
+        }
+        if (convergence_status != SAO_STATUS_OK) {
+            {
+                std::lock_guard lock(compositor->mtx);
+                if (find_composition_slot_it(compositor, slot) !=
+                    compositor->composition_slots.end()) {
+                    apply_composition_proxy_config_locked(slot);
+                }
+            }
+            if (compositor->host != nullptr) {
+                (void)sao_ui_compositor_sync_host_rgn(compositor);
+                (void)sao_ui_compositor_sync_host_input_mode(compositor);
+            }
+            return convergence_status;
+        }
+
+        sao_status_t detach_status = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(compositor->mtx);
+            const auto slot_it = find_composition_slot_it(compositor, slot);
+            if (slot_it == compositor->composition_slots.end()) {
+                detach_status = SAO_STATUS_ERR_HANDLE_INVALID;
+            } else {
+                auto* proxy = slot->input_proxy;
+                const auto proxy_it = find_layer_it(compositor, proxy);
+                if (proxy_it == compositor->layers.end()) {
+                    detach_status = SAO_STATUS_ERR_HANDLE_INVALID;
+                } else {
+                    compositor->pending_layer_destroys.reserve(
+                        compositor->pending_layer_destroys.size() + 1u);
+                    compositor->retired_composition_slots.reserve(
+                        compositor->retired_composition_slots.size() + 1u);
+                    detach_status = detach_composition_visual_locked(slot);
+                    if (detach_status == SAO_STATUS_OK) {
+                        proxy->composition_slot = nullptr;
+                        auto retired_proxy = std::move(*proxy_it);
+                        compositor->layers.erase(proxy_it);
+                        release_detached_layer_payload(retired_proxy.get());
+                        ++compositor->released_pending_count;
+                        compositor->pending_layer_destroys.push_back(std::move(retired_proxy));
+                        slot->active = false;
+                        compositor->retired_composition_slots.push_back(std::move(*slot_it));
+                        compositor->composition_slots.erase(slot_it);
+                    }
+                }
+                if (detach_status != SAO_STATUS_OK &&
+                    find_composition_slot_it(compositor, slot) !=
+                        compositor->composition_slots.end()) {
+                    apply_composition_proxy_config_locked(slot);
+                    if (detach_status == SAO_STATUS_ERR_DEVICE_LOST) {
+                        release_all_composition_visuals_locked(compositor);
+                        failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+                    }
+                }
+            }
+        }
+        if (failed_bridge != nullptr)
+            sao_ui_dcomp_bridge_destroy(failed_bridge);
+        if (detach_status != SAO_STATUS_OK && compositor->host != nullptr) {
+            (void)sao_ui_compositor_sync_host_rgn(compositor);
+            (void)sao_ui_compositor_sync_host_input_mode(compositor);
+        }
+        return detach_status;
+    } catch (...) {
+        try {
+            std::lock_guard lock(compositor->mtx);
+            if (find_composition_slot_it(compositor, slot) !=
+                compositor->composition_slots.end()) {
+                apply_composition_proxy_config_locked(slot);
+            }
+        } catch (...) {
+        }
+        if (compositor->host != nullptr) {
+            (void)sao_ui_compositor_sync_host_rgn(compositor);
+            (void)sao_ui_compositor_sync_host_input_mode(compositor);
+        }
+        for (const auto& invocation : invocations)
+            (void)invoke_input_callback(invocation);
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_get_target(
+    sao_ui_composition_slot_handle_t slot, SaoUiCompositionTarget* out_target) {
+    if (out_target == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const uint32_t declared = out_target->struct_size == 0u
+                                  ? SAO_UI_COMPOSITION_TARGET_V1_SIZE
+                                  : out_target->struct_size;
+    if (declared < SAO_UI_COMPOSITION_TARGET_V1_SIZE ||
+        declared > sizeof(SaoUiCompositionTarget)) {
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    }
+    *out_target = {};
+    out_target->struct_size = sizeof(SaoUiCompositionTarget);
+    if (slot == nullptr || slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(slot->owner);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    try {
+        std::lock_guard lock(slot->owner->mtx);
+        if (find_composition_slot_it(slot->owner, slot) == slot->owner->composition_slots.end())
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        out_target->target_generation = slot->target_generation;
+        out_target->dcomp_device = sao::ui::detail::dcomp_external_visual_device(slot->visual);
+        out_target->root_visual_target =
+            sao::ui::detail::dcomp_external_visual_target(slot->visual);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_composition_slot_commit(sao_ui_composition_slot_handle_t slot) {
+    if (slot == nullptr || slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto* compositor = slot->owner;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
+    sao_status_t status = SAO_STATUS_OK;
+    try {
+        {
+            std::lock_guard lock(compositor->mtx);
+            if (find_composition_slot_it(compositor, slot) ==
+                compositor->composition_slots.end()) {
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            }
+            status = sao::ui::detail::commit_dcomp_external_visual(slot->visual);
+            if (status == SAO_STATUS_ERR_DEVICE_LOST) {
+                release_all_composition_visuals_locked(compositor);
+                failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+            }
+        }
+        if (failed_bridge != nullptr)
+            sao_ui_dcomp_bridge_destroy(failed_bridge);
+        return status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_get_state(
+    sao_ui_composition_slot_handle_t slot, SaoUiCompositionSlotState* out_state) {
+    if (out_state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const uint32_t declared = out_state->struct_size == 0u
+                                  ? SAO_UI_COMPOSITION_SLOT_STATE_V1_SIZE
+                                  : out_state->struct_size;
+    if (declared < SAO_UI_COMPOSITION_SLOT_STATE_V1_SIZE ||
+        declared > sizeof(SaoUiCompositionSlotState)) {
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    }
+    *out_state = {};
+    out_state->struct_size = sizeof(SaoUiCompositionSlotState);
+    if (slot == nullptr || slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        std::lock_guard lock(slot->owner->mtx);
+        if (find_composition_slot_it(slot->owner, slot) == slot->owner->composition_slots.end())
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        out_state->x = slot->config.x;
+        out_state->y = slot->config.y;
+        out_state->width = slot->config.width;
+        out_state->height = slot->config.height;
+        out_state->z_order = slot->config.z_order;
+        out_state->band = slot->config.band;
+        out_state->opacity = slot->config.opacity;
+        out_state->visible = slot->config.visible;
+        out_state->input_enabled = slot->config.input_enabled;
+        out_state->focusable = slot->config.focusable;
+        out_state->target_ready = slot->visual != nullptr;
+        out_state->target_generation = slot->target_generation;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_geometry(
+    sao_ui_composition_slot_handle_t slot, int32_t x, int32_t y, int32_t width,
+    int32_t height) {
+    return mutate_composition_slot(slot, [=](SaoUiCompositionSlotConfig& config) {
+        config.x = x;
+        config.y = y;
+        config.width = width;
+        config.height = height;
+    });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_z_order(
+    sao_ui_composition_slot_handle_t slot, int32_t z_order) {
+    return mutate_composition_slot(
+        slot, [=](SaoUiCompositionSlotConfig& config) { config.z_order = z_order; });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_visible(
+    sao_ui_composition_slot_handle_t slot, bool visible) {
+    return mutate_composition_slot(
+        slot, [=](SaoUiCompositionSlotConfig& config) { config.visible = visible; });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_opacity(
+    sao_ui_composition_slot_handle_t slot, float opacity) {
+    return mutate_composition_slot(
+        slot, [=](SaoUiCompositionSlotConfig& config) { config.opacity = opacity; });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_input_policy(
+    sao_ui_composition_slot_handle_t slot, bool input_enabled, bool focusable) {
+    return mutate_composition_slot(slot, [=](SaoUiCompositionSlotConfig& config) {
+        config.input_enabled = input_enabled;
+        config.focusable = focusable;
+    });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_mouse_handler(
+    sao_ui_composition_slot_handle_t slot, sao_ui_composition_slot_mouse_fn_t callback,
+    void* user_data) {
+    if (slot == nullptr || slot->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(slot->owner);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    sao_ui_layer_s* proxy = nullptr;
+    {
+        std::lock_guard lock(slot->owner->mtx);
+        if (find_composition_slot_it(slot->owner, slot) == slot->owner->composition_slots.end())
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        proxy = slot->input_proxy;
+    }
+    const sao_status_t callback_status =
+        sao_ui_layer_set_input_callbacks(proxy, nullptr, nullptr, nullptr, nullptr, user_data);
+    if (callback_status != SAO_STATUS_OK)
+        return callback_status;
+    try {
+        std::lock_guard lock(slot->owner->mtx);
+        if (find_composition_slot_it(slot->owner, slot) == slot->owner->composition_slots.end())
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        proxy->composition_mouse_fn = callback;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2305,25 +3094,34 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
             auto it = find_layer_it(comp, layer);
             if (it == comp->layers.end())
                 return;
+            const bool queue_for_owner = std::this_thread::get_id() != comp->render_thread;
+            comp->pending_layer_destroys.reserve(comp->pending_layer_destroys.size() + 1u);
+            if (queue_for_owner) {
+                comp->pending_owner_input_callbacks.reserve(
+                    comp->pending_owner_input_callbacks.size() + 1u);
+            }
+            int32_t pointer_x = 0;
+            int32_t pointer_y = 0;
+            (void)sao::ui::input_router_detail::layer_input_last_pointer(
+                comp->input_state, &pointer_x, &pointer_y);
             std::array<sao::ui::input_router_detail::LayerInputAction, 1> actions{};
             size_t action_count = 0;
             if (sao::ui::input_router_detail::invalidate_layer_input(
                     comp->input_state, layer, false, actions.data(), actions.size(),
                     &action_count) == SAO_STATUS_OK &&
                 action_count != 0) {
-                invoke_leave = capture_router_action_locked(comp, actions[0], 0, 0, &leave);
+                invoke_leave = capture_router_action_locked(comp, actions[0], pointer_x, pointer_y,
+                                                            &leave);
+            }
+            if (invoke_leave && queue_for_owner) {
+                comp->pending_owner_input_callbacks.push_back(std::move(leave));
+                invoke_leave = false;
             }
             comp->pending_layer_destroys.push_back(std::move(*it));
             comp->layers.erase(it);
         }
-        if (invoke_leave) {
-            if (std::this_thread::get_id() != comp->render_thread) {
-                std::lock_guard lock(comp->mtx);
-                comp->pending_owner_input_callbacks.push_back(std::move(leave));
-            } else {
-                (void)invoke_input_callback(leave);
-            }
-        }
+        if (invoke_leave)
+            (void)invoke_input_callback(leave);
     } catch (...) {
     }
 }
@@ -2400,7 +3198,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_list_layers(
 
     try {
         std::lock_guard<std::mutex> lk(compositor->mtx);
-        const size_t n = compositor->layers.size();
+        const size_t n = static_cast<size_t>(std::count_if(
+            compositor->layers.begin(), compositor->layers.end(),
+            [](const auto& layer) { return !layer->composition_input_proxy; }));
         *out_count = n;
 
         if (out_layers == nullptr) {
@@ -2408,9 +3208,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_list_layers(
             // caller can distinguish from "invalid arg".
             return SAO_STATUS_OK;
         }
-        const size_t emit = (n < capacity) ? n : capacity;
-        for (size_t i = 0; i < emit; ++i) {
-            out_layers[i] = compositor->layers[i].get();
+        size_t emit = 0;
+        for (const auto& layer : compositor->layers) {
+            if (layer->composition_input_proxy || emit == capacity)
+                continue;
+            out_layers[emit++] = layer.get();
         }
         if (emit < n) {
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
@@ -2879,7 +3681,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
         message != kLeftButtonUp && message != kLeftButtonDoubleClick &&
         message != kRightButtonDown && message != kRightButtonUp &&
         message != kRightButtonDoubleClick && message != kMiddleButtonDown &&
-        message != kMiddleButtonUp && message != kMiddleButtonDoubleClick) {
+        message != kMiddleButtonUp && message != kMiddleButtonDoubleClick &&
+        message != kXButtonDown && message != kXButtonUp &&
+        message != kXButtonDoubleClick) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -2891,13 +3695,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
         bool callback_failed = drain_owner_input_callbacks(compositor);
         int32_t host_x = 0;
         int32_t host_y = 0;
-        sao_status_t dispatch_status = SAO_STATUS_OK;
-        if (message != kMouseLeave && message != kCaptureChanged && message != kCancelMode) {
-            const sao_status_t coordinate_status =
-                screen_to_host(compositor, screen_x, screen_y, &host_x, &host_y);
-            if (coordinate_status != SAO_STATUS_OK)
-                dispatch_status = coordinate_status;
-        }
+        sao_status_t dispatch_status =
+            screen_to_host(compositor, screen_x, screen_y, &host_x, &host_y);
 
         std::vector<InputCallbackInvocation> invocations;
         invocations.reserve(3);
@@ -2905,15 +3704,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_dispatch_mouse(
             std::lock_guard lock(compositor->mtx);
             float hit_x = 0.0F;
             float hit_y = 0.0F;
+            bool hit_uses_raw_input = false;
             sao_ui_layer_s* hit_target = nullptr;
             if (sao::ui::input_router_detail::layer_event_uses_coordinates(message)) {
-                hit_target = top_input_layer_locked(compositor, host_x, host_y, &hit_x, &hit_y);
+                hit_target = top_input_layer_locked(compositor, host_x, host_y, &hit_x, &hit_y,
+                                                    &hit_uses_raw_input);
             }
             std::array<sao::ui::input_router_detail::LayerInputAction, 3> actions{};
             size_t action_count = 0;
             dispatch_status = sao::ui::input_router_detail::route_layer_input(
-                compositor->input_state, message, host_x, host_y, button, wheel_delta, hit_target,
-                hit_x, hit_y, actions.data(), actions.size(), &action_count);
+                compositor->input_state, message, host_x, host_y, button, wheel_delta,
+                current_mouse_key_state(message, button), hit_target, hit_uses_raw_input, hit_x,
+                hit_y,
+                actions.data(), actions.size(), &action_count);
             if (dispatch_status == SAO_STATUS_OK) {
                 for (size_t index = 0; index < action_count; ++index) {
                     InputCallbackInvocation invocation{};
@@ -3011,6 +3814,25 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
     }
     const bool callback_failed = advance_layer_animations_and_callbacks(compositor);
 #if defined(_WIN32)
+    if (compositor->d3d11_device != nullptr && compositor->dcomp_bridge != nullptr) {
+        const sao_status_t alive_status =
+            sao_ui_d3d11_device_check_alive(compositor->d3d11_device);
+        if (alive_status == SAO_STATUS_ERR_DEVICE_LOST) {
+            {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                release_all_composition_visuals_locked(compositor);
+                for (const auto& layer : compositor->layers) {
+                    release_shared_texture_objects(layer.get());
+                    release_layer_gpu_surface(layer.get());
+                }
+                release_master_gpu_resources(compositor);
+            }
+            auto* failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+            sao_ui_dcomp_bridge_destroy(failed_bridge);
+        } else if (alive_status != SAO_STATUS_OK) {
+            return alive_status;
+        }
+    }
     // A failed device-loss recovery leaves the bridge null. Retry on later
     // owner-thread presents so a transient adapter/ResizeBuffers failure does
     // not strand the process behind the LinkStart surface indefinitely.
@@ -3038,8 +3860,17 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             recovery_status = sao_ui_dcomp_bridge_create(compositor->host, &bridge_config,
                                                          &compositor->dcomp_bridge);
         }
-        if (recovery_status != SAO_STATUS_OK)
+        if (recovery_status == SAO_STATUS_OK) {
+            std::lock_guard<std::mutex> lock(compositor->mtx);
+            recovery_status = bind_all_composition_visuals_locked(compositor);
+        }
+        if (recovery_status != SAO_STATUS_OK) {
+            if (compositor->dcomp_bridge != nullptr) {
+                sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
+                compositor->dcomp_bridge = nullptr;
+            }
             return recovery_status;
+        }
     }
 #endif
     if (compositor->dcomp_bridge == nullptr || compositor->d3d11_device == nullptr) {
@@ -3085,6 +3916,8 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                     }
                 }
             }
+            if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
+                invalidate_presentation_bridge_after_device_loss(compositor);
             if (gpu_status != SAO_STATUS_OK)
                 return gpu_status;
             if (gpu_width == 0 || gpu_height == 0)
@@ -3099,6 +3932,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
         if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST) {
             {
                 std::lock_guard<std::mutex> lock(compositor->mtx);
+                release_all_composition_visuals_locked(compositor);
                 for (const auto& layer : compositor->layers) {
                     release_shared_texture_objects(layer.get());
                     release_layer_gpu_surface(layer.get());
@@ -3120,6 +3954,14 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                 gpu_status = sao_ui_dcomp_bridge_create(compositor->host, &bridge_config,
                                                         &compositor->dcomp_bridge);
             }
+            if (gpu_status == SAO_STATUS_OK) {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                gpu_status = bind_all_composition_visuals_locked(compositor);
+            }
+            if (gpu_status != SAO_STATUS_OK && compositor->dcomp_bridge != nullptr) {
+                sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
+                compositor->dcomp_bridge = nullptr;
+            }
             if (gpu_status == SAO_STATUS_OK)
                 gpu_status = compose_and_present();
         }
@@ -3133,6 +3975,8 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             for (const auto& layer : compositor->layers)
                 layer->bgra_dirty = false;
         }
+        if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
+            invalidate_presentation_bridge_after_device_loss(compositor);
         if (gpu_status != SAO_STATUS_OK)
             return gpu_status;
         return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
@@ -3211,6 +4055,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
     {
         std::lock_guard<std::mutex> lock(compositor->mtx);
 #if defined(_WIN32)
+        release_all_composition_visuals_locked(compositor);
         for (const auto& layer : compositor->layers) {
             release_shared_texture_objects(layer.get());
             release_layer_gpu_surface(layer.get());
@@ -3238,9 +4083,20 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
     if (status != SAO_STATUS_OK) {
         return status;
     }
+    {
+        std::lock_guard<std::mutex> lock(compositor->mtx);
+        status = bind_all_composition_visuals_locked(compositor);
+    }
+    if (status != SAO_STATUS_OK) {
+        sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
+        compositor->dcomp_bridge = nullptr;
+        return status;
+    }
     status = sao_ui_dcomp_bridge_upload_bgra(compositor->dcomp_bridge, composed_pixels.data(),
                                              width, height, width * 4u);
     if (status != SAO_STATUS_OK) {
+        if (status == SAO_STATUS_ERR_DEVICE_LOST)
+            invalidate_presentation_bridge_after_device_loss(compositor);
         return status;
     }
     status = sao_ui_dcomp_bridge_present(compositor->dcomp_bridge);
@@ -3258,6 +4114,8 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             }
         }
     }
+    if (status == SAO_STATUS_ERR_DEVICE_LOST)
+        invalidate_presentation_bridge_after_device_loss(compositor);
     if (status != SAO_STATUS_OK)
         return status;
     return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
@@ -3343,6 +4201,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
                 gpu_status =
                     compose_native_layers_gpu_locked(compositor, seconds, out_width, out_height);
             }
+            if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
+                invalidate_presentation_bridge_after_device_loss(compositor);
             if (gpu_status != SAO_STATUS_OK)
                 return gpu_status;
             if (*out_width == 0 || *out_height == 0)
@@ -3357,6 +4217,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
                 std::lock_guard<std::mutex> lock(compositor->mtx);
                 gpu_status = readback_master_locked(compositor, &gpu_pixels);
             }
+            if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
+                invalidate_presentation_bridge_after_device_loss(compositor);
             if (gpu_status != SAO_STATUS_OK)
                 return gpu_status;
             if (!gpu_pixels.empty())
@@ -3709,7 +4571,8 @@ sao_ui_compositor_sync_host_rgn(sao_ui_compositor_handle_t compositor) {
             if (!layer->visible || layer->width <= 0 || layer->height <= 0 || layer->alpha <= 0.0f)
                 continue;
             const bool gpu_visual =
-                layer->paint_commands != nullptr || layer->d3d11_render_fn != nullptr;
+                layer->composition_input_proxy || layer->paint_commands != nullptr ||
+                layer->d3d11_render_fn != nullptr;
             if (!gpu_visual &&
                 (!layer->input_enabled || layer->click_through || layer->input_proxy_enabled))
                 continue;
@@ -3891,6 +4754,7 @@ sao_ui_compositor_sync_host_input_mode(sao_ui_compositor_handle_t compositor) {
         return SAO_STATUS_ERR_ACCESS_DENIED;
     }
     bool interactive = false;
+    bool focusable_composition = false;
     try {
         std::lock_guard<std::mutex> lock(compositor->mtx);
         for (const auto& layer : compositor->layers) {
@@ -3899,12 +4763,19 @@ sao_ui_compositor_sync_host_input_mode(sao_ui_compositor_handle_t compositor) {
                 (!layer->input_rects.empty() || layer->rect_hit || layer->bgra_pixels.empty() ||
                  has_nonzero_bgra_alpha(layer.get()))) {
                 interactive = true;
-                break;
+                if (layer->composition_input_proxy && layer->composition_slot != nullptr &&
+                    layer->composition_slot->config.focusable) {
+                    focusable_composition = true;
+                }
             }
         }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    return sao::ui::input_router_detail::apply_host_input_passthrough(compositor->host,
-                                                                      !interactive);
+    const sao_status_t passthrough_status =
+        sao::ui::input_router_detail::apply_host_input_passthrough(compositor->host,
+                                                                   !interactive);
+    if (passthrough_status != SAO_STATUS_OK)
+        return passthrough_status;
+    return sao_ui_overlay_host_set_activation_enabled(compositor->host, focusable_composition);
 }

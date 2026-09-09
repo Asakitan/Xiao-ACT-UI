@@ -120,6 +120,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/vt_commands.cpp
     src/vt_tools.cpp
     src/webview_panel_registry.cpp
+    src/workbench_composition_host.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
     # Phase 10 (Python parity closure): live SDK dumper for 4 game engines,
@@ -149,6 +150,14 @@ if (SAO_BUILD_WEBVIEW_BRIDGE)
         VERBATIM)
 endif()
 add_library(sao::plugin_ai_editor ALIAS sao_plugin_ai_editor)
+
+add_custom_command(TARGET sao_plugin_ai_editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:sao_plugin_ai_editor>/assets/ai_editor/workbench"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workbench"
+        "$<TARGET_FILE_DIR:sao_plugin_ai_editor>/assets/ai_editor/workbench"
+    VERBATIM)
 
 target_include_directories(sao_plugin_ai_editor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -233,6 +242,16 @@ install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
     DESTINATION "bin/assets/ai_editor"
     COMPONENT ship
+)
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workbench/"
+    DESTINATION "bin/assets/ai_editor/workbench"
+    COMPONENT ship
+    FILES_MATCHING
+        PATTERN "*.html"
+        PATTERN "*.js"
+        PATTERN "*.css"
+        PATTERN "*.md"
 )
 
 # Market presets: bundled agent/workflow definitions surfaced by

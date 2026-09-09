@@ -220,6 +220,16 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_get_desired_bounds(
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visible);
 
+// Enable activation for an explicitly focusable windowless composition
+// surface. Disabled is the default and preserves WS_EX_NOACTIVATE plus
+// MA_NOACTIVATE. Enabling affects hRender only; the hidden owner/control
+// windows remain non-activating. Owner-thread-only and idempotent.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activation_enabled(
+    sao_ui_overlay_host_handle_t handle, bool enabled);
+
+SAO_UI_API bool SAO_UI_CALL sao_ui_overlay_host_activation_enabled(
+    sao_ui_overlay_host_handle_t handle);
+
 // Toggle `WS_EX_TRANSPARENT` for cross-process click passthrough.
 // See §4 of the handoff — `WM_NCHITTEST → HTTRANSPARENT` only works
 // within the same thread; `WS_EX_TRANSPARENT` is required for the
@@ -314,10 +324,17 @@ typedef bool(SAO_UI_CALL* sao_ui_hit_test_fn_t)(int32_t screen_x, int32_t screen
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
     sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data);
 
+// Optional hit-aware activation gate used only while activation mode is
+// enabled. WM_MOUSEACTIVATE returns MA_ACTIVATE only when this callback says
+// the top target at the current screen point requires native focus.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activation_hit_test(
+    sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data);
+
 // Mouse event callback — invoked from WndProc for WM_MOUSEMOVE /
-// WM_LBUTTON* / WM_RBUTTON* / WM_MOUSEWHEEL / WM_MOUSELEAVE.
+// WM_LBUTTON* / WM_RBUTTON* / WM_MBUTTON* / WM_XBUTTON* /
+// WM_MOUSEWHEEL / WM_MOUSELEAVE.
 // msg_type is the raw Win32 message id.  Screen coordinates.
-// button: 0=left, 1=right, 2=middle (GLFW convention).  wheel_delta
+// button: 0=left, 1=right, 2=middle, 3=XBUTTON1, 4=XBUTTON2. wheel_delta
 // is signed multiple of WHEEL_DELTA (120) for WM_MOUSEWHEEL, else 0.
 // TrackMouseEvent(TME_LEAVE) is auto-armed on WM_MOUSEMOVE so a
 // WM_MOUSELEAVE arrives when the cursor exits without a WM_MOUSEMOVE

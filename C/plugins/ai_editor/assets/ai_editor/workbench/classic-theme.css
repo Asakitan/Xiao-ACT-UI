@@ -1,0 +1,120 @@
+/* SAO Classic workbench overlay. The legacy HTML owns structure and theme switching. */
+:root,
+:root[data-theme="light"] {
+  --bg: #f7f4ef;
+  --bg2: #ede8df;
+  --bg3: #fffdf9;
+  --bg-sidebar: #f1ede5;
+  --bg-input: #fffdf9;
+  --bg-editor: #fffdf9;
+  --bg-panel: #fbf8f2;
+  --bg-code: #f7f4ee;
+  --bg-tool: #edf4e9;
+  --bg-tool-result: #e5f0de;
+  --bg-hover: #e9e0d2;
+  --bg-active: #dfd3c2;
+  --bg-tab-active: #fffdf9;
+  --bg-tab: #eee7dc;
+  --bg-badge: #c86920;
+  --fg: #39342f;
+  --fg-dim: #746b61;
+  --fg-bright: #231e19;
+  --fg-accent: #b85a18;
+  --fg-success: #2f8557;
+  --fg-error: #c94c3f;
+  --fg-warning: #9d6812;
+  --fg-tool: #7a4a16;
+  --fg-code: #2e2924;
+  --fg-kw: #8355a1;
+  --fg-str: #a3442e;
+  --fg-num: #17725a;
+  --fg-cmt: #6f7f59;
+  --fg-fn: #855719;
+  --fg-type: #236f87;
+  --border: #d9d0c4;
+  --border-focus: #d46d1e;
+  --btn: #c8621c;
+  --btn-hover: #aa4f13;
+  --scrollbar: #c9bdae;
+  --scrollbar-hover: #ab9c89;
+  --selection: #f0c695;
+  --line-highlight: #bf66100d;
+  --statusbar-bg: #eee8de;
+  --statusbar-fg: #4d453c;
+  --sans: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", "Microsoft YaHei UI", Consolas, monospace;
+  --classic-display: "Microsoft YaHei UI", "Segoe UI Semibold", sans-serif;
+}
+
+/* Dark remains an explicit user-selected mode; no light token leaks into it. */
+:root[data-theme="dark"] {
+  --bg: #1e1e1e; --bg2: #252526; --bg3: #2d2d2d; --bg-sidebar: #181818;
+  --bg-input: #1e1e1e; --bg-editor: #1e1e1e; --bg-panel: #1e1e1e;
+  --bg-code: #0d1117; --bg-tool: #1a2a1a; --bg-tool-result: #0d1a0d;
+  --bg-hover: #2a2d2e; --bg-active: #37373d; --bg-tab-active: #1e1e1e;
+  --bg-tab: #2d2d2d; --bg-badge: #c8641b;
+  --fg: #d1ccc6; --fg-dim: #aaa39b; --fg-bright: #f0ebe5;
+  --fg-accent: #eea054; --fg-success: #62c994; --fg-error: #f17d6d;
+  --fg-warning: #e7b960; --fg-tool: #e5c17b; --fg-code: #ddd5cc;
+  --fg-kw: #c496e5; --fg-str: #d88970; --fg-num: #b5cea8; --fg-cmt: #849f70;
+  --fg-fn: #e4c878; --fg-type: #72c6bb;
+  --border: #423c37; --border-focus: #eb8a35;
+  --btn: #bd5b17; --btn-hover: #da7224;
+  --scrollbar: #4a4540; --scrollbar-hover: #645b53;
+  --selection: #7b451f; --line-highlight: #ffffff0b;
+  --statusbar-bg: #181818; --statusbar-fg: #d1ccc6;
+  --sans: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", "Microsoft YaHei UI", Consolas, monospace;
+  --classic-display: "Microsoft YaHei UI", "Segoe UI Semibold", sans-serif;
+}
+
+html { background: var(--bg); color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+body { font-family: var(--sans); letter-spacing: .005em; }
+button, input, select, textarea { font-family: var(--sans); }
+code, pre, kbd, samp, .terminal, .terminal-output, .editor-code, .monaco-like-editor { font-family: var(--mono); }
+.titlebar .title, .sidebar-title, .panel-title, .settings-title, .chat-welcome-title { font-family: var(--classic-display); }
+
+.titlebar, .sidebar, .right-sidebar, .panel, .terminal-panel, .settings-page,
+.extension-panel-container, .chat-panel { box-shadow: none; }
+.titlebar { border-bottom: 1px solid color-mix(in srgb, var(--border) 84%, transparent); }
+.sidebar, .right-sidebar.has-editor { background: var(--bg-sidebar); }
+.panel, .terminal-panel, .settings-page { background: var(--bg-panel); }
+.tab, .editor-tab, .ptab { border-radius: 5px 5px 0 0; }
+input, select, textarea, .chat-input-container, .quick-input, .settings-input {
+  border-color: var(--border);
+  background-color: var(--bg-input);
+}
+button, .btn, .chat-welcome-action, .sidebar-action, .toolbar-btn {
+  border-radius: 5px;
+}
+button.primary, .primary, .chat-welcome-action.primary { background: var(--btn); border-color: var(--btn); }
+button.primary:hover, .primary:hover, .chat-welcome-action.primary:hover { background: var(--btn-hover); }
+
+:focus-visible {
+  outline: 2px solid var(--border-focus) !important;
+  outline-offset: 2px;
+}
+input:focus, select:focus, textarea:focus,
+.chat-input-container:focus-within, .terminal-profile-select:focus,
+.chat-welcome-action:focus, .chat-tool-summary-chip:focus, .sidebar-action:focus {
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-focus) 24%, transparent) !important;
+}
+.activity-bar .ab-icon.active, .activity-bar .ab-icon:hover { color: var(--fg-accent); }
+.activity-bar .ab-icon.active::before { background: var(--border-focus); }
+.statusbar, .status-bar { border-top-color: var(--border); }
+
+/* A visible but quiet state marker replaces misleading backend-looking chrome while offline. */
+html[data-sao-workbench-bridge="offline"] .titlebar::after {
+  content: "离线工作台";
+  color: var(--fg-warning);
+  font: 11px var(--sans);
+  position: absolute;
+  right: 110px;
+  opacity: .9;
+}
+html[data-sao-workbench-bridge="online"] .titlebar::after { content: ""; }
+@media (max-width: 760px) {
+  html[data-sao-workbench-bridge="offline"] .titlebar::after { display: none; }
+}

@@ -63,6 +63,7 @@ extern "C" {
 
 typedef struct sao_ui_compositor_s* sao_ui_compositor_handle_t;
 typedef struct sao_ui_layer_s* sao_ui_layer_handle_t;
+typedef struct sao_ui_composition_slot_s* sao_ui_composition_slot_handle_t;
 
 #define SAO_UI_SOPF_MMF_MAGIC 0x46504F53u
 #define SAO_UI_SOPF_MMF_VERSION_V1 1u
@@ -221,6 +222,72 @@ struct SaoLayerConfig {
 // + 4 (target_fps). No trailing pad needed since the struct alignment is 8.
 #define SAO_UI_LAYER_CONFIG_V1_SIZE 48u
 
+// DirectComposition visual slots live in one of two explicit bands around
+// the compositor's flattened native surface. They never alter Win32 HWND
+// z-order and cannot interleave between individual native layers.
+enum sao_ui_composition_band_e : int32_t {
+    SAO_UI_COMPOSITION_BAND_BELOW_NATIVE = -1,
+    SAO_UI_COMPOSITION_BAND_ABOVE_NATIVE = 1,
+};
+
+// Generic external-visual slot. The platform owns the wrapper/clip visual;
+// a producer such as WebView2 binds to the generation-scoped target returned
+// by sao_ui_composition_slot_get_target(). Geometry is in hRender client
+// pixels. External pixels bypass native master-texture snapshots and native
+// backdrop/effect sampling by design.
+struct SaoUiCompositionSlotConfig {
+    uint32_t struct_size;
+    uint32_t _reserved0;
+    const char* name_utf8;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    int32_t z_order;
+    int32_t band; // sao_ui_composition_band_e
+    float opacity;
+    bool visible;
+    bool input_enabled;
+    bool focusable;
+    uint8_t _reserved1;
+};
+
+#define SAO_UI_COMPOSITION_SLOT_CONFIG_V1_SIZE 48u
+
+// Owner-thread-only borrowed COM interfaces. Do not AddRef/Release them. Use
+// them synchronously before the next owner-thread compositor/slot call and do
+// not retain them after target_generation changes. root_visual_target is an
+// IDCompositionVisual-compatible IUnknown for a windowless producer's root
+// visual target; dcomp_device belongs to the same visual tree.
+struct SaoUiCompositionTarget {
+    uint32_t struct_size;
+    uint32_t _reserved0;
+    uint64_t target_generation;
+    void* dcomp_device;
+    void* root_visual_target;
+};
+
+#define SAO_UI_COMPOSITION_TARGET_V1_SIZE 32u
+
+struct SaoUiCompositionSlotState {
+    uint32_t struct_size;
+    uint32_t _reserved0;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    int32_t z_order;
+    int32_t band;
+    float opacity;
+    bool visible;
+    bool input_enabled;
+    bool focusable;
+    bool target_ready;
+    uint64_t target_generation;
+};
+
+#define SAO_UI_COMPOSITION_SLOT_STATE_V1_SIZE 48u
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_create(
     sao_ui_overlay_host_handle_t host,
     const SaoCompositorConfig* config,
@@ -268,6 +335,74 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_host_dpi(
 // not own.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_require_owner_thread(
     sao_ui_compositor_handle_t compositor);
+
+// ── External DirectComposition visual slots ─────────────────────
+
+// Owner-thread-only. Slot names are unique within one compositor. The
+// returned handle stays a rejection-safe tombstone until compositor teardown.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_create(
+    sao_ui_compositor_handle_t compositor,
+    const SaoUiCompositionSlotConfig* config,
+    sao_ui_composition_slot_handle_t* out_slot);
+
+// Retryable owner-thread teardown. Active input callbacks return CANCELLED;
+// success removes the slot from hit testing and the DComp tree before its
+// target is released. Safe on NULL.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_try_destroy(
+    sao_ui_composition_slot_handle_t slot);
+
+// Owner-thread-only snapshot of the current generation-scoped visual target.
+// target_ready=false is represented by NULL interfaces and is expected during
+// device recovery.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_get_target(
+    sao_ui_composition_slot_handle_t slot,
+    SaoUiCompositionTarget* out_target);
+
+// Commit producer-side changes made through the borrowed root visual target
+// (for example, after connecting or disconnecting a windowless visual tree).
+// Owner-thread-only. DEVICE_LOST invalidates every slot target generation.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_commit(
+    sao_ui_composition_slot_handle_t slot);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_get_state(
+    sao_ui_composition_slot_handle_t slot,
+    SaoUiCompositionSlotState* out_state);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_geometry(
+    sao_ui_composition_slot_handle_t slot,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_z_order(
+    sao_ui_composition_slot_handle_t slot, int32_t z_order);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_visible(
+    sao_ui_composition_slot_handle_t slot, bool visible);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_opacity(
+    sao_ui_composition_slot_handle_t slot, float opacity);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_input_policy(
+    sao_ui_composition_slot_handle_t slot, bool input_enabled, bool focusable);
+
+// Exact Win32 mouse messages for windowless producers. Coordinates are slot-
+// local client pixels. key_state uses the Win32 MK_* bit layout reconstructed
+// at dispatch time; wheel_delta is the signed raw WHEEL_DELTA multiple.
+typedef void(SAO_UI_CALL* sao_ui_composition_slot_mouse_fn_t)(
+    uint32_t message,
+    uint32_t key_state,
+    float slot_x,
+    float slot_y,
+    int32_t button,
+    int32_t wheel_delta,
+    void* user_data);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_composition_slot_set_mouse_handler(
+    sao_ui_composition_slot_handle_t slot,
+    sao_ui_composition_slot_mouse_fn_t callback,
+    void* user_data);
 
 // ── Layer lifecycle ─────────────────────────────────────────────
 
@@ -576,8 +711,20 @@ static_assert(offsetof(SaoCompositorConfig, struct_size) == 0u,
               "SaoCompositorConfig::struct_size must be the first field");
 static_assert(offsetof(SaoLayerConfig, struct_size) == 0u,
               "SaoLayerConfig::struct_size must be the first field");
+static_assert(offsetof(SaoUiCompositionSlotConfig, struct_size) == 0u,
+              "SaoUiCompositionSlotConfig::struct_size must be the first field");
+static_assert(offsetof(SaoUiCompositionTarget, struct_size) == 0u,
+              "SaoUiCompositionTarget::struct_size must be the first field");
+static_assert(offsetof(SaoUiCompositionSlotState, struct_size) == 0u,
+              "SaoUiCompositionSlotState::struct_size must be the first field");
 static_assert(sizeof(SaoCompositorConfig) == SAO_UI_COMPOSITOR_CONFIG_V1_SIZE,
               "SaoCompositorConfig v1 size drift");
 static_assert(sizeof(SaoLayerConfig) == SAO_UI_LAYER_CONFIG_V1_SIZE,
               "SaoLayerConfig v1 size drift");
+static_assert(sizeof(SaoUiCompositionSlotConfig) == SAO_UI_COMPOSITION_SLOT_CONFIG_V1_SIZE,
+              "SaoUiCompositionSlotConfig v1 size drift");
+static_assert(sizeof(SaoUiCompositionTarget) == SAO_UI_COMPOSITION_TARGET_V1_SIZE,
+              "SaoUiCompositionTarget v1 size drift");
+static_assert(sizeof(SaoUiCompositionSlotState) == SAO_UI_COMPOSITION_SLOT_STATE_V1_SIZE,
+              "SaoUiCompositionSlotState v1 size drift");
 #endif

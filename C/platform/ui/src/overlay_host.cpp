@@ -70,6 +70,8 @@ struct sao_ui_overlay_host_s {
     std::mutex state_mu;
     bool visible = false;
     bool input_passthrough = true;
+    bool activation_enabled = false;
+    bool activation_sync_partial = false;
     uint32_t input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
     bool capture_excluded = false;
     bool protection_requested = false;
@@ -83,6 +85,8 @@ struct sao_ui_overlay_host_s {
 
     sao_ui_hit_test_fn_t hit_test_fn = nullptr;
     void* hit_test_user = nullptr;
+    sao_ui_hit_test_fn_t activation_hit_test_fn = nullptr;
+    void* activation_hit_test_user = nullptr;
     sao_ui_mouse_fn_t mouse_fn = nullptr;
     void* mouse_user = nullptr;
 
@@ -93,6 +97,7 @@ struct sao_ui_overlay_host_s {
     bool dpi_pending_bounds = false;
     SaoOverlayHostClientRect dpi_pending_rect{};
     int32_t cursor_hint = 0;
+    uint32_t captured_mouse_buttons = 0;
     uint64_t last_threat_scan_ms = 0u;
     uint64_t last_process_window_sweep_ms = 0u;
     SaoOverlayHostWMCounters wm_counters{};
@@ -488,6 +493,64 @@ sao_status_t apply_passthrough_unlocked(sao_ui_overlay_host_s* host, bool passth
     return SAO_STATUS_OK;
 }
 
+sao_status_t apply_activation_unlocked(sao_ui_overlay_host_s* host, bool enabled) {
+    if (host == nullptr || host->hwnd == nullptr || !::IsWindow(host->hwnd))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    const auto& api = win32_api();
+    const auto publish_state = [&](LONG_PTR style, bool partial) {
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        host->activation_enabled = (style & WS_EX_NOACTIVATE) == 0;
+        host->activation_sync_partial = partial;
+    };
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR old_style = api.get_window_long_ptr_w(host->hwnd, GWL_EXSTYLE);
+    if (old_style == 0 && ::GetLastError() != ERROR_SUCCESS) {
+        const sao_status_t status = last_win32_status();
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        host->activation_sync_partial = true;
+        return status;
+    }
+    const auto rollback = [&](sao_status_t failure) {
+        const bool restored = restore_passthrough_style(host, old_style);
+        publish_state(old_style, !restored);
+        return restored ? failure : SAO_STATUS_ERR_OS_CALL_FAILED;
+    };
+    const LONG_PTR new_style = enabled
+                                   ? old_style & ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE)
+                                   : old_style | WS_EX_NOACTIVATE;
+    if (new_style != old_style) {
+        ::SetLastError(ERROR_SUCCESS);
+        const LONG_PTR previous = api.set_window_long_ptr_w(host->hwnd, GWL_EXSTYLE, new_style);
+        if (previous == 0 && ::GetLastError() != ERROR_SUCCESS) {
+            const sao_status_t status = last_win32_status();
+            publish_state(old_style, false);
+            return status;
+        }
+        if (!api.set_window_pos(host->hwnd, nullptr, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                                    SWP_FRAMECHANGED)) {
+            return rollback(SAO_STATUS_ERR_OS_CALL_FAILED);
+        }
+    }
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR readback = api.get_window_long_ptr_w(host->hwnd, GWL_EXSTYLE);
+    if (readback == 0 && ::GetLastError() != ERROR_SUCCESS) {
+        const sao_status_t status = last_win32_status();
+        if (new_style != old_style)
+            return rollback(status);
+        publish_state(old_style, true);
+        return status;
+    }
+    if (((readback & WS_EX_NOACTIVATE) == 0) != enabled) {
+        if (new_style != old_style)
+            return rollback(SAO_STATUS_ERR_ACCESS_DENIED);
+        publish_state(readback, true);
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    }
+    publish_state(readback, false);
+    return SAO_STATUS_OK;
+}
+
 bool input_rect_has_valid_bounds(const SaoOverlayHostInputRect& rect) noexcept {
     const int64_t right = static_cast<int64_t>(rect.x) + rect.width;
     const int64_t bottom = static_cast<int64_t>(rect.y) + rect.height;
@@ -533,6 +596,26 @@ class OwnedRegion {
     HRGN region_ = nullptr;
 };
 
+uint32_t mouse_button_bit(UINT message, WPARAM wparam) noexcept {
+    if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP ||
+        message == WM_LBUTTONDBLCLK) {
+        return MK_LBUTTON;
+    }
+    if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP ||
+        message == WM_RBUTTONDBLCLK) {
+        return MK_RBUTTON;
+    }
+    if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP ||
+        message == WM_MBUTTONDBLCLK) {
+        return MK_MBUTTON;
+    }
+    if (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ||
+        message == WM_XBUTTONDBLCLK) {
+        return GET_XBUTTON_WPARAM(wparam) == XBUTTON1 ? MK_XBUTTON1 : MK_XBUTTON2;
+    }
+    return 0;
+}
+
 void dispatch_mouse(sao_ui_overlay_host_s* host, UINT message, WPARAM wparam, LPARAM lparam) {
     sao_ui_mouse_fn_t callback = nullptr;
     void* user_data = nullptr;
@@ -563,6 +646,9 @@ void dispatch_mouse(sao_ui_overlay_host_s* host, UINT message, WPARAM wparam, LP
     } else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP ||
                message == WM_MBUTTONDBLCLK) {
         button = 2;
+    } else if (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ||
+               message == WM_XBUTTONDBLCLK) {
+        button = GET_XBUTTON_WPARAM(wparam) == XBUTTON1 ? 3 : 4;
     }
     callback(message, point.x, point.y, button,
              message == WM_MOUSEWHEEL ? GET_WHEEL_DELTA_WPARAM(wparam) : 0, user_data);
@@ -635,8 +721,28 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     host = callback_lease.get();
     const bool is_render_host = host != nullptr && host->hwnd == hwnd;
 
-    if (message == WM_MOUSEACTIVATE)
-        return MA_NOACTIVATE;
+    if (message == WM_MOUSEACTIVATE) {
+        bool activation_enabled = false;
+        sao_ui_hit_test_fn_t activation_hit_test = nullptr;
+        void* activation_user = nullptr;
+        if (is_render_host) {
+            std::lock_guard<std::mutex> lock(host->state_mu);
+            activation_enabled = host->activation_enabled;
+            activation_hit_test = host->activation_hit_test_fn;
+            activation_user = host->activation_hit_test_user;
+        }
+        if (!activation_enabled || activation_hit_test == nullptr)
+            return MA_NOACTIVATE;
+        POINT point{};
+        if (!::GetCursorPos(&point))
+            return MA_NOACTIVATE;
+        try {
+            return activation_hit_test(point.x, point.y, activation_user) ? MA_ACTIVATE
+                                                                          : MA_NOACTIVATE;
+        } catch (...) {
+            return MA_NOACTIVATE;
+        }
+    }
     if (message == WM_ERASEBKGND)
         return 1;
     if (!is_render_host) {
@@ -677,8 +783,8 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     case WM_MOUSEMOVE: {
         TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
         ::TrackMouseEvent(&track);
-        dispatch_mouse(host, message, wparam, lparam);
         apply_cursor_hint(host);
+        dispatch_mouse(host, message, wparam, lparam);
         return 0;
     }
     case WM_MOUSELEAVE:
@@ -690,29 +796,37 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         apply_cursor_hint(host);
         return 0;
     case WM_MOUSEWHEEL:
-    case WM_LBUTTONDBLCLK:
-    case WM_RBUTTONDBLCLK:
-    case WM_MBUTTONDBLCLK:
         dispatch_mouse(host, message, wparam, lparam);
         return 0;
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
     case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDBLCLK:
+        host->captured_mouse_buttons |= mouse_button_bit(message, wparam);
         ::SetCapture(hwnd);
         dispatch_mouse(host, message, wparam, lparam);
-        return 0;
+        return message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK ? TRUE : 0;
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
     case WM_MBUTTONUP:
+    case WM_XBUTTONUP:
         dispatch_mouse(host, message, wparam, lparam);
-        if (::GetCapture() == hwnd)
+        host->captured_mouse_buttons &= ~mouse_button_bit(message, wparam);
+        if (host->captured_mouse_buttons == 0 && ::GetCapture() == hwnd)
             ::ReleaseCapture();
-        return 0;
+        return message == WM_XBUTTONUP ? TRUE : 0;
     case WM_CAPTURECHANGED:
-        if (reinterpret_cast<HWND>(lparam) != hwnd)
+        if (reinterpret_cast<HWND>(lparam) != hwnd) {
+            host->captured_mouse_buttons = 0;
             dispatch_mouse(host, message, wparam, lparam);
+        }
         return 0;
     case WM_CANCELMODE:
+        host->captured_mouse_buttons = 0;
         dispatch_mouse(host, message, wparam, lparam);
         if (::GetCapture() == hwnd)
             ::ReleaseCapture();
@@ -1135,6 +1249,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     host->class_name = make_class_name();
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
+    window_class.style = CS_DBLCLKS;
     window_class.lpfnWndProc = overlay_wndproc;
     window_class.hInstance = host->hinstance;
     window_class.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
@@ -1500,6 +1615,34 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
     return submit_physical_rect_scrub(handle);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activation_enabled(
+    sao_ui_overlay_host_handle_t handle, bool enabled) {
+    try {
+        HostLease lease(handle);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        if (handle->owner_thread_id != ::GetCurrentThreadId())
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        std::lock_guard<std::mutex> update_lock(handle->input_update_mu);
+        return apply_activation_unlocked(handle, enabled);
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" bool SAO_UI_CALL
+sao_ui_overlay_host_activation_enabled(sao_ui_overlay_host_handle_t handle) {
+    try {
+        HostLease lease(handle);
+        if (!lease)
+            return false;
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        return handle->activation_enabled;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -1949,6 +2092,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
     handle->hit_test_fn = fn;
     handle->hit_test_user = user_data;
     return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_activation_hit_test(
+    sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data) {
+    try {
+        HostLease lease(handle);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        handle->activation_hit_test_fn = fn;
+        handle->activation_hit_test_user = user_data;
+        return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

@@ -4,9 +4,10 @@
 The previous generic-card/AI-only Preview result was rejected as a complete visual rebuild.
 The native GPU rendering foundations below are implemented, but full visual and functional
 parity with the complete Python editor and the supplied SAO Utils references remains open.
-The frozen `python/web/ai_editor_app.html` is the workbench structure reference, not an
-already integrated native frontend. Its editor, explorer, terminal, extension and settings
-host APIs require a real native adapter; displaying its static HTML alone is not parity.
+The frozen `python/web/ai_editor_app.html` now supplies the complete hosted Workbench
+structure through the native CompositionController path. Its editor, explorer, terminal,
+extension and settings method families still require the remaining native adapters;
+hosting the complete frontend alone is not backend parity.
 
 ## Design reference
 - Primary: https://www.bilibili.com/video/BV1iv4y1U7xA/
@@ -24,6 +25,8 @@ host APIs require a real native adapter; displaying its static HTML alone is not
 - JSON `dock`, `clip`, and `scroll` are optional. Old documents retain the legacy whole-panel scrolling path. Viewports preserve offsets by stable ID; text focus and edits survive stable body refresh.
 - Slider uses a real typed control, updates while dragging, and emits one final action on release. Dropdown uses the existing native popup, selection callback, keyboard navigation, and clipped z-last painting.
 - Panels, Entity/NerveGear and Link Start text record immutable drawing commands. Direct2D 1.1 draws those primitives and DirectWrite text directly into compositor-owned BGRA8 D3D11 textures. Normal native pages no longer rasterize/upload complete CPU frames. Explicit panel rasterization and local image/custom-canvas content retain their separate CPU paths.
+- The one DirectComposition target now owns explicit `BELOW_NATIVE` and `ABOVE_NATIVE` external visual slots around the flattened native swapchain. Slot targets are generation-scoped across device loss, participate in host clipping and exact chorded L/R/M/X raw input without entering native snapshots/effects, and remain on the compositor owner thread.
+- AI main prefers an in-process WebView2 CompositionController bound to the full-client `ABOVE_NATIVE` slot and fixed `https://sao-workbench.local/ai_editor_app.html` origin. It issues a fresh challenge after each completed navigation, accepts only challenge-bound `sao.workbench` hello/request envelopes, supplies a light-default bootstrap config plus `win_close`, returns structured errors for unavailable adapters, and keeps the existing native panel as startup/runtime fallback.
 - GPU Link Start uses 300 instanced 3D cylinders, depth, canonical camera/Bezier curves, warm/cool palettes, motion trails and half-resolution bloom. Precompiled HLSL is built with Windows SDK FXC.
 - One monotonic production clock coordinates the opening and sound phases. The default preserves the reference's 0.72-second prelude plus 10-second scene; explicit custom timelines preserve their wall-clock total duration. Intro skip, completion and failure converge on one completion edge. GPU white field fades with premultiplied alpha into the actual underlying UI.
 
@@ -36,7 +39,7 @@ host APIs require a real native adapter; displaying its static HTML alone is not
 | Workshop | Catalog connectivity is separate from owner/worker lifetime; stale catalog actions are disabled when the latest validated list is disconnected | Detached production Preview observed `目录未连接`, structured list failure and normal retry/empty layout; connected backend still pending |
 | Process selector | Full process snapshot with 32-row materialization pages; core enumeration remains available without RT I/O while attach is explicitly disabled | Production Preview observed 1–32 of 357, Page 1/12, `Attach off / 未连接`, disabled attach actions and clean close |
 | AI settings | Scope rail, actual text search, independent scroll, bottom save area, checkbox/dropdown fields | Native offline renderer inspected at 1264×820; initial Dock/resize/TextField dispatch defects found and corrected; input frame visually rechecked; full editing/scroll acceptance remains open |
-| AI main / Control Center | Fixed composer, actual multiline edit, separate control scroll/fixed actions | Native offline main/composer visually inspected; real backend/chat session pending |
+| AI main / Control Center | Full Workbench asset hosted by CompositionController; native panel retained as fallback | Debug production Preview created the AIWorkbench WebView2 process tree and completed hello/ready; adapter slices and full visual/input/backend acceptance remain open |
 | Embedded AI pages | Classic light/default and neutral-dark CSS | Source review; hosted WebView runtime pending |
 | User guide | Classic CSS, shorter interactions, native sound bridge and real WAV copies | Browser inspected at 1280×900 and 390×844, no horizontal overflow or broken images |
 | Link Start | GPU compositor path, white transition, SAO display font, one-shot completion and skip | Compiled; real GPU tunnel and SAO-font white-field welcome captured, then returned to actual settings UI; FPS/audio timing not measured |
@@ -54,6 +57,7 @@ host APIs require a real native adapter; displaying its static HTML alone is not
 - Draw-list publication holds no live panel/widget/callback. Only the compositor owner thread creates, replays, resizes and releases GPU contexts, including device recovery. Every master draw explicitly restores rasterizer/depth/shader state after Direct2D or a custom GPU renderer.
 - Legacy externally shared texture sources still use their old staging conversion path. This was not generalized into the new native GPU path.
 - GPU callbacks run under the compositor render-thread contract and must not re-enter compositor APIs.
+- External visuals bypass the native master texture, so native backdrop/effect passes and `snapshot_bgra` do not sample WebView pixels. Cross-band blur must be implemented inside the owning external surface or replaced by an explicit non-sampling treatment.
 
 ## Build / preview (no automated tests)
 Production compilation targets: `sao_platform_ui sao_plugin_ai_editor SaoAuto` in `C/build/windows-debug`, Debug.

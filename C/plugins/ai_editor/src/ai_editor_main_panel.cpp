@@ -9,6 +9,8 @@
 #include "sao/ui/panel_sdk.h"
 #include "sao/ui/theme.h"
 
+#include "workbench_composition_host.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -228,6 +230,7 @@ struct AiEditorMainPanelState {
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
     sao_ui_dialog_handle_t dialog{};
+    sao::ai_editor::workbench::CompositionHost* workbench_host{};
     std::mutex mutex;
     std::mutex publish_mutex;
     std::condition_variable worker_cv;
@@ -353,6 +356,7 @@ struct AiEditorMainPanelState {
     bool teardown_failed{};
     bool destroy_preflight_active{};
     bool destroy_claimed{};
+    bool workbench_active{};
 
     ~AiEditorMainPanelState() {
         {
@@ -5604,17 +5608,24 @@ void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {
     } guard{state};
 
     if (event_kind == SAO_UI_PANEL_EVENT_CLOSE) {
+        {
+            std::lock_guard lock(state->mutex);
+            state->visible = false;
+        }
+        if (state->workbench_host != nullptr) {
+            const sao_status_t workbench_status =
+                sao::ai_editor::workbench::hide(state->workbench_host);
+            if (workbench_status != SAO_STATUS_OK) {
+                append_output_line(*state, "[error] AI Workbench close failed: " +
+                                               std::to_string(map_ui_status(workbench_status)));
+            }
+        }
         const sao_status_t hide_status = sao_ui_panel_hide(state->panel);
         if (hide_status != SAO_STATUS_OK) {
             append_output_line(*state, "[error] AI Editor panel close failed: " +
                                           std::to_string(map_ui_status(hide_status)));
             return;
         }
-    }
-    if (event_kind == SAO_UI_PANEL_EVENT_SHOW || event_kind == SAO_UI_PANEL_EVENT_HIDE ||
-        event_kind == SAO_UI_PANEL_EVENT_CLOSE) {
-        std::lock_guard lock(state->mutex);
-        state->visible = event_kind == SAO_UI_PANEL_EVENT_SHOW;
     }
 }
 
@@ -5977,6 +5988,15 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
             (void)sao_ui_panel_unregister(raw_state->panel);
             throw;
         }
+        sao::ai_editor::workbench::CompositionHost* workbench_host = nullptr;
+        const sao_status_t workbench_status = sao::ai_editor::workbench::create(
+            borrowed_compositor, borrowed_launcher, &workbench_host);
+        if (workbench_status == SAO_STATUS_OK &&
+            workbench_host != nullptr) {
+            std::lock_guard lock(raw_state->mutex);
+            raw_state->workbench_host = workbench_host;
+            raw_state->workbench_active = true;
+        }
         *out_panel = handle;
         return SAO_AI_EDITOR_OK;
     } catch (const std::bad_alloc&) {
@@ -5991,15 +6011,31 @@ sao_ai_editor_main_panel_show(sao_ai_editor_main_panel_t panel) {
     ApiLease lease(panel, true);
     if (!lease)
         return lease.status();
-    sao_status_t status = sao_ui_panel_show(lease.state().panel);
-    if (status == SAO_STATUS_OK)
-        status = sao_ui_panel_bring_to_front(lease.state().panel);
+    auto& state = lease.state();
+    bool use_workbench = state.workbench_active && state.workbench_host != nullptr;
+    sao_status_t status = SAO_STATUS_OK;
+    if (use_workbench) {
+        status = sao::ai_editor::workbench::show(state.workbench_host);
+        if (status != SAO_STATUS_OK &&
+            sao::ai_editor::workbench::failed(state.workbench_host)) {
+            state.workbench_active = false;
+            use_workbench = false;
+            status = SAO_STATUS_OK;
+        }
+    }
+    const bool show_native = !use_workbench ||
+                             !sao::ai_editor::workbench::ready(state.workbench_host);
+    if (show_native && status == SAO_STATUS_OK) {
+        status = sao_ui_panel_show(state.panel);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_bring_to_front(state.panel);
+    }
     if (status == SAO_STATUS_OK) {
         {
-            std::lock_guard lock(lease.state().mutex);
-            lease.state().visible = true;
+            std::lock_guard lock(state.mutex);
+            state.visible = true;
         }
-        queue_bootstrap_if_needed(lease.state());
+        queue_bootstrap_if_needed(state);
     }
     return map_ui_status(status);
 }
@@ -6009,15 +6045,22 @@ sao_ai_editor_main_panel_hide(sao_ai_editor_main_panel_t panel) {
     ApiLease lease(panel, true);
     if (!lease)
         return lease.status();
-    const int32_t child_status = hide_child_panels(lease.state());
-    if (child_status != SAO_AI_EDITOR_OK)
-        return child_status;
-    const sao_status_t status = sao_ui_panel_hide(lease.state().panel);
-    if (status == SAO_STATUS_OK) {
-        std::lock_guard lock(lease.state().mutex);
-        lease.state().visible = false;
+    auto& state = lease.state();
+    {
+        std::lock_guard lock(state.mutex);
+        state.visible = false;
     }
-    return map_ui_status(status);
+    int32_t first_status = hide_child_panels(state);
+    if (state.workbench_active && state.workbench_host != nullptr) {
+        const sao_status_t workbench_status =
+            sao::ai_editor::workbench::hide(state.workbench_host);
+        if (first_status == SAO_AI_EDITOR_OK && workbench_status != SAO_STATUS_OK)
+            first_status = map_ui_status(workbench_status);
+    }
+    const sao_status_t native_status = sao_ui_panel_hide(state.panel);
+    if (first_status == SAO_AI_EDITOR_OK && native_status != SAO_STATUS_OK)
+        first_status = map_ui_status(native_status);
+    return first_status;
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
@@ -6025,6 +6068,66 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
     ApiLease lease(panel, true);
     if (!lease)
         return lease.status();
+    auto& state = lease.state();
+    if (state.workbench_host != nullptr) {
+        sao_status_t workbench_status = SAO_STATUS_OK;
+        if (state.workbench_active) {
+            workbench_status = sao::ai_editor::workbench::tick(state.workbench_host);
+            if (sao::ai_editor::workbench::consume_close_request(state.workbench_host)) {
+                std::lock_guard lock(state.mutex);
+                state.visible = false;
+            }
+            if (workbench_status != SAO_STATUS_OK &&
+                sao::ai_editor::workbench::failed(state.workbench_host)) {
+                state.workbench_active = false;
+            } else if (workbench_status != SAO_STATUS_OK) {
+                return map_ui_status(workbench_status);
+            }
+        }
+        if (state.workbench_active) {
+            bool visible = false;
+            {
+                std::lock_guard lock(state.mutex);
+                visible = state.visible;
+            }
+            const bool native_should_show =
+                visible && !sao::ai_editor::workbench::ready(state.workbench_host);
+            SaoPanelState panel_state{};
+            sao_status_t native_status = sao_ui_panel_get_state(state.panel, &panel_state);
+            if (native_status == SAO_STATUS_OK && native_should_show && !panel_state.visible) {
+                native_status = sao_ui_panel_show(state.panel);
+                if (native_status == SAO_STATUS_OK)
+                    native_status = sao_ui_panel_bring_to_front(state.panel);
+            } else if (native_status == SAO_STATUS_OK && !native_should_show &&
+                       panel_state.visible) {
+                native_status = sao_ui_panel_hide(state.panel);
+            }
+            if (native_status != SAO_STATUS_OK)
+                return map_ui_status(native_status);
+        }
+        if (!state.workbench_active) {
+            bool visible = false;
+            {
+                std::lock_guard lock(state.mutex);
+                visible = state.visible;
+            }
+            if (visible) {
+                SaoPanelState panel_state{};
+                sao_status_t fallback_status = sao_ui_panel_get_state(state.panel, &panel_state);
+                if (fallback_status == SAO_STATUS_OK && !panel_state.visible) {
+                    fallback_status = sao_ui_panel_show(state.panel);
+                    if (fallback_status == SAO_STATUS_OK)
+                        fallback_status = sao_ui_panel_bring_to_front(state.panel);
+                }
+                if (fallback_status != SAO_STATUS_OK)
+                    return map_ui_status(fallback_status);
+            }
+            const sao_status_t destroy_status =
+                sao::ai_editor::workbench::try_destroy(state.workbench_host);
+            if (destroy_status == SAO_STATUS_OK)
+                state.workbench_host = nullptr;
+        }
+    }
     const int32_t dialog_status = tick_dialog(lease.state());
     if (dialog_status != SAO_AI_EDITOR_OK)
         return dialog_status;
@@ -6177,6 +6280,20 @@ sao_ai_editor_main_panel_try_destroy(sao_ai_editor_main_panel_t panel) {
         std::lock_guard state_lock(state->mutex);
         if (state->gpu_hunt_panel == gpu_hunt_panel)
             state->gpu_hunt_panel = nullptr;
+    }
+
+    if (state->workbench_host != nullptr) {
+        const sao_status_t workbench_status =
+            sao::ai_editor::workbench::try_destroy(state->workbench_host);
+        if (workbench_status != SAO_STATUS_OK) {
+            state->workbench_active = false;
+            const int32_t mapped = workbench_status == SAO_STATUS_ERR_CANCELLED
+                                       ? SAO_AI_EDITOR_ERR_BUSY
+                                       : map_ui_status(workbench_status);
+            return restore_panel_handlers(*state, mapped);
+        }
+        state->workbench_host = nullptr;
+        state->workbench_active = false;
     }
 
     const sao_status_t unregister_status = sao_ui_panel_unregister(state->panel);

@@ -445,15 +445,12 @@ if (TARGET SaoAuto)
         "bin/docs/html/assets/linkstart.js"
         "bin/docs/html/assets/gpu_ripple.js"
         "bin/docs/html/assets/detail_popup.js"
-        "bin/docs/html/assets/sounds/Dismiss.SAO.Launcher.mp3"
-        "bin/docs/html/assets/sounds/Dismiss.SAO.Message.mp3"
-        "bin/docs/html/assets/sounds/Feedback.SAO.Click.mp3"
-        "bin/docs/html/assets/sounds/LinkStart.SAO.Kirito.mp3"
-        "bin/docs/html/assets/sounds/Popup.SAO.Alert.mp3"
-        "bin/docs/html/assets/sounds/Popup.SAO.Launcher.mp3"
-        "bin/docs/html/assets/sounds/Popup.SAO.Menu.mp3"
-        "bin/docs/html/assets/sounds/Popup.SAO.Panel.mp3"
-        "bin/docs/html/assets/sounds/Startup.SAO.NerveGear.mp3")
+        "bin/docs/html/assets/sounds/Dismiss.SAO.Launcher.wav"
+        "bin/docs/html/assets/sounds/Dismiss.SAO.Message.wav"
+        "bin/docs/html/assets/sounds/Feedback.SAO.Click.wav"
+        "bin/docs/html/assets/sounds/Popup.SAO.Launcher.wav"
+        "bin/docs/html/assets/sounds/Popup.SAO.Menu.wav"
+        "bin/docs/html/assets/sounds/Popup.SAO.Panel.wav")
     set(_SAO_RELEASE_PLUGIN_ROOT "bin/plugins")
     set(_SAO_RELEASE_EXPECTED_DIRECTORIES
         "${_SAO_RELEASE_PLUGIN_ROOT}")
@@ -484,7 +481,9 @@ if (TARGET SaoAuto)
             "workflows/security-audit-and-fix.json" "workflows/sql-schema-fix.json" "workflows/test-first-refactor.json"
             "prompts/performance-review.json" "prompts/refactor-plan.json" "prompts/security-checklist.json" "prompts/sql-audit.json"
             "kernel_map_panel/index.html" "kernel_map_panel/panel.css" "kernel_map_panel/panel.js"
-            "mcp_management_panel/index.html" "mcp_management_panel/panel.css" "mcp_management_panel/panel.js")
+            "mcp_management_panel/index.html" "mcp_management_panel/panel.css" "mcp_management_panel/panel.js"
+            "workbench/ai_editor_app.html" "workbench/classic-theme.css"
+            "workbench/native-bridge.js" "workbench/SOURCE.md")
         foreach (_sao_ai_editor_asset IN LISTS _SAO_AI_EDITOR_REQUIRED_ASSETS)
             if (_sao_ai_editor_asset STREQUAL "extension_host_shim.js")
                 set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/${_sao_ai_editor_asset}")

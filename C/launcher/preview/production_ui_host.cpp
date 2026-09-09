@@ -681,7 +681,7 @@ struct Host {
             return;
         }
         const uint32_t elapsed =
-            static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, UINT32_MAX));
+            static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
         require(sao_ui_entity_shell_tick(entity, elapsed));
         if (now - last_service >= 50) {
             if (ai_settings != nullptr)

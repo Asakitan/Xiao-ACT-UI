@@ -10,6 +10,8 @@
 
 #include "sao/ui/dcomp_bridge.h"
 
+#include "dcomp_bridge_internal.h"
+
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
@@ -24,6 +26,8 @@
 #endif
 
 #include <atomic>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -33,6 +37,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <new>
+#include <vector>
 
 namespace {
 
@@ -82,6 +87,24 @@ std::atomic<int64_t> g_bridge_live_count{0};
 
 // ── bridge state ────────────────────────────────────────────────────
 
+struct sao_ui_dcomp_bridge_s;
+
+namespace sao::ui::detail {
+
+struct DcompExternalVisual {
+    sao_ui_dcomp_bridge_s* owner{};
+#if defined(_WIN32)
+    IDCompositionVisual* wrapper{};
+    IDCompositionVisual* target{};
+    IDCompositionRectangleClip* clip{};
+    IDCompositionEffectGroup* opacity_effect{};
+#endif
+    DcompExternalVisualConfig config{};
+    uint64_t creation_seq{};
+};
+
+} // namespace sao::ui::detail
+
 struct sao_ui_dcomp_bridge_s {
 #if defined(_WIN32)
     HWND                    hwnd = nullptr;
@@ -93,6 +116,7 @@ struct sao_ui_dcomp_bridge_s {
     IDXGIFactory2*          dxgi_fac = nullptr;
     IDCompositionDevice*    dc_dev = nullptr;
     IDCompositionTarget*    dc_tgt = nullptr;
+    IDCompositionVisual*    dc_root = nullptr;
     IDCompositionVisual*    dc_vis = nullptr;
     IDXGISwapChain1*        swap = nullptr;
     ID3D11Texture2D*        upload_texture = nullptr;
@@ -102,6 +126,8 @@ struct sao_ui_dcomp_bridge_s {
     uint32_t                alpha_mode = DXGI_ALPHA_MODE_PREMULTIPLIED;
     uint32_t                buffer_count = 2;
     uint32_t                last_removed_reason = 0;
+    uint64_t                external_seq = 0;
+    std::vector<sao::ui::detail::DcompExternalVisual*> external_visuals;
     bool                    attached = false;
     bool                    alive = false;
 #else
@@ -112,18 +138,37 @@ struct sao_ui_dcomp_bridge_s {
 namespace {
 
 #if defined(_WIN32)
+void release_external_visual_objects(
+    sao::ui::detail::DcompExternalVisual* visual) noexcept {
+    if (visual == nullptr)
+        return;
+    if (visual->wrapper != nullptr)
+        (void)visual->wrapper->RemoveAllVisuals();
+    safe_release(&visual->opacity_effect);
+    safe_release(&visual->clip);
+    safe_release(&visual->target);
+    safe_release(&visual->wrapper);
+    delete visual;
+}
+
 void release_bridge_resources(sao_ui_dcomp_bridge_s* bridge) noexcept {
     if (bridge == nullptr) return;
-    if (bridge->attached && bridge->dc_tgt != nullptr && bridge->dc_vis != nullptr &&
-        bridge->dc_dev != nullptr) {
+    if (bridge->dc_tgt != nullptr && bridge->dc_dev != nullptr) {
         (void)bridge->dc_tgt->SetRoot(nullptr);
-        (void)bridge->dc_vis->SetContent(nullptr);
+        if (bridge->dc_root != nullptr)
+            (void)bridge->dc_root->RemoveAllVisuals();
+        if (bridge->dc_vis != nullptr)
+            (void)bridge->dc_vis->SetContent(nullptr);
         (void)bridge->dc_dev->Commit();
         bridge->attached = false;
     }
+    for (auto* visual : bridge->external_visuals)
+        release_external_visual_objects(visual);
+    bridge->external_visuals.clear();
     safe_release(&bridge->upload_texture);
     safe_release(&bridge->swap);
     safe_release(&bridge->dc_vis);
+    safe_release(&bridge->dc_root);
     safe_release(&bridge->dc_tgt);
     safe_release(&bridge->dc_dev);
     safe_release(&bridge->dxgi_fac);
@@ -275,16 +320,86 @@ sao_status_t create_composition_swapchain(sao_ui_dcomp_bridge_s* bridge) {
     return SAO_STATUS_OK;
 }
 
+bool valid_external_visual_config(
+    const sao::ui::detail::DcompExternalVisualConfig& config) noexcept {
+    return config.width > 0 && config.height > 0 &&
+           (config.band == -1 || config.band == 1) &&
+           std::isfinite(config.opacity) && config.opacity >= 0.0F && config.opacity <= 1.0F;
+}
+
+HRESULT apply_external_visual_config(
+    sao::ui::detail::DcompExternalVisual* visual,
+    const sao::ui::detail::DcompExternalVisualConfig& config) noexcept {
+    if (visual == nullptr || visual->wrapper == nullptr || visual->clip == nullptr)
+        return E_INVALIDARG;
+    HRESULT hr = visual->wrapper->SetOffsetX(static_cast<float>(config.x));
+    if (SUCCEEDED(hr))
+        hr = visual->wrapper->SetOffsetY(static_cast<float>(config.y));
+    if (SUCCEEDED(hr))
+        hr = visual->opacity_effect->SetOpacity(config.visible ? config.opacity : 0.0F);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetLeft(0.0F);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetTop(0.0F);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetRight(static_cast<float>(config.width));
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetBottom(static_cast<float>(config.height));
+    if (SUCCEEDED(hr))
+        hr = visual->wrapper->SetClip(visual->clip);
+    if (SUCCEEDED(hr))
+        hr = visual->wrapper->SetEffect(visual->opacity_effect);
+    return hr;
+}
+
+HRESULT rebuild_visual_order(sao_ui_dcomp_bridge_s* bridge) noexcept {
+    try {
+        if (bridge == nullptr || bridge->dc_root == nullptr || bridge->dc_vis == nullptr)
+            return E_INVALIDARG;
+        std::vector<sao::ui::detail::DcompExternalVisual*> ordered = bridge->external_visuals;
+        std::stable_sort(ordered.begin(), ordered.end(), [](const auto* left, const auto* right) {
+            if (left->config.band != right->config.band)
+                return left->config.band < right->config.band;
+            if (left->config.z_order != right->config.z_order)
+                return left->config.z_order < right->config.z_order;
+            return left->creation_seq < right->creation_seq;
+        });
+        HRESULT hr = bridge->dc_root->RemoveAllVisuals();
+        if (FAILED(hr))
+            return hr;
+        const auto append = [&](IDCompositionVisual* child) -> HRESULT {
+            return bridge->dc_root->AddVisual(child, TRUE, nullptr);
+        };
+        for (const auto* visual : ordered) {
+            if (visual->config.band < 0 && SUCCEEDED(hr))
+                hr = append(visual->wrapper);
+        }
+        if (SUCCEEDED(hr))
+            hr = append(bridge->dc_vis);
+        for (const auto* visual : ordered) {
+            if (visual->config.band > 0 && SUCCEEDED(hr))
+                hr = append(visual->wrapper);
+        }
+        return hr;
+    } catch (...) {
+        return E_OUTOFMEMORY;
+    }
+}
+
 sao_status_t attach_visual_tree(sao_ui_dcomp_bridge_s* bridge) {
     HRESULT hr = bridge->dc_vis->SetContent(bridge->swap);
     if (SUCCEEDED(hr)) {
-        hr = bridge->dc_tgt->SetRoot(bridge->dc_vis);
+        hr = rebuild_visual_order(bridge);
+    }
+    if (SUCCEEDED(hr)) {
+        hr = bridge->dc_tgt->SetRoot(bridge->dc_root);
     }
     if (SUCCEEDED(hr)) {
         hr = bridge->dc_dev->Commit();
     }
     if (FAILED(hr)) {
         bridge->dc_tgt->SetRoot(nullptr);
+        bridge->dc_root->RemoveAllVisuals();
         bridge->dc_vis->SetContent(nullptr);
         return status_from_hresult(bridge, hr);
     }
@@ -410,6 +525,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_create(
     if (FAILED(hr) || b->dc_tgt == nullptr) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+    hr = b->dc_dev->CreateVisual(&b->dc_root);
+    if (FAILED(hr) || b->dc_root == nullptr) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
     hr = b->dc_dev->CreateVisual(&b->dc_vis);
     if (FAILED(hr) || b->dc_vis == nullptr) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
@@ -476,23 +595,7 @@ extern "C" void SAO_UI_CALL sao_ui_dcomp_bridge_destroy(
         g_bridge_registry.erase(b);
     }
     g_bridge_live_count.fetch_sub(1, std::memory_order_relaxed);
-    if (b->attached && b->dc_tgt != nullptr && b->dc_vis != nullptr &&
-        b->dc_dev != nullptr) {
-        b->dc_tgt->SetRoot(nullptr);
-        b->dc_vis->SetContent(nullptr);
-        b->dc_dev->Commit();
-    }
-    release_upload_texture(b);
-    safe_release(&b->swap);
-    safe_release(&b->dc_vis);
-    safe_release(&b->dc_tgt);
-    safe_release(&b->dc_dev);
-    safe_release(&b->dxgi_fac);
-    safe_release(&b->dxgi_adp);
-    safe_release(&b->dxgi_dev);
-    safe_release(&b->d3d_ctx);
-    safe_release(&b->d3d_dev);
-    b->alive = false;
+    release_bridge_resources(b);
     delete b;
 #endif
     } catch (...) {
@@ -787,6 +890,262 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_unlock_texture(
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
+
+namespace sao::ui::detail {
+
+sao_status_t create_dcomp_external_visual(
+    sao_ui_dcomp_bridge_handle_t handle, const DcompExternalVisualConfig& config,
+    DcompExternalVisual** out_visual) noexcept {
+    if (out_visual == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_visual = nullptr;
+#if !defined(_WIN32)
+    (void)handle;
+    (void)config;
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#else
+    try {
+        BridgeLease lease(handle);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        auto* bridge = lease.get();
+        if (!is_owner_thread(bridge))
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        if (!bridge->alive || bridge->dc_dev == nullptr || bridge->dc_root == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        if (!valid_external_visual_config(config))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+
+        auto* visual = new (std::nothrow) DcompExternalVisual{};
+        if (visual == nullptr)
+            return SAO_STATUS_ERR_UNKNOWN;
+        visual->owner = bridge;
+        visual->config = config;
+        visual->creation_seq = ++bridge->external_seq;
+        HRESULT hr = bridge->dc_dev->CreateVisual(&visual->wrapper);
+        if (SUCCEEDED(hr))
+            hr = bridge->dc_dev->CreateVisual(&visual->target);
+        if (SUCCEEDED(hr))
+            hr = bridge->dc_dev->CreateRectangleClip(&visual->clip);
+        if (SUCCEEDED(hr))
+            hr = bridge->dc_dev->CreateEffectGroup(&visual->opacity_effect);
+        if (SUCCEEDED(hr))
+            hr = visual->wrapper->AddVisual(visual->target, TRUE, nullptr);
+        if (SUCCEEDED(hr))
+            hr = apply_external_visual_config(visual, config);
+        if (FAILED(hr)) {
+            release_external_visual_objects(visual);
+            return status_from_hresult(bridge, hr);
+        }
+        try {
+            bridge->external_visuals.push_back(visual);
+        } catch (...) {
+            release_external_visual_objects(visual);
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        hr = rebuild_visual_order(bridge);
+        if (SUCCEEDED(hr))
+            hr = bridge->dc_dev->Commit();
+        if (FAILED(hr)) {
+            const HRESULT failure_hr = hr;
+            bridge->external_visuals.pop_back();
+            HRESULT rollback_hr = rebuild_visual_order(bridge);
+            if (SUCCEEDED(rollback_hr))
+                rollback_hr = bridge->dc_dev->Commit();
+            release_external_visual_objects(visual);
+            if (FAILED(rollback_hr)) {
+                bridge->alive = false;
+                return SAO_STATUS_ERR_DEVICE_LOST;
+            }
+            return status_from_hresult(bridge, failure_hr);
+        }
+        *out_visual = visual;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#endif
+}
+
+sao_status_t update_dcomp_external_visual(
+    DcompExternalVisual* visual, const DcompExternalVisualConfig& config) noexcept {
+#if !defined(_WIN32)
+    (void)visual;
+    (void)config;
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#else
+    if (visual == nullptr || visual->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        BridgeLease lease(visual->owner);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        auto* bridge = lease.get();
+        if (!is_owner_thread(bridge))
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        if (!valid_external_visual_config(config))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (std::find(bridge->external_visuals.begin(), bridge->external_visuals.end(), visual) ==
+            bridge->external_visuals.end()) {
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        const DcompExternalVisualConfig previous = visual->config;
+        HRESULT hr = apply_external_visual_config(visual, config);
+        if (SUCCEEDED(hr)) {
+            visual->config = config;
+            hr = rebuild_visual_order(bridge);
+        }
+        if (SUCCEEDED(hr))
+            hr = bridge->dc_dev->Commit();
+        if (FAILED(hr)) {
+            const HRESULT failure_hr = hr;
+            visual->config = previous;
+            HRESULT rollback_hr = apply_external_visual_config(visual, previous);
+            if (SUCCEEDED(rollback_hr))
+                rollback_hr = rebuild_visual_order(bridge);
+            if (SUCCEEDED(rollback_hr))
+                rollback_hr = bridge->dc_dev->Commit();
+            if (FAILED(rollback_hr)) {
+                bridge->alive = false;
+                return SAO_STATUS_ERR_DEVICE_LOST;
+            }
+            return status_from_hresult(bridge, failure_hr);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#endif
+}
+
+sao_status_t commit_dcomp_external_visual(DcompExternalVisual* visual) noexcept {
+#if !defined(_WIN32)
+    (void)visual;
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#else
+    if (visual == nullptr || visual->owner == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        BridgeLease lease(visual->owner);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        auto* bridge = lease.get();
+        if (!is_owner_thread(bridge))
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        if (!bridge->alive || bridge->dc_dev == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        if (std::find(bridge->external_visuals.begin(), bridge->external_visuals.end(), visual) ==
+            bridge->external_visuals.end()) {
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        const HRESULT hr = bridge->dc_dev->Commit();
+        return FAILED(hr) ? status_from_hresult(bridge, hr) : SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#endif
+}
+
+sao_status_t destroy_dcomp_external_visual(DcompExternalVisual* visual) noexcept {
+#if defined(_WIN32)
+    if (visual == nullptr)
+        return SAO_STATUS_OK;
+    try {
+        auto* bridge = visual->owner;
+        BridgeLease lease(bridge);
+        if (!lease || !is_owner_thread(lease.get()))
+            return !lease ? SAO_STATUS_ERR_HANDLE_INVALID : SAO_STATUS_ERR_ACCESS_DENIED;
+        const auto found =
+            std::find(bridge->external_visuals.begin(), bridge->external_visuals.end(), visual);
+        if (found == bridge->external_visuals.end())
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        const size_t index = static_cast<size_t>(found - bridge->external_visuals.begin());
+        bridge->external_visuals.erase(found);
+        HRESULT hr = rebuild_visual_order(bridge);
+        if (SUCCEEDED(hr) && bridge->dc_dev != nullptr)
+            hr = bridge->dc_dev->Commit();
+        if (FAILED(hr)) {
+            const HRESULT failure_hr = hr;
+            bridge->external_visuals.insert(bridge->external_visuals.begin() + index, visual);
+            HRESULT rollback_hr = rebuild_visual_order(bridge);
+            if (SUCCEEDED(rollback_hr) && bridge->dc_dev != nullptr)
+                rollback_hr = bridge->dc_dev->Commit();
+            if (FAILED(rollback_hr)) {
+                bridge->alive = false;
+                return SAO_STATUS_ERR_DEVICE_LOST;
+            }
+            return status_from_hresult(bridge, failure_hr);
+        }
+        if (visual->wrapper != nullptr)
+            (void)visual->wrapper->RemoveAllVisuals();
+        visual->owner = nullptr;
+        release_external_visual_objects(visual);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#else
+    (void)visual;
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+void abandon_dcomp_external_visual(DcompExternalVisual* visual) noexcept {
+#if defined(_WIN32)
+    if (visual == nullptr || visual->owner == nullptr)
+        return;
+    try {
+        auto* bridge = visual->owner;
+        BridgeLease lease(bridge);
+        if (!lease || !is_owner_thread(lease.get()))
+            return;
+        const auto found =
+            std::find(bridge->external_visuals.begin(), bridge->external_visuals.end(), visual);
+        if (found == bridge->external_visuals.end())
+            return;
+        bridge->external_visuals.erase(found);
+        visual->owner = nullptr;
+        release_external_visual_objects(visual);
+    } catch (...) {
+    }
+#else
+    (void)visual;
+#endif
+}
+
+void* dcomp_external_visual_target(DcompExternalVisual* visual) noexcept {
+#if defined(_WIN32)
+    if (visual == nullptr || visual->owner == nullptr)
+        return nullptr;
+    try {
+        BridgeLease lease(visual->owner);
+        return lease ? visual->target : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+#else
+    (void)visual;
+    return nullptr;
+#endif
+}
+
+void* dcomp_external_visual_device(DcompExternalVisual* visual) noexcept {
+#if defined(_WIN32)
+    if (visual == nullptr || visual->owner == nullptr)
+        return nullptr;
+    try {
+        BridgeLease lease(visual->owner);
+        return lease ? lease.get()->dc_dev : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+#else
+    (void)visual;
+    return nullptr;
+#endif
+}
+
+} // namespace sao::ui::detail
 
 // ── device_removed ──────────────────────────────────────────────
 // Non-blocking wrapper around ID3D11Device::GetDeviceRemovedReason.

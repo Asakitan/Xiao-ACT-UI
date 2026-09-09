@@ -97,6 +97,9 @@ constexpr uint32_t kMiddleButtonDown = 0x0207;
 constexpr uint32_t kMiddleButtonUp = 0x0208;
 constexpr uint32_t kMiddleButtonDoubleClick = 0x0209;
 constexpr uint32_t kMouseWheel = 0x020A;
+constexpr uint32_t kXButtonDown = 0x020B;
+constexpr uint32_t kXButtonUp = 0x020C;
+constexpr uint32_t kXButtonDoubleClick = 0x020D;
 constexpr uint32_t kCaptureChanged = 0x0215;
 constexpr uint32_t kMouseLeave = 0x02A3;
 constexpr uint32_t kCancelMode = 0x001F;
@@ -109,7 +112,12 @@ bool valid_layer_message(uint32_t message) noexcept {
            message == kLeftButtonDoubleClick || message == kRightButtonDown ||
            message == kRightButtonUp || message == kRightButtonDoubleClick ||
            message == kMiddleButtonDown || message == kMiddleButtonUp ||
-           message == kMiddleButtonDoubleClick;
+           message == kMiddleButtonDoubleClick || message == kXButtonDown ||
+           message == kXButtonUp || message == kXButtonDoubleClick;
+}
+
+uint32_t button_bit(int32_t button) noexcept {
+    return button >= 0 && button < 5 ? 1u << static_cast<uint32_t>(button) : 0u;
 }
 
 bool append_action(std::array<LayerInputAction, 3>* actions, size_t* count,
@@ -130,8 +138,10 @@ uint64_t next_writer_revision(uint64_t current) noexcept {
 struct LayerInputState {
     void* hovered_layer{};
     void* captured_layer{};
-    int32_t captured_button{-1};
-    int32_t suppressed_button_up{-1};
+    bool hovered_uses_raw_input{};
+    bool captured_uses_raw_input{};
+    uint32_t pressed_buttons{};
+    uint32_t suppressed_button_ups{};
     int32_t last_pointer_x{};
     int32_t last_pointer_y{};
     bool has_pointer{};
@@ -152,7 +162,8 @@ bool layer_event_uses_coordinates(uint32_t message) noexcept {
 
 sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t host_x,
                                int32_t host_y, int32_t button, int32_t wheel_delta,
-                               void* hit_layer, float hit_x, float hit_y,
+                               uint32_t key_state, void* hit_layer, bool hit_uses_raw_input,
+                               float hit_x, float hit_y,
                                LayerInputAction* out_actions, size_t action_capacity,
                                size_t* out_action_count) noexcept {
     if (out_action_count == nullptr || state == nullptr)
@@ -167,91 +178,192 @@ sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t
     std::array<LayerInputAction, 3> actions{};
     size_t action_count = 0;
 
-    const auto emit_leave = [&](void* layer) {
-        return layer == nullptr ||
-               append_action(&actions, &action_count,
-                             {LayerInputActionKind::leave, layer});
+    const auto emit_semantic = [&](LayerInputActionKind kind, void* layer, float x, float y,
+                                   float scroll_y, int32_t action_button, int32_t action_value,
+                                   bool coordinates_are_host) {
+        LayerInputAction action{};
+        action.kind = kind;
+        action.layer = layer;
+        action.x = x;
+        action.y = y;
+        action.scroll_dy = scroll_y;
+        action.button = action_button;
+        action.action = action_value;
+        action.coordinates_are_host = coordinates_are_host;
+        return append_action(&actions, &action_count, action);
     };
-    const auto release_capture = [&](bool suppress_button_up) {
-        if (suppress_button_up && next.captured_button >= 0)
-            next.suppressed_button_up = next.captured_button;
+    const auto emit_raw = [&](void* layer, uint32_t raw_message, float x, float y,
+                              bool coordinates_are_host) {
+        LayerInputAction action{};
+        action.kind = LayerInputActionKind::raw_mouse;
+        action.layer = layer;
+        action.x = x;
+        action.y = y;
+        action.button = button;
+        action.message = raw_message;
+        action.key_state = key_state;
+        action.wheel_delta = wheel_delta;
+        action.coordinates_are_host = coordinates_are_host;
+        return append_action(&actions, &action_count, action);
+    };
+    const auto emit_leave = [&](void* layer, bool raw, uint32_t raw_message) {
+        if (layer == nullptr)
+            return true;
+        return raw ? emit_raw(layer, raw_message, 0.0F, 0.0F, true)
+                   : emit_semantic(LayerInputActionKind::leave, layer, 0.0F, 0.0F, 0.0F, -1, 0,
+                                   false);
+    };
+    const auto abandon_capture = [&](bool suppress_button_ups) {
+        if (suppress_button_ups)
+            next.suppressed_button_ups |= next.pressed_buttons;
+        next.pressed_buttons = 0;
         next.captured_layer = nullptr;
-        next.captured_button = -1;
+        next.captured_uses_raw_input = false;
+    };
+    const auto release_capture_if_idle = [&]() {
+        if (next.pressed_buttons == 0) {
+            next.captured_layer = nullptr;
+            next.captured_uses_raw_input = false;
+        }
+    };
+    const auto update_hover_after_capture = [&]() {
+        if (next.hovered_layer == hit_layer &&
+            next.hovered_uses_raw_input == (hit_layer != nullptr && hit_uses_raw_input)) {
+            return true;
+        }
+        if (!emit_leave(next.hovered_layer, next.hovered_uses_raw_input, kMouseLeave))
+            return false;
+        next.hovered_layer = hit_layer;
+        next.hovered_uses_raw_input = hit_layer != nullptr && hit_uses_raw_input;
+        return true;
     };
 
     if (message == kCaptureChanged || message == kCancelMode) {
         void* leave_target = next.captured_layer != nullptr ? next.captured_layer
                                                             : next.hovered_layer;
-        if (!emit_leave(leave_target))
+        const bool leave_raw = next.captured_layer != nullptr ? next.captured_uses_raw_input
+                                                              : next.hovered_uses_raw_input;
+        if (!emit_leave(leave_target, leave_raw, message))
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
-        release_capture(true);
+        abandon_capture(true);
         next.hovered_layer = nullptr;
+        next.hovered_uses_raw_input = false;
         next.has_pointer = false;
     } else if (message == kMouseLeave) {
         if (next.captured_layer == nullptr) {
             next.has_pointer = false;
-            if (!emit_leave(next.hovered_layer))
+            if (!emit_leave(next.hovered_layer, next.hovered_uses_raw_input, message))
                 return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             next.hovered_layer = nullptr;
+            next.hovered_uses_raw_input = false;
         }
     } else {
         next.last_pointer_x = host_x;
         next.last_pointer_y = host_y;
         next.has_pointer = true;
         if (message == kMouseMove) {
-            if (next.captured_layer == nullptr && next.hovered_layer != hit_layer) {
-                if (!emit_leave(next.hovered_layer))
+            if (next.captured_layer == nullptr &&
+                (next.hovered_layer != hit_layer ||
+                 next.hovered_uses_raw_input != hit_uses_raw_input)) {
+                if (!emit_leave(next.hovered_layer, next.hovered_uses_raw_input, kMouseLeave))
                     return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
                 next.hovered_layer = hit_layer;
+                next.hovered_uses_raw_input = hit_layer != nullptr && hit_uses_raw_input;
             }
             void* route_target = next.captured_layer != nullptr ? next.captured_layer : hit_layer;
-            if (route_target != nullptr &&
-                !append_action(&actions, &action_count,
-                               {LayerInputActionKind::cursor, route_target, hit_x, hit_y, 0.0F,
-                                0.0F, -1, 0, route_target != hit_layer})) {
-                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            const bool route_raw = next.captured_layer != nullptr
+                                       ? next.captured_uses_raw_input
+                                       : hit_uses_raw_input;
+            if (route_target != nullptr) {
+                const bool appended = route_raw
+                                          ? emit_raw(route_target, message, hit_x, hit_y,
+                                                     route_target != hit_layer)
+                                          : emit_semantic(LayerInputActionKind::cursor,
+                                                          route_target, hit_x, hit_y, 0.0F, -1, 0,
+                                                          route_target != hit_layer);
+                if (!appended)
+                    return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             }
         } else if (message == kMouseWheel) {
-            if (hit_layer != nullptr &&
-                !append_action(&actions, &action_count,
-                               {LayerInputActionKind::scroll, hit_layer, hit_x, hit_y, 0.0F,
-                                static_cast<float>(wheel_delta) / kWheelDelta})) {
-                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            if (hit_layer != nullptr) {
+                const bool appended = hit_uses_raw_input
+                                          ? emit_raw(hit_layer, message, hit_x, hit_y, false)
+                                          : emit_semantic(
+                                                LayerInputActionKind::scroll, hit_layer, hit_x,
+                                                hit_y, static_cast<float>(wheel_delta) / kWheelDelta,
+                                                -1, 0, false);
+                if (!appended)
+                    return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
             }
         } else {
             const bool double_click = message == kLeftButtonDoubleClick ||
                                       message == kRightButtonDoubleClick ||
-                                      message == kMiddleButtonDoubleClick;
-            const bool released =
-                message == kLeftButtonUp || message == kRightButtonUp || message == kMiddleButtonUp;
-            if (!double_click && !released && next.suppressed_button_up == button)
-                next.suppressed_button_up = -1;
-            if (double_click) {
-                next.suppressed_button_up = button;
-                release_capture(false);
-            } else if (released && next.suppressed_button_up == button) {
-                next.suppressed_button_up = -1;
-                release_capture(false);
+                                      message == kMiddleButtonDoubleClick ||
+                                      message == kXButtonDoubleClick;
+            const bool released = message == kLeftButtonUp || message == kRightButtonUp ||
+                                  message == kMiddleButtonUp || message == kXButtonUp;
+            const uint32_t edge_bit = button_bit(button);
+            if (edge_bit == 0)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (!double_click && !released)
+                next.suppressed_button_ups &= ~edge_bit;
+            void* route_target =
+                next.captured_layer != nullptr ? next.captured_layer : hit_layer;
+            const bool route_raw = next.captured_layer != nullptr
+                                       ? next.captured_uses_raw_input
+                                       : hit_uses_raw_input;
+            if (route_raw && route_target != nullptr) {
+                if (released && (next.suppressed_button_ups & edge_bit) != 0) {
+                    next.suppressed_button_ups &= ~edge_bit;
+                    next.pressed_buttons &= ~edge_bit;
+                    release_capture_if_idle();
+                } else {
+                    if (!released) {
+                        if (next.captured_layer == nullptr) {
+                            next.captured_layer = route_target;
+                            next.captured_uses_raw_input = true;
+                        }
+                        next.pressed_buttons |= edge_bit;
+                    }
+                    if (!emit_raw(route_target, message, hit_x, hit_y,
+                                  route_target != hit_layer)) {
+                        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                    }
+                    if (released) {
+                        next.pressed_buttons &= ~edge_bit;
+                        const bool capture_ended = next.pressed_buttons == 0;
+                        release_capture_if_idle();
+                        if (capture_ended && !update_hover_after_capture())
+                            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                    }
+                }
+            } else if (double_click) {
+                next.suppressed_button_ups |= edge_bit;
+                next.pressed_buttons &= ~edge_bit;
+                release_capture_if_idle();
+            } else if (released && (next.suppressed_button_ups & edge_bit) != 0) {
+                next.suppressed_button_ups &= ~edge_bit;
+                next.pressed_buttons &= ~edge_bit;
+                release_capture_if_idle();
             } else {
-                void* route_target =
-                    released && next.captured_layer != nullptr ? next.captured_layer : hit_layer;
                 if (!released && route_target != nullptr) {
-                    next.captured_layer = route_target;
-                    next.captured_button = button;
+                    if (next.captured_layer == nullptr) {
+                        next.captured_layer = route_target;
+                        next.captured_uses_raw_input = false;
+                    }
+                    next.pressed_buttons |= edge_bit;
                 }
                 if (route_target != nullptr &&
-                    !append_action(&actions, &action_count,
-                                   {LayerInputActionKind::button, route_target, hit_x, hit_y, 0.0F,
-                                    0.0F, button, released ? 0 : 1, route_target != hit_layer})) {
+                    !emit_semantic(LayerInputActionKind::button, route_target, hit_x, hit_y, 0.0F,
+                                   button, released ? 0 : 1, route_target != hit_layer)) {
                     return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
                 }
                 if (released) {
-                    release_capture(false);
-                    if (next.hovered_layer != hit_layer) {
-                        if (!emit_leave(next.hovered_layer))
-                            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
-                        next.hovered_layer = hit_layer;
-                    }
+                    next.pressed_buttons &= ~edge_bit;
+                    const bool capture_ended = next.pressed_buttons == 0;
+                    release_capture_if_idle();
+                    if (capture_ended && !update_hover_after_capture())
+                        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
                 }
             }
         }
@@ -296,15 +408,27 @@ sao_status_t invalidate_layer_input(LayerInputState* state, void* layer,
         return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
 
     LayerInputState next = *state;
-    if (next.hovered_layer == layer)
+    const bool was_captured = next.captured_layer == layer;
+    const bool used_raw_input = was_captured ? next.captured_uses_raw_input
+                                             : next.hovered_uses_raw_input;
+    if (next.hovered_layer == layer) {
         next.hovered_layer = nullptr;
-    if (next.captured_layer == layer) {
-        if (next.captured_button >= 0)
-            next.suppressed_button_up = next.captured_button;
-        next.captured_layer = nullptr;
-        next.captured_button = -1;
+        next.hovered_uses_raw_input = false;
     }
-    out_actions[0] = {LayerInputActionKind::leave, layer};
+    if (next.captured_layer == layer) {
+        next.suppressed_button_ups |= next.pressed_buttons;
+        next.pressed_buttons = 0;
+        next.captured_layer = nullptr;
+        next.captured_uses_raw_input = false;
+    }
+    LayerInputAction action{};
+    action.kind = used_raw_input ? LayerInputActionKind::raw_mouse
+                                 : LayerInputActionKind::leave;
+    action.layer = layer;
+    action.message = was_captured ? kCancelMode : kMouseLeave;
+    action.button = -1;
+    action.coordinates_are_host = used_raw_input;
+    out_actions[0] = action;
     *out_action_count = 1;
     next.writer_revision = next_writer_revision(state->writer_revision);
     *state = next;
@@ -316,8 +440,6 @@ void reset_layer_input(LayerInputState* state) noexcept {
         return;
     const uint64_t revision = next_writer_revision(state->writer_revision);
     *state = {};
-    state->captured_button = -1;
-    state->suppressed_button_up = -1;
     state->writer_revision = revision;
 }
 
@@ -337,9 +459,12 @@ sao_status_t apply_host_input_passthrough(sao_ui_overlay_host_handle_t host,
 }
 
 sao_status_t reset_host_input(sao_ui_overlay_host_handle_t host) noexcept {
-    const sao_status_t region_status = apply_host_input_regions(host, nullptr, 0);
-    if (region_status != SAO_STATUS_OK)
-        return region_status;
+    const sao_status_t first_region_status = apply_host_input_regions(host, nullptr, 0);
+    if (first_region_status != SAO_STATUS_OK)
+        return first_region_status;
+    const sao_status_t settled_region_status = apply_host_input_regions(host, nullptr, 0);
+    if (settled_region_status != SAO_STATUS_OK)
+        return settled_region_status;
     return apply_host_input_passthrough(host, true);
 }
 

@@ -22,6 +22,7 @@ enum class LayerInputActionKind : uint8_t {
     leave,
     button,
     scroll,
+    raw_mouse,
 };
 
 struct LayerInputAction {
@@ -33,6 +34,9 @@ struct LayerInputAction {
     float scroll_dy{};
     int32_t button{-1};
     int32_t action{};
+    uint32_t message{};
+    uint32_t key_state{};
+    int32_t wheel_delta{};
     bool coordinates_are_host{};
 };
 
@@ -43,7 +47,8 @@ bool layer_event_uses_coordinates(uint32_t message) noexcept;
 
 sao_status_t route_layer_input(LayerInputState* state, uint32_t message, int32_t host_x,
                                int32_t host_y, int32_t button, int32_t wheel_delta,
-                               void* hit_layer, float hit_x, float hit_y,
+                               uint32_t key_state, void* hit_layer, bool hit_uses_raw_input,
+                               float hit_x, float hit_y,
                                LayerInputAction* out_actions, size_t action_capacity,
                                size_t* out_action_count) noexcept;
 
