@@ -8,7 +8,7 @@
     /* 01 快速开始 */
     q1: {
       section: '01 快速开始', title: '启动 SaoAuto.exe',
-      html: '<p>双击安装目录里的 <code>SaoAuto.exe</code>。程序没有欢迎窗口，启动后直接进后台：</p><ul><li>屏幕左上角出现 NerveGear 圆形悬浮按钮。</li><li>系统托盘出现 SAO Auto 图标（如果托盘折叠了，先点「显示隐藏的图标」展开）。</li><li>程序同时注册 <kbd>HOME</kbd> / <kbd>INSERT</kbd> 两个全局快捷键。</li></ul><p>什么都没看到的话，多半是进程没起来：打开任务管理器确认 <code>SaoAuto.exe</code> 在运行。</p>'
+      html: '<p>双击安装目录里的 <code>SaoAuto.exe</code>。正常界面启动后播放 Link Start，随后进入主界面；首次使用还会打开本指南。</p><ul><li>屏幕右下角出现 NerveGear 圆形悬浮按钮。</li><li>系统托盘出现 SAO Auto 图标（如果托盘折叠了，先展开隐藏图标）。</li><li>默认使用 <kbd>HOME</kbd> / <kbd>INSERT</kbd> 两个全局快捷键。</li></ul><p>启动动画不等同于插件或在线 AI 服务已经连接；请以各面板的实际状态为准。</p>'
     },
     q2: {
       section: '01 快速开始', title: '打开主菜单',
@@ -24,16 +24,16 @@
     },
     /* 02 托盘菜单 */
     t1: {
-      section: '02 系统托盘菜单', title: '左键 / 右键托盘图标',
-      html: '<p>左键和右键弹的是同一个菜单，没有任何分别。菜单内容：设置、快捷键、关于 / 用户指南、退出，共四项。</p><p>托盘图标是悬浮按钮之外的第二个入口，按钮藏起来之后所有设置都从这里改。</p>'
+      section: '02 系统托盘菜单', title: '左键单击 / 右键托盘图标',
+      html: '<p>左键单击和右键点击都会弹出 SAO Auto 菜单。菜单内容：设置、快捷键、关于 / 用户指南、退出，共四项。</p><p>托盘图标是悬浮按钮之外的第二个入口，按钮藏起来之后所有设置都从这里改。</p>'
     },
     t2: {
-      section: '02 系统托盘菜单', title: '设置',
-      html: '<p>常规设置都在这：启动选项、显示行为、面板主题等。</p><ul><li>启动选项：开机自启、启动后是否直接显示悬浮按钮这一类的开关。</li><li>显示：深浅主题、按钮位置和缩放。</li><li>面板主题：各面板统一的视觉风格。</li></ul><p>改完即时生效，个别选项需要重启程序。</p>'
+      section: '02 系统托盘菜单', title: '左键双击托盘图标',
+      html: '<p>左键双击托盘图标打开 Settings（设置）。通过概览、外观、行为、音频、高级和配置分类查看对应内容；宽屏左右排列，窄屏上下排列。</p><p>切换分类不丢弃草稿。顶部“应用并保存”保存当前更改，“撤销草稿”恢复已提交设置；不是只保存或撤销当前分类。</p>'
     },
     t3: {
       section: '02 系统托盘菜单', title: '快捷键',
-      html: '<p>显示当前生效的全局快捷键并支持修改。默认两个：</p><ul><li><kbd>HOME</kbd> — 开关主菜单。</li><li><kbd>INSERT</kbd> — 隐藏 / 显示悬浮按钮。</li></ul><p>改键后点保存；如果和游戏或其他软件冲突会有提示。配置文件里残留的 <code>F5 / F9 / F10 / F11</code> 是旧版本兼容项，实际是否生效以这个面板显示为准。</p>'
+      html: '<p>每个快捷键使用独立卡片显示组合、状态和操作。默认两个：</p><ul><li><kbd>HOME</kbd> — 开关主菜单。</li><li><kbd>INSERT</kbd> — 隐藏 / 显示悬浮按钮。</li></ul><p>点击“录入组合键”再按下新组合，成功后自动保存并显示“已保存”；发生冲突或保存失败时显示相应提示。“恢复默认”只重置该项。</p>'
     },
     t4: {
       section: '02 系统托盘菜单', title: '关于 / 用户指南',
@@ -50,7 +50,7 @@
     },
     h2: {
       section: '03 全局快捷键', title: 'INSERT — 显隐悬浮按钮',
-      html: '<p>游戏画面被按钮挡住时按一下藏起来，再按一下显示回来。部分显示模式下，覆盖层会跟着一起隐藏。</p><p>想改成别的键：右键托盘图标 → 快捷键，选一个游戏没用到的组合保存。</p>'
+      html: '<p>画面被按钮挡住时按一下藏起来，再按一下显示回来。部分显示模式下，覆盖层会跟着一起隐藏。</p><p>想改成别的键：右键托盘图标 → 快捷键，录入新组合后确认卡片显示“已保存”。</p>'
     },
     /* 04 面板和插件 */
     p0: {
@@ -96,15 +96,15 @@
     /* 05 AI Editor */
     a1: {
       section: '05 AI Editor', title: '配置模型服务',
-      html: '<p>第一次打开先进设置，把要用的模型服务配好。可以用本地部署的模型，也可以填在线服务的地址和密钥。配置保存在本机，换电脑需要重新配。</p>'
+      html: '<p>第一次打开先进入“编辑器设置”，确认模型服务和基础偏好。先选择系统、工作区或插件范围，再选择分类；点击“应用”保存到当前范围。关闭设置面板只保留草稿，不代表已经保存。</p>'
     },
     a2: {
       section: '05 AI Editor', title: '选模型和工作区',
-      html: '<p>选好当前对话使用的模型和对话模式（普通问答 / 指令模式等），再确认打开的工作区路径正确——涉及改文件时，AI 只在这个工作区范围内操作。</p>'
+      html: '<p>回到 SAO AI Editor 主面板，按当前界面选择需要的子面板。需要调整编辑与文件行为时，从 Settings → Editor & Files 进入相应设置。</p>'
     },
     a3: {
       section: '05 AI Editor', title: '对话与改文件',
-      html: '<p>在对话框里把要做的说清楚。涉及修改文件的请求，AI 会先列出它计划改动的位置和内容，确认后才写入。不要直接确认没看过的改动。</p>'
+      html: '<p>对话区每页显示最多六条已载入消息，用“较早消息”和“较新消息”翻页；分页不删除或修改会话数据。</p><p>阅读旧页时，流式回复不插入当前页；点击“回到最新”查看待提交消息与实时回复。计数分别说明已载入消息和会话总数，分页不会额外请求尚未载入的内容。</p><p>Native AI Editor 是对话工作台，不是完整文件编辑器或终端；涉及文件的确认行为保持不变。</p>'
     },
     a4: {
       section: '05 AI Editor', title: '备份与隐私',
@@ -112,20 +112,20 @@
     },
     /* 06 GPU Hunt */
     g1: {
-      section: '06 GPU Hunt', title: '填 PID',
-      html: '<p>PID 是进程 ID。打开任务管理器 → 详细信息（列「PID」）找到游戏本体进程，把它填到面板顶部的输入框。</p><p>常见错误是填成启动器或其他后台进程——认准游戏本体的进程名。</p>'
+      section: '06 GPU Hunt', title: '打开 GPU Hunt 子面板',
+      html: '<p>先从 SAO 菜单 → Tools → AI Editor (LLM) 打开 SAO AI Editor，再按当前界面查找 GPU Hunt 子面板。它是否可用，以面板当前显示为准。</p>'
     },
     g2: {
-      section: '06 GPU Hunt', title: 'Attach 与 Auto Tick',
-      html: '<p><strong>Attach</strong>：加载指定的游戏进程，状态变为 <em>attached</em>。</p><p><strong>Auto Tick</strong>：OFF 时手动单帧，点成 ON 后自动以 60Hz 刷新。锁定过程中建议保持 ON。</p>'
+      section: '06 GPU Hunt', title: '查看当前入口',
+      html: '<p>GPU Hunt 作为子面板提供时，连接、定位和刷新控件以当前面板显示为准。本指南不展开内部工具步骤。</p>'
     },
     g3: {
-      section: '06 GPU Hunt', title: 'Locked 是什么意思',
-      html: '<p>状态变为 <em>locked</em> 表示场景相机已经锁定，面板开始持续显示数据。游戏在渲染 3D 画面时，一般几秒内锁定；停在主菜单或加载画面时可能没有结果。</p>'
+      section: '06 GPU Hunt', title: '查看当前状态',
+      html: '<p>面板显示可用或锁定状态时，按当前界面提供的提示查看结果。状态字段和结果内容可能随版本或当前场景变化。</p>'
     },
     g4: {
-      section: '06 GPU Hunt', title: 'Invalidate / Detach',
-      html: '<p><strong>Invalidate</strong>：切场景、换地图或游戏重启后，点它清掉旧结果并重新定位。</p><p><strong>Detach</strong>：结束本次会话并断开进程。面板不再使用时保持 Detach 即可。</p>'
+      section: '06 GPU Hunt', title: '场景或目标变化后',
+      html: '<p>场景或目标变化后，按子面板当前提供的刷新、重置或关闭提示处理。若当前界面没有对应控件，以面板的实际状态提示为准。</p>'
     },
     /* 07 启动参数 */
     c1: {
@@ -134,7 +134,7 @@
     },
     c2: {
       section: '07 启动参数', title: '--config=<path>',
-      html: '<p>指定启动要用哪个配置文件。不填时用安装目录下的默认配置。适合多套配置切换或把配置放在别处的情况。</p>'
+      html: '<p>指定启动时读取的 provider 配置文件路径，例如 SaoAuto.provider.json。它用于 provider、更新和插件等启动配置，不等同于普通 Settings 面板使用的用户设置文件。</p>'
     },
     c3: {
       section: '07 启动参数', title: '--log-level=<lvl>',
@@ -163,21 +163,59 @@
     }
   };
 
-  /* ── DOM：单例面板 ── */
   var overlay = null;
+  var closeTimer = 0;
+  var focusTimer = 0;
+  var activeTrigger = null;
+  var savedScroll = null;
+
+  function isOpen() {
+    return overlay && overlay.classList.contains('visible');
+  }
+
+  function setTriggerExpanded(trigger, expanded) {
+    if (trigger && trigger.nodeType === 1) {
+      trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+  }
+
   function build() {
     overlay = document.createElement('div');
-    overlay.className = 'detail-popup';
+    overlay.id = 'detail-popup';
+    overlay.className = 'detail-overlay detail-popup';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
-    overlay.innerHTML =
-      '<div class="dp-backdrop" data-close="1"></div>' +
-      '<div class="dp-panel" role="document">' +
-      '<button type="button" class="dp-close" data-close="1" aria-label="关闭">✕</button>' +
-      '<p class="dp-kicker"></p>' +
-      '<h3 class="dp-title"></h3>' +
-      '<div class="dp-body"></div>' +
-      '</div>';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.setAttribute('aria-labelledby', 'dp-title');
+    overlay.setAttribute('aria-describedby', 'dp-body');
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'dp-backdrop';
+    backdrop.setAttribute('data-close', '1');
+    var panel = document.createElement('div');
+    panel.className = 'dp-panel';
+    panel.setAttribute('role', 'document');
+    panel.tabIndex = -1;
+    var closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'dp-close';
+    closeButton.setAttribute('data-close', '1');
+    closeButton.setAttribute('aria-label', '关闭');
+    closeButton.textContent = '✕';
+    var kicker = document.createElement('p');
+    kicker.className = 'dp-kicker';
+    var title = document.createElement('h3');
+    title.id = 'dp-title';
+    title.className = 'dp-title';
+    var body = document.createElement('div');
+    body.id = 'dp-body';
+    body.className = 'dp-body';
+    panel.appendChild(closeButton);
+    panel.appendChild(kicker);
+    panel.appendChild(title);
+    panel.appendChild(body);
+    overlay.appendChild(backdrop);
+    overlay.appendChild(panel);
     document.body.appendChild(overlay);
 
     overlay.addEventListener('click', function (e) {
@@ -186,16 +224,65 @@
     });
   }
 
-  function open(key) {
+  function renderBody(markup) {
+    var body = overlay.querySelector('.dp-body');
+    var parsed = new DOMParser().parseFromString(markup, 'text/html');
+    while (body.firstChild) { body.removeChild(body.firstChild); }
+    Array.prototype.slice.call(parsed.body.childNodes).forEach(function (node) {
+      body.appendChild(document.importNode(node, true));
+    });
+  }
+
+  function focusDialog() {
+    if (!isOpen()) { return; }
+    var closeButton = overlay.querySelector('.dp-close');
+    if (closeButton) {
+      try {
+        closeButton.focus({ preventScroll: true });
+      } catch (error) {
+        closeButton.focus();
+      }
+    }
+  }
+
+  function focusableElements() {
+    var candidates = Array.prototype.slice.call(
+      overlay.querySelectorAll('a[href], area[href], button, input, select, textarea, [tabindex]'));
+    return candidates.filter(function (element) {
+      return !element.disabled && element.getAttribute('tabindex') !== '-1';
+    });
+  }
+
+  function open(key, trigger) {
     var item = DETAILS[key];
     if (!item) { return; }
     if (!overlay) { build(); }
+    window.clearTimeout(closeTimer);
+    closeTimer = 0;
+    overlay.classList.remove('closing');
+    if (!isOpen()) {
+      savedScroll = {
+        x: window.scrollX || window.pageXOffset || 0,
+        y: window.scrollY || window.pageYOffset || 0
+      };
+    }
+    setTriggerExpanded(activeTrigger, false);
+    activeTrigger = trigger || activeTrigger;
     overlay.querySelector('.dp-kicker').textContent = item.section;
     overlay.querySelector('.dp-title').textContent = item.title;
-    overlay.querySelector('.dp-body').innerHTML = item.html;
-    overlay.classList.remove('closing');
-    overlay.classList.add('open');
+    renderBody(item.html);
+    overlay.setAttribute('aria-hidden', 'false');
+    if (activeTrigger) {
+      activeTrigger.setAttribute('aria-controls', 'detail-popup');
+      setTriggerExpanded(activeTrigger, true);
+    }
+    overlay.classList.add('visible');
     document.body.classList.add('dp-locked');
+    window.clearTimeout(focusTimer);
+    focusTimer = window.setTimeout(function () {
+      focusTimer = 0;
+      focusDialog();
+    }, 0);
     if (window.saoSfxPlay) {
       window.saoSfxPlay('panel', 0.4);
       if (window.saoSfxUnlock) { window.saoSfxUnlock(); }
@@ -203,34 +290,108 @@
   }
 
   function close() {
-    if (!overlay || !overlay.classList.contains('open')) { return; }
+    if (!isOpen()) { return; }
+    var trigger = activeTrigger;
+    var restore = savedScroll;
+    window.clearTimeout(focusTimer);
+    focusTimer = 0;
     overlay.classList.add('closing');
-    overlay.classList.remove('open');
+    overlay.classList.remove('visible');
+    overlay.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('dp-locked');
+    setTriggerExpanded(trigger, false);
+    activeTrigger = null;
+    savedScroll = null;
+    if (trigger && document.contains(trigger)) {
+      try {
+        trigger.focus({ preventScroll: true });
+      } catch (error) {
+        trigger.focus();
+      }
+    }
+    if (restore) { window.scrollTo(restore.x, restore.y); }
     if (window.saoSfxPlay) { window.saoSfxPlay('alert_close', 0.38); }
-    window.setTimeout(function () {
-      overlay.classList.remove('closing');
+    window.clearTimeout(closeTimer);
+    closeTimer = window.setTimeout(function () {
+      if (overlay && !isOpen()) { overlay.classList.remove('closing'); }
+      closeTimer = 0;
     }, 260);
   }
 
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && overlay && overlay.classList.contains('open')) {
+    if (!isOpen()) { return; }
+    if (e.key === 'Escape') {
+      e.preventDefault();
       close();
+      return;
+    }
+    if (e.key !== 'Tab') { return; }
+    var focusable = focusableElements();
+    if (focusable.length === 0) {
+      e.preventDefault();
+      overlay.querySelector('.dp-panel').focus();
+      return;
+    }
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+      e.preventDefault();
+      first.focus();
     }
   });
 
-  /* 事件代理：点击带 data-detail 的内容项 */
-  document.addEventListener('click', function (e) {
-    var el = e.target && e.target.closest ? e.target.closest('[data-detail]') : null;
-    if (!el) { return; }
-    var key = el.getAttribute('data-detail');
-    if (DETAILS[key]) { open(key); }
+  Array.prototype.slice.call(document.querySelectorAll('[data-detail]')).forEach(function (trigger) {
+    var key = trigger.getAttribute('data-detail');
+    if (!DETAILS[key]) { return; }
+    var descriptionGroup = trigger.tagName === 'DIV' && trigger.parentElement &&
+      trigger.parentElement.tagName === 'DL';
+    if (trigger.matches('li, tr, dt, dd, td, th') || descriptionGroup) {
+      var container = trigger;
+      if (trigger.tagName === 'TR') { container = trigger.cells[trigger.cells.length - 1]; }
+      else if (descriptionGroup) { container = trigger.querySelector('dd'); }
+      else if (trigger.tagName === 'LI') { container = trigger.querySelector('div') || trigger; }
+      if (!container) { return; }
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'detail-trigger';
+      button.textContent = '查看详情';
+      button.setAttribute('data-detail', key);
+      container.appendChild(button);
+      trigger.removeAttribute('data-detail');
+      trigger = button;
+    }
+    if (DETAILS[key]) { trigger.setAttribute('aria-label', DETAILS[key].title); }
+    if (trigger.tagName !== 'BUTTON') { trigger.setAttribute('role', 'button'); }
+    trigger.setAttribute('tabindex', '0');
+    trigger.setAttribute('aria-haspopup', 'dialog');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-controls', 'detail-popup');
   });
 
-  // 鼠标悬停提示：可点项显示详情光标文案
+  document.addEventListener('click', function (e) {
+    var trigger = e.target && e.target.closest ? e.target.closest('[data-detail]') : null;
+    if (!trigger) { return; }
+    var key = trigger.getAttribute('data-detail');
+    if (DETAILS[key]) { open(key, trigger); }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var trigger = e.target && e.target.closest ? e.target.closest('[data-detail]') : null;
+    if (!trigger || (e.key !== 'Enter' && e.key !== ' ')) { return; }
+    if (trigger.tagName === 'BUTTON') { return; }
+    var key = trigger.getAttribute('data-detail');
+    if (DETAILS[key]) {
+      e.preventDefault();
+      open(key, trigger);
+    }
+  });
+
   document.addEventListener('mouseover', function (e) {
-    var el = e.target && e.target.closest ? e.target.closest('[data-detail]') : null;
-    if (!el) { return; }
-    el.setAttribute('title', '点击查看详细介绍');
+    var trigger = e.target && e.target.closest ? e.target.closest('[data-detail]') : null;
+    if (!trigger) { return; }
+    trigger.setAttribute('title', '点击查看详细介绍');
   }, { passive: true });
 })();

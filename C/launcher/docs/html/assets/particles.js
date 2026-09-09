@@ -1,17 +1,15 @@
 // SAO Auto 用户指南 — SAO 式全息粒子层 + 光标辉光。
-// 全部只读画布动画：粒子缓慢上浮 + 轻微漂移，鼠标附近带轻微扰动；
-// 颜色跟随主题（html.dark），prefers-reduced-motion 下完全关闭。
+// 粒子只在可见页面运行；隐藏、BFCache 与 reduced-motion 会停用装饰层。
 (function () {
   'use strict';
 
-  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reducedMotion) { return; }
+  var root = document.documentElement;
+  var motionQuery = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+  var contrastQuery = window.matchMedia && window.matchMedia('(forced-colors: active)');
 
   function readPalette() {
-    var cs = getComputedStyle(document.documentElement);
-    var strip = function (v) {
-      return (v || '#0ea5c4').trim();
-    };
+    var cs = getComputedStyle(root);
+    var strip = function (v) { return (v || '#0ea5c4').trim(); };
     return [
       strip(cs.getPropertyValue('--accent')),
       strip(cs.getPropertyValue('--violet')),
@@ -20,13 +18,13 @@
     ];
   }
 
-  /* ── 粒子层 ── */
   var canvas = document.createElement('canvas');
   canvas.className = 'sao-particles';
   canvas.setAttribute('aria-hidden', 'true');
   document.body.appendChild(canvas);
 
   var ctx = canvas.getContext('2d');
+  if (!ctx) { if (canvas.parentNode) { canvas.parentNode.removeChild(canvas); } return; }
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
   var width = 0, height = 0;
   var palette = readPalette();
@@ -37,7 +35,7 @@
   function sizeCanvas() {
     width = window.innerWidth;
     height = window.innerHeight;
-    if (width <= 0 || height <= 0) { width = 0; height = 0; } // 嵌入环境首帧可能为 0
+    if (width <= 0 || height <= 0) { width = 0; height = 0; }
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     canvas.style.width = width + 'px';
@@ -68,13 +66,21 @@
   var paletteObserver = new MutationObserver(function () {
     palette = readPalette();
   });
-  paletteObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  paletteObserver.observe(root, { attributes: true, attributeFilter: ['class'] });
 
   var tick = 0;
   var last = Date.now();
+  var scheduleId = 0;
+  var running = false;
+  var suspended = document.hidden || root.classList.contains('guide-hidden');
+
+  function canRun() {
+    return !suspended && !document.hidden && !root.classList.contains('guide-hidden') &&
+      !(motionQuery && motionQuery.matches) && !(contrastQuery && contrastQuery.matches);
+  }
 
   function frame() {
-    if (width === 0) { sizeCanvas(); } // 自救：尺寸曾被 0 挡住
+    if (width === 0) { sizeCanvas(); }
     var now = Date.now();
     tick += (now - last) * 0.001;
     last = now;
@@ -86,7 +92,6 @@
       p.y -= p.speedY;
       p.x += p.drift + Math.sin(tick * p.twinkle + p.phase) * 0.12;
 
-      // 鼠标扰动：近处粒子轻轻让开
       var dx = p.x - mouse.x;
       var dy = p.y - mouse.y;
       var dist2 = dx * dx + dy * dy;
@@ -109,7 +114,6 @@
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
       ctx.fill();
 
-      // 大粒子带一点光晕
       if (p.size > 1.6) {
         ctx.globalAlpha = p.alpha * tw * 0.22;
         ctx.beginPath();
@@ -119,11 +123,42 @@
     }
     ctx.globalAlpha = 1;
   }
-  // 用 setInterval 驱动（部分 WebView 不派发 rAF 回调）。
-  window.setInterval(frame, 33);
-  frame();
 
-  /* ── 光标辉光 ── */
+  function schedule() {
+    if (!running || !canRun() || scheduleId) { return; }
+    scheduleId = window.setTimeout(function () {
+      scheduleId = 0;
+      if (!running || !canRun()) { return; }
+      frame();
+      schedule();
+    }, 33);
+  }
+
+  function start() {
+    if (running || !canRun()) { return; }
+    running = true;
+    last = Date.now();
+    frame();
+    schedule();
+  }
+
+  function pause() {
+    running = false;
+    if (scheduleId) { window.clearTimeout(scheduleId); }
+    scheduleId = 0;
+    last = Date.now();
+    window.clearTimeout(dimTimer);
+    dimTimer = 0;
+    if (glow) { glow.classList.remove('on'); }
+  }
+
+  function syncSuspension() {
+    var shouldPause = document.hidden || root.classList.contains('guide-hidden') ||
+      (motionQuery && motionQuery.matches) || (contrastQuery && contrastQuery.matches);
+    suspended = shouldPause;
+    if (shouldPause) { pause(); } else { start(); }
+  }
+
   var glow = document.createElement('div');
   glow.className = 'cursor-glow';
   glow.setAttribute('aria-hidden', 'true');
@@ -131,6 +166,7 @@
 
   var dimTimer = 0;
   document.addEventListener('mousemove', function (e) {
+    if (!canRun()) { return; }
     mouse.x = e.clientX;
     mouse.y = e.clientY;
     glow.style.transform = 'translate(' + (e.clientX - 260) + 'px,' + (e.clientY - 260) + 'px)';
@@ -141,5 +177,22 @@
     }, 2600);
   }, { passive: true });
 
+  new MutationObserver(syncSuspension).observe(root, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('visibilitychange', syncSuspension);
+  [motionQuery, contrastQuery].forEach(function (query) {
+    if (query && query.addEventListener) { query.addEventListener('change', syncSuspension); }
+  });
+  window.addEventListener('pagehide', function () {
+    suspended = true;
+    pause();
+    window.clearTimeout(dimTimer);
+    dimTimer = 0;
+    glow.classList.remove('on');
+  });
+  window.addEventListener('pageshow', function () {
+    syncSuspension();
+  });
   window.addEventListener('resize', sizeCanvas);
+
+  syncSuspension();
 })();

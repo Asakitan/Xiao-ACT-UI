@@ -1,3 +1,5 @@
+#include "panel_viewport_internal.h"
+#include <unordered_map>
 // SAO Auto — panel_layout engine first slice.
 //
 // Two-phase measure→arrange with 6 layout
@@ -113,6 +115,13 @@ struct sao_ui_layout_node_s {
     SaoUiRect arranged{0, 0, 0, 0};
     bool dirty = true;
     bool paint_dirty = true;
+    std::string viewport_id;
+    int scroll_axis{};
+    bool wheel_enabled{true};
+    bool bars_enabled{true};
+    SaoUiSize scroll_extent{};
+    int scroll_x{}, scroll_y{};
+    int drag_axis{}, drag_pointer{}, drag_offset{};
 };
 
 struct sao_ui_layout_tree_s {
@@ -515,7 +524,8 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
     insets_of(node->spec, ml, mt, mr, mb);
     const int64_t inner_w = std::max<int64_t>(0, nonnegative_i64(available.width_px) - ml - mr);
     const int64_t inner_h = std::max<int64_t>(0, nonnegative_i64(available.height_px) - mt - mb);
-    const SaoUiSize child_avail{clamp_nonnegative_i32(inner_w), clamp_nonnegative_i32(inner_h)};
+    const SaoUiSize child_avail{node->scroll_axis & 1 ? 1048576 : clamp_nonnegative_i32(inner_w),
+                                node->scroll_axis & 2 ? 1048576 : clamp_nonnegative_i32(inner_h)};
     int64_t total_w = 0;
     int64_t total_h = 0;
     const int64_t gap = nonnegative_i64(node->spec.gap_px);
@@ -704,6 +714,11 @@ static SaoUiSize measure_node(sao_ui_layout_node_s* node, SaoUiSize available) {
     total_w = saturating_add_nonnegative(total_w, mr);
     total_h = saturating_add_nonnegative(total_h, mt);
     total_h = saturating_add_nonnegative(total_h, mb);
+    node->scroll_extent = {clamp_nonnegative_i32(total_w), clamp_nonnegative_i32(total_h)};
+    if (node->scroll_axis & 1)
+        total_w = std::max<int64_t>(1, node->spec.min_width_px);
+    if (node->scroll_axis & 2)
+        total_h = std::max<int64_t>(1, node->spec.min_height_px);
     if (node->spec.fixed_width_px > 0)
         total_w = nonnegative_i64(node->spec.fixed_width_px);
     if (node->spec.fixed_height_px > 0)
@@ -1150,8 +1165,21 @@ static void arrange_node(sao_ui_layout_node_s* node, SaoUiRect rect) {
     insets_of(node->spec, ml, mt, mr, mb);
     const int64_t inner_w = std::max<int64_t>(0, static_cast<int64_t>(rect.width_px) - ml - mr);
     const int64_t inner_h = std::max<int64_t>(0, static_cast<int64_t>(rect.height_px) - mt - mb);
+    if (node->scroll_axis) {
+        measure_node(node, {rect.width_px, rect.height_px});
+        node->scroll_x = std::clamp(node->scroll_x, 0,
+                                    std::max(0, node->scroll_extent.width_px - rect.width_px));
+        node->scroll_y = std::clamp(node->scroll_y, 0,
+                                    std::max(0, node->scroll_extent.height_px - rect.height_px));
+    }
     const SaoUiRect inner = make_nonnegative_rect(
-        saturating_add_i64(rect.x_px, ml), saturating_add_i64(rect.y_px, mt), inner_w, inner_h);
+        saturating_add_i64(rect.x_px, ml), saturating_add_i64(rect.y_px, mt),
+        node->scroll_axis & 1
+            ? std::max(inner_w, static_cast<int64_t>(node->scroll_extent.width_px) - ml - mr)
+            : inner_w,
+        node->scroll_axis & 2
+            ? std::max(inner_h, static_cast<int64_t>(node->scroll_extent.height_px) - mt - mb)
+            : inner_h);
     switch (node->layout_mode) {
     case SAO_UI_LAYOUT_VERTICAL:
         arrange_vertical(node, inner);
@@ -1235,6 +1263,8 @@ sao_ui_layout_tree_set_root(sao_ui_layout_tree_handle_t tree, int32_t layout_mod
         node->tree = tree;
         node->layout_mode = layout_mode;
         node->spec = *spec;
+        if (layout_mode == SAO_UI_LAYOUT_DOCK)
+            node->dock.last_child_fills = true;
         sao_ui_layout_node_handle_t root = node.get();
         tree->root = std::move(node);
         *out_root = root;
@@ -1259,6 +1289,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_node_add_container(
         node->tree = parent->tree;
         node->layout_mode = layout_mode;
         node->spec = *spec;
+        if (layout_mode == SAO_UI_LAYOUT_DOCK)
+            node->dock.last_child_fills = true;
         sao_ui_layout_node_handle_t child = node.get();
         parent->children.push_back(std::move(node));
         *out_child = child;
@@ -1451,13 +1483,85 @@ static sao_ui_layout_node_s* hit_test_walk(sao_ui_layout_node_s* node, int32_t x
         return nullptr;
     // Children later in the list draw on top — test them first.
     for (size_t index = node->children.size(); index-- > 0;) {
+        // A viewport offsets descendants only; its own arranged rect remains
+        // the stable clip/hit surface.
+        const int32_t child_x = x + ((node->scroll_axis & 1) ? node->scroll_x : 0);
+        const int32_t child_y = y + ((node->scroll_axis & 2) ? node->scroll_y : 0);
         sao_ui_layout_node_s* const child_hit =
-            hit_test_walk(node->children[index].get(), x, y, nullptr);
+            hit_test_walk(node->children[index].get(), child_x, child_y, nullptr);
         if (child_hit != nullptr)
             return child_hit;
     }
     return node;
 }
+
+namespace sao::ui::detail {
+void layout_set_viewport(sao_ui_layout_node_handle_t node, const char* id, int axis, bool wheel,
+                         bool bar) {
+    if (node == nullptr || node->tree == nullptr)
+        return;
+    std::lock_guard lock(node->tree->mu);
+    node->viewport_id = id == nullptr ? std::string{} : std::string(id);
+    node->scroll_axis = axis & 3;
+    node->wheel_enabled = wheel;
+    node->bars_enabled = bar;
+    node->scroll_x = std::max(0, node->scroll_x);
+    node->scroll_y = std::max(0, node->scroll_y);
+    mark_dirty_up(node);
+}
+
+bool layout_visual_geometry(sao_ui_layout_node_handle_t node, SaoUiRect& rect, SaoUiRect& clip) {
+    if (node == nullptr || node->tree == nullptr)
+        return false;
+    std::lock_guard lock(node->tree->mu);
+    std::vector<sao_ui_layout_node_s*> ancestors;
+    for (auto* parent = node->parent; parent != nullptr; parent = parent->parent)
+        ancestors.push_back(parent);
+    std::reverse(ancestors.begin(), ancestors.end());
+    int32_t total_x = 0;
+    int32_t total_y = 0;
+    for (const auto* parent : ancestors) {
+        if (parent->scroll_axis & 1)
+            total_x -= parent->scroll_x;
+        if (parent->scroll_axis & 2)
+            total_y -= parent->scroll_y;
+    }
+    rect = node->arranged;
+    rect.x_px += total_x;
+    rect.y_px += total_y;
+    clip = ancestors.empty() ? rect : ancestors.front()->arranged;
+    bool has_explicit_clip = false;
+    int32_t ancestor_x = 0;
+    int32_t ancestor_y = 0;
+    for (const auto* parent : ancestors) {
+        SaoUiRect parent_clip = parent->arranged;
+        parent_clip.x_px += ancestor_x;
+        parent_clip.y_px += ancestor_y;
+        if (parent->scroll_axis || parent->spec.clip_children) {
+            if (!has_explicit_clip) {
+                clip = parent_clip;
+                has_explicit_clip = true;
+            } else {
+                const int32_t left = std::max(clip.x_px, parent_clip.x_px);
+                const int32_t top = std::max(clip.y_px, parent_clip.y_px);
+                const int64_t right =
+                    std::min(static_cast<int64_t>(clip.x_px) + clip.width_px,
+                             static_cast<int64_t>(parent_clip.x_px) + parent_clip.width_px);
+                const int64_t bottom =
+                    std::min(static_cast<int64_t>(clip.y_px) + clip.height_px,
+                             static_cast<int64_t>(parent_clip.y_px) + parent_clip.height_px);
+                clip = {left, top, static_cast<int32_t>(std::max<int64_t>(0, right - left)),
+                        static_cast<int32_t>(std::max<int64_t>(0, bottom - top))};
+            }
+        }
+        if (parent->scroll_axis & 1)
+            ancestor_x -= parent->scroll_x;
+        if (parent->scroll_axis & 2)
+            ancestor_y -= parent->scroll_y;
+    }
+    return clip.width_px > 0 && clip.height_px > 0;
+}
+} // namespace sao::ui::detail
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_hit_test(sao_ui_layout_node_handle_t root,
                                                            int32_t x, int32_t y,
@@ -1587,3 +1691,190 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layout_dump_json(sao_ui_layout_tree_h
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
+
+namespace sao::ui::detail {
+namespace {
+bool viewport_point(SaoUiRect r, int x, int y) {
+    return x >= r.x_px && y >= r.y_px &&
+           static_cast<int64_t>(x) < static_cast<int64_t>(r.x_px) + r.width_px &&
+           static_cast<int64_t>(y) < static_cast<int64_t>(r.y_px) + r.height_px;
+}
+SaoUiRect viewport_intersection(SaoUiRect a, SaoUiRect b) {
+    const int64_t left = std::max<int64_t>(a.x_px, b.x_px), top = std::max<int64_t>(a.y_px, b.y_px);
+    const int64_t right = std::min(static_cast<int64_t>(a.x_px) + a.width_px,
+                                   static_cast<int64_t>(b.x_px) + b.width_px);
+    const int64_t bottom = std::min(static_cast<int64_t>(a.y_px) + a.height_px,
+                                    static_cast<int64_t>(b.y_px) + b.height_px);
+    return {static_cast<int>(left), static_cast<int>(top),
+            static_cast<int>(std::max<int64_t>(0, right - left)),
+            static_cast<int>(std::max<int64_t>(0, bottom - top))};
+}
+struct OwnedViewportBar {
+    sao_ui_layout_node_s* node;
+    int axis;
+    ViewportBar geometry;
+};
+void collect_viewport_bars(sao_ui_layout_node_s* node, int ox, int oy, SaoUiRect clip,
+                           std::vector<OwnedViewportBar>& bars) {
+    auto r = node->arranged;
+    r.x_px -= ox;
+    r.y_px -= oy;
+    if (node->scroll_axis || node->spec.clip_children)
+        clip = viewport_intersection(clip, r);
+    if (node->bars_enabled && r.width_px > 12 && r.height_px > 12) {
+        for (int axis : {1, 2}) {
+            const int extent =
+                axis == 2 ? node->scroll_extent.height_px : node->scroll_extent.width_px;
+            const int visible = axis == 2 ? r.height_px : r.width_px;
+            if (!(node->scroll_axis & axis) || extent <= visible)
+                continue;
+            const int span = std::max(1, visible - 4);
+            const int thumb =
+                std::min(span, std::max(18, static_cast<int>(static_cast<int64_t>(span) * visible /
+                                                             std::max(1, extent))));
+            const int offset = axis == 2 ? node->scroll_y : node->scroll_x;
+            const int position = static_cast<int>(static_cast<int64_t>(span - thumb) * offset /
+                                                  std::max(1, extent - visible));
+            ViewportBar bar;
+            bar.clip = clip;
+            bar.active = node->drag_axis == axis;
+            if (axis == 2) {
+                bar.track = {r.x_px + r.width_px - 8, r.y_px + 2, 6, span};
+                bar.thumb = {bar.track.x_px, bar.track.y_px + position, 6, thumb};
+            } else {
+                bar.track = {r.x_px + 2, r.y_px + r.height_px - 8, span, 6};
+                bar.thumb = {bar.track.x_px + position, bar.track.y_px, thumb, 6};
+            }
+            bars.push_back({node, axis, bar});
+        }
+    }
+    for (auto& child : node->children)
+        collect_viewport_bars(child.get(), ox + node->scroll_x, oy + node->scroll_y, clip, bars);
+}
+bool scroll_viewport_node(sao_ui_layout_node_s* node, int x, int y, int dx, int dy) {
+    const bool inside = viewport_point(node->arranged, x, y);
+    if (!inside && (node->scroll_axis || node->spec.clip_children))
+        return false;
+    for (auto it = node->children.rbegin(); it != node->children.rend(); ++it)
+        if (scroll_viewport_node(it->get(), x + node->scroll_x, y + node->scroll_y, dx, dy))
+            return true;
+    if (!inside || !node->wheel_enabled)
+        return false;
+    bool changed = false;
+    for (int axis : {1, 2}) {
+        if (!(node->scroll_axis & axis))
+            continue;
+        int& offset = axis == 2 ? node->scroll_y : node->scroll_x;
+        const int range =
+            std::max(0, axis == 2 ? node->scroll_extent.height_px - node->arranged.height_px
+                                  : node->scroll_extent.width_px - node->arranged.width_px);
+        const int delta = axis == 2 ? dy : (dx ? dx : (!(node->scroll_axis & 2) ? dy : 0));
+        const int next =
+            static_cast<int>(std::clamp<int64_t>(static_cast<int64_t>(offset) + delta, 0, range));
+        changed |= next != offset;
+        offset = next;
+    }
+    if (changed)
+        node->paint_dirty = true;
+    return changed;
+}
+} // namespace
+bool layout_scroll_at(sao_ui_layout_node_handle_t root, int x, int y, int dx, int dy) {
+    if (!root || !root->tree)
+        return false;
+    std::lock_guard lock(root->tree->mu);
+    return scroll_viewport_node(root, x, y, dx, dy);
+}
+std::vector<ViewportBar> layout_scrollbars(sao_ui_layout_node_handle_t root) {
+    std::vector<ViewportBar> result;
+    if (!root || !root->tree)
+        return result;
+    std::lock_guard lock(root->tree->mu);
+    std::vector<OwnedViewportBar> bars;
+    collect_viewport_bars(root, 0, 0, root->arranged, bars);
+    result.reserve(bars.size());
+    for (auto& bar : bars)
+        result.push_back(bar.geometry);
+    return result;
+}
+bool layout_scrollbar_pointer(sao_ui_layout_node_handle_t root, int x, int y, int phase) {
+    if (!root || !root->tree)
+        return false;
+    std::lock_guard lock(root->tree->mu);
+    std::vector<OwnedViewportBar> bars;
+    collect_viewport_bars(root, 0, 0, root->arranged, bars);
+    for (auto it = bars.rbegin(); it != bars.rend(); ++it) {
+        auto* node = it->node;
+        const auto& g = it->geometry;
+        const int pointer = it->axis == 2 ? y : x;
+        int& offset = it->axis == 2 ? node->scroll_y : node->scroll_x;
+        const int visible = it->axis == 2 ? node->arranged.height_px : node->arranged.width_px;
+        const int extent =
+            it->axis == 2 ? node->scroll_extent.height_px : node->scroll_extent.width_px;
+        const int range = std::max(0, extent - visible);
+        const int track = it->axis == 2 ? g.track.height_px : g.track.width_px;
+        const int thumb = it->axis == 2 ? g.thumb.height_px : g.thumb.width_px;
+        if (node->drag_axis == it->axis && phase != 0) {
+            if (phase == 1)
+                node->drag_axis = 0;
+            else
+                offset = static_cast<int>(std::clamp<int64_t>(
+                    node->drag_offset + (static_cast<int64_t>(pointer) - node->drag_pointer) *
+                                            range / std::max(1, track - thumb),
+                    0, range));
+            node->paint_dirty = true;
+            return true;
+        }
+        if (phase != 0 || !viewport_point(g.clip, x, y) || !viewport_point(g.track, x, y))
+            continue;
+        if (viewport_point(g.thumb, x, y)) {
+            node->drag_axis = it->axis;
+            node->drag_pointer = pointer;
+            node->drag_offset = offset;
+        } else {
+            const int start = it->axis == 2 ? g.thumb.y_px : g.thumb.x_px;
+            offset = static_cast<int>(std::clamp<int64_t>(
+                static_cast<int64_t>(offset) + (pointer < start ? -visible : visible), 0, range));
+        }
+        node->paint_dirty = true;
+        return true;
+    }
+    return false;
+}
+void layout_restore_viewports(sao_ui_layout_node_handle_t previous,
+                              sao_ui_layout_node_handle_t next) {
+    if (!previous || !next || previous == next || !previous->tree || !next->tree ||
+        previous->tree == next->tree)
+        return;
+    std::scoped_lock lock(previous->tree->mu, next->tree->mu);
+    std::unordered_map<std::string, SaoUiSize> positions;
+    auto capture = [&](auto&& self, sao_ui_layout_node_s* node) -> void {
+        if (!node->viewport_id.empty())
+            positions[node->viewport_id] = {node->scroll_x, node->scroll_y};
+        for (auto& child : node->children)
+            self(self, child.get());
+    };
+    auto restore = [&](auto&& self, sao_ui_layout_node_s* node) -> void {
+        if (const auto it = positions.find(node->viewport_id); it != positions.end()) {
+            node->scroll_x =
+                std::clamp(it->second.width_px, 0,
+                           std::max(0, node->scroll_extent.width_px - node->arranged.width_px));
+            node->scroll_y =
+                std::clamp(it->second.height_px, 0,
+                           std::max(0, node->scroll_extent.height_px - node->arranged.height_px));
+        }
+        for (auto& child : node->children)
+            self(self, child.get());
+    };
+    capture(capture, previous);
+    restore(restore, next);
+}
+bool layout_replace_widget(sao_ui_layout_node_handle_t node, sao_ui_widget_handle_t widget) {
+    if (!node || !node->tree || node->widget == nullptr || !node->children.empty() || !widget)
+        return false;
+    std::lock_guard lock(node->tree->mu);
+    node->widget = widget;
+    mark_dirty_up(node);
+    return true;
+}
+} // namespace sao::ui::detail

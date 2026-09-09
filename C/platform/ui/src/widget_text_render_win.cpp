@@ -7,7 +7,11 @@
 // or COM is unavailable, so the caller can keep the procedural path as a
 // safety net — text rendering must never crash a paint pass.
 
+#pragma push_macro("NTDDI_VERSION")
+#undef NTDDI_VERSION
+#define NTDDI_VERSION 0x0A000003
 #include "widget_raster_internal.h"
+#include "classic_text_roles.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -16,14 +20,20 @@
 
 #include <d2d1.h>
 #include <dwrite.h>
+#include <dwrite_3.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#pragma pop_macro("NTDDI_VERSION")
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -37,12 +47,57 @@ using namespace sao::ui::raster;
 // Lazy, process-wide COM + factory set.  Guarded by a function-local static
 // (thread-safe init in C++11).  All factory creation failure paths leave
 // ready()==false so the caller falls back.
+// The Windows 10 loader owns its own copy of the embedded bytes. Collection
+// teardown precedes unregistering the loader, and no process-wide font install occurs.
+struct EmbeddedDisplayFont {
+    ComPtr<IDWriteFactory5> factory;
+    ComPtr<IDWriteInMemoryFontFileLoader> loader;
+    ComPtr<IDWriteFontCollection1> collection;
+    bool registered{};
+    explicit EmbeddedDisplayFont(IDWriteFactory* source) noexcept {
+        if (!source || FAILED(source->QueryInterface(IID_PPV_ARGS(&factory))))
+            return;
+        if (FAILED(factory->CreateInMemoryFontFileLoader(&loader)))
+            return;
+        if (FAILED(factory->RegisterFontFileLoader(loader.Get())))
+            return;
+        registered = true;
+        static const int resource_anchor = 0;
+        HMODULE module{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                reinterpret_cast<LPCWSTR>(&resource_anchor), &module))
+            return;
+        HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(701), MAKEINTRESOURCEW(10));
+        const DWORD size = resource ? SizeofResource(module, resource) : 0;
+        HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
+        const void* bytes = memory ? LockResource(memory) : nullptr;
+        if (!bytes || !size)
+            return;
+        ComPtr<IDWriteFontFile> file;
+        ComPtr<IDWriteFontSetBuilder1> builder;
+        ComPtr<IDWriteFontSet> set;
+        if (FAILED(loader->CreateInMemoryFontFileReference(factory.Get(), bytes, size, nullptr,
+                                                           &file)) ||
+            FAILED(factory->CreateFontSetBuilder(&builder)) ||
+            FAILED(builder->AddFontFile(file.Get())) || FAILED(builder->CreateFontSet(&set)))
+            return;
+        (void)factory->CreateFontCollectionFromFontSet(set.Get(), &collection);
+    }
+    ~EmbeddedDisplayFont() {
+        collection.Reset();
+        if (registered)
+            (void)factory->UnregisterFontFileLoader(loader.Get());
+    }
+};
+
 struct DwriteBackend {
     HRESULT com_result{E_UNEXPECTED};
     bool owns_com{};
     ComPtr<IWICImagingFactory> wic;
     ComPtr<ID2D1Factory> d2d;
     ComPtr<IDWriteFactory> dwrite;
+    std::shared_ptr<EmbeddedDisplayFont> display_font;
 
     bool ready() const noexcept {
         return dwrite != nullptr && d2d != nullptr && wic != nullptr;
@@ -65,6 +120,10 @@ struct DwriteBackend {
                                            __uuidof(IDWriteFactory),
                                            reinterpret_cast<IUnknown**>(b.dwrite.GetAddressOf()))))
                 return b;
+            try {
+                b.display_font = std::make_shared<EmbeddedDisplayFont>(b.dwrite.Get());
+            } catch (...) {
+            }
             return b;
         }();
         return backend;
@@ -95,67 +154,219 @@ bool utf8_to_utf16(const char* text, std::wstring* output) noexcept {
 // Bounded glyph-mask cache.  Entries store a white (alpha-only) bitmap so
 // the tint color and opacity can change per frame without re-rasterizing.
 struct GlyphMaskEntry {
-    std::wstring text;
     float size_px{0.0F};
     std::vector<uint8_t> pixels;
     uint32_t width{0};
     uint32_t height{0};
-    uint64_t last_used{0};
+};
+
+uint32_t text_size_bits(float size_px) noexcept {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &size_px, sizeof(bits));
+    return bits;
+}
+
+struct TextStyleKey {
+    ClassicTextStyle style{};
+
+    bool operator==(const TextStyleKey& other) const noexcept {
+        return style.role == other.style.role && style.weight == other.style.weight;
+    }
+};
+
+struct GlyphMaskKey {
+    std::wstring text;
+    uint32_t size_bits{};
+    TextStyleKey style{};
+
+    bool operator==(const GlyphMaskKey& other) const noexcept {
+        return size_bits == other.size_bits && style == other.style && text == other.text;
+    }
+};
+
+struct GlyphMaskKeyHash {
+    size_t operator()(const GlyphMaskKey& key) const noexcept {
+        size_t hash = std::hash<std::wstring>{}(key.text);
+        hash ^= std::hash<uint32_t>{}(key.size_bits) + static_cast<size_t>(0x9e3779b9U) +
+                (hash << 6U) + (hash >> 2U);
+        hash ^= static_cast<size_t>(key.style.style.role) +
+                (static_cast<size_t>(key.style.style.weight) << 8U) +
+                static_cast<size_t>(0x85ebca6bU) + (hash << 6U) + (hash >> 2U);
+        return hash;
+    }
 };
 
 struct GlyphMaskCache {
     static constexpr size_t kMaxEntries = 256;
     std::mutex mtx;
-    std::unordered_map<std::wstring, GlyphMaskEntry> entries;
-    uint64_t tick{0};
+    std::unordered_map<GlyphMaskKey, std::shared_ptr<const GlyphMaskEntry>, GlyphMaskKeyHash>
+        entries;
 
-    // Copies the entry out under the lock so the caller never touches
-    // map-owned storage after release (eviction-safe).
-    bool find(const std::wstring& text, float size_px, GlyphMaskEntry* out) {
+    // Keep the immutable entry alive in the caller while eviction releases the
+    // cache's reference.
+    std::shared_ptr<const GlyphMaskEntry> find(const std::wstring& text, float size_px,
+                                               ClassicTextStyle style) {
         std::lock_guard<std::mutex> lock(mtx);
-        auto it = entries.find(text);
-        if (it == entries.end() ||
-            std::abs(it->second.size_px - size_px) > 0.25F)
-            return false;
-        it->second.last_used = ++tick;
-        *out = it->second;
-        return true;
+        GlyphMaskKey key{text, text_size_bits(size_px), {style}};
+        auto it = entries.find(key);
+        if (it == entries.end() || std::abs(it->second->size_px - size_px) > 0.25F)
+            return {};
+        return it->second;
     }
 
-    void store(std::wstring text, float size_px,
-               const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
-        if (size_px < 4.0F || size_px > 512.0F || width == 0 || height == 0)
-            return;   // transient one-off sizes pollute the cache
-        if (text.size() > 64)
-            return;   // long labels are near-unique; don't cache them
-        std::lock_guard<std::mutex> lock(mtx);
-        if (entries.size() >= kMaxEntries) {
-            // Evict everything in one pass; simple and bounded.
-            entries.clear();
-            tick = 0;
+    std::shared_ptr<const GlyphMaskEntry>
+    store(std::wstring text, float size_px, ClassicTextStyle style,
+          std::shared_ptr<const GlyphMaskEntry> entry) noexcept {
+        if (entry == nullptr || size_px < 4.0F || size_px > 512.0F || entry->width == 0 ||
+            entry->height == 0 || text.size() > 64)
+            return entry; // transient one-off sizes pollute the cache
+        try {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (entries.size() >= kMaxEntries)
+                entries.clear();
+            entries[GlyphMaskKey{std::move(text), text_size_bits(size_px), {style}}] = entry;
+        } catch (...) {
         }
-        GlyphMaskEntry entry;
-        entry.text = text;
-        entry.size_px = size_px;
-        entry.pixels = pixels;
-        entry.width = width;
-        entry.height = height;
-        entry.last_used = ++tick;
-        entries[std::move(text)] = std::move(entry);
+        return entry;
     }
 };
-
 GlyphMaskCache& glyph_mask_cache() noexcept {
     static GlyphMaskCache cache;
     return cache;
 }
 
+struct TextMetricsKey {
+    std::wstring text;
+    uint32_t size_bits{0};
+    TextStyleKey style{};
+
+    bool operator==(const TextMetricsKey& other) const noexcept {
+        return size_bits == other.size_bits && style == other.style && text == other.text;
+    }
+};
+
+struct TextMetricsKeyHash {
+    size_t operator()(const TextMetricsKey& key) const noexcept {
+        size_t hash = std::hash<std::wstring>{}(key.text);
+        hash ^= std::hash<uint32_t>{}(key.size_bits) + static_cast<size_t>(0x9e3779b9U) +
+                (hash << 6U) + (hash >> 2U);
+        hash ^= static_cast<size_t>(key.style.style.role) +
+                (static_cast<size_t>(key.style.style.weight) << 8U) +
+                static_cast<size_t>(0x85ebca6bU) + (hash << 6U) + (hash >> 2U);
+        return hash;
+    }
+};
+
+struct TextMetricsValue {
+    float width{0.0F};
+    float height{0.0F};
+};
+
+struct TextMetricsCache {
+    static constexpr size_t kMaxEntries = 256;
+    std::mutex mtx;
+    std::unordered_map<TextMetricsKey, TextMetricsValue, TextMetricsKeyHash> entries;
+
+    bool find(const std::wstring& text, float size_px, ClassicTextStyle style, float* out_width,
+              float* out_height) noexcept {
+        try {
+            TextMetricsKey key;
+            key.text = text;
+            key.size_bits = text_size_bits(size_px);
+            key.style = {style};
+            std::lock_guard<std::mutex> lock(mtx);
+            const auto it = entries.find(key);
+            if (it == entries.end())
+                return false;
+            *out_width = it->second.width;
+            *out_height = it->second.height;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void store(std::wstring text, float size_px, ClassicTextStyle style, float width,
+               float height) noexcept {
+        if (text.empty() || text.size() > 64 || !std::isfinite(width) || !std::isfinite(height) ||
+            width < 0.0F || height < 0.0F || width > 65536.0F || height > 65536.0F)
+            return;
+        try {
+            TextMetricsKey key;
+            key.text = std::move(text);
+            key.size_bits = text_size_bits(size_px);
+            key.style = {style};
+            std::lock_guard<std::mutex> lock(mtx);
+            if (entries.size() >= kMaxEntries && entries.find(key) == entries.end())
+                entries.clear();
+            entries.insert_or_assign(std::move(key), TextMetricsValue{width, height});
+        } catch (...) {
+        }
+    }
+};
+
+TextMetricsCache& text_metrics_cache() noexcept {
+    static TextMetricsCache cache;
+    return cache;
+}
+
+ClassicTextStyle resolved_text_style(const std::wstring& text) noexcept {
+    ClassicTextStyle style = active_classic_text_style();
+    if (style.role == ClassicTextRole::Display &&
+        std::any_of(text.begin(), text.end(), [](wchar_t c) { return c > 127; }))
+        style.role = ClassicTextRole::Body;
+    if (style.role == ClassicTextRole::Auto)
+        style.role = ClassicTextRole::Body;
+    return style;
+}
+
+const wchar_t* family_for_role(ClassicTextRole role) noexcept {
+    switch (role) {
+    case ClassicTextRole::Display:
+        return L"SAO UI";
+    case ClassicTextRole::Monospace:
+        return L"Consolas";
+    case ClassicTextRole::Body:
+    case ClassicTextRole::Auto:
+    default:
+        return L"Microsoft YaHei UI";
+    }
+}
+
+DWRITE_FONT_WEIGHT weight_for_role(ClassicTextWeight weight) noexcept {
+    switch (weight) {
+    case ClassicTextWeight::SemiBold:
+        return DWRITE_FONT_WEIGHT_SEMI_BOLD;
+    case ClassicTextWeight::Bold:
+        return DWRITE_FONT_WEIGHT_BOLD;
+    case ClassicTextWeight::Normal:
+    default:
+        return DWRITE_FONT_WEIGHT_NORMAL;
+    }
+}
+
+HRESULT create_text_format(DwriteBackend& backend, float size_px, ClassicTextStyle style,
+                           IDWriteTextFormat** out_format) noexcept {
+    if (out_format == nullptr)
+        return E_INVALIDARG;
+    IDWriteFontCollection* collection =
+        style.role == ClassicTextRole::Display && backend.display_font
+            ? backend.display_font->collection.Get()
+            : nullptr;
+    const wchar_t* family = style.role == ClassicTextRole::Display && !collection
+                                ? L"Segoe UI"
+                                : family_for_role(style.role);
+    return backend.dwrite->CreateTextFormat(family, collection, weight_for_role(style.weight),
+                                            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                                            size_px, L"", out_format);
+}
+
 // Render `text` at `size_px` into a tight WIC bitmap (premultiplied BGRA)
 // filled with a white mask: every channel equals the coverage alpha.
 // Tinting happens at blend time.  On success returns true + pixels/w/h.
-bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
-                        float size_px, std::vector<uint8_t>* out_pixels,
-                        uint32_t* out_w, uint32_t* out_h) noexcept {
+bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float size_px,
+                        ClassicTextStyle style, std::vector<uint8_t>* out_pixels, uint32_t* out_w,
+                        uint32_t* out_h) noexcept {
     if (out_pixels == nullptr || out_w == nullptr || out_h == nullptr || text.empty() ||
         !std::isfinite(size_px) || size_px <= 0.0F ||
         text.size() > std::numeric_limits<UINT32>::max())
@@ -163,10 +374,7 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text,
     const uint32_t kMaskColor = 0xFFFFFFFFu;
     try {
         ComPtr<IDWriteTextFormat> format;
-        if (FAILED(backend.dwrite->CreateTextFormat(
-                L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size_px, L"",
-                &format)))
+        if (FAILED(create_text_format(backend, size_px, style, &format)))
             return false;
         if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
             return false;
@@ -255,6 +463,14 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
     std::wstring wide;
     if (!utf8_to_utf16(text_utf8, &wide))
         return false;
+    const ClassicTextStyle style = resolved_text_style(wide);
+    // The embedded SAO display face is designed for capitals. Keep its
+    // lowercase x-height out of compact titles; measure the exact same text.
+    if (style.role == ClassicTextRole::Display) {
+        for (wchar_t& character : wide)
+            if (character >= L'a' && character <= L'z')
+                character -= L'a' - L'A';
+    }
 
     // Shared raster per-pixel premultiplied blending.
     const uint32_t effective = apply_opacity(argb, current_opacity(context));
@@ -264,19 +480,25 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y,
     GlyphMaskCache& cache = glyph_mask_cache();
     uint32_t width = 0;
     uint32_t height = 0;
-    std::vector<uint8_t> local_pixels;
-    GlyphMaskEntry cached{};
-    if (!cache.find(wide, size_px, &cached)) {
-        if (!render_text_bitmap(backend, wide, size_px,
-                                &local_pixels, &width, &height))
+    std::shared_ptr<const GlyphMaskEntry> cached = cache.find(wide, size_px, style);
+    if (cached == nullptr) {
+        std::vector<uint8_t> local_pixels;
+        if (!render_text_bitmap(backend, wide, size_px, style, &local_pixels, &width, &height))
             return false;
-        cache.store(std::move(wide), size_px, local_pixels, width, height);
-    } else {
-        width = cached.width;
-        height = cached.height;
-        local_pixels = std::move(cached.pixels);
+        try {
+            auto rendered = std::make_shared<GlyphMaskEntry>();
+            rendered->size_px = size_px;
+            rendered->pixels = std::move(local_pixels);
+            rendered->width = width;
+            rendered->height = height;
+            cached = cache.store(std::move(wide), size_px, style, std::move(rendered));
+        } catch (...) {
+            return false;
+        }
     }
-    const uint8_t* pixels = local_pixels.data();
+    width = cached->width;
+    height = cached->height;
+    const uint8_t* pixels = cached->pixels.data();
 
     const Rect destination = intersect({x, y, static_cast<float>(width), static_cast<float>(height)},
                                        clip_bounds(context));
@@ -331,12 +553,20 @@ bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
     std::wstring wide;
     if (!utf8_to_utf16(text_utf8, &wide) || wide.size() > std::numeric_limits<UINT32>::max())
         return false;
+    const ClassicTextStyle style = resolved_text_style(wide);
+    // The embedded SAO display face is designed for capitals. Keep its
+    // lowercase x-height out of compact titles; measure the exact same text.
+    if (style.role == ClassicTextRole::Display) {
+        for (wchar_t& character : wide)
+            if (character >= L'a' && character <= L'z')
+                character -= L'a' - L'A';
+    }
+    auto& cache = text_metrics_cache();
+    if (cache.find(wide, size_px, style, out_width, out_height))
+        return true;
     try {
         ComPtr<IDWriteTextFormat> format;
-        if (FAILED(backend.dwrite->CreateTextFormat(
-                L"Microsoft YaHei UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size_px, L"",
-                &format)))
+        if (FAILED(create_text_format(backend, size_px, style, &format)))
             return false;
         if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
             return false;
@@ -354,6 +584,7 @@ bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
             return false;
         *out_width = metrics.width;
         *out_height = metrics.height;
+        cache.store(std::move(wide), size_px, style, metrics.width, metrics.height);
         return true;
     } catch (...) {
         return false;

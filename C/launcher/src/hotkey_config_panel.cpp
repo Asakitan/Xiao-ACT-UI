@@ -186,14 +186,47 @@ Json card_node(std::string title, Json children, std::string_view accent = "cyan
                 {"children", std::move(children)}};
 }
 
+Json section_node(std::string title, Json children, std::string_view accent = "cyan") {
+    return Json{{"type", "section"},
+                {"title", bounded_utf8(std::move(title), kMaximumLabelBytes, "Section")},
+                {"accent", accent},
+                {"children", std::move(children)}};
+}
+
+Json dock_document(Json nodes, std::string content_id, int min_width = 520) {
+    if (!nodes.is_array() || nodes.empty())
+        return Json{{"version", 1},
+                    {"title", ""},
+                    {"surface", "solid"},
+                    {"layout", "dock"},
+                    {"nodes", std::move(nodes)}};
+    Json top = std::move(nodes.front());
+    nodes.erase(nodes.begin());
+    top["dock"] = "top";
+    Json content{{"type", "section"},
+                 {"id", std::move(content_id)},
+                 {"container", true},
+                 {"layout", "vertical"},
+                 {"width", 0},
+                 {"min_width", min_width},
+                 {"weight", 1.0F},
+                 {"dock", "fill"},
+                 {"scroll", {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}}},
+                 {"children", std::move(nodes)}};
+    return Json{{"version", 1},
+                {"title", ""},
+                {"surface", "solid"},
+                {"layout", "dock"},
+                {"nodes", Json::array({std::move(top), std::move(content)})}};
+}
+
 Json status_strip_node(std::string message, std::string_view accent, bool capturing) {
     Json children = Json::array();
     children.push_back(row_node(Json::array({text_node(std::move(message), accent, 24)})));
     if (capturing)
         children.push_back(row_node(Json::array({button_node(
-            "capture.cancel", "Cancel capture / 取消捕获", "hotkey.capture.cancel",
-            Json::object(), "ghost")})));
-    return card_node("Status / 状态", std::move(children), accent);
+            "capture.cancel", "取消捕获", "hotkey.capture.cancel", Json::object(), "ghost")})));
+    return card_node("状态", std::move(children), accent);
 }
 
 std::string_view panel_accent(const std::unordered_map<std::string, PanelStatus>& statuses,
@@ -243,6 +276,8 @@ std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
     Json nodes = Json::array();
     nodes.push_back(status_strip_node(visible_message, accent, capture_running));
     Json rows = Json::array();
+    rows.push_back(
+        text_node("选择要更改的快捷键，点击录入后按下组合键；重置恢复该项默认值。", "muted", 38));
     for (std::size_t index = 0; index < bindings.size(); ++index) {
         const auto& binding = bindings[index];
         const auto found = statuses.find(binding.id);
@@ -254,23 +289,33 @@ std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
             binding.description, kMaximumTextBytes, "Invalid description / 无效描述");
         const Json payload = identity_safe ? Json(binding.id) : Json();
         const bool action_disabled = capture_running || !identity_safe;
-        rows.push_back(row_node(Json::array({
-            text_node(description, "value", 28),
-            text_node(display_id, "mono", 28),
-            text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 28),
-            Json{{"type", "badge"},
-                 {"text", identity_safe ? status_label(status) : "Unavailable / 不可用"},
-                 {"style", status_style(status)}, {"height", 22}},
-            button_node(bounded_action_node_id("capture.", binding.id, index, identity_safe),
-                        "Capture / 捕获", kCaptureAction, payload, "primary", action_disabled),
-            button_node(bounded_action_node_id("reset.", binding.id, index, identity_safe),
-                        "Reset / 重置", kResetAction, payload, "ghost", action_disabled),
-        })));
+        rows.push_back(card_node(
+            description.empty() ? display_id : description,
+            Json::array({
+                row_node(Json::array({
+                    text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 30),
+                    Json{{"type", "badge"},
+                         {"text", identity_safe ? status_label(status) : "Unavailable / 不可用"},
+                         {"style", status_style(status)},
+                         {"height", 22}},
+                })),
+                row_node(Json::array({
+                    button_node(
+                        bounded_action_node_id("capture.", binding.id, index, identity_safe),
+                        "录入组合键", kCaptureAction, payload, "primary", action_disabled),
+                    button_node(bounded_action_node_id("reset.", binding.id, index, identity_safe),
+                                "恢复默认", kResetAction, payload, "ghost", action_disabled),
+                })),
+                text_node(display_id, "muted", 22),
+            }),
+            identity_safe ? (status == PanelStatus::ready ? "cyan" : status_style(status))
+                          : "bad"));
     }
-    nodes.push_back(card_node("Bindings / 快捷键", std::move(rows), "cyan"));
-    std::string serialized = Json{{"version", 1}, {"title", ""}, {"surface", "solid"},
-                                  {"nodes", std::move(nodes)}}
-                                 .dump();
+    if (bindings.empty())
+        rows.push_back(text_node("No bindings configured. / 尚未配置快捷键。", "muted", 30));
+    nodes.push_back(section_node(
+        "快捷键", Json::array({card_node("已配置快捷键", std::move(rows), accent)}), accent));
+    std::string serialized = dock_document(std::move(nodes), "hotkey-content").dump();
     if (serialized.size() <= kMaximumSpecBytes)
         return serialized;
     return compact_spec("Hotkey panel exceeded the 256 KiB serialized budget / 快捷键面板超出 256 KiB 序列化限制");
@@ -571,6 +616,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         std::lock_guard lock(mutex);
         panel = created_panel;
         body = created_body;
+        rendered_body = nullptr;
+        rendered_spec.clear();
         accepting = true;
         action_handler_attached = true;
         event_handler_attached = true;
@@ -643,6 +690,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             std::lock_guard lock(mutex);
             panel = nullptr;
             body = nullptr;
+            rendered_body = nullptr;
+            rendered_spec.clear();
             accepting = true;
             cleanup_pending = false;
             retirement = RetirementState::offline;
@@ -704,9 +753,27 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             message = status_message;
             capture_running_local = capture_running;
         }
-        if (target_body == nullptr) return SAO_STATUS_ERR_NOT_INITIALIZED;
-        const std::string spec = build_panel_spec(snapshot(), statuses, message, capture_running_local);
-        return sao_ui_panel_body_set_spec(target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
+        if (target_body == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        const std::string spec =
+            build_panel_spec(snapshot(), statuses, message, capture_running_local);
+        {
+            std::lock_guard lock(mutex);
+            if (body == target_body && rendered_body == target_body && rendered_spec == spec)
+                return SAO_STATUS_OK;
+        }
+        const sao_status_t status = sao_ui_panel_body_set_spec(
+            target_body, reinterpret_cast<const std::uint8_t*>(spec.data()), spec.size());
+        if (status != SAO_STATUS_OK)
+            return status;
+        {
+            std::lock_guard lock(mutex);
+            if (body != target_body)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
+            rendered_body = target_body;
+            rendered_spec = std::move(spec);
+        }
+        return SAO_STATUS_OK;
     }
 
     sao_status_t dispatch(std::string_view action, std::string_view payload_json) noexcept {
@@ -779,6 +846,8 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     mutable std::mutex mutex;
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
+    sao_ui_panel_body_handle_t rendered_body{};
+    std::string rendered_spec;
     std::unordered_map<std::string, PanelStatus> row_status;
     std::string status_message;
     CaptureHooks capture_hooks;

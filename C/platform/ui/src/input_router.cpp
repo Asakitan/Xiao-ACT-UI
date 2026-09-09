@@ -32,7 +32,9 @@
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 #include "sao/ui/widget_table.h"
+#include "sao/ui/sound.h"
 
+#include "dialog_input_internal.h"
 #include "input_router_internal.h"
 
 #include <algorithm>
@@ -56,6 +58,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_activate_widget_(sao_ui_w
 extern "C" bool SAO_UI_CALL sao_ui_panel_input_widget_is_visible_(sao_ui_widget_handle_t widget);
 extern "C" bool SAO_UI_CALL sao_ui_panel_input_widget_owner_(
     sao_ui_widget_handle_t widget, sao_ui_panel_handle_t* out_panel);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_current_focus_(
+    sao_ui_compositor_handle_t compositor, sao_ui_widget_handle_t* out_widget);
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_focus_adjacent_(
+    sao_ui_widget_handle_t current, bool reverse, sao_ui_widget_handle_t* out_widget);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_input_accept_keyboard_focus_(sao_ui_widget_handle_t widget);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_input_refresh_widget_(sao_ui_widget_handle_t widget);
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_panel_input_dispatch_control_action_(sao_ui_widget_handle_t widget);
 extern "C" void SAO_UI_CALL sao_ui_input_router_clear_focus_widget_(sao_ui_widget_handle_t widget);
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_button_dispatch_event(sao_ui_widget_handle_t handle, int32_t event_type, int32_t* out_action_id);
 
@@ -1264,6 +1276,16 @@ sao_ui_input_router_feed_raw_win32(sao_ui_input_router_deep_handle_t handle, uin
             event.kind = SAO_UI_INPUT_KEY_CHAR;
             event.unicode_codepoint = static_cast<uint32_t>(wparam);
             break;
+        case SAO_UI_NATIVE_TEXT_TAB_MESSAGE:
+            event.kind = SAO_UI_INPUT_KEY_DOWN;
+            event.virtual_key = VK_TAB;
+            event.scan_code = static_cast<uint32_t>(MapVirtualKeyW(VK_TAB, MAPVK_VK_TO_VSC));
+            event.key_repeat = false;
+            if (wparam != 0)
+                event.modifiers |= SAO_UI_MOD_SHIFT_BIT;
+            else
+                event.modifiers &= ~SAO_UI_MOD_SHIFT_BIT;
+            break;
         case WM_SETFOCUS:
             event.kind = SAO_UI_INPUT_FOCUS_GAIN;
             break;
@@ -1273,10 +1295,45 @@ sao_ui_input_router_feed_raw_win32(sao_ui_input_router_deep_handle_t handle, uin
         default:
             return SAO_STATUS_ERR_NOT_FOUND;
         }
+        const bool keyboard_event =
+            event.kind >= SAO_UI_INPUT_KEY_DOWN && event.kind <= SAO_UI_INPUT_KEY_CHAR;
+        if (keyboard_event && compositor != nullptr) {
+            const HWND focused = ::GetFocus();
+            const bool native_child_focused = host_hwnd != nullptr && focused != nullptr &&
+                                              focused != host_hwnd &&
+                                              ::IsChild(host_hwnd, focused) != FALSE;
+            const bool internal_native_tab = msg == SAO_UI_NATIVE_TEXT_TAB_MESSAGE;
+            const bool interaction_host_focused =
+                internal_native_tab || focused == host_hwnd || native_child_focused;
+            if (!interaction_host_focused || (native_child_focused && !internal_native_tab)) {
+                return SAO_STATUS_OK;
+            }
+            bool dialog_consumed = false;
+            const sao_status_t dialog_status = dialog_input_route_key(
+                compositor, event.kind == SAO_UI_INPUT_KEY_DOWN, event.virtual_key,
+                (event.modifiers & SAO_UI_MOD_SHIFT_BIT) != 0, &dialog_consumed);
+            if (dialog_status != SAO_STATUS_OK && dialog_status != SAO_STATUS_ERR_NOT_FOUND) {
+                return dialog_status;
+            }
+            if (dialog_consumed) {
+                if (out_consumed != nullptr)
+                    *out_consumed = true;
+                return SAO_STATUS_OK;
+            }
+        }
         if (event.kind == SAO_UI_INPUT_MOUSE_MOVE || event.kind == SAO_UI_INPUT_MOUSE_DOWN ||
             event.kind == SAO_UI_INPUT_MOUSE_UP) {
             event.screen_x_px = GET_X_LPARAM(lparam);
             event.screen_y_px = GET_Y_LPARAM(lparam);
+        }
+        if (keyboard_event && compositor != nullptr) {
+            sao_ui_widget_handle_t panel_focus = nullptr;
+            sao_ui_widget_handle_t router_focus = nullptr;
+            (void)sao_ui_input_router_get_focus(handle, &router_focus, nullptr);
+            if (sao_ui_panel_input_current_focus_(compositor, &panel_focus) == SAO_STATUS_OK &&
+                panel_focus != nullptr && panel_focus != router_focus) {
+                (void)sao_ui_input_router_set_focus_widget(handle, panel_focus);
+            }
         }
         return sao_ui_input_router_route_event(handle, &event, out_consumed);
 #endif
@@ -1469,13 +1526,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
         if (event->kind == SAO_UI_INPUT_KEY_DOWN) {
             sao_status_t keyboard_status = SAO_STATUS_ERR_NOT_FOUND;
             if (event->virtual_key == 0x09U) {
-                keyboard_status = sao_ui_input_router_focus_next(handle,
-                                                                  (event->modifiers &
-                                                                   SAO_UI_MOD_SHIFT_BIT) != 0);
+                const bool reverse = (event->modifiers & SAO_UI_MOD_SHIFT_BIT) != 0;
+                sao_ui_widget_handle_t next = nullptr;
+                if (target != nullptr &&
+                    sao_ui_panel_input_focus_adjacent_(target, reverse, &next) == SAO_STATUS_OK &&
+                    next != nullptr) {
+                    keyboard_status = sao_ui_input_router_set_focus_widget(handle, next);
+                    if (keyboard_status == SAO_STATUS_OK)
+                        keyboard_status = sao_ui_panel_input_accept_keyboard_focus_(next);
+                } else {
+                    keyboard_status = sao_ui_input_router_focus_next(handle, reverse);
+                }
                 consumed = keyboard_status == SAO_STATUS_OK;
             } else if (key_is_activation(event->virtual_key)) {
+                sao_ui_sound_event_scope_t sound_scope = 0;
+                const sao_status_t scope_status = sao_ui_sound_event_begin(0, &sound_scope);
                 RouterCallbackScope callback_scope(handle);
                 int32_t activate_kind = -1;
+                bool dropdown_was_open = false;
                 if (target != nullptr &&
                     sao_ui_widget_get_kind(target, &activate_kind) == SAO_STATUS_OK &&
                     (activate_kind == SAO_UI_WIDGET_TABLE_EXT ||
@@ -1485,11 +1553,31 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                             ? sao_ui_widget_table_key_navigate(target, event->virtual_key)
                             : sao_ui_tree_view_key_navigate(target, event->virtual_key);
                 } else {
+                    if (activate_kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
+                        activate_kind == SAO_UI_WIDGET_DROPDOWN_BUTTON_EXT)
+                        (void)sao_ui_dropdown_button_popup_is_open(target, &dropdown_was_open);
                     keyboard_status = activate_widget(target);
                 }
                 if (keyboard_status == SAO_STATUS_OK && !lease.transition_is_current(transition))
                     return SAO_UI_STATUS_ERR_BUSY;
                 consumed = keyboard_status == SAO_STATUS_OK;
+                if (consumed && (activate_kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
+                                 activate_kind == SAO_UI_WIDGET_DROPDOWN_BUTTON_EXT))
+                    (void)sao_ui_panel_input_refresh_widget_(target);
+                if (consumed && dropdown_was_open)
+                    keyboard_status = sao_ui_panel_input_dispatch_control_action_(target);
+                if (consumed && dropdown_was_open)
+                    (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+                if (consumed && (activate_kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+                                 activate_kind == SAO_UI_WIDGET_BUTTON ||
+                                 activate_kind == SAO_UI_WIDGET_ICON_BUTTON))
+                    (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+                if (scope_status == SAO_STATUS_OK) {
+                    if (keyboard_status == SAO_STATUS_OK)
+                        (void)sao_ui_sound_event_commit(sound_scope);
+                    else
+                        (void)sao_ui_sound_event_cancel(sound_scope);
+                }
             } else if (target != nullptr &&
                        (event->virtual_key == 0x25U || event->virtual_key == 0x26U ||
                         event->virtual_key == 0x27U || event->virtual_key == 0x28U)) {
@@ -1499,6 +1587,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                     keyboard_status =
                         sao_ui_dropdown_button_popup_key(target, event->virtual_key);
                     consumed = keyboard_status == SAO_STATUS_OK;
+                    if (consumed)
+                        (void)sao_ui_panel_input_refresh_widget_(target);
+                    if (consumed && (event->virtual_key == 0x0dU || event->virtual_key == 0x20U))
+                        keyboard_status = sao_ui_panel_input_dispatch_control_action_(target);
                 } else {
                     int32_t arrow_kind = -1;
                     if (sao_ui_widget_get_kind(target, &arrow_kind) == SAO_STATUS_OK &&
@@ -1514,6 +1606,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                             event->virtual_key == 0x25U || event->virtual_key == 0x28U ? -1 : 1;
                         keyboard_status = sao_ui_widget_nudge_value(target, direction);
                         consumed = keyboard_status == SAO_STATUS_OK;
+                        if (consumed)
+                            (void)sao_ui_panel_input_refresh_widget_(target);
+                        int32_t nudge_kind = -1;
+                        if (consumed &&
+                            sao_ui_widget_get_kind(target, &nudge_kind) == SAO_STATUS_OK &&
+                            (nudge_kind == SAO_UI_WIDGET_SLIDER ||
+                             nudge_kind == SAO_UI_WIDGET_SLIDER_EXT))
+                            keyboard_status = sao_ui_panel_input_dispatch_control_action_(target);
                     }
                 }
             } else if (event->virtual_key == 0x1bU) {
@@ -1522,6 +1622,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
                     popup_open) {
                     keyboard_status = sao_ui_dropdown_button_popup_key(target, 0x1bU);
                     consumed = keyboard_status == SAO_STATUS_OK;
+                    if (consumed)
+                        (void)sao_ui_panel_input_refresh_widget_(target);
                 } else if (modal_active) {
                     keyboard_status = sao_ui_input_router_pop_modal(handle);
                     consumed = keyboard_status == SAO_STATUS_OK;

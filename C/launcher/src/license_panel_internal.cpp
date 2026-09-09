@@ -266,10 +266,34 @@ json section_node(std::string title, json children, std::string_view accent = "c
                 {"accent", accent}, {"children", std::move(children)}};
 }
 
+json dock_document(json nodes, std::string content_id, int min_width = 520) {
+    if (!nodes.is_array() || nodes.empty())
+        return json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
+    json top = std::move(nodes.front());
+    nodes.erase(nodes.begin());
+    top["dock"] = "top";
+    json content{{"type", "section"},
+                 {"id", std::move(content_id)},
+                 {"container", true},
+                 {"layout", "vertical"},
+                 {"width", 0},
+                 {"min_width", min_width},
+                 {"weight", 1.0F},
+                 {"dock", "fill"},
+                 {"scroll", {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}}},
+                 {"children", std::move(nodes)}};
+    return json{{"version", 1},
+                {"title", ""},
+                {"layout", "dock"},
+                {"nodes", json::array({std::move(top), std::move(content)})}};
+}
+
 json status_strip_node(std::string label, std::string message, std::string_view accent) {
-    return card_node("Status / 状态", json::array({row_node(json::array({
-        badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
-                     accent);
+    return card_node(
+        "状态",
+        json::array({row_node(json::array(
+            {badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
+        accent);
 }
 
 std::string tier_display(std::string_view tier) {
@@ -325,39 +349,41 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     }
     {
         json row = json::array();
-        row.push_back(button_node("license.copy_hwid", "Copy HWID / 复制 HWID", kCopyHwidAction,
-                                  json::object(), "ghost", snapshot.hwid_hex.empty() || snapshot.busy));
-        row.push_back(button_node("license.refresh", "Refresh / 刷新", kRefreshAction,
-                                  json::object(), "default", snapshot.busy));
+        row.push_back(button_node("license.copy_hwid", "复制 HWID", kCopyHwidAction, json::object(),
+                                  "ghost", snapshot.hwid_hex.empty() || snapshot.busy));
+        row.push_back(button_node("license.refresh", "刷新", kRefreshAction, json::object(),
+                                  "default", snapshot.busy));
         status.push_back(row_node(std::move(row)));
     }
-    nodes.push_back(section_node("License Status / 授权状态", std::move(status), accent));
+    nodes.push_back(card_node("授权与设备 / License", std::move(status), accent));
 
     json activation = json::array();
     activation.push_back(text_node("Activation key / 激活码", "muted", 22));
+    activation.push_back(text_node("已有激活码可在下方输入；也可以选择使用免费版。", "muted", 34));
     activation.push_back(input_node("license.key_input", snapshot.license_key, kKeyInputAction));
     json activation_actions = json::array();
-    activation_actions.push_back(button_node(
-        "license.activate", snapshot.busy ? "Activating... / 激活中..." : "Activate / 激活",
-        kActivateAction, json::object(), "primary", snapshot.busy));
-    activation_actions.push_back(button_node("license.skip", "Use Free Tier / 使用免费版", kSkipAction,
+    activation_actions.push_back(button_node("license.activate", snapshot.busy ? "激活中…" : "激活",
+                                             kActivateAction, json::object(), "primary",
+                                             snapshot.busy));
+    activation_actions.push_back(button_node("license.skip", "使用免费版", kSkipAction,
                                              json::object(), "ghost", snapshot.busy));
     activation.push_back(row_node(std::move(activation_actions)));
     if (snapshot.busy)
         activation.push_back(text_node("Verifying with license server... / 正在验证授权服务器...", "warn", 22));
-    nodes.push_back(section_node("Activation / 激活", std::move(activation), snapshot.busy ? "gold" : "cyan"));
+    nodes.push_back(
+        card_node("激活 / Activation", std::move(activation), snapshot.busy ? "gold" : "cyan"));
     if (!snapshot.error_text.empty()) {
         json msg = json::array();
         msg.push_back(text_node(snapshot.error_text, "danger", 28));
-        msg.push_back(button_node("license.error-retry", "Retry / 重试", kRefreshAction,
-                                  json::object(), "primary", snapshot.busy));
+        msg.push_back(button_node("license.error-retry", "重试", kRefreshAction, json::object(),
+                                  "primary", snapshot.busy));
         nodes.push_back(section_node("Error / 错误", std::move(msg), "danger"));
     } else if (!snapshot.status_text.empty()) {
         json msg = json::array();
         msg.push_back(text_node(snapshot.status_text, "muted", 28));
         nodes.push_back(section_node("Message / 消息", std::move(msg), snapshot.activated ? "ok" : "cyan"));
     }
-    std::string serialized = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+    std::string serialized = dock_document(std::move(nodes), "license-content").dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
     json compact = json::array();

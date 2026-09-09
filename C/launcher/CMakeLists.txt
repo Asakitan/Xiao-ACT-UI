@@ -260,6 +260,18 @@ add_executable(SaoAuto WIN32
     ${SAO_LAUNCHER_SOURCES}
     ${SAO_LAUNCHER_RESOURCES}
 )
+if(WIN32 AND TARGET sao::ui AND TARGET sao::plugin_ai_editor)
+    add_executable(sao_ui_preview WIN32 EXCLUDE_FROM_ALL preview/production_ui_host.cpp)
+    target_compile_features(sao_ui_preview PRIVATE cxx_std_20)
+    target_compile_definitions(sao_ui_preview PRIVATE UNICODE _UNICODE)
+    target_link_libraries(sao_ui_preview PRIVATE sao::ui sao::plugin_ai_editor user32 gdi32 ole32 shell32)
+    if(TARGET SaoAiEditor)
+        add_dependencies(sao_ui_preview SaoAiEditor)
+    endif()
+    if(MSVC)
+        target_compile_options(sao_ui_preview PRIVATE /utf-8)
+    endif()
+endif()
 if (TARGET sao::server::freetier::updater AND TARGET SaoAutoUpdateHelper)
     target_sources(SaoAuto PRIVATE src/auto_update.cpp)
     target_link_libraries(SaoAuto PRIVATE sao::server::freetier::updater)
@@ -501,15 +513,12 @@ set(SAO_LAUNCHER_DOCS_DETAIL_POPUP
 set(SAO_LAUNCHER_DOCS_SOUNDS_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/sounds")
 set(SAO_LAUNCHER_DOCS_SOUND_NAMES
-    "Dismiss.SAO.Launcher.mp3"
-    "Dismiss.SAO.Message.mp3"
-    "Feedback.SAO.Click.mp3"
-    "LinkStart.SAO.Kirito.mp3"
-    "Popup.SAO.Alert.mp3"
-    "Popup.SAO.Launcher.mp3"
-    "Popup.SAO.Menu.mp3"
-    "Popup.SAO.Panel.mp3"
-    "Startup.SAO.NerveGear.mp3")
+    "Dismiss.SAO.Launcher.wav"
+    "Dismiss.SAO.Message.wav"
+    "Feedback.SAO.Click.wav"
+    "Popup.SAO.Launcher.wav"
+    "Popup.SAO.Menu.wav"
+    "Popup.SAO.Panel.wav")
 set(SAO_LAUNCHER_DOCS_SOUND_FILES "")
 foreach (_sao_launcher_guide_sound IN LISTS SAO_LAUNCHER_DOCS_SOUND_NAMES)
     set(_sao_launcher_guide_sound_path

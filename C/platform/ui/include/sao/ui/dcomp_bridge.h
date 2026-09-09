@@ -148,6 +148,15 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
     uint32_t height,
     uint32_t stride);
 
+// Copy a GPU-composited BGRA8 texture into the current DirectComposition
+// swap-chain buffer without a CPU map/upload. The source must belong to the
+// bridge's D3D11 device, match width/height, and contain premultiplied alpha.
+// Owner-thread only; call present() afterwards.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dcomp_bridge_copy_texture(sao_ui_dcomp_bridge_handle_t handle,
+                                 void* d3d11_texture, // borrowed ID3D11Texture2D*
+                                 uint32_t width, uint32_t height);
+
 // ── Interop with WGL_NV_DX_interop2 ─────────────────────────────
 //
 // Explicit legacy gate: the D3D/DComp production host has no WGL context, so

@@ -6,6 +6,8 @@
 #include "sao/ui/theme.h"
 
 #include "menu_visual_internal.h"
+#include "panel_theme_internal.h"
+#include "../assets/classic/classic_icons.h"
 
 #if defined(_WIN32)
 #include "entity_authority_frames.h"
@@ -25,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -154,57 +157,57 @@ std::vector<OwnedRootItem> make_default_roots(bool nervgear_mode) {
     roots.push_back({
         "Control",
         "Control",
-        "C",
+        "",
         10,
         true,
         {
-            {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, false},
-            {nervgear_mode ? "NervGear: ON" : "NervGear: OFF", "◈",
+            {"置顶: OFF", "", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, false},
+            {nervgear_mode ? "NervGear: ON" : "NervGear: OFF", "",
              SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, true},
-            {"──────────", "─", -1, false},
-            {"Streaming Mode: OFF", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true},
-            {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, false},
-            {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, false},
-            {"──────────", "─", -1, false},
-            {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true},
+            {"──────────", "", -1, false},
+            {"Streaming Mode: OFF", "", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true},
+            {"鱼眼背景: 程序生成", "", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, false},
+            {"鱼眼背景: 实时截屏", "", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, false},
+            {"──────────", "", -1, false},
+            {"保存设置", "", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true},
         },
     });
     roots.push_back({
         "Tools",
         "Tools",
-        "T",
+        "",
         11,
         true,
         {
-            {"AI Editor (LLM)", "✦", SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, true},
-            {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, false},
-            {"Process Selector", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, false},
+            {"AI Editor (LLM)", "", SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, true},
+            {"Workshop", "", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, false},
+            {"Process Selector", "", SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR, false},
         },
     });
     roots.push_back({
         "Plugins",
         "Plugins",
-        "P",
+        "",
         12,
         true,
         {
-            {"插件管理面板 Manage", "⚙", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, false},
-            {"重载全部插件 Reload", "↻", SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, true},
-            {"无已启用面板插件 (去 Manage 启用)", "·", -1, false},
+            {"插件管理面板 Manage", "", SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER, false},
+            {"重载全部插件 Reload", "", SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS, true},
+            {"无已启用面板插件 (去 Manage 启用)", "", -1, false},
         },
     });
     roots.push_back({
         "Skins",
         "Skins",
-        "S",
+        "",
         13,
         true,
         {
-            {"全部 Light", "🎨", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true},
-            {"全部 Dark", "🌙", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true},
+            {"全部 Light", "", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true},
+            {"全部 Dark", "", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true},
         },
     });
-    roots.push_back({"About", "About", "?", SAO_UI_ENTITY_ACTION_OPEN_ABOUT, true, {}});
+    roots.push_back({"About", "About", "", SAO_UI_ENTITY_ACTION_OPEN_ABOUT, true, {}});
     return roots;
 }
 
@@ -572,6 +575,61 @@ void draw_line(Raster& raster, int32_t x0, int32_t y0, int32_t x1, int32_t y1, i
     }
 }
 
+std::optional<sao::ui::classic::IconId> classic_icon_for_action(int32_t action_id) noexcept {
+    using sao::ui::classic::IconId;
+    switch (action_id) {
+    case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
+        return IconId::Info;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
+        return IconId::Expand;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
+        return IconId::Lock;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
+        return IconId::Notification;
+    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
+        return IconId::Confirm;
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
+        return IconId::Tools;
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
+        return IconId::Search;
+    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
+        return IconId::Plugins;
+    case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
+        return IconId::Folder;
+    case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
+        return IconId::Search;
+    case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
+        return IconId::Plugins;
+    case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
+        return IconId::Refresh;
+    case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
+        return IconId::Notification;
+    case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
+        return IconId::Lock;
+    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+        return IconId::Home;
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+        return IconId::Lock;
+    default:
+        return std::nullopt;
+    }
+}
+
+void draw_classic_icon(Raster& raster, sao::ui::classic::IconId id, float x, float y, float size,
+                       Color color, BlendRounding rounding = BlendRounding::Nearest) {
+    const auto& definition = sao::ui::classic::definition(id);
+    const float scale = size / 24.0F;
+    const int32_t thickness = std::max(1, static_cast<int32_t>(std::lround(scale * 1.65F)));
+    for (size_t index = 0; index < definition.stroke_count; ++index) {
+        const auto& stroke = definition.strokes[index];
+        draw_line(raster, static_cast<int32_t>(std::lround(x + stroke.x1 * scale)),
+                  static_cast<int32_t>(std::lround(y + stroke.y1 * scale)),
+                  static_cast<int32_t>(std::lround(x + stroke.x2 * scale)),
+                  static_cast<int32_t>(std::lround(y + stroke.y2 * scale)), thickness, color,
+                  rounding);
+    }
+}
+
 using Glyph = std::array<uint8_t, 7>;
 
 constexpr std::array<Glyph, 26> kUppercaseGlyphs{{
@@ -685,6 +743,27 @@ uint8_t scaled_alpha(double base, double opacity) {
         std::clamp(static_cast<int32_t>(base * opacity), 0, 255));
 }
 
+Color panel_color(SaoUiColorToken token) noexcept {
+    const uint32_t argb = sao::ui::detail::panel_theme_color(token);
+    return {static_cast<uint8_t>((argb >> 16U) & 0xFFU), static_cast<uint8_t>((argb >> 8U) & 0xFFU),
+            static_cast<uint8_t>(argb & 0xFFU), static_cast<uint8_t>((argb >> 24U) & 0xFFU)};
+}
+
+Color alpha_color(Color color, uint8_t alpha) noexcept {
+    color.a = alpha;
+    return color;
+}
+
+Color fade_color(Color color, double opacity) noexcept {
+    color.a = scaled_alpha(color.a, opacity);
+    return color;
+}
+
+bool menu_decoration_enabled(const sao::ui::menu_visual::Snapshot& snapshot,
+                             bool high_contrast) noexcept {
+    return !high_contrast && !snapshot.reduced_motion && !snapshot.fps_pressure;
+}
+
 bool root_row_disabled(const sao::ui::menu_visual::RootRowSnapshot& row) {
     return !row.can_activate || row.state == SAO_UI_MENU_BTN_DISABLED;
 }
@@ -708,18 +787,27 @@ int32_t adaptive_corner_radius(int32_t width, int32_t height) {
 }
 
 void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot,
-                        size_t first_visible_child_index, int32_t pressed_child_index) {
-    constexpr Color kChildBackground{248, 248, 248, 255};
-    constexpr Color kChildHover{244, 238, 225, 255};
-    constexpr Color kChildText{100, 99, 100, 255};
-    constexpr Color kChildHoverText{98, 88, 70, 255};
-    constexpr Color kChildIcon{143, 149, 155, 255};
-    constexpr Color kActiveBorder{243, 175, 18, 255};
+                        size_t first_visible_child_index, int32_t pressed_child_index,
+                        bool classic_default_icons) {
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const bool decoration_enabled = menu_decoration_enabled(snapshot, high_contrast);
+    const Color child_background = panel_color(SAO_UI_TOKEN_CHILD_BG);
+    const Color child_hover = panel_color(SAO_UI_TOKEN_CHILD_HOVER);
+    const Color child_hover_text = panel_color(SAO_UI_TOKEN_CHILD_HOVER_FG);
+    const Color child_text = panel_color(SAO_UI_TOKEN_CHILD_TEXT);
+    const Color child_line = panel_color(SAO_UI_TOKEN_CHILD_LINE);
+    const Color child_icon = panel_color(SAO_UI_TOKEN_CHILD_ICON);
+    const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
+    const Color gold = panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_GOLD);
+    const Color disabled_bg = panel_color(SAO_UI_TOKEN_DISABLED_BG);
+    const Color disabled_border = panel_color(SAO_UI_TOKEN_DISABLED_BORDER);
+    const Color disabled_fg = panel_color(SAO_UI_TOKEN_DISABLED_FG);
+    const Color pressed_surface = panel_color(SAO_UI_TOKEN_PRESSED_SURFACE);
+    const Color app_bg = panel_color(SAO_UI_TOKEN_APP_BG);
 
     if (snapshot.active_root_idx >= 0 && snapshot.active_root_idx < kRootItemCount) {
         const int32_t center_y = kMenuPad + snapshot.active_root_idx * kMenuSlot + kMenuSlot / 2;
-        stroke_circle(raster, kMenuColumnCenter, center_y, 31, 2,
-                      Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b, 235},
+        stroke_circle(raster, kMenuColumnCenter, center_y, 31, 2, fade_color(gold, 0.92),
                       kChildBlendRounding);
     }
 
@@ -737,39 +825,41 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
     text_commands.reserve(static_cast<size_t>(row_count) * 2U);
 #endif
     const double opacity = 1.0 - std::clamp(static_cast<double>(snapshot.fade_t), 0.0, 1.0);
-    const uint8_t rail_glow_alpha = scaled_alpha(110.0, snapshot.child_rail_glow_t * opacity);
-    draw_line(raster, kChildLineCenterX - 2, kChildOriginY + 4,
-              kChildLineCenterX + 2, kChildOriginY + row_count * kChildRowStride - 4, 2,
-              Color{104, 228, 255, rail_glow_alpha}, kChildBlendRounding);
+    const uint8_t rail_glow_alpha =
+        decoration_enabled ? scaled_alpha(126.0, snapshot.child_rail_glow_t * opacity) : 0;
+    draw_line(raster, kChildLineCenterX - 2, kChildOriginY + 4, kChildLineCenterX + 2,
+              kChildOriginY + row_count * kChildRowStride - 4, 2,
+              alpha_color(accent, rail_glow_alpha), kChildBlendRounding);
     const int32_t line_height = row_count * kChildRowStride - 3;
     const int32_t line_top = kChildOriginY + 5;
-    const uint8_t line_alpha = scaled_alpha(210.0, opacity);
+    const uint8_t line_alpha = scaled_alpha(220.0, opacity);
     draw_line(raster, kChildLineCenterX, line_top + 5, kChildLineCenterX,
-              line_top + line_height - 5, 4, Color{212, 208, 208, line_alpha},
+              line_top + line_height - 5, 4, alpha_color(child_line, line_alpha),
               kChildBlendRounding);
     draw_line(raster, kChildLineCenterX, line_top + 5, kChildLineCenterX,
-              line_top + line_height - 5, 2, Color{156, 153, 153, line_alpha},
+              line_top + line_height - 5, 2, alpha_color(accent, scaled_alpha(150.0, opacity)),
               kChildBlendRounding);
-    fill_circle(raster, kChildLineCenterX, line_top + 5, 2,
-                Color{176, 176, 176, line_alpha}, kChildBlendRounding);
+    fill_circle(raster, kChildLineCenterX, line_top + 5, 2, alpha_color(child_line, line_alpha),
+                kChildBlendRounding);
     fill_circle(raster, kChildLineCenterX, line_top + line_height - 5, 2,
-                Color{176, 176, 176, line_alpha}, kChildBlendRounding);
+                alpha_color(child_line, line_alpha), kChildBlendRounding);
 
     constexpr int32_t kArrowCenterX = kChildOriginX + 10 + 3 + 6;
     const int32_t arrow_center_y = kChildOriginY + 5 + line_height / 2;
-    for (int32_t glow_radius = 6; glow_radius > 0; glow_radius -= 2) {
-        const int32_t glow_amount = static_cast<int32_t>(15.0 * (1.0 - glow_radius / 6.0));
-        fill_circle(raster, kArrowCenterX, arrow_center_y, glow_radius,
-                    Color{static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 3.5) & 0xFF),
-                          static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 2.2) & 0xFF),
-                          static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 0.3) & 0xFF),
-                          scaled_alpha(150.0, opacity)},
-                    kChildBlendRounding);
+    if (decoration_enabled) {
+        for (int32_t glow_radius = 6; glow_radius > 0; glow_radius -= 2) {
+            const int32_t glow_amount = static_cast<int32_t>(15.0 * (1.0 - glow_radius / 6.0));
+            fill_circle(raster, kArrowCenterX, arrow_center_y, glow_radius,
+                        {static_cast<uint8_t>(std::clamp(glow_amount * 4, 0, 255)),
+                         static_cast<uint8_t>(std::clamp(glow_amount * 2, 0, 255)),
+                         static_cast<uint8_t>(glow_amount), scaled_alpha(150.0, opacity)},
+                        kChildBlendRounding);
+        }
     }
-    fill_circle(raster, kArrowCenterX, arrow_center_y, 3,
-                Color{201, 184, 150, scaled_alpha(220.0, opacity)}, kChildBlendRounding);
-    stroke_circle(raster, kArrowCenterX, arrow_center_y, 3, 1,
-                  Color{212, 200, 168, scaled_alpha(220.0, opacity)}, kChildBlendRounding);
+    fill_circle(raster, kArrowCenterX, arrow_center_y, 3, fade_color(gold, opacity),
+                kChildBlendRounding);
+    stroke_circle(raster, kArrowCenterX, arrow_center_y, 3, 1, fade_color(accent, opacity),
+                  kChildBlendRounding);
 
     for (int32_t slot = 0; slot < row_count; ++slot) {
         const size_t logical_index = first_visible_child_index + static_cast<size_t>(slot);
@@ -782,47 +872,43 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
         const float hover = std::clamp(row.hover_t, 0.0F, 1.0F);
         const int32_t row_y = kChildOriginY + slot * kChildRowStride + (pressed ? 1 : 0);
         const int32_t radius = adaptive_corner_radius(row_width, kChildRowHeight);
-        Color background = disabled
-                               ? Color{230, 230, 230, scaled_alpha(185.0, opacity)}
-                           : pressed
-                               ? Color{233, 222, 198, scaled_alpha(248.0, opacity)}
-                               : lerp_rgb(kChildBackground, kChildHover, hover,
-                                          scaled_alpha(218.0 + 18.0 * hover, opacity));
-        Color foreground = disabled
-                               ? Color{148, 148, 148, scaled_alpha(210.0, opacity)}
-                               : lerp_rgb(kChildText, kChildHoverText, hover,
-                                          scaled_alpha(255.0, opacity));
-        Color icon = disabled
-                         ? Color{166, 166, 166, scaled_alpha(205.0, opacity)}
-                         : lerp_rgb(kChildIcon, kChildHoverText, hover,
-                                    scaled_alpha(245.0, opacity));
-        Color indicator = disabled
-                              ? Color{190, 190, 190, scaled_alpha(120.0, opacity)}
-                          : pressed
-                              ? Color{202, 142, 18, scaled_alpha(255.0, opacity)}
-                              : lerp_rgb(kChildBackground, kActiveBorder, hover,
-                                         scaled_alpha(235.0, opacity));
+        Color background = disabled  ? fade_color(disabled_bg, opacity)
+                           : pressed ? fade_color(pressed_surface, opacity)
+                                     : lerp_rgb(child_background, child_hover, hover,
+                                                scaled_alpha(255.0, opacity));
+        Color foreground =
+            disabled ? fade_color(disabled_fg, opacity)
+                     : lerp_rgb(child_text, child_hover_text, hover, scaled_alpha(255.0, opacity));
+        Color icon =
+            disabled ? fade_color(disabled_fg, opacity)
+                     : lerp_rgb(child_icon, child_hover_text, hover, scaled_alpha(245.0, opacity));
+        Color indicator =
+            disabled  ? fade_color(disabled_border, opacity)
+            : pressed ? fade_color(gold, opacity)
+                      : lerp_rgb(child_background, accent, hover, scaled_alpha(235.0, opacity));
         fill_rounded_rect(raster, entity_child_row_x(), row_y, row_width, kChildRowHeight, radius,
                           background, kChildBlendRounding);
-        stroke_rounded_rect(raster, entity_child_row_x(), row_y, row_width, kChildRowHeight, radius, 1,
-                            Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b,
-                                  scaled_alpha(pressed ? 190.0 : 72.0 * hover, opacity)},
-                            kChildBlendRounding);
+        stroke_rounded_rect(
+            raster, entity_child_row_x(), row_y, row_width, kChildRowHeight, radius, 1,
+            pressed ? fade_color(gold, opacity)
+                    : lerp_rgb(child_line, accent, hover, scaled_alpha(145.0, opacity)),
+            kChildBlendRounding);
         fill_rounded_rect(raster, entity_child_row_x(), row_y, 2, kChildRowHeight, 2, indicator,
                           kChildBlendRounding);
         if (!disabled && row_width > 20) {
-            const uint8_t glass_alpha = scaled_alpha(22.0 + 26.0 * hover, opacity);
+            const uint8_t glass_alpha =
+                decoration_enabled ? scaled_alpha(30.0 + 30.0 * hover, opacity) : 0;
             draw_line(raster, entity_child_row_x() + 8, row_y + 1,
                       entity_child_row_x() + row_width - 8, row_y + 1, 1,
-                      Color{255, 255, 255, glass_alpha}, kChildBlendRounding);
+                      alpha_color(panel_color(SAO_UI_TOKEN_WHITE), glass_alpha),
+                      kChildBlendRounding);
         }
-        if (!disabled && (hover > 0.05F || pressed)) {
-            const uint8_t spine_alpha = scaled_alpha(30.0 + 48.0 * hover +
-                                                         (pressed ? 24.0 : 0.0),
-                                                     opacity);
+        if (!disabled && decoration_enabled && (hover > 0.05F || pressed)) {
+            const uint8_t spine_alpha =
+                scaled_alpha(34.0 + 52.0 * hover + (pressed ? 24.0 : 0.0), opacity);
             draw_line(raster, kChildLineCenterX + 3, row_y + kChildRowHeight / 2,
                       entity_child_row_x(), row_y + kChildRowHeight / 2, 1,
-                      Color{104, 228, 255, spine_alpha}, kChildBlendRounding);
+                      alpha_color(accent, spine_alpha), kChildBlendRounding);
         }
 
         const int32_t icon_x = entity_child_row_x() + 2 + 8;
@@ -832,9 +918,25 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
         const int32_t caret_x = entity_child_row_x() + row_width - kChildRowPadRight - 6;
         const int32_t label_max_width =
             std::max(0, caret_x - kChildCaretWidth - kChildCaretGap - label_x);
+        if (row_width >= 24) {
+            const Color icon_well = pressed ? panel_color(SAO_UI_TOKEN_SELECTION) : app_bg;
+            fill_rounded_rect(raster, icon_x - 4, row_y + 7, 20, 30, 5,
+                              alpha_color(icon_well, scaled_alpha(120.0, opacity)),
+                              kChildBlendRounding);
+            stroke_rounded_rect(raster, icon_x - 4, row_y + 7, 20, 30, 5, 1,
+                                alpha_color(accent, scaled_alpha(72.0 + 80.0 * hover, opacity)),
+                                kChildBlendRounding);
+        }
         const std::string_view icon_text(row.icon_utf8.data());
+        const auto classic_id = classic_default_icons && icon_text.empty()
+                                    ? classic_icon_for_action(row.action_id)
+                                    : std::nullopt;
+        if (classic_id.has_value()) {
+            draw_classic_icon(raster, *classic_id, static_cast<float>(icon_x - 2),
+                              static_cast<float>(row_y + 12), 18.0F, icon, kChildBlendRounding);
+        }
 #if defined(_WIN32)
-        if (!icon_text.empty()) {
+        if (!classic_id.has_value() && !icon_text.empty()) {
             text_commands.push_back({icon_x,
                                      icon_y,
                                      kChildFallbackIconWidth,
@@ -858,7 +960,7 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                                      true});
         }
 #else
-        if (!icon_text.empty()) {
+        if (!classic_id.has_value() && !icon_text.empty()) {
             draw_text_clipped(raster, icon_x, icon_y, kChildFallbackIconWidth, icon_text, 1, icon,
                               kChildBlendRounding);
         }
@@ -869,13 +971,19 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
         }
 #endif
         if (!disabled && hover > 0.05F && row_width >= 18) {
-            const Color caret = lerp_rgb(kChildBackground, kChildHoverText, hover,
-                                         scaled_alpha(255.0, opacity));
+            const Color caret =
+                lerp_rgb(child_text, child_hover_text, hover, scaled_alpha(255.0, opacity));
             const int32_t caret_y = row_y + 15;
             draw_line(raster, caret_x, caret_y, caret_x + 3, caret_y + 3, 1, caret,
                       kChildBlendRounding);
             draw_line(raster, caret_x + 3, caret_y + 3, caret_x, caret_y + 6, 1, caret,
                       kChildBlendRounding);
+        }
+        if (slot + 1 < row_count && row_width > 16) {
+            draw_line(raster, entity_child_row_x() + 8, row_y + kChildRowHeight + 1,
+                      entity_child_row_x() + std::max(8, row_width - 8),
+                      row_y + kChildRowHeight + 1, 1,
+                      alpha_color(child_line, scaled_alpha(80.0, opacity)), kChildBlendRounding);
         }
     }
 #if defined(_WIN32)
@@ -1045,6 +1153,52 @@ Raster blend_authority_menu(const sao::ui::menu_visual::Snapshot& snapshot,
 }
 #endif
 
+void draw_classic_default_root_icons(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot,
+                                     const std::vector<OwnedRootItem>& roots) {
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const Color circle_bg = panel_color(SAO_UI_TOKEN_CIRCLE_BG);
+    const Color circle_hover_bg = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_BG);
+    const Color circle_active_bg = panel_color(SAO_UI_TOKEN_CIRCLE_ACTIVE_BG);
+    const Color circle_icon = panel_color(SAO_UI_TOKEN_CIRCLE_ICON);
+    const Color circle_hover_icon = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_ICON);
+    const Color circle_active_icon = panel_color(SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON);
+    const Color disabled_bg = panel_color(SAO_UI_TOKEN_DISABLED_BG);
+    const Color disabled_fg = panel_color(SAO_UI_TOKEN_DISABLED_FG);
+    const size_t visible = std::min(roots.size(), static_cast<size_t>(kRootItemCount));
+    for (size_t index = 0; index < visible; ++index) {
+        const auto id = classic_icon_for_action(roots[index].action_id);
+        if (!id.has_value())
+            continue;
+        const bool has_visual = index < snapshot.roots.size();
+        const auto& row =
+            has_visual ? snapshot.roots[index] : sao::ui::menu_visual::RootRowSnapshot{};
+        const bool disabled = has_visual && root_row_disabled(row);
+        const bool active = has_visual && row.state == SAO_UI_MENU_BTN_ACTIVE;
+        const float hover = has_visual ? std::clamp(row.hover_t, 0.0F, 1.0F) : 0.0F;
+        const float fisheye = has_visual ? std::clamp(row.fisheye_t, 0.0F, 1.0F) : 0.0F;
+        const float stagger = has_visual ? std::clamp(row.stagger_t, 0.0F, 1.0F) : 0.0F;
+        SaoUiMenuLayout visual_layout{};
+        visual_layout.button_size = sao::ui::menu_visual::kVisualButtonBaseSize;
+        visual_layout.button_max_size = sao::ui::menu_visual::kVisualButtonMaxSize;
+        const int32_t size =
+            sao::ui::menu_visual::visual_button_diameter(visual_layout, fisheye * stagger);
+        const int32_t center_y = kMenuPad + static_cast<int32_t>(index) * kMenuSlot + kMenuSlot / 2;
+        const Color well = disabled        ? disabled_bg
+                           : active        ? circle_active_bg
+                           : hover > 0.01F ? lerp_rgb(circle_bg, circle_hover_bg, hover, 255)
+                                           : circle_bg;
+        const Color icon = disabled        ? disabled_fg
+                           : active        ? circle_active_icon
+                           : hover > 0.01F ? circle_hover_icon
+                                           : circle_icon;
+        fill_circle(raster, kMenuColumnCenter, center_y, std::max(8, size / 2 - 9),
+                    alpha_color(well, high_contrast ? 255 : 235));
+        const float icon_size = std::max(20.0F, static_cast<float>(size) * 0.54F);
+        draw_classic_icon(raster, *id, static_cast<float>(kMenuColumnCenter) - icon_size * 0.5F,
+                          static_cast<float>(center_y) - icon_size * 0.5F, icon_size, icon);
+    }
+}
+
 Raster rasterize_nervegear(SaoUiNerveGearState state) {
 #if defined(_WIN32)
     Raster raster = copy_authority_frame(authority_frame_cache().frames[
@@ -1086,23 +1240,49 @@ Raster rasterize_generic_menu(int32_t pressed_index,
                               const std::vector<OwnedRootItem>& roots,
                               size_t first_visible_root_index) {
     Raster raster = make_raster(kMenuWidth, kMenuHeight);
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const bool decoration_enabled = menu_decoration_enabled(snapshot, high_contrast);
+    const Color app_bg = panel_color(SAO_UI_TOKEN_APP_BG);
+    const Color panel_card = panel_color(SAO_UI_TOKEN_APP_CARD);
+    const Color border = panel_color(SAO_UI_TOKEN_APP_BORDER);
+    const Color text = panel_color(SAO_UI_TOKEN_APP_TEXT);
+    const Color text_secondary = panel_color(SAO_UI_TOKEN_APP_TEXT_2);
+    const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
+    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color gold = panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_GOLD);
+    const Color circle_bg = panel_color(SAO_UI_TOKEN_CIRCLE_BG);
+    const Color circle_hover_bg = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_BG);
+    const Color circle_hover_icon = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_ICON);
+    const Color circle_active_bg = panel_color(SAO_UI_TOKEN_CIRCLE_ACTIVE_BG);
+    const Color circle_active_icon = panel_color(SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON);
+    const Color circle_icon = panel_color(SAO_UI_TOKEN_CIRCLE_ICON);
+    const Color circle_border = panel_color(SAO_UI_TOKEN_CIRCLE_BORDER);
+    const Color disabled_bg = panel_color(SAO_UI_TOKEN_DISABLED_BG);
+    const Color disabled_border = panel_color(SAO_UI_TOKEN_DISABLED_BORDER);
+    const Color disabled_fg = panel_color(SAO_UI_TOKEN_DISABLED_FG);
+    const Color pressed_surface = panel_color(SAO_UI_TOKEN_PRESSED_SURFACE);
     const float lens = std::clamp(snapshot.backdrop_lens_t, 0.0F, 1.0F);
-    for (int32_t radius = 48; radius >= 26; radius -= 6) {
-        const uint8_t alpha = static_cast<uint8_t>(12.0F * lens *
-                                                    (1.0F - radius / 60.0F));
-        fill_circle(raster, kMenuColumnCenter, kMenuPad, radius,
-                    Color{104, 228, 255, alpha});
+    if (decoration_enabled) {
+        for (int32_t radius = 48; radius >= 26; radius -= 6) {
+            const uint8_t alpha = static_cast<uint8_t>(12.0F * lens * (1.0F - radius / 60.0F));
+            fill_circle(raster, kMenuColumnCenter, kMenuPad, radius, alpha_color(cyan, alpha));
+        }
     }
-    fill_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30,
-              Color{248, 248, 248, static_cast<uint8_t>(150 + 105 * lens)});
-    fill_rect(raster, 34, 34, 2, kMenuHeight - 68, Color{104, 228, 255, 235});
-    fill_rect(raster, kMenuWidth - 36, 34, 2, kMenuHeight - 68, Color{212, 156, 23, 240});
-    draw_line(raster, 34, 34, 54, 34, 2, Color{104, 228, 255, 240});
-    draw_line(raster, 34, 34, 34, 54, 2, Color{104, 228, 255, 240});
-    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 54, kMenuHeight - 34, 2,
-              Color{212, 156, 23, 240});
-    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 54, 2,
-              Color{212, 156, 23, 240});
+    const uint8_t panel_alpha =
+        high_contrast ? 255 : static_cast<uint8_t>(std::max(190, static_cast<int>(panel_card.a)));
+    fill_rounded_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30, 16,
+                      alpha_color(panel_card, panel_alpha));
+    stroke_rounded_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30, 16, 1,
+                        alpha_color(border, high_contrast ? 255 : 220));
+    fill_rect(raster, 34, 34, 3, kMenuHeight - 68, alpha_color(accent, high_contrast ? 255 : 220));
+    fill_rect(raster, kMenuWidth - 37, 34, 3, kMenuHeight - 68,
+              alpha_color(gold, high_contrast ? 255 : 220));
+    draw_line(raster, 34, 34, 58, 34, 2, alpha_color(cyan, high_contrast ? 255 : 235));
+    draw_line(raster, 34, 34, 34, 58, 2, alpha_color(cyan, high_contrast ? 255 : 235));
+    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 58, kMenuHeight - 34, 2,
+              alpha_color(gold, high_contrast ? 255 : 235));
+    draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 58, 2,
+              alpha_color(gold, high_contrast ? 255 : 235));
 
     const size_t available =
         first_visible_root_index < roots.size() ? roots.size() - first_visible_root_index : 0U;
@@ -1115,19 +1295,17 @@ Raster rasterize_generic_menu(int32_t pressed_index,
         const auto& root = roots[first_visible_root_index + slot];
         const int32_t physical_index = static_cast<int32_t>(slot);
         const bool has_visual = slot < snapshot.roots.size();
-        const bool disabled = has_visual && root_row_disabled(snapshot.roots[slot]);
-        const float hover = has_visual ? std::clamp(snapshot.roots[slot].hover_t, 0.0F, 1.0F)
-                           : 0.0F;
-        const float fisheye = has_visual
-                                  ? std::clamp(snapshot.roots[slot].fisheye_t, 0.0F, 1.0F)
-                                  : 0.0F;
-        const float stagger = has_visual ? std::clamp(snapshot.roots[slot].stagger_t, 0.0F, 1.0F)
-                             : 0.0F;
-        const float trail = has_visual ? std::clamp(snapshot.roots[slot].selection_trail_t, 0.0F, 1.0F)
-                           : 0.0F;
-        const float pulse = has_visual ? std::clamp(snapshot.roots[slot].pressed_pulse_t, 0.0F, 1.0F)
-                           : 0.0F;
+        const sao::ui::menu_visual::RootRowSnapshot row =
+            has_visual ? snapshot.roots[slot] : sao::ui::menu_visual::RootRowSnapshot{};
+        const bool disabled = has_visual && root_row_disabled(row);
+        const bool active = has_visual && row.state == SAO_UI_MENU_BTN_ACTIVE;
+        const float hover = has_visual ? std::clamp(row.hover_t, 0.0F, 1.0F) : 0.0F;
+        const float fisheye = has_visual ? std::clamp(row.fisheye_t, 0.0F, 1.0F) : 0.0F;
+        const float stagger = has_visual ? std::clamp(row.stagger_t, 0.0F, 1.0F) : 0.0F;
+        const float trail = has_visual ? std::clamp(row.selection_trail_t, 0.0F, 1.0F) : 0.0F;
+        const float pulse = has_visual ? std::clamp(row.pressed_pulse_t, 0.0F, 1.0F) : 0.0F;
         const bool pressed = !disabled && physical_index == pressed_index;
+        const bool hovered = hover > 0.01F || (has_visual && row.state == SAO_UI_MENU_BTN_HOVER);
         SaoUiMenuLayout visual_layout{};
         visual_layout.button_size = sao::ui::menu_visual::kVisualButtonBaseSize;
         visual_layout.button_max_size = sao::ui::menu_visual::kVisualButtonMaxSize;
@@ -1140,26 +1318,54 @@ Raster rasterize_generic_menu(int32_t pressed_index,
                                                                  stagger)) +
                                  (pressed ? 2 : 0);
         if (trail > 0.01F)
-            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 +
-                          static_cast<int32_t>(std::lround(8.0F * trail)), 2,
-                          Color{104, 228, 255, static_cast<uint8_t>(180.0F * trail)});
+            stroke_circle(raster, kMenuColumnCenter, center_y,
+                          size / 2 + static_cast<int32_t>(std::lround(8.0F * trail)), 2,
+                          alpha_color(gold, scaled_alpha(220.0, trail)));
         if (pulse > 0.01F)
-            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 +
-                          static_cast<int32_t>(std::lround(12.0F * (1.0F - pulse))), 2,
-                          Color{212, 156, 23, static_cast<uint8_t>(210.0F * pulse)});
-        fill_circle(raster, kMenuColumnCenter, center_y, size / 2,
-                disabled ? Color{224, 226, 228, 185}
-                : pressed ? Color{232, 219, 191, 248}
-                      : lerp_rgb(Color{247, 248, 248, 255}, Color{237, 247, 250, 255},
-                         hover, static_cast<uint8_t>(220 + 15 * hover)));
-        stroke_circle(raster, kMenuColumnCenter, center_y, size / 2, 2,
-                  disabled ? Color{150, 154, 158, 175}
-                  : pressed ? Color{212, 156, 23, 250}
-                  : root.action_id == SAO_UI_ENTITY_ACTION_OPEN_ABOUT
-                  ? Color{212, 156, 23, 245}
-                  : Color{88, 152, 190, 225});
+            stroke_circle(raster, kMenuColumnCenter, center_y,
+                          size / 2 + static_cast<int32_t>(std::lround(12.0F * (1.0F - pulse))), 2,
+                          alpha_color(gold, scaled_alpha(230.0, pulse)));
+        Color fill = disabled  ? disabled_bg
+                     : active  ? circle_active_bg
+                     : hovered ? lerp_rgb(circle_bg, circle_hover_bg, hover, 255)
+                               : circle_bg;
+        const double fill_opacity = high_contrast ? 1.0 : 0.86 + 0.14 * stagger;
+        fill_circle(
+            raster, kMenuColumnCenter, center_y, size / 2,
+            alpha_color(fill, scaled_alpha(std::max(180, static_cast<int>(fill.a)), fill_opacity)));
+        const int32_t well_radius = std::max(2, size / 2 - 7);
+        const Color well = active ? circle_active_bg : app_bg;
+        fill_circle(raster, kMenuColumnCenter, center_y, well_radius,
+                    alpha_color(well, scaled_alpha(high_contrast ? 220.0 : 150.0, fill_opacity)));
+        Color edge = disabled ? disabled_border : active ? gold : hovered ? accent : circle_border;
+        stroke_circle(raster, kMenuColumnCenter, center_y, size / 2, active || hovered ? 2 : 1,
+                      alpha_color(edge, high_contrast ? 255 : (active ? 245 : 220)));
+        if (hovered)
+            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 + 2, 1,
+                          alpha_color(accent, high_contrast ? 255 : scaled_alpha(150.0, hover)));
+        if (active)
+            stroke_circle(raster, kMenuColumnCenter, center_y, size / 2 + 3, 2,
+                          alpha_color(gold, high_contrast ? 255 : 205));
+
+        const Color icon_color = disabled  ? disabled_fg
+                                 : active  ? circle_active_icon
+                                 : hovered ? circle_hover_icon
+                                           : circle_icon;
+        const auto classic_id =
+            root.icon.empty() ? classic_icon_for_action(root.action_id) : std::nullopt;
+        if (classic_id.has_value()) {
+            const int32_t icon_cover_radius = std::max(6, size / 2 - 10);
+            fill_circle(
+                raster, kMenuColumnCenter, center_y, icon_cover_radius,
+                alpha_color(well, scaled_alpha(high_contrast ? 240.0 : 190.0, fill_opacity)),
+                BlendRounding::Nearest);
+            const float icon_size = std::max(16.0F, static_cast<float>(size) * 0.56F);
+            draw_classic_icon(
+                raster, *classic_id, static_cast<float>(kMenuColumnCenter) - icon_size * 0.5F,
+                static_cast<float>(center_y) - icon_size * 0.5F, icon_size, icon_color);
+        }
 #if defined(_WIN32)
-        if (!root.icon.empty()) {
+        if (!classic_id.has_value() && !root.icon.empty()) {
             text_commands.push_back({kMenuColumnCenter - 10,
                                      center_y - 12,
                                      20,
@@ -1167,12 +1373,12 @@ Raster rasterize_generic_menu(int32_t pressed_index,
                                      root.icon,
                                      sao::ui::entity_text::FontRole::Icon,
                                      15.0F,
-                                     {static_cast<uint8_t>(disabled ? 148 : 100),
-                                      static_cast<uint8_t>(disabled ? 148 : 99),
-                                      static_cast<uint8_t>(disabled ? 148 : 100), 255},
+                                     {icon_color.r, icon_color.g, icon_color.b,
+                                      high_contrast ? uint8_t{255} : icon_color.a},
                                      true});
         }
         if (!root.name.empty()) {
+            const Color label_color = disabled ? disabled_fg : active ? circle_active_icon : text;
             text_commands.push_back({118,
                                      center_y - 8,
                                      kMenuWidth - 140,
@@ -1180,20 +1386,27 @@ Raster rasterize_generic_menu(int32_t pressed_index,
                                      root.name,
                                      sao::ui::entity_text::FontRole::Label,
                                      11.0F,
-                                     {static_cast<uint8_t>(disabled ? 148 : 100),
-                                      static_cast<uint8_t>(disabled ? 148 : 99),
-                                      static_cast<uint8_t>(disabled ? 148 : 100), 255},
+                                     {label_color.r, label_color.g, label_color.b,
+                                      high_contrast ? uint8_t{255} : label_color.a},
                                      true});
         }
 #else
-        draw_text_clipped(raster, kMenuColumnCenter - 5, center_y - 7, 12, root.icon, 2,
-                          Color{100, 99, 100, 255});
+        if (!classic_id.has_value() && !root.icon.empty())
+            draw_text_clipped(raster, kMenuColumnCenter - 5, center_y - 7, 12, root.icon, 2,
+                              icon_color);
         draw_text_clipped(raster, 118, center_y - 7, kMenuWidth - 140, root.name, 1,
-                          pressed ? Color{98, 88, 70, 255} : Color{100, 99, 100, 255},
+                          disabled ? disabled_fg
+                          : active ? circle_active_icon
+                                   : text,
                           BlendRounding::Nearest, true);
 #endif
+        const Color separator = hovered || active ? accent : border;
         draw_line(raster, 113, center_y + 15, kMenuWidth - 19, center_y + 15, 1,
-                  Color{188, 196, 202, 145});
+                  alpha_color(separator, high_contrast ? 220 : 145));
+        if (slot + 1 < visible) {
+            draw_line(raster, 118, center_y + 28, kMenuWidth - 26, center_y + 28, 1,
+                      alpha_color(text_secondary, high_contrast ? 150 : 58));
+        }
     }
 #if defined(_WIN32)
     const sao::ui::entity_text::BgraSurface surface{
@@ -1210,66 +1423,116 @@ Raster rasterize_generic_menu(int32_t pressed_index,
     return raster;
 }
 
+void draw_authority_menu_accents(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot,
+                                 int32_t pressed_index) {
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const bool decoration_enabled = menu_decoration_enabled(snapshot, high_contrast);
+    const Color accent = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color gold = panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_GOLD);
+    const int32_t pulse_index =
+        snapshot.pressed_pulse_idx >= 0 ? snapshot.pressed_pulse_idx : pressed_index;
+    const size_t visible = std::min(snapshot.roots.size(), static_cast<size_t>(kRootItemCount));
+    for (size_t index = 0; index < visible; ++index) {
+        const auto& row = snapshot.roots[index];
+        const int32_t center_y = kMenuPad + static_cast<int32_t>(index) * kMenuSlot + kMenuSlot / 2;
+        const bool active = row.state == SAO_UI_MENU_BTN_ACTIVE;
+        if (row.hover_t > 0.02F)
+            stroke_circle(raster, kMenuColumnCenter, center_y, 31, 1,
+                          alpha_color(accent, high_contrast ? 255 : 130));
+        if (active)
+            stroke_circle(raster, kMenuColumnCenter, center_y, 32, 2,
+                          alpha_color(gold, high_contrast ? 255 : 220));
+        if (decoration_enabled && row.selection_trail_t > 0.01F)
+            stroke_circle(raster, kMenuColumnCenter, center_y,
+                          34 + static_cast<int32_t>(std::lround(6.0F * row.selection_trail_t)), 2,
+                          alpha_color(gold, scaled_alpha(205.0, row.selection_trail_t)));
+        if (decoration_enabled && static_cast<int32_t>(index) == pulse_index &&
+            row.pressed_pulse_t > 0.01F)
+            stroke_circle(
+                raster, kMenuColumnCenter, center_y,
+                35 + static_cast<int32_t>(std::lround(10.0F * (1.0F - row.pressed_pulse_t))), 2,
+                alpha_color(gold, scaled_alpha(220.0, row.pressed_pulse_t)));
+    }
+}
+
+void draw_finite_menu_effects(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot) {
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    if (!menu_decoration_enabled(snapshot, high_contrast))
+        return;
+    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color gold = panel_color(SAO_UI_TOKEN_CORNER_GOLD);
+    const float spark_t = std::max(snapshot.open_spark_t, snapshot.selection_spark_t);
+    const uint32_t spark_count =
+        std::min<uint32_t>(24U, snapshot.open_spark_count + snapshot.selection_spark_count);
+    for (uint32_t spark = 0; spark < spark_count; ++spark) {
+        const float angle = static_cast<float>(spark) * 0.78539816339F;
+        const float distance = 42.0F + 24.0F * (1.0F - spark_t);
+        const int32_t x0 =
+            kMenuColumnCenter + static_cast<int32_t>(std::lround(28.0F * std::cos(angle)));
+        const int32_t y0 = kMenuPad + static_cast<int32_t>(std::lround(28.0F * std::sin(angle)));
+        const int32_t x1 =
+            kMenuColumnCenter + static_cast<int32_t>(std::lround(distance * std::cos(angle)));
+        const int32_t y1 = kMenuPad + static_cast<int32_t>(std::lround(distance * std::sin(angle)));
+        draw_line(
+            raster, x0, y0, x1, y1, 1,
+            alpha_color((spark & 1U) == 0U ? cyan : gold, static_cast<uint8_t>(180.0F * spark_t)));
+    }
+
+    const float sweep = std::clamp(snapshot.ambient_phase_t, 0.0F, 1.0F);
+    if (sweep <= 0.0F || sweep >= 1.0F)
+        return;
+    const float envelope = std::sin(3.14159265359F * sweep);
+    const int32_t scanline_y = 38 + static_cast<int32_t>(std::lround(sweep * (kMenuHeight - 76)));
+    draw_line(raster, 38, scanline_y, kMenuWidth - 38, scanline_y, 1,
+              alpha_color(cyan, scaled_alpha(118.0, envelope)));
+    if (scanline_y > 45)
+        draw_line(raster, 38, scanline_y - 7, kMenuWidth - 38, scanline_y - 7, 1,
+                  alpha_color(cyan, scaled_alpha(32.0, envelope)));
+    if (scanline_y < kMenuHeight - 45)
+        draw_line(raster, 38, scanline_y + 7, kMenuWidth - 38, scanline_y + 7, 1,
+                  alpha_color(cyan, scaled_alpha(24.0, envelope)));
+    const int32_t cyan_marker_y =
+        34 + static_cast<int32_t>(std::lround(sweep * (kMenuHeight - 68)));
+    const float gold_sweep = std::fmod(sweep + 0.5F, 1.0F);
+    const int32_t gold_marker_y =
+        34 + static_cast<int32_t>(std::lround(gold_sweep * (kMenuHeight - 68)));
+    draw_line(raster, 31, cyan_marker_y, 38, cyan_marker_y, 1,
+              alpha_color(cyan, scaled_alpha(110.0, envelope)));
+    draw_line(raster, kMenuWidth - 38, gold_marker_y, kMenuWidth - 31, gold_marker_y, 1,
+              alpha_color(gold, scaled_alpha(96.0, envelope)));
+}
+
 Raster rasterize_menu(int32_t pressed_index, int32_t pressed_child_index,
                       const sao::ui::menu_visual::Snapshot& snapshot,
                       size_t first_visible_child_index, const std::vector<OwnedRootItem>& roots,
                       size_t first_visible_root_index) {
+    const bool authority = is_default_root_view(roots, first_visible_root_index);
 #if defined(_WIN32)
-    Raster raster;
-    if (is_default_root_view(roots, first_visible_root_index)) {
-        raster = blend_authority_menu(snapshot, pressed_index);
-    } else {
-        raster = rasterize_generic_menu(pressed_index, snapshot, roots, first_visible_root_index);
-    }
+    Raster raster = authority ? blend_authority_menu(snapshot, pressed_index)
+                              : rasterize_generic_menu(pressed_index, snapshot, roots,
+                                                       first_visible_root_index);
 #else
     Raster raster =
         rasterize_generic_menu(pressed_index, snapshot, roots, first_visible_root_index);
 #endif
-    if (!snapshot.reduced_motion && !snapshot.fps_pressure) {
-        const float spark_t = std::max(snapshot.open_spark_t, snapshot.selection_spark_t);
-        const uint32_t spark_count = std::min<uint32_t>(24U,
-                                                        snapshot.open_spark_count +
-                                                        snapshot.selection_spark_count);
-        for (uint32_t spark = 0; spark < spark_count; ++spark) {
-            const float angle = static_cast<float>(spark) * 0.78539816339F;
-            const float distance = 42.0F + 24.0F * (1.0F - spark_t);
-            const int32_t x0 = kMenuColumnCenter + static_cast<int32_t>(std::lround(28.0F * std::cos(angle)));
-            const int32_t y0 = kMenuPad + static_cast<int32_t>(std::lround(28.0F * std::sin(angle)));
-            const int32_t x1 = kMenuColumnCenter + static_cast<int32_t>(std::lround(distance * std::cos(angle)));
-            const int32_t y1 = kMenuPad + static_cast<int32_t>(std::lround(distance * std::sin(angle)));
-            draw_line(raster, x0, y0, x1, y1, 1,
-                      Color{104, 228, 255, static_cast<uint8_t>(180.0F * spark_t)});
-        }
-    }
-    if (!snapshot.reduced_motion && !snapshot.fps_pressure) {
-        const float ambient_phase = std::clamp(snapshot.ambient_phase_t, 0.0F, 1.0F);
-        const int32_t scanline_y =
-            38 + static_cast<int32_t>(std::lround(ambient_phase * (kMenuHeight - 76)));
-        draw_line(raster, 38, scanline_y, kMenuWidth - 38, scanline_y, 1,
-                  Color{104, 228, 255, 78});
-        if (scanline_y > 45)
-            draw_line(raster, 38, scanline_y - 7, kMenuWidth - 38, scanline_y - 7, 1,
-                      Color{104, 228, 255, 22});
-        if (scanline_y < kMenuHeight - 45)
-            draw_line(raster, 38, scanline_y + 7, kMenuWidth - 38, scanline_y + 7, 1,
-                      Color{104, 228, 255, 16});
-        const int32_t cyan_marker_y =
-            34 + static_cast<int32_t>(std::lround(ambient_phase * (kMenuHeight - 68)));
-        const float gold_phase = std::fmod(ambient_phase + 0.5F, 1.0F);
-        const int32_t gold_marker_y =
-            34 + static_cast<int32_t>(std::lround(gold_phase * (kMenuHeight - 68)));
-        draw_line(raster, 31, cyan_marker_y, 38, cyan_marker_y, 1,
-                  Color{104, 228, 255, 76});
-        draw_line(raster, kMenuWidth - 38, gold_marker_y, kMenuWidth - 31, gold_marker_y, 1,
-                  Color{212, 156, 23, 70});
-    }
-    draw_line(raster, 34, 34, 54, 34, 2, Color{104, 228, 255, 210});
-    draw_line(raster, 34, 34, 34, 54, 2, Color{104, 228, 255, 210});
+#if defined(_WIN32)
+    if (authority)
+        draw_classic_default_root_icons(raster, snapshot, roots);
+#endif
+    if (authority)
+        draw_authority_menu_accents(raster, snapshot, pressed_index);
+    draw_finite_menu_effects(raster, snapshot);
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color gold =
+        panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_CORNER_GOLD);
+    draw_line(raster, 34, 34, 54, 34, 2, alpha_color(cyan, high_contrast ? 255 : 210));
+    draw_line(raster, 34, 34, 34, 54, 2, alpha_color(cyan, high_contrast ? 255 : 210));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 54, kMenuHeight - 34, 2,
-              Color{212, 156, 23, 210});
+              alpha_color(gold, high_contrast ? 255 : 210));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 54, 2,
-              Color{212, 156, 23, 210});
-    draw_child_overlay(raster, snapshot, first_visible_child_index, pressed_child_index);
+              alpha_color(gold, high_contrast ? 255 : 210));
+    draw_child_overlay(raster, snapshot, first_visible_child_index, pressed_child_index, authority);
     return raster;
 }
 
@@ -1326,6 +1589,15 @@ struct sao_ui_entity_shell_s {
     bool menu_visible{};
     bool nervgear_mode{true};
     bool visual_dirty{true};
+    bool menu_raster_dirty{true};
+    bool nervegear_raster_dirty{true};
+    bool menu_raster_valid{};
+    bool nervegear_raster_valid{};
+    uint64_t menu_raster_signature{};
+    uint64_t nervegear_raster_signature{};
+    uint64_t raster_theme_generation{};
+    bool menu_effects_applied{};
+    SaoUiLayerEffects applied_menu_effects{};
     bool input_region_settle_pending{};
     bool destroy_pending{};
     bool destroy_finalizer_scheduled{};
@@ -1342,6 +1614,159 @@ struct sao_ui_entity_shell_s {
     std::thread::id owner_thread;
     mutable std::mutex mutex;
 };
+
+void invalidate_menu_raster_locked(sao_ui_entity_shell_s* shell) {
+    shell->menu_raster_dirty = true;
+}
+
+void invalidate_nervegear_raster_locked(sao_ui_entity_shell_s* shell) {
+    shell->nervegear_raster_dirty = true;
+}
+
+void invalidate_rasters_locked(sao_ui_entity_shell_s* shell) {
+    shell->menu_raster_dirty = true;
+    shell->nervegear_raster_dirty = true;
+    shell->menu_raster_valid = false;
+    shell->nervegear_raster_valid = false;
+}
+
+void signature_mix(uint64_t* value, uint64_t next) noexcept {
+    *value ^= next + 0x9E3779B97F4A7C15ULL + (*value << 6U) + (*value >> 2U);
+}
+
+void signature_mix_float(uint64_t* value, float next) noexcept {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &next, sizeof(bits));
+    signature_mix(value, bits);
+}
+
+void signature_mix_string(uint64_t* value, std::string_view next) noexcept {
+    signature_mix(value, next.size());
+    for (const unsigned char character : next)
+        signature_mix(value, character);
+}
+
+uint64_t compute_menu_raster_signature(const sao_ui_entity_shell_s* shell,
+                                       const sao::ui::menu_visual::Snapshot& snapshot,
+                                       uint64_t theme_generation) noexcept {
+    uint64_t signature = 0xCBF29CE484222325ULL;
+    signature_mix(&signature, theme_generation);
+    signature_mix(&signature, shell->roots.size());
+    for (const auto& root : shell->roots) {
+        signature_mix_string(&signature, root.id);
+        signature_mix_string(&signature, root.name);
+        signature_mix_string(&signature, root.icon);
+        signature_mix(&signature, static_cast<uint64_t>(static_cast<int64_t>(root.action_id) + 1));
+        signature_mix(&signature, root.can_activate ? 1U : 0U);
+        signature_mix(&signature, root.children.size());
+        for (const auto& child : root.children) {
+            signature_mix_string(&signature, child.name);
+            signature_mix_string(&signature, child.icon);
+            signature_mix(&signature,
+                          static_cast<uint64_t>(static_cast<int64_t>(child.action_id) + 1));
+            signature_mix(&signature, child.can_activate ? 1U : 0U);
+        }
+    }
+    signature_mix(&signature, shell->first_visible_root_index);
+    signature_mix(&signature, shell->first_visible_child_index);
+    signature_mix(&signature, static_cast<uint64_t>(shell->menu_pressed_index + 1));
+    signature_mix(&signature, static_cast<uint64_t>(shell->menu_pressed_child_index + 1));
+    signature_mix(&signature, shell->menu_visible ? 1U : 0U);
+    signature_mix(&signature, snapshot.revision);
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.phase));
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.active_root_idx + 1));
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.displayed_parent_idx + 1));
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.child_hover_idx + 1));
+    signature_mix_float(&signature, snapshot.fade_t);
+    signature_mix_float(&signature, snapshot.transition_eased_t);
+    signature_mix_float(&signature, snapshot.center_diffusion_t);
+    signature_mix_float(&signature, snapshot.close_suction_t);
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.selection_trail_idx + 1));
+    signature_mix_float(&signature, snapshot.selection_trail_t);
+    signature_mix(&signature, static_cast<uint64_t>(snapshot.pressed_pulse_idx + 1));
+    signature_mix_float(&signature, snapshot.pressed_pulse_t);
+    signature_mix_float(&signature, snapshot.child_rail_glow_t);
+    signature_mix_float(&signature, snapshot.backdrop_lens_t);
+    signature_mix_float(&signature, snapshot.ambient_phase_t);
+    signature_mix_float(&signature, snapshot.open_spark_t);
+    signature_mix_float(&signature, snapshot.selection_spark_t);
+    signature_mix(&signature, snapshot.open_spark_count);
+    signature_mix(&signature, snapshot.selection_spark_count);
+    signature_mix(&signature, snapshot.reduced_motion ? 1U : 0U);
+    signature_mix(&signature, snapshot.fps_pressure ? 1U : 0U);
+    signature_mix(&signature, snapshot.roots.size());
+    for (const auto& row : snapshot.roots) {
+        signature_mix(&signature, row.can_activate ? 1U : 0U);
+        signature_mix(&signature, static_cast<uint64_t>(row.state));
+        signature_mix_float(&signature, row.hover_t);
+        signature_mix_float(&signature, row.fisheye_t);
+        signature_mix_float(&signature, row.stagger_t);
+        signature_mix_float(&signature, row.selection_trail_t);
+        signature_mix_float(&signature, row.pressed_pulse_t);
+    }
+    signature_mix(&signature, snapshot.rows.size());
+    for (const auto& row : snapshot.rows) {
+        signature_mix(&signature, row.can_activate ? 1U : 0U);
+        signature_mix(&signature, static_cast<uint64_t>(row.state));
+        signature_mix(&signature, static_cast<uint64_t>(row.visible_width_px));
+        signature_mix_float(&signature, row.hover_t);
+        signature_mix_float(&signature, row.stagger_t);
+        signature_mix_float(&signature, row.radial_t);
+        signature_mix_float(&signature, row.selection_trail_t);
+        signature_mix_float(&signature, row.pressed_pulse_t);
+    }
+    return signature;
+}
+
+uint64_t compute_nervegear_raster_signature(const sao_ui_entity_shell_s* shell,
+                                            SaoUiNerveGearState state,
+                                            uint64_t theme_generation) noexcept {
+    uint64_t signature = 0x84222325CBF29CE4ULL;
+    signature_mix(&signature, theme_generation);
+    signature_mix(&signature, static_cast<uint64_t>(state));
+    signature_mix(&signature, shell->nervgear_mode ? 1U : 0U);
+    return signature;
+}
+
+bool layer_effects_equal(const SaoUiLayerEffects& left, const SaoUiLayerEffects& right) noexcept {
+    if (left.struct_size != right.struct_size || left.flags != right.flags ||
+        left.blur_sigma != right.blur_sigma || left.shadow_sigma != right.shadow_sigma ||
+        left.shadow_offset_x != right.shadow_offset_x ||
+        left.shadow_offset_y != right.shadow_offset_y || left.shadow_argb != right.shadow_argb ||
+        left.reserved != right.reserved) {
+        return false;
+    }
+    for (size_t index = 0; index < 20U; ++index) {
+        if (left.color_matrix[index] != right.color_matrix[index])
+            return false;
+    }
+    return true;
+}
+
+sao_status_t apply_menu_effects_locked(sao_ui_entity_shell_s* shell) {
+    if (shell->menu_layer == nullptr || shell->host == nullptr)
+        return SAO_STATUS_OK;
+    SaoUiLayerEffects effects{};
+    sao_status_t status = sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MENU, &effects);
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (shell->reduced_motion || shell->fps_pressure ||
+        sao::ui::detail::panel_theme_high_contrast()) {
+        effects.flags &= ~SAO_UI_LAYER_EFFECT_BACKDROP_BLUR;
+        effects.blur_sigma = 0.0F;
+    } else {
+        effects.blur_sigma *= 0.82F;
+    }
+    if (shell->menu_effects_applied && layer_effects_equal(shell->applied_menu_effects, effects))
+        return SAO_STATUS_OK;
+    shell->menu_effects_applied = false;
+    status = sao_ui_layer_set_effects(shell->menu_layer, &effects);
+    if (status == SAO_STATUS_OK) {
+        shell->applied_menu_effects = effects;
+        shell->menu_effects_applied = true;
+    }
+    return status;
+}
 
 namespace {
 
@@ -1591,6 +2016,7 @@ sao_status_t sync_child_viewport_locked(
     shell->displayed_child_parent_index = next_parent;
     shell->first_visible_child_index = next_first;
     shell->visual_dirty = true;
+    invalidate_menu_raster_locked(shell);
     return clear_child_interaction_locked(shell);
 }
 
@@ -1713,6 +2139,8 @@ sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visib
         return status;
     shell->menu_visible = visible;
     shell->visual_dirty = shell->visual_dirty || changed;
+    if (changed)
+        invalidate_menu_raster_locked(shell);
     if (!visible) {
         shell->active_root_id.clear();
         shell->menu_hover_index = -1;
@@ -1771,8 +2199,10 @@ sao_status_t refresh_host_geometry_locked(sao_ui_entity_shell_s* shell) {
                                                         shell->nervegear_y));
     status = first_failure(
         status, sao_ui_layer_set_position(shell->menu_layer, shell->menu_x, shell->menu_y));
-    if (status == SAO_STATUS_OK)
+    if (status == SAO_STATUS_OK) {
         shell->visual_dirty = true;
+        invalidate_rasters_locked(shell);
+    }
     return status;
 }
 
@@ -1854,6 +2284,11 @@ sao_status_t build_menu_input_rects_locked(
 }
 
 sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
+    const uint64_t theme_generation = sao::ui::detail::process_theme_generation();
+    if (shell->raster_theme_generation != theme_generation) {
+        shell->raster_theme_generation = theme_generation;
+        invalidate_rasters_locked(shell);
+    }
     sao::ui::menu_visual::Snapshot menu_snapshot{};
     sao_status_t status = sao::ui::menu_visual::get_snapshot(shell->menu, &menu_snapshot);
     menu_snapshot.reduced_motion = shell->reduced_motion;
@@ -1867,33 +2302,63 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
     status = sao_ui_nervegear_get_state(shell->nervegear, &state);
     if (status != SAO_STATUS_OK)
         return status;
+
+    const uint64_t next_nervegear_signature =
+        compute_nervegear_raster_signature(shell, state, theme_generation);
+    const uint64_t next_menu_signature =
+        compute_menu_raster_signature(shell, menu_snapshot, theme_generation);
+    const bool update_nervegear = shell->nervegear_raster_dirty || !shell->nervegear_raster_valid ||
+                                  shell->nervegear_raster_signature != next_nervegear_signature;
+    const bool update_menu = shell->menu_raster_dirty || !shell->menu_raster_valid ||
+                             shell->menu_raster_signature != next_menu_signature;
     Raster next_nervegear_raster;
     Raster next_menu_raster;
     std::vector<SaoUiLayerInputRect> next_menu_input_rects;
     try {
-        next_nervegear_raster = rasterize_nervegear(state);
-        next_menu_raster = rasterize_menu(
-            shell->menu_pressed_index, shell->menu_pressed_child_index, menu_snapshot,
-            shell->first_visible_child_index, shell->roots, shell->first_visible_root_index);
+        if (update_nervegear)
+            next_nervegear_raster = rasterize_nervegear(state);
+        if (update_menu) {
+            next_menu_raster = rasterize_menu(
+                shell->menu_pressed_index, shell->menu_pressed_child_index, menu_snapshot,
+                shell->first_visible_child_index, shell->roots, shell->first_visible_root_index);
+        }
         status = build_menu_input_rects_locked(shell, menu_snapshot, &next_menu_input_rects);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
     if (status != SAO_STATUS_OK)
         return status;
-    status = sao_ui_layer_update_bgra(
-        shell->nervegear_layer,
-        reinterpret_cast<const uint8_t*>(next_nervegear_raster.pixels.data()),
-        next_nervegear_raster.width, next_nervegear_raster.height,
-        next_nervegear_raster.width * sizeof(Pixel));
-    if (status != SAO_STATUS_OK)
-        return status;
-    status = sao_ui_layer_update_bgra(
-        shell->menu_layer, reinterpret_cast<const uint8_t*>(next_menu_raster.pixels.data()),
-        next_menu_raster.width, next_menu_raster.height,
-        next_menu_raster.width * sizeof(Pixel));
-    if (status != SAO_STATUS_OK)
-        return status;
+    if (update_nervegear) {
+        status = sao_ui_layer_update_bgra(
+            shell->nervegear_layer,
+            reinterpret_cast<const uint8_t*>(next_nervegear_raster.pixels.data()),
+            next_nervegear_raster.width, next_nervegear_raster.height,
+            next_nervegear_raster.width * sizeof(Pixel));
+        if (status != SAO_STATUS_OK) {
+            shell->nervegear_raster_valid = false;
+            shell->nervegear_raster_dirty = true;
+            return status;
+        }
+        shell->nervegear_raster = std::move(next_nervegear_raster);
+        shell->nervegear_raster_signature = next_nervegear_signature;
+        shell->nervegear_raster_valid = true;
+        shell->nervegear_raster_dirty = false;
+    }
+    if (update_menu) {
+        status = sao_ui_layer_update_bgra(
+            shell->menu_layer, reinterpret_cast<const uint8_t*>(next_menu_raster.pixels.data()),
+            next_menu_raster.width, next_menu_raster.height,
+            next_menu_raster.width * sizeof(Pixel));
+        if (status != SAO_STATUS_OK) {
+            shell->menu_raster_valid = false;
+            shell->menu_raster_dirty = true;
+            return status;
+        }
+        shell->menu_raster = std::move(next_menu_raster);
+        shell->menu_raster_signature = next_menu_signature;
+        shell->menu_raster_valid = true;
+        shell->menu_raster_dirty = false;
+    }
     if (!input_rects_equal(shell->menu_input_rects, next_menu_input_rects)) {
         status = sao_ui_layer_set_input_rects(shell->menu_layer, next_menu_input_rects.data(),
                                               next_menu_input_rects.size());
@@ -1901,24 +2366,19 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
             return status;
         shell->menu_input_rects = std::move(next_menu_input_rects);
     }
-    shell->nervegear_raster = std::move(next_nervegear_raster);
-    shell->menu_raster = std::move(next_menu_raster);
+    shell->nervegear_raster_dirty = false;
+    shell->menu_raster_dirty = false;
     return SAO_STATUS_OK;
 }
 
 sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
-    if (shell->menu_layer != nullptr && shell->host != nullptr) {
-        SaoUiLayerEffects effects{};
-        if (sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MENU, &effects) == SAO_STATUS_OK) {
-            if (shell->reduced_motion || shell->fps_pressure) {
-                effects.flags &= ~SAO_UI_LAYER_EFFECT_BACKDROP_BLUR;
-                effects.blur_sigma = 0.0F;
-            } else {
-                effects.blur_sigma *= 0.82F;
-            }
-            (void)sao_ui_layer_set_effects(shell->menu_layer, &effects);
-        }
+    const uint64_t theme_generation = sao::ui::detail::process_theme_generation();
+    if (shell->raster_theme_generation != theme_generation) {
+        shell->raster_theme_generation = theme_generation;
+        invalidate_rasters_locked(shell);
+        shell->visual_dirty = true;
     }
+    (void)apply_menu_effects_locked(shell);
     if (!shell->visual_dirty) {
         if (!shell->owns_compositor || shell->host == nullptr ||
             !shell->input_region_settle_pending) {
@@ -1952,8 +2412,11 @@ sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
         status = first_failure(status, sao_ui_compositor_enforce_z_order(shell->compositor));
     }
     ++shell->frame_count;
-    if (status == SAO_STATUS_OK)
+    if (status == SAO_STATUS_OK) {
         shell->visual_dirty = false;
+        shell->menu_raster_dirty = false;
+        shell->nervegear_raster_dirty = false;
+    }
     shell->last_status = status;
     return status;
 }
@@ -2044,6 +2507,7 @@ sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
             status = clear_child_interaction_locked(shell);
         if (status == SAO_STATUS_OK) {
             shell->visual_dirty = true;
+            invalidate_menu_raster_locked(shell);
             status = commit_visual_state_locked(shell);
         }
         if (status == SAO_STATUS_OK) {
@@ -2084,8 +2548,10 @@ sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms
     shell->fps_pressure = next_fps_pressure;
     shell->reduced_motion = next_reduced_motion;
     (void)sao_ui_menu_set_visual_budget(shell->menu, shell->reduced_motion, shell->fps_pressure);
-    if (visual_budget_changed)
+    if (visual_budget_changed) {
         shell->visual_dirty = true;
+        invalidate_menu_raster_locked(shell);
+    }
     SaoUiNerveGearState previous_state = SAO_UI_NG_STATE_IDLE;
     SaoUiMenuPhase previous_menu_phase = SAO_UI_MENU_PHASE_CLOSED;
     float previous_menu_progress = 0.0F;
@@ -2110,10 +2576,15 @@ sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms
         status, sao_ui_menu_get_transition_progress(shell->menu, &current_menu_progress));
     status = first_failure(
         status, sao::ui::menu_visual::get_snapshot(shell->menu, &current_menu_visual));
-    shell->visual_dirty = shell->visual_dirty || previous_state != current_state ||
-                          previous_menu_phase != current_menu_phase ||
-                          previous_menu_progress != current_menu_progress ||
-                          previous_menu_visual.revision != current_menu_visual.revision;
+    const bool nervegear_changed = previous_state != current_state;
+    const bool menu_changed = previous_menu_phase != current_menu_phase ||
+                              previous_menu_progress != current_menu_progress ||
+                              previous_menu_visual.revision != current_menu_visual.revision;
+    if (nervegear_changed)
+        invalidate_nervegear_raster_locked(shell);
+    if (menu_changed)
+        invalidate_menu_raster_locked(shell);
+    shell->visual_dirty = shell->visual_dirty || nervegear_changed || menu_changed;
     status = first_failure(status, commit_visual_state_locked(shell));
     shell->last_status = status;
     return status;
@@ -2222,6 +2693,7 @@ sao_status_t scroll_root_viewport_locked(sao_ui_entity_shell_s* shell, int32_t s
         shell->first_visible_child_index = 0;
         shell->displayed_child_parent_index = -1;
         shell->visual_dirty = true;
+        invalidate_menu_raster_locked(shell);
         *out_changed = true;
         return SAO_STATUS_OK;
     }
@@ -2263,6 +2735,7 @@ sao_status_t scroll_child_viewport_locked(sao_ui_entity_shell_s* shell, int32_t 
         shell->menu_pressed_child_parent = -1;
         shell->menu_pressed_child_index = -1;
         shell->visual_dirty = true;
+        invalidate_menu_raster_locked(shell);
         *out_changed = true;
         return SAO_STATUS_OK;
     }
@@ -2270,6 +2743,7 @@ sao_status_t scroll_child_viewport_locked(sao_ui_entity_shell_s* shell, int32_t 
     status = clear_child_interaction_locked(shell);
     if (status == SAO_STATUS_OK) {
         shell->visual_dirty = true;
+        invalidate_menu_raster_locked(shell);
         *out_changed = true;
     }
     return status;
@@ -2511,12 +2985,8 @@ static sao_status_t create_entity_shell(
         layer.target_fps = 60;
         status = sao_ui_layer_create(shell->compositor, &layer, &shell->menu_layer);
     }
-    if (status == SAO_STATUS_OK && sao_ui_compositor_host(shell->compositor) != nullptr) {
-        SaoUiLayerEffects effects{};
-        status = sao_ui_layer_effects_init(SAO_UI_LAYER_EFFECT_PRESET_MENU, &effects);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_layer_set_effects(shell->menu_layer, &effects);
-    }
+    if (status == SAO_STATUS_OK && sao_ui_compositor_host(shell->compositor) != nullptr)
+        status = apply_menu_effects_locked(shell.get());
     if (status == SAO_STATUS_OK) {
         status = sao_ui_layer_set_visible(shell->menu_layer, false);
     }
@@ -2622,6 +3092,7 @@ sao_ui_entity_shell_bring_online(sao_ui_entity_shell_handle_t handle) {
     handle->online = true;
     handle->overlay_visible = true;
     handle->visual_dirty = true;
+    invalidate_rasters_locked(handle);
     sao_status_t status = sao_ui_nervegear_show(handle->nervegear);
     status = first_failure(status, sao_ui_layer_set_visible(handle->nervegear_layer, true));
     status = first_failure(status, sao_ui_layer_set_input_enabled(handle->nervegear_layer, true));
@@ -2655,6 +3126,7 @@ sao_ui_entity_shell_take_offline(sao_ui_entity_shell_handle_t handle) {
     handle->online = false;
     handle->overlay_visible = false;
     handle->visual_dirty = true;
+    invalidate_nervegear_raster_locked(handle);
     status = first_failure(status, sao_ui_nervegear_hide(handle->nervegear));
     status = first_failure(status, commit_visual_state_locked(handle));
     if (handle->owns_compositor && handle->host != nullptr) {
@@ -2957,12 +3429,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
         SaoUiNerveGearState current_state = previous_state;
         status =
             first_failure(status, sao_ui_nervegear_get_state(handle->nervegear, &current_state));
-        handle->visual_dirty = handle->visual_dirty || previous_state != current_state ||
-                               previous_hover != handle->menu_hover_index ||
-                               previous_pressed != handle->menu_pressed_index ||
-                               previous_child_hover != handle->menu_hover_child_index ||
-                               previous_child_pressed != handle->menu_pressed_child_index ||
-                               previous_menu_visible != handle->menu_visible;
+        const bool nervegear_changed = previous_state != current_state;
+        const bool menu_changed = previous_hover != handle->menu_hover_index ||
+                                  previous_pressed != handle->menu_pressed_index ||
+                                  previous_child_hover != handle->menu_hover_child_index ||
+                                  previous_child_pressed != handle->menu_pressed_child_index ||
+                                  previous_menu_visible != handle->menu_visible;
+        if (nervegear_changed)
+            invalidate_nervegear_raster_locked(handle);
+        if (menu_changed)
+            invalidate_menu_raster_locked(handle);
+        handle->visual_dirty = handle->visual_dirty || nervegear_changed || menu_changed;
         status = first_failure(status, commit_visual_state_locked(handle));
         if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
             ++handle->action_count;
@@ -3109,6 +3586,7 @@ sao_ui_entity_shell_insert(sao_ui_entity_shell_handle_t handle) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     handle->overlay_visible = !handle->overlay_visible;
     handle->visual_dirty = true;
+    invalidate_rasters_locked(handle);
     sao_status_t status = commit_visual_state_locked(handle);
     if (handle->owns_compositor && handle->host != nullptr) {
         status = first_failure(

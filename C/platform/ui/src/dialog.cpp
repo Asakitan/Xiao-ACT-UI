@@ -1,3 +1,4 @@
+#include "../assets/classic/classic_icons.h"
 // SAO Auto - modal dialog state machine, focus, and keyboard logic.
 //
 // 1:1 with sao_theme/dialogs.py:
@@ -13,12 +14,15 @@
 // (d2d_widgets + compositor); the header-declared show() call flips
 // the machine IDLE -> EXPANDING and captures the spec.
 
-#include "sao/ui/dialog.h"
 #include "sao/ui/animator.h"
 #include "sao/ui/d2d_effects.h"
 #include "sao/ui/d2d_widgets.h"
+#include "sao/ui/dialog.h"
 #include "sao/ui/overlay_host.h"
+#include "sao/ui/sound.h"
 
+#include "native_text_edit.h"
+#include "dialog_input_internal.h"
 #include "panel_theme_internal.h"
 
 #include <array>
@@ -36,6 +40,9 @@
 
 namespace {
 
+void dialog_origin_locked(const sao_ui_dialog_s& d, int32_t width, int32_t height, int32_t* out_x,
+                          int32_t* out_y);
+
 // ── Canonical button text ────────────────────────────────────────
 // Fallback for SaoUiDialogButtonSpec::label_utf8 == nullptr.  Matches
 // the fixed captions in dialogs.py (the icon buttons carry no text,
@@ -47,7 +54,8 @@ const char* canonical_label(SaoUiDialogButton kind) {
     case SAO_UI_DIALOG_BTN_YES:     return "Yes";
     case SAO_UI_DIALOG_BTN_NO:      return "No";
     case SAO_UI_DIALOG_BTN_CUSTOM:  return "";
-    case SAO_UI_DIALOG_BTN_DISMISS: return "";
+    case SAO_UI_DIALOG_BTN_DISMISS:
+        return "Close";
     default:                        return "";
     }
 }
@@ -60,7 +68,6 @@ uint32_t canonical_color(SaoUiDialogButton kind) {
     case SAO_UI_DIALOG_BTN_CANCEL:
     case SAO_UI_DIALOG_BTN_NO:
     case SAO_UI_DIALOG_BTN_DISMISS:
-        return sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_CLOSE_RED);
     case SAO_UI_DIALOG_BTN_CUSTOM:
     default:
         return sao::ui::detail::panel_theme_color(
@@ -98,8 +105,7 @@ struct ResolvedButton {
     uint32_t          color = 0;  // canonical or spec-provided
 };
 
-// Python SAODialog defaults. The two reveal paths are deliberately kept
-// separate: title starts 100ms after expansion, message starts at 600ms.
+// Explicit caller timings override the native default transition.
 constexpr int32_t kDefaultDialogWidth = 375;
 constexpr int32_t kDefaultDialogHeight = 240;
 constexpr int32_t kInitialDialogWidth = 135;
@@ -108,12 +114,12 @@ constexpr int32_t kFooterHeight = 83;
 constexpr int32_t kSeparatorHeight = 1;
 constexpr int32_t kDefaultContentHeight =
     kDefaultDialogHeight - kHeaderHeight - kFooterHeight - 2 * kSeparatorHeight;
-constexpr int32_t kDefaultExpandMs = 500;
-constexpr int32_t kTitleRevealDelayMs = 100;
-constexpr int32_t kDefaultTitleRevealMs = 400;
-constexpr int32_t kMessageRevealDelayMs = 600;
-constexpr int32_t kDefaultMessageRevealMs = 350;
-constexpr int32_t kDefaultShrinkMs = 350;
+constexpr int32_t kDefaultExpandMs = 240;
+constexpr int32_t kTitleRevealDelayMs = 40;
+constexpr int32_t kDefaultTitleRevealMs = 160;
+constexpr int32_t kMessageRevealDelayMs = 260;
+constexpr int32_t kDefaultMessageRevealMs = 180;
+constexpr int32_t kDefaultShrinkMs = 160;
 constexpr int32_t kDefaultMirrorZ = 2000;
 constexpr size_t kMaxDialogTextBytes = 16u * 1024u;
 constexpr size_t kMaxDialogTotalTextBytes = 64u * 1024u;
@@ -156,7 +162,10 @@ struct sao_ui_dialog_s {
     std::string                     message;
     std::string                     input_prompt;
     std::string                     input_default;
+    std::string input_value;
     int32_t                         input_max_length = 0;
+    sao_ui_widget_handle_t input_widget = nullptr;
+    bool input_password = false;
     std::vector<ResolvedButton>     buttons;
     int32_t                         focused_index    = -1;
 
@@ -195,13 +204,24 @@ struct sao_ui_dialog_s {
     int32_t rendered_mirror_z = kDefaultMirrorZ;
     float rendered_alpha = 0.0F;
     bool rendered_visible = false;
+    bool rendered_reveals_complete = false;
+    uint64_t rendered_theme_generation = 0;
     bool self_owned = false;
     std::chrono::steady_clock::time_point auto_tick_at{};
+
+    // Intrusive membership in the process-local dialog keyboard registry.
+    // These fields are guarded only by dialog_input_registry_mutex(); keeping
+    // the node inside the dialog avoids allocation during show/dismiss.
+    sao_ui_dialog_s* input_prev = nullptr;
+    sao_ui_dialog_s* input_next = nullptr;
+    bool input_registered = false;
+    int32_t input_z = 0;
+    uint64_t input_order = 0;
 
     // Convenience: focus the first non-DISMISS button (matches dialogs.py
     // grabbing focus on the OK icon after expand).
     void reset_default_focus() {
-        focused_index = -1;
+        focused_index = buttons.empty() ? -1 : 0;
         for (size_t i = 0; i < buttons.size(); ++i) {
             if (buttons[i].kind != SAO_UI_DIALOG_BTN_DISMISS) {
                 focused_index = static_cast<int32_t>(i);
@@ -210,6 +230,103 @@ struct sao_ui_dialog_s {
         }
     }
 };
+
+namespace {
+SaoUiDialogLayoutSnapshot make_layout_snapshot_locked(const sao_ui_dialog_s& d,
+                                                      SaoUiDialogState state, int32_t elapsed);
+sao_status_t apply_dialog_visual_locked(sao_ui_dialog_s* d, const SaoUiDialogLayoutSnapshot& layout,
+                                        bool visible, bool allow_cached = false);
+
+std::mutex& dialog_input_registry_mutex() noexcept {
+    static std::mutex mutex;
+    return mutex;
+}
+
+sao_ui_dialog_s*& dialog_input_registry_head() noexcept {
+    static sao_ui_dialog_s* head = nullptr;
+    return head;
+}
+
+uint64_t& dialog_input_registry_sequence() noexcept {
+    static uint64_t sequence = 0;
+    return sequence;
+}
+
+void register_dialog_input(sao_ui_dialog_s* dialog) noexcept {
+    if (dialog == nullptr || dialog->compositor == nullptr)
+        return;
+    std::lock_guard lock(dialog_input_registry_mutex());
+    if (!dialog->input_registered) {
+        dialog->input_prev = nullptr;
+        dialog->input_next = dialog_input_registry_head();
+        if (dialog->input_next != nullptr)
+            dialog->input_next->input_prev = dialog;
+        dialog_input_registry_head() = dialog;
+        dialog->input_registered = true;
+    }
+    uint64_t& sequence = dialog_input_registry_sequence();
+    ++sequence;
+    if (sequence == 0)
+        ++sequence;
+    dialog->input_z = dialog->mirror_z;
+    dialog->input_order = sequence;
+}
+
+void unregister_dialog_input(sao_ui_dialog_s* dialog) noexcept {
+    if (dialog == nullptr)
+        return;
+    std::lock_guard lock(dialog_input_registry_mutex());
+    if (!dialog->input_registered)
+        return;
+    if (dialog->input_prev != nullptr)
+        dialog->input_prev->input_next = dialog->input_next;
+    else
+        dialog_input_registry_head() = dialog->input_next;
+    if (dialog->input_next != nullptr)
+        dialog->input_next->input_prev = dialog->input_prev;
+    dialog->input_prev = nullptr;
+    dialog->input_next = nullptr;
+    dialog->input_registered = false;
+    dialog->input_z = 0;
+    dialog->input_order = 0;
+}
+} // namespace
+
+sao_status_t dialog_input_route_key(sao_ui_compositor_handle_t compositor, bool key_down,
+                                    uint32_t virtual_key, bool shift_held,
+                                    bool* out_consumed) noexcept {
+    if (out_consumed == nullptr || compositor == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_consumed = false;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    try {
+        std::lock_guard registry_lock(dialog_input_registry_mutex());
+        sao_ui_dialog_s* target = nullptr;
+        for (sao_ui_dialog_s* candidate = dialog_input_registry_head(); candidate != nullptr;
+             candidate = candidate->input_next) {
+            if (candidate->compositor != compositor)
+                continue;
+            if (target == nullptr || candidate->input_z > target->input_z ||
+                (candidate->input_z == target->input_z &&
+                 candidate->input_order > target->input_order)) {
+                target = candidate;
+            }
+        }
+        if (target == nullptr)
+            return SAO_STATUS_ERR_NOT_FOUND;
+        *out_consumed = true;
+        if (!key_down)
+            return SAO_STATUS_OK;
+        const sao_status_t status = sao_ui_dialog_dispatch_key(target, virtual_key, shift_held);
+        // A shrinking dialog remains a modal barrier until its final idle
+        // transition, even though its action dispatcher no longer accepts keys.
+        return status == SAO_STATUS_ERR_NOT_INITIALIZED ? SAO_STATUS_OK : status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────
 namespace {
@@ -506,7 +623,7 @@ sao_status_t resolve_buttons(const SaoUiDialogSpec& spec,
                 } else {
                     rb.label = canonical_label(s.kind);
                 }
-                rb.color = s.color_argb != 0u ? s.color_argb : canonical_color(s.kind);
+                rb.color = s.color_argb;
                 out->push_back(std::move(rb));
             }
         } catch (...) {
@@ -525,7 +642,7 @@ sao_status_t resolve_buttons(const SaoUiDialogSpec& spec,
             ResolvedButton rb;
             rb.kind = kind;
             rb.label = canonical_label(kind);
-            rb.color = canonical_color(kind);
+            rb.color = 0u;
             out->push_back(std::move(rb));
         }
     } catch (...) {
@@ -555,7 +672,7 @@ FireSnapshot take_pending_fire(sao_ui_dialog_s* d) {
     snap.pressed = d->pending_pressed;
     if (d->kind == SAO_UI_DIALOG_INPUT) {
         snap.has_input = true;
-        snap.input_text = d->input_default;
+        snap.input_text = d->input_value;
     }
     d->have_pending_fire = false;
     d->callback = nullptr;
@@ -570,7 +687,9 @@ struct DialogStateBackup {
     std::string message;
     std::string input_prompt;
     std::string input_default;
+    std::string input_value;
     int32_t input_max_length = 0;
+    bool input_password = false;
     std::vector<ResolvedButton> buttons;
     int32_t focused_index = -1;
     sao_ui_dialog_result_callback_t callback = nullptr;
@@ -600,7 +719,9 @@ bool save_dialog_state_locked(const sao_ui_dialog_s& d, DialogStateBackup* b) {
         b->message = d.message;
         b->input_prompt = d.input_prompt;
         b->input_default = d.input_default;
+        b->input_value = d.input_value;
         b->input_max_length = d.input_max_length;
+        b->input_password = d.input_password;
         b->buttons = d.buttons;
         b->focused_index = d.focused_index;
         b->callback = d.callback;
@@ -631,7 +752,9 @@ void restore_dialog_state_locked(sao_ui_dialog_s* d, DialogStateBackup* b) noexc
     d->message = std::move(b->message);
     d->input_prompt = std::move(b->input_prompt);
     d->input_default = std::move(b->input_default);
+    d->input_value = std::move(b->input_value);
     d->input_max_length = b->input_max_length;
+    d->input_password = b->input_password;
     d->buttons = std::move(b->buttons);
     d->focused_index = b->focused_index;
     d->callback = b->callback;
@@ -735,6 +858,76 @@ sao_status_t ensure_dialog_layers_locked(sao_ui_dialog_s* d, bool* created_modal
     return SAO_STATUS_OK;
 }
 
+void begin_dialog_input_edit(sao_ui_dialog_s* dialog) noexcept {
+    if (dialog == nullptr)
+        return;
+    sao_ui_widget_handle_t widget = nullptr;
+    void* owner = nullptr;
+    std::string initial;
+    int32_t maximum = 0;
+    bool password = false;
+    int32_t input_x = 0, input_y = 0, input_width = 1, input_height = 24;
+    {
+        std::lock_guard lock(dialog->mu);
+        if (!dialog->has_spec || dialog->kind != SAO_UI_DIALOG_INPUT ||
+            dialog->state == SAO_UI_DIALOG_STATE_IDLE)
+            return;
+        widget = dialog->input_widget;
+        initial = dialog->input_value;
+        maximum = dialog->input_max_length;
+        password = dialog->input_password;
+        owner = sao_ui_compositor_host_hwnd(dialog->compositor);
+        const auto final_layout = make_layout_snapshot_locked(
+            *dialog, SAO_UI_DIALOG_STATE_CLIP_REVEALED, dialog->expand_ms);
+        dialog_origin_locked(*dialog, final_layout.width, final_layout.height, &input_x, &input_y);
+        input_x += 14;
+        input_y += final_layout.height - final_layout.footer_height - 32;
+        input_width = std::max(1, final_layout.width - 28);
+    }
+    if (widget == nullptr) {
+        SaoUiTextFieldSpec spec{};
+        spec.initial_text_utf8 = initial.c_str();
+        spec.max_length = maximum;
+        sao_ui_widget_handle_t created = nullptr;
+        if (sao_ui_text_field_create(nullptr, &spec, &created) != SAO_STATUS_OK ||
+            created == nullptr)
+            return;
+        std::lock_guard lock(dialog->mu);
+        if (!dialog->has_spec || dialog->kind != SAO_UI_DIALOG_INPUT ||
+            dialog->input_widget != nullptr) {
+            sao_ui_widget_destroy(created);
+            return;
+        }
+        dialog->input_widget = created;
+        widget = created;
+    }
+    sao::ui::detail::end_native_text_edit_for_widget(owner, widget, true);
+    const std::string input_props =
+        std::string("{\"password\":") + (password ? "true" : "false") +
+        ",\"max_length\":" + std::to_string(maximum > 0 ? maximum : 65536) + "}";
+    (void)sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(input_props.data()),
+                                    input_props.size());
+    (void)sao_ui_text_field_set_text(widget, initial.c_str());
+    (void)sao::ui::detail::begin_native_text_edit(
+        owner, widget, input_x, input_y, input_width, input_height,
+        [dialog](const std::string& text, sao::ui::detail::TextEditPhase phase) {
+            {
+                std::lock_guard lock(dialog->mu);
+                if (!dialog->has_spec || dialog->kind != SAO_UI_DIALOG_INPUT)
+                    return;
+                dialog->input_value = text;
+                (void)apply_dialog_visual_locked(
+                    dialog,
+                    make_layout_snapshot_locked(*dialog, dialog->state, dialog->state_elapsed_ms),
+                    true);
+            }
+            // Enter is an explicit submit; focus loss and Tab only commit text.
+            if (phase == sao::ui::detail::TextEditPhase::Submit)
+                (void)sao_ui_dialog_dispatch_key(dialog, 0x0d, false);
+            else if (phase == sao::ui::detail::TextEditPhase::Cancel)
+                (void)sao_ui_dialog_dispatch_key(dialog, 0x1b, false);
+        });
+}
 
 struct DialogButtonRect {
     float x = 0.0F;
@@ -742,6 +935,14 @@ struct DialogButtonRect {
     float width = 0.0F;
     float height = 0.0F;
 };
+
+bool classic_dialog_buttons(const sao_ui_dialog_s& d) {
+    return !d.buttons.empty() && d.buttons.size() <= 2 &&
+           std::all_of(d.buttons.begin(), d.buttons.end(), [](const ResolvedButton& button) {
+               return button.kind != SAO_UI_DIALOG_BTN_CUSTOM &&
+                      button.label == canonical_label(button.kind);
+           });
+}
 
 struct DialogFooterGeometry {
     int32_t header_height = 0;
@@ -853,6 +1054,18 @@ DialogFooterGeometry make_footer_geometry(const sao_ui_dialog_s& d,
             button_width,
             geometry.button_height};
     }
+    if (classic_dialog_buttons(d)) {
+        const float diameter = std::min(40.0F, geometry.button_height);
+        const float gap = 42.0F;
+        const float total = diameter * static_cast<float>(geometry.button_count) +
+                            gap * static_cast<float>(geometry.button_count - 1);
+        for (size_t index = 0; index < geometry.button_count; ++index)
+            geometry.buttons[index] = {
+                (safe_width - total) * 0.5F + static_cast<float>(index) * (diameter + gap),
+                static_cast<float>(geometry.footer_y) +
+                    (static_cast<float>(geometry.footer_height) - diameter) * 0.5F,
+                diameter, diameter};
+    }
     return geometry;
 }
 
@@ -904,9 +1117,11 @@ float reveal_progress(const sao_ui_dialog_s& d, bool title) noexcept {
     const int32_t duration = title ? d.title_reveal_ms : d.message_reveal_ms;
     if (duration <= 0 || d.state == SAO_UI_DIALOG_STATE_SHRINKING)
         return 1.0F;
-    const int32_t delay = title ? kTitleRevealDelayMs :
-                                 std::max(0, kMessageRevealDelayMs - d.expand_ms);
-    return std::clamp(static_cast<float>(d.state_elapsed_ms - delay) /
+    const int32_t delay =
+        title ? kTitleRevealDelayMs : std::max(d.expand_ms, kMessageRevealDelayMs);
+    const int64_t elapsed = static_cast<int64_t>(d.state_elapsed_ms) +
+                            (d.state == SAO_UI_DIALOG_STATE_CLIP_REVEALED ? d.expand_ms : 0);
+    return std::clamp(static_cast<float>(elapsed - delay) /
                           static_cast<float>(std::max(1, duration)),
                       0.0F, 1.0F);
 }
@@ -955,7 +1170,7 @@ sao_status_t rasterize_dialog_locked(const sao_ui_dialog_s& d,
     const uint32_t accent = dialog_kind_accent(d.kind);
     const uint32_t focus = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING);
     if (status == SAO_STATUS_OK)
-        status = sao_ui_paint_ctx_fill_rounded_rect(ctx, 0.0F, 0.0F, width, height, 4.0F, panel);
+        status = sao_ui_paint_ctx_fill_rounded_rect(ctx, 0.0F, 0.0F, width, height, 8.0F, panel);
     if (status == SAO_STATUS_OK)
         status = sao_ui_paint_ctx_stroke_line(ctx, std::min(1.0F, width),
                                               std::min(1.0F, height),
@@ -1025,9 +1240,12 @@ sao_status_t rasterize_dialog_locked(const sao_ui_dialog_s& d,
             status = sao_ui_paint_ctx_fill_rounded_rect(
                 ctx, left, entry_y, text_width, entry_height, 2.0F,
                 sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG));
-        if (status == SAO_STATUS_OK && entry_height > 0.0F && text_width > 0.0F) {
+        if (status == SAO_STATUS_OK && entry_height > 0.0F && text_width > 0.0F && d.input_widget) {
+            status =
+                sao_ui_widget_paint(d.input_widget, ctx, left, entry_y, text_width, entry_height);
+        } else if (status == SAO_STATUS_OK && entry_height > 0.0F && text_width > 0.0F) {
             const std::string clipped_default = clip_utf8_single_line(
-                d.input_default, std::max(0.0F, text_width - 12.0F), kDialogTextSizeInput);
+                d.input_value, std::max(0.0F, text_width - 12.0F), kDialogTextSizeInput);
             if (!clipped_default.empty())
                 status = sao_ui_paint_ctx_draw_utf8(
                     ctx, left + 6.0F, entry_y + std::min(6.0F, entry_height),
@@ -1045,24 +1263,47 @@ sao_status_t rasterize_dialog_locked(const sao_ui_dialog_s& d,
                 continue;
             const ResolvedButton& button = d.buttons[index];
             const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
-            const uint32_t button_fill = high_contrast
-                                   ? sao::ui::detail::panel_theme_color(
-                                       SAO_UI_TOKEN_SELECTION)
-                                   : button.color;
+            const uint32_t button_fill =
+                high_contrast        ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SELECTION)
+                : button.color != 0u ? button.color
+                                     : canonical_color(button.kind);
             const uint32_t button_text = high_contrast
                                    ? sao::ui::detail::panel_theme_color(
                                        SAO_UI_TOKEN_WHITE)
                                    : contrasting_button_text(button_fill);
-            status = sao_ui_paint_ctx_fill_rounded_rect(ctx, rect.x, rect.y,
-                                                        rect.width, rect.height, 2.0F,
-                                          button_fill);
+            if (classic_dialog_buttons(d)) {
+                if (static_cast<int32_t>(index) == d.focused_index)
+                    status = sao_ui_paint_ctx_fill_ellipse(ctx, rect.x - 3, rect.y - 3,
+                                                           rect.width + 6, rect.height + 6, focus);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_fill_ellipse(ctx, rect.x, rect.y, rect.width,
+                                                           rect.height, button_fill);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_fill_ellipse(
+                        ctx, rect.x + 2, rect.y + 2, rect.width - 4, rect.height - 4,
+                        sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD));
+                const auto icon =
+                    button.kind == SAO_UI_DIALOG_BTN_OK || button.kind == SAO_UI_DIALOG_BTN_YES
+                        ? sao::ui::classic::IconId::Confirm
+                        : sao::ui::classic::IconId::Cancel;
+                if (status == SAO_STATUS_OK)
+                    status = sao::ui::classic::paint_classic_icon(
+                        ctx, icon, rect.x + rect.width * 0.20F, rect.y + rect.height * 0.20F,
+                        rect.width * 0.60F, button_fill);
+                continue;
+            }
+            status = sao_ui_paint_ctx_fill_rounded_rect(ctx, rect.x, rect.y, rect.width,
+                                                        rect.height, 5.0F, button_fill);
             const std::string clipped_label = clip_utf8_single_line(
                 button.label, std::max(0.0F, rect.width - 16.0F), kDialogTextSizeButton);
             if (status == SAO_STATUS_OK && !clipped_label.empty())
                 status = sao_ui_paint_ctx_draw_utf8(
-                    ctx, rect.x + std::min(8.0F, rect.width * 0.5F),
-                    rect.y + std::min(9.0F, rect.height * 0.5F), clipped_label.c_str(),
-                    kDialogTextSizeButton, button_text);
+                    ctx,
+                    rect.x + std::max(0.0F, (rect.width - utf8_text_width(clipped_label,
+                                                                          kDialogTextSizeButton)) *
+                                                0.5F),
+                    rect.y + std::max(0.0F, (rect.height - kDialogTextSizeButton) * 0.5F),
+                    clipped_label.c_str(), kDialogTextSizeButton, button_text);
             if (status == SAO_STATUS_OK && static_cast<int32_t>(index) == d.focused_index) {
                 const float dialog_right = width;
                 const float dialog_bottom = height;
@@ -1128,18 +1369,27 @@ void dialog_origin_locked(const sao_ui_dialog_s& d, int32_t width, int32_t heigh
     *out_y = host_height > 0 ? std::max(0, (host_height - height) / 2) : 0;
 }
 
-sao_status_t apply_dialog_visual_locked(sao_ui_dialog_s* d,
-                                        const SaoUiDialogLayoutSnapshot& layout,
-                                        bool visible) {
+sao_status_t apply_dialog_visual_locked(sao_ui_dialog_s* d, const SaoUiDialogLayoutSnapshot& layout,
+                                        bool visible, bool allow_cached) {
     if (d->compositor == nullptr)
+        return SAO_STATUS_OK;
+    int32_t x = 0;
+    int32_t y = 0;
+    dialog_origin_locked(*d, layout.width, layout.height, &x, &y);
+    const uint64_t theme_generation = sao::ui::detail::process_theme_generation();
+    const bool reveals_complete =
+        reveal_progress(*d, true) >= 1.0F && reveal_progress(*d, false) >= 1.0F;
+    if (allow_cached && !d->rendered_bgra.empty() && reveals_complete &&
+        d->rendered_reveals_complete && theme_generation == d->rendered_theme_generation &&
+        d->rendered_width == static_cast<uint32_t>(layout.width) &&
+        d->rendered_height == static_cast<uint32_t>(layout.height) && d->rendered_x == x &&
+        d->rendered_y == y && d->rendered_mirror_z == layout.mirror_z &&
+        d->rendered_alpha == layout.alpha && d->rendered_visible == visible)
         return SAO_STATUS_OK;
     std::vector<uint8_t> pixels;
     sao_status_t status = rasterize_dialog_locked(*d, layout, &pixels);
     if (status != SAO_STATUS_OK)
         return status;
-    int32_t x = 0;
-    int32_t y = 0;
-    dialog_origin_locked(*d, layout.width, layout.height, &x, &y);
     const bool had_previous = !d->rendered_bgra.empty();
     const int32_t old_x = d->rendered_x;
     const int32_t old_y = d->rendered_y;
@@ -1192,6 +1442,8 @@ sao_status_t apply_dialog_visual_locked(sao_ui_dialog_s* d,
     d->rendered_mirror_z = z;
     d->rendered_alpha = layout.alpha;
     d->rendered_visible = visible;
+    d->rendered_reveals_complete = reveals_complete;
+    d->rendered_theme_generation = theme_generation;
     return SAO_STATUS_OK;
 }
 
@@ -1237,9 +1489,15 @@ int32_t dialog_button_at_locked(const sao_ui_dialog_s& d, float x, float y) {
     const DialogFooterGeometry footer = make_footer_geometry(d, layout.width, layout.height);
     for (size_t index = 0; index < footer.button_count; ++index) {
         const DialogButtonRect& rect = footer.buttons[index];
-        if (x >= rect.x && x < rect.x + rect.width && y >= rect.y &&
-            y < rect.y + rect.height)
+        if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) {
+            if (classic_dialog_buttons(d)) {
+                const float dx = (x - rect.x - rect.width * 0.5F) / (rect.width * 0.5F);
+                const float dy = (y - rect.y - rect.height * 0.5F) / (rect.height * 0.5F);
+                if (dx * dx + dy * dy > 1.0F)
+                    continue;
+            }
             return static_cast<int32_t>(index);
+        }
     }
     return -1;
 }
@@ -1251,7 +1509,7 @@ void SAO_UI_CALL dialog_layer_button(int32_t button, int32_t action,
     if (button != 0 || action != 1 || user_data == nullptr)
         return;
     auto* dialog = static_cast<sao_ui_dialog_s*>(user_data);
-    std::lock_guard lock(dialog->mu);
+    std::unique_lock lock(dialog->mu);
     if (!dialog->has_spec || dialog->state == SAO_UI_DIALOG_STATE_IDLE ||
         dialog->state == SAO_UI_DIALOG_STATE_SHRINKING) {
         return;
@@ -1260,6 +1518,15 @@ void SAO_UI_CALL dialog_layer_button(int32_t button, int32_t action,
     if (index < 0 || static_cast<size_t>(index) >= dialog->buttons.size())
         return;
     dialog->focused_index = index;
+    const auto input_widget = dialog->input_widget;
+    void* owner = sao_ui_compositor_host_hwnd(dialog->compositor);
+    lock.unlock();
+    if (input_widget != nullptr)
+        sao::ui::detail::end_native_text_edit_for_widget(owner, input_widget, true);
+    lock.lock();
+    if (!dialog->has_spec || dialog->state == SAO_UI_DIALOG_STATE_IDLE ||
+        dialog->state == SAO_UI_DIALOG_STATE_SHRINKING)
+        return;
     (void)begin_shrink_locked(
         dialog, dialog->buttons[static_cast<size_t>(index)].kind);
 }
@@ -1316,6 +1583,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_create(
 extern "C" void SAO_UI_CALL sao_ui_dialog_destroy(
     sao_ui_dialog_handle_t handle) {
     if (handle == nullptr) return;
+    unregister_dialog_input(handle);
     // If a result callback is still pending (caller destroyed mid-flight),
     // fire it now with DISMISS/cancelled so any user_data resources
     // downstream get released.
@@ -1323,12 +1591,15 @@ extern "C" void SAO_UI_CALL sao_ui_dialog_destroy(
     bool fire = false;
     sao_ui_layer_handle_t modal_effect_layer = nullptr;
     sao_ui_layer_handle_t content_layer = nullptr;
+    sao_ui_widget_handle_t input_widget = nullptr;
+    void* input_owner = sao_ui_compositor_host_hwnd(handle->compositor);
     {
         std::lock_guard<std::mutex> lk(handle->mu);
         modal_effect_layer = handle->modal_effect_layer;
         content_layer = handle->content_layer;
         handle->modal_effect_layer = nullptr;
         handle->content_layer = nullptr;
+        input_widget = std::exchange(handle->input_widget, nullptr);
         if (handle->callback != nullptr) {
             snap.cb = handle->callback;
             snap.user_data = handle->user_data;
@@ -1337,6 +1608,10 @@ extern "C" void SAO_UI_CALL sao_ui_dialog_destroy(
             handle->user_data = nullptr;
             fire = true;
         }
+    }
+    if (input_widget != nullptr) {
+        sao::ui::detail::end_native_text_edit_for_widget(input_owner, input_widget, false);
+        sao_ui_widget_destroy(input_widget);
     }
     if (fire && snap.cb != nullptr) {
         snap.cb(snap.pressed, /*input_text_utf8=*/nullptr,
@@ -1401,7 +1676,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_show(
     const int32_t shrink_ms = sao_ui_animation_duration_ms(
         spec->shrink_ms > 0 ? spec->shrink_ms : kDefaultShrinkMs);
 
-    std::lock_guard<std::mutex> lk(handle->mu);
+    std::unique_lock<std::mutex> lk(handle->mu);
+    const bool play_open_sound =
+        handle->compositor != nullptr && handle->state == SAO_UI_DIALOG_STATE_IDLE;
     DialogStateBackup backup;
     if (!save_dialog_state_locked(*handle, &backup))
         return SAO_STATUS_ERR_UNKNOWN;
@@ -1410,6 +1687,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_show(
     handle->message = std::move(message);
     handle->input_prompt = std::move(input_prompt);
     handle->input_default = std::move(input_default);
+    handle->input_value = handle->input_default;
     handle->input_max_length = spec->input_max_length;
     handle->buttons = std::move(buttons);
     handle->width = width;
@@ -1448,12 +1726,44 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_show(
         }
         return status;
     }
+    lk.unlock();
+    register_dialog_input(handle);
+    if (spec->kind == SAO_UI_DIALOG_INPUT)
+        begin_dialog_input_edit(handle);
+    if (play_open_sound)
+        (void)sao_ui_sound_play(SAO_UI_SOUND_ALERT, 65);
     return SAO_STATUS_OK;
 }
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_hide(
     sao_ui_dialog_handle_t handle) {
     if (handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    return sao_ui_dialog_dismiss(handle, SAO_UI_DIALOG_BTN_DISMISS);
+    unregister_dialog_input(handle);
+    const sao_status_t status = sao_ui_dialog_dismiss(handle, SAO_UI_DIALOG_BTN_DISMISS);
+    if (status != SAO_STATUS_OK) {
+        bool still_visible = false;
+        {
+            std::lock_guard lock(handle->mu);
+            still_visible = handle->state != SAO_UI_DIALOG_STATE_IDLE;
+        }
+        if (still_visible)
+            register_dialog_input(handle);
+    }
+    return status;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_set_input_password(sao_ui_dialog_handle_t handle,
+                                                                     bool enabled) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard lock(handle->mu);
+        if (handle->state != SAO_UI_DIALOG_STATE_IDLE)
+            return SAO_UI_STATUS_ERR_BUSY;
+        handle->input_password = enabled;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_is_visible(
@@ -1491,6 +1801,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     FireSnapshot snap;
     bool should_fire = false;
+    bool play_close_sound = false;
+    bool became_idle = false;
     {
         std::lock_guard<std::mutex> lk(handle->mu);
         if (handle->state == SAO_UI_DIALOG_STATE_IDLE)
@@ -1521,6 +1833,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
             }
             handle->state = SAO_UI_DIALOG_STATE_IDLE;
             handle->state_elapsed_ms = 0;
+            became_idle = true;
+            play_close_sound = handle->compositor != nullptr;
             if (handle->have_pending_fire) {
                 snap = take_pending_fire(handle);
                 should_fire = true;
@@ -1531,8 +1845,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
         }
         if (!closing) {
             const sao_status_t visual_status = apply_dialog_visual_locked(
-                handle, make_layout_snapshot_locked(*handle, handle->state,
-                                                     handle->state_elapsed_ms), true);
+                handle,
+                make_layout_snapshot_locked(*handle, handle->state, handle->state_elapsed_ms), true,
+                true);
             if (visual_status != SAO_STATUS_OK) {
                 handle->state = old_state;
                 handle->state_elapsed_ms = old_elapsed;
@@ -1540,6 +1855,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_tick(
             }
         }
     }
+    if (became_idle)
+        unregister_dialog_input(handle);
+    if (play_close_sound)
+        (void)sao_ui_sound_play(SAO_UI_SOUND_ALERT_CLOSE, 55);
     if (should_fire && snap.cb != nullptr) {
         const char* text = snap.has_input ? snap.input_text.c_str() : nullptr;
         const size_t text_len = snap.has_input ? snap.input_text.size() : 0;
@@ -1551,6 +1870,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_dismiss(
     sao_ui_dialog_handle_t handle, SaoUiDialogButton pressed) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    sao_ui_widget_handle_t input = nullptr;
+    void* owner = nullptr;
+    {
+        std::lock_guard lock(handle->mu);
+        input = handle->input_widget;
+        owner = sao_ui_compositor_host_hwnd(handle->compositor);
+    }
+    if (input != nullptr)
+        sao::ui::detail::end_native_text_edit_for_widget(owner, input, true);
     std::lock_guard<std::mutex> lk(handle->mu);
     if (handle->state == SAO_UI_DIALOG_STATE_IDLE && !handle->has_spec)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
@@ -1604,7 +1932,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_get_button_at(
     const ResolvedButton& rb = handle->buttons[static_cast<size_t>(index)];
     out_info->kind = rb.kind;
     out_info->label_utf8 = rb.label.c_str();
-    out_info->color_argb = rb.color;
+    out_info->color_argb = rb.color != 0u ? rb.color : canonical_color(rb.kind);
     out_info->is_focused = (index == handle->focused_index);
     for (bool& p : out_info->_pad) p = false;
     return SAO_STATUS_OK;
@@ -1613,22 +1941,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dialog_get_button_at(
 // ── Keyboard dispatch ────────────────────────────────────────────
 namespace {
 
-// Advance focus by direction (+1 = next, -1 = prev).  Skips DISMISS
-// buttons (they're not a real focusable target) but wraps around.
 int32_t advance_focus(const std::vector<ResolvedButton>& buttons,
                       int32_t current, int32_t direction) {
     if (buttons.empty()) return -1;
     const int32_t n = static_cast<int32_t>(buttons.size());
-    int32_t start = (current < 0) ? (direction > 0 ? -1 : n) : current;
-    for (int32_t step = 0; step < n; ++step) {
-        int32_t candidate = start + direction * (step + 1);
-        candidate = ((candidate % n) + n) % n;
-        if (buttons[static_cast<size_t>(candidate)].kind != SAO_UI_DIALOG_BTN_DISMISS) {
-            return candidate;
-        }
-    }
-    // All buttons are DISMISS - fall through to any of them.
-    return (direction > 0) ? 0 : (n - 1);
+    const int32_t start = current < 0 ? (direction > 0 ? -1 : n) : current;
+    return ((start + direction) % n + n) % n;
 }
 
 constexpr uint32_t kVkTab    = 0x09u;

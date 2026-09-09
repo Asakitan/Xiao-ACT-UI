@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "collection": "sao-ui-sounds",
+  "source_version": "baseline HEAD08a91fb0",
+  "license_policy": "Original/repository provenance remains unverified; generated cues are original synthesized. No asset is labeled CC0.",
+  "generator": "C/platform/ui/assets/sounds/generate_notification_cues.py",
+  "assets": [
+    {
+      "cue": 0,
+      "enum": "SAO_UI_SOUND_CLICK",
+      "file": "Feedback.SAO.Click.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Feedback.SAO.Click.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "feedback click",
+      "sha256": "a0c423913f757e6f23c60dfdec283b8157e5f1531849b101ffea36b5c83534ea",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 22050,
+        "duration_seconds": 0.5
+      }
+    },
+    {
+      "cue": 1,
+      "enum": "SAO_UI_SOUND_MENU_OPEN",
+      "file": "Popup.SAO.Launcher.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.SAO.Launcher.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "menu open",
+      "sha256": "3b4833eae6c5443dd26b746a1d882739de3c2c9d06de2e346d7112919b3a5c8e",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 88200,
+        "duration_seconds": 2.0
+      }
+    },
+    {
+      "cue": 2,
+      "enum": "SAO_UI_SOUND_MENU_CLOSE",
+      "file": "Dismiss.SAO.Launcher.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Dismiss.SAO.Launcher.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "menu close",
+      "sha256": "7f28b68abca269f731a6f3857ae7c36ff18ad0bdbc16e1f99153198efe556b6c",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 70560,
+        "duration_seconds": 1.6
+      }
+    },
+    {
+      "cue": 3,
+      "enum": "SAO_UI_SOUND_PANEL",
+      "file": "Popup.SAO.Panel.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.SAO.Panel.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "panel open",
+      "sha256": "525aef3ba9c972c96ea4cdfd2c6842444bf2dc113c5d89a24afb7f9891667dc6",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 15435,
+        "duration_seconds": 0.35
+      }
+    },
+    {
+      "cue": 4,
+      "enum": "SAO_UI_SOUND_SUBMENU",
+      "file": "Popup.SAO.Menu.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.SAO.Menu.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "submenu open",
+      "sha256": "0c2d73c742035da8e45821a73c668838f80927a710f14b71727f550ab44945e5",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 7938,
+        "duration_seconds": 0.18
+      }
+    },
+    {
+      "cue": 5,
+      "enum": "SAO_UI_SOUND_ALERT",
+      "file": "Popup.SAO.Alert.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.SAO.Alert.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "alert",
+      "sha256": "8b09a3b5745d7a6f1d71fdd5efff734d45d979ee2d36feceba5e5879b5bec158",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 88200,
+        "duration_seconds": 2.0
+      }
+    },
+    {
+      "cue": 6,
+      "enum": "SAO_UI_SOUND_ALERT_CLOSE",
+      "file": "Dismiss.SAO.Message.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Dismiss.SAO.Message.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "alert dismiss",
+      "sha256": "1fa75eb1b7bd9bbab426ffad12204eaf9707bb62ba22b43e8309c709280acf98",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 8820,
+        "duration_seconds": 0.2
+      }
+    },
+    {
+      "cue": 7,
+      "enum": "SAO_UI_SOUND_WELCOME",
+      "file": "Popup.SAO.Welcome.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.SAO.Welcome.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "SAO welcome",
+      "sha256": "f79f0dcb4419a5a293ddd6ed8483bc4a0f5e0ba5dabe0a54b4943f51a9398a97",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 88200,
+        "duration_seconds": 2.0
+      }
+    },
+    {
+      "cue": 8,
+      "enum": "SAO_UI_SOUND_ALO_WELCOME",
+      "file": "Popup.ALO.Welcome.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Popup.ALO.Welcome.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "ALO welcome",
+      "sha256": "caaaa88a0810fab013e9a1a25168fc7b3c5cb8bbfc568a0c3277660ef048c215",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 246974,
+        "duration_seconds": 5.60031746
+      }
+    },
+    {
+      "cue": 9,
+      "enum": "SAO_UI_SOUND_LINK_START",
+      "file": "LinkStart.SAO.Kirito.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/LinkStart.SAO.Kirito.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "Link Start intro",
+      "sha256": "76b95783418d693017414b6e5039f19a9533e7b9f2e3c5c48527ecf7a3b1a2c5",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 44116,
+        "duration_seconds": 1.000362812
+      }
+    },
+    {
+      "cue": 10,
+      "enum": "SAO_UI_SOUND_NERVEGEAR",
+      "file": "Startup.SAO.NerveGear.wav",
+      "source": {
+        "kind": "repository-existing original material",
+        "path": "C/platform/ui/assets/sounds/Startup.SAO.NerveGear.wav",
+        "version": "baseline HEAD08a91fb0"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "NerveGear startup",
+      "sha256": "b593b79c9d3ad9a2c16c660760190bc28ab417c1d508595f1f61287415071b15",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 171990,
+        "duration_seconds": 3.9
+      }
+    },
+    {
+      "cue": 11,
+      "enum": "SAO_UI_SOUND_MESSAGE",
+      "file": "Notify.SAO.Message.wav",
+      "source": {
+        "kind": "original synthesized",
+        "path": "C/platform/ui/assets/sounds/generate_notification_cues.py",
+        "version": "baseline HEAD08a91fb0 + generator source"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "message notification",
+      "sha256": "97e92ed95137633a63cf479af8e50a09dd6e01e40b94d00b93e2b079c11f1c8b",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 13230,
+        "duration_seconds": 0.3
+      }
+    },
+    {
+      "cue": 12,
+      "enum": "SAO_UI_SOUND_SYSTEM",
+      "file": "Notify.SAO.System.wav",
+      "source": {
+        "kind": "original synthesized",
+        "path": "C/platform/ui/assets/sounds/generate_notification_cues.py",
+        "version": "baseline HEAD08a91fb0 + generator source"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "system notification",
+      "sha256": "edde3f36d1a0115ac9e07989ef2def3a1a2813353ff76d202420ba6a709b7acf",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 22050,
+        "duration_seconds": 0.5
+      }
+    },
+    {
+      "cue": 13,
+      "enum": "SAO_UI_SOUND_WARNING",
+      "file": "Notify.SAO.Warning.wav",
+      "source": {
+        "kind": "original synthesized",
+        "path": "C/platform/ui/assets/sounds/generate_notification_cues.py",
+        "version": "baseline HEAD08a91fb0 + generator source"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "warning notification",
+      "sha256": "f3e5b373ec5a2c6e8574aa0c198ef36892b5fc8a78336c63e2394d701b5cf0a5",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 24255,
+        "duration_seconds": 0.55
+      }
+    },
+    {
+      "cue": 14,
+      "enum": "SAO_UI_SOUND_EMERGENCY",
+      "file": "Notify.SAO.Emergency.wav",
+      "source": {
+        "kind": "original synthesized",
+        "path": "C/platform/ui/assets/sounds/generate_notification_cues.py",
+        "version": "baseline HEAD08a91fb0 + generator source"
+      },
+      "license_status": "unverified; no CC0 claim",
+      "purpose": "emergency notification",
+      "sha256": "5d41f3001c6bea9b1291ceedadc659163826e5f3d8ee71a47fbadc718fb8292a",
+      "pcm": {
+        "format": "PCM",
+        "channels": 2,
+        "sample_width_bytes": 2,
+        "sample_rate_hz": 44100,
+        "frames": 33075,
+        "duration_seconds": 0.75
+      }
+    }
+  ],
+  "guide_copies": {
+    "count": 6,
+    "root": "C/launcher/docs/html/assets/sounds",
+    "entries": [
+      {
+        "file": "Dismiss.SAO.Launcher.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Dismiss.SAO.Launcher.wav",
+        "sha256": "7f28b68abca269f731a6f3857ae7c36ff18ad0bdbc16e1f99153198efe556b6c",
+        "matches_platform_asset": true
+      },
+      {
+        "file": "Dismiss.SAO.Message.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Dismiss.SAO.Message.wav",
+        "sha256": "1fa75eb1b7bd9bbab426ffad12204eaf9707bb62ba22b43e8309c709280acf98",
+        "matches_platform_asset": true
+      },
+      {
+        "file": "Feedback.SAO.Click.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Feedback.SAO.Click.wav",
+        "sha256": "a0c423913f757e6f23c60dfdec283b8157e5f1531849b101ffea36b5c83534ea",
+        "matches_platform_asset": true
+      },
+      {
+        "file": "Popup.SAO.Launcher.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Popup.SAO.Launcher.wav",
+        "sha256": "3b4833eae6c5443dd26b746a1d882739de3c2c9d06de2e346d7112919b3a5c8e",
+        "matches_platform_asset": true
+      },
+      {
+        "file": "Popup.SAO.Menu.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Popup.SAO.Menu.wav",
+        "sha256": "0c2d73c742035da8e45821a73c668838f80927a710f14b71727f550ab44945e5",
+        "matches_platform_asset": true
+      },
+      {
+        "file": "Popup.SAO.Panel.wav",
+        "path": "C/launcher/docs/html/assets/sounds/Popup.SAO.Panel.wav",
+        "sha256": "525aef3ba9c972c96ea4cdfd2c6842444bf2dc113c5d89a24afb7f9891667dc6",
+        "matches_platform_asset": true
+      }
+    ]
+  }
+}

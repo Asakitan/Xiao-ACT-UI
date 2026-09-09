@@ -686,6 +686,60 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_upload_bgra(
     }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_copy_texture(
+    sao_ui_dcomp_bridge_handle_t handle, void* d3d11_texture, uint32_t width, uint32_t height) {
+    try {
+        if (handle == nullptr || d3d11_texture == nullptr || width == 0 || height == 0)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+#if defined(_WIN32)
+        BridgeLease lease(handle);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        sao_ui_dcomp_bridge_s* bridge = lease.get();
+        if (!is_owner_thread(bridge))
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+        if (!bridge->alive || !bridge->attached || bridge->swap == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        sao_status_t status = check_device_removed(bridge);
+        if (status != SAO_STATUS_OK)
+            return status;
+        if (width != bridge->width || height != bridge->height) {
+            status = sao_ui_dcomp_bridge_resize(bridge, width, height);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        auto* source = static_cast<ID3D11Texture2D*>(d3d11_texture);
+        D3D11_TEXTURE2D_DESC source_desc{};
+        source->GetDesc(&source_desc);
+        if (source_desc.Width != width || source_desc.Height != height ||
+            source_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM || source_desc.SampleDesc.Count != 1)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        ID3D11Device* source_device = nullptr;
+        source->GetDevice(&source_device);
+        const bool same_device = source_device == bridge->d3d_dev;
+        safe_release(&source_device);
+        if (!same_device)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        ID3D11Texture2D* back_buffer = nullptr;
+        const HRESULT hr = bridge->swap->GetBuffer(0, __uuidof(ID3D11Texture2D),
+                                                   reinterpret_cast<void**>(&back_buffer));
+        if (FAILED(hr) || back_buffer == nullptr) {
+            safe_release(&back_buffer);
+            return status_from_hresult(bridge, hr);
+        }
+        bridge->d3d_ctx->CopyResource(back_buffer, source);
+        safe_release(&back_buffer);
+        return check_device_removed(bridge);
+#else
+        (void)width;
+        (void)height;
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 // ── GL interop / keyed mutex compatibility gates ─────────────────
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_register_gl_interop(

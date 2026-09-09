@@ -8,6 +8,7 @@
 
 #include "sao/ui/widget_badge.h"
 #include "sao/ui/widget_kit.h"
+#include "sao/ui/animator.h"
 
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
@@ -68,8 +69,8 @@ struct AnimatedBadgeState {
 };
 
 struct BadgePropsSnapshot {
-    int32_t count{};
-    int32_t pulse_ms{};
+    SaoUiAnimatedBadgeSpec spec{};
+    int32_t pulse_elapsed_ms{};
     bool pulsing{};
 };
 
@@ -160,13 +161,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_is_pulsing(
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
-    *out_pulsing = state->pulsing && state->spec.pulse_ms > 0;
+    *out_pulsing = state->pulsing && state->spec.pulse_ms > 0 && !sao_ui_reduced_motion_enabled() &&
+                   !sao::ui::detail::panel_theme_high_contrast();
     return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_apply_props(
     sao_ui_widget_handle_t handle, const uint8_t* props_json_utf8, size_t props_len) {
-    if (handle == nullptr || (props_json_utf8 == nullptr && props_len != 0))
+    if (handle == nullptr || props_json_utf8 == nullptr || props_len == 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try {
         nlohmann::json props = nlohmann::json::parse(
@@ -181,84 +183,85 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_apply_props(
         if (state == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> lock(state->mtx);
+        SaoUiAnimatedBadgeSpec candidate = state->spec;
+        bool pulse_changed = false;
         const auto count_it = props.find("count");
         if (count_it != props.end()) {
             int32_t count = 0;
             if (!sao::ui::detail::widget_props_i32(*count_it, &count))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.count = count;
+            candidate.count = count;
         }
         const auto dot_it = props.find("dot_radius");
         if (dot_it != props.end()) {
             int32_t dot = 0;
             if (!sao::ui::detail::widget_props_i32(*dot_it, &dot) || dot < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.dot_radius_px = dot > 0 ? dot : kDefaultDotRadius;
+            candidate.dot_radius_px = dot > 0 ? dot : kDefaultDotRadius;
         }
         const auto pulse_it = props.find("pulse_ms");
         if (pulse_it != props.end()) {
             int32_t pulse = 0;
             if (!sao::ui::detail::widget_props_i32(*pulse_it, &pulse) || pulse < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pulse_ms = pulse;
-            state->pulsing = pulse != 0;
-            state->pulse_elapsed_ms = 0;
+            candidate.pulse_ms = pulse;
+            pulse_changed = true;
         }
         const auto font_it = props.find("font_size");
         if (font_it != props.end()) {
             int32_t font = 0;
             if (!sao::ui::detail::widget_props_i32(*font_it, &font) || font < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.font_size_px = font > 0 ? font : kDefaultFontSize;
+            candidate.font_size_px = font > 0 ? font : kDefaultFontSize;
         }
         const auto padx_it = props.find("pad_x");
         if (padx_it != props.end()) {
             int32_t pad = 0;
             if (!sao::ui::detail::widget_props_i32(*padx_it, &pad) || pad < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pad_x_px = pad > 0 ? pad : kDefaultPadX;
+            candidate.pad_x_px = pad > 0 ? pad : kDefaultPadX;
         }
         const auto pady_it = props.find("pad_y");
         if (pady_it != props.end()) {
             int32_t pad = 0;
             if (!sao::ui::detail::widget_props_i32(*pady_it, &pad) || pad < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pad_y_px = pad > 0 ? pad : kDefaultPadY;
+            candidate.pad_y_px = pad > 0 ? pad : kDefaultPadY;
         }
         const auto radius_it = props.find("radius");
         if (radius_it != props.end()) {
             int32_t r = 0;
             if (!sao::ui::detail::widget_props_i32(*radius_it, &r) || r < 0)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.radius_px = r > 0 ? r : kDefaultRadius;
+            candidate.radius_px = r > 0 ? r : kDefaultRadius;
         }
         const auto fill_it = props.find("fill");
         if (fill_it != props.end()) {
             uint32_t fill = 0;
             if (!sao::ui::detail::widget_props_argb(*fill_it, &fill))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.fill_argb = fill;
+            candidate.fill_argb = fill;
         }
         const auto fg_it = props.find("fg");
         if (fg_it != props.end()) {
             uint32_t fg = 0;
             if (!sao::ui::detail::widget_props_argb(*fg_it, &fg))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.fg_argb = fg;
+            candidate.fg_argb = fg;
         }
         const auto border_it = props.find("border");
         if (border_it != props.end()) {
             uint32_t border = 0;
             if (!sao::ui::detail::widget_props_argb(*border_it, &border))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.border_argb = border;
+            candidate.border_argb = border;
         }
         const auto pulse_color_it = props.find("pulse");
         if (pulse_color_it != props.end()) {
             uint32_t pulse = 0;
             if (!sao::ui::detail::widget_props_argb(*pulse_color_it, &pulse))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.pulse_argb = pulse;
+            candidate.pulse_argb = pulse;
         }
         const auto theme_it = props.find("theme");
         if (theme_it != props.end()) {
@@ -266,7 +269,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_apply_props(
             if (!sao::ui::detail::widget_props_i32(*theme_it, &theme) ||
                 theme < 0 || theme >= SAO_UI_THEME_COUNT)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            state->spec.theme_override = static_cast<SaoUiThemeId>(theme);
+            candidate.theme_override = static_cast<SaoUiThemeId>(theme);
+        }
+        state->spec = candidate;
+        if (pulse_changed) {
+            state->pulsing = candidate.pulse_ms != 0;
+            state->pulse_elapsed_ms = 0;
         }
         return SAO_STATUS_OK;
     } catch (...) {
@@ -282,8 +290,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_tick(
     if (dt_ms < 0)
         dt_ms = 0;
     std::lock_guard<std::mutex> lock(state->mtx);
+    if (sao_ui_reduced_motion_enabled() || sao::ui::detail::panel_theme_high_contrast()) {
+        state->pulse_elapsed_ms = 0;
+        return SAO_STATUS_OK;
+    }
     if (state->pulsing && state->spec.pulse_ms > 0) {
-        state->pulse_elapsed_ms = (state->pulse_elapsed_ms + dt_ms) % state->spec.pulse_ms;
+        state->pulse_elapsed_ms = static_cast<int32_t>(
+            (static_cast<int64_t>(state->pulse_elapsed_ms) + dt_ms) % state->spec.pulse_ms);
     }
     return SAO_STATUS_OK;
 }
@@ -296,7 +309,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_animated_badge_pulse_scale(
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
-    if (!state->pulsing || state->spec.pulse_ms <= 0) {
+    if (!state->pulsing || state->spec.pulse_ms <= 0 || sao_ui_reduced_motion_enabled() ||
+        sao::ui::detail::panel_theme_high_contrast()) {
         *out_scale = 1.0F;
         return SAO_STATUS_OK;
     }
@@ -325,8 +339,8 @@ sao_status_t widget_animated_badge_apply_props(sao_ui_widget_handle_t handle,
             return SAO_STATUS_ERR_HANDLE_INVALID;
         {
             std::lock_guard<std::mutex> lock(state->mtx);
-            snapshot->count = state->spec.count;
-            snapshot->pulse_ms = state->spec.pulse_ms;
+            snapshot->spec = state->spec;
+            snapshot->pulse_elapsed_ms = state->pulse_elapsed_ms;
             snapshot->pulsing = state->pulsing;
         }
         // Delegate field parsing to the public apply_props (reuses the
@@ -355,10 +369,9 @@ sao_status_t widget_animated_badge_restore_props(sao_ui_widget_handle_t handle,
     if (state == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard<std::mutex> lock(state->mtx);
-    state->spec.count = previous->count;
-    state->spec.pulse_ms = previous->pulse_ms;
+    state->spec = previous->spec;
     state->pulsing = previous->pulsing;
-    state->pulse_elapsed_ms = 0;
+    state->pulse_elapsed_ms = previous->pulse_elapsed_ms;
     return SAO_STATUS_OK;
 }
 
@@ -383,7 +396,7 @@ sao_status_t widget_animated_badge_paint(sao_ui_widget_handle_t handle,
             scale = s;
         }
         const uint32_t fill = resolve_or(spec.fill_argb, SAO_UI_TOKEN_APP_ACCENT);
-        const uint32_t fg = resolve_or(spec.fg_argb, SAO_UI_TOKEN_WHITE);
+        const uint32_t fg = resolve_or(spec.fg_argb, SAO_UI_TOKEN_APP_TEXT);
         const uint32_t border = resolve_or(spec.border_argb, SAO_UI_TOKEN_APP_BORDER);
         const uint32_t pulse_color = sao::ui::detail::panel_theme_high_contrast()
                                          ? sao::ui::detail::panel_theme_color(

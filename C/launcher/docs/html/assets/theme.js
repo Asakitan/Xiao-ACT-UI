@@ -5,6 +5,16 @@
 
   var STORAGE_KEY = 'sao-manual-theme';
 
+  function syncGuideHidden() {
+    document.documentElement.classList.toggle('guide-hidden', document.hidden);
+  }
+
+  syncGuideHidden();
+  document.addEventListener('visibilitychange', syncGuideHidden);
+  window.addEventListener('pagehide', function () {
+    document.documentElement.classList.add('guide-hidden');
+  });
+  window.addEventListener('pageshow', syncGuideHidden);
   function applyTheme(dark) {
     var root = document.documentElement;
     if (dark) {

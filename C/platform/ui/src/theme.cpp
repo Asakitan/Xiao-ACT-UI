@@ -49,7 +49,7 @@ struct ThemeListener {
 };
 
 struct sao_ui_theme_s {
-    SaoUiThemeId active{SAO_UI_THEME_DARK};
+    SaoUiThemeId active{SAO_UI_THEME_LIGHT};
     std::vector<ThemePanelOverride> overrides;
     std::vector<ThemeListener> listeners;
     std::array<uint32_t, SAO_UI_TOKEN_COUNT> color_overrides{};
@@ -63,7 +63,7 @@ namespace {
 // Process-wide active theme id.  Atomic keeps the getter lock-free;
 // each setter dispatches the transition it wins synchronously on its
 // own calling thread.
-std::atomic<int32_t> g_active_theme_id{SAO_UI_THEME_DARK};
+std::atomic<int32_t> g_active_theme_id{SAO_UI_THEME_LIGHT};
 std::atomic<uint64_t> g_active_theme_generation{1};
 std::atomic<uint64_t> g_native_contrast_generation{};
 std::atomic<uint64_t> g_native_contrast_signature{};

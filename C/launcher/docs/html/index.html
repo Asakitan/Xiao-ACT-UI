@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+  <link rel="icon" href="data:,">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
@@ -37,6 +38,7 @@
       <a href="#quick-start">快速开始</a><a href="#hotkeys">快捷键</a><a href="#cli">启动参数</a><a href="#faq">常见问题</a>
     </nav>
     <div class="header-actions">
+      <div class="chapter-picker"><label for="chapter-select">章节</label><select id="chapter-select" aria-label="跳转到指南章节"></select></div>
       <span class="offline-badge"><i aria-hidden="true"></i>离线可用</span>
       <button type="button" id="sound-toggle" class="theme-switch sound-toggle" aria-label="关闭音效" title="音效开 / 关" aria-pressed="true">
         <svg class="icon-on" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm11.4 3a3.5 3.5 0 0 0 0-4.5v4.5Zm0-6.5A7 7 0 0 1 17 12a7 7 0 0 1-1.6 4.5L14 15a5 5 0 0 0 0-6l1.4-1.5Z"/></svg>
@@ -56,7 +58,7 @@
         <div class="hero-copy">
           <p class="hero-tag">LINK START · 用户指南接入</p>
           <h1 id="hero-title">SAO Auto<br>用户指南</h1>
-          <p class="hero-lede">连接完成。启动后屏幕左上角会挂一个 NerveGear 悬浮按钮，点它或者按 <kbd>HOME</kbd> 打开主菜单。这份手册覆盖启动、托盘菜单、快捷键，以及 AI Editor、GPU Hunt 的完整用法。</p>
+          <p class="hero-lede">连接完成。启动后屏幕右下角会挂一个 NerveGear 悬浮按钮，点它或者按 <kbd>HOME</kbd> 打开主菜单。这份手册覆盖启动、托盘菜单、快捷键，以及 AI Editor、GPU Hunt 的使用说明。</p>
           <div class="hero-actions">
             <a class="action-primary" href="#quick-start">进入指南 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 10h11.5l-4-4 1.4-1.4L17.3 10l-5.4 5.4-1.4-1.4 4-4H3z"/></svg></a>
             <a class="action-secondary" href="#hotkeys">快捷键一览</a>
@@ -108,7 +110,7 @@
           <header class="section-heading"><span class="section-number">01</span><div><p>FIRST TIME</p><h2 id="quick-title">快速开始</h2></div></header>
           <p class="section-intro">第一次用按下面的顺序来。游戏里具体有哪些功能可用，取决于你装了哪些插件。</p>
           <ol class="step-list">
-            <li data-detail="q1"><span class="step-index">01</span><div><h3>启动</h3><p>双击安装目录里的 <kbd>SaoAuto.exe</kbd>。启动后屏幕左上角出现 NerveGear 悬浮按钮，右下角托盘里多一个 SAO Auto 图标。</p></div></li>
+            <li data-detail="q1"><span class="step-index">01</span><div><h3>启动</h3><p>双击安装目录里的 <kbd>SaoAuto.exe</kbd>。启动后屏幕右下角出现 NerveGear 悬浮按钮，系统托盘里多一个 SAO Auto 图标。</p></div></li>
             <li data-detail="q2"><span class="step-index">02</span><div><h3>打开菜单</h3><p>左键点悬浮按钮，或者按 <kbd>HOME</kbd>。主菜单里能进插件、面板和各个工具。</p></div></li>
             <li data-detail="q3"><span class="step-index">03</span><div><h3>启用插件</h3><p>在主菜单的"插件"页面，把你正在玩的游戏对应的插件启用。暂时用不上的可以保持停用，之后随时改。</p></div></li>
             <li data-detail="q4"><span class="step-index">04</span><div><h3>打开面板</h3><p>从主菜单或插件界面打开需要的面板。识别功能怎么启动，以插件界面上的提示为准。</p></div></li>
@@ -119,20 +121,20 @@
         <!-- 02 托盘菜单 -->
         <section class="manual-section" id="tray-menu" aria-labelledby="tray-title">
           <header class="section-heading"><span class="section-number">02</span><div><p>TRAY MENU</p><h2 id="tray-title">系统托盘菜单</h2></div></header>
-          <p class="section-intro">SAO Auto 启动后常驻系统托盘。左键或右键点托盘图标，弹出的是同一个菜单。不想用悬浮按钮的时候，设置都从这里进。</p>
+          <p class="section-intro">SAO Auto 启动后常驻系统托盘。左键单击或右键点托盘图标会弹出菜单；左键双击会直接打开 Settings（设置）。不想用悬浮按钮的时候，设置都从这里进。</p>
           <div class="interaction-board">
             <div class="button-demo" aria-hidden="true"><span class="demo-ring ring-one"></span><span class="demo-ring ring-two"></span><span class="demo-button">SA</span><span class="demo-caption">SAO AUTO</span></div>
             <dl class="gesture-list">
-              <div data-detail="t1"><dt><span>左键 / 右键</span>托盘图标</dt><dd>弹出 SAO Auto 菜单。</dd></div>
-              <div data-detail="t2"><dt><span>设置</span>打开设置</dt><dd>启动选项、显示、面板主题等常规设置。</dd></div>
-              <div data-detail="t3"><dt><span>快捷键</span>打开快捷键</dt><dd>查看和修改当前生效的全局快捷键，改完需要保存。</dd></div>
+              <div data-detail="t1"><dt><span>左键单击 / 右键</span>托盘图标</dt><dd>弹出 SAO Auto 菜单。</dd></div>
+              <div data-detail="t2"><dt><span>左键双击</span>托盘图标</dt><dd>直接打开 Settings（设置）面板。</dd></div>
+              <div data-detail="t3"><dt><span>快捷键</span>打开快捷键</dt><dd>录入组合键后自动保存，以卡片上的“已保存”状态为准。</dd></div>
               <div data-detail="t4"><dt><span>关于 / 用户指南</span>打开本指南</dt><dd>在程序内打开离线手册；组件不可用时改用默认浏览器。</dd></div>
               <div data-detail="t5"><dt><span>退出</span>退出</dt><dd>关闭 SAO Auto，面板、快捷键和托盘图标会一并清理。</dd></div>
             </dl>
           </div>
           <div class="menu-route" aria-label="托盘菜单项概览">
-            <div data-detail="t2"><span>设置</span><strong>常规设置</strong><small>启动、显示、面板主题</small></div>
-            <div data-detail="t3"><span>快捷键</span><strong>修改快捷键</strong><small>改完记得保存</small></div>
+            <div data-detail="t2"><span>设置</span><strong>常规设置</strong><small>左键双击托盘图标打开</small></div>
+            <div data-detail="t3"><span>快捷键</span><strong>修改快捷键</strong><small>录入成功后自动保存</small></div>
             <div data-detail="t4"><span>关于 / 用户指南</span><strong>打开本手册</strong><small>程序内打开，浏览器备用</small></div>
             <div data-detail="t5"><span>退出</span><strong>退出 SAO Auto</strong><small>面板和托盘图标一并关闭</small></div>
           </div>
@@ -152,7 +154,7 @@
             </table>
           </div>
           <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>配置文件里的 F 键</strong><p>配置文件里可能还留着 <code>F5 / F9 / F10 / F11</code> 之类的旧默认值，那是兼容老配置用的，不一定生效。实际键位以"快捷键"面板里显示的为准。</p></div></aside>
-          <aside class="callout callout-gold"><span class="callout-icon" aria-hidden="true">!</span><div><strong>和游戏键位冲突</strong><p>右键托盘图标 → "快捷键"，改成一个游戏没用到的组合，保存即可。</p></div></aside>
+          <aside class="callout callout-gold"><span class="callout-icon" aria-hidden="true">!</span><div><strong>和游戏键位冲突</strong><p>右键托盘图标 → "快捷键"，点击“录入组合键”，改成没有冲突的组合；成功后会显示“已保存”。</p></div></aside>
         </section>
 
         <!-- 04 面板和插件 -->
@@ -160,13 +162,13 @@
           <header class="section-heading"><span class="section-number">04</span><div><p>PANELS &amp; PLUGINS</p><h2 id="panels-title">面板和插件</h2></div></header>
           <p class="section-intro">插件提供功能，面板负责显示。一般的顺序是：先在插件里启用功能，再从菜单里打开对应的面板。</p>
           <div class="split-guide">
-            <section data-detail="p0"><span class="guide-tag">PLUGIN</span><h3>插件</h3><ul>
+            <section><span class="guide-tag" data-detail="p0">PLUGIN</span><h3>插件</h3><ul>
               <li data-detail="p1">玩哪个游戏就启用哪个游戏的插件。</li>
               <li data-detail="p2">用不到的插件可以停用，之后随时能再启用。</li>
               <li data-detail="p3">插件启用或停用后，它带的菜单项、面板和快捷键会跟着变化。</li>
               <li data-detail="p4">插件的统一管理在主菜单的"插件"页面。</li>
             </ul></section>
-            <section data-detail="pn0"><span class="guide-tag">PANEL</span><h3>面板</h3><ul>
+            <section><span class="guide-tag" data-detail="pn0">PANEL</span><h3>面板</h3><ul>
               <li data-detail="pn1">面板从主菜单或插件界面打开。</li>
               <li data-detail="pn2">不需要的面板可以单独关掉。</li>
               <li data-detail="pn3">面板被游戏窗口挡住时，用面板自带的置顶或透明选项。</li>
@@ -181,39 +183,46 @@
           <header class="section-heading"><span class="section-number">05</span><div><p>AI EDITOR</p><h2 id="ai-title">AI Editor</h2></div></header>
           <div class="ai-entry">
             <div class="ai-copy">
-              <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>ACT</span><b>›</b><span>AI Editor (LLM)</span></p>
-              <h3>内置的 AI 对话编辑器</h3>
-              <p>AI Editor 分两部分：左边是文件编辑区，右边是 AI 对话区。第一次用需要先在设置里配置模型服务，之后就可以打开文件、在对话区提问或让它改代码。</p>
+              <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>Tools</span><b>›</b><span>AI Editor (LLM)</span></p>
+              <h3>SAO AI Editor 主面板</h3>
+              <p>Native AI Editor 是对话工作台，不是完整的文件编辑器或终端。主区域包含<strong>对话 / Conversation</strong>和<strong>输入消息 / Compose</strong>，辅助区域使用 <strong>Inspector</strong>、<strong>History</strong>、<strong>Logs</strong> 等标签切换；宽度不足时上下排列。点击<strong>编辑器设置</strong>配置模型服务与偏好。</p>
+              <p>对话记录按页浏览，每页最多六条已载入消息；阅读旧页时可用<strong>回到最新</strong>查看实时回复，分页不改变会话数据。</p>
               <ol>
-                <li data-detail="a1">第一次打开先进设置，配置要用的模型服务。</li>
-                <li data-detail="a2">选好模型和对话模式，确认当前打开的工作区。</li>
-                <li data-detail="a3">在对话框里描述要做什么；涉及改文件时，先检查它列出的改动再确认。</li>
+                <li data-detail="a1">第一次打开先进入“编辑器设置”，确认模型服务和基础偏好。</li>
+                <li data-detail="a2">回到 <strong>SAO AI Editor</strong> 主面板，按当前界面选择需要的子面板。</li>
+                <li data-detail="a3">按当前面板提供的对话、确认或提交控件操作；涉及文件时，先检查清楚再确认。</li>
                 <li data-detail="a4">重要文件建议先备份；使用在线服务时，不要发送不方便外发的内容。</li>
               </ol>
             </div>
             <div class="editor-sketch" aria-hidden="true">
               <div class="sketch-title"><i></i><i></i><i></i><span>AI EDITOR</span></div>
-              <div class="sketch-body"><div class="sketch-rail"><b></b><b></b><b></b><b></b></div><div class="sketch-code"><span></span><span></span><span></span><span></span><span></span></div><div class="sketch-chat"><strong>ASSISTANT</strong><p></p><p></p><em></em></div></div>
+              <div class="workbench-preview">
+                <header><strong>对话工作台</strong><span>会话状态</span></header>
+                <div class="workbench-preview-grid">
+                  <div><p class="workbench-preview-message"><strong>你</strong>帮我理解这段代码。</p><p class="workbench-preview-message"><strong>Assistant</strong>对话内容与回答显示在这里。</p><div class="workbench-preview-compose">输入消息 / Compose</div></div>
+                  <nav><span>Inspector</span><span>History</span><span>Logs</span></nav>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
         <!-- 06 GPU Hunt -->
         <section class="manual-section" id="gpu-hunt" aria-labelledby="gpu-hunt-title">
-          <header class="section-heading"><span class="section-number">06</span><div><p>GPU HUNT</p><h2 id="gpu-hunt-title">GPU Hunt · 找游戏相机和骨骼</h2></div></header>
+          <header class="section-heading"><span class="section-number">06</span><div><p>GPU HUNT</p><h2 id="gpu-hunt-title">GPU Hunt · 场景辅助</h2></div></header>
           <div class="ai-entry">
             <div class="ai-copy">
-              <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>工具</span><b>›</b><span>GPU Hunt</span></p>
-              <h3>输入 PID，自动定位相机矩阵和骨骼数据</h3>
-              <p>GPU Hunt 是一个独立小工具，用来定位当前场景的相机与骨骼数据，并把结果集中显示在面板上。</p>
+              <p class="route-label">怎么找到</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>Tools</span><b>›</b><span>AI Editor (LLM)</span><b>›</b><span>GPU Hunt 子面板</span></p>
+              <h3>AI Editor 中的辅助子面板</h3>
+              <p>GPU Hunt 在当前 Native AI Editor 提供时作为子面板出现，用于显示场景相关的识别状态。具体入口、状态和可用操作以面板当前显示为准。</p>
               <ol>
-                <li data-detail="g1">在面板顶部的输入框填游戏进程的 PID（任务管理器 → "详细信息"里可以看到）。</li>
-                <li data-detail="g2">点 <strong>Attach</strong>，状态变成 <em>attached</em>；再把 <strong>Auto Tick: OFF</strong> 点成 <em>ON</em>，让它以 60Hz 运行。</li>
-                <li data-detail="g3">状态变成 <em>locked</em> 表示锁定成功，矩阵和骨骼坐标会显示在面板上。游戏正在渲染 3D 画面时，一般几秒内就能锁定。</li>
-                <li data-detail="g4">切场景、换地图或游戏重启后，点 <strong>Invalidate</strong> 重新定位；不用了点 <strong>Detach</strong>。</li>
+                <li data-detail="g1">先从 SAO 菜单 → Tools → AI Editor (LLM) 打开 <strong>SAO AI Editor</strong>。</li>
+                <li data-detail="g2">在主面板中查找 <strong>GPU Hunt</strong> 子面板；没有该入口时，以当前界面为准。</li>
+                <li data-detail="g3">按子面板显示的状态和提示操作，查看当前面板提供的结果。</li>
+                <li data-detail="g4">场景或目标变化后，按子面板当前提供的刷新、重置或关闭提示处理。</li>
               </ol>
               <p class="route-label" style="margin-top:14px">结果使用</p>
-              <p>锁定后，面板会持续显示场景状态与已识别对象。AI Editor 和兼容脚本可以使用同一份会话结果；切换场景后按上面的步骤重新定位即可。</p>
+              <p>面板显示的结果以当前会话为准；切换场景或目标后，按当前界面提供的提示重新处理。本手册不展开内部工具操作。</p>
             </div>
             <div class="editor-sketch" aria-hidden="true">
               <div class="sketch-title"><i></i><i></i><i></i><span>GPU HUNT</span></div>
@@ -224,7 +233,7 @@
               </div>
             </div>
           </div>
-          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>一直锁不上？先检查这三项</strong><p>1) 游戏是不是停在加载画面或主菜单，2) PID 是不是填成了启动器而不是游戏本体，3) 面板状态栏有没有提示连接组件不可用。</p></div></aside>
+          <aside class="callout callout-cyan"><span class="callout-icon" aria-hidden="true">i</span><div><strong>子面板没有显示？</strong><p>先确认 <strong>SAO AI Editor</strong> 主面板已经打开；GPU Hunt 的入口、状态和可用操作按当前版本的面板显示为准。</p></div></aside>
         </section>
 
         <!-- 07 启动参数 -->
@@ -236,7 +245,7 @@
               <thead><tr><th scope="col">参数</th><th scope="col">类别</th><th scope="col">说明</th></tr></thead>
               <tbody>
                 <tr data-detail="c1"><td><code>--safe-mode</code></td><td>常规</td><td>跳过插件和扩展组件，只启动核心界面，排查问题时先用它</td></tr>
-                <tr data-detail="c2"><td><code>--config=&lt;path&gt;</code></td><td>常规</td><td>指定用哪个配置文件，默认用安装目录下的</td></tr>
+                <tr data-detail="c2"><td><code>--config=&lt;path&gt;</code></td><td>Provider</td><td>指定 provider 配置文件路径，不是普通 Settings 面板使用的用户设置文件</td></tr>
                 <tr data-detail="c3"><td><code>--log-level=&lt;lvl&gt;</code></td><td>常规</td><td>日志级别：trace / debug / info / warn / error / critical</td></tr>
                 <tr data-detail="c4"><td><code>--version</code> / <code>-v</code></td><td>常规</td><td>在版本窗口显示当前版本，然后退出</td></tr>
                 <tr data-detail="c5"><td><code>--help</code> / <code>-h</code></td><td>常规</td><td>打开内置帮助窗口，然后退出</td></tr>
@@ -251,7 +260,7 @@
           <header class="section-heading"><span class="section-number">08</span><div><p>TROUBLESHOOTING</p><h2 id="faq-title">常见问题</h2></div></header>
           <div class="faq-list">
             <details><summary><span>悬浮按钮不见了</span><i aria-hidden="true">+</i></summary><p>先按 <kbd>INSERT</kbd> 把它显示出来，再按 <kbd>HOME</kbd> 试试菜单能不能开。还不行就右键托盘图标确认 SAO Auto 是否还在运行；已经退出的话重新启动。</p></details>
-            <details><summary><span>按快捷键没反应</span><i aria-hidden="true">+</i></summary><p>常见原因是和游戏或其他软件的全局键冲突。右键托盘图标 → "快捷键"，里面能看到当前生效的键位，重新绑定后保存。</p></details>
+            <details><summary><span>按快捷键没反应</span><i aria-hidden="true">+</i></summary><p>常见原因是和其他软件的全局键冲突。右键托盘图标 → "快捷键"，录入新的组合后查看卡片状态；失败会显示冲突或保存回滚提示。</p></details>
             <details><summary><span>面板打开了但内容为空</span><i aria-hidden="true">+</i></summary><p>先确认对应插件已启用、当前场景符合插件的要求。部分插件有自己的"启动识别"按钮，按插件界面上的提示操作。</p></details>
             <details><summary><span>面板被游戏窗口挡住</span><i aria-hidden="true">+</i></summary><p>大多数面板自带置顶或透明选项。也可以按 <kbd>HOME</kbd> 关掉主菜单，或关掉暂时不用的覆盖层。</p></details>
             <details><summary><span>插件界面和手册描述不一致</span><i aria-hidden="true">+</i></summary><p>本手册只讲平台通用的部分。插件随版本和游戏不同，菜单、面板、快捷键会有差异，以程序里实际显示的为准。</p></details>

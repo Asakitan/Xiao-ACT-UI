@@ -81,6 +81,8 @@
 #  include <windows.h>
 #  include <d3d11.h>
 #  include <dxgi.h>
+#include "sao_ui_compositor_master_ps.h"
+#include "sao_ui_compositor_master_vs.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -200,6 +202,16 @@ struct sao_ui_layer_s {
 #endif
     sao_ui_layer_render_fn_t render_fn{nullptr};
     void*       render_user_data{nullptr};
+    sao_ui_layer_d3d11_render_fn_t d3d11_render_fn{nullptr};
+    void* d3d11_render_user_data{nullptr};
+#if defined(_WIN32)
+    ID3D11Texture2D* gpu_texture{nullptr};
+    ID3D11RenderTargetView* gpu_rtv{nullptr};
+    ID3D11ShaderResourceView* gpu_srv{nullptr};
+    uint32_t gpu_width{0};
+    uint32_t gpu_height{0};
+    uint64_t gpu_uploaded_revision{UINT64_MAX};
+#endif
     bool        redraw_requested{false};
     bool        fade_active{false};
     float       fade_from{1.0f};
@@ -249,6 +261,23 @@ struct sao_ui_compositor_s {
     uint64_t                     seq{0};
     sao_ui_d3d11_device_handle_t d3d11_device{nullptr};
     sao_ui_dcomp_bridge_handle_t dcomp_bridge{nullptr};
+#if defined(_WIN32)
+    ID3D11Texture2D* gpu_master_texture{nullptr};
+    ID3D11RenderTargetView* gpu_master_rtv{nullptr};
+    ID3D11Texture2D* gpu_readback_texture{nullptr};
+    ID3D11Texture2D* gpu_cpu_prefix_texture{nullptr};
+    ID3D11ShaderResourceView* gpu_cpu_prefix_srv{nullptr};
+    ID3D11VertexShader* gpu_master_vs{nullptr};
+    ID3D11PixelShader* gpu_master_ps{nullptr};
+    ID3D11Buffer* gpu_master_constants{nullptr};
+    ID3D11SamplerState* gpu_master_sampler{nullptr};
+    ID3D11BlendState* gpu_master_blend{nullptr};
+    uint32_t gpu_master_width{0};
+    uint32_t gpu_master_height{0};
+    uint32_t gpu_cpu_prefix_width{0};
+    uint32_t gpu_cpu_prefix_height{0};
+    uint64_t gpu_cpu_prefix_revision{UINT64_MAX};
+#endif
     sao_ui_z_order_manager_handle_t z_order{nullptr};
     void*                         game_hwnd{nullptr};
     std::thread::id               render_thread{};
@@ -806,6 +835,50 @@ void mark_layer_dirty(sao_ui_layer_s* layer) {
 
 #if defined(_WIN32)
 void release_shared_texture_objects(sao_ui_layer_s* layer);
+
+template <typename T> void release_com(T*& value) noexcept {
+    if (value != nullptr) {
+        value->Release();
+        value = nullptr;
+    }
+}
+
+void release_layer_gpu_surface(sao_ui_layer_s* layer) noexcept {
+    if (layer == nullptr)
+        return;
+    release_com(layer->gpu_srv);
+    release_com(layer->gpu_rtv);
+    release_com(layer->gpu_texture);
+    layer->gpu_width = 0;
+    layer->gpu_height = 0;
+    layer->gpu_uploaded_revision = UINT64_MAX;
+}
+
+void release_master_gpu_resources(sao_ui_compositor_s* compositor) noexcept {
+    if (compositor == nullptr)
+        return;
+    release_com(compositor->gpu_master_blend);
+    release_com(compositor->gpu_master_sampler);
+    release_com(compositor->gpu_master_constants);
+    release_com(compositor->gpu_master_ps);
+    release_com(compositor->gpu_master_vs);
+    release_com(compositor->gpu_readback_texture);
+    release_com(compositor->gpu_cpu_prefix_srv);
+    release_com(compositor->gpu_cpu_prefix_texture);
+    release_com(compositor->gpu_master_rtv);
+    release_com(compositor->gpu_master_texture);
+    compositor->gpu_master_width = 0;
+    compositor->gpu_master_height = 0;
+    compositor->gpu_cpu_prefix_width = 0;
+    compositor->gpu_cpu_prefix_height = 0;
+    compositor->gpu_cpu_prefix_revision = UINT64_MAX;
+}
+
+sao_status_t gpu_failure_status(ID3D11Device* device) noexcept {
+    return device != nullptr && FAILED(device->GetDeviceRemovedReason())
+               ? SAO_STATUS_ERR_DEVICE_LOST
+               : SAO_STATUS_ERR_OS_CALL_FAILED;
+}
 #endif
 
 bool clear_bgra_cache(sao_ui_layer_s* layer) {
@@ -822,6 +895,7 @@ bool clear_bgra_cache(sao_ui_layer_s* layer) {
 void release_detached_layer_payload(sao_ui_layer_s* layer) {
 #if defined(_WIN32)
     release_shared_texture_objects(layer);
+    release_layer_gpu_surface(layer);
 #endif
     std::vector<SaoUiLayerInputRect>{}.swap(layer->input_rects);
     clear_bgra_cache(layer);
@@ -829,6 +903,8 @@ void release_detached_layer_payload(sao_ui_layer_s* layer) {
     std::string{}.swap(layer->mmf_name);
     layer->render_fn = nullptr;
     layer->render_user_data = nullptr;
+    layer->d3d11_render_fn = nullptr;
+    layer->d3d11_render_user_data = nullptr;
     layer->fade_done_fn = nullptr;
     layer->fade_done_user_data = nullptr;
     layer->cursor_pos_fn = nullptr;
@@ -1012,6 +1088,381 @@ bool refresh_shared_texture_locked(sao_ui_layer_s* layer,
     layer->bgra_stride = layer->shared_width * 4u;
     mark_layer_dirty(layer);
     return true;
+}
+
+bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3d11_device_ptr,
+                                       std::vector<uint8_t>* out_pixels, uint32_t* out_width,
+                                       uint32_t* out_height, bool* out_has_visible_alpha,
+                                       size_t begin_layer, size_t end_layer);
+
+struct MasterLayerConstants {
+    float viewport[2];
+    float origin[2];
+    float size[2];
+    float opacity;
+    float padding;
+};
+static_assert(sizeof(MasterLayerConstants) == 32u);
+
+bool ensure_master_pipeline_locked(sao_ui_compositor_s* compositor, ID3D11Device* device,
+                                   uint32_t width, uint32_t height) {
+    if (compositor == nullptr || device == nullptr || width == 0 || height == 0)
+        return false;
+    const bool pipeline_ready =
+        compositor->gpu_master_vs != nullptr && compositor->gpu_master_ps != nullptr &&
+        compositor->gpu_master_constants != nullptr && compositor->gpu_master_sampler != nullptr &&
+        compositor->gpu_master_blend != nullptr;
+    if (!pipeline_ready) {
+        release_master_gpu_resources(compositor);
+        const HRESULT vs_hr = device->CreateVertexShader(g_sao_ui_compositor_master_vs,
+                                                         sizeof(g_sao_ui_compositor_master_vs),
+                                                         nullptr, &compositor->gpu_master_vs);
+        const HRESULT ps_hr = device->CreatePixelShader(g_sao_ui_compositor_master_ps,
+                                                        sizeof(g_sao_ui_compositor_master_ps),
+                                                        nullptr, &compositor->gpu_master_ps);
+        if (FAILED(vs_hr) || FAILED(ps_hr)) {
+            release_master_gpu_resources(compositor);
+            return false;
+        }
+        D3D11_BUFFER_DESC cb{};
+        cb.ByteWidth = sizeof(MasterLayerConstants);
+        cb.Usage = D3D11_USAGE_DYNAMIC;
+        cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        if (FAILED(device->CreateBuffer(&cb, nullptr, &compositor->gpu_master_constants))) {
+            release_master_gpu_resources(compositor);
+            return false;
+        }
+        D3D11_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampler.MaxLOD = D3D11_FLOAT32_MAX;
+        if (FAILED(device->CreateSamplerState(&sampler, &compositor->gpu_master_sampler))) {
+            release_master_gpu_resources(compositor);
+            return false;
+        }
+        D3D11_BLEND_DESC blend{};
+        blend.RenderTarget[0].BlendEnable = TRUE;
+        blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        blend.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        if (FAILED(device->CreateBlendState(&blend, &compositor->gpu_master_blend))) {
+            release_master_gpu_resources(compositor);
+            return false;
+        }
+    }
+    if (compositor->gpu_master_texture != nullptr && compositor->gpu_master_width == width &&
+        compositor->gpu_master_height == height)
+        return true;
+    release_com(compositor->gpu_readback_texture);
+    release_com(compositor->gpu_master_rtv);
+    release_com(compositor->gpu_master_texture);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &compositor->gpu_master_texture)) ||
+        FAILED(device->CreateRenderTargetView(compositor->gpu_master_texture, nullptr,
+                                              &compositor->gpu_master_rtv))) {
+        release_com(compositor->gpu_master_rtv);
+        release_com(compositor->gpu_master_texture);
+        return false;
+    }
+    compositor->gpu_master_width = width;
+    compositor->gpu_master_height = height;
+    return true;
+}
+
+bool ensure_layer_gpu_surface(sao_ui_layer_s* layer, ID3D11Device* device, uint32_t width,
+                              uint32_t height, bool render_target) {
+    if (layer == nullptr || device == nullptr || width == 0 || height == 0)
+        return false;
+    if (layer->gpu_texture != nullptr && layer->gpu_width == width && layer->gpu_height == height &&
+        (!render_target || layer->gpu_rtv != nullptr))
+        return true;
+    release_layer_gpu_surface(layer);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (render_target ? D3D11_BIND_RENDER_TARGET : 0u);
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &layer->gpu_texture)) ||
+        FAILED(device->CreateShaderResourceView(layer->gpu_texture, nullptr, &layer->gpu_srv)) ||
+        (render_target &&
+         FAILED(device->CreateRenderTargetView(layer->gpu_texture, nullptr, &layer->gpu_rtv)))) {
+        release_layer_gpu_surface(layer);
+        return false;
+    }
+    layer->gpu_width = width;
+    layer->gpu_height = height;
+    return true;
+}
+
+bool ensure_cpu_prefix_surface(sao_ui_compositor_s* compositor, ID3D11Device* device,
+                               uint32_t width, uint32_t height) {
+    if (compositor->gpu_cpu_prefix_texture != nullptr &&
+        compositor->gpu_cpu_prefix_width == width && compositor->gpu_cpu_prefix_height == height)
+        return true;
+    release_com(compositor->gpu_cpu_prefix_srv);
+    release_com(compositor->gpu_cpu_prefix_texture);
+    compositor->gpu_cpu_prefix_width = 0;
+    compositor->gpu_cpu_prefix_height = 0;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &compositor->gpu_cpu_prefix_texture)) ||
+        FAILED(device->CreateShaderResourceView(compositor->gpu_cpu_prefix_texture, nullptr,
+                                                &compositor->gpu_cpu_prefix_srv))) {
+        release_com(compositor->gpu_cpu_prefix_srv);
+        release_com(compositor->gpu_cpu_prefix_texture);
+        return false;
+    }
+    compositor->gpu_cpu_prefix_width = width;
+    compositor->gpu_cpu_prefix_height = height;
+    return true;
+}
+
+bool has_visible_native_layer_locked(const sao_ui_compositor_s* compositor) {
+    return std::ranges::any_of(compositor->layers, [](const auto& layer) {
+        return layer->visible && layer->alpha > 0.0F && layer->d3d11_render_fn != nullptr;
+    });
+}
+
+bool gpu_composition_extent_locked(const sao_ui_compositor_s* compositor, uint32_t* out_width,
+                                   uint32_t* out_height) {
+    int64_t right = 0;
+    int64_t bottom = 0;
+    for (const auto& layer : compositor->layers) {
+        if (!layer->visible || layer->alpha <= 0.0F)
+            continue;
+        const uint32_t width = layer->d3d11_render_fn != nullptr
+                                   ? static_cast<uint32_t>(std::max(0, layer->width))
+                                   : layer->bgra_width;
+        const uint32_t height = layer->d3d11_render_fn != nullptr
+                                    ? static_cast<uint32_t>(std::max(0, layer->height))
+                                    : layer->bgra_height;
+        right = std::max(right, static_cast<int64_t>(layer->x) + width);
+        bottom = std::max(bottom, static_cast<int64_t>(layer->y) + height);
+    }
+    if (right <= 0 || bottom <= 0 || right > UINT32_MAX || bottom > UINT32_MAX)
+        return false;
+    *out_width = static_cast<uint32_t>(right);
+    *out_height = static_cast<uint32_t>(bottom);
+    return true;
+}
+
+sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, float time_seconds,
+                                              uint32_t* out_width, uint32_t* out_height) {
+    auto* device = static_cast<ID3D11Device*>(sao_ui_d3d11_device_ptr(compositor->d3d11_device));
+    auto* context = static_cast<ID3D11DeviceContext*>(
+        sao_ui_d3d11_device_context_ptr(compositor->d3d11_device));
+    if (device == nullptr || context == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+
+    size_t first_native = compositor->layers.size();
+    for (size_t index = 0; index < compositor->layers.size(); ++index) {
+        const auto& layer = compositor->layers[index];
+        if (layer->visible && layer->alpha > 0.0F && layer->d3d11_render_fn != nullptr) {
+            first_native = index;
+            break;
+        }
+    }
+    if (first_native == compositor->layers.size())
+        return SAO_STATUS_OK;
+
+    // Backdrop blur and shadow depend on everything already composed below a
+    // layer. Preserve that legacy semantic by flattening the unchanged CPU
+    // prefix with the established effect path, then upload only when a prefix
+    // revision changes. Effects above a native surface require a GPU-native
+    // effect graph; report the unsupported mix rather than silently dropping it.
+    for (size_t index = first_native; index < compositor->layers.size(); ++index) {
+        const auto& layer = compositor->layers[index];
+        if (layer->visible && layer->alpha > 0.0F && layer->d3d11_render_fn == nullptr &&
+            layer->effects.flags != SAO_UI_LAYER_EFFECT_NONE)
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    }
+    uint64_t prefix_revision = 1469598103934665603ull;
+    for (size_t index = 0; index < first_native; ++index) {
+        prefix_revision ^= compositor->layers[index]->visual_revision;
+        prefix_revision *= 1099511628211ull;
+    }
+    prefix_revision ^= static_cast<uint64_t>(first_native);
+    std::vector<uint8_t> prefix_pixels;
+    uint32_t prefix_width = compositor->gpu_cpu_prefix_width;
+    uint32_t prefix_height = compositor->gpu_cpu_prefix_height;
+    bool prefix_has_alpha = prefix_width != 0 && prefix_height != 0;
+    const bool rebuild_prefix = compositor->gpu_cpu_prefix_revision != prefix_revision;
+    if (rebuild_prefix) {
+        prefix_width = 0;
+        prefix_height = 0;
+        prefix_has_alpha = false;
+        (void)compose_premultiplied_bgra_locked(compositor, device, &prefix_pixels, &prefix_width,
+                                                &prefix_height, &prefix_has_alpha, 0u,
+                                                first_native);
+    }
+
+    if (!gpu_composition_extent_locked(compositor, out_width, out_height))
+        return SAO_STATUS_OK;
+    *out_width = std::max(*out_width, prefix_width);
+    *out_height = std::max(*out_height, prefix_height);
+    if (!ensure_master_pipeline_locked(compositor, device, *out_width, *out_height))
+        return gpu_failure_status(device);
+    if (rebuild_prefix) {
+        release_com(compositor->gpu_cpu_prefix_srv);
+        release_com(compositor->gpu_cpu_prefix_texture);
+        compositor->gpu_cpu_prefix_width = 0;
+        compositor->gpu_cpu_prefix_height = 0;
+        if (prefix_has_alpha) {
+            if (!ensure_cpu_prefix_surface(compositor, device, prefix_width, prefix_height))
+                return gpu_failure_status(device);
+            context->UpdateSubresource(compositor->gpu_cpu_prefix_texture, 0, nullptr,
+                                       prefix_pixels.data(), prefix_width * 4u, 0);
+        }
+        compositor->gpu_cpu_prefix_revision = prefix_revision;
+    }
+    constexpr float transparent[4]{0, 0, 0, 0};
+    context->ClearRenderTargetView(compositor->gpu_master_rtv, transparent);
+    D3D11_VIEWPORT viewport{
+        0.0F, 0.0F, static_cast<float>(*out_width), static_cast<float>(*out_height), 0.0F, 1.0F};
+    const auto draw_surface = [&](ID3D11ShaderResourceView* surface, int32_t x, int32_t y,
+                                  uint32_t width, uint32_t height, float opacity) -> sao_status_t {
+        ID3D11RenderTargetView* target = compositor->gpu_master_rtv;
+        context->OMSetRenderTargets(1, &target, nullptr);
+        context->RSSetViewports(1, &viewport);
+        context->IASetInputLayout(nullptr);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(compositor->gpu_master_vs, nullptr, 0);
+        context->PSSetShader(compositor->gpu_master_ps, nullptr, 0);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(context->Map(compositor->gpu_master_constants, 0, D3D11_MAP_WRITE_DISCARD, 0,
+                                &mapped)))
+            return gpu_failure_status(device);
+        auto* constants = static_cast<MasterLayerConstants*>(mapped.pData);
+        *constants = {{static_cast<float>(*out_width), static_cast<float>(*out_height)},
+                      {static_cast<float>(x), static_cast<float>(y)},
+                      {static_cast<float>(width), static_cast<float>(height)},
+                      opacity,
+                      0.0F};
+        context->Unmap(compositor->gpu_master_constants, 0);
+        ID3D11Buffer* cb = compositor->gpu_master_constants;
+        context->VSSetConstantBuffers(0, 1, &cb);
+        context->PSSetConstantBuffers(0, 1, &cb);
+        context->PSSetShaderResources(0, 1, &surface);
+        context->PSSetSamplers(0, 1, &compositor->gpu_master_sampler);
+        constexpr float blend_factor[4]{0, 0, 0, 0};
+        context->OMSetBlendState(compositor->gpu_master_blend, blend_factor, 0xffffffffu);
+        context->Draw(6, 0);
+        ID3D11ShaderResourceView* null_srv = nullptr;
+        context->PSSetShaderResources(0, 1, &null_srv);
+        return SAO_STATUS_OK;
+    };
+    if (compositor->gpu_cpu_prefix_srv != nullptr) {
+        const sao_status_t draw_status =
+            draw_surface(compositor->gpu_cpu_prefix_srv, 0, 0, compositor->gpu_cpu_prefix_width,
+                         compositor->gpu_cpu_prefix_height, 1.0F);
+        if (draw_status != SAO_STATUS_OK)
+            return draw_status;
+    }
+    for (size_t index = first_native; index < compositor->layers.size(); ++index) {
+        const auto& owned = compositor->layers[index];
+        sao_ui_layer_s* layer = owned.get();
+        if (!layer->visible || layer->alpha <= 0.0F)
+            continue;
+        uint32_t layer_width = layer->bgra_width;
+        uint32_t layer_height = layer->bgra_height;
+        if (layer->d3d11_render_fn != nullptr) {
+            layer_width = static_cast<uint32_t>(std::max(0, layer->width));
+            layer_height = static_cast<uint32_t>(std::max(0, layer->height));
+            if (!ensure_layer_gpu_surface(layer, device, layer_width, layer_height, true))
+                return gpu_failure_status(device);
+            if (layer->gpu_uploaded_revision != layer->visual_revision) {
+                context->ClearRenderTargetView(layer->gpu_rtv, transparent);
+                SaoUiD3d11LayerRenderContext render_context{};
+                render_context.struct_size = SAO_UI_D3D11_LAYER_RENDER_CONTEXT_V1_SIZE;
+                render_context.width_px = layer_width;
+                render_context.height_px = layer_height;
+                render_context.time_seconds = time_seconds;
+                render_context.d3d11_device = device;
+                render_context.d3d11_context = context;
+                render_context.render_target_view = layer->gpu_rtv;
+                const sao_status_t render_status =
+                    layer->d3d11_render_fn(&render_context, layer->d3d11_render_user_data);
+                if (render_status != SAO_STATUS_OK)
+                    return render_status;
+                layer->gpu_uploaded_revision = layer->visual_revision;
+            }
+        } else {
+            if (layer->bgra_pixels.empty() || layer_width == 0 || layer_height == 0)
+                continue;
+            if (!ensure_layer_gpu_surface(layer, device, layer_width, layer_height, false))
+                return gpu_failure_status(device);
+            if (layer->gpu_uploaded_revision != layer->visual_revision) {
+                context->UpdateSubresource(layer->gpu_texture, 0, nullptr,
+                                           layer->bgra_pixels.data(), layer->bgra_stride, 0);
+                layer->gpu_uploaded_revision = layer->visual_revision;
+            }
+        }
+        const sao_status_t draw_status = draw_surface(layer->gpu_srv, layer->x, layer->y,
+                                                      layer_width, layer_height, layer->alpha);
+        if (draw_status != SAO_STATUS_OK)
+            return draw_status;
+    }
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    return FAILED(device->GetDeviceRemovedReason()) ? SAO_STATUS_ERR_DEVICE_LOST : SAO_STATUS_OK;
+}
+
+sao_status_t readback_master_locked(sao_ui_compositor_s* compositor,
+                                    std::vector<uint8_t>* out_pixels) {
+    auto* context = static_cast<ID3D11DeviceContext*>(
+        sao_ui_d3d11_device_context_ptr(compositor->d3d11_device));
+    auto* device = static_cast<ID3D11Device*>(sao_ui_d3d11_device_ptr(compositor->d3d11_device));
+    if (context == nullptr || device == nullptr || compositor->gpu_master_texture == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (compositor->gpu_readback_texture == nullptr) {
+        D3D11_TEXTURE2D_DESC desc{};
+        compositor->gpu_master_texture->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        desc.MiscFlags = 0;
+        const HRESULT create_status =
+            device->CreateTexture2D(&desc, nullptr, &compositor->gpu_readback_texture);
+        if (FAILED(create_status))
+            return gpu_failure_status(device);
+    }
+    context->CopyResource(compositor->gpu_readback_texture, compositor->gpu_master_texture);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(compositor->gpu_readback_texture, 0, D3D11_MAP_READ, 0, &mapped)))
+        return gpu_failure_status(device);
+    const size_t row_bytes = static_cast<size_t>(compositor->gpu_master_width) * 4u;
+    out_pixels->resize(row_bytes * compositor->gpu_master_height);
+    for (uint32_t row = 0; row < compositor->gpu_master_height; ++row) {
+        std::memcpy(out_pixels->data() + static_cast<size_t>(row) * row_bytes,
+                    static_cast<const uint8_t*>(mapped.pData) +
+                        static_cast<size_t>(row) * mapped.RowPitch,
+                    row_bytes);
+    }
+    context->Unmap(compositor->gpu_readback_texture, 0);
+    return SAO_STATUS_OK;
 }
 #endif
 
@@ -1440,17 +1891,17 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
     return callback_failed;
 }
 
-bool compose_premultiplied_bgra_locked(
-    const sao_ui_compositor_s* comp,
-    void* d3d11_device_ptr,
-    std::vector<uint8_t>* out_pixels,
-    uint32_t* out_width,
-    uint32_t* out_height,
-    bool* out_has_visible_alpha) {
+bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3d11_device_ptr,
+                                       std::vector<uint8_t>* out_pixels, uint32_t* out_width,
+                                       uint32_t* out_height, bool* out_has_visible_alpha,
+                                       size_t begin_layer, size_t end_layer) {
+    const size_t bounded_begin = std::min(begin_layer, comp->layers.size());
+    const size_t bounded_end = std::min(std::max(end_layer, bounded_begin), comp->layers.size());
     int64_t right = 0;
     int64_t bottom = 0;
     *out_has_visible_alpha = false;
-    for (const auto& layer : comp->layers) {
+    for (size_t index = bounded_begin; index < bounded_end; ++index) {
+        const auto& layer = comp->layers[index];
         if (!layer->visible || layer->bgra_pixels.empty() ||
             layer->bgra_width == 0 || layer->bgra_height == 0) {
             continue;
@@ -1496,7 +1947,8 @@ bool compose_premultiplied_bgra_locked(
     }
     out_pixels->assign(output_size, 0u);
 
-    for (const auto& layer : comp->layers) {
+    for (size_t index = bounded_begin; index < bounded_end; ++index) {
+        const auto& layer = comp->layers[index];
         if (!layer->visible || layer->bgra_pixels.empty() ||
             layer->bgra_width == 0 || layer->bgra_height == 0 ||
             layer->alpha <= 0.0f) {
@@ -1720,7 +2172,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_try_destroy(
 #if defined(_WIN32)
         for (const auto& layer : handle->layers) {
             release_shared_texture_objects(layer.get());
+            release_layer_gpu_surface(layer.get());
         }
+        release_master_gpu_resources(handle);
 #endif
         handle->layers.clear();
         handle->pending_layer_destroys.clear();
@@ -2126,6 +2580,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_render_fn(
             active->redraw_requested = fn != nullptr;
             return SAO_STATUS_OK;
         });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_d3d11_render_fn(
+    sao_ui_layer_handle_t layer, sao_ui_layer_d3d11_render_fn_t fn, void* user_data) {
+    if (layer == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    sao_ui_compositor_s* owner = layer->owner;
+    if (owner == nullptr || std::this_thread::get_id() != owner->render_thread)
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    return with_active_layer_locked(owner, layer,
+                                    [fn, user_data](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+#if defined(_WIN32)
+                                        release_layer_gpu_surface(active);
+#endif
+                                        active->d3d11_render_fn = fn;
+                                        active->d3d11_render_user_data = user_data;
+                                        active->redraw_requested = fn != nullptr;
+                                        mark_layer_dirty(active);
+                                        return SAO_STATUS_OK;
+                                    });
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_position(
@@ -2534,11 +3008,114 @@ sao_status_t compositor_present_impl(
     }
     const bool callback_failed =
         advance_layer_animations_and_callbacks(compositor);
+#if defined(_WIN32)
+    // A failed device-loss recovery leaves the bridge null. Retry on later
+    // owner-thread presents so a transient adapter/ResizeBuffers failure does
+    // not strand the process behind the LinkStart surface indefinitely.
+    if (compositor->d3d11_device != nullptr && compositor->dcomp_bridge == nullptr &&
+        compositor->host != nullptr) {
+        {
+            std::lock_guard<std::mutex> lock(compositor->mtx);
+            for (const auto& layer : compositor->layers) {
+                release_shared_texture_objects(layer.get());
+                release_layer_gpu_surface(layer.get());
+            }
+            release_master_gpu_resources(compositor);
+        }
+        uint32_t removed_reason = 0;
+        sao_status_t recovery_status =
+            sao_ui_d3d11_device_recreate(compositor->d3d11_device, &removed_reason);
+        if (recovery_status == SAO_STATUS_OK) {
+            SaoDcompBridgeConfig bridge_config{};
+            bridge_config.hwnd = sao_ui_overlay_host_hwnd(compositor->host);
+            bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(compositor->d3d11_device);
+            bridge_config.alpha_mode = 1;
+            bridge_config.buffer_count = 2;
+            bridge_config.width = std::max(1u, compositor->last_present_width);
+            bridge_config.height = std::max(1u, compositor->last_present_height);
+            recovery_status = sao_ui_dcomp_bridge_create(compositor->host, &bridge_config,
+                                                         &compositor->dcomp_bridge);
+        }
+        if (recovery_status != SAO_STATUS_OK)
+            return recovery_status;
+    }
+#endif
     if (compositor->dcomp_bridge == nullptr ||
         compositor->d3d11_device == nullptr) {
         return callback_failed ? SAO_STATUS_ERR_UNKNOWN
                                : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
+
+#if defined(_WIN32)
+    bool use_native_gpu = false;
+    {
+        std::lock_guard<std::mutex> lock(compositor->mtx);
+        use_native_gpu = has_visible_native_layer_locked(compositor);
+    }
+    if (use_native_gpu) {
+        const float seconds =
+            std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        uint32_t gpu_width = 0;
+        uint32_t gpu_height = 0;
+        auto compose_and_present = [&]() -> sao_status_t {
+            sao_status_t gpu_status = SAO_STATUS_OK;
+            {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                gpu_status =
+                    compose_native_layers_gpu_locked(compositor, seconds, &gpu_width, &gpu_height);
+            }
+            if (gpu_status != SAO_STATUS_OK)
+                return gpu_status;
+            if (gpu_width == 0 || gpu_height == 0)
+                return SAO_STATUS_OK;
+            gpu_status = sao_ui_dcomp_bridge_copy_texture(
+                compositor->dcomp_bridge, compositor->gpu_master_texture, gpu_width, gpu_height);
+            if (gpu_status == SAO_STATUS_OK)
+                gpu_status = sao_ui_dcomp_bridge_present(compositor->dcomp_bridge);
+            return gpu_status;
+        };
+        sao_status_t gpu_status = compose_and_present();
+        if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST) {
+            {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                for (const auto& layer : compositor->layers) {
+                    release_shared_texture_objects(layer.get());
+                    release_layer_gpu_surface(layer.get());
+                }
+                release_master_gpu_resources(compositor);
+            }
+            sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
+            compositor->dcomp_bridge = nullptr;
+            uint32_t removed_reason = 0;
+            gpu_status = sao_ui_d3d11_device_recreate(compositor->d3d11_device, &removed_reason);
+            if (gpu_status == SAO_STATUS_OK) {
+                SaoDcompBridgeConfig bridge_config{};
+                bridge_config.hwnd = sao_ui_overlay_host_hwnd(compositor->host);
+                bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(compositor->d3d11_device);
+                bridge_config.alpha_mode = 1;
+                bridge_config.buffer_count = 2;
+                bridge_config.width = gpu_width;
+                bridge_config.height = gpu_height;
+                gpu_status = sao_ui_dcomp_bridge_create(compositor->host, &bridge_config,
+                                                        &compositor->dcomp_bridge);
+            }
+            if (gpu_status == SAO_STATUS_OK)
+                gpu_status = compose_and_present();
+        }
+        if (gpu_status == SAO_STATUS_OK) {
+            std::lock_guard<std::mutex> lock(compositor->mtx);
+            compositor->presented_visible_content = gpu_width != 0 && gpu_height != 0;
+            compositor->last_present_width = gpu_width;
+            compositor->last_present_height = gpu_height;
+            for (const auto& layer : compositor->layers)
+                layer->bgra_dirty = false;
+        }
+        if (gpu_status != SAO_STATUS_OK)
+            return gpu_status;
+        return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
+    }
+#endif
 
     struct PresentedRevision {
         sao_ui_layer_s* layer;
@@ -2555,8 +3132,8 @@ sao_status_t compositor_present_impl(
     {
         std::lock_guard<std::mutex> lk(compositor->mtx);
         has_geometry_buffer = compose_premultiplied_bgra_locked(
-            compositor, d3d11_device_ptr, &composed_pixels, &width, &height,
-            &has_visible_alpha);
+            compositor, d3d11_device_ptr, &composed_pixels, &width, &height, &has_visible_alpha, 0u,
+            compositor->layers.size());
         if (!has_visible_alpha) {
             if (!compositor->presented_visible_content) {
                 if (!callback_failed) {
@@ -2617,7 +3194,9 @@ sao_status_t compositor_present_impl(
 #if defined(_WIN32)
         for (const auto& layer : compositor->layers) {
             release_shared_texture_objects(layer.get());
+            release_layer_gpu_surface(layer.get());
         }
+        release_master_gpu_resources(compositor);
 #endif
     }
     sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
@@ -2731,15 +3310,53 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
     *out_bytes = 0;
 
     try {
+#if defined(_WIN32)
+        bool native_visible = false;
+        {
+            std::lock_guard<std::mutex> lock(compositor->mtx);
+            native_visible = has_visible_native_layer_locked(compositor);
+        }
+        if (native_visible) {
+            if (std::this_thread::get_id() != compositor->render_thread)
+                return SAO_STATUS_ERR_ACCESS_DENIED;
+            std::vector<uint8_t> gpu_pixels;
+            const float seconds =
+                std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            sao_status_t gpu_status = SAO_STATUS_OK;
+            {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                gpu_status =
+                    compose_native_layers_gpu_locked(compositor, seconds, out_width, out_height);
+            }
+            if (gpu_status != SAO_STATUS_OK)
+                return gpu_status;
+            size_t required_bytes = 0;
+            if (!checked_bgra_buffer_size(*out_width, *out_height, &required_bytes))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            *out_bytes = required_bytes;
+            if (out_bgra_pixels == nullptr || capacity < required_bytes)
+                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            if (required_bytes != 0) {
+                std::lock_guard<std::mutex> lock(compositor->mtx);
+                gpu_status = readback_master_locked(compositor, &gpu_pixels);
+            }
+            if (gpu_status != SAO_STATUS_OK)
+                return gpu_status;
+            if (!gpu_pixels.empty())
+                std::memcpy(out_bgra_pixels, gpu_pixels.data(), gpu_pixels.size());
+            return SAO_STATUS_OK;
+        }
+#endif
         // This is the same composition function used by present. The caller
         // in capture_sync owns the capture lease; this function only composes.
         std::vector<uint8_t> composed_pixels;
         bool has_visible_alpha = false;
         {
             std::lock_guard<std::mutex> lock(compositor->mtx);
-            if (!compose_premultiplied_bgra_locked(
-                    compositor, nullptr, &composed_pixels, out_width, out_height,
-                    &has_visible_alpha)) {
+            if (!compose_premultiplied_bgra_locked(compositor, nullptr, &composed_pixels, out_width,
+                                                   out_height, &has_visible_alpha, 0u,
+                                                   compositor->layers.size())) {
                 return SAO_STATUS_OK;
             }
         }

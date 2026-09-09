@@ -55,28 +55,28 @@ sao_status_t parse_panel_theme(std::string_view value, PanelTheme& out) noexcept
 
 sao_status_t read_process_theme(const settings_owner::SettingsOwner& owner,
 								PanelTheme& out) noexcept {
-	out = PanelTheme::dark;
-	try {
-		Json panel_themes;
-		const sao_status_t status = owner.get_value("panel_themes", panel_themes);
-		if (status == SAO_STATUS_ERR_NOT_FOUND)
-			return SAO_STATUS_OK;
-		if (status != SAO_STATUS_OK)
-			return status;
-		if (!panel_themes.is_object())
-			return SAO_STATUS_OK;
-		const auto active = panel_themes.find("act");
-		if (active == panel_themes.end() || !active->is_string())
-			return SAO_STATUS_OK;
-		PanelTheme parsed = PanelTheme::dark;
-		if (parse_panel_theme(active->get_ref<const std::string&>(), parsed) == SAO_STATUS_OK)
-			out = parsed;
-		return SAO_STATUS_OK;
-	} catch (const std::bad_alloc&) {
-		return SAO_STATUS_ERR_UNKNOWN;
-	} catch (...) {
-		return SAO_STATUS_ERR_UNKNOWN;
-	}
+    out = PanelTheme::light;
+    try {
+        Json panel_themes;
+        const sao_status_t status = owner.get_value("panel_themes", panel_themes);
+        if (status == SAO_STATUS_ERR_NOT_FOUND)
+            return SAO_STATUS_OK;
+        if (status != SAO_STATUS_OK)
+            return status;
+        if (!panel_themes.is_object())
+            return SAO_STATUS_OK;
+        const auto active = panel_themes.find("act");
+        if (active == panel_themes.end() || !active->is_string())
+            return SAO_STATUS_OK;
+        PanelTheme parsed = PanelTheme::dark;
+        if (parse_panel_theme(active->get_ref<const std::string&>(), parsed) == SAO_STATUS_OK)
+            out = parsed;
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 sao_status_t replace_all_panel_themes(settings_owner::SettingsOwner& owner,

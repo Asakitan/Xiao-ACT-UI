@@ -18,6 +18,7 @@ inline constexpr size_t kIconCapacity = 32;
 struct ChildRowSnapshot {
     std::array<char, kNameCapacity> name_utf8{};
     std::array<char, kIconCapacity> icon_utf8{};
+    int32_t action_id{-1};
     bool can_activate{};
     SaoUiMenuBtnState state{SAO_UI_MENU_BTN_IDLE};
     int32_t visible_width_px{};

@@ -28,6 +28,10 @@
 
 #pragma once
 
+// Owner-thread EDIT proxy posts a completed Tab traversal with Shift captured
+// in wParam (0/1). Hosts forward this message alongside ordinary key messages.
+#define SAO_UI_NATIVE_TEXT_TAB_MESSAGE 0x851Au
+
 #include <cstddef>
 #include <cstdint>
 

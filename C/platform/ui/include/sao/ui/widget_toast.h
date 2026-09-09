@@ -124,6 +124,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_set_hovered(sao_ui_toast_handle
 // Close-button hit-test + dismissal.  Uses the same geometry as paint
 // (top stack entry, its × glyph box).  On hit the top entry is dismissed
 // (cancelled=true) and *out_dismissed is set.
+// x/y are pointer coordinates relative to the viewport origin supplied to paint.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_toast_click_at(
     sao_ui_toast_handle_t handle, int32_t x, int32_t y, int32_t width,
     int32_t height, bool* out_dismissed);

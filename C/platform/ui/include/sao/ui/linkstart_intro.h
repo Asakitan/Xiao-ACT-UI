@@ -13,6 +13,10 @@ extern "C" {
 
 typedef struct sao_ui_linkstart_s* sao_ui_linkstart_handle_t;
 
+// LinkStart owns compositor-native GPU resources. Creation, show/tick/dismiss,
+// and destruction are compositor owner-thread operations; the renderer never
+// creates a second swap chain or graphics device.
+
 enum SaoUiLinkStartPhase : int32_t {
     SAO_UI_LINKSTART_PHASE_HIDDEN = 0,
     SAO_UI_LINKSTART_PHASE_PARTICLE_TUNNEL = 1,

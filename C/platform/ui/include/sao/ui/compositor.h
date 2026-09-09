@@ -341,6 +341,34 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_render_fn(
     sao_ui_layer_handle_t layer,
     sao_ui_layer_render_fn_t fn, void* user_data);
 
+// Native D3D11 render target path. The callback runs synchronously on the
+// compositor owner/render thread with a transparent, layer-sized BGRA8 target
+// already bound by the compositor. All pointers are borrowed for the duration
+// of the callback. The renderer must set every D3D11 state it depends on and
+// must not call compositor/layer APIs, Present, Flush, resize the swap chain,
+// or retain the context/RTV.
+// Output must be premultiplied-alpha; the master compositor blends it with
+// ONE / INV_SRC_ALPHA in ordinary layer z order.
+struct SaoUiD3d11LayerRenderContext {
+    uint32_t struct_size;
+    uint32_t width_px;
+    uint32_t height_px;
+    float time_seconds;
+    void* d3d11_device;       // borrowed ID3D11Device*
+    void* d3d11_context;      // borrowed ID3D11DeviceContext*
+    void* render_target_view; // borrowed ID3D11RenderTargetView*
+};
+
+#define SAO_UI_D3D11_LAYER_RENDER_CONTEXT_V1_SIZE 40u
+
+typedef sao_status_t(SAO_UI_CALL* sao_ui_layer_d3d11_render_fn_t)(
+    const SaoUiD3d11LayerRenderContext* context, void* user_data);
+
+// Owner-thread-affine because binding/clearing the callback can release the
+// layer's private D3D11 render targets. Passing NULL clears the native source.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_d3d11_render_fn(
+    sao_ui_layer_handle_t layer, sao_ui_layer_d3d11_render_fn_t fn, void* user_data);
+
 // ── Layer geometry / visibility / alpha ───────────────────────
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_position(

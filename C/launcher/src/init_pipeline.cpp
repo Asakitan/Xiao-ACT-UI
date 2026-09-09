@@ -82,6 +82,7 @@
 #include "sao/ui/dc_mutation.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
 #include "sao/ui/fisheye_backdrop.h"
@@ -2268,6 +2269,7 @@ struct sao_platform_ctx {
     sao_ui_dc_mutation_coordinator_handle_t dc_mutation_coordinator;
     sao_ui_overlay_host_handle_t overlay_host;
     sao_ui_compositor_handle_t compositor;
+    sao_ui_input_router_deep_handle_t keyboard_router = nullptr;
     bool sdk_compositor_bound;
     void* user_menu = nullptr;
     sao_ui_entity_shell_handle_t entity_shell;
@@ -2301,6 +2303,8 @@ struct sao_platform_ctx {
     // 自动播的 Link Start 开场；tick 驱动，结束时打 just_finished 边沿。
     sao_ui_linkstart_handle_t linkstart = nullptr;
     bool linkstart_just_finished = false;
+    bool linkstart_pending_completion = false;
+    ULONGLONG linkstart_last_tick = 0;
 };
 
 void clear_settings_bindings() noexcept {
@@ -4230,6 +4234,13 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         sao_ui_linkstart_destroy(ctx->linkstart);
         ctx->linkstart = nullptr;
     }
+    if (ctx->keyboard_router != nullptr) {
+        const sao_status_t router_status =
+            sao_ui_input_router_deep_try_destroy(ctx->keyboard_router);
+        if (router_status != SAO_STATUS_OK)
+            return router_status;
+        ctx->keyboard_router = nullptr;
+    }
     const sao_status_t sound_status = sao_ui_sound_shutdown();
     if (sound_status != SAO_STATUS_OK)
         return sound_status;
@@ -4344,6 +4355,11 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
     sao_status_t status = SAO_STATUS_OK;
+    if (ctx->keyboard_router == nullptr) {
+        status = sao_ui_input_router_deep_create(ctx->compositor, &ctx->keyboard_router);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     status = publishEntityAuthorityBeforeOnline(
         [](void* context) { return refresh_entity(context); },
@@ -4408,6 +4424,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
                 if (sao_ui_linkstart_show(linkstart) == SAO_STATUS_OK) {
                     ctx->linkstart = linkstart;
                     ctx->linkstart_just_finished = false;
+                    ctx->linkstart_pending_completion = true;
+                    ctx->linkstart_last_tick = GetTickCount64();
                     linkstart_started = true;
                 } else {
                     sao_ui_linkstart_destroy(linkstart);
@@ -4529,22 +4547,35 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     // Link Start 开场：驱动完成边沿。 show() 已由 sao_ui_bring_online 开头调用；
     // tick 内部自己推进到 total_duration 后转入 inactive 并隐藏图层。
     if (ctx->linkstart != nullptr) {
-        bool was_active = false;
-        (void)sao_ui_linkstart_is_active(ctx->linkstart, &was_active);
-        const sao_status_t linkstart_status =
-            sao_ui_linkstart_tick(ctx->linkstart, static_cast<int32_t>(elapsed_ms));
+        // WM_TIMER is coalesced under load: its nominal 16 ms is not a clock.
+        // Use one monotonic elapsed time for visual phases and sound triggers.
+        const ULONGLONG now = GetTickCount64();
+        const auto intro_delta = static_cast<int32_t>(
+            std::min<ULONGLONG>(now - ctx->linkstart_last_tick, static_cast<ULONGLONG>(INT32_MAX)));
+        ctx->linkstart_last_tick = now;
+        const sao_status_t linkstart_status = sao_ui_linkstart_tick(ctx->linkstart, intro_delta);
         if (linkstart_status != SAO_STATUS_OK &&
-            linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED &&
-            status == SAO_STATUS_OK) {
-            status = linkstart_status;
+            linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED) {
+            // An optional intro must never prevent the real UI from opening.
+            (void)sao_ui_linkstart_dismiss(ctx->linkstart);
         }
         bool now_active = false;
         (void)sao_ui_linkstart_is_active(ctx->linkstart, &now_active);
-        if (was_active && !now_active) {
+        if (ctx->linkstart_pending_completion && !now_active) {
             ctx->linkstart_just_finished = true;
+            ctx->linkstart_pending_completion = false;
         }
     }
-    const sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    if (compositor_status != SAO_STATUS_OK && ctx->linkstart_pending_completion) {
+        (void)sao_ui_linkstart_dismiss(ctx->linkstart);
+        ctx->linkstart_pending_completion = false;
+        ctx->linkstart_just_finished = true;
+        compositor_status = sao_ui_compositor_tick(ctx->compositor);
+    }
+    // The compositor owns device recreation and retries it on the next frame.
+    if (compositor_status == SAO_STATUS_ERR_DEVICE_LOST)
+        compositor_status = SAO_STATUS_OK;
     return status == SAO_STATUS_OK ? compositor_status : status;
 }
 
@@ -4563,7 +4594,7 @@ sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx,
 }
 
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
-                                   intptr_t, int32_t* out_handled) {
+                                   intptr_t l_param, int32_t* out_handled) {
     if (!ctx || !ctx->entity_shell || !out_handled) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
@@ -4576,6 +4607,22 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
         *out_handled = 1;
         return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner()
                                  : SAO_STATUS_OK;
+    }
+    if ((message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
+         message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE) &&
+        ctx->keyboard_router != nullptr && ctx->compositor != nullptr) {
+        const HWND host = static_cast<HWND>(sao_ui_compositor_host_hwnd(ctx->compositor));
+        const HWND focus = GetFocus();
+        if (host != nullptr && focus == host) {
+            bool consumed = false;
+            const sao_status_t route_status = sao_ui_input_router_feed_raw_win32(
+                ctx->keyboard_router, message, static_cast<uint64_t>(w_param),
+                static_cast<int64_t>(l_param), &consumed);
+            if (route_status != SAO_STATUS_OK && route_status != SAO_STATUS_ERR_NOT_FOUND)
+                return route_status;
+            *out_handled = consumed ? 1 : 0;
+            return SAO_STATUS_OK;
+        }
     }
     if (message != WM_HOTKEY)
         return SAO_STATUS_OK;

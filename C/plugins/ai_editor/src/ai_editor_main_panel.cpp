@@ -49,7 +49,7 @@ constexpr size_t kMaximumComposerBytes = 48U * 1024U;
 constexpr size_t kOutputTrimBytes = 128U * 1024U;
 constexpr size_t kUiTextChunkBytes = 3600U;
 constexpr size_t kUiInputPreviewBytes = 1900U;
-constexpr size_t kMaximumVisibleMessages = 24U;
+constexpr size_t kMaximumVisibleMessages = 6U;
 constexpr size_t kMaximumMessageChunks = 4U;
 constexpr size_t kMaximumHistoryEntries = 10U;
 constexpr size_t kMaximumHistorySearchEntries = 100U;
@@ -65,6 +65,7 @@ constexpr size_t kMaximumToolStatusBytes = 64U * 1024U;
 constexpr size_t kMaximumUiNodeTextBytes = 4096U;
 constexpr size_t kMaximumUiTitleBytes = 512U;
 constexpr std::chrono::milliseconds kEventDrainInterval{75};
+constexpr std::chrono::milliseconds kPanelRefreshInterval{33};
 constexpr std::chrono::milliseconds kRunPollInterval{250};
 constexpr std::chrono::milliseconds kVtDashboardPollInterval{250};
 constexpr std::chrono::milliseconds kVtDashboardBackoffInterval{1000};
@@ -240,6 +241,8 @@ struct AiEditorMainPanelState {
     std::string conversation_id;
     std::string conversation_title{"New Chat"};
     json conversation_messages{json::array()};
+    std::string transcript_view_conversation_id;
+    size_t transcript_page_end{};
     std::string composer_text;
     std::string pending_user_text;
     std::vector<HistoryEntry> history;
@@ -317,6 +320,8 @@ struct AiEditorMainPanelState {
     bool diagnostics_auto_scroll{true};
     std::string terminal_reload_run_id;
     std::string last_spec;
+    std::chrono::steady_clock::time_point next_refresh_allowed{};
+    bool refresh_retry_pending{};
     DialogIntent pending_dialog{DialogIntent::None};
     std::optional<HistoryEntry> pending_delete;
     std::optional<HistoryEntry> undo_entry;
@@ -476,7 +481,7 @@ json button_node(std::string id, std::string label, std::string action,
 }
 
 json input_node(std::string id, std::string value, std::string action, bool disabled,
-                bool multiline = false) {
+                bool multiline = false, int32_t multiline_height = 128) {
     if (!multiline && value.size() > kUiInputPreviewBytes) {
         size_t begin = value.size() - kUiInputPreviewBytes;
         while (begin < value.size() &&
@@ -490,7 +495,7 @@ json input_node(std::string id, std::string value, std::string action, bool disa
               {"value", std::move(value)},
               {"input_type", multiline ? "multiline" : "text"},
               {"action", std::move(action)},
-              {"height", multiline ? 128 : 42}};
+              {"height", multiline ? multiline_height : 42}};
     if (multiline) {
         node["multiline"] = true;
         node["accepts_newlines"] = true;
@@ -576,14 +581,14 @@ bool valid_view(std::string_view value) {
 
 std::string view_label(std::string_view value) {
     if (value == "control")
-        return "Control Center";
+        return "控制中心";
     if (value == "history")
-        return "History";
+        return "历史";
     if (value == "diagnostics")
-        return "Diagnostics";
+        return "诊断";
     if (value == "platform")
-        return "Platform Tools";
-    return "Inspector";
+        return "平台工具";
+    return "检查器";
 }
 
 json host_status_badge(const AiEditorMainPanelState& state) {
@@ -2827,6 +2832,24 @@ std::string control_group_key(std::string_view group) {
     return key;
 }
 
+std::string_view control_group_label(std::string_view group) noexcept {
+    if (group == "Conversations")
+        return "对话";
+    if (group == "Workflows")
+        return "工作流";
+    if (group == "Agents & Prompts")
+        return "代理与提示词";
+    if (group == "Tools")
+        return "工具";
+    if (group == "Providers & Usage")
+        return "服务商与用量";
+    if (group == "Runtime & Extensions")
+        return "运行时与扩展";
+    if (group == "VT")
+        return "VT";
+    return group;
+}
+
 const json* vt_field(const json& object, std::string_view key) {
     if (!object.is_object())
         return nullptr;
@@ -3088,45 +3111,49 @@ json vt_dashboard_section(const AiEditorMainPanelState& state,
 }
 
 json control_center_section(const AiEditorMainPanelState& state, bool launcher_bound) {
-    json children = json::array();
-    children.push_back(text_node(
-        "Discover and run supported user-facing APIs. Internal codec/IPC/create/destroy/test seams are intentionally omitted.",
-        "muted", 42));
+    json header_children = json::array();
+    header_children.push_back(
+        text_node("发现并运行面向用户的 API；内部 codec/IPC/create/destroy/test 接口不在此列。",
+                  "muted", 42));
     json toolbar = json::array();
-    toolbar.push_back(button_node("control.palette.open", "Search API / action", "control.palette",
-                                  {}, "primary", !launcher_bound));
+    toolbar.push_back(button_node("control.palette.open", "搜索 API", "control.palette", {},
+                                  "primary", !launcher_bound));
     toolbar.push_back(button_node(
         "control.advanced.toggle",
-        state.control_developer_advanced ? "Developer Advanced: ON" : "Developer Advanced: OFF",
+        state.control_developer_advanced ? "开发者高级：开" : "开发者高级：关",
         "control.advanced.toggle", {}, state.control_developer_advanced ? "warn" : "ghost"));
-    toolbar.push_back(button_node("control.retry", "Retry", "control.retry", {}, "default",
+    toolbar.push_back(button_node("control.retry", "重试", "control.retry", {}, "default",
                                   state.control_last_method.empty() || !launcher_bound));
-    toolbar.push_back(button_node("control.copy", "Copy result", "control.copy", {}, "ghost",
+    toolbar.push_back(button_node("control.copy", "复制结果", "control.copy", {}, "ghost",
                                   state.control_last_result.empty()));
-    toolbar.push_back(button_node("control.vt.refresh", "Refresh VT", "control.vt.refresh",
-                                  {}, "default", !launcher_bound));
-    children.push_back(row_node(std::move(toolbar)));
-    children.push_back(row_node(json::array({
-        badge_node("Status: " + state.control_status,
-                   state.control_status == "Success" ? "ok" : state.control_status == "Failed" ? "bad" : "warn"),
-        badge_node(state.control_request_id.empty() ? "Request: -" : "Request: " + state.control_request_id,
+    toolbar.push_back(button_node("control.vt.refresh", "刷新 VT", "control.vt.refresh", {},
+                                  "default", !launcher_bound));
+    header_children.push_back(row_node(std::move(toolbar)));
+    header_children.push_back(row_node(json::array({
+        badge_node("Status: " + state.control_status, state.control_status == "Success"  ? "ok"
+                                                      : state.control_status == "Failed" ? "bad"
+                                                                                         : "warn"),
+        badge_node(state.control_request_id.empty() ? "Request: -"
+                                                    : "Request: " + state.control_request_id,
                    state.control_request_id.empty() ? "muted" : "accent"),
         badge_node("Group: " + state.control_group_filter, "muted"),
         badge_node(state.control_developer_advanced ? "Advanced enabled" : "User surface",
                    state.control_developer_advanced ? "warn" : "muted"),
     })));
     json groups = json::array();
-    groups.push_back(button_node("control.group.all", "All", "control.group", {{"group", "all"}},
+    groups.push_back(button_node("control.group.all", "全部", "control.group", {{"group", "all"}},
                                  state.control_group_filter == "all" ? "primary" : "ghost"));
     for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
                               "Providers & Usage", "Runtime & Extensions", "VT"}) {
-        groups.push_back(button_node("control.group." + control_group_key(group), group,
-                                     "control.group", {{"group", group}},
+        groups.push_back(button_node("control.group." + control_group_key(group),
+                                     std::string(control_group_label(group)), "control.group",
+                                     {{"group", group}},
                                      state.control_group_filter == group ? "primary" : "ghost"));
     }
-    children.push_back(row_node(std::move(groups)));
+    header_children.push_back(row_node(std::move(groups)));
     if (!state.control_palette_query.empty())
-        children.push_back(text_node("Search: " + state.control_palette_query, "accent", 28));
+        header_children.push_back(text_node("搜索：" + state.control_palette_query, "accent", 28));
+    json content_children = json::array();
     for (const char* group : {"Conversations", "Workflows", "Agents & Prompts", "Tools",
                               "Providers & Usage", "Runtime & Extensions", "VT"}) {
         json buttons = json::array();
@@ -3143,13 +3170,15 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
             ++visible;
         }
         if (visible != 0U) {
-            buttons.push_back(text_node(std::to_string(visible) + " available actions", "muted", 24));
-            children.push_back(card_node(group, json::array({row_node(std::move(buttons))}),
-                                         std::string_view(group) == "Tools" ? "gold" : "cyan"));
+            buttons.push_back(text_node(std::to_string(visible) + " 个可用操作", "muted", 24));
+            content_children.push_back(
+                card_node(std::string(control_group_label(group)),
+                          json::array({row_node(std::move(buttons))}),
+                          std::string_view(group) == "Tools" ? "gold" : "cyan"));
         }
     }
     if (state.control_group_filter == "all" || state.control_group_filter == "VT")
-        children.push_back(vt_dashboard_section(state, launcher_bound));
+        content_children.push_back(vt_dashboard_section(state, launcher_bound));
     if (!state.control_tools.empty() &&
         (state.control_group_filter == "all" || state.control_group_filter == "Tools")) {
         json tools = json::array();
@@ -3157,29 +3186,34 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
             const json defaults = control_tool_arguments(tool.schema);
             tools.push_back(card_node(
                 compact_text(tool.name, 180U),
-                json::array({text_node(compact_text(tool.description, 500U), "muted", 30),
-                             row_node(json::array({
-                                 badge_node(tool.read_only ? "readOnly" : "write/execute",
-                                            tool.read_only ? "ok" : "warn"),
-                                 badge_node("permission: " + tool.permission,
-                                            tool.permission == "allowed" ? "ok" : "warn"),
-                                 badge_node("category: " + (tool.category.empty() ? "unknown" : tool.category),
-                                            tool.category == "read" ? "ok" : "warn"),
-                                 badge_node("source: " + tool.permission_source, "muted"),
-                                 badge_node(tool.confirmation_required ? "confirmation required" : "confirmation: policy",
-                                            tool.confirmation_required ? "warn" : "muted"),
-                                 button_node("control.tool." + tool.name, "Call", "control.tool.call",
-                                             {{"name", tool.name}, {"readOnly", tool.read_only},
-                                              {"permission", tool.permission},
-                                              {"permissionSource", tool.permission_source},
-                                              {"category", tool.category},
-                                              {"confirmationRequired", tool.confirmation_required},
-                                              {"schema", tool.schema}, {"arguments", defaults}},
-                                             tool.read_only ? "default" : "danger", !launcher_bound),
-                             }))}),
+                json::array(
+                    {text_node(compact_text(tool.description, 500U), "muted", 30),
+                     row_node(json::array({
+                         badge_node(tool.read_only ? "readOnly" : "write/execute",
+                                    tool.read_only ? "ok" : "warn"),
+                         badge_node("permission: " + tool.permission,
+                                    tool.permission == "allowed" ? "ok" : "warn"),
+                         badge_node("category: " +
+                                        (tool.category.empty() ? "unknown" : tool.category),
+                                    tool.category == "read" ? "ok" : "warn"),
+                         badge_node("source: " + tool.permission_source, "muted"),
+                         badge_node(tool.confirmation_required ? "confirmation required"
+                                                               : "confirmation: policy",
+                                    tool.confirmation_required ? "warn" : "muted"),
+                         button_node("control.tool." + tool.name, "调用", "control.tool.call",
+                                     {{"name", tool.name},
+                                      {"readOnly", tool.read_only},
+                                      {"permission", tool.permission},
+                                      {"permissionSource", tool.permission_source},
+                                      {"category", tool.category},
+                                      {"confirmationRequired", tool.confirmation_required},
+                                      {"schema", tool.schema},
+                                      {"arguments", defaults}},
+                                     tool.read_only ? "default" : "danger", !launcher_bound),
+                     }))}),
                 tool.read_only ? "cyan" : "gold"));
         }
-        children.push_back(section_node("Discovered Tools", std::move(tools)));
+        content_children.push_back(section_node("已发现工具", std::move(tools)));
     }
     if (!state.agents.empty() &&
         (state.control_group_filter == "all" || state.control_group_filter == "Agents & Prompts")) {
@@ -3189,11 +3223,11 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
                 continue;
             agents.push_back(row_node(json::array({
                 badge_node(compact_text(agent.label, 180U), "accent"),
-                button_node("control.use.agent." + agent.id, "Use in Composer", "control.use_agent",
+                button_node("control.use.agent." + agent.id, "用于输入", "control.use_agent",
                             {{"id", agent.id}}, "default"),
             })));
         }
-        children.push_back(card_node("Agents available in Composer", std::move(agents), "cyan"));
+        content_children.push_back(card_node("可用于输入的代理", std::move(agents), "cyan"));
     }
     if (!state.control_prompts.empty() &&
         (state.control_group_filter == "all" || state.control_group_filter == "Agents & Prompts")) {
@@ -3202,21 +3236,25 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
             prompts.push_back(row_node(json::array({
                 badge_node(compact_text(prompt.name.empty() ? prompt.id : prompt.name, 180U),
                            prompt.pinned ? "accent" : "muted"),
-                button_node("control.use.prompt." + prompt.id, "Use in Composer", "control.use_prompt",
+                button_node("control.use.prompt." + prompt.id, "用于输入", "control.use_prompt",
                             {{"id", prompt.id}}, "default"),
             })));
         }
-        children.push_back(card_node("Prompts available in Composer", std::move(prompts), "gold"));
+        content_children.push_back(card_node("可用于输入的提示词", std::move(prompts), "gold"));
     }
     if (state.control_group_filter == "all" || state.control_group_filter == "Runtime & Extensions") {
-        children.push_back(card_node(
-            "Runtime lifecycle",
-            json::array({text_node("Runtime config/status use runtime.initialize and config.load. Restart/stop remain launcher-owned lifecycle controls and are shown without a dangerous RPC call.", "muted", 44),
-                         row_node(json::array({
-                             button_node("control.runtime.restart", "Restart (launcher-owned)", "control.unavailable", {}, "ghost", true),
-                             button_node("control.runtime.stop", "Stop (launcher-owned)", "control.unavailable", {}, "ghost", true),
-                         }))}),
-            "gold"));
+        content_children.push_back(
+            card_node("运行时生命周期",
+                      json::array({text_node("运行时配置与状态使用 runtime.initialize 和 "
+                                             "config.load；重启/停止仍由启动器管理。",
+                                             "muted", 44),
+                                   row_node(json::array({
+                                       button_node("control.runtime.restart", "重启（启动器管理）",
+                                                   "control.unavailable", {}, "ghost", true),
+                                       button_node("control.runtime.stop", "停止（启动器管理）",
+                                                   "control.unavailable", {}, "ghost", true),
+                                   }))}),
+                      "gold"));
     }
     json feedback = json::array();
     if (state.control_last_method.empty()) {
@@ -3237,9 +3275,23 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
         if (!state.control_last_result.empty())
             append_text_chunks(feedback, state.control_last_result, "mono", 80, 8);
     }
-    children.push_back(card_node("Control Center feedback", std::move(feedback),
-                                 state.control_status == "Failed" ? "bad" : "cyan"));
-    return section_node("Control Center / API Explorer", std::move(children));
+    content_children.push_back(card_node("控制中心反馈", std::move(feedback),
+                                         state.control_status == "Failed" ? "bad" : "cyan"));
+    json header = container_node("control-center-header", std::move(header_children), "vertical", 0,
+                                 kMainMinimumWidth, 0.0F, kMainMinimumWidth);
+    header["dock"] = "top";
+    header["role"] = "control-header";
+    json content = container_node("control-center-content", std::move(content_children), "vertical",
+                                  0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    content["dock"] = "fill";
+    content["role"] = "control-content";
+    content["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json workspace = container_node("control-center-workspace",
+                                    json::array({std::move(header), std::move(content)}), "dock", 0,
+                                    kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    workspace["title"] = "控制中心 / API 浏览器";
+    workspace["dock"] = "fill";
+    return workspace;
 }
 json choice_card(std::string title, std::string action, const std::vector<ChoiceItem>& choices,
                  std::string_view selected, std::string prefix, bool disabled) {
@@ -3277,84 +3329,115 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
     const bool selectors_disabled = run_is_active(state.run_phase);
     const std::string current_view = valid_view(state.selected_view) ? state.selected_view : "inspector";
+    const bool has_status_error = !state.run_error.empty() || !state.backend_connected;
+    const std::string header_accent = state.bootstrap_pending ? "gold"
+                                      : has_status_error      ? "bad"
+                                                              : "cyan";
 
     json app_bar = json::array();
-    app_bar.push_back(text_node("AI Editor", "title", 30));
-    json app_badges = json::array();
-    app_badges.push_back(
-        badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
-                   state.backend_connected ? "ok" : "warn"));
-    app_badges.push_back(
+    json app_identity = json::array();
+    app_identity.push_back(text_node("AI 编辑器", "title", 30));
+    app_identity.push_back(host_status_badge(state));
+    app_identity.push_back(badge_node(state.bootstrap_pending   ? "正在连接"
+                                      : state.backend_connected ? "已连接"
+                                                                : "离线",
+                                      state.bootstrap_pending   ? "warn"
+                                      : state.backend_connected ? "ok"
+                                                                : "warn"));
+    app_identity.push_back(
         badge_node("Run: " + state.run_status, run_phase_style(state.run_phase)));
-    app_badges.push_back(badge_node(
-        state.conversation_id.empty() ? "Unsaved conversation" : "Conversation persisted",
-        state.conversation_id.empty() ? "muted" : "accent"));
-    app_badges.push_back(host_status_badge(state));
-    app_bar.push_back(row_node(std::move(app_badges)));
-    app_bar.push_back(text_node(state.conversation_title, "value", 24));
-    app_bar.push_back(text_node(
+    app_bar.push_back(row_node(std::move(app_identity)));
+    const std::string backend_summary =
         state.backend_status.empty()
             ? (launcher_bound ? "Waiting for asynchronous runtime initialization..."
                               : "Offline / 离线: backend not attached; local UI remains usable.")
-            : state.backend_status,
-        state.backend_connected ? "muted" : "warn", 30));
+            : state.backend_status;
+    app_bar.push_back(row_node(json::array({
+        text_node("会话：" + state.conversation_title, "value", 24),
+        badge_node(state.conversation_id.empty() ? "尚未保存" : "已保存到历史",
+                   state.conversation_id.empty() ? "muted" : "accent"),
+    })));
     json status_actions = json::array();
-    const bool has_status_error = !state.run_error.empty() || !state.backend_connected;
-    status_actions.push_back(text_node("Status: " + (state.bootstrap_pending ? "Loading" : has_status_error ? (state.backend_connected ? "Error" : "Offline") : state.run_status),
-                                           has_status_error ? "bad" : state.bootstrap_pending ? "warn" : "muted", 30));
-    if (!state.last_status_update.empty())
-        status_actions.push_back(text_node("Updated " + state.last_status_update, "muted", 24));
-    if (!state.backend_connected || state.bootstrap_pending || !state.run_error.empty())
-        status_actions.push_back(button_node("status.retry", "Retry", "diagnostics.refresh", json::object(), "default", !launcher_bound));
+    if (!state.backend_connected || state.bootstrap_pending || !state.run_error.empty()) {
+        status_actions.push_back(text_node(compact_text(backend_summary, 240U),
+                                           has_status_error ? "warn" : "muted", 38));
+        status_actions.push_back(button_node("status.retry", "重试", "diagnostics.refresh",
+                                             json::object(), "default", !launcher_bound));
+    }
     if (run_is_active(state.run_phase))
-        status_actions.push_back(button_node("status.cancel", "Cancel", "chat.stop", json::object(), "danger"));
-    app_bar.push_back(row_node(std::move(status_actions)));
+        status_actions.push_back(
+            button_node("status.cancel", "停止", "chat.stop", json::object(), "danger"));
+    if (!status_actions.empty())
+        app_bar.push_back(row_node(std::move(status_actions)));
     SaoUiThemeId active_ui_theme = SAO_UI_THEME_DARK;
     if (sao_ui_theme_get_active_id(&active_ui_theme) != SAO_STATUS_OK)
         active_ui_theme = SAO_UI_THEME_DARK;
     json app_actions = json::array();
-    app_actions.push_back(button_node(
-        "chat.new", "New Chat", "chat.new", json::object(), "primary",
-        !launcher_bound || state.run_phase == RunPhase::Running ||
-            state.run_phase == RunPhase::Cancelling || state.history_task_pending));
-    app_actions.push_back(button_node("history.refresh", "Refresh History", "history.refresh",
+    app_actions.push_back(button_node("chat.new", "新建对话", "chat.new", json::object(), "primary",
+                                      !launcher_bound || state.run_phase == RunPhase::Running ||
+                                          state.run_phase == RunPhase::Cancelling ||
+                                          state.history_task_pending));
+    app_actions.push_back(button_node("history.refresh", "刷新历史", "history.refresh",
                                       json::object(), "default", history_actions_disabled));
-    app_actions.push_back(button_node("settings.open", "Settings", "settings.open"));
-    app_actions.push_back(button_node("gpu.hunt", "GPU Hunt", "gpu.hunt"));
-    app_actions.push_back(button_node("diagnostics.refresh", "Diagnostics",
-                                      "diagnostics.refresh", json::object(), "ghost",
-                                      !launcher_bound));
+    app_actions.push_back(button_node("settings.open", "编辑器设置", "settings.open"));
+    app_actions.push_back(button_node("gpu.hunt", "GPU 检测", "gpu.hunt"));
+    app_actions.push_back(button_node("diagnostics.refresh", "诊断", "diagnostics.refresh",
+                                      json::object(), "ghost", !launcher_bound));
     app_bar.push_back(row_node(std::move(app_actions)));
     json theme_actions = json::array();
-    theme_actions.push_back(text_node("Color Theme · session", "muted", 22));
-    theme_actions.push_back(button_node(
-        "theme.dark", "Dark", "theme.select", {{"value", "dark"}},
-        active_ui_theme == SAO_UI_THEME_DARK ? "primary" : "ghost"));
-    theme_actions.push_back(button_node(
-        "theme.light", "Light", "theme.select", {{"value", "light"}},
-        active_ui_theme == SAO_UI_THEME_LIGHT ? "primary" : "ghost"));
+    theme_actions.push_back(text_node("外观 · 当前会话", "muted", 22));
+    theme_actions.push_back(
+        button_node("theme.dark", "深色", "theme.select", {{"value", "dark"}},
+                    active_ui_theme == SAO_UI_THEME_DARK ? "primary" : "ghost"));
+    theme_actions.push_back(
+        button_node("theme.light", "浅色", "theme.select", {{"value", "light"}},
+                    active_ui_theme == SAO_UI_THEME_LIGHT ? "primary" : "ghost"));
     app_bar.push_back(row_node(std::move(theme_actions)));
-    json app_bar_node = card_node("AI Editor", std::move(app_bar), "muted");
+    json app_bar_node = card_node("", std::move(app_bar), header_accent);
+    app_bar_node["dock"] = "top";
     nodes.push_back(std::move(app_bar_node));
 
     json transcript = json::array();
-    transcript.push_back(text_node("Transcript", "title", 26));
+    const size_t transcript_count = state.conversation_messages.size();
+    const bool following_latest = state.transcript_page_end == 0U ||
+                                  state.transcript_view_conversation_id != state.conversation_id;
+    const size_t transcript_end =
+        following_latest ? transcript_count : std::min(state.transcript_page_end, transcript_count);
+    const size_t transcript_begin =
+        transcript_end > kMaximumVisibleMessages ? transcript_end - kMaximumVisibleMessages : 0U;
     const size_t transcript_total = state.conversation_messages_total == 0
                                         ? state.conversation_messages.size()
                                         : state.conversation_messages_total;
-    transcript.push_back(text_node(
-        "Showing last " + std::to_string(std::min(kMaximumVisibleMessages, transcript_total)) +
-            " of " + std::to_string(transcript_total) + " messages",
-        "muted", 24));
+    json transcript_navigation = row_node(json::array({
+        button_node("transcript.older", "较早消息", "transcript.older", json::object(), "ghost",
+                    transcript_begin == 0U),
+        button_node("transcript.newer", "较新消息", "transcript.newer", json::object(), "ghost",
+                    following_latest || transcript_end >= transcript_count),
+        button_node("transcript.latest", "回到最新", "transcript.latest", json::object(),
+                    following_latest ? "ghost" : "primary", following_latest),
+    }));
+    transcript.push_back(transcript_navigation);
+    transcript.push_back(
+        text_node(transcript_count == 0U
+                      ? "尚无已保存消息"
+                      : "已载入消息 " + std::to_string(transcript_begin + 1U) + "–" +
+                            std::to_string(transcript_end) + " / " +
+                            std::to_string(transcript_count) + " · 会话共 " +
+                            std::to_string(std::max(transcript_total, transcript_count)) + " 条",
+                  "muted", 24));
+    if (!following_latest)
+        transcript.push_back(
+            text_node("正在阅读历史页；新回复不会插入当前页，点击“回到最新”查看。", "accent", 36));
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
-        transcript.push_back(text_node("No messages yet. Start with a prompt in Composer.",
-                                       "muted", 42));
+        transcript.push_back(card_node(
+            "从一个问题开始",
+            json::array(
+                {text_node("阅读代码、梳理思路，或描述你想完成的改动。", "value", 30),
+                 text_node("在下方输入区编写消息；服务和模型可在编辑器设置中配置。", "muted", 38)}),
+            "gold"));
     } else {
-        size_t begin = 0;
-        if (state.conversation_messages.size() > kMaximumVisibleMessages)
-            begin = state.conversation_messages.size() - kMaximumVisibleMessages;
-        for (size_t index = begin; index < state.conversation_messages.size(); ++index) {
+        for (size_t index = transcript_begin; index < transcript_end; ++index) {
             const auto& message = state.conversation_messages[index];
             const std::string role =
                 compact_text(message.value("role", std::string{"message"}), 64U);
@@ -3364,13 +3447,13 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             transcript.push_back(card_node(role, std::move(message_nodes),
                                            role == "assistant" ? "cyan" : "gold"));
         }
-        if (!state.pending_user_text.empty()) {
+        if (following_latest && !state.pending_user_text.empty()) {
             json pending = json::array();
             append_text_chunks(pending, state.pending_user_text, "mono", 90);
             pending.push_back(badge_node("Pending backend append", "warn"));
             transcript.push_back(card_node("user", std::move(pending), "gold"));
         }
-        if (!state.streamed_assistant_text.empty()) {
+        if (following_latest && !state.streamed_assistant_text.empty()) {
             json assistant = json::array();
             append_text_chunks(assistant, state.streamed_assistant_text, "value", 90);
             assistant.push_back(badge_node(
@@ -3381,297 +3464,314 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             transcript.push_back(card_node("assistant", std::move(assistant), "cyan"));
         }
     }
-    json transcript_panel = card_node("Transcript", std::move(transcript), "cyan");
+    json transcript_panel = card_node("对话", std::move(transcript), "cyan");
 
-    json inspector = json::array();
-    inspector.push_back(text_node("Inspector", "title", 26));
-    json inspector_badges = json::array();
-    inspector_badges.push_back(badge_node("Status: " + state.run_status,
-                                          run_phase_style(state.run_phase)));
-    inspector_badges.push_back(badge_node("Approval: " + approval_label(state.selected_approval),
-                                          state.selected_approval == "default" ? "muted"
-                                                                               : "warn"));
-    inspector_badges.push_back(badge_node(
-        state.active_run_id.empty()
-            ? "No active run"
-            : "Run ID: " + compact_text(state.active_run_id, 1000U),
-        state.active_run_id.empty() ? "muted" : "accent"));
-    inspector.push_back(row_node(std::move(inspector_badges)));
+    auto build_inspector = [&]() {
+        json inspector = json::array();
+        inspector.push_back(text_node("检查器", "title", 26));
+        json inspector_badges = json::array();
+        inspector_badges.push_back(
+            badge_node("状态：" + state.run_status, run_phase_style(state.run_phase)));
+        inspector_badges.push_back(
+            badge_node("审批：" + approval_label(state.selected_approval),
+                       state.selected_approval == "default" ? "muted" : "warn"));
+        inspector_badges.push_back(badge_node(
+            state.active_run_id.empty() ? "当前无运行"
+                                        : "运行 ID：" + compact_text(state.active_run_id, 1000U),
+            state.active_run_id.empty() ? "muted" : "accent"));
+        inspector.push_back(row_node(std::move(inspector_badges)));
 
-    inspector.push_back(choice_row(
-        "Provider: " + choice_label(state.providers, state.selected_provider, "Auto (Settings)"),
-        "select.provider", state.providers, state.selected_provider, "provider",
-        selectors_disabled));
-    inspector.push_back(choice_row(
-        "Model: " + choice_label(state.models, state.selected_model, "Auto (Settings)"),
-        "select.model", state.models, state.selected_model, "model", selectors_disabled));
-    inspector.push_back(choice_row(
-        "Agent: " + choice_label(state.agents, state.selected_agent, "None"), "select.agent",
-        state.agents, state.selected_agent, "agent", selectors_disabled));
-    inspector.push_back(choice_row(
-        "Workflow: " + choice_label(state.workflows, state.selected_workflow, "None"),
-        "select.workflow", state.workflows, state.selected_workflow, "workflow",
-        selectors_disabled));
+        inspector.push_back(choice_row(
+            "服务商：" + choice_label(state.providers, state.selected_provider, "Auto (Settings)"),
+            "select.provider", state.providers, state.selected_provider, "provider",
+            selectors_disabled));
+        inspector.push_back(choice_row(
+            "模型：" + choice_label(state.models, state.selected_model, "Auto (Settings)"),
+            "select.model", state.models, state.selected_model, "model", selectors_disabled));
+        inspector.push_back(choice_row(
+            "代理：" + choice_label(state.agents, state.selected_agent, "None"), "select.agent",
+            state.agents, state.selected_agent, "agent", selectors_disabled));
+        inspector.push_back(
+            choice_row("工作流：" + choice_label(state.workflows, state.selected_workflow, "None"),
+                       "select.workflow", state.workflows, state.selected_workflow, "workflow",
+                       selectors_disabled));
 
-    json mode_controls = json::array();
-    mode_controls.push_back(text_node("Mode", "muted", 22));
-    for (const std::string_view value : {"ask", "plan", "agent"}) {
-        mode_controls.push_back(button_node(
-            "mode." + std::string(value), std::string(value), "select.mode", {{"value", value}},
-            state.selected_mode == value ? "primary" : "ghost", selectors_disabled));
-    }
-    inspector.push_back(row_node(std::move(mode_controls)));
-
-    json approval_controls = json::array();
-    approval_controls.push_back(text_node("Approval", "muted", 22));
-    for (const std::string_view value : {"default", "bypass", "autopilot"}) {
-        approval_controls.push_back(button_node(
-            "approval." + std::string(value),
-            value == "default" ? "Default" : value == "bypass" ? "Bypass" : "Autopilot",
-            "select.approval", {{"value", value}},
-            state.selected_approval == value ? "primary" : "ghost", selectors_disabled));
-    }
-    inspector.push_back(row_node(std::move(approval_controls)));
-    inspector.push_back(text_node(approval_description(state.selected_approval), "muted", 30));
-
-    json context_controls = json::array();
-    context_controls.push_back(text_node("Context", "muted", 22));
-    context_controls.push_back(button_node(
-        "context.conversation", "Conversation", "select.context", {{"value", "conversation"}},
-        state.selected_context == "conversation" ? "primary" : "ghost", selectors_disabled));
-    context_controls.push_back(button_node(
-        "context.current", "Current Turn", "select.context", {{"value", "current_turn"}},
-        state.selected_context == "current_turn" ? "primary" : "ghost", selectors_disabled));
-    inspector.push_back(row_node(std::move(context_controls)));
-
-    json state_components = json::array();
-    state_components.push_back(row_node(json::array({
-        badge_node(state.thinking_status.empty() ? "Thinking: idle" : "Thinking: active",
-                   state.thinking_status.empty() ? "muted" : "accent"),
-        badge_node(state.tool_status.empty() ? "Tools: idle" : "Tools: active",
-                   state.tool_status.empty() ? "muted" : "accent"),
-        badge_node(state.usage_status.empty() ? "Usage: pending" : "Usage: ready",
-                   state.usage_status.empty() ? "muted" : "ok"),
-        badge_node(state.run_error.empty() ? "Error: none" : "Error: active",
-                   state.run_error.empty() ? "ok" : "bad"),
-    })));
-    if (!state.thinking_status.empty())
-        state_components.push_back(text_node("Thinking: " + state.thinking_status, "accent", 34));
-    if (!state.refusal_status.empty())
-        state_components.push_back(text_node("Refusal: " + state.refusal_status, "warn", 34));
-    if (!state.tool_status.empty())
-        state_components.push_back(text_node("Tools: " + state.tool_status, "mono", 40));
-    if (!state.usage_status.empty())
-        state_components.push_back(text_node("Usage: " + state.usage_status, "value", 32));
-    if (!state.run_error.empty())
-        state_components.push_back(text_node("Error: " + state.run_error, "bad", 42));
-    inspector.push_back(card_node("State Components", std::move(state_components),
-                                  state.run_phase == RunPhase::Failed ? "bad" : "cyan"));
-
-    json platform_help = json::array();
-    platform_help.push_back(text_node(
-        "helperStatus — helper liveness, loaded engines, active target, and driver readiness.",
-        "muted", 40));
-    platform_help.push_back(text_node(
-        "engineSelect — switch the active memory engine after confirmation.", "muted", 40));
-    platform_help.push_back(text_node(
-        "memoryRead — read a capped PID virtual-memory range without confirmation.", "muted",
-        40));
-    platform_help.push_back(text_node(
-        "driverList — inspect driver assets, readiness, engine availability, and VT presence.",
-        "muted", 40));
-    platform_help.push_back(text_node(
-        "hidSend — submit one mouse or keyboard event after confirmation.", "muted", 40));
-    platform_help.push_back(text_node(
-        "vtStatus — reports VT_ABSENT until driver_vt is installed.", "muted", 40));
-    json platform_actions = json::array();
-    platform_actions.push_back(button_node(
-        "platform.mcp_management.open", "MCP Management", "platform.mcp_management.open",
-        json::object(), "primary", !launcher_bound));
-    platform_actions.push_back(button_node(
-        "platform.kernel_map.open", "Kernel Map", "platform.kernel_map.open", json::object(),
-        "default", !launcher_bound));
-    platform_help.push_back(row_node(std::move(platform_actions)));
-    json platform_section = section_node("Platform Tools", std::move(platform_help));
-
-    json diagnostics = json::array();
-    json diagnostic_actions = json::array();
-    diagnostic_actions.push_back(button_node("ai.ping", "Ping", "ai.ping", json::object(),
-                                             "default", !launcher_bound));
-    diagnostic_actions.push_back(button_node("ai.hello", "Hello", "ai.hello", json::object(),
-                                             "default", !launcher_bound));
-    diagnostic_actions.push_back(button_node("diagnostics.copy", "Copy", "diagnostics.copy",
-                                             json::object(), "ghost", state.output_text.empty()));
-    diagnostic_actions.push_back(button_node("output.clear", "Clear", "output.clear"));
-    diagnostic_actions.push_back(button_node("diagnostics.filter",
-                                             state.diagnostic_filter == "errors" ? "All logs" : "Only errors",
-                                             "diagnostics.filter",
-                                             {{"value", state.diagnostic_filter == "errors" ? "all" : "errors"}},
-                                             "default"));
-    diagnostic_actions.push_back(button_node("diagnostics.auto_scroll",
-                                             state.diagnostics_auto_scroll ? "Auto-scroll: ON" : "Auto-scroll: OFF",
-                                             "diagnostics.auto_scroll", json::object(), "ghost"));
-    diagnostics.push_back(row_node(std::move(diagnostic_actions)));
-    std::string diagnostic_text = state.output_text;
-    if (state.diagnostics_auto_scroll)
-        diagnostic_text = tail_text(diagnostic_text, kUiTextChunkBytes * 2U);
-    std::istringstream diagnostic_lines(diagnostic_text);
-    std::string diagnostic_line;
-    size_t diagnostic_count = 0;
-    while (std::getline(diagnostic_lines, diagnostic_line) && diagnostic_count++ < 80U) {
-        const bool is_error = diagnostic_line.find("error") != std::string::npos ||
-                              diagnostic_line.find("Error") != std::string::npos;
-        if (state.diagnostic_filter == "errors" && !is_error)
-            continue;
-        diagnostics.push_back(text_node(diagnostic_line, is_error ? "bad" : "mono", 30));
-    }
-    if (diagnostics.size() == 1U)
-        diagnostics.push_back(text_node("No diagnostic output yet.", "muted", 34));
-    json diagnostics_section = section_node("Diagnostics", std::move(diagnostics));
-    json inspector_panel = section_node("Inspector", std::move(inspector));
-
-    json history = json::array();
-    history.push_back(text_node("History", "title", 26));
-    json history_actions = json::array();
-    history_actions.push_back(button_node("history.search", "Search...", "history.search",
-                                          json::object(), "primary", history_actions_disabled));
-    history_actions.push_back(button_node("history.clear_search", "Clear Search",
-                                          "history.clear_search", json::object(), "ghost",
-                                          history_actions_disabled || state.history_query.empty()));
-    history_actions.push_back(button_node("history.refresh.section", "Refresh", "history.refresh",
-                                          json::object(), "default", history_actions_disabled));
-    const bool undo_available = state.undo_entry.has_value() &&
-                                std::chrono::steady_clock::now() < state.undo_deadline;
-    if (undo_available) {
-        const bool undo_content_available = state.undo_entry->content_available;
-        history_actions.push_back(button_node(
-            "history.undo", undo_content_available ? "Undo" : "Undo (content unavailable)",
-            "history.undo", json::object(), "primary",
-            history_actions_disabled || !undo_content_available));
-    }
-    json history_status = json::array();
-    const size_t visible_begin = state.history.empty() ? 0U : 1U;
-    const size_t visible_end = state.history.size();
-    history_status.push_back(badge_node(
-        "Showing " + std::to_string(visible_begin) + "–" + std::to_string(visible_end) +
-            " of " + std::to_string(state.history_total),
-        state.history_total == 0 ? "muted" : "accent"));
-    if (state.history_query.empty()) {
-        history_status.push_back(badge_node("Conversations: " + std::to_string(state.history_total), "muted"));
-    } else {
-        history_status.push_back(
-            badge_node("Query: " + compact_text(state.history_query, 420U), "accent"));
-        history_status.push_back(badge_node("Results: " + std::to_string(state.history_total) +
-                                                " · showing " +
-                                                std::to_string(state.history.size()),
-                                            "ok"));
-    }
-    if (state.history_task_pending)
-        history_status.push_back(badge_node("History request in progress", "warn"));
-    if (state.history_limit >= 500U)
-        history_status.push_back(badge_node("History limit: 500", "warn"));
-    if (undo_available && !state.undo_entry->content_available)
-        history_status.push_back(badge_node("Undo: content unavailable", "warn"));
-    if (state.history.size() < state.history_total)
-        history_actions.push_back(button_node(
-            "history.load_more", state.history_limit >= 500U ? "Load more (limit 500)" : "Load more",
-            "history.load_more", json::object(), "ghost",
-            history_actions_disabled || state.history_limit >= 500U));
-    history.push_back(row_node(std::move(history_actions)));
-    history.push_back(row_node(std::move(history_status)));
-    if (state.history.empty()) {
-        history.push_back(text_node(
-            !launcher_bound               ? "History is unavailable while the backend is detached."
-            : state.history_query.empty() ? "No history loaded yet. Use Refresh History."
-                                         : "No conversations matched the current search query.",
-            "muted", 34));
-    } else {
-        for (size_t index = 0; index < state.history.size(); ++index) {
-            const auto& entry = state.history[index];
-            json summary = json::array();
-            summary.push_back(text_node(compact_text(entry.title, 160U), "value", 26));
-            if (entry.search_result) {
-                summary.push_back(
-                    text_node(entry.scope + " · " + format_saved_at(entry.saved_at), "muted", 30));
-                json matches = json::array();
-                for (const auto& field : entry.matched_fields)
-                    matches.push_back(badge_node("Matched: " + field, "accent"));
-                matches.push_back(
-                    badge_node("Matches: " + std::to_string(entry.match_count), "ok"));
-                summary.push_back(row_node(std::move(matches)));
-            } else {
-                summary.push_back(text_node(
-                    std::to_string(entry.message_count) + " messages · " + entry.scope + " · " +
-                        (entry.model.empty() ? "auto model" : entry.model) + " · " +
-                        format_saved_at(entry.saved_at),
-                    "muted", 30));
-            }
-            json actions = json::array();
-            actions.push_back(button_node("history.load." + std::to_string(index), "Load",
-                                          "history.load", {{"id", entry.id}}, "primary",
-                                          history_actions_disabled));
-            actions.push_back(button_node("history.delete." + std::to_string(index), "Delete",
-                                          "history.delete", {{"id", entry.id}}, "danger",
-                                          history_actions_disabled));
-            actions.push_back(button_node("history.duplicate." + std::to_string(index),
-                                          "Duplicate / 复制", "history.duplicate",
-                                          {{"id", entry.id}}, "default", history_actions_disabled));
-            summary.push_back(row_node(std::move(actions)));
-            history.push_back(card_node(compact_text(entry.id, 500U), std::move(summary),
-                                        entry.id == state.conversation_id ? "ok" : "cyan"));
+        json mode_controls = json::array();
+        mode_controls.push_back(text_node("模式", "muted", 22));
+        for (const std::string_view value : {"ask", "plan", "agent"}) {
+            mode_controls.push_back(button_node(
+                "mode." + std::string(value), std::string(value), "select.mode", {{"value", value}},
+                state.selected_mode == value ? "primary" : "ghost", selectors_disabled));
         }
-    }
-    json history_drawer = section_node("History", std::move(history));
+        inspector.push_back(row_node(std::move(mode_controls)));
+
+        json approval_controls = json::array();
+        approval_controls.push_back(text_node("审批", "muted", 22));
+        for (const std::string_view value : {"default", "bypass", "autopilot"}) {
+            approval_controls.push_back(button_node(
+                "approval." + std::string(value),
+                value == "default"  ? "默认"
+                : value == "bypass" ? "绕过"
+                                    : "自动驾驶",
+                "select.approval", {{"value", value}},
+                state.selected_approval == value ? "primary" : "ghost", selectors_disabled));
+        }
+        inspector.push_back(row_node(std::move(approval_controls)));
+        inspector.push_back(text_node(approval_description(state.selected_approval), "muted", 30));
+
+        json context_controls = json::array();
+        context_controls.push_back(text_node("上下文", "muted", 22));
+        context_controls.push_back(button_node(
+            "context.conversation", "当前会话", "select.context", {{"value", "conversation"}},
+            state.selected_context == "conversation" ? "primary" : "ghost", selectors_disabled));
+        context_controls.push_back(button_node(
+            "context.current", "当前轮次", "select.context", {{"value", "current_turn"}},
+            state.selected_context == "current_turn" ? "primary" : "ghost", selectors_disabled));
+        inspector.push_back(row_node(std::move(context_controls)));
+
+        json state_components = json::array();
+        state_components.push_back(row_node(json::array({
+            badge_node(state.thinking_status.empty() ? "思考：空闲" : "思考：进行中",
+                       state.thinking_status.empty() ? "muted" : "accent"),
+            badge_node(state.tool_status.empty() ? "工具：空闲" : "工具：进行中",
+                       state.tool_status.empty() ? "muted" : "accent"),
+            badge_node(state.usage_status.empty() ? "用量：等待" : "用量：就绪",
+                       state.usage_status.empty() ? "muted" : "ok"),
+            badge_node(state.run_error.empty() ? "错误：无" : "错误：存在",
+                       state.run_error.empty() ? "ok" : "bad"),
+        })));
+        if (!state.thinking_status.empty())
+            state_components.push_back(text_node("思考：" + state.thinking_status, "accent", 34));
+        if (!state.refusal_status.empty())
+            state_components.push_back(text_node("拒答：" + state.refusal_status, "warn", 34));
+        if (!state.tool_status.empty())
+            state_components.push_back(text_node("工具：" + state.tool_status, "mono", 40));
+        if (!state.usage_status.empty())
+            state_components.push_back(text_node("用量：" + state.usage_status, "value", 32));
+        if (!state.run_error.empty())
+            state_components.push_back(text_node("错误：" + state.run_error, "bad", 42));
+        inspector.push_back(card_node("状态组件", std::move(state_components),
+                                      state.run_phase == RunPhase::Failed ? "bad" : "cyan"));
+        return section_node("检查器", std::move(inspector));
+    };
+
+    auto build_platform = [&]() {
+        json platform_help = json::array();
+        platform_help.push_back(text_node(
+            "helperStatus — helper liveness, loaded engines, active target, and driver readiness.",
+            "muted", 40));
+        platform_help.push_back(text_node(
+            "engineSelect — switch the active memory engine after confirmation.", "muted", 40));
+        platform_help.push_back(
+            text_node("memoryRead — read a capped PID virtual-memory range without confirmation.",
+                      "muted", 40));
+        platform_help.push_back(text_node(
+            "driverList — inspect driver assets, readiness, engine availability, and VT presence.",
+            "muted", 40));
+        platform_help.push_back(text_node(
+            "hidSend — submit one mouse or keyboard event after confirmation.", "muted", 40));
+        platform_help.push_back(
+            text_node("vtStatus — reports VT_ABSENT until driver_vt is installed.", "muted", 40));
+        json platform_actions = json::array();
+        platform_actions.push_back(button_node("platform.mcp_management.open", "MCP Management",
+                                               "platform.mcp_management.open", json::object(),
+                                               "primary", !launcher_bound));
+        platform_actions.push_back(button_node("platform.kernel_map.open", "Kernel Map",
+                                               "platform.kernel_map.open", json::object(),
+                                               "default", !launcher_bound));
+        platform_help.push_back(row_node(std::move(platform_actions)));
+        return section_node("Platform Tools", std::move(platform_help));
+    };
+
+    auto build_diagnostics = [&]() {
+        json diagnostics = json::array();
+        json diagnostic_actions = json::array();
+        diagnostic_actions.push_back(
+            button_node("ai.ping", "Ping", "ai.ping", json::object(), "default", !launcher_bound));
+        diagnostic_actions.push_back(button_node("ai.hello", "Hello", "ai.hello", json::object(),
+                                                 "default", !launcher_bound));
+        diagnostic_actions.push_back(button_node("diagnostics.copy", "Copy", "diagnostics.copy",
+                                                 json::object(), "ghost",
+                                                 state.output_text.empty()));
+        diagnostic_actions.push_back(button_node("output.clear", "Clear", "output.clear"));
+        diagnostic_actions.push_back(button_node(
+            "diagnostics.filter", state.diagnostic_filter == "errors" ? "All logs" : "Only errors",
+            "diagnostics.filter",
+            {{"value", state.diagnostic_filter == "errors" ? "all" : "errors"}}, "default"));
+        diagnostic_actions.push_back(
+            button_node("diagnostics.auto_scroll",
+                        state.diagnostics_auto_scroll ? "Auto-scroll: ON" : "Auto-scroll: OFF",
+                        "diagnostics.auto_scroll", json::object(), "ghost"));
+        diagnostics.push_back(row_node(std::move(diagnostic_actions)));
+        std::string diagnostic_text = state.output_text;
+        if (state.diagnostics_auto_scroll)
+            diagnostic_text = tail_text(diagnostic_text, kUiTextChunkBytes * 2U);
+        std::istringstream diagnostic_lines(diagnostic_text);
+        std::string diagnostic_line;
+        size_t diagnostic_count = 0;
+        while (std::getline(diagnostic_lines, diagnostic_line) && diagnostic_count++ < 80U) {
+            const bool is_error = diagnostic_line.find("error") != std::string::npos ||
+                                  diagnostic_line.find("Error") != std::string::npos;
+            if (state.diagnostic_filter == "errors" && !is_error)
+                continue;
+            diagnostics.push_back(text_node(diagnostic_line, is_error ? "bad" : "mono", 30));
+        }
+        if (diagnostics.size() == 1U)
+            diagnostics.push_back(text_node("No diagnostic output yet.", "muted", 34));
+        return section_node("Diagnostics", std::move(diagnostics));
+    };
+
+    auto build_history = [&]() {
+        json history = json::array();
+        history.push_back(text_node("History", "title", 26));
+        json history_actions = json::array();
+        history_actions.push_back(button_node("history.search", "Search...", "history.search",
+                                              json::object(), "primary", history_actions_disabled));
+        history_actions.push_back(button_node(
+            "history.clear_search", "Clear Search", "history.clear_search", json::object(), "ghost",
+            history_actions_disabled || state.history_query.empty()));
+        history_actions.push_back(button_node("history.refresh.section", "Refresh",
+                                              "history.refresh", json::object(), "default",
+                                              history_actions_disabled));
+        const bool undo_available =
+            state.undo_entry.has_value() && std::chrono::steady_clock::now() < state.undo_deadline;
+        if (undo_available) {
+            const bool undo_content_available = state.undo_entry->content_available;
+            history_actions.push_back(button_node(
+                "history.undo", undo_content_available ? "Undo" : "Undo (content unavailable)",
+                "history.undo", json::object(), "primary",
+                history_actions_disabled || !undo_content_available));
+        }
+        json history_status = json::array();
+        const size_t visible_begin = state.history.empty() ? 0U : 1U;
+        const size_t visible_end = state.history.size();
+        history_status.push_back(badge_node("Showing " + std::to_string(visible_begin) + "–" +
+                                                std::to_string(visible_end) + " of " +
+                                                std::to_string(state.history_total),
+                                            state.history_total == 0 ? "muted" : "accent"));
+        if (state.history_query.empty()) {
+            history_status.push_back(
+                badge_node("Conversations: " + std::to_string(state.history_total), "muted"));
+        } else {
+            history_status.push_back(
+                badge_node("Query: " + compact_text(state.history_query, 420U), "accent"));
+            history_status.push_back(badge_node("Results: " + std::to_string(state.history_total) +
+                                                    " · showing " +
+                                                    std::to_string(state.history.size()),
+                                                "ok"));
+        }
+        if (state.history_task_pending)
+            history_status.push_back(badge_node("History request in progress", "warn"));
+        if (state.history_limit >= 500U)
+            history_status.push_back(badge_node("History limit: 500", "warn"));
+        if (undo_available && !state.undo_entry->content_available)
+            history_status.push_back(badge_node("Undo: content unavailable", "warn"));
+        if (state.history.size() < state.history_total)
+            history_actions.push_back(
+                button_node("history.load_more",
+                            state.history_limit >= 500U ? "Load more (limit 500)" : "Load more",
+                            "history.load_more", json::object(), "ghost",
+                            history_actions_disabled || state.history_limit >= 500U));
+        history.push_back(row_node(std::move(history_actions)));
+        history.push_back(row_node(std::move(history_status)));
+        if (state.history.empty()) {
+            history.push_back(
+                text_node(!launcher_bound ? "History is unavailable while the backend is detached."
+                          : state.history_query.empty()
+                              ? "No history loaded yet. Use Refresh History."
+                              : "No conversations matched the current search query.",
+                          "muted", 34));
+        } else {
+            for (size_t index = 0; index < state.history.size(); ++index) {
+                const auto& entry = state.history[index];
+                json summary = json::array();
+                summary.push_back(text_node(compact_text(entry.title, 160U), "value", 26));
+                if (entry.search_result) {
+                    summary.push_back(text_node(
+                        entry.scope + " · " + format_saved_at(entry.saved_at), "muted", 30));
+                    json matches = json::array();
+                    for (const auto& field : entry.matched_fields)
+                        matches.push_back(badge_node("Matched: " + field, "accent"));
+                    matches.push_back(
+                        badge_node("Matches: " + std::to_string(entry.match_count), "ok"));
+                    summary.push_back(row_node(std::move(matches)));
+                } else {
+                    summary.push_back(text_node(
+                        std::to_string(entry.message_count) + " messages · " + entry.scope + " · " +
+                            (entry.model.empty() ? "auto model" : entry.model) + " · " +
+                            format_saved_at(entry.saved_at),
+                        "muted", 30));
+                }
+                json actions = json::array();
+                actions.push_back(button_node("history.load." + std::to_string(index), "Load",
+                                              "history.load", {{"id", entry.id}}, "primary",
+                                              history_actions_disabled));
+                actions.push_back(button_node("history.delete." + std::to_string(index), "Delete",
+                                              "history.delete", {{"id", entry.id}}, "danger",
+                                              history_actions_disabled));
+                actions.push_back(button_node(
+                    "history.duplicate." + std::to_string(index), "Duplicate / 复制",
+                    "history.duplicate", {{"id", entry.id}}, "default", history_actions_disabled));
+                summary.push_back(row_node(std::move(actions)));
+                history.push_back(card_node(compact_text(entry.id, 500U), std::move(summary),
+                                            entry.id == state.conversation_id ? "ok" : "cyan"));
+            }
+        }
+        return section_node("History", std::move(history));
+    };
 
     json composer = json::array();
-    composer.push_back(text_node("Composer", "title", 24));
     json shortcut_actions = json::array();
-    shortcut_actions.push_back(button_node("prompt.explain", "Explain", "composer.shortcut",
-                                           {{"value", "explain"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.fix", "Fix", "composer.shortcut",
-                                           {{"value", "fix"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.tests", "Tests", "composer.shortcut",
-                                           {{"value", "tests"}}, "ghost",
-                                           selectors_disabled));
-    shortcut_actions.push_back(button_node("prompt.review", "Review", "composer.shortcut",
-                                           {{"value", "review"}}, "ghost",
-                                           selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.explain", "解释", "composer.shortcut",
+                                           {{"value", "explain"}}, "ghost", selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.fix", "修复", "composer.shortcut",
+                                           {{"value", "fix"}}, "ghost", selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.tests", "测试", "composer.shortcut",
+                                           {{"value", "tests"}}, "ghost", selectors_disabled));
+    shortcut_actions.push_back(button_node("prompt.review", "审查", "composer.shortcut",
+                                           {{"value", "review"}}, "ghost", selectors_disabled));
     composer.push_back(row_node(std::move(shortcut_actions)));
-    composer.push_back(input_node("chat.composer", state.composer_text, "composer.edit",
-                                  selectors_disabled, true));
-    composer.push_back(text_node(
-        state.composer_text.empty()
-            ? "Multiline composer ready. Enter submits through Send; line breaks are preserved."
-            : std::to_string(state.composer_text.size()) + " UTF-8 bytes ready to send.",
-        state.composer_text.empty() ? "muted" : "accent", 30));
+    composer.push_back(input_node("chat.composer", state.composer_text, "composer.changed",
+                                  selectors_disabled, true, 96));
+    composer.push_back(
+        text_node(state.composer_text.empty()
+                      ? "在输入框编写多行内容，再点击发送。"
+                      : "已输入 " + std::to_string(state.composer_text.size()) + " 字节",
+                  state.composer_text.empty() ? "muted" : "accent", 30));
     json composer_actions = json::array();
-    composer_actions.push_back(button_node("composer.edit.button", "Edit", "composer.edit",
-                                           json::object(), "default", selectors_disabled));
-    composer_actions.push_back(button_node(
-        "chat.send", "Send", "chat.send", json::object(), "primary",
-        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
-            state.history_task_pending));
-    composer_actions.push_back(button_node("chat.stop", "Stop", "chat.stop", json::object(),
+    composer_actions.push_back(button_node("chat.send", "发送", "chat.send", json::object(),
+                                           "primary",
+                                           !launcher_bound || state.composer_text.empty() ||
+                                               selectors_disabled || state.history_task_pending));
+    composer_actions.push_back(button_node("chat.stop", "停止", "chat.stop", json::object(),
                                            "danger", !run_is_active(state.run_phase)));
-    composer_actions.push_back(button_node("composer.clear", "Clear", "composer.clear",
+    composer_actions.push_back(button_node("composer.clear", "清空", "composer.clear",
                                            json::object(), "ghost", state.composer_text.empty()));
     composer.push_back(row_node(std::move(composer_actions)));
-    json composer_panel = card_node("Composer", std::move(composer), "gold");
+    json composer_panel = card_node("输入消息", std::move(composer), "gold");
 
-    json main_section = section_node(
-        "Main", json::array({std::move(transcript_panel), std::move(composer_panel)}));
-    main_section["width"] = 0;
-    main_section["min_width"] = kMainMinimumWidth;
-    main_section["weight"] = 1.0;
+    json transcript_view =
+        container_node("ai-editor-transcript-viewport", json::array({std::move(transcript_panel)}),
+                       "vertical", 0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    transcript_view["role"] = "transcript";
+    transcript_view["dock"] = "fill";
+    transcript_view["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json composer_dock =
+        container_node("ai-editor-composer-dock", json::array({std::move(composer_panel)}),
+                       "vertical", 0, kMainMinimumWidth, 0.0F, kMainMinimumWidth);
+    composer_dock["role"] = "composer";
+    composer_dock["dock"] = "bottom";
+    composer_dock["height"] = 276;
+    json main_section =
+        container_node("ai-editor-main-workspace",
+                       json::array({std::move(transcript_view), std::move(composer_dock)}), "dock",
+                       0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    main_section["role"] = "workspace";
+    main_section["dock"] = "fill";
 
     const std::pair<std::string_view, std::string_view> sidebar_views[] = {
-        {"inspector", "Inspector"},
-        {"control", "Control"},
-        {"history", "History"},
-        {"diagnostics", "Logs"},
-        {"platform", "Tools"},
+        {"inspector", "检查器"}, {"control", "控制"},  {"history", "历史"},
+        {"diagnostics", "日志"}, {"platform", "工具"},
     };
     json primary_view_buttons = json::array();
     json secondary_view_buttons = json::array();
@@ -3684,27 +3784,29 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             .push_back(std::move(button));
     }
     json view_navigation = json::array();
-    view_navigation.push_back(text_node("Sidebar", "title", 24));
     view_navigation.push_back(row_node(std::move(primary_view_buttons)));
     view_navigation.push_back(row_node(std::move(secondary_view_buttons)));
-    view_navigation.push_back(text_node("View: " + view_label(current_view), "muted", 24));
 
     json active_secondary_view;
     if (current_view == "control")
         active_secondary_view = control_center_section(state, launcher_bound);
     else if (current_view == "history")
-        active_secondary_view = std::move(history_drawer);
+        active_secondary_view = build_history();
     else if (current_view == "diagnostics")
-        active_secondary_view = std::move(diagnostics_section);
+        active_secondary_view = build_diagnostics();
     else if (current_view == "platform")
-        active_secondary_view = std::move(platform_section);
+        active_secondary_view = build_platform();
     else
-        active_secondary_view = std::move(inspector_panel);
+        active_secondary_view = build_inspector();
 
     json secondary_children = json::array();
-    secondary_children.push_back(card_node("Workbench", std::move(view_navigation), "gold"));
+    const std::string secondary_accent = current_view == "diagnostics" && has_status_error ? "bad"
+                                         : current_view == "history"                       ? "gold"
+                                                                                           : "cyan";
+    secondary_children.push_back(card_node("Workbench · " + view_label(current_view),
+                                           std::move(view_navigation), secondary_accent));
     secondary_children.push_back(std::move(active_secondary_view));
-    json secondary_section = section_node("Secondary", std::move(secondary_children));
+    json secondary_section = section_node("", std::move(secondary_children));
     secondary_section["width"] = kWorkbenchWidth;
     secondary_section["min_width"] = kWorkbenchMinimumWidth;
     secondary_section["weight"] = 0.0;
@@ -3712,11 +3814,12 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         "ai-editor-columns",
         json::array({std::move(main_section), std::move(secondary_section)}),
         "horizontal", 0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    columns["dock"] = "fill";
     columns["fallback"]["threshold_width"] = kWorkbenchHorizontalThreshold;
     nodes.push_back(std::move(columns));
 
     std::string serialized =
-        json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+        json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}}.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
 
@@ -3738,7 +3841,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     compact_status.push_back(text_node("Conversation: " + state.conversation_title, "value", 28));
     if (!state.active_run_id.empty())
         compact_status.push_back(text_node("Run ID: " + state.active_run_id, "mono", 24));
-    if (!state.streamed_assistant_text.empty())
+    if (following_latest && !state.streamed_assistant_text.empty())
         compact_status.push_back(text_node(
             "Assistant: " + tail_text(state.streamed_assistant_text, kUiTextChunkBytes), "value",
             110));
@@ -3776,96 +3879,114 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
 
     json compact_transcript = json::array();
     compact_transcript.push_back(text_node("Transcript", "title", 26));
+    compact_transcript.push_back(transcript_navigation);
     const size_t compact_transcript_total = state.conversation_messages_total == 0
                                                 ? state.conversation_messages.size()
                                                 : state.conversation_messages_total;
     compact_transcript.push_back(text_node(
-        "Showing last " + std::to_string(std::min<size_t>(4U, state.conversation_messages.size())) +
-            " of " + std::to_string(compact_transcript_total) + " messages", "muted", 24));
+        "当前页显示 " + std::to_string(transcript_end - transcript_begin) + " 条 · 会话共 " +
+            std::to_string(std::max(compact_transcript_total, transcript_count)) + " 条",
+        "muted", 24));
+    if (!following_latest)
+        compact_transcript.push_back(
+            text_node("正在阅读历史页，点击“回到最新”查看实时回复。", "accent", 36));
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
         compact_transcript.push_back(text_node("No messages yet. Start with a prompt in Composer.",
                                                "muted", 42));
     } else {
-        const size_t begin = state.conversation_messages.size() > 4U
-                                 ? state.conversation_messages.size() - 4U
-                                 : 0U;
-        for (size_t index = begin; index < state.conversation_messages.size(); ++index) {
+        for (size_t index = transcript_begin; index < transcript_end; ++index) {
             const auto& message = state.conversation_messages[index];
             const std::string role = compact_text(message.value("role", std::string{"message"}), 64U);
             append_text_chunks(compact_transcript, message_content(message),
                                role == "assistant" ? "value" : "mono", 76, 2);
         }
-        if (!state.pending_user_text.empty())
+        if (following_latest && !state.pending_user_text.empty())
             append_text_chunks(compact_transcript, state.pending_user_text, "mono", 76, 2);
-        if (!state.streamed_assistant_text.empty())
+        if (following_latest && !state.streamed_assistant_text.empty())
             append_text_chunks(compact_transcript, state.streamed_assistant_text, "value", 76, 2);
     }
     compact_nodes.push_back(card_node("Transcript", std::move(compact_transcript), "cyan"));
 
     json compact_composer = json::array();
     json compact_shortcuts = json::array();
-    compact_shortcuts.push_back(button_node("compact.prompt.explain", "Explain",
-                                            "composer.shortcut", {{"value", "explain"}},
-                                            "ghost", selectors_disabled));
-    compact_shortcuts.push_back(button_node("compact.prompt.fix", "Fix", "composer.shortcut",
-                                            {{"value", "fix"}}, "ghost",
-                                            selectors_disabled));
-    compact_shortcuts.push_back(button_node("compact.prompt.tests", "Tests",
-                                            "composer.shortcut", {{"value", "tests"}},
-                                            "ghost", selectors_disabled));
-    compact_shortcuts.push_back(button_node("compact.prompt.review", "Review",
-                                            "composer.shortcut", {{"value", "review"}},
-                                            "ghost", selectors_disabled));
+    compact_shortcuts.push_back(button_node("compact.prompt.explain", "解释", "composer.shortcut",
+                                            {{"value", "explain"}}, "ghost", selectors_disabled));
+    compact_shortcuts.push_back(button_node("compact.prompt.fix", "修复", "composer.shortcut",
+                                            {{"value", "fix"}}, "ghost", selectors_disabled));
+    compact_shortcuts.push_back(button_node("compact.prompt.tests", "测试", "composer.shortcut",
+                                            {{"value", "tests"}}, "ghost", selectors_disabled));
+    compact_shortcuts.push_back(button_node("compact.prompt.review", "审查", "composer.shortcut",
+                                            {{"value", "review"}}, "ghost", selectors_disabled));
     compact_composer.push_back(row_node(std::move(compact_shortcuts)));
     compact_composer.push_back(input_node("compact.chat.composer", state.composer_text,
-                                          "composer.edit", selectors_disabled));
+                                          "composer.changed", selectors_disabled, true, 96));
     json compact_actions = json::array();
-    compact_actions.push_back(button_node("compact.chat.new", "New Chat", "chat.new",
-                                          json::object(), "default",
-                                          !launcher_bound ||
-                                              state.run_phase == RunPhase::Running ||
-                                              state.run_phase == RunPhase::Cancelling ||
-                                              state.history_task_pending));
-    compact_actions.push_back(button_node("compact.composer.edit", "Edit Composer",
-                                          "composer.edit", json::object(), "default",
-                                          selectors_disabled));
-    compact_actions.push_back(button_node(
-        "compact.chat.send", "Send", "chat.send", json::object(), "primary",
-        !launcher_bound || state.composer_text.empty() || selectors_disabled ||
-            state.history_task_pending));
-    compact_actions.push_back(button_node("compact.chat.stop", "Stop", "chat.stop",
-                                          json::object(), "danger",
-                                          !run_is_active(state.run_phase)));
-    compact_actions.push_back(button_node("compact.history.refresh", "Refresh History",
-                                          "history.refresh", json::object(), "ghost",
-                                          history_actions_disabled));
-    compact_actions.push_back(button_node("compact.history.search", "Search...", "history.search",
+    compact_actions.push_back(
+        button_node("compact.chat.new", "新对话", "chat.new", json::object(), "default",
+                    !launcher_bound || state.run_phase == RunPhase::Running ||
+                        state.run_phase == RunPhase::Cancelling || state.history_task_pending));
+    compact_actions.push_back(button_node("compact.chat.send", "发送", "chat.send", json::object(),
+                                          "primary",
+                                          !launcher_bound || state.composer_text.empty() ||
+                                              selectors_disabled || state.history_task_pending));
+    compact_actions.push_back(button_node("compact.chat.stop", "停止", "chat.stop", json::object(),
+                                          "danger", !run_is_active(state.run_phase)));
+    compact_actions.push_back(button_node("compact.history.refresh", "刷新历史", "history.refresh",
                                           json::object(), "ghost", history_actions_disabled));
-    compact_actions.push_back(button_node("compact.history.clear_search", "Clear Search",
+    compact_actions.push_back(button_node("compact.history.search", "搜索…", "history.search",
+                                          json::object(), "ghost", history_actions_disabled));
+    compact_actions.push_back(button_node("compact.history.clear_search", "清空搜索",
                                           "history.clear_search", json::object(), "ghost",
                                           history_actions_disabled || state.history_query.empty()));
     compact_composer.push_back(row_node(std::move(compact_actions)));
-    compact_nodes.push_back(card_node("Composer", std::move(compact_composer), "gold"));
-    return json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact_nodes)}}.dump();
+    json compact_composer_panel = card_node("Composer", std::move(compact_composer), "gold");
+    json compact_content =
+        container_node("ai-editor-compact-content", std::move(compact_nodes), "vertical", 0,
+                       kMainMinimumWidth, 1.0F, kMainMinimumWidth);
+    compact_content["dock"] = "fill";
+    compact_content["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json compact_composer_dock = container_node(
+        "ai-editor-compact-composer", json::array({std::move(compact_composer_panel)}), "vertical",
+        0, kMainMinimumWidth, 0.0F, kMainMinimumWidth);
+    compact_composer_dock["dock"] = "bottom";
+    compact_composer_dock["height"] = 220;
+    return json{
+        {"version", 1},
+        {"title", ""},
+        {"layout", "dock"},
+        {"nodes", json::array({std::move(compact_content), std::move(compact_composer_dock)})}}
+        .dump();
 }
 
 sao_status_t refresh_body(AiEditorMainPanelState& state, bool force) {
     std::lock_guard publish_lock(state.publish_mutex);
     const bool launcher_bound = state.launcher != nullptr;
+    const auto now = std::chrono::steady_clock::now();
     std::string spec;
     {
         std::lock_guard lock(state.mutex);
-        spec = build_panel_spec(state, launcher_bound);
-        if (!force && spec == state.last_spec)
+        if (!force && !state.refresh_retry_pending && now < state.next_refresh_allowed)
             return SAO_STATUS_OK;
+        spec = build_panel_spec(state, launcher_bound);
+        if (spec == state.last_spec) {
+            state.refresh_retry_pending = false;
+            state.next_refresh_allowed = now + kPanelRefreshInterval;
+            return SAO_STATUS_OK;
+        }
     }
     const sao_status_t status = sao_ui_panel_body_set_spec(
         state.body, reinterpret_cast<const uint8_t*>(spec.data()), spec.size());
-    if (status != SAO_STATUS_OK)
+    if (status != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        state.refresh_retry_pending = true;
+        state.next_refresh_allowed = std::chrono::steady_clock::time_point{};
         return status;
+    }
     std::lock_guard lock(state.mutex);
     state.last_spec = std::move(spec);
+    state.refresh_retry_pending = false;
+    state.next_refresh_allowed = now + kPanelRefreshInterval;
     return SAO_STATUS_OK;
 }
 
@@ -5315,6 +5436,25 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else if (action == "composer.clear") {
         std::lock_guard lock(state->mutex);
         state->composer_text.clear();
+    } else if (action == "transcript.older" || action == "transcript.newer" ||
+               action == "transcript.latest") {
+        std::lock_guard lock(state->mutex);
+        const size_t count = state->conversation_messages.size();
+        const bool latest = state->transcript_page_end == 0U ||
+                            state->transcript_view_conversation_id != state->conversation_id;
+        const size_t end = latest ? count : std::min(state->transcript_page_end, count);
+        state->transcript_view_conversation_id = state->conversation_id;
+        if (latest)
+            state->transcript_page_end = 0U;
+        if (action == "transcript.latest") {
+            state->transcript_page_end = 0U;
+        } else if (action == "transcript.older") {
+            if (end > kMaximumVisibleMessages)
+                state->transcript_page_end = end - kMaximumVisibleMessages;
+        } else {
+            const size_t next = end + std::min(kMaximumVisibleMessages, count - end);
+            state->transcript_page_end = next >= count ? 0U : next;
+        }
     } else if (action == "history.list" || action == "history.refresh") {
         queue_history_refresh(*state);
     } else if (action == "history.search") {
@@ -5442,7 +5582,7 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else {
         append_output_line(*state, "[warn] unknown action id: " + std::string(action));
     }
-    (void)refresh_body(*state, true);
+    (void)refresh_body(*state, false);
 }
 
 void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {

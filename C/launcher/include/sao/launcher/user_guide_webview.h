@@ -21,4 +21,7 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept;
 // callers may retry during their normal shutdown sequence.
 bool shutdownUserGuideWebView() noexcept;
 
+// Notify the guide STA after the native sound preferences change.
+void refreshUserGuideSoundPolicy() noexcept;
+
 } // namespace sao::launcher

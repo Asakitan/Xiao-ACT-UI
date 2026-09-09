@@ -321,10 +321,34 @@ json section_node(std::string title, json children, std::string_view accent = "c
                 {"accent", accent}, {"children", std::move(children)}};
 }
 
+json dock_document(json nodes, std::string content_id, int min_width = 640) {
+    if (!nodes.is_array() || nodes.empty())
+        return json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
+    json top = std::move(nodes.front());
+    nodes.erase(nodes.begin());
+    top["dock"] = "top";
+    json content{{"type", "section"},
+                 {"id", std::move(content_id)},
+                 {"container", true},
+                 {"layout", "vertical"},
+                 {"width", 0},
+                 {"min_width", min_width},
+                 {"weight", 1.0F},
+                 {"dock", "fill"},
+                 {"scroll", {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}}},
+                 {"children", std::move(nodes)}};
+    return json{{"version", 1},
+                {"title", ""},
+                {"layout", "dock"},
+                {"nodes", json::array({std::move(top), std::move(content)})}};
+}
+
 json status_strip_node(std::string label, std::string message, std::string_view accent) {
-    return card_node("Status / 状态", json::array({row_node(json::array({
-        badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
-                     accent);
+    return card_node(
+        "状态",
+        json::array({row_node(json::array(
+            {badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
+        accent);
 }
 
 json button_node(std::string id, std::string label, std::string action, json payload,
@@ -1302,7 +1326,7 @@ class Owner::Impl final {
         case TaskKind::List:
             return "List";
         case TaskKind::Detail:
-            return "Detail";
+            return "Detail / 详情";
         case TaskKind::Install:
             return "Download / verify / install";
         case TaskKind::Uninstall:
@@ -1315,32 +1339,41 @@ class Owner::Impl final {
         const bool busy = worker_active_ || !tasks_.empty();
         json controls = json::array();
         const std::string_view status_accent = !error_text_.empty() ? "danger" : busy ? "gold" : online_ ? "ok" : "danger";
-        nodes.push_back(status_strip_node(busy ? "Busy / 处理中" : online_ ? "Online / 在线" : "Offline / 离线",
-                                          error_text_.empty() ? (progress_text_.empty() ? "Ready / 就绪" : progress_text_) : error_text_,
-                                          status_accent));
+        controls.push_back(text_node("浏览、查看并管理插件包。", "muted", 30));
+        nodes.push_back(status_strip_node(
+            busy      ? "处理中"
+            : online_ ? "在线"
+                      : "离线",
+            error_text_.empty() ? (progress_text_.empty() ? "Ready / 就绪" : progress_text_)
+                                : error_text_,
+            status_accent));
         json status_badges = json::array();
         const bool has_pages = total_ != 0U && page_size_ != 0U;
-        status_badges.push_back(badge_node(online_ ? "Online / 在线" : "Offline / 离线", online_ ? "ok" : "danger"));
+        status_badges.push_back(badge_node(online_ ? "在线" : "离线", online_ ? "ok" : "danger"));
         status_badges.push_back(badge_node(has_pages ? "Page " + std::to_string(current_page_) + " of " + std::to_string((total_ + page_size_ - 1U) / page_size_) + " / 第" + std::to_string(current_page_) + "页，共" + std::to_string((total_ + page_size_ - 1U) / page_size_) + "页" : "Empty / 空页", has_pages ? "cyan" : "muted"));
-        status_badges.push_back(badge_node(std::to_string(total_) + " plugins / 个插件", "gold"));
+        status_badges.push_back(badge_node(std::to_string(total_) + " 个插件", "gold"));
         controls.push_back(row_node(std::move(status_badges)));
         json navigation = json::array();
-        navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "Refresh / 刷新" : "Retry / 重试",
+        navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "刷新" : "重试",
                                          "workshop.refresh", json::object(), "primary", busy));
-        navigation.push_back(button_node("workshop.previous", "Previous / 上一页", "workshop.page.previous",
+        navigation.push_back(button_node("workshop.previous", "上一页", "workshop.page.previous",
                                          json::object(), "default", busy || current_page_ <= 1));
-        navigation.push_back(button_node("workshop.next", "Next / 下一页", "workshop.page.next", json::object(),
-                                         "default", busy || !next_page_available(current_page_, page_size_, total_)));
-        navigation.push_back(button_node("workshop.close", "Close / 关闭", "workshop.close",
-                                         json::object(), "ghost", false));
+        navigation.push_back(
+            button_node("workshop.next", "下一页", "workshop.page.next", json::object(), "default",
+                        busy || !next_page_available(current_page_, page_size_, total_)));
+        navigation.push_back(button_node("workshop.close", "关闭", "workshop.close", json::object(),
+                                         "ghost", false));
         controls.push_back(row_node(std::move(navigation)));
-        nodes.push_back(section_node("Controls / 控制", std::move(controls), busy ? "gold" : "cyan"));
+        nodes.push_back(card_node("创意工坊", std::move(controls), busy ? "gold" : "cyan"));
 
         json catalog = json::array();
         if (items_.empty()) {
-            catalog.push_back(text_node(busy ? "Loading plugins... / 正在加载插件..." : "No plugins on this page. / 此页暂无插件。", "muted", 38));
+            catalog.push_back(text_node(busy ? "正在加载插件目录…" : "此页暂无插件", "value", 32));
             if (!busy)
-                catalog.push_back(button_node("workshop.catalog-retry", "Refresh / 刷新", "workshop.refresh",
+                catalog.push_back(
+                    text_node("可刷新目录，或通过上方分页浏览其他页面。", "muted", 34));
+            if (!busy)
+                catalog.push_back(button_node("workshop.catalog-retry", "刷新", "workshop.refresh",
                                               json::object(), "primary"));
         } else {
             for (std::size_t index = 0; index < items_.size(); ++index) {
@@ -1350,7 +1383,8 @@ class Owner::Impl final {
                 metadata.push_back(badge_node("v" + item.version, "cyan"));
                 std::error_code installed_error;
                 const bool installed = std::filesystem::is_directory(plugins_dir_ / item.id, installed_error) && !installed_error;
-                metadata.push_back(badge_node(installed ? "Installed" : "Not installed", installed ? "ok" : "muted"));
+                metadata.push_back(
+                    badge_node(installed ? "已安装" : "未安装", installed ? "ok" : "muted"));
                 details.push_back(row_node(std::move(metadata)));
                 details.push_back(text_node("Tag / 标签: " + (item.tag.empty() ? "untagged / 未分类" : item.tag) +
                                                 " · Author / 作者: " + (item.author.empty() ? item.id : item.author) +
@@ -1361,19 +1395,22 @@ class Owner::Impl final {
                 details.push_back(row_node(std::move(metrics)));
                 const json payload{{"id", item.id}};
                 json actions = json::array();
-                actions.push_back(button_node("detail." + std::to_string(index), "View",
+                actions.push_back(button_node("detail." + std::to_string(index), "查看",
                                               "workshop.plugin.detail", payload, "default", busy));
                 if (!installed)
-                    actions.push_back(button_node("install." + std::to_string(index), "Install",
-                                                  "workshop.plugin.install", payload, "primary", busy));
+                    actions.push_back(button_node("install." + std::to_string(index), "安装",
+                                                  "workshop.plugin.install", payload, "primary",
+                                                  busy));
                 if (installed)
-                    actions.push_back(button_node("uninstall." + std::to_string(index), "Remove",
-                                                  "workshop.plugin.uninstall", payload, "danger", busy));
+                    actions.push_back(button_node("uninstall." + std::to_string(index), "移除",
+                                                  "workshop.plugin.uninstall", payload, "danger",
+                                                  busy));
                 details.push_back(row_node(std::move(actions)));
-                catalog.push_back(card_node(item.name + " · v" + item.version, std::move(details), installed ? "ok" : "cyan"));
+                catalog.push_back(
+                    card_node(item.name, std::move(details), installed ? "ok" : "cyan"));
             }
         }
-        nodes.push_back(section_node("Catalog / 目录", std::move(catalog), "cyan"));
+        nodes.push_back(section_node("Catalog / 目录", std::move(catalog), busy ? "gold" : "cyan"));
 
         json detail_children = json::array();
         if (detail_.has_value()) {
@@ -1396,23 +1433,28 @@ class Owner::Impl final {
             std::error_code detail_installed_error;
             const bool detail_installed = std::filesystem::is_directory(plugins_dir_ / detail.summary.id, detail_installed_error) && !detail_installed_error;
             if (!detail_installed)
-                detail_actions.push_back(button_node("detail.install", "Install", "workshop.plugin.install",
-                                                     payload, "primary", busy));
+                detail_actions.push_back(button_node(
+                    "detail.install", "安装", "workshop.plugin.install", payload, "primary", busy));
             if (detail_installed)
-                detail_actions.push_back(button_node("detail.remove", "Remove", "workshop.plugin.uninstall",
-                                                     payload, "danger", busy));
+                detail_actions.push_back(button_node(
+                    "detail.remove", "移除", "workshop.plugin.uninstall", payload, "danger", busy));
             detail_children.push_back(row_node(std::move(detail_actions)));
-            nodes.push_back(section_node("Detail", json::array({card_node(detail.summary.name,
-                                                                            std::move(detail_children))} )));
+            nodes.push_back(section_node(
+                "Detail / 详情",
+                json::array({card_node(detail.summary.name, std::move(detail_children))})));
         } else {
-            detail_children.push_back(text_node("Select a plugin to review its package and compatibility details.",
-                                                "muted", 52));
-            nodes.push_back(section_node("Detail", std::move(detail_children)));
+            detail_children.push_back(
+                text_node("Select a plugin to review its package and compatibility details. / "
+                          "选择插件查看包与兼容性详情。",
+                          "muted", 52));
+            nodes.push_back(section_node("Detail / 详情", std::move(detail_children),
+                                         detail_.has_value() ? "cyan" : "muted"));
         }
 
         json task_center = json::array();
         json task_badges = json::array();
-        task_badges.push_back(badge_node(busy ? "In progress" : "Ready", busy ? "warn" : "ok"));
+        task_badges.push_back(
+            badge_node(busy ? "In progress / 处理中" : "Ready / 就绪", busy ? "warn" : "ok"));
         task_badges.push_back(badge_node(std::to_string(completed_operations_) + " completed", "accent"));
         const std::uint64_t remaining = queued_operations_ > completed_operations_
                                             ? queued_operations_ - completed_operations_ : 0;
@@ -1424,7 +1466,7 @@ class Owner::Impl final {
         if (!error_text_.empty())
             task_center.push_back(text_node(error_text_, "bad", 42));
         nodes.push_back(section_node("Task Center / 任务中心", std::move(task_center), busy ? "gold" : last_status_ == SAO_STATUS_OK ? "ok" : "danger"));
-        std::string spec = json{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}}.dump();
+        std::string spec = dock_document(std::move(nodes), "workshop-content").dump();
         if (spec.size() <= kMaximumPanelSpecBytes)
             return spec;
         return json{{"version", 1}, {"title", ""},

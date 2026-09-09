@@ -302,6 +302,7 @@ struct OwnedTreeNode {
     int32_t icon_slot{-1};
     bool expanded{false};
     bool selectable{true};
+    bool has_children{false};
     uint32_t fg_argb{0};
     uint32_t bg_argb{0};
 };
@@ -560,7 +561,16 @@ sao_status_t build_tree_candidate(const SaoUiTreeNode* nodes, size_t node_count,
         }
     }
 
+    for (const auto& node : next) {
+        if (node.parent_id == 0)
+            continue;
+        const auto parent = node_indices.find(node.parent_id);
+        if (parent != node_indices.end())
+            next[parent->second].has_children = true;
+    }
+
     auto visible = build_tree_visible(next);
+
     *owned_out = std::move(next);
     *visible_out = std::move(visible);
     return SAO_STATUS_OK;
@@ -1755,11 +1765,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_tree_view_key_navigate(
             case 0x0dU: {  // Enter: toggle expand on parents.
                 const size_t node_index = tree->visible[current].node_index;
                 const int64_t node_id = tree->nodes[node_index].node_id;
-                const bool has_children = std::any_of(
-                    tree->nodes.begin(), tree->nodes.end(),
-                    [&](const OwnedTreeNode& candidate) {
-                        return candidate.parent_id == node_id;
-                    });
+                const bool has_children = tree->nodes[node_index].has_children;
                 if (has_children)
                     toggle_node_id = node_id;
                 else
@@ -2672,10 +2678,7 @@ sao_status_t sao::ui::detail::widget_table_paint(sao_ui_widget_handle_t handle, 
                 }
                 const int32_t indent = item.depth * std::max(1, spec.indent_px);
                 const int32_t caret = std::max(3, spec.caret_width_px);
-                const bool has_children =
-                    std::any_of(nodes.begin(), nodes.end(), [&](const OwnedTreeNode& candidate) {
-                        return candidate.parent_id == node.node_id;
-                    });
+                const bool has_children = node.has_children;
                 if (has_children) {
                     const int32_t cx = x + indent + caret / 2 + 2;
                     const int32_t cy = row_y + row_height / 2;

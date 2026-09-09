@@ -4,6 +4,7 @@
 #include "sao/ui/animator.h"
 #include "sao/ui/d2d_effects.h"
 #include "sao/ui/d2d_widgets.h"
+#include "sao/ui/sound.h"
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
 #if defined(_WIN32)
@@ -1400,10 +1401,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
         sao_status_t status = make_root_level(replacement_root.children, *spec, &root_level);
         if (status != SAO_STATUS_OK) return status;
 
-        std::lock_guard layer_lock(handle->layer_mu);
+        std::unique_lock layer_lock(handle->layer_mu);
         sao_ui_layer_handle_t old_layer = nullptr;
+        bool play_open_sound = false;
         {
             std::lock_guard lock(handle->mu);
+            play_open_sound = handle->compositor != nullptr && !handle->visible;
             old_layer = std::exchange(handle->layer, nullptr);
             handle->layer_bounds_valid = false;
             handle->root = std::move(replacement_root);
@@ -1425,7 +1428,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_popup_show(
         }
         destroy_layer_handle(old_layer);
         status = sync_visible_layer_locked(handle);
-        if (status == SAO_STATUS_OK) return SAO_STATUS_OK;
+        if (status == SAO_STATUS_OK) {
+            layer_lock.unlock();
+            if (play_open_sound)
+                (void)sao_ui_sound_play(SAO_UI_SOUND_SUBMENU, 55);
+            return SAO_STATUS_OK;
+        }
 
         sao_ui_layer_handle_t failed_layer = nullptr;
         {

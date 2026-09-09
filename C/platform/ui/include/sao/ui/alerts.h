@@ -6,8 +6,8 @@
 //   * Banner queue — text banners with a duration + color hint, drained
 //     by the UI compositor for on-screen display.  This module is only
 //     the queue back-end; the compositor is the consumer.
-//   * Sound playback via winmm PlaySoundW — fire-and-forget WAV / SND
-//     resource play with an optional stop token.
+//   * Alert sound semantics via the shared XAudio2 mixer with an optional
+//     stop token.
 //
 // Everything here is game-agnostic: the caller supplies the text /
 // path / color; no boss names, no skill IDs.  The game-specific glue
@@ -107,17 +107,15 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_banner_drain(
 
 // ── Sound ───────────────────────────────────────────────────────
 
-// Play a WAV file at `path_utf16` asynchronously via winmm
-// PlaySoundW(SND_ASYNC | SND_FILENAME).  `volume` is 0..100 mapped to
-// waveOutSetVolume on the default device.  Returns a positive sound_id
-// on success; SAO_STATUS_ERR_NOT_FOUND when the file does not exist.
+// Submit an alert sound through the shared XAudio2 mixer.  The path selects a
+// stable alert semantic (message/warning/emergency/dismiss/default alert); it
+// never changes the system waveOut volume or bypasses UI mute.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_sound_play(
     const uint16_t* path_utf16,
     int32_t         volume,
     uint64_t*       out_sound_id);
 
-// Stop a previously-started sound.  Passing 0 stops every currently-
-// playing sound (PlaySoundW(NULL, NULL, 0)).
+// Stop a previously-started alert group.  Passing 0 stops every alert group.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_sound_stop(
     uint64_t sound_id);
 

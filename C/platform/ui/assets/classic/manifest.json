@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "collection": "classic-sao",
+  "viewBox": "0 0 24 24",
+  "color": "currentColor",
+  "source": "generated:classic-sao-geometry",
+  "license": "CC0-1.0",
+  "reference_source": {
+    "repository": "https://github.com/vm-sao/sao-icons",
+    "path": "packages/svgs/outlined",
+    "license": "MIT",
+    "commit": "fd677ca",
+    "usage": "category reference only; SVGs in this collection are original redraws"
+  },
+  "icons": [
+    {
+      "id": "back",
+      "file": "back.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "38ddfb35e49f6507e661165ac655471595a7de4c8d4fe5505308b797bc446ba4"
+    },
+    {
+      "id": "cancel",
+      "file": "cancel.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "e0e2104b6d3097b43c71c7f3098d7b4327f874b734a7152fadfb2f5b92c3726e"
+    },
+    {
+      "id": "close",
+      "file": "close.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "267b701c22450e4d82019e1dbf2877d2d156400d1fdab836ad08344abce1dfb2"
+    },
+    {
+      "id": "confirm",
+      "file": "confirm.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "4d375a1953d13ba57d8294ae8794a5e71ccc711ae2046dc538261f624f4e6d5c"
+    },
+    {
+      "id": "download",
+      "file": "download.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "3693b0c07887c8f799b3c5da3bf9cdd10bcab1a289e26e11ebb3dec306aff544"
+    },
+    {
+      "id": "expand",
+      "file": "expand.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "b3adb5db1694419a09473c18efdfc23be1ef9556aa7885b8117695335254991b"
+    },
+    {
+      "id": "folder",
+      "file": "folder.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "05e4e979dec52a154910c222ccae84d5860eceebfe21fc29a0d2b4eeada484b6"
+    },
+    {
+      "id": "home",
+      "file": "home.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "0c705b58d10e5b6885c0286e9bd321efb7171e72c0fff8f654030f3a8881a1cd"
+    },
+    {
+      "id": "info",
+      "file": "info.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "07468e8b458bef16b0bcd9ef50264a215b8ce5285b87bbfeaff5b46ac4b7e10f"
+    },
+    {
+      "id": "lock",
+      "file": "lock.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "ac3a165a7873f62312d5da3db26ca311bea3c3331f11850260c4b884eddfb638"
+    },
+    {
+      "id": "menu",
+      "file": "menu.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "38db81d48a4b385408c474c8c73d7673b1c631d81a2c7aebb6c868e36867b56c"
+    },
+    {
+      "id": "notification",
+      "file": "notification.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "efbba36e322550a4f1239f61136dc57f1a88d1abf11e274aab39f2cd4151183d"
+    },
+    {
+      "id": "plugins",
+      "file": "plugins.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "cb7b3edbc3c9591c13710be68b9bc51cfdd8849e419055bae69021ae2d5a8fe4"
+    },
+    {
+      "id": "refresh",
+      "file": "refresh.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "e36d569ef12e4305ce0f75dbc9f8090e5b7ffefd8c6779ef67059107ba566298"
+    },
+    {
+      "id": "search",
+      "file": "search.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "4362590754e1264f3f53e8769fafeb35a5b889d927e68e714b1aae7fc0da0d1c"
+    },
+    {
+      "id": "settings",
+      "file": "settings.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "030a058750bcb201facd00eb371182b038dab4f13a606ebe6da04ce12bb8120d"
+    },
+    {
+      "id": "tools",
+      "file": "tools.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "2c5c3807e7e297c9ad9336b3c09682c1aa9e1566059a7def1017839779b224cf"
+    },
+    {
+      "id": "user",
+      "file": "user.svg",
+      "source": "generated:classic-sao-geometry",
+      "license": "CC0-1.0",
+      "sha256": "01202341e6b99e785dc8aa54186816e1e1f4866c6fccfd25db63199f074f6c5d"
+    }
+  ],
+  "native_helper": {
+    "file": "classic_icons.h",
+    "source": "generated:classic-sao-geometry",
+    "license": "CC0-1.0",
+    "sha256": "9c836f48e095fbd89949ee5ab738f3f2c24aba91dd83651a373c4455158f9ecf"
+  }
+}

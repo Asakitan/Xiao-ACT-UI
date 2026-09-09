@@ -130,6 +130,11 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dialog_create(
 SAO_UI_API void SAO_UI_CALL sao_ui_dialog_destroy(
     sao_ui_dialog_handle_t handle);
 
+// Configure masking before showing an INPUT dialog. Existing spec layout is
+// unchanged; non-input dialogs ignore the option. Returns BUSY while visible.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dialog_set_input_password(sao_ui_dialog_handle_t handle,
+                                                                     bool enabled);
+
 // Fire-and-forget modal show.  Never blocks.  The callback fires
 // once, then the internal window animates out and cleans up.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dialog_show(

@@ -53,6 +53,7 @@ constexpr size_t kMaximumNodeTextBytes = 3600U;
 constexpr size_t kMaximumTitleTextBytes = 180U;
 constexpr size_t kMaximumPanelSpecBytes = 192U * 1024U;
 constexpr int32_t kDialogCloseAdvanceMs = 1000;
+constexpr std::chrono::milliseconds kPanelRefreshInterval{33};
 constexpr std::chrono::milliseconds kSavedStatusLifetime{5000};
 
 enum class FieldKind {
@@ -97,20 +98,20 @@ struct PageDefinition {
 };
 
 constexpr std::array<PageDefinition, 14> kPages{{
-    {"overview", "Overview / 概览", "连接状态、当前作用域、AI 提供商和待保存更改。"},
-    {"endpoint", "AI Endpoint / AI 端点", "提供商、模型、密钥、端点和助手运行模式。"},
-    {"appearance", "Appearance / 外观", "颜色主题、图标主题与编辑器视觉选项。"},
-    {"editor", "Editor & Files / 编辑器与文件", "编辑、格式化、建议、悬停、保存与文件行为。"},
+    {"overview", "概览", "连接状态、当前作用域、AI 提供商和待保存更改。"},
+    {"endpoint", "AI 端点", "提供商、模型、密钥、端点和助手运行模式。"},
+    {"appearance", "外观", "颜色主题、图标主题与编辑器视觉选项。"},
+    {"editor", "编辑器与文件", "编辑、格式化、建议、悬停、保存与文件行为。"},
     {"claude", "Claude Code", "Claude Code CLI、模型、参数和权限边界。"},
     {"codex", "Codex", "Codex CLI、模型、传输方式和启动参数。"},
     {"mcp", "MCP", "MCP 工具访问、发现、信任、采样和服务器配置。"},
-    {"terminal", "Terminal / 终端", "终端配置、Shell、超时、输出限制与 ConPTY。"},
-    {"workspace", "Workspace / 工作区", "工作区根目录、额外根目录与自动检测。"},
-    {"extensions", "Extensions / 扩展", "安装确认、诊断、发布者与贡献点策略。"},
-    {"customization", "Customization / 自定义", "AGENTS/CLAUDE 指令、代理、工作流和技能发现。"},
-    {"advanced", "Advanced / 高级", "采样、连接、额外请求头与请求体。"},
-    {"models", "Custom Models / 自定义模型", "私有或新模型的上下文、能力与输出限制。"},
-    {"permissions", "Permissions / 权限", "读、写、执行和工具权限覆盖。"},
+    {"terminal", "终端", "终端配置、Shell、超时、输出限制与 ConPTY。"},
+    {"workspace", "工作区", "工作区根目录、额外根目录与自动检测。"},
+    {"extensions", "扩展", "安装确认、诊断、发布者与贡献点策略。"},
+    {"customization", "自定义", "AGENTS/CLAUDE 指令、代理、工作流和技能发现。"},
+    {"advanced", "高级", "采样、连接、额外请求头与请求体。"},
+    {"models", "自定义模型", "私有或新模型的上下文、能力与输出限制。"},
+    {"permissions", "权限", "读、写、执行和工具权限覆盖。"},
 }};
 
 struct FieldOption {
@@ -196,6 +197,7 @@ struct AiEditorSettingsPanelState {
     std::unordered_map<std::string, json> pending_secret_values;
     std::unordered_set<std::string> pending_secret_clears;
     std::unordered_set<std::string> reset_keys;
+    std::unordered_set<std::string> expanded_field_details;
     std::unordered_map<std::string, std::string> validation_errors;
     PendingDialog pending_dialog;
     std::string active_page{"overview"};
@@ -204,6 +206,8 @@ struct AiEditorSettingsPanelState {
     std::string search_query;
     std::string review_filter{"all"};
     std::string last_spec;
+    std::chrono::steady_clock::time_point next_refresh_allowed{};
+    bool refresh_retry_pending{};
     std::string backend_message;
     std::string status_message;
     std::string last_error;
@@ -466,7 +470,8 @@ json badge_node(std::string text, std::string_view style = "muted") {
     return json{{"type", "badge"},
                 {"text", clamp_utf8_bytes(std::move(text), kMaximumTitleTextBytes)},
                 {"style", style},
-                {"height", 22}};
+                {"height", 26},
+                {"width", 160}};
 }
 
 json button_node(std::string id, std::string label, std::string action,
@@ -486,8 +491,9 @@ json button_node(std::string id, std::string label, std::string action,
 }
 
 json input_node(std::string id, std::string value, std::string action, bool disabled = false) {
-    json node{{"type", "input"}, {"id", std::move(id)}, {"value", std::move(value)},
-              {"input_type", "text"}, {"action", std::move(action)}, {"height", 38}};
+    json node{{"type", "input"},      {"id", std::move(id)},       {"value", std::move(value)},
+              {"input_type", "text"}, {"placeholder", "搜索设置"}, {"action", std::move(action)},
+              {"height", 38}};
     if (disabled)
         node["disabled"] = true;
     return node;
@@ -500,7 +506,7 @@ json row_node(json children, std::string_view align = "left") {
 json card_node(std::string title, json children, std::string_view accent = "cyan") {
     return json{{"type", "card"},
                 {"title", clamp_utf8_bytes(std::move(title), kMaximumTitleTextBytes)},
-                {"accent", accent},
+                {"accent", accent == "cyan" ? "muted" : accent},
                 {"children", std::move(children)}};
 }
 
@@ -866,7 +872,7 @@ std::vector<FieldMeta> field_hints() {
                            "Additional provider request properties as JSON.", FieldKind::Json,
                            json::object(), {}, {}, {}, "Connection"));
 
-    fields.push_back(field("ai.custom_models", "models", "Custom Models", "自定义模型",
+    fields.push_back(field("ai.custom_models", "models", "自定义模型", "自定义模型",
                            "Model context windows and capability overrides as JSON.",
                            FieldKind::Json, json::object()));
 
@@ -2024,19 +2030,18 @@ std::string rpc_kind_text(RpcKind kind) {
 
 std::string scope_label(std::string_view scope) {
     if (scope == "system")
-        return "System / 系统";
+        return "系统";
     if (scope == "plugin")
-        return "Plugin / 插件";
-    return "Workspace / 工作区";
+        return "插件";
+    return "工作区";
 }
 
 json build_overview(const AiEditorSettingsPanelState& state) {
     json children = json::array();
     json connection = json::array();
 
-    connection.push_back(
-        badge_node(state.backend_connected ? "Connected / 已连接" : "Offline / 离线",
-                   state.backend_connected ? "ok" : "warn"));
+    connection.push_back(badge_node(state.backend_connected ? "Connected / 已连接" : "未连接",
+                                    state.backend_connected ? "ok" : "warn"));
     connection.push_back(text_node(state.backend_message.empty()
                                        ? (state.backend_connected
                                               ? "Named-pipe JSON-RPC is ready."
@@ -2044,7 +2049,7 @@ json build_overview(const AiEditorSettingsPanelState& state) {
                                        : state.backend_message,
                                    state.backend_connected ? "muted" : "warn", 34));
     children.push_back(
-        card_node("Backend", std::move(connection), state.backend_connected ? "ok" : "warn"));
+        card_node("后端", std::move(connection), state.backend_connected ? "ok" : "warn"));
 
     json assistant = json::array();
 
@@ -2059,12 +2064,12 @@ json build_overview(const AiEditorSettingsPanelState& state) {
     assistant.push_back(text_node(
         "Mode: " + summary_value(state, {"ai.mode", "ai_editor.mode", "mode"}, "agent"), "value"));
     json assistant_actions = json::array();
-    assistant_actions.push_back(button_node("overview.endpoint", "AI Endpoint", "nav.page",
-                                            {{"page", "endpoint"}}, "primary"));
     assistant_actions.push_back(
-        button_node("overview.permissions", "Permissions", "nav.page", {{"page", "permissions"}}));
+        button_node("overview.endpoint", "AI 端点", "nav.page", {{"page", "endpoint"}}, "primary"));
+    assistant_actions.push_back(
+        button_node("overview.permissions", "权限", "nav.page", {{"page", "permissions"}}));
     assistant.push_back(row_node(std::move(assistant_actions)));
-    children.push_back(card_node("Active AI", std::move(assistant), "cyan"));
+    children.push_back(card_node("当前 AI", std::move(assistant), "cyan"));
 
     size_t configured_secrets = 0;
     for (const auto& [key, status] : state.secret_states) {
@@ -2074,7 +2079,7 @@ json build_overview(const AiEditorSettingsPanelState& state) {
     }
     json draft = json::array();
 
-    draft.push_back(badge_node(state_dirty(state) ? "Dirty / 有未保存更改" : "Clean / 已同步",
+    draft.push_back(badge_node(state_dirty(state) ? "有未保存更改" : "没有待保存更改",
                                state_dirty(state) ? "warn" : "ok"));
     draft.push_back(text_node("Scope: " + scope_label(state.selected_scope) +
                                   " · Save state: " + save_phase_text(state.save_phase),
@@ -2087,57 +2092,47 @@ json build_overview(const AiEditorSettingsPanelState& state) {
     if (state.hidden_with_dirty)
         draft.push_back(text_node(
             "提示：面板上次关闭时存在脏草稿；内容未丢失，请 Apply 或 Discard。", "warn", 34));
-    children.push_back(card_node("Draft", std::move(draft), state_dirty(state) ? "warn" : "ok"));
+    children.push_back(card_node("草稿", std::move(draft), state_dirty(state) ? "warn" : "ok"));
 
     json quick = json::array();
 
     json quick_buttons = json::array();
     quick_buttons.push_back(
-        button_node("overview.editor", "Editor & Files", "nav.page", {{"page", "editor"}}));
+        button_node("overview.editor", "编辑器与文件", "nav.page", {{"page", "editor"}}));
     quick_buttons.push_back(button_node("overview.mcp", "MCP", "nav.page", {{"page", "mcp"}}));
     quick_buttons.push_back(
-        button_node("overview.advanced", "Advanced", "nav.page", {{"page", "advanced"}}));
+        button_node("overview.advanced", "高级", "nav.page", {{"page", "advanced"}}));
     quick_buttons.push_back(
-        button_node("overview.models", "Custom Models", "nav.page", {{"page", "models"}}));
+        button_node("overview.models", "自定义模型", "nav.page", {{"page", "models"}}));
     quick.push_back(row_node(std::move(quick_buttons)));
-    children.push_back(card_node("Quick Settings", std::move(quick), "gold"));
-    return section_node("Overview", std::move(children));
+    children.push_back(card_node("快速设置", std::move(quick), "gold"));
+    return section_node("概览", std::move(children));
 }
 
 json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& field) {
     json children = json::array();
-    std::string title = field.label;
-    if (!field.label_zh.empty() && field.label_zh != field.label)
-        title.append(" / ").append(field.label_zh);
-    children.push_back(text_node(std::move(title), "title", 24));
-    children.push_back(text_node("Key: " + field.key, "mono", 22));
+    std::string title = field.label_zh.empty() ? field.label : field.label_zh;
+    const bool details_expanded = state.expanded_field_details.contains(field.key);
+    if (!field.description.empty())
+        children.push_back(text_node(field.description, "muted", 38));
     json state_badges = json::array();
     const bool has_override = selected_scope_has_override(state, field);
     const bool dependencies_met = field_dependencies_satisfied(state, field);
-    state_badges.push_back(badge_node(has_override ? "Override / 当前作用域覆盖"
-                                                   : "Inherited / 继承",
-                                      has_override ? "accent" : "muted"));
+    state_badges.push_back(
+        badge_node(has_override ? "当前范围覆盖" : "继承", has_override ? "accent" : "muted"));
     if (field_has_pending_change(state, field))
         state_badges.push_back(badge_node("Modified / 已修改", "warn"));
     if (field_is_advanced(field))
-        state_badges.push_back(badge_node("Advanced / 高级", "muted"));
+        state_badges.push_back(badge_node("高级", "muted"));
     if (is_secret_field(field))
-        state_badges.push_back(badge_node("Protected / 受保护", "ok"));
+        state_badges.push_back(badge_node("受保护", "ok"));
     if (!dependencies_met)
-        state_badges.push_back(badge_node("Unavailable / 条件未满足", "warn"));
-    children.push_back(row_node(std::move(state_badges)));
+        state_badges.push_back(badge_node("条件未满足", "warn"));
     const auto validation = state.validation_errors.find(field.key);
-    children.push_back(text_node("Effective: " + effective_display(state, field),
+    children.push_back(text_node("当前值：" + effective_display(state, field),
                                  validation == state.validation_errors.end() ? "value" : "bad",
                                  30));
-    children.push_back(
-        text_node("Scope override: " + override_display(state, field),
-                  "muted", 30));
-    children.push_back(text_node("Inheritance: " + inheritance_display(state, field),
-                                 has_override ? "accent" : "muted", 30));
-    if (!field.description.empty())
-        children.push_back(text_node(field.description, "muted", 38));
-    if (!field.dependencies.empty()) {
+    if (!field.dependencies.empty() && (!dependencies_met || details_expanded)) {
         children.push_back(text_node(
             (dependencies_met ? "Condition met / 条件已满足: "
                               : "Available when / 满足以下条件后可用: ") +
@@ -2155,30 +2150,35 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
     if (field.kind == FieldKind::Boolean) {
         const json* current = effective_value(state, field);
         const bool enabled = current != nullptr && current->is_boolean() && current->get<bool>();
-        actions.push_back(button_node("field." + token + ".toggle",
-                                      enabled ? "[✓] Enabled" : "[ ] Disabled",
-                                      "field.toggle", {{"key", field.key}},
-                                      enabled ? "primary" : "default", interaction_locked));
+        children.push_back(json{{"type", "checkbox"},
+                                {"id", "field." + token + ".toggle"},
+                                {"label", enabled ? "已开启" : "已关闭"},
+                                {"checked", enabled},
+                                {"active", enabled},
+                                {"action", "field.toggle"},
+                                {"payload", {{"key", field.key}}},
+                                {"disabled", interaction_locked},
+                                {"height", 34}});
     } else if (field.kind == FieldKind::Enum && !field.options.empty()) {
         const json* current = effective_value(state, field);
-        const size_t maximum_options = std::min<size_t>(field.options.size(), 10U);
-        for (size_t index = 0; index < maximum_options; ++index) {
+        json items = json::array();
+        int32_t selected = 0;
+        for (size_t index = 0; index < field.options.size(); ++index) {
             const FieldOption& item = field.options[index];
-            std::string label = item.label;
-            if (!item.label_zh.empty())
-                label.append(" / ").append(item.label_zh);
+            std::string label = item.label_zh.empty() ? item.label : item.label_zh;
             const bool active = current != nullptr && *current == item.value;
-            actions.push_back(button_node("field." + token + ".option." + std::to_string(index),
-                                          std::string(active ? "(●) " : "( ) ") + label,
-                                          "field.select",
-                                          {{"key", field.key}, {"value", item.value}},
-                                          active ? "primary" : "default", interaction_locked));
+            if (active)
+                selected = static_cast<int32_t>(index);
+            items.push_back({{"id", index}, {"label", std::move(label)}, {"value", item.value}});
         }
-        if (field.options.size() > maximum_options) {
-            actions.push_back(button_node("field." + token + ".edit", "Select...",
-                                          "field.edit", {{"key", field.key}}, "default",
-                                          interaction_locked));
-        }
+        children.push_back(json{{"type", "dropdown"},
+                                {"id", "field." + token + ".select"},
+                                {"action", "field.select"},
+                                {"payload", {{"key", field.key}}},
+                                {"items", std::move(items)},
+                                {"selected_id", selected},
+                                {"disabled", interaction_locked},
+                                {"height", 36}});
     } else if ((field.kind == FieldKind::Integer || field.kind == FieldKind::Number) &&
                !is_secret_field(field)) {
         const json* current = effective_value(state, field);
@@ -2186,32 +2186,42 @@ json build_field_card(const AiEditorSettingsPanelState& state, const FieldMeta& 
         const double minimum = field.minimum.value_or(-std::numeric_limits<double>::max());
         const double maximum = field.maximum.value_or(std::numeric_limits<double>::max());
         const double step = field.kind == FieldKind::Integer ? 1.0 : 0.1;
-        std::ostringstream value_text;
-        value_text << "Value: " << value;
         if (field.minimum.has_value() || field.maximum.has_value())
-            value_text << " · range " << minimum << "–" << maximum;
-        children.push_back(text_node(value_text.str(), "value", 30));
-        children.push_back(text_node("Use the spinner buttons; Edit remains available for precise values.", "muted", 30));
+            children.push_back(text_node(
+                "范围：" + (field.minimum.has_value() ? json(*field.minimum).dump() : "未设下限") +
+                    " – " + (field.maximum.has_value() ? json(*field.maximum).dump() : "未设上限"),
+                "muted", 28));
         actions.push_back(button_node("field." + token + ".down", "−", "field.number.adjust",
                                       {{"key", field.key}, {"delta", -step}}, "default", interaction_locked || value <= minimum));
         actions.push_back(button_node("field." + token + ".up", "+", "field.number.adjust",
                                       {{"key", field.key}, {"delta", step}}, "default", interaction_locked || value >= maximum));
-        actions.push_back(button_node("field." + token + ".edit", "Edit", "field.edit",
+        actions.push_back(button_node("field." + token + ".edit", "精确编辑", "field.edit",
                                       {{"key", field.key}}, "ghost", interaction_locked));
     } else {
-        actions.push_back(button_node(
-            "field." + token + ".edit",
-            is_secret_field(field) ? "Set Protected Value" : "Edit",
-            "field.edit", {{"key", field.key}}, "primary", interaction_locked));
+        actions.push_back(button_node("field." + token + ".edit",
+                                      is_secret_field(field) ? "设置敏感值" : "编辑", "field.edit",
+                                      {{"key", field.key}}, "primary", interaction_locked));
     }
     if (is_secret_field(field)) {
         actions.push_back(button_node("field." + token + ".clear", "Clear", "field.clear",
                                       {{"key", field.key}}, "danger", interaction_locked));
     }
-    actions.push_back(button_node("field." + token + ".reset", "Reset", "field.reset",
-                                  {{"key", field.key}}, "ghost", interaction_locked));
-    children.push_back(row_node(std::move(actions)));
-    return card_node(field.label, std::move(children),
+    actions.push_back(button_node(
+        "field." + token + ".reset", state.selected_scope == "system" ? "恢复默认" : "恢复继承",
+        "field.reset", {{"key", field.key}}, "ghost", interaction_locked));
+    actions.push_back(button_node("field." + token + ".details",
+                                  details_expanded ? "收起详情" : "来源与详情", "field.details",
+                                  {{"key", field.key}}, "ghost"));
+    append_button_rows(children, std::move(actions), 2);
+    children.push_back(row_node(std::move(state_badges)));
+    if (details_expanded) {
+        children.push_back(text_node("Key: " + field.key, "mono", 22));
+        children.push_back(
+            text_node("当前范围覆盖：" + override_display(state, field), "muted", 30));
+        children.push_back(
+            text_node("继承关系：" + inheritance_display(state, field), "muted", 30));
+    }
+    return card_node(std::move(title), std::move(children),
                      validation == state.validation_errors.end() ? "cyan" : "bad");
 }
 
@@ -2220,32 +2230,35 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     const bool dirty = state_dirty(state);
     const bool synchronization_locked = state.rpc_kind != RpcKind::None || state.save_pending ||
                                         followup_load_active(state);
-    nodes.push_back(text_node(dirty ? "AI Editor Settings *" : "AI Editor Settings",
-                              dirty ? "warn" : "title", 30));
-    nodes.push_back(text_node("Scope priority: Plugin > Workspace > System. Only the selected "
-                              "scope is written; higher scopes override lower scopes.",
-                              "muted", 34));
+    json header = json::array();
+    header.push_back(
+        text_node(dirty ? "编辑器设置 · 未保存" : "编辑器设置", dirty ? "warn" : "title", 30));
+    header.push_back(text_node(
+        "先选择保存范围，再选择分类。插件设置优先于工作区，工作区优先于系统；应用只写入当前范围。",
+        "muted", 34));
 
     json status_row_one = json::array();
+    status_row_one.push_back(badge_node(!state.values_loaded
+                                            ? (state.backend_connected ? "等待加载" : "后端未连接")
+                                        : dirty ? "有未保存更改"
+                                                : "无待保存更改",
+                                        !state.values_loaded || dirty ? "warn" : "ok"));
+    if (state.save_phase == SavePhase::Saving || state.save_phase == SavePhase::Failed)
+        status_row_one.push_back(badge_node("Save: " + save_phase_text(state.save_phase),
+                                            save_phase_style(state.save_phase)));
     status_row_one.push_back(
-        badge_node(dirty ? "Unsaved changes" : "Saved", dirty ? "warn" : "ok"));
-    status_row_one.push_back(badge_node("Save: " + save_phase_text(state.save_phase),
-                                       save_phase_style(state.save_phase)));
-    status_row_one.push_back(badge_node(
-        state.validation_errors.empty()
-            ? "Validation: OK"
-            : "Validation: " + std::to_string(state.validation_errors.size()),
-        state.validation_errors.empty() ? "ok" : "bad"));
-    nodes.push_back(row_node(std::move(status_row_one)));
-
-    json status_row_two = json::array();
-    status_row_two.push_back(badge_node("Scope: " + scope_label(state.selected_scope), "accent"));
-    status_row_two.push_back(
-        badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
-                   state.backend_connected ? "ok" : "warn"));
-    status_row_two.push_back(badge_node("Sync: " + rpc_kind_text(state.rpc_kind),
-                                       state.rpc_kind == RpcKind::None ? "muted" : "warn"));
-    nodes.push_back(row_node(std::move(status_row_two)));
+        badge_node(!state.values_loaded ? "尚未校验"
+                   : state.validation_errors.empty()
+                       ? "校验通过"
+                       : "待修正：" + std::to_string(state.validation_errors.size()),
+                   !state.values_loaded              ? "muted"
+                   : state.validation_errors.empty() ? "ok"
+                                                     : "bad"));
+    header.push_back(row_node(std::move(status_row_one)));
+    nodes.push_back(card_node("", std::move(header),
+                              dirty                     ? "warn"
+                              : state.backend_connected ? "cyan"
+                                                        : "gold"));
 
     json scope_children = json::array();
     json scope_buttons = json::array();
@@ -2260,45 +2273,43 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
             plugin_unavailable || synchronization_locked));
     }
     scope_children.push_back(row_node(std::move(scope_buttons)));
-    scope_children.push_back(text_node(
-        dirty ? "存在未保存更改：请先 Apply 或 Discard，再切换作用域。"
-              : "System provides defaults; Workspace overrides System; Plugin overrides both.",
-        dirty ? "warn" : "muted", 32));
+    scope_children.push_back(
+        text_node(dirty ? "请先应用或丢弃草稿，再切换范围。" : "优先级：插件 > 工作区 > 系统。",
+                  dirty ? "warn" : "muted", 32));
     json rail_nodes = json::array();
-    rail_nodes.push_back(card_node("Scope", std::move(scope_children), dirty ? "warn" : "cyan"));
+    rail_nodes.push_back(card_node("保存范围", std::move(scope_children), dirty ? "warn" : "cyan"));
 
     json search_children = json::array();
-    search_children.push_back(input_node("settings.search", state.search_query, "search.open"));
+    search_children.push_back(input_node("settings.search", state.search_query, "search.changed"));
     json search_actions = json::array();
-    search_actions.push_back(button_node("search.open", "Search... / 搜索...", "search.open",
-                                         json::object(), "primary"));
-    search_actions.push_back(button_node("search.clear", "Clear", "search.clear",
-                                         json::object(), "ghost", state.search_query.empty()));
+    search_actions.push_back(button_node("search.clear", "清空", "search.clear", json::object(),
+                                         "ghost", state.search_query.empty()));
     search_children.push_back(row_node(std::move(search_actions)));
-    search_children.push_back(text_node("Search label, 中文/English, stable key, description and keywords.", "muted", 30));
+    search_children.push_back(text_node("搜索名称、设置键或描述。", "muted", 30));
     json review_actions = json::array();
     for (const std::string_view filter : {"all", "modified", "overrides", "errors"}) {
-        const std::string label = filter == "all" ? "All" : filter == "modified" ? "Modified" : filter == "overrides" ? "Overrides" : "Errors";
+        const std::string label = filter == "all"         ? "全部"
+                                  : filter == "modified"  ? "已修改"
+                                  : filter == "overrides" ? "覆盖项"
+                                                          : "错误";
         review_actions.push_back(button_node("review." + std::string(filter),
                                              label + " (" + std::to_string(review_filter_count(state, filter)) + ")",
                                              "filter.review", {{"value", filter}},
                                              state.review_filter == filter ? "primary" : "default"));
     }
-    search_children.push_back(row_node(std::move(review_actions)));
+    append_button_rows(search_children, std::move(review_actions), 2);
     json advanced_actions = json::array();
-    advanced_actions.push_back(button_node(
-        "advanced.toggle",
-        state.show_advanced ? "Hide advanced details / 隐藏高级项"
-                            : "Show advanced details / 显示高级项",
-        "filter.advanced", {{"value", state.show_advanced ? "hide" : "show"}},
-        state.show_advanced ? "primary" : "ghost"));
+    advanced_actions.push_back(
+        button_node("advanced.toggle", state.show_advanced ? "隐藏高级项" : "显示高级项",
+                    "filter.advanced", {{"value", state.show_advanced ? "hide" : "show"}},
+                    state.show_advanced ? "primary" : "ghost"));
     advanced_actions.push_back(badge_node(
         std::to_string(static_cast<size_t>(std::ranges::count_if(
             state.fields, [](const FieldMeta& item) { return field_is_advanced(item); }))) +
-            " advanced fields / 高级字段",
+            " 项高级设置",
         "muted"));
     search_children.push_back(row_node(std::move(advanced_actions)));
-    rail_nodes.push_back(card_node("Search", std::move(search_children), "cyan"));
+    rail_nodes.push_back(card_node("搜索与筛选", std::move(search_children), "cyan"));
 
     json navigation = json::array();
     for (const auto& page : kPages) {
@@ -2310,15 +2321,16 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
             modified += field_has_pending_change(state, field) ? 1U : 0U;
             errors += state.validation_errors.contains(field.key) ? 1U : 0U;
         }
-        const std::string icon = page.id.empty() ? "•" : std::string(1, page.id.front() >= 'a' && page.id.front() <= 'z' ? static_cast<char>(page.id.front() - ('a' - 'A')) : page.id.front());
-        std::string label = icon + "  " + std::string(page.label);
-        if (modified != 0 || errors != 0)
-            label += " · M" + std::to_string(modified) + "/E" + std::to_string(errors);
+        std::string label = std::string(page.label);
+        if (errors != 0)
+            label += " · " + std::to_string(errors) + " 项错误";
+        else if (modified != 0)
+            label += " · " + std::to_string(modified) + " 项更改";
         navigation.push_back(button_node("nav." + std::string(page.id), label, "nav.page",
                                           {{"page", page.id}},
                                           state.search_query.empty() && state.active_page == page.id ? "primary" : "default"));
     }
-    rail_nodes.push_back(card_node("Categories", std::move(navigation), "gold"));
+    rail_nodes.push_back(card_node("设置分类", std::move(navigation), "gold"));
 
     json content_nodes = json::array();
 
@@ -2382,7 +2394,7 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
                                                 json::object(), "primary",
                                                 state.search_query.empty()));
             empty_actions.push_back(
-                button_node("empty.overview", "Overview", "nav.page", {{"page", "overview"}}));
+                button_node("empty.overview", "概览", "nav.page", {{"page", "overview"}}));
             empty.push_back(row_node(std::move(empty_actions)));
             content_nodes.push_back(card_node("Empty", std::move(empty), "warn"));
         } else {
@@ -2418,51 +2430,63 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     }
 
     json footer = json::array();
-    footer.push_back(text_node(dirty ? "Unsaved changes are kept if the panel is hidden."
-                                     : "No pending changes.",
-                               dirty ? "warn" : "muted", 28));
+    footer.push_back(text_node(
+        !state.values_loaded ? (state.backend_connected ? "正在加载设置，当前内容尚未同步。"
+                                                        : "后端未连接，编辑与保存将在连接后启用。")
+        : dirty              ? "关闭面板会保留草稿；点击应用才会保存，丢弃会撤销当前草稿。"
+                             : "当前没有待保存更改。",
+        !state.values_loaded || dirty ? "warn" : "muted", 38));
     json footer_actions = json::array();
     footer_actions.push_back(
-        button_node("footer.apply", "Apply / 应用", "draft.apply", json::object(), "primary",
+        button_node("footer.apply", "应用", "draft.apply", json::object(), "primary",
                     !dirty || !state.values_loaded || state.save_phase == SavePhase::Saving ||
                         synchronization_locked));
-    footer_actions.push_back(button_node("footer.discard", "Discard / 丢弃", "draft.discard",
-                                         json::object(), "danger",
-                                         !dirty || state.save_phase == SavePhase::Saving ||
-                                             synchronization_locked));
-    footer_actions.push_back(button_node("footer.reload", "Reload / 重新加载", "draft.reload",
-                                         json::object(), "default",
-                                         state.save_phase == SavePhase::Saving ||
-                                             synchronization_locked));
-    footer_actions.push_back(button_node("footer.reset_section", "Reset Section / 重置本页",
-                                         "draft.reset_section", json::object(), "ghost",
-                                         state.active_page == "overview" ||
-                                             !state.search_query.empty() ||
-                                             state.review_filter != "all" ||
-                                             !state.values_loaded ||
-                                             state.save_phase == SavePhase::Saving ||
-                                             synchronization_locked));
-    footer.push_back(row_node(std::move(footer_actions)));
-    json footer_node = card_node("Footer", std::move(footer), dirty ? "warn" : "ok");
-    content_nodes.push_back(std::move(footer_node));
+    footer_actions.push_back(
+        button_node("footer.discard", "丢弃", "draft.discard", json::object(), "danger",
+                    !dirty || state.save_phase == SavePhase::Saving || synchronization_locked));
+    footer_actions.push_back(
+        button_node("footer.reload", "重新加载", "draft.reload", json::object(), "default",
+                    state.save_phase == SavePhase::Saving || synchronization_locked));
+    footer_actions.push_back(button_node(
+        "footer.reset_section", "重置本页", "draft.reset_section", json::object(), "ghost",
+        state.active_page == "overview" || !state.search_query.empty() ||
+            state.review_filter != "all" || !state.values_loaded ||
+            state.save_phase == SavePhase::Saving || synchronization_locked));
+    append_button_rows(footer, std::move(footer_actions), 4);
+    json footer_node =
+        card_node("保存更改", std::move(footer), !state.values_loaded || dirty ? "warn" : "ok");
 
-    json rail = container_node("settings-category-rail", std::move(rail_nodes),
-                               "vertical", 248, 188, 0.0F, 760);
+    json rail = container_node("settings-category-rail", std::move(rail_nodes), "vertical", 286,
+                               240, 0.0F, 760);
     rail["role"] = "category-rail";
+    rail["dock"] = "left";
+    rail["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
     json content = container_node("settings-content", std::move(content_nodes),
                                   "vertical", 0, 520, 1.0F, 760);
     content["role"] = "content";
-    nodes.push_back(container_node(
-        "settings-layout", json::array({std::move(rail), std::move(content)}),
-        "horizontal", 0, 760, 1.0F, 760));
+    content["dock"] = "fill";
+    content["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json footer_dock = container_node("settings-footer-dock", json::array({std::move(footer_node)}),
+                                      "vertical", 0, 760, 0.0F, 760);
+    footer_dock["role"] = "footer";
+    footer_dock["dock"] = "bottom";
+    footer_dock["height"] = 128;
+    json settings_layout =
+        container_node("settings-layout", json::array({std::move(rail), std::move(content)}),
+                       "dock", 0, 760, 1.0F, 760);
+    settings_layout["dock"] = "fill";
+    nodes.push_back(std::move(footer_dock));
+    nodes.push_back(std::move(settings_layout));
 
-    json document{{"version", 1}, {"title", ""}, {"nodes", std::move(nodes)}};
+    if (!nodes.empty() && nodes.front().is_object())
+        nodes.front()["dock"] = "top";
+    json document{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     std::string serialized = document.dump();
     if (serialized.size() <= kMaximumPanelSpecBytes)
         return serialized;
 
     json compact_nodes = json::array();
-    compact_nodes.push_back(text_node("AI Editor Settings", "title", 30));
+    compact_nodes.push_back(text_node("编辑器设置", "title", 30));
     compact_nodes.push_back(text_node(
         "This page exceeded the UI spec budget and was compacted. Narrow the search or use "
         "pagination. / 当前页面超过 UI spec 预算，已切换紧凑视图；请缩小搜索范围或翻页。",
@@ -2479,24 +2503,78 @@ std::string build_panel_spec(const AiEditorSettingsPanelState& state) {
     json compact_navigation = json::array();
     append_button_rows(compact_navigation, std::move(compact_nav), 4);
     compact_nodes.push_back(card_node("Categories", std::move(compact_navigation), "gold"));
-    return json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact_nodes)}}.dump();
+    json compact_footer = json::array();
+    compact_footer.push_back(row_node(json::array({
+        badge_node(!state.values_loaded ? "草稿：加载中"
+                   : dirty              ? "草稿：未保存"
+                                        : "草稿：已同步",
+                   !state.values_loaded || dirty ? "warn" : "ok"),
+        badge_node("保存：" + save_phase_text(state.save_phase),
+                   save_phase_style(state.save_phase)),
+    })));
+    json compact_footer_actions = json::array();
+    compact_footer_actions.push_back(
+        button_node("footer.apply", "应用", "draft.apply", json::object(), "primary",
+                    !dirty || !state.values_loaded || state.save_phase == SavePhase::Saving ||
+                        synchronization_locked));
+    compact_footer_actions.push_back(
+        button_node("footer.discard", "丢弃", "draft.discard", json::object(), "danger",
+                    !dirty || state.save_phase == SavePhase::Saving || synchronization_locked));
+    compact_footer_actions.push_back(
+        button_node("footer.reload", "重新加载", "draft.reload", json::object(), "default",
+                    state.save_phase == SavePhase::Saving || synchronization_locked));
+    compact_footer_actions.push_back(button_node(
+        "footer.reset_section", "重置本页", "draft.reset_section", json::object(), "ghost",
+        state.active_page == "overview" || !state.search_query.empty() ||
+            state.review_filter != "all" || !state.values_loaded ||
+            state.save_phase == SavePhase::Saving || synchronization_locked));
+    append_button_rows(compact_footer, std::move(compact_footer_actions), 2);
+    json compact_footer_node = card_node("保存更改 / Save changes", std::move(compact_footer),
+                                         !state.values_loaded || dirty ? "warn" : "ok");
+    json compact_content = container_node("settings-compact-content", std::move(compact_nodes),
+                                          "vertical", 0, 760, 1.0F, 760);
+    compact_content["dock"] = "fill";
+    compact_content["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json compact_footer_dock =
+        container_node("settings-compact-footer", json::array({std::move(compact_footer_node)}),
+                       "vertical", 0, 760, 0.0F, 760);
+    compact_footer_dock["dock"] = "bottom";
+    compact_footer_dock["height"] = 136;
+    return json{
+        {"version", 1},
+        {"title", ""},
+        {"layout", "dock"},
+        {"nodes", json::array({std::move(compact_content), std::move(compact_footer_dock)})}}
+        .dump();
 }
 
 sao_status_t refresh_body(AiEditorSettingsPanelState& state, bool force) {
     std::lock_guard publish_lock(state.publish_mutex);
+    const auto now = std::chrono::steady_clock::now();
     std::string spec;
     {
         std::lock_guard lock(state.mutex);
-        spec = build_panel_spec(state);
-        if (!force && spec == state.last_spec)
+        if (!force && !state.refresh_retry_pending && now < state.next_refresh_allowed)
             return SAO_STATUS_OK;
+        spec = build_panel_spec(state);
+        if (spec == state.last_spec) {
+            state.refresh_retry_pending = false;
+            state.next_refresh_allowed = now + kPanelRefreshInterval;
+            return SAO_STATUS_OK;
+        }
     }
     const sao_status_t status = sao_ui_panel_body_set_spec(
         state.body, reinterpret_cast<const uint8_t*>(spec.data()), spec.size());
-    if (status != SAO_STATUS_OK)
+    if (status != SAO_STATUS_OK) {
+        std::lock_guard lock(state.mutex);
+        state.refresh_retry_pending = true;
+        state.next_refresh_allowed = std::chrono::steady_clock::time_point{};
         return status;
+    }
     std::lock_guard lock(state.mutex);
     state.last_spec = std::move(spec);
+    state.refresh_retry_pending = false;
+    state.next_refresh_allowed = now + kPanelRefreshInterval;
     return SAO_STATUS_OK;
 }
 
@@ -3580,8 +3658,10 @@ void show_input_dialog(AiEditorSettingsPanelState& state, DialogIntent intent,
         state.pending_dialog.intent = intent;
         state.pending_dialog.field_key = field == nullptr ? std::string{} : field->key;
     }
-    const sao_status_t status =
-        sao_ui_dialog_show(state.dialog, &spec, &dialog_result_callback, &state);
+    sao_status_t status =
+        sao_ui_dialog_set_input_password(state.dialog, field != nullptr && is_secret_field(*field));
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_dialog_show(state.dialog, &spec, &dialog_result_callback, &state);
     if (status != SAO_STATUS_OK) {
         std::lock_guard lock(state.mutex);
         state.pending_dialog = {};
@@ -3713,6 +3793,28 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
         state.last_error.clear();
         return;
     }
+    if (action == "search.changed") {
+        std::string value;
+        const auto text = payload.find("text");
+        const auto input_value = payload.find("value");
+        const json* source = text != payload.end() && text->is_string() ? &*text
+                             : input_value != payload.end() && input_value->is_string()
+                                 ? &*input_value
+                                 : nullptr;
+        if (source != nullptr)
+            value = source->get<std::string>();
+        if (value.size() > kMaximumSearchBytes) {
+            std::lock_guard lock(state.mutex);
+            state.last_error = "Search query exceeds the input limit.";
+            return;
+        }
+        std::lock_guard lock(state.mutex);
+        state.search_query = std::move(value);
+        state.result_offset = 0;
+        state.status_message.clear();
+        state.last_error.clear();
+        return;
+    }
     if (action == "search.open") {
         std::string current;
         {
@@ -3775,6 +3877,19 @@ void dispatch_action(AiEditorSettingsPanelState& state, std::string_view action,
         } else if (state.result_offset + kFieldsPerPage < total) {
             state.result_offset += kFieldsPerPage;
         }
+        return;
+    }
+    if (action == "field.details") {
+        const auto key = payload_string(payload, "key");
+        std::lock_guard lock(state.mutex);
+        if (!key.has_value() || find_field(state, *key) == nullptr) {
+            state.last_error = "Unknown field details target.";
+            return;
+        }
+        if (state.expanded_field_details.contains(*key))
+            state.expanded_field_details.erase(*key);
+        else
+            state.expanded_field_details.insert(*key);
         return;
     }
     const bool mutates_draft = action == "draft.discard" || action == "draft.reload" ||
@@ -4028,7 +4143,7 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         std::lock_guard lock(state->mutex);
         state->last_error = "Settings action failed with an internal error.";
     }
-    (void)refresh_body(*state, true);
+    (void)refresh_body(*state, false);
 }
 
 void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {
@@ -4369,20 +4484,19 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_settings_p
         state->describe_pending = borrowed_launcher != nullptr;
         state->load_pending = borrowed_launcher != nullptr;
         state->backend_connected = false;
-        state->backend_message =
-            borrowed_launcher == nullptr
-                ? "Offline / 离线: backend not attached; local draft remains available."
-                : "Connecting to settings backend...";
+        state->backend_message = borrowed_launcher == nullptr
+                                     ? "后端未连接。本地草稿会保留，连接后可同步。"
+                                     : "Connecting to settings backend...";
 
         SaoPanelDescriptor descriptor{};
         descriptor.struct_size = sizeof(SaoPanelDescriptor);
         descriptor.panel_id_utf8 = SAO_AI_EDITOR_SETTINGS_PANEL_ID;
-        descriptor.title_utf8 = "AI Editor Settings";
+        descriptor.title_utf8 = "编辑器设置";
         descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
         descriptor.default_width_px = 1040;
         descriptor.default_height_px = 820;
-        descriptor.min_width_px = 900;
-        descriptor.min_height_px = 720;
+        descriptor.min_width_px = 760;
+        descriptor.min_height_px = 520;
         descriptor.movable = true;
         descriptor.resizable = true;
         descriptor.show_titlebar = true;

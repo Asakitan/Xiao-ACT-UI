@@ -14,12 +14,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_set>
 
@@ -103,6 +105,39 @@ struct FilterRowPropsSnapshot {
     std::string query;
     std::vector<OwnedChip> chips;
 };
+
+bool is_utf8_continuation(unsigned char value) noexcept {
+    return (value & 0xC0U) == 0x80U;
+}
+
+size_t utf8_codepoint_bytes(std::string_view text, size_t offset) noexcept {
+    const unsigned char lead = static_cast<unsigned char>(text[offset]);
+    const size_t remaining = text.size() - offset;
+    if (lead < 0x80U)
+        return 1U;
+    if (lead >= 0xC2U && lead <= 0xDFU && remaining >= 2U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])))
+        return 2U;
+    if (lead >= 0xE0U && lead <= 0xEFU && remaining >= 3U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 2U])))
+        return 3U;
+    if (lead >= 0xF0U && lead <= 0xF4U && remaining >= 4U &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 1U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 2U])) &&
+        is_utf8_continuation(static_cast<unsigned char>(text[offset + 3U])))
+        return 4U;
+    return 1U;
+}
+
+size_t utf8_codepoint_count(std::string_view text) noexcept {
+    size_t count = 0U;
+    for (size_t offset = 0U; offset < text.size();) {
+        offset += utf8_codepoint_bytes(text, offset);
+        ++count;
+    }
+    return count;
+}
 
 }  // namespace
 
@@ -544,6 +579,9 @@ sao_status_t widget_filter_row_paint(sao_ui_widget_handle_t handle,
         const float search_w = static_cast<float>(spec.search_box_width_px);
         const float font_size = static_cast<float>(spec.font_size_px);
         const float text_y = yf + pad_y + 2.0F;
+        status = sao_ui_paint_ctx_push_clip(context, xf, yf, search_w, hf);
+        if (status != SAO_STATUS_OK)
+            return status;
         if (!query.empty()) {
             status = sao_ui_paint_ctx_draw_utf8(context, xf + pad_x, text_y, query.c_str(),
                                                 font_size, fg);
@@ -554,8 +592,11 @@ sao_status_t widget_filter_row_paint(sao_ui_widget_handle_t handle,
         } else {
             status = SAO_STATUS_OK;
         }
+        const sao_status_t pop_search_status = sao_ui_paint_ctx_pop_clip(context);
         if (status != SAO_STATUS_OK)
             return status;
+        if (pop_search_status != SAO_STATUS_OK)
+            return pop_search_status;
 
         // Chips (right of search box).
         const uint32_t chip_bg = resolve_or(spec.chip_bg_argb, SAO_UI_TOKEN_APP_BG);
@@ -569,37 +610,47 @@ sao_status_t widget_filter_row_paint(sao_ui_widget_handle_t handle,
         size_t visible = 0;
         size_t dropped = 0;
         const float row_right = xf + wf - gap;
+        const auto measure_label = [font_size](const std::string& label) {
+            float text_width = 0.0F;
+            float text_height = 0.0F;
+            if (measure_text_dwrite(label.c_str(), font_size, &text_width, &text_height))
+                return std::ceil(text_width);
+            const float glyph_width =
+                static_cast<float>(std::max(1, static_cast<int32_t>(font_size / 5.0F)) * 6);
+            return static_cast<float>(utf8_codepoint_count(label)) * glyph_width;
+        };
         for (const auto& chip : chips) {
             const uint32_t fill = chip.selected ? chip_sel : chip_bg;
             const uint32_t c_fg = chip.selected ? chip_sel_fg : chip_fg;
-            // Estimate chip width from label length (rough: 6px/char + padding).
-            const float chip_w = static_cast<float>(chip.label.size()) * 6.0F +
-                                  static_cast<float>(spec.pad_x_px) * 2.0F;
+            const float label_width = measure_label(chip.label);
+            const float chip_w = label_width + pad_x * 2.0F;
             if (chip_x + chip_w > row_right)
                 break;
             status = paint_rounded_rect(context, chip_x, chip_y, chip_w, chip_h,
                                          std::min(radius, chip_h * 0.5F), fill);
             if (status != SAO_STATUS_OK)
                 return status;
-            // Clip label to the chip's interior so long UTF-8 labels
-            // never overpaint the next chip.
-            const float label_space = std::max(0.0F, chip_w - static_cast<float>(spec.pad_x_px) * 2.0F);
-            const std::string clipped_label = label_space >=
-                    static_cast<float>(chip.label.size()) * 6.0F
-                ? chip.label
-                : chip.label.substr(0, static_cast<size_t>(std::max(0.0F, label_space / 6.0F)));
-            status = sao_ui_paint_ctx_draw_utf8(
-                context, chip_x + static_cast<float>(spec.pad_x_px),
-                chip_y + (chip_h - font_size) * 0.5F, clipped_label.c_str(), font_size, c_fg);
-            if (status != SAO_STATUS_OK)
-                return status;
+            if (label_width > 0.0F) {
+                status = sao_ui_paint_ctx_push_clip(context, chip_x + pad_x, chip_y, label_width,
+                                                    chip_h);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                status = sao_ui_paint_ctx_draw_utf8(context, chip_x + pad_x,
+                                                    chip_y + (chip_h - font_size) * 0.5F,
+                                                    chip.label.c_str(), font_size, c_fg);
+                const sao_status_t pop_chip_status = sao_ui_paint_ctx_pop_clip(context);
+                if (status != SAO_STATUS_OK)
+                    return status;
+                if (pop_chip_status != SAO_STATUS_OK)
+                    return pop_chip_status;
+            }
             chip_x += chip_w + gap;
             ++visible;
         }
         dropped = chips.size() - visible;
         if (dropped > 0) {
             const std::string folded = "+" + std::to_string(dropped);
-            const float fold_w = static_cast<float>(folded.size()) * 6.0F + 16.0F;
+            const float fold_w = measure_label(folded) + 16.0F;
             if (chip_x + fold_w <= row_right) {
                 status = paint_rounded_rect(context, chip_x, chip_y, fold_w, chip_h,
                                              std::min(radius, chip_h * 0.5F), chip_bg);

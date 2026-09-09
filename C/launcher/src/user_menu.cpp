@@ -406,7 +406,7 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     if (!menu.get() ||
         !AppendMenuW(menu.get(), MF_STRING, kOpenSettingsCommand, settings_label.c_str()) ||
         !AppendMenuW(menu.get(), MF_STRING, kOpenHotkeysCommand, hotkey_label.c_str()) ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenUserGuideCommand, L"关于 / 用户指南") ||
+        !AppendMenuW(menu.get(), MF_STRING, kOpenUserGuideCommand, L"关于与用户指南") ||
         !AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr) ||
         !AppendMenuW(menu.get(), MF_STRING, kExitCommand, L"退出")) {
         showMenuUnavailableError();

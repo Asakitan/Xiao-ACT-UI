@@ -40,13 +40,13 @@ enum sao_ui_widget_badge_kind_e : int32_t {
 struct SaoUiAnimatedBadgeSpec {
     int32_t     count;          // < 0 → dot only
     int32_t     dot_radius_px;  // 0 → 6
-    int32_t     pulse_ms;       // 0 → 900 default
+    int32_t pulse_ms;           // 0 → static
     int32_t     font_size_px;   // 0 → 12
     int32_t     pad_x_px;       // 0 → 6
     int32_t     pad_y_px;       // 0 → 3
     int32_t     radius_px;      // corner radius for text pill; 0 → 8
     uint32_t    fill_argb;      // 0 → SAO_UI_TOKEN_APP_ACCENT
-    uint32_t    fg_argb;         // 0 → SAO_UI_TOKEN_WHITE
+    uint32_t fg_argb;           // 0 → SAO_UI_TOKEN_APP_TEXT
     uint32_t    border_argb;    // 0 → SAO_UI_TOKEN_APP_BORDER
     uint32_t    pulse_argb;      // 0 → fill lightened 30%
     SaoUiThemeId theme_override; // SAO_UI_THEME_COUNT = inherit

@@ -17,11 +17,11 @@ typedef enum sao_sdk_sound_kind_e {
     SAO_SDK_SOUND_BEEP_CONFIRM = 3,
 } sao_sdk_sound_kind_t;
 
-// 播放 procedural 8-bit 生成的音效 (matches Python play_levelup_sfx()).
+// 播放 SDK 语义音效，经平台 XAudio2 mixer 和全局音量策略输出。
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_procedural(
     const struct SaoSdkContext* ctx, sao_sdk_sound_kind_t kind);
 
-// 播放 WAV 文件 (winsound.PlaySoundW alias).
+// 从 UTF-8 路径读取并播放有界 PCM WAV；经平台 XAudio2 mixer 与全局策略输出。
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_sound_play_wav(
     const struct SaoSdkContext* ctx, const char* path_utf8);
 

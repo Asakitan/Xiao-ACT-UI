@@ -42,6 +42,7 @@
 #include "sao/ui/subpixel.h"
 
 #include "menu_visual_internal.h"
+#include "panel_theme_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -90,8 +91,7 @@ constexpr int32_t kRootHoverInMs = 140;
 constexpr int32_t kRootHoverOutMs = 110;
 constexpr int32_t kChildHoverInMs = 140;
 constexpr int32_t kChildHoverOutMs = 110;
-constexpr int32_t kAmbientCadenceMs = 50;
-constexpr int32_t kAmbientCycleMs = 4000;
+constexpr int32_t kAccentSweepMs = 420;
 constexpr float kGeometrySnapEpsilon = 1.0F / 512.0F;
 
 // Default metrics — from menu.h banner + theme.h metrics table:
@@ -198,7 +198,6 @@ struct sao_ui_menu_s {
     float child_rail_glow_t{};
     float backdrop_lens_t{};
     int32_t ambient_phase_ms{};
-    int32_t ambient_cadence_ms{};
     float open_spark_t{};
     float selection_spark_t{};
     uint32_t open_spark_count{};
@@ -500,16 +499,21 @@ void append_sound_locked(sao_ui_menu_s* menu, PendingMenuEvent* pending, MenuSou
 }
 
 void dispatch_event_noexcept(const PendingMenuEvent& pending) noexcept {
+    sao_ui_sound_event_scope_t scope{};
+    const bool scoped = sao_ui_sound_event_begin(0, &scope) == SAO_STATUS_OK;
     if (pending.play_sound)
         emit_menu_sound(pending.sound);
     if (pending.play_secondary_sound)
         emit_menu_sound(pending.secondary_sound);
-    if (pending.callback == nullptr)
-        return;
     try {
-        pending.callback(pending.event, pending.primary, pending.secondary, pending.action_id,
-                         pending.user_data);
+        if (pending.callback)
+            pending.callback(pending.event, pending.primary, pending.secondary, pending.action_id,
+                             pending.user_data);
+        if (scoped)
+            (void)sao_ui_sound_event_commit(scope);
     } catch (...) {
+        if (scoped)
+            (void)sao_ui_sound_event_cancel(scope);
     }
 }
 
@@ -623,6 +627,49 @@ void mark_visual_changed_locked(sao_ui_menu_s* menu) {
     ++menu->visual_revision;
 }
 
+bool decorations_suppressed_locked(const sao_ui_menu_s* menu) {
+    return menu->reduced_motion || menu->fps_pressure ||
+           sao::ui::detail::panel_theme_high_contrast();
+}
+
+bool clear_decorations_locked(sao_ui_menu_s* menu) {
+    const bool changed = menu->ambient_phase_ms != 0 || menu->open_spark_t != 0.0F ||
+                         menu->selection_spark_t != 0.0F || menu->open_spark_count != 0 ||
+                         menu->selection_spark_count != 0 || menu->selection_trail_t != 0.0F ||
+                         menu->pressed_pulse_t != 0.0F || menu->child_rail_glow_t != 0.0F;
+    menu->ambient_phase_ms = 0;
+    menu->open_spark_t = 0.0F;
+    menu->selection_spark_t = 0.0F;
+    menu->open_spark_count = 0;
+    menu->selection_spark_count = 0;
+    menu->selection_trail_t = 0.0F;
+    menu->pressed_pulse_t = 0.0F;
+    menu->child_rail_glow_t = 0.0F;
+    return changed;
+}
+
+void restart_open_decoration_locked(sao_ui_menu_s* menu) {
+    if (decorations_suppressed_locked(menu)) {
+        (void)clear_decorations_locked(menu);
+        return;
+    }
+    menu->ambient_phase_ms = 1;
+    menu->open_spark_t = 1.0F;
+    menu->open_spark_count = static_cast<uint32_t>(std::min<size_t>(24U, menu->items.size()));
+}
+
+void restart_selection_decoration_locked(sao_ui_menu_s* menu) {
+    if (decorations_suppressed_locked(menu)) {
+        (void)clear_decorations_locked(menu);
+        return;
+    }
+    menu->ambient_phase_ms = 1;
+    menu->selection_spark_t = 1.0F;
+    menu->selection_spark_count = 8U;
+    menu->selection_trail_t = 1.0F;
+    menu->pressed_pulse_t = 1.0F;
+}
+
 void clear_child_visual_locked(sao_ui_menu_s* menu) {
     menu->displayed_parent_name.clear();
     menu->pending_parent_name.clear();
@@ -696,6 +743,7 @@ void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_na
         menu->child_fade_t = 0.0F;
         menu->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
         menu->phase_elapsed_ms = 0;
+        restart_open_decoration_locked(menu);
         mark_visual_changed_locked(menu);
         return;
     }
@@ -706,6 +754,7 @@ void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_na
     menu->child_fade_t = 1.0F;
     menu->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
     menu->phase_elapsed_ms = 0;
+    restart_open_decoration_locked(menu);
     mark_visual_changed_locked(menu);
 }
 
@@ -788,11 +837,15 @@ void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
             changed = true;
         }
     }
+    const float previous_rail = menu->child_rail_glow_t;
+    menu->child_rail_glow_t = advance_hover_value(
+        previous_rail,
+        decorations_suppressed_locked(menu) ? 0.0F : (menu->child_hover_idx >= 0 ? 1.0F : 0.0F),
+        dt_ms, 120);
+    if (menu->child_rail_glow_t != previous_rail)
+        changed = true;
     if (changed)
         mark_visual_changed_locked(menu);
-    menu->child_rail_glow_t = advance_hover_value(menu->child_rail_glow_t,
-                                                   menu->child_hover_idx >= 0 ? 1.0F : 0.0F,
-                                                   dt_ms, 120);
 }
 
 SaoUiMenuButtonRect compute_child_rect(const SaoUiMenuLayout& layout, const ChildMenu& child_menu,
@@ -1020,12 +1073,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_show(sao_ui_menu_handle_t handle
             handle->transition_eased_t = 0.0F;
             handle->center_diffusion_t = 0.0F;
             handle->backdrop_lens_t = 0.0F;
-            handle->ambient_phase_ms = 0;
-            handle->ambient_cadence_ms = 0;
-            handle->open_spark_t = handle->reduced_motion || handle->fps_pressure ? 0.0F : 1.0F;
-            handle->open_spark_count = handle->reduced_motion || handle->fps_pressure
-                                           ? 0U
-                                           : static_cast<uint32_t>(std::min<size_t>(24U, handle->items.size()));
             if (handle->reduced_motion) {
                 handle->phase = SAO_UI_MENU_PHASE_OPEN;
                 handle->transition_eased_t = 1.0F;
@@ -1035,6 +1082,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_show(sao_ui_menu_handle_t handle
             } else {
                 handle->phase = SAO_UI_MENU_PHASE_OPENING;
             }
+            restart_open_decoration_locked(handle);
             append_sound_locked(handle, &pending, MenuSoundCue::MenuOpen);
             mark_visual_changed_locked(handle);
         }
@@ -1208,11 +1256,8 @@ sao_status_t sao::ui::menu_visual::activate_root(sao_ui_menu_handle_t handle,
             begin_child_transition_locked(handle, opens_child ? it.name : "");
         }
         handle->selection_trail_idx = menu_idx;
-        handle->selection_trail_t = 1.0F;
         handle->pressed_pulse_idx = menu_idx;
-        handle->pressed_pulse_t = 1.0F;
-        handle->selection_spark_t = handle->reduced_motion || handle->fps_pressure ? 0.0F : 1.0F;
-        handle->selection_spark_count = handle->reduced_motion || handle->fps_pressure ? 0U : 8U;
+        restart_selection_decoration_locked(handle);
         mark_visual_changed_locked(handle);
         if (emit_interaction) {
             pending = capture_event_locked(handle, SAO_UI_MENU_EV_ITEM_ACTIVATED, menu_idx, -1,
@@ -1326,11 +1371,8 @@ sao_status_t sao::ui::menu_visual::activate_child(sao_ui_menu_handle_t handle,
             *out_activated = true;
             *out_action_id = child.action_id;
             handle->selection_trail_idx = parent_menu_idx;
-            handle->selection_trail_t = 1.0F;
             handle->pressed_pulse_idx = parent_menu_idx;
-            handle->pressed_pulse_t = 1.0F;
-            handle->selection_spark_t = handle->reduced_motion || handle->fps_pressure ? 0.0F : 1.0F;
-            handle->selection_spark_count = handle->reduced_motion || handle->fps_pressure ? 0U : 8U;
+            restart_selection_decoration_locked(handle);
             mark_visual_changed_locked(handle);
             pending = capture_sound_event_locked(handle, SAO_UI_MENU_EV_CHILD_SELECTED, child_idx,
                                                  parent_menu_idx, child.action_id,
@@ -1426,17 +1468,21 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
             snapshot.center_diffusion_t = handle->center_diffusion_t;
             snapshot.close_suction_t = handle->close_suction_t;
             snapshot.selection_trail_idx = handle->selection_trail_idx;
-            snapshot.selection_trail_t = handle->selection_trail_t;
+            const bool suppress_decorations = decorations_suppressed_locked(handle);
+            snapshot.selection_trail_t = suppress_decorations ? 0.0F : handle->selection_trail_t;
             snapshot.pressed_pulse_idx = handle->pressed_pulse_idx;
-            snapshot.pressed_pulse_t = handle->pressed_pulse_t;
-            snapshot.child_rail_glow_t = handle->child_rail_glow_t;
+            snapshot.pressed_pulse_t = suppress_decorations ? 0.0F : handle->pressed_pulse_t;
+            snapshot.child_rail_glow_t = suppress_decorations ? 0.0F : handle->child_rail_glow_t;
             snapshot.backdrop_lens_t = handle->backdrop_lens_t;
-            snapshot.ambient_phase_t =
-                static_cast<float>(handle->ambient_phase_ms) / static_cast<float>(kAmbientCycleMs);
-            snapshot.open_spark_t = handle->open_spark_t;
-            snapshot.selection_spark_t = handle->selection_spark_t;
-            snapshot.open_spark_count = handle->open_spark_count;
-            snapshot.selection_spark_count = handle->selection_spark_count;
+            snapshot.ambient_phase_t = suppress_decorations
+                                           ? 0.0F
+                                           : static_cast<float>(handle->ambient_phase_ms) /
+                                                 static_cast<float>(kAccentSweepMs);
+            snapshot.open_spark_t = suppress_decorations ? 0.0F : handle->open_spark_t;
+            snapshot.selection_spark_t = suppress_decorations ? 0.0F : handle->selection_spark_t;
+            snapshot.open_spark_count = suppress_decorations ? 0U : handle->open_spark_count;
+            snapshot.selection_spark_count =
+                suppress_decorations ? 0U : handle->selection_spark_count;
             snapshot.reduced_motion = handle->reduced_motion;
             snapshot.fps_pressure = handle->fps_pressure;
             int32_t fisheye_hover_idx = handle->hover_idx;
@@ -1466,10 +1512,11 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
                     index, fisheye_hover_idx, fisheye_hover_t);
                 row.stagger_t = root_stagger_locked(handle, index);
                 row.radial_t = row.stagger_t;
-                row.selection_trail_t = handle->selection_trail_idx == index
-                                            ? handle->selection_trail_t
-                                            : 0.0F;
-                row.pressed_pulse_t = handle->pressed_pulse_idx == index
+                row.selection_trail_t =
+                    !suppress_decorations && handle->selection_trail_idx == index
+                        ? handle->selection_trail_t
+                        : 0.0F;
+                row.pressed_pulse_t = !suppress_decorations && handle->pressed_pulse_idx == index
                                           ? handle->pressed_pulse_t
                                           : 0.0F;
                 snapshot.roots.push_back(row);
@@ -1482,6 +1529,7 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
                     ChildRowSnapshot row{};
                     copy_fixed_utf8(&row.name_utf8, child_menu->items[i].name);
                     copy_fixed_utf8(&row.icon_utf8, child_menu->items[i].icon);
+                    row.action_id = child_menu->items[i].action_id;
                     row.can_activate = child_menu->items[i].can_activate;
                     row.state = child_menu->items[i].state;
                     row.visible_width_px = child_menu->visible_widths[i];
@@ -1489,10 +1537,12 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
                     row.stagger_t = static_cast<float>(child_menu->visible_widths[i]) /
                                     static_cast<float>(kChildTargetRowWidth);
                     row.radial_t = snapshot.child_rail_glow_t;
-                    row.selection_trail_t = handle->selection_trail_idx == snapshot.active_root_idx
+                    row.selection_trail_t = !suppress_decorations && handle->selection_trail_idx ==
+                                                                         snapshot.active_root_idx
                                                 ? handle->selection_trail_t
                                                 : 0.0F;
-                    row.pressed_pulse_t = handle->pressed_pulse_idx == snapshot.active_root_idx
+                    row.pressed_pulse_t = !suppress_decorations && handle->pressed_pulse_idx ==
+                                                                       snapshot.active_root_idx
                                               ? handle->pressed_pulse_t
                                               : 0.0F;
                     snapshot.rows.push_back(row);
@@ -1714,17 +1764,15 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
         handle->child_activate_sound_debounce_ms =
             std::max(0, handle->child_activate_sound_debounce_ms - dt_ms);
         bool transient_changed = false;
-        if (handle->phase != SAO_UI_MENU_PHASE_CLOSED && dt_ms > 0 &&
-            !handle->reduced_motion && !handle->fps_pressure) {
-            // Decorative motion resumes after a stall without replaying every missed frame.
-            const int32_t bounded_dt = std::min(dt_ms, kAmbientCadenceMs * 4);
-            handle->ambient_cadence_ms = std::min(
-                handle->ambient_cadence_ms + bounded_dt, kAmbientCadenceMs * 4);
-            const int32_t steps = handle->ambient_cadence_ms / kAmbientCadenceMs;
-            if (steps > 0) {
-                handle->ambient_cadence_ms -= steps * kAmbientCadenceMs;
-                handle->ambient_phase_ms =
-                    (handle->ambient_phase_ms + steps * kAmbientCadenceMs) % kAmbientCycleMs;
+        if (decorations_suppressed_locked(handle) || handle->phase == SAO_UI_MENU_PHASE_CLOSED) {
+            transient_changed = clear_decorations_locked(handle) || transient_changed;
+        } else if (dt_ms > 0 && handle->ambient_phase_ms > 0) {
+            const int64_t next_phase = std::min<int64_t>(
+                kAccentSweepMs, static_cast<int64_t>(handle->ambient_phase_ms) + dt_ms);
+            const int32_t next_phase_ms =
+                next_phase >= kAccentSweepMs ? 0 : static_cast<int32_t>(next_phase);
+            if (next_phase_ms != handle->ambient_phase_ms) {
+                handle->ambient_phase_ms = next_phase_ms;
                 transient_changed = true;
             }
         }
@@ -1738,18 +1786,17 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
         advance_transient(&handle->selection_trail_t, 220);
         advance_transient(&handle->pressed_pulse_t, 180);
         advance_transient(&handle->selection_spark_t, 260);
-        advance_root_hover_locked(handle, dt_ms);
-        if (handle->phase == SAO_UI_MENU_PHASE_CHILD_OPENING ||
-            handle->phase == SAO_UI_MENU_PHASE_CHILD_OPEN ||
-            handle->phase == SAO_UI_MENU_PHASE_CHILD_CLOSING) {
-            const float next_rail = advance_hover_value(
-                handle->child_rail_glow_t, handle->child_hover_idx >= 0 ? 1.0F : 0.0F,
-                dt_ms, 120);
-            if (next_rail != handle->child_rail_glow_t) {
-                handle->child_rail_glow_t = next_rail;
-                transient_changed = true;
-            }
+        if (handle->phase != SAO_UI_MENU_PHASE_OPENING)
+            advance_transient(&handle->open_spark_t, 260);
+        if (handle->open_spark_t <= 0.0F && handle->open_spark_count != 0U) {
+            handle->open_spark_count = 0U;
+            transient_changed = true;
         }
+        if (handle->selection_spark_t <= 0.0F && handle->selection_spark_count != 0U) {
+            handle->selection_spark_count = 0U;
+            transient_changed = true;
+        }
+        advance_root_hover_locked(handle, dt_ms);
         if (transient_changed)
             mark_visual_changed_locked(handle);
         switch (handle->phase) {
@@ -1760,9 +1807,8 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             handle->transition_eased_t = spring_progress(raw);
             handle->center_diffusion_t = handle->transition_eased_t;
             handle->backdrop_lens_t = handle->transition_eased_t;
-            handle->open_spark_t = handle->reduced_motion || handle->fps_pressure
-                                       ? 0.0F
-                                       : std::max(0.0F, 1.0F - raw * 1.35F);
+            handle->open_spark_t =
+                decorations_suppressed_locked(handle) ? 0.0F : std::max(0.0F, 1.0F - raw * 1.35F);
             mark_visual_changed_locked(handle);
             if (handle->phase_elapsed_ms >= duration) {
                 handle->phase = SAO_UI_MENU_PHASE_OPEN;
@@ -1784,6 +1830,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
                 handle->phase = SAO_UI_MENU_PHASE_CLOSED;
                 handle->phase_elapsed_ms = 0;
                 clear_child_visual_locked(handle);
+                (void)clear_decorations_locked(handle);
                 for (auto& item : handle->items) {
                     if (item.state == SAO_UI_MENU_BTN_ACTIVE ||
                         item.state == SAO_UI_MENU_BTN_HOVER) {
@@ -1946,13 +1993,8 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_visual_budget(
     const bool changed = handle->reduced_motion != reduced_motion || handle->fps_pressure != fps_pressure;
     handle->reduced_motion = reduced_motion;
     handle->fps_pressure = fps_pressure;
-    if (reduced_motion || fps_pressure) {
-        handle->open_spark_t = 0.0F;
-        handle->selection_spark_t = 0.0F;
-        handle->open_spark_count = 0;
-        handle->selection_spark_count = 0;
-        handle->ambient_cadence_ms = 0;
-    }
+    const bool cleared =
+        decorations_suppressed_locked(handle) ? clear_decorations_locked(handle) : false;
     if (reduced_motion) {
         if (handle->phase == SAO_UI_MENU_PHASE_CHILD_OPENING) {
             auto* child_menu = find_child_menu_locked(handle, handle->displayed_parent_name);
@@ -1974,7 +2016,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_visual_budget(
             }
         }
     }
-    if (changed)
+    if (changed || cleared)
         mark_visual_changed_locked(handle);
     return SAO_STATUS_OK;
 }

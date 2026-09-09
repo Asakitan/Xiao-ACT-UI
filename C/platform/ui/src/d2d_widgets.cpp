@@ -8,6 +8,8 @@
 #include "widget_paint_internal.h"
 #include "widget_raster_internal.h"
 #include "widget_typed_internal.h"
+#include "native_text_edit.h"
+#include "classic_text_roles.h"
 
 #include <nlohmann/json.hpp>
 
@@ -18,6 +20,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -55,6 +58,16 @@ struct sao_ui_widget_s {
     float border_width{1.0F};
     Rect bounds{};
     std::string text;
+    std::string placeholder;
+    std::string composition;
+    size_t selection_start{};
+    size_t selection_end{};
+    int32_t max_length{65536};
+    bool password{};
+    bool readonly{};
+    bool multiline{};
+    sao_ui_text_change_cb_t text_changed{};
+    void* text_changed_user{};
     std::string style;
     std::unordered_map<std::string, uint32_t> prop_colors;
     std::unordered_map<std::string, uint32_t> theme_overrides;
@@ -73,6 +86,11 @@ struct GenericWidgetPropsState {
     float radius{};
     float border_width{1.0F};
     std::string text;
+    std::string placeholder;
+    int32_t max_length{65536};
+    bool password{};
+    bool readonly{};
+    bool multiline{};
     std::string style;
     std::unordered_map<std::string, uint32_t> colors;
 };
@@ -780,19 +798,60 @@ std::string ellipsize_utf8(std::string_view text, float size, float available_wi
     if (measured_text_width(ellipsis, size) > available_width)
         return {};
 
-    std::string result(ellipsis);
+    std::vector<size_t> boundaries;
+    boundaries.reserve(text.size());
+    bool monotonic_search_safe = true;
     for (size_t offset = 0U; offset < text.size();) {
         const size_t next = offset + utf8_codepoint_bytes(text, offset);
-        std::string candidate(text.substr(0U, next));
+        boundaries.push_back(next);
+        const unsigned char lead = static_cast<unsigned char>(text[offset]);
+        if (lead >= 0x80U || lead < 0x20U)
+            monotonic_search_safe = false;
+        offset = next;
+    }
+    auto candidate_width = [&](size_t end) {
+        std::string candidate;
+        candidate.reserve(end + ellipsis.size());
+        candidate.assign(text.data(), end);
+        candidate.append(ellipsis);
+        return measured_text_width(candidate, size);
+    };
+
+    // Simple ASCII labels use monotonic prefix widths, so find the first
+    // overflow with a UTF-8-boundary binary search.  Shaped/multibyte text
+    // keeps the original first-overflow scan because combining marks and
+    // invalid shaping can make prefix widths non-monotonic.
+    if (monotonic_search_safe) {
+        if (candidate_width(boundaries.back()) <= available_width)
+            return std::string(text) + std::string(ellipsis);
+        size_t low = 0U;
+        size_t high = boundaries.size();
+        while (high - low > 1U) {
+            const size_t middle = low + (high - low) / 2U;
+            if (candidate_width(boundaries[middle - 1U]) <= available_width)
+                low = middle;
+            else
+                high = middle;
+        }
+        if (low == 0U)
+            return std::string(ellipsis);
+        std::string result(text.substr(0U, boundaries[low - 1U]));
+        result.append(ellipsis);
+        return result;
+    }
+
+    std::string result(ellipsis);
+    for (const size_t boundary : boundaries) {
+        std::string candidate;
+        candidate.reserve(boundary + ellipsis.size());
+        candidate.assign(text.data(), boundary);
         candidate.append(ellipsis);
         if (measured_text_width(candidate, size) > available_width)
             break;
         result = std::move(candidate);
-        offset = next;
     }
     return result;
 }
-
 void draw_widget_text(sao_ui_paint_ctx_s& context, Rect widget_bounds, float x, float y,
                       std::string_view text, float size, uint32_t argb) {
     if (text.empty() || x >= widget_bounds.x + widget_bounds.width)
@@ -926,6 +985,16 @@ std::string_view semantic_color_key(std::string_view key) noexcept {
 void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bounds) {
     widget.bounds = bounds;
     const std::string_view style = widget.style;
+    std::optional<sao::ui::detail::ScopedTextRole> text_role_scope;
+    if (style == "title") {
+        text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Display,
+                                sao::ui::detail::ClassicTextWeight::SemiBold);
+    } else if (style == "subtitle") {
+        text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Body,
+                                sao::ui::detail::ClassicTextWeight::SemiBold);
+    } else if (style == "mono") {
+        text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Monospace);
+    }
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     uint32_t accent = widget_color(
         widget, "accent", style_color(style, "accent",
@@ -992,6 +1061,95 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         else if (canvas_prop != widget.prop_colors.end())
             fill_rect(context, bounds, canvas_prop->second);
     }
+    if (widget.kind == SAO_UI_WIDGET_INPUT || widget.kind == SAO_UI_WIDGET_TEXT_FIELD) {
+        fill_rounded_rect(context, bounds, 3.0F, focused ? accent : border);
+        const Rect inner{bounds.x + 1, bounds.y + 1, std::max(0.0F, bounds.width - 2),
+                         std::max(0.0F, bounds.height - 2)};
+        fill_rounded_rect(context, inner, 2.0F, fill);
+        const Rect text_clip{bounds.x + 8, bounds.y + 4, std::max(0.0F, bounds.width - 16),
+                             std::max(0.0F, bounds.height - 8)};
+        context.clips.push_back(text_clip);
+        std::string display = widget.text;
+        if (widget.password) {
+            display.clear();
+            for (const unsigned char ch : widget.text)
+                if ((ch & 0xc0U) != 0x80U)
+                    display += "\xE2\x80\xA2";
+        }
+        const bool empty = display.empty() && widget.composition.empty();
+        if (empty)
+            display = widget.placeholder;
+        const float size = 14.0F;
+        const float line_height = 20.0F;
+        const size_t caret = std::min(widget.selection_end, widget.text.size());
+        std::string prefix = widget.text.substr(0, caret);
+        if (widget.password) {
+            prefix.clear();
+            for (size_t i = 0; i < caret; ++i)
+                if ((static_cast<unsigned char>(widget.text[i]) & 0xc0U) != 0x80U)
+                    prefix += "\xE2\x80\xA2";
+        }
+        const size_t caret_line =
+            static_cast<size_t>(std::count(prefix.begin(), prefix.end(), '\n'));
+        const size_t visible_lines =
+            std::max<size_t>(1, static_cast<size_t>(text_clip.height / line_height));
+        const size_t first_line = caret_line >= visible_lines ? caret_line - visible_lines + 1 : 0;
+        size_t begin = 0, line = 0;
+        do {
+            const size_t end = display.find('\n', begin);
+            if (line >= first_line && line < first_line + visible_lines) {
+                std::string row =
+                    display.substr(begin, end == std::string::npos ? end : end - begin);
+                const float line_y =
+                    text_clip.y + static_cast<float>(line - first_line) * line_height;
+                const size_t prefix_start = prefix.find_last_of('\n');
+                const std::string caret_prefix =
+                    prefix.substr(prefix_start == std::string::npos ? 0 : prefix_start + 1);
+                const float caret_width =
+                    line == caret_line ? measured_text_width(caret_prefix, size) : 0;
+                const float shift = line == caret_line && focused
+                                        ? std::max(0.0F, caret_width - text_clip.width + 3)
+                                        : 0;
+                if (focused && !widget.password && line == caret_line &&
+                    widget.selection_start != widget.selection_end) {
+                    const size_t a = std::min(widget.selection_start, widget.selection_end);
+                    const size_t b = std::max(widget.selection_start, widget.selection_end);
+                    const size_t row_end = end == std::string::npos ? widget.text.size() : end;
+                    if (a < row_end && b > begin) {
+                        const float left = measured_text_width(
+                            widget.text.substr(begin, std::max(a, begin) - begin), size);
+                        const float right = measured_text_width(
+                            widget.text.substr(begin, std::min(b, row_end) - begin), size);
+                        fill_rect(context,
+                                  {text_clip.x + left - shift, line_y, right - left, line_height},
+                                  sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SELECTION));
+                    }
+                }
+                draw_text(context, text_clip.x - shift, line_y, row.c_str(), size,
+                          empty ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_PLACEHOLDER)
+                                : foreground);
+                if (focused && line == caret_line && !widget.readonly) {
+                    const float cx = text_clip.x + caret_width - shift;
+                    fill_rect(context, {cx, line_y + 1, 1.0F, 16.0F}, accent);
+                    if (!widget.composition.empty() && !widget.password) {
+                        draw_text(context, cx, line_y, widget.composition.c_str(), size,
+                                  foreground);
+                        fill_rect(
+                            context,
+                            {cx, line_y + 18, measured_text_width(widget.composition, size), 1.0F},
+                            accent);
+                    }
+                }
+            }
+            if (end == std::string::npos || !widget.multiline)
+                break;
+            begin = end + 1;
+            ++line;
+        } while (line < first_line + visible_lines);
+        context.clips.pop_back();
+        return;
+    }
+
     if (widget.kind == SAO_UI_WIDGET_SCROLLBAR) {
         const ScrollbarGeometry geometry = scrollbar_geometry(widget, bounds);
         const uint32_t track = widget_color(widget, "track", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_SCROLLBAR_TRACK));
@@ -1142,8 +1300,18 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                                          ? 1.0F
                                          : 0.0F;
         const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - padding));
-        draw_widget_text(context, bounds, bounds.x + padding,
-                         bounds.y + padding + pressed_offset, widget.text, text_size, foreground);
+        const bool centered = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+                              widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
+                              widget.kind == SAO_UI_WIDGET_ICON;
+        const float text_x =
+            centered ? std::max(padding,
+                                (bounds.width - measured_text_width(widget.text, text_size)) * 0.5F)
+                     : padding;
+        const float text_y = centered || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON
+                                 ? std::max(0.0F, (bounds.height - text_size) * 0.5F)
+                                 : padding;
+        draw_widget_text(context, bounds, bounds.x + text_x, bounds.y + text_y + pressed_offset,
+                         widget.text, text_size, foreground);
     }
 }
 
@@ -1313,6 +1481,24 @@ sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len
             }
         }
 
+        if (widget_kind == SAO_UI_WIDGET_INPUT || widget_kind == SAO_UI_WIDGET_TEXT_FIELD) {
+            const auto value = document.find("value");
+            if (value != document.end()) {
+                if (!value->is_string())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                candidate.text = value->get<std::string>();
+            }
+            candidate.placeholder = document.value("placeholder", std::string());
+            candidate.password = document.value("password", false) ||
+                                 document.value("input_type", std::string()) == "password";
+            candidate.readonly = document.value("readonly", false);
+            candidate.multiline = document.value("multiline", false) ||
+                                  document.value("input_type", std::string()) == "multiline";
+            candidate.max_length = document.value("max_length", 65536);
+            if (candidate.max_length < 0 || candidate.max_length > 1048576)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+
         const auto style = document.find("style");
         if (style != document.end()) {
             if (!style->is_string())
@@ -1356,7 +1542,7 @@ sao_status_t parse_widget_props(const uint8_t* props_json_utf8, size_t props_len
 extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_create(int32_t widget_kind, void*,
                                                          sao_ui_widget_handle_t* out_handle) {
     if (out_handle == nullptr || widget_kind < SAO_UI_WIDGET_ROUNDED_PANEL ||
-        widget_kind > SAO_UI_WIDGET_ICON)
+        (widget_kind > SAO_UI_WIDGET_ICON && widget_kind != SAO_UI_WIDGET_TEXT_FIELD))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
     try {
@@ -1502,7 +1688,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_apply_props(sao_ui_widget_hand
     handle->nudge_step = candidate.nudge_step;
     handle->radius = candidate.radius;
     handle->border_width = candidate.border_width;
-    handle->text.swap(candidate.text);
+    if (!handle->focused ||
+        (handle->kind != SAO_UI_WIDGET_INPUT && handle->kind != SAO_UI_WIDGET_TEXT_FIELD))
+        handle->text.swap(candidate.text);
+    handle->placeholder.swap(candidate.placeholder);
+    handle->password = candidate.password;
+    handle->readonly = candidate.readonly;
+    handle->multiline = candidate.multiline;
+    handle->max_length = candidate.max_length;
     handle->style.swap(candidate.style);
     handle->prop_colors.swap(candidate.colors);
     return SAO_STATUS_OK;
@@ -1629,10 +1822,10 @@ sao_status_t set_widget_interaction_state(sao_ui_widget_handle_t handle, int32_t
 
 bool generic_kind_focusable(int32_t kind) {
     return kind == SAO_UI_WIDGET_ACTION_BUTTON || kind == SAO_UI_WIDGET_SCROLLBAR ||
-           kind == SAO_UI_WIDGET_INPUT || kind == SAO_UI_WIDGET_SLIDER ||
-           kind == SAO_UI_WIDGET_TABLE || kind == SAO_UI_WIDGET_DROPDOWN_BUTTON ||
-           kind == SAO_UI_WIDGET_CHECKBOX || kind == SAO_UI_WIDGET_RADIO ||
-           kind == SAO_UI_WIDGET_ICON;
+           kind == SAO_UI_WIDGET_INPUT || kind == SAO_UI_WIDGET_TEXT_FIELD ||
+           kind == SAO_UI_WIDGET_SLIDER || kind == SAO_UI_WIDGET_TABLE ||
+           kind == SAO_UI_WIDGET_DROPDOWN_BUTTON || kind == SAO_UI_WIDGET_CHECKBOX ||
+           kind == SAO_UI_WIDGET_RADIO || kind == SAO_UI_WIDGET_ICON;
 }
 
 bool generic_kind_has_value(int32_t kind) {
@@ -2421,5 +2614,148 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_paint_ctx_draw_clock_pulse(
                 center_y + pulse_radius + tick, stroke_width, pulse_color);
     stroke_line(*context, center_x - pulse_radius - tick, center_y,
                 center_x - pulse_radius + tick, center_y, stroke_width, pulse_color);
+    return SAO_STATUS_OK;
+}
+
+namespace sao::ui::detail {
+bool text_edit_snapshot(sao_ui_widget_handle_t widget, TextEditSnapshot& out) noexcept {
+    try {
+        GenericLifecycleLease lease(widget);
+        if (!lease)
+            return false;
+        std::lock_guard lock(widget->mutex);
+        if (widget->kind != SAO_UI_WIDGET_INPUT && widget->kind != SAO_UI_WIDGET_TEXT_FIELD)
+            return false;
+        out.text = widget->text;
+        out.composition = widget->composition;
+        out.selection_start = widget->selection_start;
+        out.selection_end = widget->selection_end;
+        out.password = widget->password;
+        out.readonly = widget->readonly || !widget->enabled;
+        out.multiline = widget->multiline;
+        out.max_length = widget->max_length;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+sao_status_t text_edit_update(sao_ui_widget_handle_t widget,
+                              const TextEditSnapshot& value) noexcept {
+    try {
+        GenericLifecycleLease lease(widget);
+        if (!lease)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        sao_ui_text_change_cb_t callback = nullptr;
+        void* user = nullptr;
+        bool changed = false;
+        {
+            std::lock_guard lock(widget->mutex);
+            if (widget->kind != SAO_UI_WIDGET_INPUT && widget->kind != SAO_UI_WIDGET_TEXT_FIELD)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            // Both programmatic and native edits remain bounded and valid UTF-8.
+            const auto validated = nlohmann::json(value.text).dump();
+            (void)validated;
+            if (value.text.size() > 4U * static_cast<size_t>(std::max(1, widget->max_length)))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const auto codepoints =
+                std::count_if(value.text.begin(), value.text.end(),
+                              [](unsigned char c) { return (c & 0xc0u) != 0x80u; });
+            if (codepoints > widget->max_length || value.text.find('\0') != std::string::npos)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            changed = widget->text != value.text;
+            widget->text = value.text;
+            widget->composition = value.composition;
+            widget->selection_start = std::min(value.selection_start, value.text.size());
+            widget->selection_end = std::min(value.selection_end, value.text.size());
+            callback = widget->text_changed;
+            user = widget->text_changed_user;
+        }
+        // Callbacks may replace/destroy their own widget. No widget lock crosses the call.
+        if (changed && callback)
+            callback(value.text.c_str(), user);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+}
+} // namespace sao::ui::detail
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_text_field_create(void* device,
+                                                             const SaoUiTextFieldSpec* spec,
+                                                             sao_ui_widget_handle_t* out) {
+    if (!spec || !out || spec->max_length < 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out = nullptr;
+    sao_ui_widget_handle_t widget = nullptr;
+    auto status = sao_ui_widget_create(SAO_UI_WIDGET_TEXT_FIELD, device, &widget);
+    if (status != SAO_STATUS_OK)
+        return status;
+    try {
+        nlohmann::json props{{"text", spec->initial_text_utf8 ? spec->initial_text_utf8 : ""},
+                             {"placeholder", spec->placeholder_utf8 ? spec->placeholder_utf8 : ""},
+                             {"password", spec->password_mode},
+                             {"readonly", spec->readonly},
+                             {"max_length", spec->max_length == 0 ? 65536 : spec->max_length}};
+        const auto bytes = props.dump();
+        status = sao_ui_widget_apply_props(widget, reinterpret_cast<const uint8_t*>(bytes.data()),
+                                           bytes.size());
+        for (const auto [name, color] :
+             {std::pair{"fg", spec->fg_argb}, std::pair{"fill", spec->bg_argb},
+              std::pair{"border", spec->border_argb}, std::pair{"focus", spec->focus_border_argb}})
+            if (status == SAO_STATUS_OK && color)
+                status = sao_ui_widget_set_theme_token(widget, name, color);
+        if (status == SAO_STATUS_OK) {
+            *out = widget;
+            return status;
+        }
+    } catch (...) {
+        status = SAO_STATUS_ERR_UNKNOWN;
+    }
+    sao_ui_widget_destroy(widget);
+    return status;
+}
+extern "C" sao_status_t SAO_UI_CALL sao_ui_text_field_set_text(sao_ui_widget_handle_t widget,
+                                                               const char* text) {
+    if (!text)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    sao::ui::detail::TextEditSnapshot state;
+    if (!sao::ui::detail::text_edit_snapshot(widget, state))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        state.text = text;
+        state.composition.clear();
+        state.selection_start = state.selection_end = state.text.size();
+        return sao::ui::detail::text_edit_update(widget, state);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+extern "C" sao_status_t SAO_UI_CALL sao_ui_text_field_get_text(sao_ui_widget_handle_t widget,
+                                                               char* buffer, size_t capacity,
+                                                               size_t* written) {
+    if (!written || (!buffer && capacity))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *written = 0;
+    sao::ui::detail::TextEditSnapshot state;
+    if (!sao::ui::detail::text_edit_snapshot(widget, state))
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    *written = state.text.size() + 1;
+    if (capacity < *written)
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    if (!buffer)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::memcpy(buffer, state.text.c_str(), *written);
+    return SAO_STATUS_OK;
+}
+extern "C" sao_status_t SAO_UI_CALL sao_ui_text_field_set_change_handler(
+    sao_ui_widget_handle_t widget, sao_ui_text_change_cb_t callback, void* user) {
+    GenericLifecycleLease lease(widget);
+    if (!lease)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::lock_guard lock(widget->mutex);
+    if (widget->kind != SAO_UI_WIDGET_INPUT && widget->kind != SAO_UI_WIDGET_TEXT_FIELD)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    widget->text_changed = callback;
+    widget->text_changed_user = user;
     return SAO_STATUS_OK;
 }

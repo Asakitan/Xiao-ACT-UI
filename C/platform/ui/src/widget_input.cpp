@@ -1076,6 +1076,27 @@ sao_ui_dropdown_button_toggle_popup(sao_ui_widget_handle_t handle) {
             lease->open = !lease->open;
             if (lease->open) {
                 lease->hover_entry = -1;
+                if (lease->has_selection) {
+                    const auto selected = std::find_if(
+                        lease->entries.begin(), lease->entries.end(),
+                        [&](const OwnedDropdownEntry& entry) {
+                            return entry.item_id == lease->selected_item_id && entry.enabled;
+                        });
+                    if (selected != lease->entries.end())
+                        lease->hover_entry =
+                            static_cast<int32_t>(std::distance(lease->entries.begin(), selected));
+                }
+                if (lease->hover_entry < 0) {
+                    const auto first = std::find_if(
+                        lease->entries.begin(), lease->entries.end(),
+                        [](const OwnedDropdownEntry& entry) {
+                            return entry.item_id != SAO_UI_DROPDOWN_SEPARATOR && entry.enabled;
+                        });
+                    if (first != lease->entries.end())
+                        lease->hover_entry =
+                            static_cast<int32_t>(std::distance(lease->entries.begin(), first));
+                }
+                lease->last_popup_hit_inside = lease->hover_entry >= 0;
                 std::lock_guard<std::mutex> slot_guard(open_dropdown_mutex());
                 open_dropdown_slot() = lease.state();
             } else {

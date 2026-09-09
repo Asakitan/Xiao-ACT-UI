@@ -1,6 +1,7 @@
 // SAO Auto — toast notification overlay implementation.
 
 #include "sao/ui/widget_toast.h"
+#include "sao/ui/animator.h"
 
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
@@ -378,6 +379,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_show(
                        static_cast<int32_t>(SAO_UI_TOAST_ERROR)));
         entry.duration_ms = spec->duration_ms > 0 ? spec->duration_ms : kDefaultDurationMs;
         entry.fade_ms = spec->fade_ms > 0 ? spec->fade_ms : kDefaultFadeMs;
+        if (sao_ui_reduced_motion_enabled()) {
+            entry.phase = ToastPhase::live;
+            entry.alpha = 1.0F;
+        }
         entry.theme_override = spec->theme_override;
         entry.bg_argb = spec->bg_argb;
         entry.fg_argb = spec->fg_argb;
@@ -435,13 +440,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_click_at(
     if (out_dismissed == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_dismissed = false;
-    if (handle == nullptr)
+    if (handle == nullptr || width <= 0 || height <= 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     ToastOperation operation(handle);
     if (!operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
-    // Mirror paint geometry for the newest (top) entry: same item box,
-    // same 10×10 × glyph centered at the right edge.
     bool hit = false;
     ToastEntry dismissed;
     {
@@ -449,11 +452,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_click_at(
         if (!handle->stack.empty()) {
             const int32_t item_width = std::max(1, std::min(std::max(1, width - 12), 360));
             const int32_t item_height = 42;
-            const int32_t item_x = x + width - item_width - 6;
-            const int32_t item_y = y + height - 8 - item_height;
+            const int32_t item_x = width - item_width - 6;
+            const int32_t item_y = height - 8 - item_height;
             const int32_t cx = item_x + item_width - 13;
             const int32_t cy = item_y + 17;
-            hit = x >= cx - 14 && x <= cx + 14 && y >= cy - 14 && y <= cy + 14;
+            hit = x >= 0 && x < width && y >= 0 && y < height && x >= cx - 14 && x <= cx + 14 &&
+                  y >= cy - 14 && y <= cy + 14;
             if (hit) {
                 dismissed = std::move(handle->stack.back());
                 handle->stack.pop_back();
@@ -572,11 +576,17 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_tick(
     if (!operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     const int32_t delta = std::max(0, dt_ms);
+    const bool reduced_motion = sao_ui_reduced_motion_enabled();
     std::vector<ToastEntry> completed;
     {
         std::lock_guard lock(handle->mu);
         for (auto& entry : handle->stack) {
             int32_t remaining = delta;
+            if (entry.phase == ToastPhase::entering && reduced_motion) {
+                entry.phase = ToastPhase::live;
+                entry.phase_elapsed_ms = 0;
+                entry.alpha = 1.0F;
+            }
             if (entry.phase == ToastPhase::entering) {
                 const int32_t needed = std::max(1, entry.fade_ms) - entry.phase_elapsed_ms;
                 const int32_t step = std::min(remaining, std::max(0, needed));
@@ -604,11 +614,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_tick(
                 }
             }
             if (entry.phase == ToastPhase::exiting && !handle->hovered) {
-                entry.phase_elapsed_ms = std::min(INT32_MAX,
-                    entry.phase_elapsed_ms + remaining);
+                entry.phase_elapsed_ms = static_cast<int32_t>(std::min<int64_t>(
+                    INT32_MAX, static_cast<int64_t>(entry.phase_elapsed_ms) + remaining));
                 entry.alpha = std::max(0.0F, 1.0F - static_cast<float>(entry.phase_elapsed_ms) /
                     static_cast<float>(std::max(1, entry.fade_ms)));
-                if (entry.phase_elapsed_ms >= std::max(1, entry.fade_ms)) {
+                if (reduced_motion || entry.phase_elapsed_ms >= std::max(1, entry.fade_ms)) {
                     completed.push_back(std::move(entry));
                     entry.text.clear();
                 }
@@ -672,7 +682,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_paint(
         const uint32_t surface = resolve_or(entry, entry.bg_argb, SAO_UI_TOKEN_APP_CARD);
         const uint32_t fg = resolve_or(entry, entry.fg_argb, SAO_UI_TOKEN_APP_TEXT);
         const std::string text = toast_ellipsize(entry.text, item_width - 60, entry.font_size_px);
-        sao_status_t status = sao_ui_paint_ctx_push_opacity(context, entry.alpha);
+        sao_status_t status = sao_ui_paint_ctx_push_opacity(
+            context, sao_ui_reduced_motion_enabled() ? 1.0F : entry.alpha);
         if (status == SAO_STATUS_OK) status = sao::ui::detail::paint_elevation_shadow(
             context, static_cast<float>(item_x), static_cast<float>(cursor_y),
             static_cast<float>(item_width), static_cast<float>(item_height),
@@ -691,14 +702,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_toast_paint(
         if (status == SAO_STATUS_OK) status = sao_ui_paint_ctx_draw_utf8(
             context, static_cast<float>(item_x + 36), static_cast<float>(cursor_y + 9),
             text.c_str(), static_cast<float>(entry.font_size_px), fg);
-        if (status == SAO_STATUS_OK) status = sao_ui_paint_ctx_stroke_line(
-            context, static_cast<float>(item_x + item_width - 18), static_cast<float>(cursor_y + 12),
-            static_cast<float>(item_x + item_width - 8), static_cast<float>(cursor_y + 22), 1.5F,
-            theme_color(entry.theme_override, SAO_UI_TOKEN_CLOSE_RED));
-        if (status == SAO_STATUS_OK) status = sao_ui_paint_ctx_stroke_line(
-            context, static_cast<float>(item_x + item_width - 8), static_cast<float>(cursor_y + 12),
-            static_cast<float>(item_x + item_width - 18), static_cast<float>(cursor_y + 22), 1.5F,
-            theme_color(entry.theme_override, SAO_UI_TOKEN_CLOSE_RED));
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_paint_ctx_stroke_line(
+                context, static_cast<float>(item_x + item_width - 18),
+                static_cast<float>(cursor_y + 12), static_cast<float>(item_x + item_width - 8),
+                static_cast<float>(cursor_y + 22), 1.5F,
+                theme_color(entry.theme_override, SAO_UI_TOKEN_APP_TEXT_2));
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_paint_ctx_stroke_line(
+                context, static_cast<float>(item_x + item_width - 8),
+                static_cast<float>(cursor_y + 12), static_cast<float>(item_x + item_width - 18),
+                static_cast<float>(cursor_y + 22), 1.5F,
+                theme_color(entry.theme_override, SAO_UI_TOKEN_APP_TEXT_2));
         const sao_status_t pop_status = sao_ui_paint_ctx_pop_opacity(context);
         if (status == SAO_STATUS_OK) status = pop_status;
         if (status != SAO_STATUS_OK)

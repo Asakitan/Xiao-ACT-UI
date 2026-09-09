@@ -3,6 +3,7 @@
 // See `include/sao/ui/alerts.h` for the ABI contract.
 
 #include "sao/ui/alerts.h"
+#include "sao/ui/sound.h"
 
 #include <algorithm>
 #include <atomic>
@@ -17,7 +18,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -29,7 +29,6 @@
 // sphelper.h uses ATL (`CComPtr` etc.) which BuildTools (non-ATL)
 // images don't ship.  We access ISpObjectToken / IEnumSpObjectTokens
 // / ISpDataKey directly via CoCreateInstance + QueryInterface below.
-#  include <mmsystem.h>
 #endif
 
 namespace {
@@ -156,9 +155,9 @@ BannerQueue& banner_queue() {
 // ─── Sound tracking ──────────────────────────────────────────────
 
 struct SoundState {
-    std::mutex                       mutex;
-    std::unordered_set<uint64_t>     active;
-    uint64_t                         next_id = 0;
+    std::mutex mutex;
+    std::unordered_map<uint64_t, sao_ui_sound_group_t> active;
+    uint64_t next_id = 0;
 };
 
 SoundState& sound_state() {
@@ -639,28 +638,21 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_sound_play(
     }
     if (out_sound_id) *out_sound_id = 0;
 #if defined(_WIN32)
-    // Verify file exists — PlaySoundW returns TRUE and silently plays
-    // the default beep on missing files, which is not useful for
-    // callers wanting a "file missing" error.
-    DWORD attrs = GetFileAttributesW(
-        reinterpret_cast<LPCWSTR>(path_utf16));
-    if (attrs == INVALID_FILE_ATTRIBUTES ||
-        (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        return SAO_STATUS_ERR_NOT_FOUND;
-    }
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
-    // Set the wave output volume — same-value both channels.
-    DWORD vol_word = (static_cast<DWORD>(volume) * 0xFFFF / 100);
-    DWORD vol_both = (vol_word << 16) | vol_word;
-    waveOutSetVolume(nullptr, vol_both);
-    BOOL ok = PlaySoundW(reinterpret_cast<LPCWSTR>(path_utf16),
-                         nullptr, SND_ASYNC | SND_FILENAME | SND_NODEFAULT);
-    if (!ok) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    sao_ui_sound_group_t group = 0;
+    sao_status_t status = sao_ui_sound_group_create(&group);
+    if (status != SAO_STATUS_OK)
+        return status;
+    status = sao_ui_sound_play_wav_utf16(path_utf16, volume, group);
+    if (status != SAO_STATUS_OK) {
+        (void)sao_ui_sound_group_destroy(group);
+        return status;
+    }
     auto& ss = sound_state();
     std::lock_guard<std::mutex> lock(ss.mutex);
     uint64_t id = ++ss.next_id;
-    ss.active.insert(id);
+    ss.active.emplace(id, group);
     if (out_sound_id) *out_sound_id = id;
     return SAO_STATUS_OK;
 #else
@@ -679,18 +671,20 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_alerts_sound_stop(
     auto& ss = sound_state();
     std::lock_guard<std::mutex> lock(ss.mutex);
     if (sound_id == 0) {
-        // Stop all — PlaySound(NULL, NULL, 0) halts the async output.
-        PlaySoundW(nullptr, nullptr, 0);
+        for (const auto& [id, group] : ss.active) {
+            (void)id;
+            (void)sao_ui_sound_group_stop(group);
+        }
         ss.active.clear();
         return SAO_STATUS_OK;
     }
-    if (ss.active.erase(sound_id) == 0) {
+    const auto found = ss.active.find(sound_id);
+    if (found == ss.active.end()) {
         return SAO_STATUS_ERR_NOT_FOUND;
     }
-    // winmm PlaySound has one async output channel — stopping one
-    // stops the current playback.  Callers wanting overlapping sounds
-    // should use a proper audio API.
-    PlaySoundW(nullptr, nullptr, 0);
+    const sao_ui_sound_group_t group = found->second;
+    ss.active.erase(found);
+    (void)sao_ui_sound_group_stop(group);
     return SAO_STATUS_OK;
 #else
     (void)sound_id;

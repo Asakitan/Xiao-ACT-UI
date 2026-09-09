@@ -50,6 +50,7 @@ add_library(sao_platform_ui SHARED
     src/menu.cpp               # gui_modules/sao_gui_menu_hud.py + menu_mixin.py
     src/nervegear.cpp          # gui_modules/sao_gui_nervegear_button.py + link_start.py
     src/linkstart_intro.cpp
+    src/linkstart_renderer_d3d11.cpp
     src/entity_shell.cpp       # production Entity root composition
 
     # ── Popup navigation, animation, and panel layout ─────────
@@ -67,6 +68,7 @@ add_library(sao_platform_ui SHARED
 
     # ── Widget kit + time-display labels ──────────────────────────
     src/widget_text.cpp        # Label + Clock/Rel/Dur time labels
+    src/native_text_edit_win.cpp
     src/widget_input.cpp       # Button (action_button parity)
     src/widget_data.cpp        # ProgressBar (flat/hp_ramp/hp_trail/segments)
     src/widget_chart.cpp       # TimeSeriesChart (ring buffer + axis)
@@ -119,6 +121,7 @@ if (WIN32)
     target_sources(sao_platform_ui PRIVATE
         src/entity_authority_frames.rc
         src/sound_assets.rc
+        src/font_assets.rc
         src/entity_text_renderer_win.cpp
     )
 
@@ -134,6 +137,8 @@ if (WIN32)
             ole32
             user32
             gdi32
+            imm32
+            comctl32
             dwmapi
             winmm
             xaudio2
@@ -147,8 +152,43 @@ if (WIN32)
     )
 endif()
 
+if (WIN32)
+    # Compile shaders once with the Windows SDK; the shipped UI has no runtime compiler.
+    find_program(SAO_UI_FXC NAMES fxc
+        HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64")
+    if (NOT SAO_UI_FXC)
+        file(GLOB _sao_fxc_candidates "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe")
+        list(SORT _sao_fxc_candidates COMPARE NATURAL ORDER DESCENDING)
+        if (_sao_fxc_candidates)
+            list(GET _sao_fxc_candidates 0 SAO_UI_FXC)
+        endif()
+    endif()
+    if (NOT SAO_UI_FXC)
+        message(FATAL_ERROR "Native UI shaders require the Windows SDK fxc compiler (SAO_UI_FXC).")
+    endif()
+    set(_sao_shader_output "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
+    foreach (_sao_shader IN ITEMS compositor_master_vs compositor_master_ps
+            linkstart_fullscreen_vs linkstart_background_ps linkstart_streak_vs
+            linkstart_streak_ps linkstart_post_ps)
+        if (_sao_shader MATCHES "_vs$")
+            set(_sao_shader_profile vs_4_0)
+        else()
+            set(_sao_shader_profile ps_4_0)
+        endif()
+        set(_sao_shader_header "${_sao_shader_output}/sao_ui_${_sao_shader}.h")
+        add_custom_command(OUTPUT "${_sao_shader_header}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_sao_shader_output}"
+            COMMAND "${SAO_UI_FXC}" /nologo /T "${_sao_shader_profile}" /E main
+                /Fh "${_sao_shader_header}" /Vn "g_sao_ui_${_sao_shader}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${_sao_shader}.hlsl"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${_sao_shader}.hlsl"
+            VERBATIM)
+        target_sources(sao_platform_ui PRIVATE "${_sao_shader_header}")
+    endforeach()
+    target_include_directories(sao_platform_ui PRIVATE "${_sao_shader_output}")
+endif()
+
 # The security subtree is configured after platform/, so it owns the optional
 # UI -> anti_screencap edge once its target exists.  Keeping this declaration
 # out of the early platform pass makes the link independent of configuration
 # order while builds without the security target remain valid.
-

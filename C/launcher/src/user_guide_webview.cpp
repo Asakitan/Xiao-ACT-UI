@@ -9,6 +9,7 @@
 // default-browser fallback.
 
 #include "sao/launcher/user_guide_webview.h"
+#include "sao/ui/sound.h"
 
 #include <windows.h>
 #include <combaseapi.h>
@@ -17,11 +18,14 @@
 #include <shellapi.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
+#include <cwchar>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
@@ -45,6 +49,7 @@ using CreateEnvironmentFn = HRESULT(WINAPI*)(
 constexpr wchar_t kWindowClassName[] = L"SAO_USER_GUIDE_WEBVIEW_WND";
 constexpr wchar_t kWindowTitle[] = L"SAO Auto \u2014 \u7528\u6237\u6307\u5357";
 constexpr UINT kShowWindowMessage = WM_APP + 0x47u;
+constexpr UINT kRefreshSoundPolicyMessage = WM_APP + 0x48u;
 constexpr DWORD kStartupWaitMs = 5000u;
 constexpr DWORD kShutdownWaitMs = 5000u;
 
@@ -86,7 +91,60 @@ struct GuideState {
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken navigation_completed_token{};
     bool navigation_handler_registered = false;
+    EventRegistrationToken web_message_token{};
+    bool web_message_handler_registered = false;
+    std::wstring guide_url;
+    sao_ui_sound_group_t sound_group{};
+    ~GuideState() {
+        if (sound_group != 0)
+            (void)sao_ui_sound_group_destroy(sound_group);
+    }
 };
+
+void routeGuideSound(GuideState& state, std::wstring_view message) noexcept {
+    if (message == L"sao-guide-sfx-stop") {
+        if (state.sound_group != 0)
+            (void)sao_ui_sound_group_stop(state.sound_group);
+        return;
+    }
+    constexpr std::wstring_view prefix = L"sao-guide-sfx-play:";
+    if (!message.starts_with(prefix) || message.size() > 64)
+        return;
+    message.remove_prefix(prefix.size());
+    const size_t delimiter = message.find(L':');
+    if (delimiter == std::wstring_view::npos)
+        return;
+    const auto name = message.substr(0, delimiter);
+    const auto gain = message.substr(delimiter + 1);
+    if (gain.empty() || gain.size() > 3)
+        return;
+    int volume = 0;
+    for (wchar_t character : gain) {
+        if (character < L'0' || character > L'9')
+            return;
+        volume = volume * 10 + character - L'0';
+    }
+    if (volume > 100)
+        return;
+    SaoUiSoundCue cue = SAO_UI_SOUND_COUNT;
+    if (name == L"click")
+        cue = SAO_UI_SOUND_CLICK;
+    else if (name == L"menu_open")
+        cue = SAO_UI_SOUND_MENU_OPEN;
+    else if (name == L"menu_close")
+        cue = SAO_UI_SOUND_MENU_CLOSE;
+    else if (name == L"submenu")
+        cue = SAO_UI_SOUND_SUBMENU;
+    else if (name == L"panel")
+        cue = SAO_UI_SOUND_PANEL;
+    else if (name == L"alert_close")
+        cue = SAO_UI_SOUND_ALERT_CLOSE;
+    if (cue == SAO_UI_SOUND_COUNT)
+        return;
+    if (state.sound_group == 0 && sao_ui_sound_group_create(&state.sound_group) != SAO_STATUS_OK)
+        return;
+    (void)sao_ui_sound_play_in_group(cue, volume, state.sound_group);
+}
 
 void releaseStartupContext(StartupContext* context) noexcept {
     if (context == nullptr || context->references.fetch_sub(1) != 1)
@@ -116,7 +174,31 @@ void removeNavigationHandler(GuideState& state) noexcept {
     state.navigation_completed_token = {};
 }
 
+void removeWebMessageHandler(GuideState& state) noexcept {
+    if (state.webview && state.web_message_handler_registered) {
+        (void)state.webview->remove_WebMessageReceived(state.web_message_token);
+    }
+    state.web_message_handler_registered = false;
+    state.web_message_token = {};
+}
+
+void postSoundPolicy(GuideState* state) noexcept {
+    if (state == nullptr || !state->webview || state->closing)
+        return;
+    bool enabled = true;
+    int32_t volume = 70;
+    (void)sao_ui_sound_get_enabled(&enabled);
+    (void)sao_ui_sound_get_volume(&volume);
+    const std::wstring policy = std::wstring(L"{\"type\":\"sao-guide-sfx-policy\",\"enabled\":") +
+                                (enabled ? L"true" : L"false") + L",\"volume\":" +
+                                std::to_wstring(std::clamp(volume, 0, 100)) + L"}";
+    (void)state->webview->PostWebMessageAsJson(policy.c_str());
+}
+
 void closeController(GuideState& state) noexcept {
+    if (state.sound_group != 0)
+        (void)sao_ui_sound_group_stop(state.sound_group);
+    removeWebMessageHandler(state);
     removeNavigationHandler(state);
     state.webview.Reset();
     if (state.controller) {
@@ -169,6 +251,9 @@ LRESULT CALLBACK guideWindowProc(HWND window, UINT message,
         case kShowWindowMessage:
             ShowWindow(window, SW_RESTORE);
             (void)SetForegroundWindow(window);
+            return 0;
+        case kRefreshSoundPolicyMessage:
+            postSoundPolicy(state);
             return 0;
         case WM_CLOSE:
             if (state != nullptr)
@@ -398,6 +483,7 @@ unsigned __stdcall guideThreadMain(void* parameter) {
         state->fallback_path = std::move(fallback_path);
         state->create_environment = create_environment;
         state->loader_lease = loader_lease;
+        state->guide_url = url;
         const auto url_value =
             std::make_shared<const std::wstring>(std::move(url));
 
@@ -474,6 +560,50 @@ unsigned __stdcall guideThreadMain(void* parameter) {
                             return S_OK;
                         }
                         state->webview = webview;
+                        ComPtr<ICoreWebView2Settings> web_settings;
+                        if (SUCCEEDED(webview->get_Settings(&web_settings)) && web_settings)
+                            (void)web_settings->put_IsWebMessageEnabled(TRUE);
+
+                        auto web_message_handler =
+                            Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                [state](ICoreWebView2*,
+                                        ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                    if (state->closing || args == nullptr)
+                                        return S_OK;
+                                    LPWSTR source = nullptr;
+                                    LPWSTR message = nullptr;
+                                    const HRESULT source_status = args->get_Source(&source);
+                                    const HRESULT message_status =
+                                        args->TryGetWebMessageAsString(&message);
+                                    const std::wstring_view source_view = source ? source : L"";
+                                    const bool local_guide =
+                                        SUCCEEDED(source_status) && source != nullptr &&
+                                        source_view.substr(0, source_view.find(L'#')) ==
+                                            state->guide_url;
+                                    const bool requested =
+                                        SUCCEEDED(message_status) && message != nullptr &&
+                                        (std::wcscmp(message, L"sao-guide-sfx-ready") == 0 ||
+                                         std::wcscmp(message, L"sao-guide-sfx-refresh") == 0);
+                                    if (local_guide && SUCCEEDED(message_status) &&
+                                        message != nullptr)
+                                        routeGuideSound(*state, message);
+                                    if (source != nullptr)
+                                        CoTaskMemFree(source);
+                                    if (message != nullptr)
+                                        CoTaskMemFree(message);
+                                    if (local_guide && requested)
+                                        postSoundPolicy(state.get());
+                                    return S_OK;
+                                });
+                        EventRegistrationToken web_message_token{};
+                        if (!web_message_handler ||
+                            FAILED(webview->add_WebMessageReceived(web_message_handler.Get(),
+                                                                   &web_message_token))) {
+                            fallbackAndClose(state);
+                            return S_OK;
+                        }
+                        state->web_message_token = web_message_token;
+                        state->web_message_handler_registered = true;
 
                         auto navigation_handler = Microsoft::WRL::Callback<
                             ICoreWebView2NavigationCompletedEventHandler>(
@@ -495,6 +625,7 @@ unsigned __stdcall guideThreadMain(void* parameter) {
                                     g_host_phase.store(
                                         GuideHostPhase::running,
                                         std::memory_order_release);
+                                    postSoundPolicy(state.get());
                                 }
                                 return S_OK;
                             });
@@ -561,6 +692,14 @@ unsigned __stdcall guideThreadMain(void* parameter) {
 }  // namespace
 
 namespace sao::launcher {
+
+void refreshUserGuideSoundPolicy() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
+    const HWND window = g_published_window.load(std::memory_order_acquire);
+    if (window != nullptr && IsWindow(window))
+        (void)PostMessageW(window, kRefreshSoundPolicyMessage, 0, 0);
+#endif
+}
 
 bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
 #if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
@@ -710,4 +849,4 @@ bool shutdownUserGuideWebView() noexcept {
 #endif
 }
 
-}  // namespace sao::launcher
+} // namespace sao::launcher

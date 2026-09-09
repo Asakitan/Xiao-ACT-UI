@@ -938,7 +938,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_paint_at(
         paint_status = paint_context_state.push_opacity(opacity_0_to_1);
         if (paint_status != SAO_STATUS_OK) return paint_status;
 
-        if (kind <= SAO_UI_WIDGET_ICON) {
+        const bool generic_backing =
+            sao_ui_widget_generic_backing_get_kind(handle, nullptr) == SAO_STATUS_OK;
+        if (generic_backing) {
             paint_status = sao_ui_widget_paint(
                 handle, ctx, static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(width), static_cast<float>(height));
@@ -1082,8 +1084,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_widget_get_size_hint(
     int32_t kind = -1;
     const sao_status_t status = sao_ui_widget_get_kind(handle, &kind);
     if (status != SAO_STATUS_OK) return status;
+    const bool generic_backing =
+        sao_ui_widget_generic_backing_get_kind(handle, nullptr) == SAO_STATUS_OK;
     *out_hint = {};
-    if (kind >= SAO_UI_WIDGET_TIME_SERIES_CHART && kind <= SAO_UI_WIDGET_SPARKLINE) {
+    if (generic_backing && kind == SAO_UI_WIDGET_TEXT_FIELD) {
+        set_size_hint(*out_hint, 80, 28, 180, 38);
+        out_hint->flex_grow = 1.0F;
+    } else if (kind >= SAO_UI_WIDGET_TIME_SERIES_CHART && kind <= SAO_UI_WIDGET_SPARKLINE) {
         set_size_hint(*out_hint, 80, 48, 320, 180);
         out_hint->flex_grow = 1.0F;
     } else if (kind == SAO_UI_WIDGET_TABLE_EXT || kind == SAO_UI_WIDGET_TREE_VIEW) {
