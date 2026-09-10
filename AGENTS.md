@@ -214,6 +214,13 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 ## Documentation Hygiene
 Current-state facts → `/memories/repo/`.
 
+**Documentation set must be synced in the same session (hard rule).** Any code or doc change has to bring its related markdown up to date before the session ends — no deferral, no TODO IOU. Which files that means depends on the tree:
+
+- **C++ tree (`C/`)** — full registry in [`C/AGENTS.md`](C/AGENTS.md) §"文档实时更新纪律": `C/STATUS.md`, `C/docs/module-inventory.md` (mapping + Status + one appended §Update-log row), `C/docs/session-log/session-NN.md` (+ index row), `C/docs/architecture.md` when structure or shipped artifacts change, the affected module docs (`platform/rt_io/README.md`, `rt_io/TECH.md`, `platform/*/docs/`, …), and the `/memories/repo/` snapshots.
+- **This tree and mixed-scope work** — keep `STATUS.md`-class tracking docs, module READMEs, and the repo-memory snapshots consistent with disk; a statement contradicting disk means the change is unfinished.
+- **Language rule** — write each document in its own existing language: English docs get English, Chinese docs get Chinese. Never mix the other language into a section you add; keep identifiers, paths, and technical terms verbatim.
+- **Dispatcher/gate** — subagent slice contracts carry a `docs` field (list of markdown or an explicit `docs: none`), and the post-phase `Review` gate verifies the claimed doc updates against disk (`docs_status`).
+
 ## Repository Memory — Real-Time Updates (hard rule)
 
 - `/memories/repo/` stores **current-state facts** about the codebase. It is NOT a history log.
