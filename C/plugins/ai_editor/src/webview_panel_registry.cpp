@@ -38,8 +38,7 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     } else {
         const auto existing = panels_.find(panel_id);
         if (existing != panels_.end()) {
-            if (!existing->second.disposed ||
-                existing->second.owner != owner ||
+            if (!existing->second.disposed || existing->second.owner != owner ||
                 existing->second.view_type != view_type) {
                 return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             }
@@ -75,10 +74,8 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t WebviewPanelRegistry::reveal(const std::string& panel_id,
-                                     int view_column,
-                                     bool preserve_focus,
-                                     WebviewPanelState& out_state) {
+int32_t WebviewPanelRegistry::reveal(const std::string& panel_id, int view_column,
+                                     bool preserve_focus, WebviewPanelState& out_state) {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = panels_.find(panel_id);
     if (it == panels_.end()) {
@@ -98,8 +95,24 @@ int32_t WebviewPanelRegistry::reveal(const std::string& panel_id,
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t WebviewPanelRegistry::dispose(const std::string& panel_id,
-                                      WebviewPanelState& out_state) {
+int32_t WebviewPanelRegistry::set_view_state(const std::string& panel_id, bool active, bool visible,
+                                             int view_column, WebviewPanelState& out_state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = panels_.find(panel_id);
+    if (it == panels_.end())
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    if (it->second.disposed)
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    it->second.visible = visible;
+    it->second.options.view_column = view_column;
+    it->second.options.extras["active"] = active;
+    if (visible)
+        it->second.last_reveal_ms = now_ms();
+    out_state = it->second;
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t WebviewPanelRegistry::dispose(const std::string& panel_id, WebviewPanelState& out_state) {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = panels_.find(panel_id);
     if (it == panels_.end()) {
@@ -117,8 +130,7 @@ int32_t WebviewPanelRegistry::dispose(const std::string& panel_id,
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t WebviewPanelRegistry::set_html(const std::string& panel_id,
-                                       const std::string& html,
+int32_t WebviewPanelRegistry::set_html(const std::string& panel_id, const std::string& html,
                                        WebviewPanelState& out_state) {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = panels_.find(panel_id);
@@ -151,8 +163,7 @@ int32_t WebviewPanelRegistry::note_post_message(const std::string& panel_id,
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t WebviewPanelRegistry::set_state(const std::string& panel_id,
-                                        const Json& state,
+int32_t WebviewPanelRegistry::set_state(const std::string& panel_id, const Json& state,
                                         WebviewPanelState& out_state) {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = panels_.find(panel_id);
@@ -167,8 +178,7 @@ int32_t WebviewPanelRegistry::set_state(const std::string& panel_id,
     return SAO_AI_EDITOR_OK;
 }
 
-std::optional<WebviewPanelState> WebviewPanelRegistry::snapshot(
-    const std::string& panel_id) const {
+std::optional<WebviewPanelState> WebviewPanelRegistry::snapshot(const std::string& panel_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = panels_.find(panel_id);
     if (it == panels_.end()) {
@@ -206,11 +216,13 @@ std::optional<WebviewPanelState> WebviewPanelRegistry::active_panel() const {
     std::optional<WebviewPanelState> active;
     for (const auto& [panel_id, state] : panels_) {
         (void)panel_id;
-        if (state.disposed || !state.visible) continue;
+        if (state.disposed || !state.visible)
+            continue;
         if (!active.has_value() || state.last_reveal_ms > active->last_reveal_ms ||
-            (state.last_reveal_ms == active->last_reveal_ms && state.created_ms > active->created_ms) ||
-            (state.last_reveal_ms == active->last_reveal_ms && state.created_ms == active->created_ms &&
-             state.panel_id > active->panel_id)) {
+            (state.last_reveal_ms == active->last_reveal_ms &&
+             state.created_ms > active->created_ms) ||
+            (state.last_reveal_ms == active->last_reveal_ms &&
+             state.created_ms == active->created_ms && state.panel_id > active->panel_id)) {
             active = state;
         }
     }
@@ -240,4 +252,4 @@ void WebviewPanelRegistry::clear() {
     total_created_ = 0;
 }
 
-}  // namespace sao::ai_editor::native
+} // namespace sao::ai_editor::native

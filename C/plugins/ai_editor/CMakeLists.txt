@@ -121,6 +121,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/vt_tools.cpp
     src/webview_panel_registry.cpp
     src/workbench_composition_host.cpp
+    src/workbench_native_adapter.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
     # Phase 10 (Python parity closure): live SDK dumper for 4 game engines,

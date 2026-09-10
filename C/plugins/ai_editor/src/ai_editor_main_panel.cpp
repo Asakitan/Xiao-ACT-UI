@@ -44,7 +44,6 @@ namespace {
 
 constexpr uint32_t kRequestTimeoutMs = 5000U;
 constexpr size_t kMaximumRequestBytes = 4U * 1024U * 1024U;
-constexpr size_t kInitialResponseBytes = 256U * 1024U;
 constexpr size_t kMaximumResponseBytes = 4U * 1024U * 1024U;
 constexpr size_t kMaximumActionPayloadBytes = 4U * 1024U * 1024U;
 constexpr size_t kMaximumComposerBytes = 48U * 1024U;
@@ -417,8 +416,7 @@ int32_t map_ui_status(sao_status_t status) noexcept {
     }
 }
 
-int32_t require_owner_thread(
-    sao_ui_compositor_handle_t compositor) noexcept {
+int32_t require_owner_thread(sao_ui_compositor_handle_t compositor) noexcept {
     return map_ui_status(sao_ui_compositor_require_owner_thread(compositor));
 }
 
@@ -533,9 +531,8 @@ json section_node(std::string title, json children) {
                 {"children", std::move(children)}};
 }
 
-json container_node(std::string id, json children, std::string_view layout,
-                    int32_t width, int32_t min_width, float weight,
-                    int32_t fallback_min_width) {
+json container_node(std::string id, json children, std::string_view layout, int32_t width,
+                    int32_t min_width, float weight, int32_t fallback_min_width) {
     return json{{"type", "section"},
                 {"id", std::move(id)},
                 {"container", true},
@@ -544,9 +541,10 @@ json container_node(std::string id, json children, std::string_view layout,
                 {"width", width},
                 {"min_width", min_width},
                 {"weight", weight},
-                {"fallback", {{"layout", "vertical"},
-                               {"min_width", fallback_min_width},
-                               {"threshold_width", fallback_min_width}}},
+                {"fallback",
+                 {{"layout", "vertical"},
+                  {"min_width", fallback_min_width},
+                  {"threshold_width", fallback_min_width}}},
                 {"children", std::move(children)}};
 }
 
@@ -647,8 +645,8 @@ std::vector<std::string> split_utf8_chunks(std::string_view text, size_t maximum
     return chunks;
 }
 
-void append_text_chunks(json& nodes, std::string_view text, std::string_view style,
-                        int32_t height, size_t maximum_chunks = kMaximumMessageChunks) {
+void append_text_chunks(json& nodes, std::string_view text, std::string_view style, int32_t height,
+                        size_t maximum_chunks = kMaximumMessageChunks) {
     for (auto& chunk : split_utf8_chunks(text, kUiTextChunkBytes, maximum_chunks))
         nodes.push_back(text_node(std::move(chunk), style, height));
 }
@@ -657,8 +655,7 @@ std::string tail_text(std::string_view text, size_t maximum) {
     if (text.size() <= maximum)
         return std::string(text);
     size_t begin = text.size() - maximum;
-    while (begin < text.size() &&
-           (static_cast<unsigned char>(text[begin]) & 0xc0U) == 0x80U) {
+    while (begin < text.size() && (static_cast<unsigned char>(text[begin]) & 0xc0U) == 0x80U) {
         ++begin;
     }
     return "...\n" + std::string(text.substr(begin));
@@ -818,8 +815,7 @@ std::string transport_message(int32_t status) {
 }
 
 RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
-                            std::atomic<uint64_t>& request_counter,
-                            std::string_view method,
+                            std::atomic<uint64_t>& request_counter, std::string_view method,
                             const json& params = json::object()) {
     RpcResponse response;
     const auto request_started = std::chrono::steady_clock::now();
@@ -849,26 +845,12 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
         return response;
     }
 
-    std::vector<char> response_buffer(kInitialResponseBytes);
+    thread_local std::vector<char> response_buffer(kMaximumResponseBytes);
     uint32_t response_len = 0;
     response.status = sao_ai_editor_request(
         launcher, request_body.data(), static_cast<uint32_t>(request_body.size()),
         response_buffer.data(), static_cast<uint32_t>(response_buffer.size()), &response_len,
         kRequestTimeoutMs);
-    if (response.status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
-        if (response_len == 0 || response_len > kMaximumResponseBytes ||
-            response_len > std::numeric_limits<uint32_t>::max()) {
-            response.status = SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
-            response.error = "response exceeds the 4 MiB main-panel limit";
-            return response;
-        }
-        response_buffer.resize(response_len);
-        uint32_t retry_len = 0;
-        response.status = sao_ai_editor_request(
-            launcher, nullptr, 0, response_buffer.data(),
-            static_cast<uint32_t>(response_buffer.size()), &retry_len, kRequestTimeoutMs);
-        response_len = retry_len;
-    }
     if (response.status != SAO_AI_EDITOR_OK) {
         response.error = transport_message(response.status);
         return response;
@@ -879,7 +861,7 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
         return response;
     }
     response.connected = true;
-    response.truncated = response_buffer.size() >= kMaximumResponseBytes;
+    response.truncated = response_len >= kMaximumResponseBytes;
     response.raw.assign(response_buffer.data(), response_buffer.data() + response_len);
     const json document = json::parse(response_buffer.data(), response_buffer.data() + response_len,
                                       nullptr, false, false);
@@ -890,24 +872,34 @@ RpcResponse request_backend(sao_ai_editor_launcher_t launcher,
         return response;
     }
     const auto request_id = request["id"];
-    if (!document.contains("id") ||
-        document["id"].type() != request_id.type() ||
+    if (!document.contains("id") || document["id"].type() != request_id.type() ||
         document["id"] != request_id) {
         response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
         response.error = "backend response id does not match the request";
         return response;
     }
-    if (const auto error = document.find("error"); error != document.end() && error->is_object()) {
+    const auto error = document.find("error");
+    const auto result = document.find("result");
+    const bool has_error = error != document.end();
+    const bool has_result = result != document.end();
+    if (has_error == has_result) {
         response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
-        response.error = error->value("message", "backend rejected the request");
-        if (const auto data = error->find("data"); data != error->end())
-            response.error.append(" · ").append(data->dump());
+        response.error = "backend response must contain exactly one result or error";
         return response;
     }
-    const auto result = document.find("result");
-    if (result == document.end()) {
+    if (has_error) {
+        if (!error->is_object()) {
+            response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
+            response.error = "backend error payload is invalid";
+            return response;
+        }
         response.status = SAO_AI_EDITOR_ERR_PROTOCOL;
-        response.error = "backend response has no result";
+        const auto message = error->find("message");
+        response.error = message != error->end() && message->is_string()
+                             ? message->get<std::string>()
+                             : "backend rejected the request";
+        if (const auto data = error->find("data"); data != error->end())
+            response.error.append(" · ").append(data->dump());
         return response;
     }
     response.result = *result;
@@ -926,15 +918,13 @@ RpcStepResult rpc_step(AiEditorMainPanelState& state, std::string method,
 bool task_cancelled(AiEditorMainPanelState& state, const RpcTask& task) {
     std::lock_guard lock(state.mutex);
     return state.worker_stop_requested ||
-           (task.generation != 0U &&
-            (task.generation != state.conversation_generation ||
-             task.generation <= state.cancelled_generation));
+           (task.generation != 0U && (task.generation != state.conversation_generation ||
+                                      task.generation <= state.cancelled_generation));
 }
 
 std::string accepted_run_id(const RpcCompletion& completion) {
     const auto found = std::ranges::find_if(
-        completion.steps,
-        [](const RpcStepResult& step) { return step.method == "chat.run"; });
+        completion.steps, [](const RpcStepResult& step) { return step.method == "chat.run"; });
     if (found == completion.steps.end() || !found->response.ok ||
         !found->response.result.is_object()) {
         return {};
@@ -991,17 +981,17 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
         (void)append("providers.list");
         (void)append("agents.list_defs");
         (void)append("workflows.list_defs");
-        (void)append("conversation.list", {{"scope", "all"}, {"limit", completion.task.history_limit}});
+        (void)append("conversation.list",
+                     {{"scope", "all"}, {"limit", completion.task.history_limit}});
         (void)append("conversation.stats", {{"scope", "all"}});
         break;
-    case RpcTaskKind::VtDashboard:
-        {
-            std::lock_guard lock(state.mutex);
-            if (!vt_dashboard_poll_eligible_locked(state)) {
-                completion.cancelled = true;
-                break;
-            }
+    case RpcTaskKind::VtDashboard: {
+        std::lock_guard lock(state.mutex);
+        if (!vt_dashboard_poll_eligible_locked(state)) {
+            completion.cancelled = true;
+            break;
         }
+    }
         (void)append("sao.vt.status");
         break;
     case RpcTaskKind::Generic:
@@ -1012,10 +1002,9 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
             completion.cancelled = true;
             break;
         }
-        (void)append("conversation.create",
-                     {{"title", completion.task.title},
-                      {"model", completion.task.model},
-                      {"scope", "workspace"}});
+        (void)append("conversation.create", {{"title", completion.task.title},
+                                             {"model", completion.task.model},
+                                             {"scope", "workspace"}});
         if (!completion.steps.empty() && completion.steps.back().response.ok &&
             completion.steps.back().response.result.is_object()) {
             completion.task.conversation_id =
@@ -1047,15 +1036,15 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
                 }
                 completion.task.restore_entry.message_count = document.value(
                     "messageCount", completion.task.restore_entry.messages.is_array()
-                                          ? completion.task.restore_entry.messages.size()
-                                          : completion.task.restore_entry.message_count);
+                                        ? completion.task.restore_entry.messages.size()
+                                        : completion.task.restore_entry.message_count);
             }
         }
         if (append("conversation.delete", {{"id", completion.task.conversation_id}})) {
             if (completion.task.query.empty()) {
-            (void)append("conversation.list",
-                         {{"scope", "all"}, {"limit", completion.task.history_limit}});
-        } else {
+                (void)append("conversation.list",
+                             {{"scope", "all"}, {"limit", completion.task.history_limit}});
+            } else {
                 (void)append("conversation.search", {{"query", completion.task.query},
                                                      {"scope", "all"},
                                                      {"limit", completion.task.history_limit}});
@@ -1120,13 +1109,12 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
             break;
         }
         std::string conversation_id = completion.task.conversation_id;
-        json messages = completion.task.messages.is_array() ? completion.task.messages
-                                                            : json::array();
+        json messages =
+            completion.task.messages.is_array() ? completion.task.messages : json::array();
         if (conversation_id.empty()) {
-            if (!append("conversation.create",
-                        {{"title", completion.task.title},
-                         {"model", completion.task.model},
-                         {"scope", "workspace"}})) {
+            if (!append("conversation.create", {{"title", completion.task.title},
+                                                {"model", completion.task.model},
+                                                {"scope", "workspace"}})) {
                 break;
             }
             conversation_id = completion.steps.back().response.result.value("id", std::string{});
@@ -1144,7 +1132,8 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
             break;
         }
         const json& appended = completion.steps.back().response.result;
-        if (appended.is_object() && appended.contains("messages") && appended["messages"].is_array())
+        if (appended.is_object() && appended.contains("messages") &&
+            appended["messages"].is_array())
             messages = appended["messages"];
         else
             messages.push_back({{"role", "user"}, {"content", completion.task.prompt}});
@@ -1157,9 +1146,9 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
             messages = json::array({{{"role", "user"}, {"content", completion.task.prompt}}});
         }
         if (!completion.task.agent_system_prompt.empty()) {
-            messages.insert(messages.begin(),
-                            json{{"role", "system"},
-                                 {"content", completion.task.agent_system_prompt}});
+            messages.insert(
+                messages.begin(),
+                json{{"role", "system"}, {"content", completion.task.agent_system_prompt}});
         }
         json params{{"conversationId", conversation_id},
                     {"messages", std::move(messages)},
@@ -1215,9 +1204,8 @@ void rpc_worker_main(AiEditorMainPanelState* state) {
         RpcTask task;
         {
             std::unique_lock lock(state->mutex);
-            state->worker_cv.wait(lock, [&] {
-                return state->worker_stop_requested || !state->rpc_queue.empty();
-            });
+            state->worker_cv.wait(
+                lock, [&] { return state->worker_stop_requested || !state->rpc_queue.empty(); });
             if (state->worker_stop_requested && state->rpc_queue.empty())
                 break;
             task = std::move(state->rpc_queue.front());
@@ -1242,15 +1230,14 @@ void rpc_worker_main(AiEditorMainPanelState* state) {
         }
         {
             std::lock_guard lock(state->mutex);
-            const bool orphan_cancel = completion.task.kind == RpcTaskKind::CancelRun &&
-                                       completion.task.orphan_cleanup;
+            const bool orphan_cancel =
+                completion.task.kind == RpcTaskKind::CancelRun && completion.task.orphan_cleanup;
             if (orphan_cancel) {
                 completion.task.generation = 0U;
                 if (!completion_has_successful_step(completion, "run.cancel") &&
                     completion.task.orphan_cancel_attempt < kMaximumOrphanCancelAttempts &&
-                    queue_orphan_cancel_locked(
-                        *state, 0U, completion.task.run_id,
-                        completion.task.orphan_cancel_attempt + 1U)) {
+                    queue_orphan_cancel_locked(*state, 0U, completion.task.run_id,
+                                               completion.task.orphan_cancel_attempt + 1U)) {
                     completion.cancelled = true;
                 }
             } else if (!completion.cancelled && completion.task.generation != 0U &&
@@ -1480,8 +1467,7 @@ void apply_conversation_document(AiEditorMainPanelState& state, const json& docu
     if (conversation_id.empty() || conversation_id.size() > 1024U)
         return;
     state.conversation_id = conversation_id;
-    state.conversation_title =
-        compact_text(document.value("title", std::string{"Untitled"}), 500U);
+    state.conversation_title = compact_text(document.value("title", std::string{"Untitled"}), 500U);
     const json messages = document.value("messages", json::array());
     state.conversation_messages = messages.is_array() ? messages : json::array();
     state.conversation_messages_total = document.value(
@@ -1542,8 +1528,8 @@ void apply_control_completion(AiEditorMainPanelState& state, const RpcCompletion
     {
         std::lock_guard lock(state.mutex);
         state.control_status = response.ok ? "Success" : "Failed";
-        state.control_request_id = response.request_id == 0 ? std::string{} :
-                                    std::to_string(response.request_id);
+        state.control_request_id =
+            response.request_id == 0 ? std::string{} : std::to_string(response.request_id);
         state.control_last_method = completion.task.method;
         state.control_last_label = completion.task.control_label.empty()
                                        ? completion.task.method
@@ -1552,28 +1538,35 @@ void apply_control_completion(AiEditorMainPanelState& state, const RpcCompletion
         redact_control_json(state.control_last_params);
         state.control_last_execution_params = completion.task.params;
         state.control_last_result = result_text;
-        state.control_last_error = response.ok ? std::string{}
-                                                : redact_control_text(compact_text(response.error, 1600U));
+        state.control_last_error =
+            response.ok ? std::string{} : redact_control_text(compact_text(response.error, 1600U));
         if (completion.task.method == "tools.call" && completion.task.params.is_object()) {
             state.control_last_tool_name = completion.task.params.value("name", std::string{});
-            state.control_last_tool_arguments = completion.task.params.value("arguments", json::object());
+            state.control_last_tool_arguments =
+                completion.task.params.value("arguments", json::object());
         }
         state.control_elapsed = std::to_string(response.elapsed_ms) + " ms";
-        state.control_truncated = response.truncated ||
-                                  (response.result.is_object() && response.result.value("truncated", false));
-        state.control_cache_hit = response.result.is_object() && response.result.value("cacheHit", false);
+        state.control_truncated = response.truncated || (response.result.is_object() &&
+                                                         response.result.value("truncated", false));
+        state.control_cache_hit =
+            response.result.is_object() && response.result.value("cacheHit", false);
         state.control_permission = response.result.is_object()
                                        ? response.result.value("permission", std::string{"-"})
                                        : "-";
-        state.control_permission_source = response.result.is_object()
-                                              ? response.result.value("permissionSource", response.result.value("source", std::string{"-"}))
-                                              : state.control_permission_source.empty() ? "-" : state.control_permission_source;
-        state.control_permission_category = response.result.is_object()
-                                                ? response.result.value("category", state.control_permission_category)
-                                                : state.control_permission_category;
-        state.control_confirmation_required = response.result.is_object()
-                                                  ? response.result.value("confirmationRequired", state.control_confirmation_required)
-                                                  : state.control_confirmation_required;
+        state.control_permission_source =
+            response.result.is_object()
+                ? response.result.value("permissionSource",
+                                        response.result.value("source", std::string{"-"}))
+            : state.control_permission_source.empty() ? "-"
+                                                      : state.control_permission_source;
+        state.control_permission_category =
+            response.result.is_object()
+                ? response.result.value("category", state.control_permission_category)
+                : state.control_permission_category;
+        state.control_confirmation_required =
+            response.result.is_object()
+                ? response.result.value("confirmationRequired", state.control_confirmation_required)
+                : state.control_confirmation_required;
         if (response.ok && step.method == "tools.list" && response.result.is_object()) {
             state.control_tools.clear();
             const json tools = response.result.value("tools", json::array());
@@ -1587,11 +1580,14 @@ void apply_control_completion(AiEditorMainPanelState& state, const RpcCompletion
                         continue;
                     tool.description = item.value("description", std::string{});
                     tool.permission = item.value("permission", std::string{"unknown"});
-                    tool.permission_source = item.value("permissionSource", item.value("source", std::string{"unknown"}));
-                    tool.category = item.value("category", item.value("permissionCategory", std::string{}));
+                    tool.permission_source = item.value(
+                        "permissionSource", item.value("source", std::string{"unknown"}));
+                    tool.category =
+                        item.value("category", item.value("permissionCategory", std::string{}));
                     tool.confirmation_required = item.value("confirmationRequired", false);
                     tool.read_only = item.value("readOnly", true);
-                    tool.schema = item.value("parameters", item.value("inputSchema", json::object()));
+                    tool.schema =
+                        item.value("parameters", item.value("inputSchema", json::object()));
                     state.control_tools.push_back(std::move(tool));
                 }
             }
@@ -1614,15 +1610,19 @@ void apply_control_completion(AiEditorMainPanelState& state, const RpcCompletion
         }
     }
     if (response.ok) {
-        append_output_line(state, "[" + format_iso_timestamp() + "] control " + step.method +
-                                      " -> Success · request " +
-                                      (response.request_id == 0 ? std::string{"-"} : std::to_string(response.request_id)) +
-                                      " · " + std::to_string(response.elapsed_ms) + " ms");
+        append_output_line(state,
+                           "[" + format_iso_timestamp() + "] control " + step.method +
+                               " -> Success · request " +
+                               (response.request_id == 0 ? std::string{"-"}
+                                                         : std::to_string(response.request_id)) +
+                               " · " + std::to_string(response.elapsed_ms) + " ms");
     } else {
-        append_output_line(state, "[" + format_iso_timestamp() + "] control " + step.method +
-                                      " -> Failed · request " +
-                                      (response.request_id == 0 ? std::string{"-"} : std::to_string(response.request_id)) +
-                                      " · " + redact_control_text(response.error));
+        append_output_line(state,
+                           "[" + format_iso_timestamp() + "] control " + step.method +
+                               " -> Failed · request " +
+                               (response.request_id == 0 ? std::string{"-"}
+                                                         : std::to_string(response.request_id)) +
+                               " · " + redact_control_text(response.error));
     }
     {
         std::lock_guard lock(state.mutex);
@@ -1638,14 +1638,14 @@ void finish_run_from_status(AiEditorMainPanelState& state, const json& status) {
         state.streamed_assistant_text = clamp_utf8_bytes(content, kMaximumStreamedAssistantBytes);
     state.usage_status = metrics_summary(result.value("metrics", json::object()));
     if (result.contains("thinking"))
-        state.thinking_status = clamp_utf8_bytes(
-            message_content({{"content", result["thinking"]}}), kMaximumRunDetailBytes);
+        state.thinking_status = clamp_utf8_bytes(message_content({{"content", result["thinking"]}}),
+                                                 kMaximumRunDetailBytes);
     else if (result.contains("reasoning"))
         state.thinking_status = clamp_utf8_bytes(
             message_content({{"content", result["reasoning"]}}), kMaximumRunDetailBytes);
     if (result.contains("refusal"))
-        state.refusal_status = clamp_utf8_bytes(
-            message_content({{"content", result["refusal"]}}), kMaximumRunDetailBytes);
+        state.refusal_status = clamp_utf8_bytes(message_content({{"content", result["refusal"]}}),
+                                                kMaximumRunDetailBytes);
     if (result.contains("toolCalls"))
         state.tool_status = compact_text(result["toolCalls"].dump(), kMaximumToolStatusBytes);
     else if (result.contains("tool_calls"))
@@ -1755,8 +1755,7 @@ bool apply_run_event(AiEditorMainPanelState& state, const json& envelope,
         return false;
     const std::string event_name = params->value("event", std::string{});
     const json payload = params->value("payload", json::object());
-    const bool terminal_event = event_name == "run.completed" ||
-                                event_name == "run.cancelled" ||
+    const bool terminal_event = event_name == "run.completed" || event_name == "run.cancelled" ||
                                 event_name == "run.failed" || event_name == "run.stale";
     if (!run_is_active(state.run_phase))
         return false;
@@ -1803,8 +1802,8 @@ bool apply_run_event(AiEditorMainPanelState& state, const json& envelope,
                 append_bounded_text(state.tool_status, tool_progress, kMaximumToolStatusBytes);
             }
         }
-        state.run_phase = state.run_phase == RunPhase::Cancelling ? RunPhase::Cancelling
-                                                                  : RunPhase::Running;
+        state.run_phase =
+            state.run_phase == RunPhase::Cancelling ? RunPhase::Cancelling : RunPhase::Running;
         state.run_status = state.run_phase == RunPhase::Cancelling ? "cancelling" : "running";
         return true;
     }
@@ -1829,16 +1828,13 @@ bool apply_run_event(AiEditorMainPanelState& state, const json& envelope,
                     clamp_utf8_bytes(content, kMaximumStreamedAssistantBytes);
             if (payload.contains("thinking"))
                 state.thinking_status = clamp_utf8_bytes(
-                    message_content({{"content", payload["thinking"]}}),
-                    kMaximumRunDetailBytes);
+                    message_content({{"content", payload["thinking"]}}), kMaximumRunDetailBytes);
             else if (payload.contains("reasoning"))
                 state.thinking_status = clamp_utf8_bytes(
-                    message_content({{"content", payload["reasoning"]}}),
-                    kMaximumRunDetailBytes);
+                    message_content({{"content", payload["reasoning"]}}), kMaximumRunDetailBytes);
             if (payload.contains("refusal"))
                 state.refusal_status = clamp_utf8_bytes(
-                    message_content({{"content", payload["refusal"]}}),
-                    kMaximumRunDetailBytes);
+                    message_content({{"content", payload["refusal"]}}), kMaximumRunDetailBytes);
             if (payload.contains("metrics"))
                 state.usage_status = metrics_summary(payload["metrics"]);
             const std::string tool_progress = event_tool_progress(payload);
@@ -1900,12 +1896,11 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         } else {
             state.vt_dashboard_stale = true;
             state.vt_dashboard_last_error = redact_control_text(
-                step.response.ok
-                    ? "sao.vt.status returned an invalid object"
-                    : compact_text(step.response.error.empty()
-                                       ? transport_message(step.response.status)
-                                       : step.response.error,
-                                   1200U));
+                step.response.ok ? "sao.vt.status returned an invalid object"
+                                 : compact_text(step.response.error.empty()
+                                                    ? transport_message(step.response.status)
+                                                    : step.response.error,
+                                                1200U));
             state.next_vt_dashboard_poll =
                 std::chrono::steady_clock::now() + kVtDashboardBackoffInterval;
         }
@@ -1983,14 +1978,14 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         }
         std::lock_guard lock(state.mutex);
         const json config = initialized.result.value("config", json::object());
-        const std::string configured_provider = summary_value(
-            config, {"ai_editor.provider", "ai.provider", "provider"}, std::string{});
-        const std::string configured_model = summary_value(
-            config, {"ai_editor.model", "ai.model", "model"}, std::string{});
-        const std::string configured_mode = summary_value(
-            config, {"ai_editor.mode", "ai.mode", "mode"}, "agent");
-        const std::string configured_approval = normalize_approval(summary_value(
-            config, {"ai_editor.approval", "ai.approval", "approval"}, "default"));
+        const std::string configured_provider =
+            summary_value(config, {"ai_editor.provider", "ai.provider", "provider"}, std::string{});
+        const std::string configured_model =
+            summary_value(config, {"ai_editor.model", "ai.model", "model"}, std::string{});
+        const std::string configured_mode =
+            summary_value(config, {"ai_editor.mode", "ai.mode", "mode"}, "agent");
+        const std::string configured_approval = normalize_approval(
+            summary_value(config, {"ai_editor.approval", "ai.approval", "approval"}, "default"));
         if (!configured_provider.empty())
             add_choice(state.providers, {configured_provider, configured_provider, {}});
         if (!configured_model.empty())
@@ -2003,14 +1998,15 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                 apply_choice_items(state.providers,
                                    step.response.result.value("items", json::array()), "Provider");
             else if (step.method == "agents.list_defs")
-                apply_choice_items(state.agents,
-                                   step.response.result.value("items", json::array()), "Agent");
+                apply_choice_items(state.agents, step.response.result.value("items", json::array()),
+                                   "Agent");
             else if (step.method == "workflows.list_defs")
                 apply_choice_items(state.workflows,
                                    step.response.result.value("items", json::array()), "Workflow");
             else if (step.method == "conversation.list" && state.history_query.empty()) {
                 state.history = parse_history(step.response.result, state.history_limit);
-                state.history_total = history_total_from_steps(completion.steps, state.history.size());
+                state.history_total =
+                    history_total_from_steps(completion.steps, state.history.size());
             }
         }
         if (!state.selections_initialized) {
@@ -2027,8 +2023,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         state.bootstrap_pending = false;
         state.backend_connected = true;
         state.backend_status = metadata_complete
-                       ? "Connected · chat metadata and history loaded"
-                       : "Connected · some chat metadata requests failed; see output";
+                                   ? "Connected · chat metadata and history loaded"
+                                   : "Connected · some chat metadata requests failed; see output";
         break;
     }
     case RpcTaskKind::VtDashboard:
@@ -2046,9 +2042,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             std::lock_guard lock(state.mutex);
             state.run_phase = RunPhase::Failed;
             state.run_status = "create error";
-            state.run_error = last.response.ok
-                                  ? "conversation.create returned no conversation id"
-                                  : compact_text(last.response.error, 1200U);
+            state.run_error = last.response.ok ? "conversation.create returned no conversation id"
+                                               : compact_text(last.response.error, 1200U);
             break;
         }
         {
@@ -2068,8 +2063,7 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         if (!last.response.ok) {
             record_completion_output(state, last);
             std::lock_guard lock(state.mutex);
-            state.run_error = "History refresh failed: " +
-                              compact_text(last.response.error, 1000U);
+            state.run_error = "History refresh failed: " + compact_text(last.response.error, 1000U);
         } else {
             std::lock_guard lock(state.mutex);
             state.history = parse_history(last.response.result, state.history_limit);
@@ -2082,10 +2076,10 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         if (!last.response.ok || !last.response.result.is_object()) {
             record_completion_output(state, last);
             std::lock_guard lock(state.mutex);
-            state.run_error = "History search failed: " +
-                              (last.response.ok
-                                   ? std::string{"conversation.search returned invalid results"}
-                                   : compact_text(last.response.error, 1000U));
+            state.run_error =
+                "History search failed: " +
+                (last.response.ok ? std::string{"conversation.search returned invalid results"}
+                                  : compact_text(last.response.error, 1000U));
             break;
         }
         {
@@ -2129,9 +2123,9 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         for (const auto& step : completion.steps)
             if (!step.response.ok)
                 record_completion_output(state, step);
-        const auto delete_step = std::find_if(
-            completion.steps.begin(), completion.steps.end(),
-            [](const auto& step) { return step.method == "conversation.delete"; });
+        const auto delete_step =
+            std::find_if(completion.steps.begin(), completion.steps.end(),
+                         [](const auto& step) { return step.method == "conversation.delete"; });
         const bool deleted = delete_step != completion.steps.end() && delete_step->response.ok;
         const std::string delete_error = delete_step == completion.steps.end()
                                              ? "missing conversation.delete response"
@@ -2153,13 +2147,15 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         }
         if (completion.steps.size() > 1 && completion.steps.back().response.ok) {
             if (completion.steps.back().method == "conversation.search") {
-                state.history =
-                    parse_history_search_results(completion.steps.back().response.result, state.history_limit);
+                state.history = parse_history_search_results(
+                    completion.steps.back().response.result, state.history_limit);
                 state.history_total =
                     completion.steps.back().response.result.value("total", state.history.size());
             } else {
-                state.history = parse_history(completion.steps.back().response.result, state.history_limit);
-                state.history_total = history_total_from_steps(completion.steps, state.history.size());
+                state.history =
+                    parse_history(completion.steps.back().response.result, state.history_limit);
+                state.history_total =
+                    history_total_from_steps(completion.steps, state.history.size());
             }
             state.run_error.clear();
         } else {
@@ -2168,10 +2164,10 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             });
             if (removed != 0 && state.history_total != 0)
                 --state.history_total;
-            const std::string detail = completion.steps.size() > 1
-                                           ? compact_text(completion.steps.back().response.error,
-                                                          900U)
-                                           : "history refresh was not reached";
+            const std::string detail =
+                completion.steps.size() > 1
+                    ? compact_text(completion.steps.back().response.error, 900U)
+                    : "history refresh was not reached";
             state.run_error = "Conversation deleted, but history refresh failed: " + detail;
         }
         break;
@@ -2214,13 +2210,15 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             state.run_status = "idle";
             if (completion.steps.size() > 1 && completion.steps.back().response.ok) {
                 if (completion.steps.back().method == "conversation.search") {
-                    state.history =
-                        parse_history_search_results(completion.steps.back().response.result, state.history_limit);
+                    state.history = parse_history_search_results(
+                        completion.steps.back().response.result, state.history_limit);
                     state.history_total = completion.steps.back().response.result.value(
                         "total", state.history.size());
                 } else {
-                    state.history = parse_history(completion.steps.back().response.result, state.history_limit);
-                    state.history_total = history_total_from_steps(completion.steps, state.history.size());
+                    state.history =
+                        parse_history(completion.steps.back().response.result, state.history_limit);
+                    state.history_total =
+                        history_total_from_steps(completion.steps, state.history.size());
                 }
                 state.run_error.clear();
             } else {
@@ -2228,15 +2226,12 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                     HistoryEntry entry;
                     entry.id = duplicate->response.result.value("id", std::string{});
                     entry.title = compact_text(
-                        duplicate->response.result.value("title", std::string{"Untitled"}),
-                        500U);
+                        duplicate->response.result.value("title", std::string{"Untitled"}), 500U);
                     entry.model = compact_text(
                         duplicate->response.result.value("model", std::string{}), 256U);
                     entry.scope = compact_text(
-                        duplicate->response.result.value("scope", std::string{"workspace"}),
-                        64U);
-                    entry.saved_at =
-                        duplicate->response.result.value("savedAt", int64_t{0});
+                        duplicate->response.result.value("scope", std::string{"workspace"}), 64U);
+                    entry.saved_at = duplicate->response.result.value("savedAt", int64_t{0});
                     entry.message_count =
                         duplicate->response.result.value("messageCount", size_t{0});
                     if (std::ranges::find(state.history, entry.id, &HistoryEntry::id) ==
@@ -2248,12 +2243,12 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                             ++state.history_total;
                     }
                 }
-                const std::string detail = completion.steps.size() > 1
-                                               ? compact_text(
-                                                     completion.steps.back().response.error, 900U)
-                                               : "history refresh was not reached";
-                state.run_error = "Conversation duplicated, but history refresh failed: " +
-                                  detail + ". Use Refresh History to retry.";
+                const std::string detail =
+                    completion.steps.size() > 1
+                        ? compact_text(completion.steps.back().response.error, 900U)
+                        : "history refresh was not reached";
+                state.run_error = "Conversation duplicated, but history refresh failed: " + detail +
+                                  ". Use Refresh History to retry.";
             }
         }
         append_output_line(state, "[" + format_iso_timestamp() + "] duplicated conversation " +
@@ -2293,20 +2288,18 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
         restored.saved_at = created->response.result.value("savedAt", int64_t{0});
         {
             std::lock_guard lock(state.mutex);
-            const auto found = std::ranges::find(
-                state.history, completion.task.restore_entry.id, &HistoryEntry::id);
+            const auto found = std::ranges::find(state.history, completion.task.restore_entry.id,
+                                                 &HistoryEntry::id);
             if (found != state.history.end())
                 *found = restored;
             else
                 state.history.insert(state.history.begin(), restored);
-            state.history_total =
-                history_total_from_steps(completion.steps, state.history.size());
+            state.history_total = history_total_from_steps(completion.steps, state.history.size());
             state.conversation_id = restored.id;
             state.conversation_title = restored.title;
             state.conversation_messages = restored.messages;
-            state.conversation_messages_total = restored.content_available
-                                                   ? restored.messages.size()
-                                                   : restored.message_count;
+            state.conversation_messages_total =
+                restored.content_available ? restored.messages.size() : restored.message_count;
             state.run_error.clear();
         }
         break;
@@ -2318,8 +2311,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             for (const auto& step : completion.steps)
                 if (!step.response.ok)
                     record_completion_output(state, step);
-            const bool append_succeeded = std::ranges::any_of(
-                completion.steps, [](const RpcStepResult& step) {
+            const bool append_succeeded =
+                std::ranges::any_of(completion.steps, [](const RpcStepResult& step) {
                     return step.method == "conversation.append" && step.response.ok;
                 });
             const bool conversation_available = !completion.task.conversation_id.empty();
@@ -2442,17 +2435,15 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             const std::string result_run_id =
                 last.response.result.value("runId", completion.task.run_id);
             if (completion.task.run_id.empty() || result_run_id != completion.task.run_id ||
-                state.active_run_id != completion.task.run_id ||
-                !run_is_active(state.run_phase)) {
+                state.active_run_id != completion.task.run_id || !run_is_active(state.run_phase)) {
                 return;
             }
             state.run_poll_pending = false;
             const std::string status = last.response.result.value("status", std::string{});
             if (status == "running" || status == "pending") {
                 state.run_status = status;
-                state.run_phase = state.run_phase == RunPhase::Cancelling
-                                      ? RunPhase::Cancelling
-                                      : RunPhase::Running;
+                state.run_phase = state.run_phase == RunPhase::Cancelling ? RunPhase::Cancelling
+                                                                          : RunPhase::Running;
                 state.next_run_poll = std::chrono::steady_clock::now() + kRunPollInterval;
                 break;
             }
@@ -2475,8 +2466,8 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
             if (run_is_active(state.run_phase)) {
                 state.run_phase = RunPhase::Running;
                 state.run_status = "running";
-                state.run_error = "Cancel request failed: " +
-                                  compact_text(last.response.error, 1100U);
+                state.run_error =
+                    "Cancel request failed: " + compact_text(last.response.error, 1100U);
                 state.run_poll_pending = false;
                 state.next_run_poll = std::chrono::steady_clock::now() + kRunPollInterval;
             }
@@ -2503,9 +2494,9 @@ void apply_completion(AiEditorMainPanelState& state, RpcCompletion completion) {
                     if (item.is_string())
                         add_choice(models, {item.get<std::string>(), item.get<std::string>(), {}});
                     else if (item.is_object())
-                        add_choice(models,
-                                   {item.value("id", item.value("name", std::string{})),
-                                    item.value("name", item.value("id", std::string{})), {}});
+                        add_choice(models, {item.value("id", item.value("name", std::string{})),
+                                            item.value("name", item.value("id", std::string{})),
+                                            {}});
                 }
             }
             if (!state.selected_model.empty())
@@ -2530,95 +2521,187 @@ void drain_completions(AiEditorMainPanelState& state) {
 
 const std::vector<ControlActionSpec>& control_action_catalog() {
     static const std::vector<ControlActionSpec> actions{
-        {"Conversations", "conversation.list", "List", "conversation.list", R"({"scope":"all","limit":50})", true, false, false},
-        {"Conversations", "conversation.get", "Get", "conversation.get", R"({"id":""})", true, false, false},
-        {"Conversations", "conversation.search", "Search", "conversation.search", R"({"query":"","scope":"all","limit":50})", true, false, false},
-        {"Conversations", "conversation.pin", "Pin", "conversation.pin", R"({"id":""})", false, false, false},
-        {"Conversations", "conversation.unpin", "Unpin", "conversation.unpin", R"({"id":""})", false, false, false},
-        {"Conversations", "conversation.tag", "Tag", "conversation.tag", R"({"id":"","tags":[]})", false, false, false},
-        {"Conversations", "conversation.untag", "Untag", "conversation.untag", R"({"id":"","tags":[]})", false, false, false},
-        {"Conversations", "conversation.find_by_tag", "Find by tag", "conversation.find_by_tag", R"({"tags":[],"scope":"all","limit":50,"matchAll":false})", true, false, false},
-        {"Conversations", "conversation.list_tags", "List tags", "conversation.list_tags", R"({"scope":"all"})", true, false, false},
-        {"Conversations", "conversation.branch", "Branch", "conversation.branch", R"({"sourceId":"","messageIndex":0,"title":"","scope":"workspace"})", false, true, false},
-        {"Conversations", "conversation.merge", "Merge", "conversation.merge", R"({"sourceIds":[],"title":"","scope":"workspace","orderBy":"explicit"})", false, true, false},
-        {"Conversations", "conversation.split", "Split", "conversation.split", R"({"sourceId":"","messageIndex":0,"scope":"workspace","keepOriginal":false})", false, true, false},
-        {"Conversations", "conversation.compact", "Compact", "conversation.compact", R"({"id":"","keepLast":6,"compactStrategy":"replace"})", false, true, false},
-        {"Conversations", "conversation.export", "Export", "conversation.export", R"({"scope":"all"})", true, false, false},
-        {"Conversations", "conversation.import", "Import", "conversation.import", R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
-        {"Conversations", "conversation.delete", "Delete", "conversation.delete", R"({"id":""})", false, true, false},
-        {"Workflows", "workflows.reload", "Reload", "workflows.reload", R"({})", true, false, false},
-        {"Workflows", "workflows.list_defs", "List", "workflows.list_defs", R"({"scope":"all"})", true, false, false},
-        {"Workflows", "workflows.get_def", "Get", "workflows.get_def", R"({"id":"","scope":"all"})", true, false, false},
-        {"Workflows", "workflows.save_def", "Save", "workflows.save_def", R"({"scope":"workspace","workflow":{}})", false, true, false},
-        {"Workflows", "workflows.delete_def", "Delete", "workflows.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
-        {"Workflows", "workflow.dry_run", "Dry run", "workflow.dry_run", R"({"id":"","input":{}})", true, false, false},
-        {"Workflows", "workflows.run", "Run", "workflows.run", R"({"id":"","input":{}})", false, true, false},
-        {"Workflows", "workflows.status", "Status", "workflows.status", R"({"executionId":""})", true, false, false},
-        {"Workflows", "workflows.pause", "Pause", "workflows.pause", R"({"executionId":""})", false, true, false},
-        {"Workflows", "workflows.resume", "Resume", "workflows.resume", R"({"executionId":""})", false, true, false},
-        {"Workflows", "workflows.cancel", "Cancel", "workflows.cancel", R"({"executionId":""})", false, true, false},
-        {"Workflows", "workflow.retry", "Retry", "workflow.retry", R"({"id":"","scope":"all"})", false, true, false},
-        {"Workflows", "workflow.list_executions", "Execution list", "workflow.list_executions", R"({"scope":"all","limit":50})", true, false, false},
-        {"Workflows", "workflow.get_execution", "Execution get", "workflow.get_execution", R"({"id":"","scope":"all"})", true, false, false},
-        {"Workflows", "workflow.delete_execution", "Execution delete", "workflow.delete_execution", R"({"id":"","scope":"all"})", false, true, false},
-        {"Workflows", "workflow.skip_step", "Skip step", "workflow.skip_step", R"({"executionId":"","reason":""})", false, true, false},
-        {"Workflows", "workflow.replace_variable", "Replace variable", "workflow.replace_variable", R"({"executionId":"","name":"","value":""})", false, true, false},
-        {"Workflows", "workflow.snapshot_variables", "Snapshot variables", "workflow.snapshot_variables", R"({"executionId":""})", true, false, false},
-        {"Agents & Prompts", "agents.list_defs", "Agents list", "agents.list_defs", R"({"scope":"all"})", true, false, false},
-        {"Agents & Prompts", "agents.get_def", "Agent get", "agents.get_def", R"({"id":"","scope":"all"})", true, false, false},
-        {"Agents & Prompts", "agents.save_def", "Agent save", "agents.save_def", R"({"scope":"workspace","agent":{}})", false, true, false},
-        {"Agents & Prompts", "agents.delete_def", "Agent delete", "agents.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
-        {"Agents & Prompts", "agents.invoke", "Invoke agent", "agents.invoke", R"({"id":"","message":""})", false, true, false},
-        {"Agents & Prompts", "agents.recommend", "Recommend", "agents.recommend", R"({"query":"","topK":3})", true, false, false},
-        {"Agents & Prompts", "agents.import", "Import agents", "agents.import", R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
-        {"Agents & Prompts", "agents.export", "Export agents", "agents.export", R"({"scope":"all"})", true, false, false},
-        {"Agents & Prompts", "agents.invoke_with_mcp", "Invoke with MCP", "agents.invoke_with_mcp", R"({"id":"","message":"","mcpServers":[],"extraTools":[]})", false, true, false},
-        {"Agents & Prompts", "agents.batch_invoke", "Batch invoke (Developer Advanced)", "agents.batch_invoke", R"({"agents":[]})", false, true, true},
-        {"Agents & Prompts", "prompts.list_defs", "Prompts list", "prompts.list_defs", R"({"scope":"all"})", true, false, false},
-        {"Agents & Prompts", "prompts.get_def", "Prompt get", "prompts.get_def", R"({"id":"","scope":"all"})", true, false, false},
-        {"Agents & Prompts", "prompts.save_def", "Prompt save", "prompts.save_def", R"({"scope":"workspace","prompt":{}})", false, true, false},
-        {"Agents & Prompts", "prompts.delete_def", "Prompt delete", "prompts.delete_def", R"({"id":"","scope":"workspace"})", false, true, false},
-        {"Agents & Prompts", "prompts.render", "Render prompt", "prompts.render", R"({"id":"","arguments":{}})", true, false, false},
-        {"Agents & Prompts", "prompts.render_batch", "Render batch", "prompts.render_batch", R"({"items":[]})", true, false, false},
-        {"Agents & Prompts", "prompts.list_tags", "Prompt tags", "prompts.list_tags", R"({"scope":"all"})", true, false, false},
-        {"Agents & Prompts", "prompt.pin", "Pin prompt", "prompt.pin", R"({"id":"","scope":"workspace"})", false, false, false},
-        {"Agents & Prompts", "prompt.unpin", "Unpin prompt", "prompt.unpin", R"({"id":"","scope":"workspace"})", false, false, false},
+        {"Conversations", "conversation.list", "List", "conversation.list",
+         R"({"scope":"all","limit":50})", true, false, false},
+        {"Conversations", "conversation.get", "Get", "conversation.get", R"({"id":""})", true,
+         false, false},
+        {"Conversations", "conversation.search", "Search", "conversation.search",
+         R"({"query":"","scope":"all","limit":50})", true, false, false},
+        {"Conversations", "conversation.pin", "Pin", "conversation.pin", R"({"id":""})", false,
+         false, false},
+        {"Conversations", "conversation.unpin", "Unpin", "conversation.unpin", R"({"id":""})",
+         false, false, false},
+        {"Conversations", "conversation.tag", "Tag", "conversation.tag", R"({"id":"","tags":[]})",
+         false, false, false},
+        {"Conversations", "conversation.untag", "Untag", "conversation.untag",
+         R"({"id":"","tags":[]})", false, false, false},
+        {"Conversations", "conversation.find_by_tag", "Find by tag", "conversation.find_by_tag",
+         R"({"tags":[],"scope":"all","limit":50,"matchAll":false})", true, false, false},
+        {"Conversations", "conversation.list_tags", "List tags", "conversation.list_tags",
+         R"({"scope":"all"})", true, false, false},
+        {"Conversations", "conversation.branch", "Branch", "conversation.branch",
+         R"({"sourceId":"","messageIndex":0,"title":"","scope":"workspace"})", false, true, false},
+        {"Conversations", "conversation.merge", "Merge", "conversation.merge",
+         R"({"sourceIds":[],"title":"","scope":"workspace","orderBy":"explicit"})", false, true,
+         false},
+        {"Conversations", "conversation.split", "Split", "conversation.split",
+         R"({"sourceId":"","messageIndex":0,"scope":"workspace","keepOriginal":false})", false,
+         true, false},
+        {"Conversations", "conversation.compact", "Compact", "conversation.compact",
+         R"({"id":"","keepLast":6,"compactStrategy":"replace"})", false, true, false},
+        {"Conversations", "conversation.export", "Export", "conversation.export",
+         R"({"scope":"all"})", true, false, false},
+        {"Conversations", "conversation.import", "Import", "conversation.import",
+         R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
+        {"Conversations", "conversation.delete", "Delete", "conversation.delete", R"({"id":""})",
+         false, true, false},
+        {"Workflows", "workflows.reload", "Reload", "workflows.reload", R"({})", true, false,
+         false},
+        {"Workflows", "workflows.list_defs", "List", "workflows.list_defs", R"({"scope":"all"})",
+         true, false, false},
+        {"Workflows", "workflows.get_def", "Get", "workflows.get_def", R"({"id":"","scope":"all"})",
+         true, false, false},
+        {"Workflows", "workflows.save_def", "Save", "workflows.save_def",
+         R"({"scope":"workspace","workflow":{}})", false, true, false},
+        {"Workflows", "workflows.delete_def", "Delete", "workflows.delete_def",
+         R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Workflows", "workflow.dry_run", "Dry run", "workflow.dry_run", R"({"id":"","input":{}})",
+         true, false, false},
+        {"Workflows", "workflows.run", "Run", "workflows.run", R"({"id":"","input":{}})", false,
+         true, false},
+        {"Workflows", "workflows.status", "Status", "workflows.status", R"({"executionId":""})",
+         true, false, false},
+        {"Workflows", "workflows.pause", "Pause", "workflows.pause", R"({"executionId":""})", false,
+         true, false},
+        {"Workflows", "workflows.resume", "Resume", "workflows.resume", R"({"executionId":""})",
+         false, true, false},
+        {"Workflows", "workflows.cancel", "Cancel", "workflows.cancel", R"({"executionId":""})",
+         false, true, false},
+        {"Workflows", "workflow.retry", "Retry", "workflow.retry", R"({"id":"","scope":"all"})",
+         false, true, false},
+        {"Workflows", "workflow.list_executions", "Execution list", "workflow.list_executions",
+         R"({"scope":"all","limit":50})", true, false, false},
+        {"Workflows", "workflow.get_execution", "Execution get", "workflow.get_execution",
+         R"({"id":"","scope":"all"})", true, false, false},
+        {"Workflows", "workflow.delete_execution", "Execution delete", "workflow.delete_execution",
+         R"({"id":"","scope":"all"})", false, true, false},
+        {"Workflows", "workflow.skip_step", "Skip step", "workflow.skip_step",
+         R"({"executionId":"","reason":""})", false, true, false},
+        {"Workflows", "workflow.replace_variable", "Replace variable", "workflow.replace_variable",
+         R"({"executionId":"","name":"","value":""})", false, true, false},
+        {"Workflows", "workflow.snapshot_variables", "Snapshot variables",
+         "workflow.snapshot_variables", R"({"executionId":""})", true, false, false},
+        {"Agents & Prompts", "agents.list_defs", "Agents list", "agents.list_defs",
+         R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.get_def", "Agent get", "agents.get_def",
+         R"({"id":"","scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.save_def", "Agent save", "agents.save_def",
+         R"({"scope":"workspace","agent":{}})", false, true, false},
+        {"Agents & Prompts", "agents.delete_def", "Agent delete", "agents.delete_def",
+         R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Agents & Prompts", "agents.invoke", "Invoke agent", "agents.invoke",
+         R"({"id":"","message":""})", false, true, false},
+        {"Agents & Prompts", "agents.recommend", "Recommend", "agents.recommend",
+         R"({"query":"","topK":3})", true, false, false},
+        {"Agents & Prompts", "agents.import", "Import agents", "agents.import",
+         R"({"payload":{},"scope":"workspace","overwrite":false})", false, true, false},
+        {"Agents & Prompts", "agents.export", "Export agents", "agents.export",
+         R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "agents.invoke_with_mcp", "Invoke with MCP", "agents.invoke_with_mcp",
+         R"({"id":"","message":"","mcpServers":[],"extraTools":[]})", false, true, false},
+        {"Agents & Prompts", "agents.batch_invoke", "Batch invoke (Developer Advanced)",
+         "agents.batch_invoke", R"({"agents":[]})", false, true, true},
+        {"Agents & Prompts", "prompts.list_defs", "Prompts list", "prompts.list_defs",
+         R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompts.get_def", "Prompt get", "prompts.get_def",
+         R"({"id":"","scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompts.save_def", "Prompt save", "prompts.save_def",
+         R"({"scope":"workspace","prompt":{}})", false, true, false},
+        {"Agents & Prompts", "prompts.delete_def", "Prompt delete", "prompts.delete_def",
+         R"({"id":"","scope":"workspace"})", false, true, false},
+        {"Agents & Prompts", "prompts.render", "Render prompt", "prompts.render",
+         R"({"id":"","arguments":{}})", true, false, false},
+        {"Agents & Prompts", "prompts.render_batch", "Render batch", "prompts.render_batch",
+         R"({"items":[]})", true, false, false},
+        {"Agents & Prompts", "prompts.list_tags", "Prompt tags", "prompts.list_tags",
+         R"({"scope":"all"})", true, false, false},
+        {"Agents & Prompts", "prompt.pin", "Pin prompt", "prompt.pin",
+         R"({"id":"","scope":"workspace"})", false, false, false},
+        {"Agents & Prompts", "prompt.unpin", "Unpin prompt", "prompt.unpin",
+         R"({"id":"","scope":"workspace"})", false, false, false},
         {"Tools", "tools.list", "List tools", "tools.list", R"({})", true, false, false},
-        {"Tools", "tools.call", "Call tool", "tools.call", R"({"mode":"agent","name":"","arguments":{}})", false, true, false},
-        {"Tools", "tools.register", "Register tool (Developer Advanced)", "tools.register", R"({"name":"","description":"","parameters":{"type":"object","properties":{}},"readOnly":true})", false, true, true},
-        {"Tools", "tools.unregister", "Unregister tool (Developer Advanced)", "tools.unregister", R"({"name":""})", false, true, true},
-        {"Tools", "tools.register_alias", "Register alias (Developer Advanced)", "tools.register_alias", R"({"alias":"","target":""})", false, true, true},
-        {"Tools", "tools.unregister_alias", "Unregister alias (Developer Advanced)", "tools.unregister_alias", R"({"alias":""})", false, true, true},
-        {"Tools", "tools.register_hook", "Register hook (Developer Advanced)", "tools.register_hook", R"({"id":"","phase":"before","emitEvent":""})", false, true, true},
-        {"Tools", "tools.unregister_hook", "Unregister hook (Developer Advanced)", "tools.unregister_hook", R"({"id":""})", false, true, true},
-        {"Tools", "tools.cache_stats", "Cache stats (Developer Advanced)", "tools.cache_stats", R"({})", true, false, true},
-        {"Tools", "tools.cache_clear", "Clear cache (Developer Advanced)", "tools.cache_clear", R"({})", false, true, true},
-        {"Tools", "tools.telemetry_stats", "Telemetry stats (Developer Advanced)", "tools.telemetry_stats", R"({})", true, false, true},
-        {"Tools", "tools.telemetry_clear", "Clear telemetry (Developer Advanced)", "tools.telemetry_clear", R"({})", false, true, true},
-        {"Providers & Usage", "providers.list", "Providers list", "providers.list", R"({"scope":"all"})", true, false, false},
-        {"Providers & Usage", "providers.configure", "Configure provider (API key uses Settings)", "providers.configure", R"({"scope":"workspace","provider":{"id":""}})", false, true, false},
-        {"Providers & Usage", "models.list", "Models list", "models.list", R"({"providerId":""})", true, false, false},
-        {"Providers & Usage", "chat.set_pricing", "Set pricing", "chat.set_pricing", R"({"providerId":"","model":"","pricing":{}})", false, true, false},
-        {"Providers & Usage", "chat.get_pricing", "Get pricing", "chat.get_pricing", R"({"providerId":"","model":""})", true, false, false},
-        {"Providers & Usage", "chat.list_pricing", "List pricing", "chat.list_pricing", R"({})", true, false, false},
-        {"Providers & Usage", "chat.cost_stats", "Cost stats", "chat.cost_stats", R"({})", true, false, false},
-        {"Runtime & Extensions", "runtime.initialize", "Runtime status", "runtime.initialize", R"({})", true, false, false},
-        {"Runtime & Extensions", "config.load", "Runtime config", "config.load", R"({})", true, false, false},
-        {"Runtime & Extensions", "scopes.list", "Scopes", "scopes.list", R"({})", true, false, false},
-        {"Runtime & Extensions", "permission.get", "Permission policy", "permission.get", R"({})", true, false, false},
-        {"Runtime & Extensions", "extensions.list", "Extensions list", "extensions.list", R"({})", true, false, false},
-        {"Runtime & Extensions", "extensions.activate", "Activate extension", "extensions.activate", R"({"extensionId":""})", false, true, false},
-        {"Runtime & Extensions", "extensions.deactivate", "Deactivate extension", "extensions.deactivate", R"({"extensionId":""})", false, true, false},
-        {"Runtime & Extensions", "extensions.execute_command", "Execute extension command", "extensions.execute_command", R"({"command":"","arguments":[]})", false, true, false},
-        {"Runtime & Extensions", "commands.execute", "Execute command", "vscode.commands.executeCommand", R"({"command":"","arguments":[]})", false, true, false},
+        {"Tools", "tools.call", "Call tool", "tools.call",
+         R"({"mode":"agent","name":"","arguments":{}})", false, true, false},
+        {"Tools", "tools.register", "Register tool (Developer Advanced)", "tools.register",
+         R"({"name":"","description":"","parameters":{"type":"object","properties":{}},"readOnly":true})",
+         false, true, true},
+        {"Tools", "tools.unregister", "Unregister tool (Developer Advanced)", "tools.unregister",
+         R"({"name":""})", false, true, true},
+        {"Tools", "tools.register_alias", "Register alias (Developer Advanced)",
+         "tools.register_alias", R"({"alias":"","target":""})", false, true, true},
+        {"Tools", "tools.unregister_alias", "Unregister alias (Developer Advanced)",
+         "tools.unregister_alias", R"({"alias":""})", false, true, true},
+        {"Tools", "tools.register_hook", "Register hook (Developer Advanced)",
+         "tools.register_hook", R"({"id":"","phase":"before","emitEvent":""})", false, true, true},
+        {"Tools", "tools.unregister_hook", "Unregister hook (Developer Advanced)",
+         "tools.unregister_hook", R"({"id":""})", false, true, true},
+        {"Tools", "tools.cache_stats", "Cache stats (Developer Advanced)", "tools.cache_stats",
+         R"({})", true, false, true},
+        {"Tools", "tools.cache_clear", "Clear cache (Developer Advanced)", "tools.cache_clear",
+         R"({})", false, true, true},
+        {"Tools", "tools.telemetry_stats", "Telemetry stats (Developer Advanced)",
+         "tools.telemetry_stats", R"({})", true, false, true},
+        {"Tools", "tools.telemetry_clear", "Clear telemetry (Developer Advanced)",
+         "tools.telemetry_clear", R"({})", false, true, true},
+        {"Providers & Usage", "providers.list", "Providers list", "providers.list",
+         R"({"scope":"all"})", true, false, false},
+        {"Providers & Usage", "providers.configure", "Configure provider (API key uses Settings)",
+         "providers.configure", R"({"scope":"workspace","provider":{"id":""}})", false, true,
+         false},
+        {"Providers & Usage", "models.list", "Models list", "models.list", R"({"providerId":""})",
+         true, false, false},
+        {"Providers & Usage", "chat.set_pricing", "Set pricing", "chat.set_pricing",
+         R"({"providerId":"","model":"","pricing":{}})", false, true, false},
+        {"Providers & Usage", "chat.get_pricing", "Get pricing", "chat.get_pricing",
+         R"({"providerId":"","model":""})", true, false, false},
+        {"Providers & Usage", "chat.list_pricing", "List pricing", "chat.list_pricing", R"({})",
+         true, false, false},
+        {"Providers & Usage", "chat.cost_stats", "Cost stats", "chat.cost_stats", R"({})", true,
+         false, false},
+        {"Runtime & Extensions", "runtime.initialize", "Runtime status", "runtime.initialize",
+         R"({})", true, false, false},
+        {"Runtime & Extensions", "config.load", "Runtime config", "config.load", R"({})", true,
+         false, false},
+        {"Runtime & Extensions", "scopes.list", "Scopes", "scopes.list", R"({})", true, false,
+         false},
+        {"Runtime & Extensions", "permission.get", "Permission policy", "permission.get", R"({})",
+         true, false, false},
+        {"Runtime & Extensions", "extensions.list", "Extensions list", "extensions.list", R"({})",
+         true, false, false},
+        {"Runtime & Extensions", "extensions.activate", "Activate extension", "extensions.activate",
+         R"({"extensionId":""})", false, true, false},
+        {"Runtime & Extensions", "extensions.deactivate", "Deactivate extension",
+         "extensions.deactivate", R"({"extensionId":""})", false, true, false},
+        {"Runtime & Extensions", "extensions.execute_command", "Execute extension command",
+         "extensions.execute_command", R"({"command":"","arguments":[]})", false, true, false},
+        {"Runtime & Extensions", "commands.execute", "Execute command",
+         "vscode.commands.executeCommand", R"({"command":"","arguments":[]})", false, true, false},
         {"VT", "platform.vt.status", "VT status", "sao.vt.status", R"({})", true, false, false},
-        {"VT", "platform.vt.capabilities", "VT capabilities", "sao.vt.capabilities", R"({})", true, false, false},
-        {"VT", "platform.vt.probe", "VT probe", "sao.vt.probe", R"({"items":"0x0"})", true, false, false},
-        {"VT", "platform.vt.hookPage", "Hook page", "sao.vt.hookPage", R"({"gva":"0xffff800000000000","patchBytes":"","confirmed":false})", false, true, false},
-        {"VT", "platform.vt.hideRegion", "Hide region", "sao.vt.hideRegion", R"({"gva":"0xffff800000000000","pageCount":1,"decoyMode":"zero","confirmed":false})", false, true, false},
-        {"VT", "platform.vt.unhook", "Unhook", "sao.vt.unhook", R"({"hookId":"0x0","confirmed":false})", false, true, false},
-        {"VT", "platform.vt.readPhys", "Read physical", "sao.vt.readPhys", R"({"gpa":"0x0","length":1})", true, false, false},
-        {"VT", "platform.vt.writePhys", "Write physical", "sao.vt.writePhys", R"({"gpa":"0x0","length":1,"dataHex":"00","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.capabilities", "VT capabilities", "sao.vt.capabilities", R"({})", true,
+         false, false},
+        {"VT", "platform.vt.probe", "VT probe", "sao.vt.probe", R"({"items":"0x0"})", true, false,
+         false},
+        {"VT", "platform.vt.hookPage", "Hook page", "sao.vt.hookPage",
+         R"({"gva":"0xffff800000000000","patchBytes":"","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.hideRegion", "Hide region", "sao.vt.hideRegion",
+         R"({"gva":"0xffff800000000000","pageCount":1,"decoyMode":"zero","confirmed":false})",
+         false, true, false},
+        {"VT", "platform.vt.unhook", "Unhook", "sao.vt.unhook",
+         R"({"hookId":"0x0","confirmed":false})", false, true, false},
+        {"VT", "platform.vt.readPhys", "Read physical", "sao.vt.readPhys",
+         R"({"gpa":"0x0","length":1})", true, false, false},
+        {"VT", "platform.vt.writePhys", "Write physical", "sao.vt.writePhys",
+         R"({"gpa":"0x0","length":1,"dataHex":"00","confirmed":false})", false, true, false},
     };
     return actions;
 }
@@ -2755,18 +2838,16 @@ void clear_pending_control_locked(AiEditorMainPanelState& state) {
 }
 
 bool control_requires_confirmation(std::string_view permission, std::string_view category,
-                                   bool confirmation_required, bool read_only,
-                                   bool destructive, bool advanced) {
+                                   bool confirmation_required, bool read_only, bool destructive,
+                                   bool advanced) {
     std::string normalized_permission(permission);
     std::string normalized_category(category);
-    std::ranges::transform(normalized_permission, normalized_permission.begin(),
-                           [](unsigned char character) {
-                               return static_cast<char>(std::tolower(character));
-                           });
-    std::ranges::transform(normalized_category, normalized_category.begin(),
-                           [](unsigned char character) {
-                               return static_cast<char>(std::tolower(character));
-                           });
+    std::ranges::transform(
+        normalized_permission, normalized_permission.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    std::ranges::transform(
+        normalized_category, normalized_category.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
     return confirmation_required || destructive || advanced || !read_only ||
            normalized_permission == "write" || normalized_permission == "execute" ||
            normalized_category == "write" || normalized_category == "execute";
@@ -2814,8 +2895,8 @@ bool control_matches(const AiEditorMainPanelState& state, const ControlActionSpe
         return false;
     if (state.control_palette_query.empty())
         return true;
-    std::string haystack = std::string(action.group) + " " + action.id + " " +
-                           action.label + " " + action.method;
+    std::string haystack =
+        std::string(action.group) + " " + action.id + " " + action.label + " " + action.method;
     std::string query = state.control_palette_query;
     std::ranges::transform(haystack, haystack.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
@@ -2909,8 +2990,7 @@ bool vt_bool_value(const json* value, bool fallback = false) {
     return value != nullptr && value->is_boolean() ? value->get<bool>() : fallback;
 }
 
-bool vt_dashboard_bool(const json& dashboard, std::string_view key,
-                       bool fallback = false) {
+bool vt_dashboard_bool(const json& dashboard, std::string_view key, bool fallback = false) {
     return vt_bool_value(vt_dashboard_field(dashboard, key), fallback);
 }
 
@@ -2966,58 +3046,51 @@ std::string vt_probe_summary(const json& dashboard) {
     return output.empty() ? "unavailable" : output;
 }
 
-json vt_hook_row(const json& hook, bool include_unhook,
-                 bool disabled, std::string_view prefix) {
+json vt_hook_row(const json& hook, bool include_unhook, bool disabled, std::string_view prefix) {
     if (!hook.is_object())
         return row_node(json::array({text_node("Invalid VT hook row", "warn", 28)}));
     const json* hook_id_value = vt_field(hook, "hookId");
-    const std::string raw_hook_id =
-        hook_id_value != nullptr && hook_id_value->is_string()
-            ? hook_id_value->get<std::string>()
-            : std::string{};
+    const std::string raw_hook_id = hook_id_value != nullptr && hook_id_value->is_string()
+                                        ? hook_id_value->get<std::string>()
+                                        : std::string{};
     const bool hook_id_available = vt_generated_hook_id(raw_hook_id);
-    const std::string hook_id = hook_id_available
-                                    ? compact_text(raw_hook_id, 120U)
-                                    : "-";
-    json children = json::array({
-        badge_node("hookId: " + hook_id, "accent"),
-        badge_node("GPA: " + vt_scalar_text(vt_field(hook, "gpa"))),
-        badge_node("backend: " + vt_scalar_text(vt_field(hook, "backend"))),
-        badge_node("state: " + vt_scalar_text(vt_field(hook, "state"))),
-        badge_node("writeCount: " + vt_scalar_text(vt_field(hook, "writeCount"))),
-        badge_node(vt_bool_value(vt_field(hook, "hidden")) ? "hidden" : "visible",
-                   vt_bool_value(vt_field(hook, "hidden")) ? "warn" : "muted"),
-        badge_node("patchSize: " + vt_scalar_text(vt_field(hook, "patchSize")))});
+    const std::string hook_id = hook_id_available ? compact_text(raw_hook_id, 120U) : "-";
+    json children =
+        json::array({badge_node("hookId: " + hook_id, "accent"),
+                     badge_node("GPA: " + vt_scalar_text(vt_field(hook, "gpa"))),
+                     badge_node("backend: " + vt_scalar_text(vt_field(hook, "backend"))),
+                     badge_node("state: " + vt_scalar_text(vt_field(hook, "state"))),
+                     badge_node("writeCount: " + vt_scalar_text(vt_field(hook, "writeCount"))),
+                     badge_node(vt_bool_value(vt_field(hook, "hidden")) ? "hidden" : "visible",
+                                vt_bool_value(vt_field(hook, "hidden")) ? "warn" : "muted"),
+                     badge_node("patchSize: " + vt_scalar_text(vt_field(hook, "patchSize")))});
     if (include_unhook) {
-        children.push_back(button_node(
-            std::string(prefix) + ".unhook", "Unhook", "control.vt.unhook",
-            {{"hookId", raw_hook_id}}, "danger", disabled || !hook_id_available));
+        children.push_back(button_node(std::string(prefix) + ".unhook", "Unhook",
+                                       "control.vt.unhook", {{"hookId", raw_hook_id}}, "danger",
+                                       disabled || !hook_id_available));
     }
     return row_node(std::move(children));
 }
 
-json vt_dashboard_section(const AiEditorMainPanelState& state,
-                          bool launcher_bound) {
+json vt_dashboard_section(const AiEditorMainPanelState& state, bool launcher_bound) {
     const json& dashboard = state.vt_dashboard;
     json children = json::array();
     json toolbar = json::array();
-    toolbar.push_back(button_node("control.vt.refresh", "Refresh", "control.vt.refresh",
-                                  {}, "default", !launcher_bound));
+    toolbar.push_back(button_node("control.vt.refresh", "Refresh", "control.vt.refresh", {},
+                                  "default", !launcher_bound));
     toolbar.push_back(badge_node(state.vt_dashboard_pending ? "poll: pending"
-                                                             : state.vt_dashboard_stale
-                                                                   ? "poll: stale"
-                                                                   : "poll: live",
-                                 state.vt_dashboard_pending
-                                     ? "accent"
-                                     : state.vt_dashboard_stale ? "bad" : "ok"));
+                                 : state.vt_dashboard_stale ? "poll: stale"
+                                                            : "poll: live",
+                                 state.vt_dashboard_pending ? "accent"
+                                 : state.vt_dashboard_stale ? "bad"
+                                                            : "ok"));
     children.push_back(row_node(std::move(toolbar)));
     if (!state.vt_dashboard_last_error.empty())
-        children.push_back(text_node("Last error: " + state.vt_dashboard_last_error,
-                                     "bad", 34));
+        children.push_back(text_node("Last error: " + state.vt_dashboard_last_error, "bad", 34));
 
     if (!dashboard.is_object() || dashboard.empty()) {
-        children.push_back(text_node("No VT dashboard snapshot yet. Use Refresh when the backend is ready.",
-                                     "muted", 36));
+        children.push_back(text_node(
+            "No VT dashboard snapshot yet. Use Refresh when the backend is ready.", "muted", 36));
         return card_node("VT Dashboard", std::move(children), "cyan");
     }
 
@@ -3027,48 +3100,46 @@ json vt_dashboard_section(const AiEditorMainPanelState& state,
     const bool guest_readonly = vt_dashboard_bool(dashboard, "guestReadonly");
     const bool recovery_required = vt_dashboard_bool(dashboard, "recoveryRequired");
     const bool deadman_degraded = vt_dashboard_bool(dashboard, "deadmanDegraded");
-    json badges = json::array({
-        badge_node("state: " + state_name, state_name == "active" ? "ok" : "warn"),
-        badge_node("engineState: " + engine_state,
-                   engine_state == "active" ? "ok" : "warn"),
-        badge_node(available ? "available" : "unavailable", available ? "ok" : "warn"),
-        badge_node(guest_readonly ? "guestReadonly" : "guestWritable",
-                   guest_readonly ? "warn" : "ok"),
-        badge_node(recovery_required ? "recoveryRequired" : "recovery clear",
-                   recovery_required ? "bad" : "ok"),
-        badge_node(deadman_degraded ? "deadmanDegraded" : "deadman nominal",
-                   deadman_degraded ? "warn" : "ok"),
-        badge_node("roots: " + vt_dashboard_text(dashboard, "roots")),
-        badge_node("hooks: " + vt_dashboard_text(dashboard, "hooks")),
-        badge_node("hidden: " + vt_dashboard_text(dashboard, "hiddenHookCount"))});
+    json badges = json::array(
+        {badge_node("state: " + state_name, state_name == "active" ? "ok" : "warn"),
+         badge_node("engineState: " + engine_state, engine_state == "active" ? "ok" : "warn"),
+         badge_node(available ? "available" : "unavailable", available ? "ok" : "warn"),
+         badge_node(guest_readonly ? "guestReadonly" : "guestWritable",
+                    guest_readonly ? "warn" : "ok"),
+         badge_node(recovery_required ? "recoveryRequired" : "recovery clear",
+                    recovery_required ? "bad" : "ok"),
+         badge_node(deadman_degraded ? "deadmanDegraded" : "deadman nominal",
+                    deadman_degraded ? "warn" : "ok"),
+         badge_node("roots: " + vt_dashboard_text(dashboard, "roots")),
+         badge_node("hooks: " + vt_dashboard_text(dashboard, "hooks")),
+         badge_node("hidden: " + vt_dashboard_text(dashboard, "hiddenHookCount"))});
     children.push_back(row_node(std::move(badges)));
 
     json summaries = json::array();
-    summaries.push_back(text_node(
-        "Status: " + state_name + " · engineState=" + engine_state +
-            " · available=" + (available ? "true" : "false") +
-            " · reason=" + vt_dashboard_text(dashboard, "reason"),
-        available ? "value" : "warn", 32));
-    summaries.push_back(text_node(
-        "Capabilities: supported=" +
-            vt_array_summary(vt_component_field(dashboard, "capabilities", "supported")) +
-            " · active=" +
-            vt_array_summary(vt_component_field(dashboard, "capabilities", "active")),
-        "muted", 42));
+    summaries.push_back(text_node("Status: " + state_name + " · engineState=" + engine_state +
+                                      " · available=" + (available ? "true" : "false") +
+                                      " · reason=" + vt_dashboard_text(dashboard, "reason"),
+                                  available ? "value" : "warn", 32));
+    summaries.push_back(
+        text_node("Capabilities: supported=" +
+                      vt_array_summary(vt_component_field(dashboard, "capabilities", "supported")) +
+                      " · active=" +
+                      vt_array_summary(vt_component_field(dashboard, "capabilities", "active")),
+                  "muted", 42));
     summaries.push_back(text_node("Probe: " + vt_probe_summary(dashboard), "muted", 32));
     children.push_back(card_node("Status / capabilities / probe", std::move(summaries),
                                  available ? "cyan" : "gold"));
 
     const json* perf = vt_field(dashboard, "perf");
     json perf_children = json::array();
-    perf_children.push_back(text_node(
-        "vmexit cumulative: " + vt_scalar_text(vt_field(perf, "vmexitCumulative")) +
-            " · vmexitRatePerSec: " + vt_scalar_text(vt_field(perf, "vmexitRatePerSec")),
-        "value", 32));
-    perf_children.push_back(row_node(json::array({
-        badge_node("sampled: " + vt_scalar_text(vt_field(perf, "sampled"))),
-        badge_node("stale: " + std::string(state.vt_dashboard_stale ? "true" : "false"),
-                   state.vt_dashboard_stale ? "bad" : "ok")})));
+    perf_children.push_back(
+        text_node("vmexit cumulative: " + vt_scalar_text(vt_field(perf, "vmexitCumulative")) +
+                      " · vmexitRatePerSec: " + vt_scalar_text(vt_field(perf, "vmexitRatePerSec")),
+                  "value", 32));
+    perf_children.push_back(row_node(json::array(
+        {badge_node("sampled: " + vt_scalar_text(vt_field(perf, "sampled"))),
+         badge_node("stale: " + std::string(state.vt_dashboard_stale ? "true" : "false"),
+                    state.vt_dashboard_stale ? "bad" : "ok")})));
     children.push_back(card_node("VT performance", std::move(perf_children), "gold"));
 
     constexpr size_t kMaximumVtDashboardRows = 64U;
@@ -3080,9 +3151,8 @@ json vt_dashboard_section(const AiEditorMainPanelState& state,
         for (size_t index = 0; index < count && rows_left != 0U; ++index) {
             if (!(*hooks)[index].is_object())
                 continue;
-            hook_rows.push_back(vt_hook_row(
-                (*hooks)[index], true, !launcher_bound,
-                "vt.hook." + std::to_string(index)));
+            hook_rows.push_back(vt_hook_row((*hooks)[index], true, !launcher_bound,
+                                            "vt.hook." + std::to_string(index)));
             --rows_left;
         }
     }
@@ -3097,18 +3167,17 @@ json vt_dashboard_section(const AiEditorMainPanelState& state,
         for (size_t index = 0; index < count && rows_left != 0U; ++index) {
             if (!(*hidden_hooks)[index].is_object())
                 continue;
-            hidden_rows.push_back(vt_hook_row(
-                (*hidden_hooks)[index], false, !launcher_bound,
-                "vt.hidden." + std::to_string(index)));
+            hidden_rows.push_back(vt_hook_row((*hidden_hooks)[index], false, !launcher_bound,
+                                              "vt.hidden." + std::to_string(index)));
             --rows_left;
         }
     }
     if (hidden_rows.empty())
-        hidden_rows.push_back(text_node(
-            hidden_hooks != nullptr && hidden_hooks->is_array() && !hidden_hooks->empty()
-                ? "Additional hidden hooks omitted by the 64-row dashboard limit."
-                : "No hidden hooks / hide regions reported.",
-            "muted", 30));
+        hidden_rows.push_back(
+            text_node(hidden_hooks != nullptr && hidden_hooks->is_array() && !hidden_hooks->empty()
+                          ? "Additional hidden hooks omitted by the 64-row dashboard limit."
+                          : "No hidden hooks / hide regions reported.",
+                      "muted", 30));
     children.push_back(section_node("Hidden hooks / hide list", std::move(hidden_rows)));
     return card_node("VT Dashboard", std::move(children),
                      state.vt_dashboard_stale ? "bad" : "cyan");
@@ -3165,12 +3234,20 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
         for (const auto& action : control_action_catalog()) {
             if (std::string_view(action.group) != group || !control_matches(state, action))
                 continue;
-            buttons.push_back(button_node(
-                "control.invoke." + std::string(action.id), action.label, "control.open",
-                {{"id", action.id}, {"method", action.method}, {"label", action.label}, {"group", action.group},
-                 {"default", action.defaults}, {"readOnly", action.read_only},
-                 {"destructive", action.destructive}, {"advanced", action.advanced}},
-                action.destructive ? "danger" : action.read_only ? "default" : "primary", !launcher_bound));
+            buttons.push_back(button_node("control.invoke." + std::string(action.id), action.label,
+                                          "control.open",
+                                          {{"id", action.id},
+                                           {"method", action.method},
+                                           {"label", action.label},
+                                           {"group", action.group},
+                                           {"default", action.defaults},
+                                           {"readOnly", action.read_only},
+                                           {"destructive", action.destructive},
+                                           {"advanced", action.advanced}},
+                                          action.destructive ? "danger"
+                                          : action.read_only ? "default"
+                                                             : "primary",
+                                          !launcher_bound));
             ++visible;
         }
         if (visible != 0U) {
@@ -3246,7 +3323,8 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
         }
         content_children.push_back(card_node("可用于输入的提示词", std::move(prompts), "gold"));
     }
-    if (state.control_group_filter == "all" || state.control_group_filter == "Runtime & Extensions") {
+    if (state.control_group_filter == "all" ||
+        state.control_group_filter == "Runtime & Extensions") {
         content_children.push_back(
             card_node("运行时生命周期",
                       json::array({text_node("运行时配置与状态使用 runtime.initialize 和 "
@@ -3262,17 +3340,21 @@ json control_center_section(const AiEditorMainPanelState& state, bool launcher_b
     }
     json feedback = json::array();
     if (state.control_last_method.empty()) {
-        feedback.push_back(text_node("Run an action to see request id, permission, cache, timing, and result details.",
-                                     "muted", 38));
+        feedback.push_back(text_node(
+            "Run an action to see request id, permission, cache, timing, and result details.",
+            "muted", 38));
     } else {
-        feedback.push_back(text_node(state.control_last_label + " · " + state.control_last_method, "title", 28));
+        feedback.push_back(
+            text_node(state.control_last_label + " · " + state.control_last_method, "title", 28));
         feedback.push_back(text_node(
             "permission=" + state.control_permission + " · category=" +
-                (state.control_permission_category.empty() ? "-" : state.control_permission_category) +
-                " · source=" + state.control_permission_source +
-                " · confirmationRequired=" + (state.control_confirmation_required ? "true" : "false") +
+                (state.control_permission_category.empty() ? "-"
+                                                           : state.control_permission_category) +
+                " · source=" + state.control_permission_source + " · confirmationRequired=" +
+                (state.control_confirmation_required ? "true" : "false") +
                 " · cacheHit=" + (state.control_cache_hit ? "true" : "false") +
-                " · elapsed=" + state.control_elapsed + " · truncated=" + (state.control_truncated ? "true" : "false"),
+                " · elapsed=" + state.control_elapsed +
+                " · truncated=" + (state.control_truncated ? "true" : "false"),
             "muted", 30));
         if (!state.control_last_error.empty())
             feedback.push_back(text_node(state.control_last_error, "bad", 42));
@@ -3332,7 +3414,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     const bool history_actions_disabled =
         !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
     const bool selectors_disabled = run_is_active(state.run_phase);
-    const std::string current_view = valid_view(state.selected_view) ? state.selected_view : "inspector";
+    const std::string current_view =
+        valid_view(state.selected_view) ? state.selected_view : "inspector";
     const bool has_status_error = !state.run_error.empty() || !state.backend_connected;
     const std::string header_accent = state.bootstrap_pending ? "gold"
                                       : has_status_error      ? "bad"
@@ -3448,8 +3531,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             json message_nodes = json::array();
             append_text_chunks(message_nodes, message_content(message),
                                role == "assistant" ? "value" : "mono", 90);
-            transcript.push_back(card_node(role, std::move(message_nodes),
-                                           role == "assistant" ? "cyan" : "gold"));
+            transcript.push_back(
+                card_node(role, std::move(message_nodes), role == "assistant" ? "cyan" : "gold"));
         }
         if (following_latest && !state.pending_user_text.empty()) {
             json pending = json::array();
@@ -3460,11 +3543,11 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         if (following_latest && !state.streamed_assistant_text.empty()) {
             json assistant = json::array();
             append_text_chunks(assistant, state.streamed_assistant_text, "value", 90);
-            assistant.push_back(badge_node(
-                run_is_active(state.run_phase)
-                    ? "Live event-stream preview"
-                    : "Terminal preview; canonical history reload is reconciled once",
-                "accent"));
+            assistant.push_back(
+                badge_node(run_is_active(state.run_phase)
+                               ? "Live event-stream preview"
+                               : "Terminal preview; canonical history reload is reconciled once",
+                           "accent"));
             transcript.push_back(card_node("assistant", std::move(assistant), "cyan"));
         }
     }
@@ -3781,9 +3864,9 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     json secondary_view_buttons = json::array();
     size_t view_index = 0;
     for (const auto& view : sidebar_views) {
-        json button = button_node(
-            "view.select." + std::string(view.first), std::string(view.second), "view.select",
-            {{"view", view.first}}, current_view == view.first ? "primary" : "ghost");
+        json button = button_node("view.select." + std::string(view.first),
+                                  std::string(view.second), "view.select", {{"view", view.first}},
+                                  current_view == view.first ? "primary" : "ghost");
         (view_index++ < 3U ? primary_view_buttons : secondary_view_buttons)
             .push_back(std::move(button));
     }
@@ -3815,8 +3898,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     secondary_section["min_width"] = kWorkbenchMinimumWidth;
     secondary_section["weight"] = 0.0;
     json columns = container_node(
-        "ai-editor-columns",
-        json::array({std::move(main_section), std::move(secondary_section)}),
+        "ai-editor-columns", json::array({std::move(main_section), std::move(secondary_section)}),
         "horizontal", 0, kMainMinimumWidth, 1.0F, kMainMinimumWidth);
     columns["dock"] = "fill";
     columns["fallback"]["threshold_width"] = kWorkbenchHorizontalThreshold;
@@ -3834,21 +3916,20 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         "data remains intact; use History after this run to load another conversation.",
         "warn", 42));
     json compact_status = json::array();
-    compact_status.push_back(badge_node("Run: " + state.run_status,
-                                        run_phase_style(state.run_phase)));
-    compact_status.push_back(badge_node(
-        state.backend_connected ? "Backend connected" : "Backend offline",
-        state.backend_connected ? "ok" : "warn"));
+    compact_status.push_back(
+        badge_node("Run: " + state.run_status, run_phase_style(state.run_phase)));
+    compact_status.push_back(
+        badge_node(state.backend_connected ? "Backend connected" : "Backend offline",
+                   state.backend_connected ? "ok" : "warn"));
     compact_status.push_back(badge_node("Approval: " + approval_label(state.selected_approval),
-                                        state.selected_approval == "default" ? "muted"
-                                                                             : "warn"));
+                                        state.selected_approval == "default" ? "muted" : "warn"));
     compact_status.push_back(text_node("Conversation: " + state.conversation_title, "value", 28));
     if (!state.active_run_id.empty())
         compact_status.push_back(text_node("Run ID: " + state.active_run_id, "mono", 24));
     if (following_latest && !state.streamed_assistant_text.empty())
-        compact_status.push_back(text_node(
-            "Assistant: " + tail_text(state.streamed_assistant_text, kUiTextChunkBytes), "value",
-            110));
+        compact_status.push_back(
+            text_node("Assistant: " + tail_text(state.streamed_assistant_text, kUiTextChunkBytes),
+                      "value", 110));
     if (!state.thinking_status.empty())
         compact_status.push_back(text_node(
             "Thinking: " + tail_text(state.thinking_status, kUiTextChunkBytes), "accent", 80));
@@ -3856,8 +3937,8 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
         compact_status.push_back(text_node(
             "Refusal: " + tail_text(state.refusal_status, kUiTextChunkBytes), "warn", 60));
     if (!state.tool_status.empty())
-        compact_status.push_back(text_node(
-            "Tools: " + tail_text(state.tool_status, kUiTextChunkBytes), "mono", 60));
+        compact_status.push_back(
+            text_node("Tools: " + tail_text(state.tool_status, kUiTextChunkBytes), "mono", 60));
     if (!state.usage_status.empty())
         compact_status.push_back(text_node("Usage: " + state.usage_status, "value", 32));
     if (!state.run_error.empty())
@@ -3869,17 +3950,17 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     json compact_secondary_view_buttons = json::array();
     view_index = 0;
     for (const auto& view : sidebar_views) {
-        json button = button_node(
-            "compact.view.select." + std::string(view.first), std::string(view.second),
-            "view.select", {{"view", view.first}}, current_view == view.first ? "primary" : "ghost");
+        json button = button_node("compact.view.select." + std::string(view.first),
+                                  std::string(view.second), "view.select", {{"view", view.first}},
+                                  current_view == view.first ? "primary" : "ghost");
         (view_index++ < 3U ? compact_primary_view_buttons : compact_secondary_view_buttons)
             .push_back(std::move(button));
     }
-    compact_nodes.push_back(card_node(
-        "Sidebar: " + view_label(current_view),
-        json::array({row_node(std::move(compact_primary_view_buttons)),
-                     row_node(std::move(compact_secondary_view_buttons))}),
-        "gold"));
+    compact_nodes.push_back(
+        card_node("Sidebar: " + view_label(current_view),
+                  json::array({row_node(std::move(compact_primary_view_buttons)),
+                               row_node(std::move(compact_secondary_view_buttons))}),
+                  "gold"));
 
     json compact_transcript = json::array();
     compact_transcript.push_back(text_node("Transcript", "title", 26));
@@ -3896,12 +3977,13 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
             text_node("正在阅读历史页，点击“回到最新”查看实时回复。", "accent", 36));
     if (state.conversation_messages.empty() && state.pending_user_text.empty() &&
         state.streamed_assistant_text.empty()) {
-        compact_transcript.push_back(text_node("No messages yet. Start with a prompt in Composer.",
-                                               "muted", 42));
+        compact_transcript.push_back(
+            text_node("No messages yet. Start with a prompt in Composer.", "muted", 42));
     } else {
         for (size_t index = transcript_begin; index < transcript_end; ++index) {
             const auto& message = state.conversation_messages[index];
-            const std::string role = compact_text(message.value("role", std::string{"message"}), 64U);
+            const std::string role =
+                compact_text(message.value("role", std::string{"message"}), 64U);
             append_text_chunks(compact_transcript, message_content(message),
                                role == "assistant" ? "value" : "mono", 76, 2);
         }
@@ -4029,9 +4111,8 @@ void show_settings_panel(AiEditorMainPanelState& state) {
         if (show_status == SAO_AI_EDITOR_OK)
             return;
         if (show_status != SAO_AI_EDITOR_ERR_HANDLE_INVALID || attempt != 0) {
-            append_output_line(state,
-                               "[error] Settings panel show failed: " +
-                                   std::to_string(show_status));
+            append_output_line(state, "[error] Settings panel show failed: " +
+                                          std::to_string(show_status));
             return;
         }
         std::lock_guard lock(state.mutex);
@@ -4069,9 +4150,8 @@ void show_gpu_hunt_panel(AiEditorMainPanelState& state) {
         if (show_status == SAO_AI_EDITOR_OK)
             return;
         if (show_status != SAO_AI_EDITOR_ERR_HANDLE_INVALID || attempt != 0) {
-            append_output_line(state,
-                               "[error] GPU Hunt panel show failed: " +
-                                   std::to_string(show_status));
+            append_output_line(state, "[error] GPU Hunt panel show failed: " +
+                                          std::to_string(show_status));
             return;
         }
         std::lock_guard lock(state.mutex);
@@ -4103,15 +4183,16 @@ void queue_generic_action(AiEditorMainPanelState& state, std::string method,
 void show_control_action_dialog(AiEditorMainPanelState& state, const json& payload);
 void show_control_palette_dialog(AiEditorMainPanelState& state);
 void show_control_confirm_dialog(AiEditorMainPanelState& state);
-void queue_control_request(AiEditorMainPanelState& state, std::string method,
-                           std::string label, std::string group, json params,
-                           bool read_only, bool destructive, bool advanced);
+void queue_control_request(AiEditorMainPanelState& state, std::string method, std::string label,
+                           std::string group, json params, bool read_only, bool destructive,
+                           bool advanced);
 void queue_vt_dashboard_poll_if_due(AiEditorMainPanelState& state);
 void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* input_text_utf8,
                                         size_t input_text_len, void* user_data);
 void show_control_confirm_dialog(AiEditorMainPanelState& state) {
     if (dialog_visible(state)) {
-        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
+        append_output_line(state,
+                           "[warn] finish or dismiss the current Control Center dialog first");
         return;
     }
     if (ensure_dialog(state) != SAO_STATUS_OK) {
@@ -4168,7 +4249,8 @@ void show_control_action_dialog(AiEditorMainPanelState& state, const json& paylo
         }
     }
     if (dialog_visible(state)) {
-        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
+        append_output_line(state,
+                           "[warn] finish or dismiss the current Control Center dialog first");
         return;
     }
     if (canonical->method == std::string_view{"providers.configure"}) {
@@ -4187,8 +4269,8 @@ void show_control_action_dialog(AiEditorMainPanelState& state, const json& paylo
     json execution_params = display_params;
     const bool retry_payload = payload.contains("executionParams");
     if (retry_payload) {
-        const json retry_display = json::parse(payload.value("default", std::string{"{}"}),
-                                               nullptr, false, false);
+        const json retry_display =
+            json::parse(payload.value("default", std::string{"{}"}), nullptr, false, false);
         if (!retry_display.is_discarded() && retry_display.is_object())
             display_params = retry_display;
         if (payload["executionParams"].is_object())
@@ -4256,7 +4338,8 @@ void show_control_action_dialog(AiEditorMainPanelState& state, const json& paylo
     SaoUiDialogSpec spec{};
     spec.kind = SAO_UI_DIALOG_INPUT;
     spec.title_utf8 = dialog_title.c_str();
-    spec.message_utf8 = "Edit the compact JSON parameters. Sensitive fields are redacted in display and logs.";
+    spec.message_utf8 =
+        "Edit the compact JSON parameters. Sensitive fields are redacted in display and logs.";
     spec.input_prompt_utf8 = "Parameters JSON";
     spec.input_default_utf8 = default_text.c_str();
     spec.input_max_length = static_cast<int32_t>(kMaximumActionPayloadBytes);
@@ -4276,7 +4359,8 @@ void show_copy_text_dialog(AiEditorMainPanelState& state, std::string title, std
         return;
     }
     if (ensure_dialog(state) != SAO_STATUS_OK) {
-        append_output_line(state, "[warn] clipboard bridge unavailable; select text manually from the panel");
+        append_output_line(
+            state, "[warn] clipboard bridge unavailable; select text manually from the panel");
         return;
     }
     text = clamp_utf8_bytes(std::move(text), kOutputTrimBytes);
@@ -4305,7 +4389,8 @@ void show_copy_text_dialog(AiEditorMainPanelState& state, std::string title, std
 
 void show_control_palette_dialog(AiEditorMainPanelState& state) {
     if (dialog_visible(state)) {
-        append_output_line(state, "[warn] finish or dismiss the current Control Center dialog first");
+        append_output_line(state,
+                           "[warn] finish or dismiss the current Control Center dialog first");
         return;
     }
     if (ensure_dialog(state) != SAO_STATUS_OK)
@@ -4367,8 +4452,7 @@ bool enqueue_or_report(AiEditorMainPanelState& state, RpcTask task, std::string_
     std::string error;
     if (queue_rpc_task(state, std::move(task), &error))
         return true;
-    append_output_line(state, "[error] " + error + "; cannot send \"" + std::string(method) +
-                                  "\"");
+    append_output_line(state, "[error] " + error + "; cannot send \"" + std::string(method) + "\"");
     return false;
 }
 
@@ -4380,9 +4464,9 @@ void queue_generic_action(AiEditorMainPanelState& state, std::string method, jso
     (void)enqueue_or_report(state, std::move(task), method);
 }
 
-void queue_control_request(AiEditorMainPanelState& state, std::string method,
-                           std::string label, std::string group, json params,
-                           bool read_only, bool destructive, bool advanced) {
+void queue_control_request(AiEditorMainPanelState& state, std::string method, std::string label,
+                           std::string group, json params, bool read_only, bool destructive,
+                           bool advanced) {
     (void)label;
     (void)group;
     (void)read_only;
@@ -4390,7 +4474,8 @@ void queue_control_request(AiEditorMainPanelState& state, std::string method,
     (void)advanced;
     const ControlActionSpec* canonical = find_control_action(method);
     if (canonical == nullptr) {
-        append_output_line(state, "[error] Control Center rejected non-canonical method: " + method);
+        append_output_line(state,
+                           "[error] Control Center rejected non-canonical method: " + method);
         std::lock_guard lock(state.mutex);
         clear_pending_control_locked(state);
         return;
@@ -4406,7 +4491,8 @@ void queue_control_request(AiEditorMainPanelState& state, std::string method,
             return;
         }
         if (canonical->method == std::string_view{"tools.call"}) {
-            const std::string name = params.is_object() ? params.value("name", std::string{}) : std::string{};
+            const std::string name =
+                params.is_object() ? params.value("name", std::string{}) : std::string{};
             const auto found = find_control_tool(state, name);
             if (found == nullptr) {
                 state.run_error = "Control Center rejected an unknown tool.";
@@ -4496,7 +4582,6 @@ void queue_control_request(AiEditorMainPanelState& state, std::string method,
     }
 }
 
-
 void show_history_delete_dialog(AiEditorMainPanelState& state, HistoryEntry entry) {
     if (dialog_visible(state)) {
         append_output_line(state, "[warn] finish or dismiss the current dialog first");
@@ -4511,9 +4596,10 @@ void show_history_delete_dialog(AiEditorMainPanelState& state, HistoryEntry entr
     const std::string title = "Delete conversation? / 删除会话？";
     const std::string message = entry.search_result
                                     ? "Delete \"" + compact_text(entry.title, 180U) +
-                                          "\"? The canonical conversation will be checked before deletion. You can Undo for 5 seconds."
-                                    : "Delete \"" + compact_text(entry.title, 180U) +
-                                          "\" with " + std::to_string(entry.message_count) +
+                                          "\"? The canonical conversation will be checked before "
+                                          "deletion. You can Undo for 5 seconds."
+                                    : "Delete \"" + compact_text(entry.title, 180U) + "\" with " +
+                                          std::to_string(entry.message_count) +
                                           " messages? You can Undo for 5 seconds.";
     {
         std::lock_guard lock(state.mutex);
@@ -4570,8 +4656,8 @@ void show_composer_dialog(AiEditorMainPanelState& state) {
             std::lock_guard lock(state.mutex);
             state.pending_dialog = DialogIntent::None;
         }
-        append_output_line(state, "[error] composer dialog show failed: " +
-                                      std::to_string(show_status));
+        append_output_line(state,
+                           "[error] composer dialog show failed: " + std::to_string(show_status));
     }
 }
 
@@ -4686,8 +4772,8 @@ void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* i
                 return;
             }
             state->control_palette_query = trim_copy(
-                input_text_utf8 == nullptr ? std::string_view{} :
-                                             std::string_view(input_text_utf8, input_text_len));
+                input_text_utf8 == nullptr ? std::string_view{}
+                                           : std::string_view(input_text_utf8, input_text_len));
             return;
         }
         if (intent == DialogIntent::ControlInput || intent == DialogIntent::ControlConfirm) {
@@ -4701,8 +4787,8 @@ void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* i
                 return;
             }
             if (intent == DialogIntent::ControlInput) {
-                input = input_text_utf8 == nullptr ? std::string{} :
-                                                     std::string(input_text_utf8, input_text_len);
+                input = input_text_utf8 == nullptr ? std::string{}
+                                                   : std::string(input_text_utf8, input_text_len);
                 control_params = json::parse(input, nullptr, false, false);
                 if (control_params.is_discarded() || !control_params.is_object()) {
                     state->run_error = "Control Center parameters must be a JSON object.";
@@ -4748,7 +4834,8 @@ void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* i
                 clear_pending_control_locked(*state);
                 return;
             }
-            ask_control_confirmation = intent == DialogIntent::ControlInput && ask_control_confirmation;
+            ask_control_confirmation =
+                intent == DialogIntent::ControlInput && ask_control_confirmation;
             execute_control = !ask_control_confirmation;
             if (execute_control)
                 clear_pending_control_locked(*state);
@@ -4770,8 +4857,8 @@ void SAO_UI_CALL composer_dialog_result(SaoUiDialogButton pressed, const char* i
                 state->run_error = "Input dialog returned an invalid buffer.";
                 return;
             }
-            input = input_text_utf8 == nullptr ? std::string{} :
-                                                 std::string(input_text_utf8, input_text_len);
+            input = input_text_utf8 == nullptr ? std::string{}
+                                               : std::string(input_text_utf8, input_text_len);
             if (intent == DialogIntent::EditComposer) {
                 if (input_text_len > kMaximumComposerBytes) {
                     state->run_error = "Composer text exceeds the 48 KiB limit.";
@@ -4813,9 +4900,8 @@ uint64_t cancel_starting_generation_locked(AiEditorMainPanelState& state,
     state.cancelled_generation = std::max(state.cancelled_generation, cancelled_generation);
     state.starting_cancelled_generation =
         reconcile_conversation ? cancelled_generation : uint64_t{0};
-    std::erase_if(state.rpc_queue, [&](const RpcTask& queued) {
-        return queued.generation == cancelled_generation;
-    });
+    std::erase_if(state.rpc_queue,
+                  [&](const RpcTask& queued) { return queued.generation == cancelled_generation; });
     for (auto& completion : state.completed_queue) {
         if (completion.task.generation != cancelled_generation)
             continue;
@@ -4823,8 +4909,7 @@ uint64_t cancel_starting_generation_locked(AiEditorMainPanelState& state,
         if (completion.task.kind == RpcTaskKind::SendMessage &&
             !completion_has_successful_step(completion, "run.cancel")) {
             completion.task.run_id = accepted_run_id(completion);
-            if (!queue_orphan_cancel_locked(state, cancelled_generation,
-                                            completion.task.run_id)) {
+            if (!queue_orphan_cancel_locked(state, cancelled_generation, completion.task.run_id)) {
                 state.run_error = "Failed to queue orphan run cancellation.";
             }
         }
@@ -5075,8 +5160,8 @@ void send_composer(AiEditorMainPanelState& state) {
         task.kind = RpcTaskKind::SendMessage;
         task.generation = state.conversation_generation;
         task.conversation_id = state.conversation_id;
-        task.title = state.conversation_id.empty() ? title_from_prompt(prompt)
-                                                   : state.conversation_title;
+        task.title =
+            state.conversation_id.empty() ? title_from_prompt(prompt) : state.conversation_title;
         task.prompt = prompt;
         task.provider_id = state.selected_provider;
         task.model = state.selected_model;
@@ -5219,8 +5304,7 @@ void apply_composer_shortcut(AiEditorMainPanelState& state, const json& payload)
         run_active = run_is_active(state.run_phase);
         if (!run_active) {
             std::string next = state.composer_text;
-            while (!next.empty() &&
-                   std::isspace(static_cast<unsigned char>(next.back())) != 0) {
+            while (!next.empty() && std::isspace(static_cast<unsigned char>(next.back())) != 0) {
                 next.pop_back();
             }
             if (!next.empty())
@@ -5302,7 +5386,8 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
                 std::lock_guard lock(state->mutex);
                 developer_allowed = !canonical->advanced || state->control_developer_advanced;
                 if (!developer_allowed)
-                    state->run_error = "Developer Advanced is required for this Control Center action.";
+                    state->run_error =
+                        "Developer Advanced is required for this Control Center action.";
             }
             if (developer_allowed)
                 show_control_action_dialog(*state, payload);
@@ -5313,9 +5398,11 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         if (!allowed)
             append_output_line(*state, "[error] Control Center catalog is missing tools.call.");
         else
-            show_control_action_dialog(*state, json{{"id", canonical->id}, {"method", canonical->method},
-                                                    {"name", payload_string(payload, "name")},
-                                                    {"arguments", payload.value("arguments", json::object())}});
+            show_control_action_dialog(
+                *state, json{{"id", canonical->id},
+                             {"method", canonical->method},
+                             {"name", payload_string(payload, "name")},
+                             {"arguments", payload.value("arguments", json::object())}});
     } else if (action == "control.vt.refresh") {
         {
             std::lock_guard lock(state->mutex);
@@ -5326,15 +5413,14 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         const ControlActionSpec* canonical = find_control_action("platform.vt.unhook");
         const std::string hook_id = payload_string(payload, "hookId");
         if (canonical == nullptr || !vt_generated_hook_id(hook_id)) {
-            append_output_line(*state, "[error] Control Center rejected an invalid VT hook action.");
+            append_output_line(*state,
+                               "[error] Control Center rejected an invalid VT hook action.");
         } else {
             const json params{{"hookId", hook_id}, {"confirmed", false}};
-            show_control_action_dialog(
-                *state,
-                json{{"id", canonical->id},
-                     {"method", canonical->method},
-                     {"default", params.dump()},
-                     {"executionParams", params}});
+            show_control_action_dialog(*state, json{{"id", canonical->id},
+                                                    {"method", canonical->method},
+                                                    {"default", params.dump()},
+                                                    {"executionParams", params}});
         }
     } else if (action == "control.retry") {
         std::string method;
@@ -5352,7 +5438,8 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         }
         const ControlActionSpec* canonical = find_control_action(method);
         if (canonical == nullptr) {
-            append_output_line(*state, "[error] Control Center retry rejected a non-canonical method.");
+            append_output_line(*state,
+                               "[error] Control Center retry rejected a non-canonical method.");
         } else {
             bool developer_allowed = true;
             {
@@ -5360,14 +5447,16 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
                 developer_allowed = !canonical->advanced || state->control_developer_advanced;
             }
             if (!developer_allowed) {
-                append_output_line(*state, "[error] Developer Advanced is required for this retry.");
+                append_output_line(*state,
+                                   "[error] Developer Advanced is required for this retry.");
             } else {
-                show_control_action_dialog(*state, json{{"id", canonical->id},
-                                                        {"method", canonical->method},
-                                                        {"default", control_default_json_text(display_params)},
-                                                        {"executionParams", execution_params},
-                                                        {"name", tool_name},
-                                                        {"arguments", tool_arguments}});
+                show_control_action_dialog(
+                    *state, json{{"id", canonical->id},
+                                 {"method", canonical->method},
+                                 {"default", control_default_json_text(display_params)},
+                                 {"executionParams", execution_params},
+                                 {"name", tool_name},
+                                 {"arguments", tool_arguments}});
             }
         }
     } else if (action == "control.copy") {
@@ -5394,7 +5483,8 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         }
         append_output_line(*state, "[control] prompt selected for Composer: " + id);
     } else if (action == "control.unavailable") {
-        append_output_line(*state, "[warn] lifecycle control is owned by the launcher and is not an RPC action");
+        append_output_line(
+            *state, "[warn] lifecycle control is owned by the launcher and is not an RPC action");
     } else if (action == "output.clear") {
         std::lock_guard lock(state->mutex);
         state->output_text.clear();
@@ -5478,7 +5568,8 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
             std::lock_guard lock(state->mutex);
             can_load_more = state->history_limit < 500U;
             if (can_load_more)
-                state->history_limit = std::min<size_t>(state->history_limit + kMaximumHistoryEntries, 500U);
+                state->history_limit =
+                    std::min<size_t>(state->history_limit + kMaximumHistoryEntries, 500U);
         }
         if (can_load_more)
             queue_history_refresh(*state);
@@ -5493,7 +5584,8 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
                 state->undo_entry.reset();
                 restore = true;
             } else if (state->undo_entry.has_value() && !state->undo_entry->content_available) {
-                state->run_error = "Undo content is unavailable; no empty conversation was created.";
+                state->run_error =
+                    "Undo content is unavailable; no empty conversation was created.";
             }
         }
         if (restore) {
@@ -5518,15 +5610,13 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else if (action == "theme.select") {
         const std::string value = payload_string(payload, "value");
         if (payload.size() != 1U || (value != "dark" && value != "light")) {
-            append_output_line(*state,
-                               "[error] theme.select requires dark or light.");
+            append_output_line(*state, "[error] theme.select requires dark or light.");
         } else {
-            const SaoUiThemeId theme =
-                value == "light" ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK;
+            const SaoUiThemeId theme = value == "light" ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK;
             const sao_status_t theme_status = sao_ui_theme_set_active_id(theme);
             if (theme_status != SAO_STATUS_OK) {
-                append_output_line(*state, "[error] theme.select failed: " +
-                                               std::to_string(theme_status));
+                append_output_line(*state,
+                                   "[error] theme.select failed: " + std::to_string(theme_status));
             }
         }
     } else if (action == "settings.open") {
@@ -5537,17 +5627,15 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         RpcTask task;
         task.kind = RpcTaskKind::Generic;
         task.method = "vscode.window.revealWebviewPanel";
-        task.params = {{"panelId", "mcp-management-builtin"},
-                       {"viewColumn", 1},
-                       {"preserveFocus", false}};
+        task.params = {
+            {"panelId", "mcp-management-builtin"}, {"viewColumn", 1}, {"preserveFocus", false}};
         (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
     } else if (action == "platform.kernel_map.open") {
         RpcTask task;
         task.kind = RpcTaskKind::Generic;
         task.method = "vscode.window.revealWebviewPanel";
-        task.params = {{"panelId", "kernel-map-builtin"},
-                       {"viewColumn", 1},
-                       {"preserveFocus", false}};
+        task.params = {
+            {"panelId", "kernel-map-builtin"}, {"viewColumn", 1}, {"preserveFocus", false}};
         (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
     } else if (action == "diagnostics.refresh") {
         RpcTask task;
@@ -5561,8 +5649,7 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
                 should_queue = true;
             }
         }
-        if (should_queue &&
-            !enqueue_or_report(*state, std::move(task), "runtime.initialize")) {
+        if (should_queue && !enqueue_or_report(*state, std::move(task), "runtime.initialize")) {
             std::lock_guard lock(state->mutex);
             state->bootstrap_pending = false;
             state->next_bootstrap_attempt =
@@ -5571,11 +5658,13 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else if (action == "view.select") {
         const auto view_field = payload.find("view");
         if (payload.size() != 1U || view_field == payload.end() || !view_field->is_string()) {
-            append_output_line(*state, "[error] view.select rejected payload: expected exactly one string field named view.");
+            append_output_line(*state, "[error] view.select rejected payload: expected exactly one "
+                                       "string field named view.");
         } else {
             const std::string requested_view = view_field->get<std::string>();
             if (!valid_view(requested_view)) {
-                append_output_line(*state, "[error] view.select rejected unknown sidebar view: " + requested_view);
+                append_output_line(*state, "[error] view.select rejected unknown sidebar view: " +
+                                               requested_view);
             } else {
                 std::lock_guard lock(state->mutex);
                 state->selected_view = requested_view;
@@ -5623,7 +5712,7 @@ void SAO_UI_CALL panel_event_callback(int32_t event_kind, void* user_data) {
         const sao_status_t hide_status = sao_ui_panel_hide(state->panel);
         if (hide_status != SAO_STATUS_OK) {
             append_output_line(*state, "[error] AI Editor panel close failed: " +
-                                          std::to_string(map_ui_status(hide_status)));
+                                           std::to_string(map_ui_status(hide_status)));
             return;
         }
     }
@@ -5723,8 +5812,8 @@ void queue_vt_dashboard_poll_if_due(AiEditorMainPanelState& state) {
         {
             std::lock_guard lock(state.mutex);
             redacted_error = redact_control_text(compact_text(error, 1200U));
-            log_error = !state.vt_dashboard_stale ||
-                        state.vt_dashboard_last_error != redacted_error;
+            log_error =
+                !state.vt_dashboard_stale || state.vt_dashboard_last_error != redacted_error;
             state.vt_dashboard_pending = false;
             state.vt_dashboard_stale = true;
             state.vt_dashboard_last_error = redacted_error;
@@ -5826,8 +5915,7 @@ int32_t restore_panel_handlers(AiEditorMainPanelState& state, int32_t original_s
 
 class ApiLease final {
   public:
-    explicit ApiLease(sao_ai_editor_main_panel_t handle,
-                      bool owner_thread_required = false) {
+    explicit ApiLease(sao_ai_editor_main_panel_t handle, bool owner_thread_required = false) {
         {
             std::lock_guard registry_lock(registry_mutex());
             const auto found = registry().find(handle);
@@ -5835,8 +5923,7 @@ class ApiLease final {
                 return;
             state_ = found->second.get();
             std::lock_guard state_lock(state_->mutex);
-            if (!state_->accepting || state_->destroy_preflight_active ||
-                state_->destroy_claimed) {
+            if (!state_->accepting || state_->destroy_preflight_active || state_->destroy_claimed) {
                 status_ = SAO_AI_EDITOR_ERR_BUSY;
                 state_ = nullptr;
                 return;
@@ -5892,8 +5979,8 @@ class ApiLease final {
 } // namespace
 
 #if defined(SAO_AI_EDITOR_TESTING)
-extern "C" void SAO_AI_EDITOR_CALL
-sao_ai_editor_main_panel_test_set_owner_preflight_pause(int32_t target) {
+extern "C" void
+    SAO_AI_EDITOR_CALL sao_ai_editor_main_panel_test_set_owner_preflight_pause(int32_t target) {
     if (target == kTestPauseDestroyPreflight)
         g_test_destroy_registry_probe_completed.store(false, std::memory_order_release);
     g_test_owner_preflight_pause_target.store(target, std::memory_order_release);
@@ -5955,7 +6042,8 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         if (status == SAO_STATUS_OK)
             state->action_handler_attached = true;
         if (status == SAO_STATUS_OK) {
-            status = sao_ui_panel_set_event_handler(state->panel, &panel_event_callback, state.get());
+            status =
+                sao_ui_panel_set_event_handler(state->panel, &panel_event_callback, state.get());
             if (status == SAO_STATUS_OK)
                 state->event_handler_attached = true;
         }
@@ -5991,8 +6079,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         sao::ai_editor::workbench::CompositionHost* workbench_host = nullptr;
         const sao_status_t workbench_status = sao::ai_editor::workbench::create(
             borrowed_compositor, borrowed_launcher, &workbench_host);
-        if (workbench_status == SAO_STATUS_OK &&
-            workbench_host != nullptr) {
+        if (workbench_status == SAO_STATUS_OK && workbench_host != nullptr) {
             std::lock_guard lock(raw_state->mutex);
             raw_state->workbench_host = workbench_host;
             raw_state->workbench_active = true;
@@ -6016,15 +6103,14 @@ sao_ai_editor_main_panel_show(sao_ai_editor_main_panel_t panel) {
     sao_status_t status = SAO_STATUS_OK;
     if (use_workbench) {
         status = sao::ai_editor::workbench::show(state.workbench_host);
-        if (status != SAO_STATUS_OK &&
-            sao::ai_editor::workbench::failed(state.workbench_host)) {
+        if (status != SAO_STATUS_OK && sao::ai_editor::workbench::failed(state.workbench_host)) {
             state.workbench_active = false;
             use_workbench = false;
             status = SAO_STATUS_OK;
         }
     }
-    const bool show_native = !use_workbench ||
-                             !sao::ai_editor::workbench::ready(state.workbench_host);
+    const bool show_native =
+        !use_workbench || !sao::ai_editor::workbench::ready(state.workbench_host);
     if (show_native && status == SAO_STATUS_OK) {
         status = sao_ui_panel_show(state.panel);
         if (status == SAO_STATUS_OK)
@@ -6052,8 +6138,7 @@ sao_ai_editor_main_panel_hide(sao_ai_editor_main_panel_t panel) {
     }
     int32_t first_status = hide_child_panels(state);
     if (state.workbench_active && state.workbench_host != nullptr) {
-        const sao_status_t workbench_status =
-            sao::ai_editor::workbench::hide(state.workbench_host);
+        const sao_status_t workbench_status = sao::ai_editor::workbench::hide(state.workbench_host);
         if (first_status == SAO_AI_EDITOR_OK && workbench_status != SAO_STATUS_OK)
             first_status = map_ui_status(workbench_status);
     }
@@ -6134,8 +6219,10 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
     drain_completions(lease.state());
     queue_bootstrap_if_needed(lease.state());
     queue_vt_dashboard_poll_if_due(lease.state());
-    queue_event_drain_if_due(lease.state());
-    queue_run_poll_if_due(lease.state());
+    if (!lease.state().workbench_active) {
+        queue_event_drain_if_due(lease.state());
+        queue_run_poll_if_due(lease.state());
+    }
     const sao_status_t refresh_status = refresh_body(lease.state(), false);
     if (refresh_status != SAO_STATUS_OK)
         return map_ui_status(refresh_status);
@@ -6187,9 +6274,8 @@ sao_ai_editor_main_panel_try_destroy(sao_ai_editor_main_panel_t panel) {
 #endif
             return SAO_AI_EDITOR_ERR_BUSY;
         }
-        if (state->api_calls_in_flight != 0 || state->worker_active ||
-            !state->rpc_queue.empty() || !state->completed_queue.empty() ||
-            run_is_active(state->run_phase)) {
+        if (state->api_calls_in_flight != 0 || state->worker_active || !state->rpc_queue.empty() ||
+            !state->completed_queue.empty() || run_is_active(state->run_phase)) {
             return SAO_AI_EDITOR_ERR_BUSY;
         }
         state->destroy_preflight_active = true;
@@ -6213,9 +6299,8 @@ sao_ai_editor_main_panel_try_destroy(sao_ai_editor_main_panel_t panel) {
         }
         std::lock_guard state_lock(state->mutex);
         if (!state->destroy_preflight_active || state->destroy_claimed ||
-            state->api_calls_in_flight != 0 || state->worker_active ||
-            !state->rpc_queue.empty() || !state->completed_queue.empty() ||
-            run_is_active(state->run_phase)) {
+            state->api_calls_in_flight != 0 || state->worker_active || !state->rpc_queue.empty() ||
+            !state->completed_queue.empty() || run_is_active(state->run_phase)) {
             state->destroy_preflight_active = false;
             state->worker_cv.notify_all();
             return SAO_AI_EDITOR_ERR_BUSY;

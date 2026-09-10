@@ -3,6 +3,7 @@
 
   const CHANNEL = "sao.workbench";
   const REQUEST_TIMEOUT_MS = 30000;
+  const LONG_REQUEST_TIMEOUT_MS = 600000;
   const HANDSHAKE_TIMEOUT_MS = 4000;
   const LEGACY_EVENT_LIMIT = 128;
   const BLOCKED_METHODS = new Set([
@@ -10,6 +11,7 @@
     "memviewer_read_value",
     "memviewer_status"
   ]);
+  const LONG_REQUEST_METHODS = new Set(["run_workflow", "retry_workflow_step"]);
   const state = {
     status: "connecting",
     connected: false,
@@ -28,11 +30,12 @@
     typeof webview.addEventListener === "function");
 
   class SaoWorkbenchBridgeError extends Error {
-    constructor(code, message, method) {
+    constructor(code, message, method, data) {
       super(message);
       this.name = "SaoWorkbenchBridgeError";
       this.code = code;
       this.method = method || "";
+      this.data = data === undefined ? null : data;
     }
   }
 
@@ -59,7 +62,7 @@
     const message = typeof source.message === "string" && source.message
       ? source.message
       : "Native workbench request failed.";
-    return new SaoWorkbenchBridgeError(code, message, method);
+    return new SaoWorkbenchBridgeError(code, message, method, source.data);
   }
 
   function rejectOutstanding(error) {
@@ -92,7 +95,7 @@
           "SAO_NATIVE_TIMEOUT",
           "Native workbench request timed out.",
           methodName));
-      }, REQUEST_TIMEOUT_MS);
+      }, LONG_REQUEST_METHODS.has(methodName) ? LONG_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
       pending.set(id, { method: methodName, resolve: resolve, reject: reject, timer: timer });
       try {
         webview.postMessage({
@@ -191,7 +194,7 @@
   }
 
   function enterOffline(reason) {
-    if (state.readyDispatched) return;
+    const firstReady = !state.readyDispatched;
     if (state.handshakeTimer) window.clearTimeout(state.handshakeTimer);
     state.handshakeTimer = 0;
     state.connected = false;
@@ -207,8 +210,10 @@
       reason: reason || "Native workbench host is unavailable."
     };
     publish("sao:workbench-offline", detail);
-    publish("sao:workbench-ready", detail);
-    try { window.dispatchEvent(new Event("pywebviewready")); } catch (_) {}
+    if (firstReady) {
+      publish("sao:workbench-ready", detail);
+      try { window.dispatchEvent(new Event("pywebviewready")); } catch (_) {}
+    }
   }
 
   function receiveNativeMessage(event) {
@@ -245,7 +250,17 @@
       else entry.reject(errorFromNative(message.error, entry.method));
       return;
     }
-    if (message.kind === "event") dispatchNativeEvent(message.name, message.payload);
+    if (message.kind === "event") {
+      if (message.name === "transport_failed") {
+        const reason = message.payload && message.payload.error
+          ? String(message.payload.error)
+          : "Native workbench transport failed.";
+        rejectOutstanding({ code: "SAO_NATIVE_UNAVAILABLE", message: reason });
+        enterOffline(reason);
+        return;
+      }
+      dispatchNativeEvent(message.name, message.payload);
+    }
   }
 
   function sendHello() {

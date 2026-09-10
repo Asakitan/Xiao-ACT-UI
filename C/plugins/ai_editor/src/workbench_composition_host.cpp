@@ -1,4 +1,6 @@
 #include "workbench_composition_host.h"
+#include "native_utils.h"
+#include "workbench_native_adapter.h"
 
 #if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
 
@@ -8,10 +10,13 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <combaseapi.h>
+#include <commdlg.h>
+#include <objbase.h>
+#include <shellapi.h>
+#include <wincrypt.h>
 #include <windows.h>
 #include <windowsx.h>
-#include <combaseapi.h>
-#include <objbase.h>
 
 #include <WebView2.h>
 #include <wrl/async.h>
@@ -27,11 +32,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace sao::ai_editor::workbench {
 namespace {
@@ -39,14 +46,15 @@ namespace {
 using Microsoft::WRL::ComPtr;
 using json = nlohmann::json;
 
-using CreateEnvironmentFn = HRESULT(WINAPI*)(
-    PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+using CreateEnvironmentFn =
+    HRESULT(WINAPI*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
+                     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
 
 constexpr wchar_t kVirtualHost[] = L"sao-workbench.local";
 constexpr wchar_t kWorkbenchUrl[] = L"https://sao-workbench.local/ai_editor_app.html";
 constexpr char kChannel[] = "sao.workbench";
-constexpr size_t kMaximumMessageBytes = 1024u * 1024u;
+constexpr size_t kMaximumMessageBytes = 4u * 1024u * 1024u + 64u * 1024u;
+constexpr int64_t kMaximumImageBytes = 3LL * 1024LL * 1024LL - 128LL * 1024LL;
 constexpr int32_t kSlotZOrder = 1000;
 constexpr std::chrono::seconds kHelloTimeout{4};
 
@@ -86,7 +94,8 @@ bool utf8_to_wide(std::string_view input, std::wstring* output) {
         return false;
     output->assign(static_cast<size_t>(required), L'\0');
     return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
-                               static_cast<int>(input.size()), output->data(), required) == required;
+                               static_cast<int>(input.size()), output->data(),
+                               required) == required;
 }
 
 bool wide_to_utf8(std::wstring_view input, std::string* output) {
@@ -97,9 +106,9 @@ bool wide_to_utf8(std::wstring_view input, std::string* output) {
         return true;
     if (input.size() > static_cast<size_t>(INT_MAX))
         return false;
-    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(),
-                                             static_cast<int>(input.size()), nullptr, 0, nullptr,
-                                             nullptr);
+    const int required =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(),
+                            static_cast<int>(input.size()), nullptr, 0, nullptr, nullptr);
     if (required <= 0)
         return false;
     output->assign(static_cast<size_t>(required), '\0');
@@ -139,14 +148,14 @@ void module_anchor() {}
 std::filesystem::path module_directory() {
     HMODULE module = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCWSTR>(&module_anchor), &module) ||
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&module_anchor), &module) ||
         module == nullptr) {
         return {};
     }
     std::array<wchar_t, 32768> buffer{};
-    const DWORD length = GetModuleFileNameW(module, buffer.data(),
-                                            static_cast<DWORD>(buffer.size()));
+    const DWORD length =
+        GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
     if (length == 0 || length >= buffer.size())
         return {};
     return std::filesystem::path(std::wstring(buffer.data(), length)).parent_path();
@@ -154,8 +163,7 @@ std::filesystem::path module_directory() {
 
 std::filesystem::path workbench_asset_root(const std::filesystem::path& module_dir) {
     const auto root = module_dir / L"assets" / L"ai_editor" / L"workbench";
-    if (!regular_file(root / L"ai_editor_app.html") ||
-        !regular_file(root / L"native-bridge.js") ||
+    if (!regular_file(root / L"ai_editor_app.html") || !regular_file(root / L"native-bridge.js") ||
         !regular_file(root / L"classic-theme.css")) {
         return {};
     }
@@ -164,8 +172,8 @@ std::filesystem::path workbench_asset_root(const std::filesystem::path& module_d
 
 std::filesystem::path user_data_folder() {
     std::array<wchar_t, 32768> buffer{};
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(),
-                                                  static_cast<DWORD>(buffer.size()));
+    const DWORD length =
+        GetEnvironmentVariableW(L"LOCALAPPDATA", buffer.data(), static_cast<DWORD>(buffer.size()));
     if (length == 0 || length >= buffer.size())
         return {};
     std::filesystem::path folder(std::wstring(buffer.data(), length));
@@ -175,6 +183,115 @@ std::filesystem::path user_data_folder() {
     std::error_code error;
     std::filesystem::create_directories(folder, error);
     return error ? std::filesystem::path{} : folder;
+}
+
+enum class FileDialogResult {
+    selected,
+    cancelled,
+    failed,
+};
+
+FileDialogResult choose_file(HWND owner, bool save, const wchar_t* filter,
+                             std::wstring_view suggested, std::filesystem::path* output) {
+    if (output == nullptr)
+        return FileDialogResult::failed;
+    std::array<wchar_t, 32768> file{};
+    if (!suggested.empty() && suggested.size() < file.size())
+        std::copy(suggested.begin(), suggested.end(), file.begin());
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = file.data();
+    dialog.nMaxFile = static_cast<DWORD>(file.size());
+    dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+                   (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    const BOOL accepted = save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+    if (!accepted)
+        return CommDlgExtendedError() == 0 ? FileDialogResult::cancelled : FileDialogResult::failed;
+    *output = std::filesystem::path(file.data());
+    return FileDialogResult::selected;
+}
+
+bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>* output) {
+    if (output == nullptr)
+        return false;
+    const std::wstring native = path.native();
+    HANDLE file = CreateFileW(native.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    LARGE_INTEGER size{};
+    const bool valid_size =
+        GetFileSizeEx(file, &size) && size.QuadPart >= 0 && size.QuadPart <= kMaximumImageBytes;
+    if (!valid_size) {
+        CloseHandle(file);
+        return false;
+    }
+    output->resize(static_cast<size_t>(size.QuadPart));
+    DWORD read = 0;
+    const bool read_ok =
+        output->empty() ||
+        (ReadFile(file, output->data(), static_cast<DWORD>(output->size()), &read, nullptr) &&
+         read == output->size());
+    CloseHandle(file);
+    return read_ok;
+}
+
+std::string base64_encode(const std::vector<uint8_t>& bytes) {
+    DWORD required = 0;
+    if (!CryptBinaryToStringA(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &required) ||
+        required == 0) {
+        return {};
+    }
+    std::string encoded(required, '\0');
+    if (!CryptBinaryToStringA(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded.data(),
+                              &required)) {
+        return {};
+    }
+    if (!encoded.empty() && encoded.back() == '\0')
+        encoded.pop_back();
+    return encoded;
+}
+
+std::string file_mime(const std::filesystem::path& path) {
+    std::wstring extension = path.extension().native();
+    std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+    if (extension == L".png")
+        return "image/png";
+    if (extension == L".jpg" || extension == L".jpeg")
+        return "image/jpeg";
+    if (extension == L".gif")
+        return "image/gif";
+    if (extension == L".webp")
+        return "image/webp";
+    return "application/octet-stream";
+}
+
+std::string text_language(const std::filesystem::path& path) {
+    std::wstring extension = path.extension().native();
+    std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+    if (extension == L".cpp" || extension == L".h" || extension == L".hpp")
+        return "cpp";
+    if (extension == L".c")
+        return "c";
+    if (extension == L".js")
+        return "javascript";
+    if (extension == L".ts" || extension == L".tsx")
+        return "typescript";
+    if (extension == L".py")
+        return "python";
+    if (extension == L".json")
+        return "json";
+    if (extension == L".md")
+        return "markdown";
+    if (extension == L".html" || extension == L".htm")
+        return "html";
+    if (extension == L".css")
+        return "css";
+    return "plaintext";
 }
 
 struct HostState {
@@ -189,6 +306,7 @@ struct HostState {
     sao_ui_compositor_handle_t compositor{};
     sao_ai_editor_launcher_t launcher{};
     sao_ui_composition_slot_handle_t slot{};
+    NativeAdapter* native_adapter{};
     HWND parent_window{};
     DWORD owner_thread{};
     HMODULE loader{};
@@ -240,6 +358,19 @@ struct HostState {
     bool process_failed_registered{};
 
     ~HostState() {
+        if (native_adapter != nullptr && owner_thread == GetCurrentThreadId()) {
+            const ULONGLONG deadline = GetTickCount64() + 10000;
+            for (;;) {
+                const sao_status_t status = native_adapter_try_destroy(native_adapter);
+                if (status == SAO_STATUS_OK) {
+                    native_adapter = nullptr;
+                    break;
+                }
+                if (status != SAO_STATUS_ERR_CANCELLED || GetTickCount64() >= deadline)
+                    break;
+                Sleep(10);
+            }
+        }
         if (owner_thread == GetCurrentThreadId()) {
             if (composition_controller) {
                 (void)composition_controller->put_RootVisualTarget(nullptr);
@@ -269,17 +400,22 @@ struct CallbackScope {
     explicit CallbackScope(const std::shared_ptr<HostState>& state) : state_(state) {
         ++state_->callback_depth;
     }
-    ~CallbackScope() { --state_->callback_depth; }
+    ~CallbackScope() {
+        --state_->callback_depth;
+    }
     std::shared_ptr<HostState> state_;
 };
+
+bool callback_on_owner(const std::shared_ptr<HostState>& state) noexcept {
+    return state && state->owner_thread == GetCurrentThreadId();
+}
 
 void fail_state(HostState& state, sao_status_t status) noexcept {
     if (state.phase == HostState::Phase::closing || state.phase == HostState::Phase::failed)
         return;
     state.failure_status = status == SAO_STATUS_OK ? SAO_STATUS_ERR_OS_CALL_FAILED : status;
 #ifndef NDEBUG
-    std::fprintf(stderr, "AI Workbench composition host async failure: %d\n",
-                 state.failure_status);
+    std::fprintf(stderr, "AI Workbench composition host async failure: %d\n", state.failure_status);
 #endif
     state.phase = HostState::Phase::failed;
     state.requested_visible = false;
@@ -425,32 +561,53 @@ bool map_mouse_kind(uint32_t message, COREWEBVIEW2_MOUSE_EVENT_KIND* out_kind) n
     if (out_kind == nullptr)
         return false;
     switch (message) {
-    case kMouseMove: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE; return true;
-    case kMouseLeave: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE; return true;
-    case kMouseWheel: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL; return true;
-    case kLeftButtonDown: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN; return true;
-    case kLeftButtonUp: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP; return true;
+    case kMouseMove:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE;
+        return true;
+    case kMouseLeave:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE;
+        return true;
+    case kMouseWheel:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL;
+        return true;
+    case kLeftButtonDown:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN;
+        return true;
+    case kLeftButtonUp:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP;
+        return true;
     case kLeftButtonDoubleClick:
         *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK;
         return true;
-    case kRightButtonDown: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN; return true;
-    case kRightButtonUp: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP; return true;
+    case kRightButtonDown:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN;
+        return true;
+    case kRightButtonUp:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP;
+        return true;
     case kRightButtonDoubleClick:
         *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOUBLE_CLICK;
         return true;
     case kMiddleButtonDown:
         *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOWN;
         return true;
-    case kMiddleButtonUp: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP; return true;
+    case kMiddleButtonUp:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP;
+        return true;
     case kMiddleButtonDoubleClick:
         *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOUBLE_CLICK;
         return true;
-    case kXButtonDown: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN; return true;
-    case kXButtonUp: *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP; return true;
+    case kXButtonDown:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN;
+        return true;
+    case kXButtonUp:
+        *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP;
+        return true;
     case kXButtonDoubleClick:
         *out_kind = COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOUBLE_CLICK;
         return true;
-    default: return false;
+    default:
+        return false;
     }
 }
 
@@ -459,15 +616,15 @@ void note_input_failure(HostState& state, HRESULT status) noexcept {
         state.input_failure_status = SAO_STATUS_ERR_OS_CALL_FAILED;
 }
 
-void send_release(HostState& state, uint32_t mask,
-                  COREWEBVIEW2_MOUSE_EVENT_KIND kind, UINT32 mouse_data = 0) noexcept {
+void send_release(HostState& state, uint32_t mask, COREWEBVIEW2_MOUSE_EVENT_KIND kind,
+                  UINT32 mouse_data = 0) noexcept {
     if ((state.mouse_buttons & mask) == 0 || !state.composition_controller)
         return;
     const POINT point{state.mouse_x, state.mouse_y};
-    const auto remaining = static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(
-        state.mouse_buttons & ~mask);
-    const HRESULT status = state.composition_controller->SendMouseInput(
-        kind, remaining, mouse_data, point);
+    const auto remaining =
+        static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(state.mouse_buttons & ~mask);
+    const HRESULT status =
+        state.composition_controller->SendMouseInput(kind, remaining, mouse_data, point);
     if (SUCCEEDED(status))
         state.mouse_buttons &= ~mask;
     else
@@ -483,20 +640,35 @@ void cancel_mouse_state(HostState& state) noexcept {
     if (state.composition_controller) {
         const POINT point{};
         const HRESULT status = state.composition_controller->SendMouseInput(
-            COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
-            COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, point);
+            COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0,
+            point);
         note_input_failure(state, status);
     }
 }
 
-void SAO_UI_CALL mouse_callback(uint32_t message, uint32_t key_state, float slot_x,
-                                float slot_y, int32_t button, int32_t wheel_delta,
-                                void* user_data) {
+void SAO_UI_CALL mouse_callback(uint32_t message, uint32_t key_state, float slot_x, float slot_y,
+                                int32_t button, int32_t wheel_delta, void* user_data) {
     auto* state = static_cast<HostState*>(user_data);
-    if (state == nullptr || !state->composition_controller || !state->requested_visible ||
+    if (state == nullptr || state->owner_thread != GetCurrentThreadId() ||
+        !state->composition_controller || !state->requested_visible ||
         state->phase == HostState::Phase::closing || state->phase == HostState::Phase::failed) {
         return;
     }
+    constexpr uint32_t kSupportedMouseKeys =
+        MK_LBUTTON | MK_RBUTTON | MK_SHIFT | MK_CONTROL | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2;
+    const bool x_button_message =
+        message == kXButtonDown || message == kXButtonUp || message == kXButtonDoubleClick;
+    const double checked_x = slot_x;
+    const double checked_y = slot_y;
+    if (!std::isfinite(slot_x) || !std::isfinite(slot_y) ||
+        checked_x < std::numeric_limits<int32_t>::min() ||
+        checked_x > std::numeric_limits<int32_t>::max() ||
+        checked_y < std::numeric_limits<int32_t>::min() ||
+        checked_y > std::numeric_limits<int32_t>::max() ||
+        (x_button_message && button != 3 && button != 4)) {
+        return;
+    }
+    key_state &= kSupportedMouseKeys;
     state->mouse_x = static_cast<int32_t>(std::lround(slot_x));
     state->mouse_y = static_cast<int32_t>(std::lround(slot_y));
     if (message == kCaptureChanged || message == kCancelMode) {
@@ -507,16 +679,17 @@ void SAO_UI_CALL mouse_callback(uint32_t message, uint32_t key_state, float slot
     if (!map_mouse_kind(message, &kind))
         return;
     const bool focus_message = message == kLeftButtonDown || message == kLeftButtonDoubleClick ||
-        message == kRightButtonDown || message == kRightButtonDoubleClick ||
-        message == kMiddleButtonDown || message == kMiddleButtonDoubleClick ||
-        message == kXButtonDown || message == kXButtonDoubleClick;
+                               message == kRightButtonDown || message == kRightButtonDoubleClick ||
+                               message == kMiddleButtonDown ||
+                               message == kMiddleButtonDoubleClick || message == kXButtonDown ||
+                               message == kXButtonDoubleClick;
     if (focus_message) {
         (void)SetFocus(state->parent_window);
         if (GetFocus() != state->parent_window)
             state->input_failure_status = SAO_STATUS_ERR_OS_CALL_FAILED;
         if (state->controller) {
-            note_input_failure(*state, state->controller->MoveFocus(
-                                           COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC));
+            note_input_failure(
+                *state, state->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC));
         }
     }
     const bool leaving = message == kMouseLeave;
@@ -524,8 +697,7 @@ void SAO_UI_CALL mouse_callback(uint32_t message, uint32_t key_state, float slot
     UINT32 mouse_data = 0;
     if (message == kMouseWheel)
         mouse_data = static_cast<UINT32>(wheel_delta);
-    else if (message == kXButtonDown || message == kXButtonUp ||
-             message == kXButtonDoubleClick)
+    else if (message == kXButtonDown || message == kXButtonUp || message == kXButtonDoubleClick)
         mouse_data = button == 3 ? XBUTTON1 : XBUTTON2;
     const HRESULT send_status = state->composition_controller->SendMouseInput(
         kind,
@@ -581,12 +753,25 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
     std::string payload_utf8;
     if (!wide_to_utf8(payload_raw, &payload_utf8) || payload_utf8.size() > kMaximumMessageBytes)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    json message;
-    try {
-        message = json::parse(payload_utf8);
-    } catch (...) {
+    bool within_budget = true;
+    size_t nodes = 0;
+    const json message = json::parse(
+        payload_utf8,
+        [&](int depth, json::parse_event_t event, json& parsed) {
+            if (depth > 64 || ++nodes > 16384) {
+                within_budget = false;
+                return false;
+            }
+            if ((event == json::parse_event_t::key || event == json::parse_event_t::value) &&
+                parsed.is_string() && parsed.get_ref<const std::string&>().size() > 1024U * 1024U) {
+                within_budget = false;
+                return false;
+            }
+            return true;
+        },
+        false);
+    if (!within_budget || message.is_discarded())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
     if (!message.is_object())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     const auto channel_it = message.find("channel");
@@ -606,15 +791,24 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
             state->handshake_challenge.empty() || !challenge_matches) {
             return SAO_STATUS_ERR_ACCESS_DENIED;
         }
-        state->handshake_complete = true;
-        state->handshake_generation = state->navigation_generation;
-        state->hello_deadline = {};
-        sao_status_t status = post_json(*state,
-                                        {{"channel", kChannel},
-                                         {"kind", "ready"},
-                                         {"challenge", state->handshake_challenge},
-                                         {"connected", true},
-                                         {"capabilities", json::array({"rpc", "events"})}});
+        const bool already_ready = state->handshake_complete &&
+                                   state->handshake_generation == state->navigation_generation;
+        if (!already_ready) {
+            const sao_status_t document_status =
+                native_adapter_set_document(state->native_adapter, state->handshake_challenge);
+            if (document_status != SAO_STATUS_OK)
+                return document_status;
+            state->handshake_complete = true;
+            state->handshake_generation = state->navigation_generation;
+            state->hello_deadline = {};
+        }
+        sao_status_t status = post_json(
+            *state, {{"channel", kChannel},
+                     {"kind", "ready"},
+                     {"challenge", state->handshake_challenge},
+                     {"connected", true},
+                     {"capabilities", state->launcher != nullptr ? json::array({"rpc", "events"})
+                                                                 : json::array({"rpc"})}});
         if (status == SAO_STATUS_OK) {
             state->phase = HostState::Phase::ready;
             status = apply_requested_visibility(*state);
@@ -630,92 +824,272 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
     }
     const auto id_it = message.find("id");
     const auto method_it = message.find("method");
-    const auto args_it = message.find("args");
     if (id_it == message.end() || !id_it->is_string() || method_it == message.end() ||
-        !method_it->is_string() || args_it == message.end() || !args_it->is_array()) {
+        !method_it->is_string()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const std::string id = id_it->get<std::string>();
     const std::string method = method_it->get<std::string>();
-    if (id.empty() || id.size() > 128u || method.empty() || method.size() > 128u ||
-        args_it->size() > 64u) {
+    if (id.empty() || id.size() > 128u || method.empty() || method.size() > 128u) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (method == "load_config") {
-        return post_json(*state,
-                         {{"channel", kChannel}, {"kind", "reply"}, {"id", id},
-                          {"challenge", state->handshake_challenge},
-                          {"ok", true},
-                          {"result", {{"theme", "light"}, {"color_theme", ""}}}});
-    }
+    const auto invalid_arguments = [&] {
+        return post_json(*state, error_reply(state->handshake_challenge, id, "SAO_INVALID_ARGUMENT",
+                                             "Native workbench method arguments are invalid."));
+    };
+    const auto args_it = message.find("args");
+    if (args_it == message.end() || !args_it->is_array() || args_it->size() > 64u)
+        return invalid_arguments();
     if (method == "win_close") {
+        if (!args_it->empty())
+            return invalid_arguments();
         state->close_requested = true;
         state->requested_visible = false;
         const sao_status_t hide_status = apply_requested_visibility(*state);
         if (hide_status != SAO_STATUS_OK && !transient_composition_status(hide_status)) {
             fail_state(state, hide_status);
             return post_json(*state,
-                            error_reply(state->handshake_challenge, id,
-                                     "SAO_WINDOW_CLOSE_FAILED",
+                             error_reply(state->handshake_challenge, id, "SAO_WINDOW_CLOSE_FAILED",
                                          "Native workbench close did not converge."));
         }
-        return post_json(*state,
-                         {{"channel", kChannel}, {"kind", "reply"}, {"id", id},
-                         {"challenge", state->handshake_challenge},
-                          {"ok", true}, {"result", {{"ok", true}}}});
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", {{"ok", true}}}});
     }
-    return post_json(*state,
-                     error_reply(state->handshake_challenge, id, "SAO_METHOD_UNAVAILABLE",
-                                 "Native workbench method is not available: " + method));
+    HWND root = GetAncestor(state->parent_window, GA_ROOTOWNER);
+    if (root == nullptr)
+        root = state->parent_window;
+    if (method == "win_minimize" || method == "win_maximize") {
+        if (!args_it->empty())
+            return invalid_arguments();
+        const int command =
+            method == "win_minimize" ? SW_MINIMIZE : (IsZoomed(root) ? SW_RESTORE : SW_MAXIMIZE);
+        ShowWindow(root, command);
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", {{"ok", true}}}});
+    }
+    if (method == "win_resize_by") {
+        if (args_it->size() != 3 || !(*args_it)[0].is_string() || !(*args_it)[1].is_number() ||
+            !(*args_it)[2].is_number()) {
+            return invalid_arguments();
+        }
+        const std::string edge = (*args_it)[0].get<std::string>();
+        const double dx_value = (*args_it)[1].get<double>();
+        const double dy_value = (*args_it)[2].get<double>();
+        if (!std::isfinite(dx_value) || !std::isfinite(dy_value) || std::abs(dx_value) > 4096.0 ||
+            std::abs(dy_value) > 4096.0 ||
+            (edge != "n" && edge != "s" && edge != "e" && edge != "w" && edge != "ne" &&
+             edge != "nw" && edge != "se" && edge != "sw")) {
+            return invalid_arguments();
+        }
+        RECT bounds{};
+        if (!GetWindowRect(root, &bounds))
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        const int dx = static_cast<int>(std::lround(dx_value));
+        const int dy = static_cast<int>(std::lround(dy_value));
+        if (edge.find('w') != std::string::npos)
+            bounds.left += dx;
+        if (edge.find('e') != std::string::npos)
+            bounds.right += dx;
+        if (edge.find('n') != std::string::npos)
+            bounds.top += dy;
+        if (edge.find('s') != std::string::npos)
+            bounds.bottom += dy;
+        if (bounds.right - bounds.left < 640) {
+            if (edge.find('w') != std::string::npos)
+                bounds.left = bounds.right - 640;
+            else
+                bounds.right = bounds.left + 640;
+        }
+        if (bounds.bottom - bounds.top < 420) {
+            if (edge.find('n') != std::string::npos)
+                bounds.top = bounds.bottom - 420;
+            else
+                bounds.bottom = bounds.top + 420;
+        }
+        if (!SetWindowPos(root, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
+                          bounds.bottom - bounds.top, SWP_NOACTIVATE | SWP_NOZORDER)) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", {{"ok", true}}}});
+    }
+    if (method == "open_external_uri") {
+        if (args_it->size() != 1 || !(*args_it)[0].is_string())
+            return invalid_arguments();
+        const std::string uri = (*args_it)[0].get<std::string>();
+        if (uri.size() > 4096 || (uri.rfind("https://", 0) != 0 && uri.rfind("http://", 0) != 0 &&
+                                  uri.rfind("mailto:", 0) != 0)) {
+            return invalid_arguments();
+        }
+        std::wstring wide_uri;
+        if (!utf8_to_wide(uri, &wide_uri) ||
+            reinterpret_cast<INT_PTR>(ShellExecuteW(root, L"open", wide_uri.c_str(), nullptr,
+                                                    nullptr, SW_SHOWNORMAL)) <= 32) {
+            return post_json(*state,
+                             error_reply(state->handshake_challenge, id, "SAO_OPEN_URI_FAILED",
+                                         "External URI could not be opened."));
+        }
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", {{"ok", true}, {"uri", uri}}}});
+    }
+    if (method == "open_text_file" || method == "open_file_dialog" ||
+        method == "save_file_dialog" || method == "save_file_as") {
+        const bool save_content = method == "save_file_as";
+        const bool save_dialog = save_content || method == "save_file_dialog";
+        if ((method == "open_text_file" || method == "open_file_dialog") && !args_it->empty())
+            return invalid_arguments();
+        if (method == "save_file_dialog" &&
+            (args_it->size() > 1 || (!args_it->empty() && !(*args_it)[0].is_string())))
+            return invalid_arguments();
+        if (save_content &&
+            (args_it->empty() || args_it->size() > 2 || !(*args_it)[0].is_string() ||
+             (args_it->size() > 1 && !(*args_it)[1].is_string())))
+            return invalid_arguments();
+        const std::string suggested_utf8 =
+            save_content ? (args_it->size() > 1 ? (*args_it)[1].get<std::string>() : "untitled.txt")
+                         : (!args_it->empty() ? (*args_it)[0].get<std::string>() : "");
+        std::wstring suggested;
+        if (!suggested_utf8.empty() && !utf8_to_wide(suggested_utf8, &suggested))
+            return invalid_arguments();
+        const wchar_t* filter =
+            method == "open_file_dialog"
+                ? L"Images\0*.png;*.jpg;*.jpeg;*.gif;*.webp\0All files\0*.*\0\0"
+                : L"Text files\0*.txt;*.md;*.json;*.cpp;*.h;*.py;*.js;*.ts;*.html;*.css\0All "
+                  L"files\0*.*\0\0";
+        std::filesystem::path selected;
+        const FileDialogResult dialog =
+            choose_file(root, save_dialog, filter, suggested, &selected);
+        if (dialog == FileDialogResult::cancelled) {
+            return post_json(*state, {{"channel", kChannel},
+                                      {"kind", "reply"},
+                                      {"id", id},
+                                      {"challenge", state->handshake_challenge},
+                                      {"ok", true},
+                                      {"result", {{"ok", false}, {"cancelled", true}}}});
+        }
+        if (dialog == FileDialogResult::failed)
+            return post_json(*state,
+                             error_reply(state->handshake_challenge, id, "SAO_FILE_DIALOG_FAILED",
+                                         "Native file dialog failed."));
+        const std::string path = sao::ai_editor::native::wide_to_utf8(selected.native());
+        const std::string name = sao::ai_editor::native::wide_to_utf8(selected.filename().native());
+        json result{{"ok", true}, {"path", path}, {"name", name}};
+        if (save_content) {
+            const std::string content = (*args_it)[0].get<std::string>();
+            if (content.size() > 4U * 1024U * 1024U ||
+                sao::ai_editor::native::write_text_atomic(selected, content) != SAO_AI_EDITOR_OK) {
+                return post_json(*state,
+                                 error_reply(state->handshake_challenge, id, "SAO_FILE_SAVE_FAILED",
+                                             "Selected file could not be saved."));
+            }
+        } else if (method == "open_text_file") {
+            std::string content;
+            if (sao::ai_editor::native::read_text_file(selected, 4U * 1024U * 1024U, content) !=
+                SAO_AI_EDITOR_OK) {
+                return post_json(*state,
+                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
+                                             "Selected text file could not be read."));
+            }
+            result["content"] = std::move(content);
+            result["language"] = text_language(selected);
+        } else if (method == "open_file_dialog") {
+            std::vector<uint8_t> bytes;
+            if (!read_binary_file(selected, &bytes))
+                return post_json(*state,
+                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
+                                             "Selected image could not be read."));
+            result["base64"] = base64_encode(bytes);
+            result["mime"] = file_mime(selected);
+        }
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", std::move(result)}});
+    }
+    const sao_status_t submit_status = native_adapter_submit(
+        state->native_adapter, state->handshake_challenge, id, method, *args_it);
+    if (submit_status == SAO_STATUS_OK)
+        return SAO_STATUS_OK;
+    return post_json(*state, error_reply(state->handshake_challenge, id, "SAO_ADAPTER_REJECTED",
+                                         sao_status_str(submit_status)));
 }
 
 sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexcept {
-    auto navigation_starting = Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
-        [state](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
-            CallbackScope callback(state);
-            if (state->phase == HostState::Phase::closing || args == nullptr)
-                return S_OK;
-            if (state->phase == HostState::Phase::failed) {
-                (void)args->put_Cancel(TRUE);
-                return S_OK;
-            }
-            LPWSTR uri_raw = nullptr;
-            const HRESULT uri_status = args->get_Uri(&uri_raw);
-            const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> uri(uri_raw, &CoTaskMemFree);
-            const bool allowed = SUCCEEDED(uri_status) && uri_raw != nullptr &&
-                                 is_workbench_document(uri_raw);
-            if (!allowed) {
-                (void)args->put_Cancel(TRUE);
-                return S_OK;
-            }
-            UINT64 navigation_id = 0;
-            if (FAILED(args->get_NavigationId(&navigation_id)) || navigation_id == 0) {
-                (void)args->put_Cancel(TRUE);
-                fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
-                return S_OK;
-            }
-            ++state->navigation_generation;
-            if (state->navigation_generation == 0)
+    auto navigation_starting =
+        Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
+            [state](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                if (!callback_on_owner(state))
+                    return RPC_E_WRONG_THREAD;
+                CallbackScope callback(state);
+                if (state->phase == HostState::Phase::closing || args == nullptr)
+                    return S_OK;
+                if (state->phase == HostState::Phase::failed) {
+                    (void)args->put_Cancel(TRUE);
+                    return S_OK;
+                }
+                LPWSTR uri_raw = nullptr;
+                const HRESULT uri_status = args->get_Uri(&uri_raw);
+                const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> uri(uri_raw,
+                                                                             &CoTaskMemFree);
+                const bool allowed =
+                    SUCCEEDED(uri_status) && uri_raw != nullptr && is_workbench_document(uri_raw);
+                if (!allowed) {
+                    (void)args->put_Cancel(TRUE);
+                    return S_OK;
+                }
+                UINT64 navigation_id = 0;
+                if (FAILED(args->get_NavigationId(&navigation_id)) || navigation_id == 0) {
+                    (void)args->put_Cancel(TRUE);
+                    fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+                    return S_OK;
+                }
                 ++state->navigation_generation;
-            state->current_navigation_id = navigation_id;
-            state->navigation_started = true;
-            state->navigation_completed = false;
-            state->handshake_complete = false;
-            state->handshake_generation = 0;
-            state->handshake_challenge.clear();
-            state->phase = HostState::Phase::controller_ready;
-            state->hello_deadline = {};
-            const sao_status_t visibility_status = apply_requested_visibility(*state);
-            if (visibility_status != SAO_STATUS_OK &&
-                !transient_composition_status(visibility_status)) {
-                fail_state(state, visibility_status);
-                (void)args->put_Cancel(TRUE);
-            }
-            return S_OK;
-        });
+                if (state->navigation_generation == 0)
+                    ++state->navigation_generation;
+                state->current_navigation_id = navigation_id;
+                state->navigation_started = true;
+                state->navigation_completed = false;
+                state->handshake_complete = false;
+                state->handshake_generation = 0;
+                state->handshake_challenge.clear();
+                const sao_status_t document_status =
+                    native_adapter_set_document(state->native_adapter, {});
+                if (document_status != SAO_STATUS_OK) {
+                    fail_state(state, document_status);
+                    (void)args->put_Cancel(TRUE);
+                    return S_OK;
+                }
+                state->phase = HostState::Phase::controller_ready;
+                state->hello_deadline = {};
+                const sao_status_t visibility_status = apply_requested_visibility(*state);
+                if (visibility_status != SAO_STATUS_OK &&
+                    !transient_composition_status(visibility_status)) {
+                    fail_state(state, visibility_status);
+                    (void)args->put_Cancel(TRUE);
+                }
+                return S_OK;
+            });
     if (!navigation_starting ||
         FAILED(state->view->add_NavigationStarting(navigation_starting.Get(),
-                                                    &state->navigation_starting_token))) {
+                                                   &state->navigation_starting_token))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     state->navigation_starting_registered = true;
@@ -723,6 +1097,8 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
     auto navigation_completed =
         Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
             [state](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                if (!callback_on_owner(state))
+                    return RPC_E_WRONG_THREAD;
                 CallbackScope callback(state);
                 if (state->phase == HostState::Phase::closing ||
                     state->phase == HostState::Phase::failed || args == nullptr)
@@ -760,13 +1136,15 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
             });
     if (!navigation_completed ||
         FAILED(state->view->add_NavigationCompleted(navigation_completed.Get(),
-                                                     &state->navigation_completed_token))) {
+                                                    &state->navigation_completed_token))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     state->navigation_completed_registered = true;
 
     auto web_message = Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
         [state](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+            if (!callback_on_owner(state))
+                return RPC_E_WRONG_THREAD;
             CallbackScope callback(state);
             if (state->phase == HostState::Phase::closing ||
                 state->phase == HostState::Phase::failed)
@@ -779,29 +1157,37 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
             return S_OK;
         });
     if (!web_message ||
-        FAILED(state->view->add_WebMessageReceived(web_message.Get(),
-                                                    &state->web_message_token))) {
+        FAILED(state->view->add_WebMessageReceived(web_message.Get(), &state->web_message_token))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     state->web_message_registered = true;
 
     auto process_failed = Microsoft::WRL::Callback<ICoreWebView2ProcessFailedEventHandler>(
         [state](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs*) -> HRESULT {
+            if (!callback_on_owner(state))
+                return RPC_E_WRONG_THREAD;
             CallbackScope callback(state);
             state->process_failed = true;
-            if (state->phase != HostState::Phase::closing)
+            if (state->phase != HostState::Phase::closing) {
+                (void)post_json(*state, {{"channel", kChannel},
+                                         {"kind", "event"},
+                                         {"challenge", state->handshake_challenge},
+                                         {"name", "transport_failed"},
+                                         {"payload", {{"error", "WebView process failed."}}}});
                 fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+            }
             return S_OK;
         });
-    if (!process_failed ||
-        FAILED(state->view->add_ProcessFailed(process_failed.Get(),
-                                               &state->process_failed_token))) {
+    if (!process_failed || FAILED(state->view->add_ProcessFailed(process_failed.Get(),
+                                                                 &state->process_failed_token))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     state->process_failed_registered = true;
 
     auto cursor_changed = Microsoft::WRL::Callback<ICoreWebView2CursorChangedEventHandler>(
         [state](ICoreWebView2CompositionController*, IUnknown*) -> HRESULT {
+            if (!callback_on_owner(state))
+                return RPC_E_WRONG_THREAD;
             CallbackScope callback(state);
             if (state->phase == HostState::Phase::closing || !state->composition_controller)
                 return S_OK;
@@ -810,9 +1196,8 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
                 (void)SetCursor(cursor);
             return S_OK;
         });
-    if (!cursor_changed ||
-        FAILED(state->composition_controller->add_CursorChanged(cursor_changed.Get(),
-                                                                 &state->cursor_changed_token))) {
+    if (!cursor_changed || FAILED(state->composition_controller->add_CursorChanged(
+                               cursor_changed.Get(), &state->cursor_changed_token))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     state->cursor_changed_registered = true;
@@ -831,8 +1216,8 @@ sao_status_t finish_controller_setup(const std::shared_ptr<HostState>& state,
     if (FAILED(state->controller.As(&state->controller4)) || !state->controller4)
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     if (FAILED(state->controller4->put_ShouldDetectMonitorScaleChanges(FALSE)) ||
-        FAILED(state->controller4->put_RasterizationScale(
-            static_cast<double>(state->dpi) / 96.0))) {
+        FAILED(
+            state->controller4->put_RasterizationScale(static_cast<double>(state->dpi) / 96.0))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     const RECT bounds{0, 0, state->width, state->height};
@@ -865,62 +1250,69 @@ sao_status_t finish_controller_setup(const std::shared_ptr<HostState>& state,
 }
 
 sao_status_t start_environment(const std::shared_ptr<HostState>& state) noexcept {
-    state->environment_handler = Microsoft::WRL::Callback<
-        ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-        [state](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
-            CallbackScope callback(state);
-            state->environment_handler.Reset();
-            if (state->pending_async != 0)
-                --state->pending_async;
-            if (state->phase == HostState::Phase::closing)
-                return S_OK;
-            if (FAILED(result) || environment == nullptr) {
-                fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
-                return S_OK;
-            }
-            state->environment = environment;
-            if (FAILED(environment->QueryInterface(IID_PPV_ARGS(&state->environment3))) ||
-                !state->environment3) {
-                fail_state(state, SAO_STATUS_ERR_NOT_IMPLEMENTED);
-                return S_OK;
-            }
-            auto controller_ready = Microsoft::WRL::Callback<
-                ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                [state](HRESULT controller_result,
-                        ICoreWebView2CompositionController* controller) -> HRESULT {
-                    CallbackScope controller_callback(state);
-                    if (state->pending_async != 0)
-                        --state->pending_async;
-                    if (state->phase == HostState::Phase::closing) {
-                        if (controller != nullptr) {
-                            ComPtr<ICoreWebView2Controller> base;
-                            if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&base))) && base)
-                                (void)base->Close();
-                        }
-                        return S_OK;
-                    }
-                    if (FAILED(controller_result) || controller == nullptr) {
-                        fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
-                        return S_OK;
-                    }
-                    const sao_status_t setup_status = finish_controller_setup(state, controller);
-                    if (setup_status != SAO_STATUS_OK)
-                        fail_state(state, setup_status);
+    state->environment_handler =
+        Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [state](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
+                if (!callback_on_owner(state))
+                    return RPC_E_WRONG_THREAD;
+                CallbackScope callback(state);
+                state->environment_handler.Reset();
+                if (state->pending_async != 0)
+                    --state->pending_async;
+                if (state->phase == HostState::Phase::closing)
                     return S_OK;
-                });
-            if (!controller_ready) {
-                fail_state(state, SAO_STATUS_ERR_UNKNOWN);
+                if (FAILED(result) || environment == nullptr) {
+                    fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+                    return S_OK;
+                }
+                state->environment = environment;
+                if (FAILED(environment->QueryInterface(IID_PPV_ARGS(&state->environment3))) ||
+                    !state->environment3) {
+                    fail_state(state, SAO_STATUS_ERR_NOT_IMPLEMENTED);
+                    return S_OK;
+                }
+                auto controller_ready = Microsoft::WRL::Callback<
+                    ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                    [state](HRESULT controller_result,
+                            ICoreWebView2CompositionController* controller) -> HRESULT {
+                        if (!callback_on_owner(state))
+                            return RPC_E_WRONG_THREAD;
+                        CallbackScope controller_callback(state);
+                        if (state->pending_async != 0)
+                            --state->pending_async;
+                        if (state->phase == HostState::Phase::closing) {
+                            if (controller != nullptr) {
+                                ComPtr<ICoreWebView2Controller> base;
+                                if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&base))) &&
+                                    base)
+                                    (void)base->Close();
+                            }
+                            return S_OK;
+                        }
+                        if (FAILED(controller_result) || controller == nullptr) {
+                            fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+                            return S_OK;
+                        }
+                        const sao_status_t setup_status =
+                            finish_controller_setup(state, controller);
+                        if (setup_status != SAO_STATUS_OK)
+                            fail_state(state, setup_status);
+                        return S_OK;
+                    });
+                if (!controller_ready) {
+                    fail_state(state, SAO_STATUS_ERR_UNKNOWN);
+                    return S_OK;
+                }
+                ++state->pending_async;
+                const HRESULT create_status =
+                    state->environment3->CreateCoreWebView2CompositionController(
+                        state->parent_window, controller_ready.Get());
+                if (FAILED(create_status)) {
+                    --state->pending_async;
+                    fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+                }
                 return S_OK;
-            }
-            ++state->pending_async;
-            const HRESULT create_status = state->environment3->CreateCoreWebView2CompositionController(
-                state->parent_window, controller_ready.Get());
-            if (FAILED(create_status)) {
-                --state->pending_async;
-                fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
-            }
-            return S_OK;
-        });
+            });
     if (!state->environment_handler)
         return SAO_STATUS_ERR_UNKNOWN;
     ++state->pending_async;
@@ -970,11 +1362,74 @@ sao_status_t remove_handlers(HostState& state) noexcept {
         state.navigation_starting_registered = false;
     }
     if (state.composition_controller && state.cursor_changed_registered) {
-        const HRESULT status = state.composition_controller->remove_CursorChanged(
-            state.cursor_changed_token);
+        const HRESULT status =
+            state.composition_controller->remove_CursorChanged(state.cursor_changed_token);
         if (FAILED(status))
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         state.cursor_changed_registered = false;
+    }
+    return SAO_STATUS_OK;
+}
+
+sao_status_t drain_native_adapter(HostState& state) noexcept {
+    if (state.native_adapter == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    std::vector<NativeAdapterCompletion> completions;
+    std::vector<NativeAdapterEvent> events;
+    sao_status_t status = native_adapter_drain(state.native_adapter, &completions, &events);
+    if (status != SAO_STATUS_OK)
+        return status;
+    const bool document_ready = state.phase == HostState::Phase::ready &&
+                                state.handshake_complete && state.navigation_completed;
+    for (auto& completion : completions) {
+        if (!document_ready || completion.document_token != state.handshake_challenge)
+            continue;
+        json message{{"channel", kChannel},
+                     {"kind", "reply"},
+                     {"challenge", completion.document_token},
+                     {"id", completion.request_id},
+                     {"ok", completion.ok}};
+        if (completion.ok) {
+            message["result"] = std::move(completion.result);
+        } else {
+            message["error"] = {{"code", completion.error_code.empty() ? "SAO_BACKEND_ERROR"
+                                                                       : completion.error_code},
+                                {"message", completion.error_message.empty()
+                                                ? "Native workbench request failed."
+                                                : completion.error_message}};
+            if (!completion.error_data.is_null())
+                message["error"]["data"] = std::move(completion.error_data);
+        }
+        status = post_json(state, message);
+        if (status == SAO_STATUS_ERR_BUFFER_TOO_SMALL) {
+            status = post_json(
+                state, error_reply(completion.document_token, completion.request_id,
+                                   "SAO_RESPONSE_TOO_LARGE",
+                                   "Native workbench response exceeds the delivery limit."));
+        }
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+    for (auto& event : events) {
+        if (!document_ready || event.document_token != state.handshake_challenge ||
+            event.name.empty()) {
+            continue;
+        }
+        status = post_json(state, {{"channel", kChannel},
+                                   {"kind", "event"},
+                                   {"challenge", event.document_token},
+                                   {"name", event.name},
+                                   {"payload", std::move(event.payload)}});
+        if (status == SAO_STATUS_ERR_BUFFER_TOO_SMALL) {
+            status = post_json(
+                state, {{"channel", kChannel},
+                        {"kind", "event"},
+                        {"challenge", event.document_token},
+                        {"name", "error"},
+                        {"payload", {{"error", "Native event exceeds the delivery limit."}}}});
+        }
+        if (status != SAO_STATUS_OK)
+            return status;
     }
     return SAO_STATUS_OK;
 }
@@ -985,8 +1440,7 @@ struct CompositionHost {
     std::shared_ptr<HostState> state;
 };
 
-sao_status_t create(sao_ui_compositor_handle_t compositor,
-                    sao_ai_editor_launcher_t launcher,
+sao_status_t create(sao_ui_compositor_handle_t compositor, sao_ai_editor_launcher_t launcher,
                     CompositionHost** out_host) noexcept {
     if (out_host == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1063,8 +1517,14 @@ sao_status_t create(sao_ui_compositor_handle_t compositor,
         status = sao_ui_composition_slot_create(compositor, &slot_config, &state->slot);
         if (status != SAO_STATUS_OK)
             return status;
-        status = sao_ui_composition_slot_set_mouse_handler(state->slot, &mouse_callback,
-                                                           state.get());
+        status =
+            sao_ui_composition_slot_set_mouse_handler(state->slot, &mouse_callback, state.get());
+        if (status != SAO_STATUS_OK) {
+            fail_state(*state, status);
+            *out_host = result.release();
+            return SAO_STATUS_OK;
+        }
+        status = native_adapter_create(launcher, &state->native_adapter);
         if (status != SAO_STATUS_OK) {
             fail_state(*state, status);
             *out_host = result.release();
@@ -1135,16 +1595,20 @@ sao_status_t tick(CompositionHost* host) noexcept {
         return status;
     }
     if (state.navigation_started &&
-        (!state.handshake_complete ||
-         state.handshake_generation != state.navigation_generation) &&
+        (!state.handshake_complete || state.handshake_generation != state.navigation_generation) &&
         state.hello_deadline.time_since_epoch().count() != 0 &&
         std::chrono::steady_clock::now() >= state.hello_deadline) {
         fail_state(state, SAO_STATUS_ERR_TIMEOUT);
         return SAO_STATUS_ERR_TIMEOUT;
     }
+    sao_status_t status = drain_native_adapter(state);
+    if (status != SAO_STATUS_OK) {
+        fail_state(state, status);
+        return status;
+    }
     if (!state.controller)
         return SAO_STATUS_OK;
-    sao_status_t status = update_bounds_and_dpi(state);
+    status = update_bounds_and_dpi(state);
     if (transient_composition_status(status))
         return SAO_STATUS_OK;
     if (status != SAO_STATUS_OK) {
@@ -1171,14 +1635,19 @@ sao_status_t try_destroy(CompositionHost* host) noexcept {
     state->requested_visible = false;
     cancel_mouse_state(*state);
     (void)apply_requested_visibility(*state);
+    if (state->native_adapter != nullptr) {
+        const sao_status_t adapter_status = native_adapter_try_destroy(state->native_adapter);
+        if (adapter_status != SAO_STATUS_OK)
+            return adapter_status;
+        state->native_adapter = nullptr;
+    }
     if (state->pending_async != 0 || state->callback_depth != 0)
         return SAO_STATUS_ERR_CANCELLED;
     sao_status_t status = remove_handlers(*state);
     if (status != SAO_STATUS_OK)
         return status;
     if (state->composition_controller) {
-        const HRESULT detach_status =
-            state->composition_controller->put_RootVisualTarget(nullptr);
+        const HRESULT detach_status = state->composition_controller->put_RootVisualTarget(nullptr);
         if (FAILED(detach_status) && !state->process_failed)
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         if (SUCCEEDED(detach_status)) {
@@ -1224,15 +1693,13 @@ sao_status_t try_destroy(CompositionHost* host) noexcept {
 }
 
 bool available(const CompositionHost* host) noexcept {
-    return host != nullptr && host->state &&
-           host->state->phase != HostState::Phase::failed &&
+    return host != nullptr && host->state && host->state->phase != HostState::Phase::failed &&
            host->state->phase != HostState::Phase::closing;
 }
 
 bool ready(const CompositionHost* host) noexcept {
     return host != nullptr && host->state && host->state->handshake_complete &&
-           host->state->navigation_completed &&
-           host->state->navigation_generation != 0 &&
+           host->state->navigation_completed && host->state->navigation_generation != 0 &&
            host->state->handshake_generation == host->state->navigation_generation &&
            host->state->phase == HostState::Phase::ready;
 }
@@ -1264,17 +1731,31 @@ sao_status_t create(sao_ui_compositor_handle_t, sao_ai_editor_launcher_t,
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
-sao_status_t show(CompositionHost*) noexcept { return SAO_STATUS_ERR_NOT_IMPLEMENTED; }
-sao_status_t hide(CompositionHost*) noexcept { return SAO_STATUS_ERR_NOT_IMPLEMENTED; }
-sao_status_t tick(CompositionHost*) noexcept { return SAO_STATUS_ERR_NOT_IMPLEMENTED; }
+sao_status_t show(CompositionHost*) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+sao_status_t hide(CompositionHost*) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+sao_status_t tick(CompositionHost*) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
 sao_status_t try_destroy(CompositionHost* host) noexcept {
     delete host;
     return SAO_STATUS_OK;
 }
-bool available(const CompositionHost*) noexcept { return false; }
-bool ready(const CompositionHost*) noexcept { return false; }
-bool failed(const CompositionHost*) noexcept { return true; }
-bool consume_close_request(CompositionHost*) noexcept { return false; }
+bool available(const CompositionHost*) noexcept {
+    return false;
+}
+bool ready(const CompositionHost*) noexcept {
+    return false;
+}
+bool failed(const CompositionHost*) noexcept {
+    return true;
+}
+bool consume_close_request(CompositionHost*) noexcept {
+    return false;
+}
 
 } // namespace sao::ai_editor::workbench
 

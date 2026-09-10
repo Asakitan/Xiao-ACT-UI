@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -16,22 +16,22 @@
 #include "auth_device_flow.h"
 #include "conversation_store.h"
 #include "extension_host.h"
+#include "kernel_map_panel_provider.h"
+#include "mcp_management_panel_provider.h"
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
 #include "prompt_registry.h"
+#include "sao/ai_editor/mcp_client.h"
 #include "tool_execution_monitor.h"
 #include "tool_result_cache.h"
 #include "tool_result_filter.h"
-#include "kernel_map_panel_provider.h"
-#include "mcp_management_panel_provider.h"
 #include "webview_panel_registry.h"
-#include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
 #include "workflow_engine.h"
 
 namespace sao::ai_editor::vt {
 class Bridge;
-}  // namespace sao::ai_editor::vt
+} // namespace sao::ai_editor::vt
 
 namespace sao::ai_editor::native {
 
@@ -47,11 +47,9 @@ struct RuntimeOptions final {
 class WorkflowExecution;
 
 class NativeRuntime final {
-public:
+  public:
     using WebviewPostMessageHandler =
-        std::function<bool(std::string_view panel_id,
-                           uint64_t message_seq,
-                           const Json& message)>;
+        std::function<bool(std::string_view panel_id, uint64_t message_seq, const Json& message)>;
 
     friend class WorkflowExecution;
     explicit NativeRuntime(RuntimeOptions options);
@@ -64,7 +62,7 @@ public:
     int32_t dispatch(const Json& request, Json& response);
     int32_t next_event(uint32_t timeout_ms, std::string& event_json);
 
-private:
+  private:
     struct RunState final {
         std::string id;
         std::string status = "running";
@@ -80,9 +78,7 @@ private:
         std::string model;
     };
 
-    int32_t invoke(std::string_view method,
-                   const Json& params,
-                   Json& result);
+    int32_t invoke(std::string_view method, const Json& params, Json& result);
     int32_t start_chat(const Json& params, Json& result);
     int32_t cancel_run(const Json& params, Json& result);
     int32_t run_status(const Json& params, Json& result);
@@ -98,19 +94,15 @@ private:
     // Resolve the injected pricing rule for a (provider, model) tuple and
     // fill `HttpChatRequest::pricing_rule` when found.  No-op if either
     // key component is empty or the map has no entry.
-    void resolve_pricing_rule(std::string_view provider_type,
-                              std::string_view model,
+    void resolve_pricing_rule(std::string_view provider_type, std::string_view model,
                               HttpChatRequest& request) const;
     // Called from execute_chat once the transport reports final metrics so
     // the in-process cost accumulator picks up prompt / completion / cost
     // even when the caller ignores chat.metrics.  Runs under
     // `cost_stats_mutex_`; feeds `chat.cost_stats` responses verbatim.
-    void accumulate_cost_stats(std::string_view provider_type,
-                               std::string_view model,
+    void accumulate_cost_stats(std::string_view provider_type, std::string_view model,
                                const Json& metrics);
-    int32_t dispatch_mcp(std::string_view method,
-                         const Json& params,
-                         Json& result);
+    int32_t dispatch_mcp(std::string_view method, const Json& params, Json& result);
     int32_t register_builtin_mcp_server();
     void register_plugin_manifest_contributions();
     Json mcp_management_snapshot();
@@ -118,8 +110,7 @@ private:
     // if empty/absent -> all registered servers) and emit them as OpenAI-shape
     // `function` tools with `mcp__<server>__<name>` naming.  Returns an empty
     // array when no MCP client is registered / servers are configured.
-    int32_t collect_mcp_openai_tools(const Json& mcp_server_filter,
-                                     Json& out_tools);
+    int32_t collect_mcp_openai_tools(const Json& mcp_server_filter, Json& out_tools);
     // chat.run_with_mcp / agents.invoke_with_mcp — thin wrappers that inject
     // collected MCP tools into params.tools before delegating to start_chat /
     // dispatch_agent("agents.invoke").
@@ -132,18 +123,10 @@ private:
     // absent, empty, or successfully rendered; propagates the get_prompt
     // failure otherwise (never silently swallowed).
     int32_t apply_system_prompt_source(Json& params);
-    int32_t dispatch_workflow(std::string_view method,
-                              const Json& params,
-                              Json& result);
-    int32_t dispatch_auth(std::string_view method,
-                          const Json& params,
-                          Json& result);
-    int32_t dispatch_extension(std::string_view method,
-                               const Json& params,
-                               Json& result);
-    int32_t dispatch_agent(std::string_view method,
-                           const Json& params,
-                           Json& result);
+    int32_t dispatch_workflow(std::string_view method, const Json& params, Json& result);
+    int32_t dispatch_auth(std::string_view method, const Json& params, Json& result);
+    int32_t dispatch_extension(std::string_view method, const Json& params, Json& result);
+    int32_t dispatch_agent(std::string_view method, const Json& params, Json& result);
     // agents.batch_invoke — fan-out multiple agents in parallel (one worker
     // thread per agent, throttled by params.concurrency in [1, 16]).  Each
     // agent runs the full agents.invoke pipeline (agent lookup +
@@ -166,9 +149,7 @@ private:
     // Results are assembled in input order; each entry carries
     // {id, name, status, durationMs} plus either result or error.
     int32_t dispatch_tool_calls(const Json& params, Json& result);
-    int32_t dispatch_prompt(std::string_view method,
-                            const Json& params,
-                            Json& result);
+    int32_t dispatch_prompt(std::string_view method, const Json& params, Json& result);
     // Resolve `promptId` + optional `promptArguments` in a chat.run-style
     // params payload: render the referenced PromptDefinition and prepend it
     // to `params.messages` either as an extra system message (when the
@@ -176,34 +157,27 @@ private:
     // SAO_AI_EDITOR_OK when the promptId field is absent, empty, or
     // successfully rendered; propagates registry lookup failures otherwise.
     int32_t apply_prompt_source(Json& params);
-    int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
-                          std::string& out_content,
+    int32_t run_chat_sync(const Json& params, uint32_t timeout_ms, std::string& out_content,
                           std::function<void(const Json&)> on_delta = nullptr);
     // Public helper so WorkflowExecution / other friend-classes can push
     // structured events (e.g. streaming step deltas) to the same queue as
     // emit().  Delegates to the private emit() method internally.
-    void emit_workflow_event(std::string_view event_name,
-                             const Json& payload,
+    void emit_workflow_event(std::string_view event_name, const Json& payload,
                              std::string_view run_id = {}) {
         emit(event_name, payload, run_id);
     }
-    void execute_chat(const std::shared_ptr<RunState>& run,
-                      HttpChatRequest request,
+    void execute_chat(const std::shared_ptr<RunState>& run, HttpChatRequest request,
                       std::string conversation_id);
-    void emit(std::string_view event_name,
-              const Json& payload,
-              std::string_view run_id = {});
+    void emit(std::string_view event_name, const Json& payload, std::string_view run_id = {});
     bool is_current(const std::shared_ptr<RunState>& run) const;
-    int32_t resolve_provider(const Json& params,
-                             Json& prepared_params,
-                             Json& provider,
+    int32_t resolve_provider(const Json& params, Json& prepared_params, Json& provider,
                              std::string& api_key);
     static Json permission_policy(std::string_view mode);
     // C-callable trampoline that unpacks the MCP notification envelope and
     // routes it into the runtime's event queue as an "mcp.notification"
     // sao.event.
-    static void SAO_AI_EDITOR_CALL mcp_notification_trampoline(
-        void* user, const char* json_utf8, uint32_t json_len);
+    static void SAO_AI_EDITOR_CALL mcp_notification_trampoline(void* user, const char* json_utf8,
+                                                               uint32_t json_len);
 
     struct McpClientDeleter final {
         void operator()(SaoAiEditorMcpClient* client) const noexcept {
@@ -239,8 +213,7 @@ private:
     std::unique_ptr<SaoAiEditorMcpClient, McpClientDeleter> mcp_client_;
     WorkflowRegistry workflow_registry_;
     mutable std::mutex workflow_mutex_;
-    std::unordered_map<std::string, std::shared_ptr<WorkflowExecution>>
-        workflow_executions_;
+    std::unordered_map<std::string, std::shared_ptr<WorkflowExecution>> workflow_executions_;
     std::unique_ptr<AuthDeviceFlow> auth_flow_;
     std::unique_ptr<ExtensionHost> extension_host_;
     AgentRegistry agent_registry_;
@@ -267,18 +240,13 @@ private:
     WebviewPostMessageHandler webview_post_message_handler_;
     uint32_t maximum_event_queue_;
 
-public:
+  public:
     // Node-side vscode.* / sao.host.* callbacks; the extension shim invokes
     // these when extensions call vscode API surface.
-    int32_t dispatch_extension_call(std::string_view method,
-                                    const Json& params,
-                                    Json& result);
-    int32_t dispatch_webview_message_to_extension(const Json& params,
-                                                  Json& result);
-    int32_t dispatch_webview_message_to_page(const Json& params,
-                                             Json& result);
-    void set_webview_post_message_handler(
-        WebviewPostMessageHandler handler);
+    int32_t dispatch_extension_call(std::string_view method, const Json& params, Json& result);
+    int32_t dispatch_webview_message_to_extension(const Json& params, Json& result);
+    int32_t dispatch_webview_message_to_page(const Json& params, Json& result);
+    void set_webview_post_message_handler(WebviewPostMessageHandler handler);
     std::optional<WebviewPanelState> active_webview_panel() const;
 
     mutable std::mutex store_mutex_;
@@ -290,6 +258,7 @@ public:
     std::mutex event_mutex_;
     std::condition_variable event_ready_;
     std::deque<std::string> events_;
+    uint64_t dropped_events_ = 0;
     bool stopping_ = false;
 
     // Pricing rules keyed by "<provider>|<model>".  Each value is a JSON
@@ -318,7 +287,7 @@ public:
     bool kernel_map_bridge_owner_ = false;
 };
 
-}  // namespace sao::ai_editor::native
+} // namespace sao::ai_editor::native
 
 struct SaoAiEditorRuntime {
     std::unique_ptr<sao::ai_editor::native::NativeRuntime> implementation;
@@ -335,19 +304,23 @@ struct SaoAiEditorRuntime {
 namespace sao::ai_editor::native {
 
 class RuntimeLease final {
-public:
+  public:
     explicit RuntimeLease(SaoAiEditorRuntime* handle) noexcept;
     ~RuntimeLease();
 
     RuntimeLease(const RuntimeLease&) = delete;
     RuntimeLease& operator=(const RuntimeLease&) = delete;
 
-    NativeRuntime* get() const noexcept { return runtime_; }
-    explicit operator bool() const noexcept { return runtime_ != nullptr; }
+    NativeRuntime* get() const noexcept {
+        return runtime_;
+    }
+    explicit operator bool() const noexcept {
+        return runtime_ != nullptr;
+    }
 
-private:
+  private:
     SaoAiEditorRuntime* handle_ = nullptr;
     NativeRuntime* runtime_ = nullptr;
 };
 
-}  // namespace sao::ai_editor::native
+} // namespace sao::ai_editor::native

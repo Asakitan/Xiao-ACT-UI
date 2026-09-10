@@ -25,7 +25,7 @@ namespace sao::ai_editor::native {
 class WebviewPanelRegistry;
 
 class NativePanelProvider {
-public:
+  public:
     virtual ~NativePanelProvider() = default;
     virtual int32_t register_with_runtime(WebviewPanelRegistry& registry,
                                           const std::string& assets_root) = 0;
@@ -45,27 +45,27 @@ struct WebviewPanelOptions final {
     // ViewColumn hint (VSCode convention: Active=-1, Beside=-2, positive=explicit).
     // Stored verbatim; the single-window WebView2 host currently ignores splits.
     int view_column = 1;
-    Json extras = Json::object();  // opaque forward-compat bag
+    Json extras = Json::object(); // opaque forward-compat bag
 };
 
 struct WebviewPanelState final {
     std::string panel_id;
     std::string view_type;
     std::string title;
-    std::string html;             // last setWebviewHtml payload
+    std::string html; // last setWebviewHtml payload
     WebviewPanelOptions options;
     WebviewPanelOwner owner = WebviewPanelOwner::extension_host;
-    bool visible = false;         // reveal → true, hide/dispose → false
+    bool visible = false; // reveal → true, hide/dispose → false
     bool disposed = false;
     int64_t created_ms = 0;
     int64_t last_reveal_ms = 0;
     int64_t last_post_ms = 0;
-    uint64_t message_seq = 0;     // monotonic id assigned to native→web posts
+    uint64_t message_seq = 0; // monotonic id assigned to native→web posts
     Json initial_state = Json::object();
 };
 
 class WebviewPanelRegistry final {
-public:
+  public:
     WebviewPanelRegistry() = default;
 
     WebviewPanelRegistry(const WebviewPanelRegistry&) = delete;
@@ -76,10 +76,8 @@ public:
     // A disposed supplied id is revived without incrementing total_created
     // when its owner and view type match.  Returns INVALID_ARGUMENT if
     // `view_type` is empty or a live/mismatched supplied id already exists.
-    int32_t create(const std::string& panel_id_hint,
-                   const std::string& view_type,
-                   const std::string& title,
-                   const WebviewPanelOptions& options,
+    int32_t create(const std::string& panel_id_hint, const std::string& view_type,
+                   const std::string& title, const WebviewPanelOptions& options,
                    WebviewPanelState& out_state);
 
     int32_t create(const std::string& panel_id_hint, const std::string& view_type,
@@ -88,32 +86,28 @@ public:
 
     // Mark the panel visible and record the reveal timestamp.  Returns
     // NOT_FOUND when the id is missing, PROTOCOL when disposed.
-    int32_t reveal(const std::string& panel_id,
-                   int view_column,
-                   bool preserve_focus,
+    int32_t reveal(const std::string& panel_id, int view_column, bool preserve_focus,
                    WebviewPanelState& out_state);
+
+    int32_t set_view_state(const std::string& panel_id, bool active, bool visible, int view_column,
+                           WebviewPanelState& out_state);
 
     // Dispose the panel.  Idempotent: repeated calls succeed but flag
     // `already` in `out_state.extras.already` for the caller to log.
-    int32_t dispose(const std::string& panel_id,
-                    WebviewPanelState& out_state);
+    int32_t dispose(const std::string& panel_id, WebviewPanelState& out_state);
 
     // Update the last-known HTML payload and reset visibility to true
     // (VSCode contract: setting HTML implicitly reveals the panel).
-    int32_t set_html(const std::string& panel_id,
-                     const std::string& html,
+    int32_t set_html(const std::string& panel_id, const std::string& html,
                      WebviewPanelState& out_state);
 
     // Bookkeeping for postMessage: returns the message seq assigned to
     // this post (monotonic, 1-based) so the bridge can correlate acks.
-    int32_t note_post_message(const std::string& panel_id,
-                              WebviewPanelState& out_state);
+    int32_t note_post_message(const std::string& panel_id, WebviewPanelState& out_state);
 
     // Persist a small opaque state blob so acquireVsCodeApi().setState()
     // survives navigations without a real disk backing.
-    int32_t set_state(const std::string& panel_id,
-                      const Json& state,
-                      WebviewPanelState& out_state);
+    int32_t set_state(const std::string& panel_id, const Json& state, WebviewPanelState& out_state);
 
     // Read-only snapshot for tests / debug endpoints.
     std::optional<WebviewPanelState> snapshot(const std::string& panel_id) const;
@@ -135,7 +129,7 @@ public:
     // Wipe everything.  Used by tests and by native runtime shutdown.
     void clear();
 
-private:
+  private:
     static int64_t now_ms() noexcept;
     std::string mint_id_locked();
 
@@ -145,4 +139,4 @@ private:
     size_t total_created_ = 0;
 };
 
-}  // namespace sao::ai_editor::native
+} // namespace sao::ai_editor::native
