@@ -89,8 +89,7 @@ struct AppState {
     bool ui_online = false;
 };
 
-bool shouldEmitRtIoReady(const AppState& state,
-                         bool validation_ready) noexcept;
+bool shouldEmitRtIoReady(const AppState& state, bool validation_ready) noexcept;
 
 // The launcher singleton.  Only one instance lives per process.
 class App {
@@ -136,6 +135,11 @@ class App {
     AppState state_{};
     UserMenu user_menu_{};
     bool first_run_ = false;
+    bool user_guide_open_pending_ = false;
+    bool user_guide_open_accepted_ = false;
+    bool user_guide_skip_intro_ = false;
+    ULONGLONG user_guide_next_retry_ = 0;
+    void serviceFirstRunGuide() noexcept;
     bool stopAutoUpdate() noexcept;
     HANDLE single_instance_mutex_ = nullptr;
     HANDLE dual_run_driver_mutex_ = nullptr;

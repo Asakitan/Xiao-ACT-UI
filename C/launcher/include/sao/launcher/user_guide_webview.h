@@ -15,6 +15,7 @@ namespace sao::launcher {
 // runtime is unavailable, in which case the caller should fall back to
 // ShellExecute (default browser).
 bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept;
+bool openUserGuideInWebView(const wchar_t* docs_index_path, bool native_intro_completed) noexcept;
 
 // Closes the guide thread and releases its WebView2/COM/module resources.
 // Returns false only when the thread did not stop within the bounded wait;

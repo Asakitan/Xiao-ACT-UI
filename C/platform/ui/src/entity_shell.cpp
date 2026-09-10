@@ -3529,6 +3529,8 @@ sao_ui_entity_shell_take_offline(sao_ui_entity_shell_handle_t handle) {
     handle->overlay_visible = false;
     handle->visual_dirty = true;
     invalidate_nervegear_raster_locked(handle);
+    status =
+        first_failure(status, sao_ui_nervegear_transition(handle->nervegear, SAO_UI_NG_STATE_IDLE));
     status = first_failure(status, sao_ui_nervegear_hide(handle->nervegear));
     status = first_failure(status, commit_visual_state_locked(handle));
     if (handle->owns_compositor && handle->host != nullptr) {

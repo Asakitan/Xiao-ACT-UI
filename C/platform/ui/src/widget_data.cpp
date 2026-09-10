@@ -1,13 +1,4 @@
-// SAO Auto — data-display widgets and progress-bar behavior.
-//
-// This slice implements the ProgressBar portion of widget_data.h:
-//   * sao_ui_progress_bar_create / _set_value / _set_max
-//
-// Plus helper APIs for style-driven fill-ratio, HP-ramp colour
-// resolution, and the HP_TRAIL animation tick.  Gauge / badge / tooltip
-// / more_indicator are stubbed to NOT_IMPLEMENTED for later slices.
-//
-// UTF-8 no BOM.
+// SAO Auto — data-display widgets, typed props, painting, and progress animation.
 
 #include "sao/ui/widget_data.h"
 #include "sao/ui/widget_kit.h"

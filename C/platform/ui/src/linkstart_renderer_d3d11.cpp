@@ -168,28 +168,41 @@ std::array<float, 3> mix_color(const std::array<float, 3>& a, const std::array<f
     return {lerp(a[0], b[0], x), lerp(a[1], b[1], x), lerp(a[2], b[2], x)};
 }
 
-std::array<float, 3> background_at(float t) noexcept {
+std::array<float, 3> background_at(float t, const FrameState& frame) noexcept {
     constexpr std::array<float, 3> start{2.0F / 255.0F, 4.0F / 255.0F, 10.0F / 255.0F};
     constexpr std::array<float, 3> tunnel{22.0F / 255.0F, 33.0F / 255.0F, 62.0F / 255.0F};
     constexpr std::array<float, 3> text{42.0F / 255.0F, 42.0F / 255.0F, 58.0F / 255.0F};
     constexpr std::array<float, 3> blue{10.0F / 255.0F, 22.0F / 255.0F, 40.0F / 255.0F};
     constexpr std::array<float, 3> blue_exit{26.0F / 255.0F, 42.0F / 255.0F, 74.0F / 255.0F};
-    if (t < 0.12F)
+    const float p1_ramp_start = frame.p1_end * (0.12F / 3.5F);
+    const float p1_ramp_end = frame.p1_end * (0.72F / 3.5F);
+    const float text_transition_start = std::max(p1_ramp_end, frame.p2_start - 0.5F);
+    const float phase3_span = std::max(0.0F, frame.p3_end - frame.p3_start);
+    const float color_transition = std::min(0.5F, phase3_span * 0.25F);
+    const float blue_transition_end = frame.p3_start + color_transition;
+    const float blue_exit_start = std::max(blue_transition_end, frame.p3_end - color_transition);
+    if (t < p1_ramp_start)
         return start;
-    if (t < 0.72F)
-        return mix_color(start, tunnel, (t - 0.12F) / 0.60F);
-    if (t < 3.0F)
+    if (t < p1_ramp_end)
+        return mix_color(start, tunnel,
+                         (t - p1_ramp_start) / std::max(0.001F, p1_ramp_end - p1_ramp_start));
+    if (t < text_transition_start)
         return tunnel;
-    if (t < 3.5F)
-        return mix_color(tunnel, text, (t - 3.0F) / 0.5F);
-    if (t < 5.2F)
+    if (t < frame.p2_start)
+        return mix_color(tunnel, text,
+                         (t - text_transition_start) /
+                             std::max(0.001F, frame.p2_start - text_transition_start));
+    if (t < frame.p3_start)
         return text;
-    if (t < 5.7F)
-        return mix_color(text, blue, (t - 5.2F) / 0.5F);
-    if (t < 7.0F)
+    if (t < blue_transition_end)
+        return mix_color(text, blue,
+                         (t - frame.p3_start) /
+                             std::max(0.001F, blue_transition_end - frame.p3_start));
+    if (t < blue_exit_start)
         return blue;
-    if (t < 7.5F)
-        return mix_color(blue, blue_exit, (t - 7.0F) / 0.5F);
+    if (t < frame.p3_end)
+        return mix_color(blue, blue_exit,
+                         (t - blue_exit_start) / std::max(0.001F, frame.p3_end - blue_exit_start));
     return blue_exit;
 }
 
@@ -198,11 +211,11 @@ VisualState visual_state(const FrameState& frame) noexcept {
     const float elapsed = std::max(0.0F, frame.elapsed_seconds);
     const float prelude = std::max(0.0F, frame.startup_prelude);
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
-    state.background = background_at(state.scene_time);
+    state.background = background_at(state.scene_time, frame);
 
     if (frame.reduced_motion && elapsed < prelude) {
         state.scene_time = frame.p2_start;
-        state.background = background_at(frame.p2_start);
+        state.background = background_at(frame.p2_start, frame);
         state.energy = 0.12F;
         state.startup_burst = 0.0F;
         state.startup_wave = 1.0F;
@@ -737,6 +750,16 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         device_context->VSSetConstantBuffers(0u, 1u, &constant_buffer);
         device_context->PSSetConstantBuffers(0u, 1u, &constant_buffer);
         device_context->PSSetSamplers(0u, 1u, &renderer->sampler);
+        device_context->SetPredication(nullptr, FALSE);
+        device_context->GSSetShader(nullptr, nullptr, 0u);
+        device_context->HSSetShader(nullptr, nullptr, 0u);
+        device_context->DSSetShader(nullptr, nullptr, 0u);
+        ID3D11Buffer* null_vertex_buffers[2]{nullptr, nullptr};
+        constexpr UINT null_strides[2]{0u, 0u};
+        constexpr UINT null_offsets[2]{0u, 0u};
+        device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
+        ID3D11ShaderResourceView* null_inputs[2]{nullptr, nullptr};
+        device_context->PSSetShaderResources(0u, 2u, null_inputs);
         constexpr float transparent[4]{0.0F, 0.0F, 0.0F, 0.0F};
         constexpr float blend_factor[4]{0.0F, 0.0F, 0.0F, 0.0F};
         device_context->ClearRenderTargetView(renderer->scene_rtv, transparent);
@@ -753,6 +776,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                                 0.0F,
                                 1.0F};
         device_context->RSSetViewports(1u, &viewport);
+        device_context->RSSetState(renderer->no_cull_rasterizer);
         device_context->IASetInputLayout(nullptr);
         device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         device_context->VSSetShader(renderer->fullscreen_vs, nullptr, 0u);
@@ -805,6 +829,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             0.0F, 1.0F};
         device_context->RSSetViewports(1u, &half_viewport);
         device_context->RSSetState(nullptr);
+        device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
         device_context->IASetInputLayout(nullptr);
         device_context->VSSetShader(renderer->fullscreen_vs, nullptr, 0u);
         device_context->PSSetShader(renderer->post_ps, nullptr, 0u);

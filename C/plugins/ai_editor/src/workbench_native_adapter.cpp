@@ -64,6 +64,7 @@ constexpr std::chrono::minutes kEventPollLifetime{10};
 constexpr size_t kMaximumJsonDepth = 64;
 constexpr size_t kMaximumJsonNodes = 16384;
 constexpr size_t kMaximumJsonStringBytes = 1024U * 1024U;
+constexpr size_t kMaximumImageBinaryBytes = 3U * 1024U * 1024U - 128U * 1024U;
 
 struct AdapterJob {
     std::string document_token;
@@ -151,6 +152,53 @@ bool json_within_budget(const json& value, size_t depth, size_t* nodes) {
 bool json_within_budget(const json& value) {
     size_t nodes = 0;
     return json_within_budget(value, 0, &nodes);
+}
+
+bool ascii_alphanumeric(unsigned char value) noexcept {
+    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') ||
+           (value >= '0' && value <= '9');
+}
+
+int base64_sextet(unsigned char value) noexcept {
+    if (value >= 'A' && value <= 'Z')
+        return value - 'A';
+    if (value >= 'a' && value <= 'z')
+        return value - 'a' + 26;
+    if (value >= '0' && value <= '9')
+        return value - '0' + 52;
+    if (value == '+')
+        return 62;
+    if (value == '/')
+        return 63;
+    return -1;
+}
+
+bool valid_image_base64(std::string_view encoded, size_t* decoded_bytes) noexcept {
+    if (decoded_bytes == nullptr || encoded.empty() || encoded.size() % 4U != 0U)
+        return false;
+    size_t padding = 0;
+    if (encoded.ends_with("=="))
+        padding = 2;
+    else if (encoded.ends_with('='))
+        padding = 1;
+    for (size_t index = 0; index < encoded.size() - padding; ++index) {
+        const unsigned char value = static_cast<unsigned char>(encoded[index]);
+        if (base64_sextet(value) < 0)
+            return false;
+    }
+    for (size_t index = encoded.size() - padding; index < encoded.size(); ++index)
+        if (encoded[index] != '=')
+            return false;
+    if ((padding == 2U &&
+         (base64_sextet(static_cast<unsigned char>(encoded[encoded.size() - 3U])) & 0x0F) != 0) ||
+        (padding == 1U &&
+         (base64_sextet(static_cast<unsigned char>(encoded[encoded.size() - 2U])) & 0x03) != 0))
+        return false;
+    const size_t groups = encoded.size() / 4U;
+    if (groups > (std::numeric_limits<size_t>::max() - 2U) / 3U)
+        return false;
+    *decoded_bytes = groups * 3U - padding;
+    return *decoded_bytes <= kMaximumImageBinaryBytes;
 }
 
 std::string string_member_or(const json& value, std::string_view name, std::string fallback = {}) {
@@ -241,6 +289,9 @@ json settings_overrides(const RpcReply& reply) {
 
 NativeAdapterCompletion failed_completion(const AdapterJob& job, std::string code,
                                           std::string message, json error_data = nullptr) {
+    if (!error_data.is_null() &&
+        (!json_within_budget(error_data) || error_data.dump().size() > kMaximumRequestBytes))
+        error_data = nullptr;
     NativeAdapterCompletion completion;
     completion.document_token = job.document_token;
     completion.request_id = job.request_id;
@@ -251,6 +302,9 @@ NativeAdapterCompletion failed_completion(const AdapterJob& job, std::string cod
 }
 
 NativeAdapterCompletion successful_completion(const AdapterJob& job, json result) {
+    if (!json_within_budget(result) || result.dump().size() > kMaximumRequestBytes)
+        return failed_completion(job, "SAO_RESPONSE_TOO_LARGE",
+                                 "Native workbench response exceeds the delivery limit.");
     NativeAdapterCompletion completion;
     completion.document_token = job.document_token;
     completion.request_id = job.request_id;
@@ -301,6 +355,7 @@ struct ManagedProcess {
     DWORD process_id{};
     DWORD exit_code{STILL_ACTIVE};
     bool running{true};
+    bool admission_active{};
     mutable std::mutex output_mutex;
     std::thread output_reader;
     std::atomic<bool> output_reader_done{false};
@@ -346,6 +401,7 @@ struct NativeAdapter {
 #if defined(_WIN32)
     std::unordered_map<std::string, std::unique_ptr<ManagedProcess>> processes;
     uint64_t process_counter{};
+    size_t active_processes{};
     bool process_reset_pending{};
 #endif
     uint64_t backend_request_id{};
@@ -520,6 +576,8 @@ RpcReply call_backend(NativeAdapter& adapter, std::string_view method, const jso
     return reply;
 }
 
+std::string workspace_resource_path(std::string value);
+
 RpcReply ensure_workspace(NativeAdapter& adapter) {
     RpcReply reply;
     if (adapter.workspace_ready) {
@@ -546,8 +604,9 @@ RpcReply ensure_workspace(NativeAdapter& adapter) {
 bool resolve_workspace_path(NativeAdapter& adapter, std::string_view value, bool for_write,
                             std::filesystem::path& result) {
     RpcReply workspace = ensure_workspace(adapter);
-    return workspace.ok && sao::ai_editor::native::resolve_bounded_path(adapter.workspace_root,
-                                                                        value, for_write, result);
+    const std::string resource = workspace_resource_path(std::string(value));
+    return workspace.ok && sao::ai_editor::native::resolve_bounded_path(
+                               adapter.workspace_root, resource, for_write, result);
 }
 
 std::string relative_workspace_path(const NativeAdapter& adapter,
@@ -627,8 +686,8 @@ std::string workspace_file_uri(const std::filesystem::path& path) {
     std::string encoded;
     encoded.reserve(native.size() + 8);
     for (const unsigned char byte : native) {
-        const bool allowed = std::isalnum(byte) != 0 || byte == '-' || byte == '_' || byte == '.' ||
-                             byte == '~' || byte == '/' || byte == ':';
+        const bool allowed = ascii_alphanumeric(byte) || byte == '-' || byte == '_' ||
+                             byte == '.' || byte == '~' || byte == '/' || byte == ':';
         if (allowed) {
             encoded.push_back(static_cast<char>(byte));
         } else {
@@ -711,7 +770,33 @@ std::wstring quote_process_argument(std::wstring_view value) {
     return result;
 }
 
-void close_managed_process(ManagedProcess& process, bool terminate) {
+DWORD remaining_wait_ms(std::chrono::steady_clock::time_point deadline) noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+        return 0;
+    const auto remaining = deadline - now;
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+    if (millis <= 0)
+        return 1;
+    return static_cast<DWORD>(
+        std::min<int64_t>(millis, static_cast<int64_t>(std::numeric_limits<DWORD>::max() - 1U)));
+}
+
+bool wait_io_thread(std::thread& thread, std::atomic<bool>& done,
+                    std::chrono::steady_clock::time_point deadline) noexcept {
+    if (!thread.joinable())
+        return true;
+    if (!done.load(std::memory_order_acquire))
+        (void)CancelSynchronousIo(thread.native_handle());
+    const DWORD timeout = remaining_wait_ms(deadline);
+    if (WaitForSingleObject(thread.native_handle(), timeout) != WAIT_OBJECT_0)
+        return false;
+    thread.join();
+    return true;
+}
+
+bool close_managed_process(ManagedProcess& process, bool terminate,
+                           std::chrono::steady_clock::time_point deadline) {
     {
         std::lock_guard lock(process.input_mutex);
         process.input_stopping = true;
@@ -720,25 +805,21 @@ void close_managed_process(ManagedProcess& process, bool terminate) {
     process.input_wake.notify_all();
     if (terminate && process.running && process.job != nullptr)
         (void)TerminateJobObject(process.job, ERROR_CANCELLED);
-    if (terminate && process.running && process.process != nullptr &&
-        WaitForSingleObject(process.process, 250) == WAIT_TIMEOUT) {
-        (void)TerminateProcess(process.process, ERROR_CANCELLED);
+    if (terminate && process.running && process.process != nullptr) {
+        const DWORD timeout = std::min<DWORD>(250U, remaining_wait_ms(deadline));
+        if (WaitForSingleObject(process.process, timeout) == WAIT_TIMEOUT)
+            (void)TerminateProcess(process.process, ERROR_CANCELLED);
     }
-    if (process.job != nullptr) {
-        CloseHandle(process.job);
-        process.job = nullptr;
-    }
-    if (process.output_reader.joinable()) {
-        if (!process.output_reader_done.load(std::memory_order_acquire))
-            (void)CancelSynchronousIo(process.output_reader.native_handle());
-        process.output_reader.join();
-    }
-    if (process.input_writer.joinable()) {
-        if (!process.input_writer_done.load(std::memory_order_acquire))
-            (void)CancelSynchronousIo(process.input_writer.native_handle());
-        process.input_wake.notify_all();
-        process.input_writer.join();
-    }
+    if (process.output_reader.joinable() &&
+        !process.output_reader_done.load(std::memory_order_acquire))
+        (void)CancelSynchronousIo(process.output_reader.native_handle());
+    if (process.input_writer.joinable() &&
+        !process.input_writer_done.load(std::memory_order_acquire))
+        (void)CancelSynchronousIo(process.input_writer.native_handle());
+    process.input_wake.notify_all();
+    if (!wait_io_thread(process.output_reader, process.output_reader_done, deadline) ||
+        !wait_io_thread(process.input_writer, process.input_writer_done, deadline))
+        return false;
     if (process.stdin_write != nullptr) {
         CloseHandle(process.stdin_write);
         process.stdin_write = nullptr;
@@ -751,7 +832,12 @@ void close_managed_process(ManagedProcess& process, bool terminate) {
         CloseHandle(process.process);
         process.process = nullptr;
     }
+    if (process.job != nullptr) {
+        CloseHandle(process.job);
+        process.job = nullptr;
+    }
     process.running = false;
+    return true;
 }
 
 json managed_process_snapshot(const ManagedProcess& process) {
@@ -973,12 +1059,24 @@ bool launch_managed_process(NativeAdapter& adapter, std::string name, std::strin
             reader_state->input_writer_done.store(true, std::memory_order_release);
         });
     } catch (...) {
-        close_managed_process(*process, true);
+        if (!close_managed_process(*process, true,
+                                   std::chrono::steady_clock::now() + std::chrono::seconds(2))) {
+            process->document_generation = 0;
+            adapter.processes[process->id] = std::move(process);
+            std::lock_guard lock(adapter.mutex);
+            adapter.process_reset_pending = true;
+            adapter.wake.notify_all();
+        }
         error_message = "Process I/O worker could not be started.";
         return false;
     }
     result = managed_process_snapshot(*process);
+    process->admission_active = true;
     adapter.processes[process->id] = std::move(process);
+    {
+        std::lock_guard lock(adapter.mutex);
+        ++adapter.active_processes;
+    }
     return true;
 }
 
@@ -993,6 +1091,9 @@ void poll_managed_processes(NativeAdapter& adapter, const std::string& document_
             process.running = false;
             (void)GetExitCodeProcess(process.process, &process.exit_code);
             std::lock_guard lock(adapter.mutex);
+            if (process.admission_active && adapter.active_processes != 0)
+                --adapter.active_processes;
+            process.admission_active = false;
             if (document_token == adapter.document_token &&
                 document_generation == adapter.document_generation &&
                 process.document_token == document_token &&
@@ -1007,21 +1108,50 @@ void poll_managed_processes(NativeAdapter& adapter, const std::string& document_
 
 void close_stale_managed_processes(NativeAdapter& adapter, const std::string& document_token,
                                    uint64_t document_generation) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    bool retry = false;
     for (auto process = adapter.processes.begin(); process != adapter.processes.end();) {
         if (process->second->document_token == document_token &&
             process->second->document_generation == document_generation) {
             ++process;
             continue;
         }
-        close_managed_process(*process->second, true);
-        process = adapter.processes.erase(process);
+        if (process->second->admission_active) {
+            std::lock_guard lock(adapter.mutex);
+            if (adapter.active_processes != 0)
+                --adapter.active_processes;
+            process->second->admission_active = false;
+        }
+        if (close_managed_process(*process->second, true, deadline)) {
+            process = adapter.processes.erase(process);
+        } else {
+            retry = true;
+            ++process;
+        }
+    }
+    if (retry) {
+        std::lock_guard lock(adapter.mutex);
+        adapter.process_reset_pending = true;
+        adapter.wake.notify_all();
     }
 }
 
 void close_managed_processes(NativeAdapter& adapter) {
-    for (auto& [id, process] : adapter.processes)
-        close_managed_process(*process, true);
-    adapter.processes.clear();
+    while (!adapter.processes.empty()) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        for (auto process = adapter.processes.begin(); process != adapter.processes.end();) {
+            if (process->second->admission_active) {
+                std::lock_guard lock(adapter.mutex);
+                if (adapter.active_processes != 0)
+                    --adapter.active_processes;
+                process->second->admission_active = false;
+            }
+            if (close_managed_process(*process->second, true, deadline))
+                process = adapter.processes.erase(process);
+            else
+                ++process;
+        }
+    }
 }
 #endif
 
@@ -1626,9 +1756,13 @@ NativeAdapterCompletion handle_chat_method(NativeAdapter& adapter, const Adapter
         const std::string text = job.args[0].get<std::string>();
         const std::string image = job.args[1].get<std::string>();
         const std::string mime = job.args.size() > 2 ? job.args[2].get<std::string>() : "image/png";
-        if (image.size() > kMaximumRequestBytes || mime.size() > 128)
-            return failed_completion(job, "SAO_REQUEST_TOO_LARGE",
-                                     "Image message exceeds the native limit.");
+        const bool supported_mime = mime == "image/png" || mime == "image/jpeg" ||
+                                    mime == "image/gif" || mime == "image/webp";
+        size_t decoded_bytes = 0;
+        if (!supported_mime || !valid_image_base64(image, &decoded_bytes))
+            return failed_completion(
+                job, "SAO_INVALID_ARGUMENT",
+                "Image message encoding is invalid or exceeds the native limit.");
         json content =
             json::array({{{"type", "text"}, {"text", text}},
                          {{"type", "image_url"},
@@ -2246,32 +2380,50 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
                                      "Workspace search query is invalid.");
         const std::string query = job.args[0].get<std::string>();
         const json options = job.args.size() > 1 ? job.args[1] : json::object();
-        const bool use_regex = options.value("regex", false);
-        const bool case_sensitive = options.value("caseSensitive", false);
-        const bool whole_word = options.value("wholeWord", false);
-        const int64_t requested_limit = options.value("maxResults", int64_t{500});
+        const auto read_bool = [&options](std::string_view primary, std::string_view alias,
+                                          bool* output) {
+            const auto first = options.find(std::string(primary));
+            const auto second = options.find(std::string(alias));
+            if ((first != options.end() && !first->is_boolean()) ||
+                (second != options.end() && !second->is_boolean()) ||
+                (first != options.end() && second != options.end() && *first != *second))
+                return false;
+            *output = first != options.end()    ? first->get<bool>()
+                      : second != options.end() ? second->get<bool>()
+                                                : false;
+            return true;
+        };
+        bool use_regex = false;
+        bool case_sensitive = false;
+        bool whole_word = false;
+        if (!read_bool("regex", "isRegex", &use_regex) ||
+            !read_bool("caseSensitive", "isCaseSensitive", &case_sensitive) ||
+            !read_bool("wholeWord", "isWordMatch", &whole_word))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Workspace search flags are invalid.");
+        const auto limit_value = options.find("maxResults");
+        if (limit_value != options.end() && !limit_value->is_number_integer())
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Workspace search limit is invalid.");
+        const int64_t requested_limit =
+            limit_value == options.end() ? int64_t{500} : limit_value->get<int64_t>();
+        const auto pattern = options.find("pattern");
+        if (pattern != options.end() &&
+            (!pattern->is_string() || pattern->get_ref<const std::string&>().size() > 1024U))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Workspace search pattern is invalid.");
         if (query.empty() || query.size() > 4096 || requested_limit < 1 || requested_limit > 2000)
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Workspace search options are invalid.");
-        const uint32_t limit = static_cast<uint32_t>(requested_limit);
-        json params{{"query", query},
-                    {"path", "."},
-                    {"limit", limit},
-                    {"regex", use_regex},
-                    {"caseSensitive", case_sensitive}};
-        const auto pattern = options.find("pattern");
-        if (pattern != options.end() && pattern->is_string())
-            params["pattern"] = *pattern;
-        RpcReply reply = call_backend(adapter, "vscode.workspace.textSearch", params);
-        if (!reply.ok)
-            return rpc_completion(job, std::move(reply));
-        std::string expression_text =
-            use_regex ? query
-                      : std::regex_replace(query, std::regex(R"([.^$|()\[\]{}*+?\\])"), R"(\$&)");
-        if (whole_word)
-            expression_text = "\\b(?:" + expression_text + ")\\b";
+        std::string expression_text;
         std::regex expression;
         try {
+            expression_text =
+                use_regex ? query
+                          : std::regex_replace(query, std::regex(R"([.^$|()\[\]{}*+?\\])"),
+                                               R"(\$&)");
+            if (whole_word)
+                expression_text = "\\b(?:" + expression_text + ")\\b";
             expression =
                 std::regex(expression_text, case_sensitive ? std::regex_constants::ECMAScript
                                                            : std::regex_constants::ECMAScript |
@@ -2280,13 +2432,36 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Workspace search expression is invalid.");
         }
+        const uint32_t limit = static_cast<uint32_t>(requested_limit);
+        json params{{"query", whole_word ? expression_text : query},
+                    {"path", "."},
+                    {"limit", limit},
+                    {"regex", use_regex || whole_word},
+                    {"caseSensitive", case_sensitive}};
+        if (pattern != options.end() && pattern->is_string())
+            params["pattern"] = *pattern;
+        RpcReply reply = call_backend(adapter, "vscode.workspace.textSearch", params);
+        if (!reply.ok)
+            return rpc_completion(job, std::move(reply));
+        json backend_rows = json::array();
+        for (const auto& row : array_from_result(reply.result, {"results", "items"})) {
+            const auto samples = row.is_object() ? row.find("samples") : row.end();
+            if (samples != row.end() && samples->is_array()) {
+                for (const auto& sample : *samples)
+                    backend_rows.push_back(sample);
+            } else {
+                backend_rows.push_back(row);
+            }
+        }
         json normalized = json::array();
         std::unordered_set<std::string> files;
-        for (const auto& row : array_from_result(reply.result, {"results", "items"})) {
+        for (const auto& row : backend_rows) {
             if (!row.is_object())
                 continue;
-            const std::string file = string_member_or(row, "file");
-            const std::string line_text = string_member_or(row, "text");
+            const std::string file = string_member_or(
+                row, "file", string_member_or(row, "path", string_member_or(row, "uri")));
+            const std::string line_text =
+                string_member_or(row, "text", string_member_or(row, "lineText"));
             if (file.empty())
                 continue;
             std::smatch match;
@@ -2296,18 +2471,28 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             const std::string prefix = line_text.substr(0, static_cast<size_t>(match.position()));
             const size_t column = sao::ai_editor::native::utf8_to_wide(prefix).size();
             const size_t match_length = sao::ai_editor::native::utf8_to_wide(match.str()).size();
-            normalized.push_back({{"file", file},
+            std::filesystem::path absolute;
+            const bool bounded = resolve_workspace_path(adapter, file, false, absolute);
+            const std::string path = bounded ? relative_workspace_path(adapter, absolute) : file;
+            const std::string uri = bounded ? workspace_file_uri(absolute) : std::string{};
+            normalized.push_back({{"file", path},
+                                  {"path", path},
+                                  {"uri", uri},
                                   {"line", std::max<int64_t>(0, one_based_line - 1)},
                                   {"lineText", line_text},
                                   {"column", column},
                                   {"matchLength", std::max<size_t>(1, match_length)}});
-            files.insert(file);
+            files.insert(path);
         }
-        return successful_completion(
-            job, {{"query", query},
-                  {"results", std::move(normalized)},
-                  {"fileCount", files.size()},
-                  {"truncated", reply.result.value("total", size_t{0}) >= limit}});
+        const size_t result_count = normalized.size();
+        const size_t backend_total =
+            reply.result.value("originalTotal", reply.result.value("total", size_t{0}));
+        return successful_completion(job, {{"query", query},
+                                           {"results", std::move(normalized)},
+                                           {"fileCount", files.size()},
+                                           {"resultCount", result_count},
+                                           {"truncated", backend_total > result_count ||
+                                                             backend_total >= limit}});
     }
     if (job.method == "editor_surface_state" || job.method == "report_editor_options" ||
         job.method == "report_editor_selection" || job.method == "report_editor_visible_ranges") {
@@ -2661,8 +2846,21 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
         if (!count(1, 1) || !job.args[0].is_object())
             return failed_completion(job, "SAO_INVALID_ARGUMENT", "MCP server config is required.");
         json config = job.args[0];
-        const std::string name = string_member_or(config, "name", string_member_or(config, "id"));
-        if (name.empty())
+        const auto name_value = config.find("name");
+        const auto id_value = config.find("id");
+        if ((name_value != config.end() && !name_value->is_string()) ||
+            (id_value != config.end() && !id_value->is_string()))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "MCP server id and name must be strings.");
+        const std::string supplied_name =
+            name_value == config.end() ? std::string{} : name_value->get<std::string>();
+        const std::string supplied_id =
+            id_value == config.end() ? std::string{} : id_value->get<std::string>();
+        if (!supplied_name.empty() && !supplied_id.empty() && supplied_name != supplied_id)
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "MCP server id and name must match.");
+        const std::string name = supplied_name.empty() ? supplied_id : supplied_name;
+        if (name.empty() || name.size() > 128U)
             return failed_completion(job, "SAO_INVALID_ARGUMENT", "MCP server id is required.");
         config["name"] = name;
         config.erase("id");
@@ -2674,6 +2872,7 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
         json result = reply.result.is_object() ? std::move(reply.result) : json::object();
         result["ok"] = true;
         result["id"] = name;
+        result["name"] = name;
         return successful_completion(job, std::move(result));
     }
     if (job.method == "stop_mcp_server" && count(0, 0)) {
@@ -2884,7 +3083,9 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
                   {"html", reply.result.value("html", std::string{})},
                   {"state", reply.result.value("state", json::object())},
                   {"source", "runtime"},
+                  {"active", reply.result.value("active", false)},
                   {"visible", reply.result.value("visible", false)},
+                  {"viewColumn", reply.result.value("viewColumn", 1)},
                   {"retainContextWhenHidden", options.value("retainContextWhenHidden", false)}});
     }
     if (job.method == "set_extension_host_diagnostics") {
@@ -3029,8 +3230,22 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
         if (!job_current(adapter, job)) {
             const auto stale = adapter.processes.find(process_id);
             if (stale != adapter.processes.end()) {
-                close_managed_process(*stale->second, true);
-                adapter.processes.erase(stale);
+                if (stale->second->admission_active) {
+                    std::lock_guard lock(adapter.mutex);
+                    if (adapter.active_processes != 0)
+                        --adapter.active_processes;
+                    stale->second->admission_active = false;
+                }
+                if (close_managed_process(*stale->second, true,
+                                          std::chrono::steady_clock::now() +
+                                              std::chrono::milliseconds(500))) {
+                    adapter.processes.erase(stale);
+                } else {
+                    stale->second->document_generation = 0;
+                    std::lock_guard lock(adapter.mutex);
+                    adapter.process_reset_pending = true;
+                    adapter.wake.notify_all();
+                }
             }
             return failed_completion(job, "SAO_NAVIGATION_RESET", "Process request is stale.");
         }
@@ -4005,9 +4220,13 @@ sao_status_t native_adapter_submit(NativeAdapter* adapter, std::string_view docu
             return SAO_STATUS_ERR_CANCELLED;
         if (document_token != adapter->document_token)
             return SAO_STATUS_ERR_ACCESS_DENIED;
+        size_t process_admission = 0;
+#if defined(_WIN32)
+        process_admission = adapter->active_processes;
+#endif
         if (adapter->jobs.size() >= kMaximumQueue ||
             adapter->jobs.size() + adapter->in_flight + adapter->completions.size() +
-                    adapter->workflows.size() + adapter->runs.size() >=
+                    adapter->workflows.size() + adapter->runs.size() + process_admission >=
                 kMaximumCompletions) {
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
         }

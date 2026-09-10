@@ -190,6 +190,24 @@ if (WIN32)
     target_include_directories(sao_platform_ui PRIVATE "${_sao_shader_output}")
 endif()
 
+if (WIN32)
+    add_executable(sao_ui_component_preview WIN32 EXCLUDE_FROM_ALL
+        preview/ui_preview.cpp
+    )
+    target_compile_features(sao_ui_component_preview PRIVATE cxx_std_20)
+    target_link_libraries(sao_ui_component_preview PRIVATE
+        nlohmann_json::nlohmann_json
+        sao::ui
+        user32
+        gdi32
+        ole32
+        comdlg32
+    )
+    if (MSVC)
+        target_compile_options(sao_ui_component_preview PRIVATE /utf-8)
+    endif()
+endif()
+
 # The security subtree is configured after platform/, so it owns the optional
 # UI -> anti_screencap edge once its target exists.  Keeping this declaration
 # out of the early platform pass makes the link independent of configuration

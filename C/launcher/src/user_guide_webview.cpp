@@ -11,14 +11,14 @@
 #include "sao/launcher/user_guide_webview.h"
 #include "sao/ui/sound.h"
 
-#include <windows.h>
 #include <combaseapi.h>
 #include <objbase.h>
 #include <process.h>
 #include <shellapi.h>
+#include <windows.h>
 
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cwchar>
 #include <memory>
@@ -40,11 +40,10 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-using CreateEnvironmentFn = HRESULT(WINAPI*)(
-    PCWSTR environment_options,
-    PCWSTR user_data_folder,
-    ICoreWebView2EnvironmentOptions* environment_options_struct,
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler);
+using CreateEnvironmentFn =
+    HRESULT(WINAPI*)(PCWSTR environment_options, PCWSTR user_data_folder,
+                     ICoreWebView2EnvironmentOptions* environment_options_struct,
+                     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler);
 
 constexpr wchar_t kWindowClassName[] = L"SAO_USER_GUIDE_WEBVIEW_WND";
 constexpr wchar_t kWindowTitle[] = L"SAO Auto \u2014 \u7528\u6237\u6307\u5357";
@@ -52,6 +51,8 @@ constexpr UINT kShowWindowMessage = WM_APP + 0x47u;
 constexpr UINT kRefreshSoundPolicyMessage = WM_APP + 0x48u;
 constexpr DWORD kStartupWaitMs = 5000u;
 constexpr DWORD kShutdownWaitMs = 5000u;
+constexpr wchar_t kNativeIntroFragment[] = L"#sao-native-intro-complete";
+constexpr wchar_t kNativeIntroScript[] = L"window.location.hash='sao-native-intro-complete';";
 
 enum class GuideHostPhase : uint32_t {
     idle = 0u,
@@ -71,6 +72,7 @@ struct StartupContext {
     HANDLE ready_event = nullptr;
     std::atomic<bool> started{false};
     std::atomic<bool> cancel_requested{false};
+    bool native_intro_completed = false;
     std::wstring url;
     std::wstring fallback_path;
 };
@@ -79,13 +81,13 @@ struct GuideState {
     HWND window = nullptr;
     bool closing = false;
     bool fallback_started = false;
+    bool native_intro_completed = false;
     std::wstring fallback_path;
     std::wstring retry_user_data_folder;
     bool user_data_retry_started = false;
     CreateEnvironmentFn create_environment = nullptr;
     std::shared_ptr<void> loader_lease;
-    ComPtr<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>
-        environment_handler;
+    ComPtr<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> environment_handler;
     ComPtr<ICoreWebView2Environment> environment;
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
@@ -167,8 +169,7 @@ void clearPublishedWindow(HWND window) noexcept {
 
 void removeNavigationHandler(GuideState& state) noexcept {
     if (state.webview && state.navigation_handler_registered) {
-        (void)state.webview->remove_NavigationCompleted(
-            state.navigation_completed_token);
+        (void)state.webview->remove_NavigationCompleted(state.navigation_completed_token);
     }
     state.navigation_handler_registered = false;
     state.navigation_completed_token = {};
@@ -215,67 +216,64 @@ void requestWindowClose(const std::shared_ptr<GuideState>& state) noexcept {
 }
 
 void fallbackAndClose(const std::shared_ptr<GuideState>& state) noexcept {
-    if (!state->closing && !state->fallback_started &&
-        !state->fallback_path.empty()) {
+    if (!state->closing && !state->fallback_started && !state->fallback_path.empty()) {
         state->fallback_started = true;
-        (void)ShellExecuteW(nullptr, L"open", state->fallback_path.c_str(),
-                            nullptr, nullptr, SW_SHOWNORMAL);
+        (void)ShellExecuteW(nullptr, L"open", state->fallback_path.c_str(), nullptr, nullptr,
+                            SW_SHOWNORMAL);
     }
-    g_host_phase.store(GuideHostPhase::stopping,
-                       std::memory_order_release);
+    g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
     requestWindowClose(state);
 }
 
-LRESULT CALLBACK guideWindowProc(HWND window, UINT message,
-                                 WPARAM w_param, LPARAM l_param) {
-    auto* state = reinterpret_cast<GuideState*>(
-        GetWindowLongPtrW(window, GWLP_USERDATA));
+LRESULT CALLBACK guideWindowProc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
+    auto* state = reinterpret_cast<GuideState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<const CREATESTRUCTW*>(l_param);
         state = static_cast<GuideState*>(create->lpCreateParams);
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
         state->window = window;
         g_published_window.store(window, std::memory_order_release);
     }
 
     switch (message) {
-        case WM_SIZE:
-            if (state != nullptr && state->controller &&
-                w_param != SIZE_MINIMIZED) {
-                RECT bounds{};
-                GetClientRect(window, &bounds);
-                (void)state->controller->put_Bounds(bounds);
-            }
-            return 0;
-        case kShowWindowMessage:
-            ShowWindow(window, SW_RESTORE);
-            (void)SetForegroundWindow(window);
-            return 0;
-        case kRefreshSoundPolicyMessage:
-            postSoundPolicy(state);
-            return 0;
-        case WM_CLOSE:
-            if (state != nullptr)
-                state->closing = true;
-            g_host_phase.store(GuideHostPhase::stopping,
-                               std::memory_order_release);
-            DestroyWindow(window);
-            return 0;
-        case WM_DESTROY:
-            if (state != nullptr) {
-                state->closing = true;
-                closeController(*state);
-                state->window = nullptr;
-            }
-            clearPublishedWindow(window);
-            g_host_phase.store(GuideHostPhase::stopping,
-                               std::memory_order_release);
-            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            PostQuitMessage(0);
-            return 0;
-        default:
-            return DefWindowProcW(window, message, w_param, l_param);
+    case WM_SIZE:
+        if (state != nullptr && state->controller && w_param != SIZE_MINIMIZED) {
+            RECT bounds{};
+            GetClientRect(window, &bounds);
+            (void)state->controller->put_Bounds(bounds);
+        }
+        return 0;
+    case kShowWindowMessage:
+        if (state != nullptr && w_param != 0) {
+            state->native_intro_completed = true;
+            if (state->webview)
+                (void)state->webview->ExecuteScript(kNativeIntroScript, nullptr);
+        }
+        ShowWindow(window, SW_RESTORE);
+        (void)SetForegroundWindow(window);
+        return 0;
+    case kRefreshSoundPolicyMessage:
+        postSoundPolicy(state);
+        return 0;
+    case WM_CLOSE:
+        if (state != nullptr)
+            state->closing = true;
+        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        if (state != nullptr) {
+            state->closing = true;
+            closeController(*state);
+            state->window = nullptr;
+        }
+        clearPublishedWindow(window);
+        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(window, message, w_param, l_param);
     }
 }
 
@@ -300,10 +298,12 @@ std::wstring toFileUri(const wchar_t* path) {
 std::wstring loaderPath() {
     wchar_t buffer[MAX_PATH + 1]{};
     const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (length == 0 || length > MAX_PATH) return L"WebView2Loader.dll";
+    if (length == 0 || length > MAX_PATH)
+        return L"WebView2Loader.dll";
     std::wstring path(buffer, length);
     const size_t slash = path.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return L"WebView2Loader.dll";
+    if (slash == std::wstring::npos)
+        return L"WebView2Loader.dll";
     return path.substr(0, slash + 1) + L"WebView2Loader.dll";
 }
 
@@ -329,10 +329,8 @@ std::wstring tryUserDataFolder(const wchar_t* base, DWORD length) {
     probe_path += std::to_wstring(GetCurrentThreadId());
     probe_path += L".tmp";
     const HANDLE probe = CreateFileW(
-        probe_path.c_str(), GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-        CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        nullptr);
+        probe_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
     if (probe == INVALID_HANDLE_VALUE)
         return {};
     CloseHandle(probe);
@@ -347,8 +345,8 @@ struct UserDataFolderCandidates {
 UserDataFolderCandidates userDataFolderPaths() {
     UserDataFolderCandidates candidates;
     wchar_t base[32768]{};
-    DWORD length = GetEnvironmentVariableW(
-        L"LOCALAPPDATA", base, static_cast<DWORD>(_countof(base)));
+    DWORD length =
+        GetEnvironmentVariableW(L"LOCALAPPDATA", base, static_cast<DWORD>(_countof(base)));
     candidates.primary = tryUserDataFolder(base, length);
 
     base[0] = L'\0';
@@ -356,8 +354,7 @@ UserDataFolderCandidates userDataFolderPaths() {
     std::wstring temporary = tryUserDataFolder(base, length);
     if (candidates.primary.empty()) {
         candidates.primary = std::move(temporary);
-    } else if (!temporary.empty() &&
-               _wcsicmp(candidates.primary.c_str(), temporary.c_str()) != 0) {
+    } else if (!temporary.empty() && _wcsicmp(candidates.primary.c_str(), temporary.c_str()) != 0) {
         candidates.retry = std::move(temporary);
     }
     return candidates;
@@ -380,8 +377,7 @@ bool registerWindowClass(HINSTANCE instance) {
 }
 
 void reapGuideThreadLocked() noexcept {
-    if (g_thread_handle == nullptr ||
-        WaitForSingleObject(g_thread_handle, 0) != WAIT_OBJECT_0) {
+    if (g_thread_handle == nullptr || WaitForSingleObject(g_thread_handle, 0) != WAIT_OBJECT_0) {
         return;
     }
     CloseHandle(g_thread_handle);
@@ -429,14 +425,13 @@ unsigned __stdcall guideThreadMain(void* parameter) {
         url.swap(startup->url);
         std::wstring fallback_path;
         fallback_path.swap(startup->fallback_path);
+        const bool native_intro_completed = startup->native_intro_completed;
 
         MSG queue_probe{};
-        (void)PeekMessageW(&queue_probe, nullptr, WM_USER, WM_USER,
-                           PM_NOREMOVE);
+        (void)PeekMessageW(&queue_probe, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
         g_thread_id.store(GetCurrentThreadId(), std::memory_order_release);
 
-        const HRESULT com_status =
-            CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const HRESULT com_status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(com_status)) {
             complete_startup(false);
             cleanup();
@@ -456,16 +451,14 @@ unsigned __stdcall guideThreadMain(void* parameter) {
             cleanup();
             return 0u;
         }
-        loader_lease = std::shared_ptr<void>(
-            unleased_loader, [](void* module) noexcept {
-                if (module != nullptr)
-                    FreeLibrary(reinterpret_cast<HMODULE>(module));
-            });
+        loader_lease = std::shared_ptr<void>(unleased_loader, [](void* module) noexcept {
+            if (module != nullptr)
+                FreeLibrary(reinterpret_cast<HMODULE>(module));
+        });
         HMODULE loader = unleased_loader;
         unleased_loader = nullptr;
         const auto create_environment = reinterpret_cast<CreateEnvironmentFn>(
-            GetProcAddress(loader,
-                           "CreateCoreWebView2EnvironmentWithOptions"));
+            GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions"));
         if (create_environment == nullptr) {
             complete_startup(false);
             cleanup();
@@ -484,16 +477,14 @@ unsigned __stdcall guideThreadMain(void* parameter) {
         state->create_environment = create_environment;
         state->loader_lease = loader_lease;
         state->guide_url = url;
-        const auto url_value =
-            std::make_shared<const std::wstring>(std::move(url));
+        state->native_intro_completed = native_intro_completed;
 
         constexpr int width = 960;
         constexpr int height = 780;
         const int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
         const int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-        HWND window = CreateWindowExW(
-            0, kWindowClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, x, y,
-            width, height, nullptr, nullptr, instance, state.get());
+        HWND window = CreateWindowExW(0, kWindowClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, x, y,
+                                      width, height, nullptr, nullptr, instance, state.get());
         if (window == nullptr) {
             complete_startup(false);
             cleanup();
@@ -509,23 +500,19 @@ unsigned __stdcall guideThreadMain(void* parameter) {
             cleanup();
             return 0u;
         }
-        state->retry_user_data_folder =
-            std::move(user_data_folders.retry);
+        state->retry_user_data_folder = std::move(user_data_folders.retry);
 
         state->environment_handler = Microsoft::WRL::Callback<
             ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [state, url_value](
-                HRESULT result,
-                ICoreWebView2Environment* environment) -> HRESULT {
+            [state](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
                 if (state->closing || state->window == nullptr)
                     return S_OK;
                 if (FAILED(result) || environment == nullptr) {
-                    if (!state->user_data_retry_started &&
-                        !state->retry_user_data_folder.empty()) {
+                    if (!state->user_data_retry_started && !state->retry_user_data_folder.empty()) {
                         state->user_data_retry_started = true;
                         const HRESULT retry_status = state->create_environment(
-                            nullptr, state->retry_user_data_folder.c_str(),
-                            nullptr, state->environment_handler.Get());
+                            nullptr, state->retry_user_data_folder.c_str(), nullptr,
+                            state->environment_handler.Get());
                         if (SUCCEEDED(retry_status))
                             return S_OK;
                     }
@@ -537,13 +524,11 @@ unsigned __stdcall guideThreadMain(void* parameter) {
                 state->environment = environment;
                 auto controller_handler = Microsoft::WRL::Callback<
                     ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                    [state, url_value](
-                        HRESULT controller_result,
-                        ICoreWebView2Controller* controller) -> HRESULT {
+                    [state](HRESULT controller_result,
+                            ICoreWebView2Controller* controller) -> HRESULT {
                         if (state->closing || state->window == nullptr)
                             return S_OK;
-                        if (FAILED(controller_result) ||
-                            controller == nullptr) {
+                        if (FAILED(controller_result) || controller == nullptr) {
                             fallbackAndClose(state);
                             return S_OK;
                         }
@@ -554,8 +539,7 @@ unsigned __stdcall guideThreadMain(void* parameter) {
                         (void)controller->put_Bounds(bounds);
 
                         ComPtr<ICoreWebView2> webview;
-                        if (FAILED(controller->get_CoreWebView2(&webview)) ||
-                            !webview) {
+                        if (FAILED(controller->get_CoreWebView2(&webview)) || !webview) {
                             fallbackAndClose(state);
                             return S_OK;
                         }
@@ -605,61 +589,57 @@ unsigned __stdcall guideThreadMain(void* parameter) {
                         state->web_message_token = web_message_token;
                         state->web_message_handler_registered = true;
 
-                        auto navigation_handler = Microsoft::WRL::Callback<
-                            ICoreWebView2NavigationCompletedEventHandler>(
-                            [state](
-                                ICoreWebView2*,
-                                ICoreWebView2NavigationCompletedEventArgs*
-                                    args) -> HRESULT {
-                                if (state->closing || state->window == nullptr)
+                        auto navigation_handler =
+                            Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                [state](
+                                    ICoreWebView2*,
+                                    ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                    if (state->closing || state->window == nullptr)
+                                        return S_OK;
+                                    BOOL succeeded = FALSE;
+                                    const HRESULT status = args == nullptr
+                                                               ? E_POINTER
+                                                               : args->get_IsSuccess(&succeeded);
+                                    removeNavigationHandler(*state);
+                                    if (FAILED(status) || succeeded == FALSE) {
+                                        fallbackAndClose(state);
+                                    } else {
+                                        g_host_phase.store(GuideHostPhase::running,
+                                                           std::memory_order_release);
+                                        postSoundPolicy(state.get());
+                                    }
                                     return S_OK;
-                                BOOL succeeded = FALSE;
-                                const HRESULT status =
-                                    args == nullptr
-                                    ? E_POINTER
-                                    : args->get_IsSuccess(&succeeded);
-                                removeNavigationHandler(*state);
-                                if (FAILED(status) || succeeded == FALSE) {
-                                    fallbackAndClose(state);
-                                } else {
-                                    g_host_phase.store(
-                                        GuideHostPhase::running,
-                                        std::memory_order_release);
-                                    postSoundPolicy(state.get());
-                                }
-                                return S_OK;
-                            });
+                                });
                         EventRegistrationToken token{};
-                        if (!navigation_handler ||
-                            FAILED(webview->add_NavigationCompleted(
-                                navigation_handler.Get(), &token))) {
+                        if (!navigation_handler || FAILED(webview->add_NavigationCompleted(
+                                                       navigation_handler.Get(), &token))) {
                             fallbackAndClose(state);
                             return S_OK;
                         }
                         state->navigation_completed_token = token;
                         state->navigation_handler_registered = true;
-                        if (FAILED(webview->Navigate(url_value->c_str())))
+                        std::wstring navigation_url = state->guide_url;
+                        if (state->native_intro_completed)
+                            navigation_url.append(kNativeIntroFragment);
+                        if (FAILED(webview->Navigate(navigation_url.c_str())))
                             fallbackAndClose(state);
                         return S_OK;
                     });
-                if (!controller_handler ||
-                    FAILED(environment->CreateCoreWebView2Controller(
-                        state->window, controller_handler.Get()))) {
+                if (!controller_handler || FAILED(environment->CreateCoreWebView2Controller(
+                                               state->window, controller_handler.Get()))) {
                     fallbackAndClose(state);
                 }
                 return S_OK;
             });
         HRESULT environment_status =
             state->environment_handler
-            ? create_environment(nullptr, user_data_folders.primary.c_str(),
-                                 nullptr, state->environment_handler.Get())
-            : E_OUTOFMEMORY;
-        if (FAILED(environment_status) &&
-            !state->retry_user_data_folder.empty()) {
+                ? create_environment(nullptr, user_data_folders.primary.c_str(), nullptr,
+                                     state->environment_handler.Get())
+                : E_OUTOFMEMORY;
+        if (FAILED(environment_status) && !state->retry_user_data_folder.empty()) {
             state->user_data_retry_started = true;
-            environment_status = create_environment(
-                nullptr, state->retry_user_data_folder.c_str(), nullptr,
-                state->environment_handler.Get());
+            environment_status = create_environment(nullptr, state->retry_user_data_folder.c_str(),
+                                                    nullptr, state->environment_handler.Get());
         }
         if (FAILED(environment_status) ||
             startup->cancel_requested.load(std::memory_order_acquire)) {
@@ -687,9 +667,9 @@ unsigned __stdcall guideThreadMain(void* parameter) {
     return 0u;
 }
 
-#endif  // SAO_LAUNCHER_HAS_WEBVIEW2
+#endif // SAO_LAUNCHER_HAS_WEBVIEW2
 
-}  // namespace
+} // namespace
 
 namespace sao::launcher {
 
@@ -702,6 +682,10 @@ void refreshUserGuideSoundPolicy() noexcept {
 }
 
 bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
+    return openUserGuideInWebView(docs_index_path, false);
+}
+
+bool openUserGuideInWebView(const wchar_t* docs_index_path, bool native_intro_completed) noexcept {
 #if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
     if (docs_index_path == nullptr || docs_index_path[0] == L'\0')
         return false;
@@ -711,24 +695,20 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
     try {
         std::unique_lock<std::mutex> lock(g_host_mutex);
         reapGuideThreadLocked();
-        const GuideHostPhase existing_phase =
-            g_host_phase.load(std::memory_order_acquire);
-        if (g_thread_handle != nullptr &&
-            existing_phase != GuideHostPhase::starting &&
+        const GuideHostPhase existing_phase = g_host_phase.load(std::memory_order_acquire);
+        if (g_thread_handle != nullptr && existing_phase != GuideHostPhase::starting &&
             existing_phase != GuideHostPhase::running) {
-            if (WaitForSingleObject(g_thread_handle, kShutdownWaitMs) !=
-                WAIT_OBJECT_0) {
+            if (WaitForSingleObject(g_thread_handle, kShutdownWaitMs) != WAIT_OBJECT_0) {
                 return false;
             }
             reapGuideThreadLocked();
         }
         if (g_thread_handle != nullptr) {
-            const HWND window =
-                g_published_window.load(std::memory_order_acquire);
+            const HWND window = g_published_window.load(std::memory_order_acquire);
             lock.unlock();
-            if (window != nullptr)
-                (void)PostMessageW(window, kShowWindowMessage, 0, 0);
-            return true;
+            return window != nullptr &&
+                   PostMessageW(window, kShowWindowMessage,
+                                native_intro_completed ? 1u : 0u, 0) != FALSE;
         }
 
         startup = new (std::nothrow) StartupContext();
@@ -741,17 +721,17 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
             startup = nullptr;
             return false;
         }
+        startup->native_intro_completed = native_intro_completed;
         startup->url = toFileUri(docs_index_path);
-        startup->fallback_path = docs_index_path;
+        startup->fallback_path = native_intro_completed ? startup->url + kNativeIntroFragment
+                                                        : std::wstring(docs_index_path);
 
         unsigned thread_id = 0u;
-        g_host_phase.store(GuideHostPhase::starting,
-                           std::memory_order_release);
-        const uintptr_t thread = _beginthreadex(
-            nullptr, 0u, guideThreadMain, startup, 0u, &thread_id);
+        g_host_phase.store(GuideHostPhase::starting, std::memory_order_release);
+        const uintptr_t thread =
+            _beginthreadex(nullptr, 0u, guideThreadMain, startup, 0u, &thread_id);
         if (thread == 0u) {
-            g_host_phase.store(GuideHostPhase::idle,
-                               std::memory_order_release);
+            g_host_phase.store(GuideHostPhase::idle, std::memory_order_release);
             releaseStartupContext(startup);
             releaseStartupContext(startup);
             startup = nullptr;
@@ -761,16 +741,12 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
         g_thread_handle = reinterpret_cast<HANDLE>(thread);
         const HANDLE ready_event = startup->ready_event;
 
-        const DWORD wait_result =
-            WaitForSingleObject(ready_event, kStartupWaitMs);
+        const DWORD wait_result = WaitForSingleObject(ready_event, kStartupWaitMs);
         if (wait_result != WAIT_OBJECT_0) {
             startup->cancel_requested.store(true, std::memory_order_release);
-            g_host_phase.store(GuideHostPhase::stopping,
-                               std::memory_order_release);
-            const HWND window =
-                g_published_window.load(std::memory_order_acquire);
-            const DWORD host_thread_id =
-                g_thread_id.load(std::memory_order_acquire);
+            g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
+            const HWND window = g_published_window.load(std::memory_order_acquire);
+            const DWORD host_thread_id = g_thread_id.load(std::memory_order_acquire);
             if (window != nullptr) {
                 (void)PostMessageW(window, WM_CLOSE, 0, 0);
             } else if (host_thread_id != 0u) {
@@ -781,22 +757,17 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
             return false;
         }
 
-        const bool started =
-            startup->started.load(std::memory_order_acquire);
+        const bool started = startup->started.load(std::memory_order_acquire);
         releaseStartupContext(startup);
         startup = nullptr;
         return started;
     } catch (...) {
         if (startup != nullptr) {
             if (thread_started) {
-                startup->cancel_requested.store(true,
-                                                std::memory_order_release);
-                g_host_phase.store(GuideHostPhase::stopping,
-                                   std::memory_order_release);
-                const HWND window =
-                    g_published_window.load(std::memory_order_acquire);
-                const DWORD host_thread_id =
-                    g_thread_id.load(std::memory_order_acquire);
+                startup->cancel_requested.store(true, std::memory_order_release);
+                g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
+                const HWND window = g_published_window.load(std::memory_order_acquire);
+                const DWORD host_thread_id = g_thread_id.load(std::memory_order_acquire);
                 if (window != nullptr) {
                     (void)PostMessageW(window, WM_CLOSE, 0, 0);
                 } else if (host_thread_id != 0u) {
@@ -812,6 +783,7 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
     }
 #else
     (void)docs_index_path;
+    (void)native_intro_completed;
     return false;
 #endif
 }
@@ -825,11 +797,9 @@ bool shutdownUserGuideWebView() noexcept {
             return true;
 
         const HANDLE thread = g_thread_handle;
-        const HWND window =
-            g_published_window.load(std::memory_order_acquire);
+        const HWND window = g_published_window.load(std::memory_order_acquire);
         const DWORD thread_id = g_thread_id.load(std::memory_order_acquire);
-        g_host_phase.store(GuideHostPhase::stopping,
-                           std::memory_order_release);
+        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
         bool posted = false;
         if (window != nullptr)
             posted = PostMessageW(window, WM_CLOSE, 0, 0) != FALSE;

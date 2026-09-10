@@ -49,6 +49,7 @@ using Json = nlohmann::ordered_json;
 
 constexpr std::size_t kMaximumActionBytes = 4096U;
 constexpr std::size_t kMaximumSpecBytes = 256U * 1024U;
+constexpr std::uintmax_t kMaximumProfileBytes = 16U * 1024U * 1024U;
 constexpr std::array<std::string_view, 6> kSections{"Overview / 概览", "Appearance / 外观",
                                                     "Behavior / 行为", "Audio / 音频",
                                                     "Advanced / 高级", "Profiles / 配置"};
@@ -81,6 +82,7 @@ struct PanelState final {
     Json committed_snapshot = Json::object();
     bool draft_initialized{};
     bool draft_dirty{};
+    bool committed_owner_dirty{};
     std::string profile_preview;
     std::size_t selected_section{};
 };
@@ -132,6 +134,10 @@ std::string status_text(sao_status_t status, std::string_view prefix) {
     result += std::to_string(status);
     result += ")";
     return bounded(std::move(result), 1024U);
+}
+
+sao_status_t first_error(sao_status_t first, sao_status_t second) noexcept {
+    return first == SAO_STATUS_OK ? second : first;
 }
 
 std::string wide_to_utf8(const std::wstring& value) {
@@ -716,6 +722,7 @@ sao_status_t owner_snapshot(Json& out, settings_owner::SettingsOwner::Lease& own
     const sao_status_t status = owner_lease->snapshot(owner_document);
     if (status != SAO_STATUS_OK)
         return status;
+    const bool owner_dirty = owner_lease->dirty();
     {
         std::lock_guard lock(state().mutex);
         if (!state().draft_initialized || !state().draft_dirty) {
@@ -723,6 +730,7 @@ sao_status_t owner_snapshot(Json& out, settings_owner::SettingsOwner::Lease& own
             state().committed_snapshot = owner_document;
             state().draft_initialized = true;
             state().draft_dirty = false;
+            state().committed_owner_dirty = owner_dirty;
         }
         out = state().draft_snapshot;
         dirty = state().draft_dirty;
@@ -758,7 +766,7 @@ sao_status_t publish_after_draft_mutation(sao_status_t status, std::string text)
 #if defined(SAO_SETTINGS_PANEL_UI)
     if (state().body != nullptr) {
         const sao_status_t publish_status = publish();
-        return publish_status == SAO_STATUS_OK ? status : publish_status;
+        return first_error(status, publish_status);
     }
 #endif
     return status;
@@ -795,12 +803,11 @@ sao_status_t restore_runtime_sound(const Json& snapshot) noexcept {
             if (std::isfinite(numeric))
                 volume = static_cast<int32_t>(std::clamp(numeric, 0.0, 100.0));
         }
-        sao_status_t status = sao_ui_sound_set_enabled(enabled);
+        const sao_status_t enabled_status = sao_ui_sound_set_enabled(enabled);
         sao::launcher::refreshUserGuideSoundPolicy();
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_sound_set_volume(volume);
+        const sao_status_t volume_status = sao_ui_sound_set_volume(volume);
         sao::launcher::refreshUserGuideSoundPolicy();
-        return status;
+        return first_error(enabled_status, volume_status);
     } catch (...) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -808,6 +815,60 @@ sao_status_t restore_runtime_sound(const Json& snapshot) noexcept {
     (void)snapshot;
     return SAO_STATUS_OK;
 #endif
+}
+
+sao_status_t restore_runtime_settings(const Json& snapshot) noexcept {
+    const sao_status_t theme_status = restore_runtime_theme(snapshot);
+    const sao_status_t sound_status = restore_runtime_sound(snapshot);
+    return first_error(theme_status, sound_status);
+}
+
+sao_status_t rollback_draft_mutation(const settings_owner::SettingsOwner::Lease& owner_lease,
+                                     const Json& snapshot, bool owner_dirty,
+                                     bool draft_dirty) noexcept {
+    if (!owner_lease)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t owner_status = owner_lease->restore_snapshot(snapshot, owner_dirty);
+    if (owner_status == SAO_STATUS_OK) {
+        const sao_status_t runtime_status = restore_runtime_settings(snapshot);
+        try {
+            std::lock_guard lock(state().mutex);
+            state().draft_snapshot = snapshot;
+            state().draft_initialized = true;
+            state().draft_dirty = draft_dirty;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        return first_error(owner_status, runtime_status);
+    }
+    // Document still holds the mutation; keep runtime at the mutated state.
+    sync_draft_snapshot(owner_lease);
+    std::lock_guard lock(state().mutex);
+    state().draft_initialized = true;
+    state().draft_dirty = true;
+    return owner_status;
+}
+
+sao_status_t merge_live_game_cache(Json& profile, const Json& live) noexcept {
+    try {
+        const auto live_cache = live.find("game_cache");
+        if (live_cache == live.end() || !live_cache->is_object())
+            return SAO_STATUS_OK;
+        Json merged = Json::object();
+        const auto profile_cache = profile.find("game_cache");
+        if (profile_cache != profile.end() && profile_cache->is_object())
+            merged = *profile_cache;
+        for (auto it = live_cache->begin(); it != live_cache->end(); ++it)
+            merged[it.key()] = it.value();
+        profile["game_cache"] = std::move(merged);
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (const nlohmann::json::exception&) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 #if defined(SAO_SETTINGS_PANEL_UI)
@@ -874,17 +935,32 @@ sao_status_t profile_document(const std::string& name, Json& out) noexcept {
     const sao_status_t path_status = profile_path(name, path);
     if (path_status != SAO_STATUS_OK)
         return path_status;
-    const std::filesystem::path file(path);
-    std::ifstream input(file, std::ios::binary);
-    if (!input)
-        return std::filesystem::exists(file) ? SAO_STATUS_ERR_ACCESS_DENIED
-                                             : SAO_STATUS_ERR_NOT_FOUND;
     try {
+        const std::filesystem::path file(path);
+        const auto unavailable_status = [&file]() noexcept {
+            std::error_code exists_error;
+            const bool exists = std::filesystem::exists(file, exists_error);
+            return !exists && !exists_error ? SAO_STATUS_ERR_NOT_FOUND
+                                            : SAO_STATUS_ERR_ACCESS_DENIED;
+        };
+        std::error_code file_error;
+        const std::uintmax_t file_size = std::filesystem::file_size(file, file_error);
+        if (file_error)
+            return unavailable_status();
+        if (file_size > kMaximumProfileBytes)
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        std::ifstream input(file, std::ios::binary);
+        if (!input)
+            return unavailable_status();
         input >> out;
-    } catch (...) {
+        return out.is_object() ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (const nlohmann::json::exception&) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    return out.is_object() ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
 }
 
 std::string profile_failure_text(sao_status_t status, std::string_view operation) {
@@ -895,8 +971,10 @@ std::string profile_failure_text(sao_status_t status, std::string_view operation
         return std::string(operation) + ": profile parse failed";
     case SAO_STATUS_ERR_ACCESS_DENIED:
         return std::string(operation) + ": permission denied";
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL:
+        return std::string(operation) + ": profile is too large";
     default:
-        return std::string(operation) + ": save failed";
+        return std::string(operation) + ": operation failed";
     }
 }
 
@@ -928,9 +1006,14 @@ void SAO_UI_CALL profile_dialog_callback(SaoUiDialogButton pressed, const char* 
             return;
         }
         const std::string name(input == nullptr ? "" : std::string(input, length));
-        const bool saved = save_profile(name);
+        std::wstring validated_path;
+        const sao_status_t validation_status = profile_path(name, validated_path);
+        const bool saved = validation_status == SAO_STATUS_OK && save_profile(name);
         refresh_profile_names();
-        update_status(saved ? SAO_STATUS_OK : SAO_STATUS_ERR_OS_CALL_FAILED,
+        update_status(saved ? SAO_STATUS_OK
+                            : validation_status != SAO_STATUS_OK
+                                ? validation_status
+                                : SAO_STATUS_ERR_OS_CALL_FAILED,
                       saved ? "Profile saved" : "Profile save failed");
     }
     (void)publish();
@@ -1031,6 +1114,7 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
     sao_status_t status = owner_snapshot(snapshot, owner_lease, dirty, path);
     if (status != SAO_STATUS_OK)
         return publish_after_draft_mutation(status, status_text(status, "Settings unavailable"));
+    const bool owner_dirty_before = owner_lease->dirty();
 
     if (action == kSettingsActionRefresh) {
         refresh_profile_names();
@@ -1043,33 +1127,48 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
     }
 
     if (action == "settings.apply") {
+        Json committed;
+        bool committed_owner_dirty = false;
+        {
+            std::lock_guard lock(state().mutex);
+            committed = state().committed_snapshot;
+            committed_owner_dirty = state().committed_owner_dirty;
+        }
         sync_draft_snapshot(owner_lease);
         status = owner_lease->save();
         if (status == SAO_STATUS_OK) {
-            std::lock_guard lock(state().mutex);
-            state().committed_snapshot = state().draft_snapshot;
-            state().draft_dirty = false;
+            {
+                std::lock_guard lock(state().mutex);
+                state().committed_snapshot = state().draft_snapshot;
+                state().draft_dirty = false;
+                state().committed_owner_dirty = false;
+            }
+            return publish_after_draft_mutation(status, "Saved just now");
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Saved just now"
-                                                                            : "Save failed");
+        const sao_status_t save_status = status;
+        const sao_status_t rollback_status = rollback_draft_mutation(
+            owner_lease, committed, committed_owner_dirty, false);
+        return publish_after_draft_mutation(
+            rollback_status == SAO_STATUS_OK ? save_status : rollback_status,
+            rollback_status == SAO_STATUS_OK ? "Save failed" : "Save failed; rollback failed");
     }
 
     if (action == "settings.cancel") {
         Json committed;
+        bool committed_owner_dirty = false;
         {
             std::lock_guard lock(state().mutex);
             committed = state().committed_snapshot;
+            committed_owner_dirty = state().committed_owner_dirty;
         }
-        status = owner_lease->restore_snapshot(committed, false);
+        status = owner_lease->restore_snapshot(committed, committed_owner_dirty);
         if (status == SAO_STATUS_OK) {
             std::lock_guard lock(state().mutex);
             state().draft_snapshot = committed;
             state().draft_dirty = false;
         }
         if (status == SAO_STATUS_OK)
-            status = restore_runtime_theme(committed);
-        if (status == SAO_STATUS_OK)
-            status = restore_runtime_sound(committed);
+            status = restore_runtime_settings(committed);
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled"
                                                                             : "Cancel failed");
     }
@@ -1081,10 +1180,14 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             state().draft_snapshot = Json::object();
             state().draft_dirty = true;
         }
-        if (status == SAO_STATUS_OK)
-            status = restore_runtime_theme(Json::object());
-        if (status == SAO_STATUS_OK)
-            status = restore_runtime_sound(Json::object());
+        if (status == SAO_STATUS_OK) {
+            const sao_status_t runtime_status = restore_runtime_settings(Json::object());
+            if (runtime_status != SAO_STATUS_OK) {
+                const sao_status_t rollback_status = rollback_draft_mutation(
+                    owner_lease, snapshot, owner_dirty_before, dirty);
+                status = first_error(runtime_status, rollback_status);
+            }
+        }
         return publish_after_draft_mutation(status, status == SAO_STATUS_OK
                                                         ? "Defaults restored in draft"
                                                         : "Restore defaults failed");
@@ -1112,10 +1215,13 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             if (key == "sound_enabled") {
                 const sao_status_t runtime_status = sao_ui_sound_set_enabled(next);
                 sao::launcher::refreshUserGuideSoundPolicy();
-                if (runtime_status != SAO_STATUS_OK)
-                    status = runtime_status;
-                else if (next)
+                if (runtime_status != SAO_STATUS_OK) {
+                    const sao_status_t rollback_status = rollback_draft_mutation(
+                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    status = first_error(runtime_status, rollback_status);
+                } else if (next) {
                     (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+                }
             }
         }
         return publish_after_draft_mutation(
@@ -1140,11 +1246,16 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 const sao_status_t runtime_status =
                     sao_ui_sound_set_volume(static_cast<int32_t>(next));
                 sao::launcher::refreshUserGuideSoundPolicy();
-                if (runtime_status != SAO_STATUS_OK)
-                    status = runtime_status;
+                if (runtime_status != SAO_STATUS_OK) {
+                    const sao_status_t rollback_status = rollback_draft_mutation(
+                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    status = first_error(runtime_status, rollback_status);
+                }
             }
-            std::lock_guard lock(state().mutex);
-            state().draft_dirty = true;
+            if (status == SAO_STATUS_OK) {
+                std::lock_guard lock(state().mutex);
+                state().draft_dirty = true;
+            }
         }
         return publish_after_draft_mutation(
             status, status == SAO_STATUS_OK ? "Draft changes pending" : "Volume change failed");
@@ -1179,8 +1290,11 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             if (key == "sound_volume") {
                 const sao_status_t runtime_status =
                     sao_ui_sound_set_volume(static_cast<int32_t>(next));
-                if (runtime_status != SAO_STATUS_OK)
-                    status = runtime_status;
+                if (runtime_status != SAO_STATUS_OK) {
+                    const sao_status_t rollback_status = rollback_draft_mutation(
+                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    status = first_error(runtime_status, rollback_status);
+                }
             }
             sao::launcher::refreshUserGuideSoundPolicy();
         }
@@ -1210,10 +1324,14 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             sync_draft_snapshot(owner_lease);
             const sao_status_t runtime_status = sao_ui_theme_set_active_id(
                 next == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
-            if (runtime_status != SAO_STATUS_OK)
-                status = runtime_status;
-            std::lock_guard lock(state().mutex);
-            state().draft_dirty = true;
+            if (runtime_status != SAO_STATUS_OK) {
+                const sao_status_t rollback_status = rollback_draft_mutation(
+                    owner_lease, snapshot, owner_dirty_before, dirty);
+                status = first_error(runtime_status, rollback_status);
+            } else {
+                std::lock_guard lock(state().mutex);
+                state().draft_dirty = true;
+            }
         }
         return publish_after_draft_mutation(
             status, status == SAO_STATUS_OK ? "Draft changes pending" : "Theme change failed");
@@ -1263,19 +1381,28 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         }
         Json profile;
         status = profile_document(name, profile);
+        Json live_snapshot;
+        const bool owner_was_dirty = owner_lease->dirty();
+        if (status == SAO_STATUS_OK)
+            status = owner_lease->snapshot(live_snapshot);
+        if (status == SAO_STATUS_OK)
+            status = merge_live_game_cache(profile, live_snapshot);
         const Json profile_copy = profile;
         if (status == SAO_STATUS_OK)
             status = owner_lease->restore_snapshot(std::move(profile), true);
         if (status == SAO_STATUS_OK) {
-            std::lock_guard lock(state().mutex);
-            state().draft_snapshot = profile_copy;
-            state().draft_initialized = true;
-            state().draft_dirty = true;
+            const sao_status_t runtime_status = restore_runtime_settings(profile_copy);
+            if (runtime_status == SAO_STATUS_OK) {
+                std::lock_guard lock(state().mutex);
+                state().draft_snapshot = profile_copy;
+                state().draft_initialized = true;
+                state().draft_dirty = true;
+            } else {
+                const sao_status_t rollback_status = rollback_draft_mutation(
+                    owner_lease, live_snapshot, owner_was_dirty, dirty);
+                status = first_error(runtime_status, rollback_status);
+            }
         }
-        if (status == SAO_STATUS_OK)
-            status = restore_runtime_theme(profile_copy);
-        if (status == SAO_STATUS_OK)
-            status = restore_runtime_sound(profile_copy);
         return publish_after_draft_mutation(
             status, status == SAO_STATUS_OK ? "Profile loaded into draft"
                                             : profile_failure_text(status, "Load profile"));
@@ -1311,6 +1438,7 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
             state().committed_snapshot = Json::object();
             state().draft_initialized = false;
             state().draft_dirty = false;
+            state().committed_owner_dirty = false;
             state().profile_preview.clear();
             state().profile_names.clear();
             state().selected_section = 0U;

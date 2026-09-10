@@ -50,8 +50,8 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <iterator>
@@ -88,20 +88,19 @@
 #include "sao/ui/fisheye_backdrop.h"
 #include "sao/ui/panel_sdk.h"
 #endif
+#include "hotkey_config_panel.h"
+#include "hotkey_manager.h"
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/sound.h"
 #include "sao/ui/streaming_flow.h"
 #include "sao/ui/theme.h"
-#include "hotkey_config_panel.h"
-#include "hotkey_manager.h"
 #endif
 
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/anti_debug/probes.h"
 #endif
-#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER) &&                                         \
-    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#if defined(SAO_LAUNCHER_ANTI_DUMP_PROVIDER) && !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/anti_dump/erase_headers.h"
 #include "sao_security/anti_dump/snapshot_detect.h"
 #endif
@@ -109,8 +108,7 @@
 #include "sao_security/anti_screencap/capture_mode.h"
 #define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
 #endif
-#if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER) &&                                      \
-    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#if defined(SAO_LAUNCHER_USER_EVASION_PROVIDER) && !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/user_evasion/api.h"
 #include "sao_security/user_evasion/halo_gate.h"
 #include "sao_security/user_evasion/indirect_syscall.h"
@@ -139,7 +137,8 @@ extern "C" void sao_launcher_set_base_dir(const wchar_t* base_dir) {
     g_dynamic_base_dir = base_dir == nullptr ? std::wstring{} : std::wstring(base_dir);
     SaoLauncherBaseDir[0] = wchar_t(0);
     if (g_dynamic_base_dir.size() + 1u <= std::size(SaoLauncherBaseDir))
-        std::wmemcpy(SaoLauncherBaseDir, g_dynamic_base_dir.c_str(), g_dynamic_base_dir.size() + 1u);
+        std::wmemcpy(SaoLauncherBaseDir, g_dynamic_base_dir.c_str(),
+                     g_dynamic_base_dir.size() + 1u);
 }
 
 extern "C" const wchar_t* sao_launcher_base_dir(void) {
@@ -148,12 +147,13 @@ extern "C" const wchar_t* sao_launcher_base_dir(void) {
 
 extern "C" uint32_t sao_launcher_base_dir_length(void) {
     return g_dynamic_base_dir.size() >= UINT32_MAX
-        ? UINT32_MAX : static_cast<uint32_t>(g_dynamic_base_dir.size());
+               ? UINT32_MAX
+               : static_cast<uint32_t>(g_dynamic_base_dir.size());
 }
 
-extern "C" sao_status_t sao_launcher_copy_base_dir(
-    wchar_t* out_dir, uint32_t* inout_char_count) {
-    if (inout_char_count == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+extern "C" sao_status_t sao_launcher_copy_base_dir(wchar_t* out_dir, uint32_t* inout_char_count) {
+    if (inout_char_count == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
     const uint32_t required = sao_launcher_base_dir_length() + 1u;
     if (out_dir == nullptr || *inout_char_count < required) {
         *inout_char_count = required;
@@ -182,12 +182,9 @@ extern "C" sao_status_t sao_launcher_copy_base_dir(
 //     its Panel authority mirror is skipped.
 namespace sao::launcher::runtime_installer_glue {
 
-using ProgressFn = void (*)(const char* kind_opaque_id_utf8,
-                            uint64_t bytes_done,
-                            uint64_t bytes_total,
-                            void* user_data);
-using EnsureAllFn = sao_status_t (*)(const wchar_t* base_dir,
-                                     ProgressFn progress_cb,
+using ProgressFn = void (*)(const char* kind_opaque_id_utf8, uint64_t bytes_done,
+                            uint64_t bytes_total, void* user_data);
+using EnsureAllFn = sao_status_t (*)(const wchar_t* base_dir, ProgressFn progress_cb,
                                      void* progress_user_data);
 using RecordOutcomeFn = void (*)(void* platform_ctx, bool ok) noexcept;
 
@@ -271,12 +268,9 @@ constexpr UINT_PTR kUiFrameTimerId = 0x53415549U;
 constexpr int32_t kUiFrameIntervalMs = 16;
 constexpr int kMaximumTeardownAttempts = 3;
 constexpr int kMaximumStreamingReleaseAttempts = 2;
-constexpr uint64_t kRtIoMandatoryLiveStepMask =
-    ((uint64_t{1} << 9u) - 1u) |
-    (uint64_t{1} << 13u) |
-    (uint64_t{1} << 14u) |
-    (uint64_t{1} << 15u) |
-    (uint64_t{1} << 16u);
+constexpr uint64_t kRtIoMandatoryLiveStepMask = ((uint64_t{1} << 9u) - 1u) | (uint64_t{1} << 13u) |
+                                                (uint64_t{1} << 14u) | (uint64_t{1} << 15u) |
+                                                (uint64_t{1} << 16u);
 constexpr uint32_t kRtIoObservationUnknown = 0u;
 constexpr uint32_t kRtIoObservationTrue = 2u;
 constexpr uint32_t kRtIoFailureStageNone = 0u;
@@ -291,8 +285,8 @@ class EnvironmentVariableRollback {
             return;
 
         SetLastError(ERROR_SUCCESS);
-        const DWORD length = GetEnvironmentVariableW(
-            name_, previous_value_.data(), static_cast<DWORD>(previous_value_.size()));
+        const DWORD length = GetEnvironmentVariableW(name_, previous_value_.data(),
+                                                     static_cast<DWORD>(previous_value_.size()));
         if (length == 0u) {
             const DWORD error = GetLastError();
             previous_exists_ = error != ERROR_ENVVAR_NOT_FOUND;
@@ -315,8 +309,7 @@ class EnvironmentVariableRollback {
     }
 
     bool set(const wchar_t* value) noexcept {
-        return valid_ && value != nullptr &&
-               SetEnvironmentVariableW(name_, value) != FALSE;
+        return valid_ && value != nullptr && SetEnvironmentVariableW(name_, value) != FALSE;
     }
 
     void commit() noexcept {
@@ -326,8 +319,8 @@ class EnvironmentVariableRollback {
     bool restore() noexcept {
         if (!valid_)
             return false;
-        return SetEnvironmentVariableW(name_, previous_exists_ ? previous_value_.data() : nullptr) !=
-               FALSE;
+        return SetEnvironmentVariableW(name_, previous_exists_ ? previous_value_.data()
+                                                               : nullptr) != FALSE;
     }
 
   private:
@@ -340,9 +333,9 @@ class EnvironmentVariableRollback {
 
 using PluginAuthoritySyncFn = sao_status_t (*)(void* user_data);
 
-sao_status_t bindPluginsWithAuthority(
-    sao_plugins_registry*& current, sao_plugins_registry* candidate,
-    PluginAuthoritySyncFn sync, void* user_data) noexcept {
+sao_status_t bindPluginsWithAuthority(sao_plugins_registry*& current,
+                                      sao_plugins_registry* candidate, PluginAuthoritySyncFn sync,
+                                      void* user_data) noexcept {
     sao_plugins_registry* previous = current;
     current = candidate;
     const sao_status_t status = sync != nullptr ? sync(user_data) : SAO_STATUS_OK;
@@ -377,15 +370,12 @@ bool rtIoOperatorPreflightFailureStateReady(int32_t last_failure_code,
             last_failure_code == SAO_STATUS_ERR_NOT_INITIALIZED);
 }
 
-bool rtIoOperatorOptionsValid(
-    const sao_launcher_rt_io_operator_options_t* options) noexcept {
-    return options != nullptr &&
-        options->struct_size == sizeof(*options) &&
-        options->reserved == 0u;
+bool rtIoOperatorOptionsValid(const sao_launcher_rt_io_operator_options_t* options) noexcept {
+    return options != nullptr && options->struct_size == sizeof(*options) &&
+           options->reserved == 0u;
 }
 
-uint64_t requestedRtIoLiveStepMask(
-    const sao_launcher_rt_io_operator_options_t& options) noexcept {
+uint64_t requestedRtIoLiveStepMask(const sao_launcher_rt_io_operator_options_t& options) noexcept {
     uint64_t mask = kRtIoMandatoryLiveStepMask;
     if (options.input_checks != 0u) {
         mask |= uint64_t{1} << 9u;
@@ -398,10 +388,9 @@ uint64_t requestedRtIoLiveStepMask(
     return mask;
 }
 
-void initializeRtIoOperatorReport(
-    const sao_launcher_rt_io_operator_options_t* options,
-    uint32_t stage,
-    sao_launcher_rt_io_operator_report_t* report) noexcept {
+void initializeRtIoOperatorReport(const sao_launcher_rt_io_operator_options_t* options,
+                                  uint32_t stage,
+                                  sao_launcher_rt_io_operator_report_t* report) noexcept {
     if (report == nullptr)
         return;
     *report = {};
@@ -409,16 +398,14 @@ void initializeRtIoOperatorReport(
     report->stage = stage;
     report->status = SAO_STATUS_INTERNAL;
     report->operation_status = SAO_STATUS_INTERNAL;
-    report->failure_classification =
-        SAO_LAUNCHER_RT_IO_FAILURE_NOT_SUBMITTED;
+    report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_NOT_SUBMITTED;
     if (options == nullptr)
         return;
     report->preflight_only = options->preflight_only != 0u ? 1u : 0u;
     report->input_checks = options->input_checks != 0u ? 1u : 0u;
     report->r5_check = options->r5_check != 0u ? 1u : 0u;
     report->mf_check = options->mf_check != 0u ? 1u : 0u;
-    report->exit_after_validation =
-        options->exit_after_validation != 0u ? 1u : 0u;
+    report->exit_after_validation = options->exit_after_validation != 0u ? 1u : 0u;
     report->requested_step_mask = requestedRtIoLiveStepMask(*options);
 }
 
@@ -554,7 +541,8 @@ bool restoreHeadlessProcessGlobals(HeadlessCleanupState& cleanup) noexcept {
         cleanup.base_dir_environment.commit();
     if (cleanup.launcher_globals_published) {
         sao_launcher_set_base_dir(cleanup.previous_base_dir_dynamic.empty()
-            ? cleanup.previous_base_dir : cleanup.previous_base_dir_dynamic.c_str());
+                                      ? cleanup.previous_base_dir
+                                      : cleanup.previous_base_dir_dynamic.c_str());
         sao::launcher::setCrashDumpDirectory(cleanup.previous_crash_dir.c_str());
         cleanup.launcher_globals_published = false;
     }
@@ -564,11 +552,11 @@ bool restoreHeadlessProcessGlobals(HeadlessCleanupState& cleanup) noexcept {
 std::mutex g_pending_cleanup_mutex;
 std::unique_ptr<HeadlessCleanupState> g_pending_cleanup;
 bool publishLauncherBaseDir(const std::wstring& base_dir) noexcept {
-    if (base_dir.empty()) return false;
+    if (base_dir.empty())
+        return false;
     sao_launcher_set_base_dir(base_dir.c_str());
     return true;
 }
-
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
@@ -600,9 +588,9 @@ sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
 // left to their pre-installed runtimes.
 sao_status_t
 runtime_installer_ensure_all_passthrough(const wchar_t* /*base_dir*/,
-                                          sao::launcher::runtime_installer_glue::ProgressFn
-                                              /*progress_cb*/,
-                                          void* /*progress_user_data*/) {
+                                         sao::launcher::runtime_installer_glue::ProgressFn
+                                         /*progress_cb*/,
+                                         void* /*progress_user_data*/) {
     return SAO_STATUS_OK;
 }
 
@@ -619,9 +607,8 @@ struct RuntimeInstallerHookSnapshot {
 RuntimeInstallerHookSnapshot current_runtime_installer_hook() {
     std::lock_guard lock(g_runtime_installer_hook_mutex);
     return {
-        g_runtime_installer_ensure_all_hook == nullptr
-            ? &runtime_installer_ensure_all_passthrough
-            : g_runtime_installer_ensure_all_hook,
+        g_runtime_installer_ensure_all_hook == nullptr ? &runtime_installer_ensure_all_passthrough
+                                                       : g_runtime_installer_ensure_all_hook,
         g_runtime_installer_hook_is_production,
     };
 }
@@ -632,19 +619,17 @@ RuntimeInstallerHookSnapshot current_runtime_installer_hook() {
 // time so the launcher's pipeline picks it up without every call site
 // having to touch the setter. Tests still override via
 // sao_launcher_init_pipeline_test_set_runtime_installer_hook.
-extern "C" sao_status_t sao_runtime_installer_ensure_all(
-    const wchar_t* base_dir,
-    sao::launcher::runtime_installer_glue::ProgressFn progress_cb,
-    void* progress_user_data);
+extern "C" sao_status_t
+sao_runtime_installer_ensure_all(const wchar_t* base_dir,
+                                 sao::launcher::runtime_installer_glue::ProgressFn progress_cb,
+                                 void* progress_user_data);
 struct sao_runtime_manifest_s;
 using sao_runtime_manifest_handle_t = sao_runtime_manifest_s*;
-extern "C" sao_status_t sao_runtime_installer_load_manifest(
-    const char* manifest_json_utf8, size_t manifest_json_length,
-    sao_runtime_manifest_handle_t* out_handle);
-extern "C" void sao_runtime_installer_manifest_release(
-    sao_runtime_manifest_handle_t handle);
-extern "C" sao_status_t sao_runtime_installer_bind_manifest(
-    sao_runtime_manifest_handle_t handle);
+extern "C" sao_status_t
+sao_runtime_installer_load_manifest(const char* manifest_json_utf8, size_t manifest_json_length,
+                                    sao_runtime_manifest_handle_t* out_handle);
+extern "C" void sao_runtime_installer_manifest_release(sao_runtime_manifest_handle_t handle);
+extern "C" sao_status_t sao_runtime_installer_bind_manifest(sao_runtime_manifest_handle_t handle);
 
 struct RuntimeInstallerHookInstall {
     RuntimeInstallerHookInstall() noexcept {
@@ -667,10 +652,8 @@ struct RuntimeInstallerProgressContext {
     void* overlay_handle = nullptr;
 };
 
-void forward_runtime_installer_progress(const char* kind_opaque_id_utf8,
-                                        uint64_t bytes_done,
-                                        uint64_t bytes_total,
-                                        void* user_data) {
+void forward_runtime_installer_progress(const char* kind_opaque_id_utf8, uint64_t bytes_done,
+                                        uint64_t bytes_total, void* user_data) {
     // Silent when the overlay handle is nullptr; the installer still runs
     // to completion, the user just gets no visible progress bar. The
     // production overlay wiring lands alongside the installer-core track;
@@ -695,23 +678,22 @@ bool read_runtime_manifest(const std::wstring& path, std::string& manifest) {
     constexpr LONGLONG maximum_bytes = 4ll * 1024ll * 1024ll;
     HANDLE raw = CreateFileW(
         path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
-            FILE_FLAG_SEQUENTIAL_SCAN,
-        nullptr);
-    if (raw == INVALID_HANDLE_VALUE) return false;
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (raw == INVALID_HANDLE_VALUE)
+        return false;
     std::unique_ptr<void, decltype(&CloseHandle)> file(raw, &CloseHandle);
-    if (GetFileType(file.get()) != FILE_TYPE_DISK) return false;
+    if (GetFileType(file.get()) != FILE_TYPE_DISK)
+        return false;
 
     FILE_ATTRIBUTE_TAG_INFO attributes{};
-    if (!GetFileInformationByHandleEx(
-            file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
-        (attributes.FileAttributes &
-         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+    if (!GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes,
+                                      sizeof(attributes)) ||
+        (attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
+            0) {
         return false;
     }
     LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0 ||
-        size.QuadPart > maximum_bytes) {
+    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0 || size.QuadPart > maximum_bytes) {
         return false;
     }
     manifest.resize(static_cast<size_t>(size.QuadPart));
@@ -736,7 +718,8 @@ sao_status_t run_configured_runtime_installer(
     const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
     using sao::launcher::runtime_installer_glue::g_record_outcome;
     const auto record = [&](bool ok) noexcept {
-        if (g_record_outcome != nullptr) g_record_outcome(state.platform_ctx, ok);
+        if (g_record_outcome != nullptr)
+            g_record_outcome(state.platform_ctx, ok);
     };
     try {
         if (state.safe_mode || !configuration.enabled) {
@@ -747,9 +730,8 @@ sao_status_t run_configured_runtime_installer(
         const RuntimeInstallerHookSnapshot hook = current_runtime_installer_hook();
         if (hook.ensure_all == nullptr ||
             hook.ensure_all == &runtime_installer_ensure_all_passthrough) {
-            const sao_status_t status = manifest_configured
-                ? SAO_STATUS_NOT_IMPLEMENTED
-                : SAO_STATUS_OK;
+            const sao_status_t status =
+                manifest_configured ? SAO_STATUS_NOT_IMPLEMENTED : SAO_STATUS_OK;
             record(status == SAO_STATUS_OK);
             return status;
         }
@@ -770,8 +752,7 @@ sao_status_t run_configured_runtime_installer(
                 return SAO_STATUS_INVALID_ARGUMENT;
             }
             sao_runtime_manifest_handle_t handle = nullptr;
-            status = sao_runtime_installer_load_manifest(
-                manifest.data(), manifest.size(), &handle);
+            status = sao_runtime_installer_load_manifest(manifest.data(), manifest.size(), &handle);
             if (status == SAO_STATUS_OK && handle == nullptr) {
                 status = SAO_STATUS_INTERNAL;
             }
@@ -780,11 +761,9 @@ sao_status_t run_configured_runtime_installer(
             }
             if (status == SAO_STATUS_OK) {
                 status = hook.ensure_all(state.base_dir.c_str(),
-                                         &forward_runtime_installer_progress,
-                                         &progress);
+                                         &forward_runtime_installer_progress, &progress);
             }
-            const sao_status_t unbind_status =
-                sao_runtime_installer_bind_manifest(nullptr);
+            const sao_status_t unbind_status = sao_runtime_installer_bind_manifest(nullptr);
             if (handle != nullptr) {
                 sao_runtime_installer_manifest_release(handle);
             }
@@ -794,8 +773,7 @@ sao_status_t run_configured_runtime_installer(
         } else
 #endif
         {
-            status = hook.ensure_all(state.base_dir.c_str(),
-                                     &forward_runtime_installer_progress,
+            status = hook.ensure_all(state.base_dir.c_str(), &forward_runtime_installer_progress,
                                      &progress);
         }
         record(status == SAO_STATUS_OK);
@@ -820,13 +798,12 @@ void notifyStep(const sao_launcher_init_hooks_t* hooks, const char* name) {
 // provider failure.
 int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState& state,
                 sao_dual_run_config& dual_cfg, sao_dual_run_config_v2& dual_cfg_v2,
-                HANDLE& single_instance_mutex,
-                HANDLE& dual_run_driver_mutex, bool& crash_installed, bool& mutex_acquired,
-                bool& dual_run_driver_acquired, bool& base_dir_resolved, bool& license_verified,
-                bool& shell_verified, bool& security_initialized, bool& platform_up,
-                bool& plugins_discovered, bool& ui_online, bool& handed_off_to_python,
-                bool& dual_run_gate_failed, sao_status_t& pipeline_status,
-                int& handed_off_exit_code) {
+                HANDLE& single_instance_mutex, HANDLE& dual_run_driver_mutex, bool& crash_installed,
+                bool& mutex_acquired, bool& dual_run_driver_acquired, bool& base_dir_resolved,
+                bool& license_verified, bool& shell_verified, bool& security_initialized,
+                bool& platform_up, bool& plugins_discovered, bool& ui_online,
+                bool& handed_off_to_python, bool& dual_run_gate_failed,
+                sao_status_t& pipeline_status, int& handed_off_exit_code) {
     using namespace sao::launcher;
     (void)crash_installed;
 
@@ -920,7 +897,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     // optional providers remain disabled.  An explicit malformed config is
     // fatal rather than partially enabling a subsystem.
     if (loadLauncherProviderConfiguration(
-            state.base_dir.c_str(), state.config_path.empty() ? nullptr : state.config_path.c_str()) != SAO_STATUS_OK) {
+            state.base_dir.c_str(),
+            state.config_path.empty() ? nullptr : state.config_path.c_str()) != SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
@@ -1000,8 +978,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
     if (installer_status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
         (void)sao_core_logf(SAO_LOG_ERROR, "launcher.runtime_installer",
-                            "configured runtime installation failed: status=%d",
-                            installer_status);
+                            "configured runtime installation failed: status=%d", installer_status);
 #endif
         return SAO_EXIT_PLUGIN_LOAD_FAIL;
     }
@@ -1302,7 +1279,7 @@ sao_status_t applyNervgearModeTransaction(bool& mode, NervgearModeSetFn set_shel
 namespace sao::launcher {
 
 sao_status_t ensureConfiguredPluginRuntimes(const AppState& state,
-    const PluginsProviderConfiguration& plugins) noexcept {
+                                            const PluginsProviderConfiguration& plugins) noexcept {
     return run_configured_runtime_installer(state, plugins);
 }
 
@@ -1373,8 +1350,7 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     cleanup->crash_installed = installCrashHandler();
 
     LauncherLifecycleDecision lifecycle;
-    const sao_status_t lifecycle_status =
-        prepareLauncherLifecycle(lifecycle, state.rt_io_operator);
+    const sao_status_t lifecycle_status = prepareLauncherLifecycle(lifecycle, state.rt_io_operator);
     if (lifecycle_status != SAO_STATUS_OK) {
         if (exit_code_out)
             *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
@@ -1386,15 +1362,13 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     sao_status_t pipeline_status = SAO_STATUS_OK;
     int handed_off_exit_code = 0;
 
-    int rc = runPipeline(hooks, state, lifecycle.dual_config, lifecycle.dual_config_v2,
-                         cleanup->single_instance_mutex,
-                         cleanup->dual_run_driver_mutex, cleanup->crash_installed,
-                         cleanup->mutex_acquired, cleanup->dual_run_driver_acquired,
-                         cleanup->base_dir_resolved, cleanup->license_verified,
-                         cleanup->shell_verified, cleanup->security_initialized,
-                         cleanup->platform_up, cleanup->plugins_discovered, cleanup->ui_online,
-                         handed_off_to_python, dual_run_gate_failed, pipeline_status,
-                         handed_off_exit_code);
+    int rc = runPipeline(
+        hooks, state, lifecycle.dual_config, lifecycle.dual_config_v2,
+        cleanup->single_instance_mutex, cleanup->dual_run_driver_mutex, cleanup->crash_installed,
+        cleanup->mutex_acquired, cleanup->dual_run_driver_acquired, cleanup->base_dir_resolved,
+        cleanup->license_verified, cleanup->shell_verified, cleanup->security_initialized,
+        cleanup->platform_up, cleanup->plugins_discovered, cleanup->ui_online, handed_off_to_python,
+        dual_run_gate_failed, pipeline_status, handed_off_exit_code);
     lifecycle.selected_mode = lifecycle.dual_config.mode;
     lifecycle.dual_config_v2.legacy.mode = lifecycle.selected_mode;
     cleanup->launcher_globals_published = cleanup->base_dir_resolved;
@@ -1407,9 +1381,8 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
     const bool is_child_of_dual_run_driver =
         GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0 &&
         inherited_role[0] != L'\0';
-    if (!dual_run_gate_failed && !is_child_of_dual_run_driver &&
-        !handed_off_to_python && rc != SAO_EXIT_OK &&
-        rc != SAO_EXIT_ALREADY_RUNNING && rc != SAO_EXIT_BAD_ARGS) {
+    if (!dual_run_gate_failed && !is_child_of_dual_run_driver && !handed_off_to_python &&
+        rc != SAO_EXIT_OK && rc != SAO_EXIT_ALREADY_RUNNING && rc != SAO_EXIT_BAD_ARGS) {
         if (lifecycle.dual_config.mode == SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK) {
             int32_t fbec = 0;
             const wchar_t* step_name = L"cpp_pipeline";
@@ -1492,10 +1465,10 @@ sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hook
 #endif
 }
 
-extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
-    const sao_launcher_rt_io_operator_report_t* report,
-    char* out_utf8, size_t out_capacity,
-    size_t* out_bytes_written) {
+extern "C" sao_status_t
+sao_launcher_rt_io_operator_format_json(const sao_launcher_rt_io_operator_report_t* report,
+                                        char* out_utf8, size_t out_capacity,
+                                        size_t* out_bytes_written) {
     if (out_bytes_written != nullptr)
         *out_bytes_written = 0u;
     if (report == nullptr || out_utf8 == nullptr || out_capacity == 0u ||
@@ -1535,42 +1508,31 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         "\"r3_uc_patch_failure_reason\":%u,"
         "\"hid_fallback_reason\":%u,"
         "\"failure_classification\":\"%s\"",
-        rtIoOperatorStageName(report->stage), report->status,
-        report->operation_status, jsonBool(report->success),
-        jsonBool(report->complete), jsonBool(report->preflight_only),
-        jsonBool(report->input_checks), jsonBool(report->r5_check),
-        jsonBool(report->mf_check), jsonBool(report->exit_after_validation),
+        rtIoOperatorStageName(report->stage), report->status, report->operation_status,
+        jsonBool(report->success), jsonBool(report->complete), jsonBool(report->preflight_only),
+        jsonBool(report->input_checks), jsonBool(report->r5_check), jsonBool(report->mf_check),
+        jsonBool(report->exit_after_validation),
         static_cast<unsigned long long>(report->requested_step_mask),
         static_cast<unsigned long long>(report->attempted_step_mask),
         static_cast<unsigned long long>(report->passed_step_mask),
         static_cast<unsigned long long>(report->unknown_step_mask),
-        static_cast<unsigned long long>(report->partial_step_mask),
-        report->selected_engine, report->runtime_tier, report->backend,
-        report->selected_backend, report->driver_strategy,
-        report->residue_gate, report->residue_count, report->unknown_count,
-        report->is_admin, report->is_elevated,
-        report->load_driver_privilege_present,
-        report->load_driver_privilege_enabled, report->hvci_enabled,
-        report->vbs_enabled, report->provider_observable,
-        report->admission_mask, report->capability_mask,
-        report->restore_mask, jsonBool(report->state_observed),
-        jsonBool(report->resources_absent), jsonBool(report->loaded),
-        jsonBool(report->probe_passed), jsonBool(report->backend_ready),
-        jsonBool(report->call_authenticated),
-        jsonBool(report->call_transport_complete),
-        jsonBool(report->call_request_id_matched),
-        jsonBool(report->call_committed),
-        jsonBool(report->cleanup_acknowledged),
-        jsonBool(report->cleanup_clean),
-        jsonBool(report->cleanup_keep_running),
-        jsonBool(report->provider_retained), jsonBool(report->wiper_joined),
-        jsonBool(report->engine_cleanup_confirmed),
+        static_cast<unsigned long long>(report->partial_step_mask), report->selected_engine,
+        report->runtime_tier, report->backend, report->selected_backend, report->driver_strategy,
+        report->residue_gate, report->residue_count, report->unknown_count, report->is_admin,
+        report->is_elevated, report->load_driver_privilege_present,
+        report->load_driver_privilege_enabled, report->hvci_enabled, report->vbs_enabled,
+        report->provider_observable, report->admission_mask, report->capability_mask,
+        report->restore_mask, jsonBool(report->state_observed), jsonBool(report->resources_absent),
+        jsonBool(report->loaded), jsonBool(report->probe_passed), jsonBool(report->backend_ready),
+        jsonBool(report->call_authenticated), jsonBool(report->call_transport_complete),
+        jsonBool(report->call_request_id_matched), jsonBool(report->call_committed),
+        jsonBool(report->cleanup_acknowledged), jsonBool(report->cleanup_clean),
+        jsonBool(report->cleanup_keep_running), jsonBool(report->provider_retained),
+        jsonBool(report->wiper_joined), jsonBool(report->engine_cleanup_confirmed),
         jsonBool(report->etw_restore_confirmed), report->last_failure_code,
-        report->last_failure_stage, report->r3_uc_patch_failure_reason,
-        report->hid_fallback_reason,
+        report->last_failure_stage, report->r3_uc_patch_failure_reason, report->hid_fallback_reason,
         rtIoOperatorFailureName(report->failure_classification));
-    if (generic_written < 0 ||
-        static_cast<size_t>(generic_written) >= generic_json.size()) {
+    if (generic_written < 0 || static_cast<size_t>(generic_written) >= generic_json.size()) {
         out_utf8[0] = '\0';
         return SAO_STATUS_INTERNAL;
     }
@@ -1580,9 +1542,7 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
         const auto append_unsigned = [&json](uint64_t value) {
             json.append(std::to_string(value));
         };
-        const auto append_signed = [&json](int64_t value) {
-            json.append(std::to_string(value));
-        };
+        const auto append_signed = [&json](int64_t value) { json.append(std::to_string(value)); };
 
         json.append(",\"strict_policy\":");
         append_unsigned(report->strict_policy);
@@ -1708,23 +1668,21 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_format_json(
 }
 
 extern "C" sao_status_t sao_launcher_rt_io_operator_run(
-    sao_platform_ctx* ctx,
-    const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_output_fn output,
-    void* output_user_data, int32_t* out_ready) {
+    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
+    sao_launcher_rt_io_operator_output_fn output, void* output_user_data, int32_t* out_ready) {
     constexpr sao_status_t kNotSubmitted = -4085;
     if (out_ready != nullptr)
         *out_ready = 0;
-    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) ||
-        output == nullptr || out_ready == nullptr) {
+    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) || output == nullptr ||
+        out_ready == nullptr) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
 
     auto emit = [&](const sao_launcher_rt_io_operator_report_t& report) {
         std::array<char, kRtIoOperatorJsonCapacity> json{};
         size_t written = 0u;
-        const sao_status_t status = sao_launcher_rt_io_operator_format_json(
-            &report, json.data(), json.size(), &written);
+        const sao_status_t status =
+            sao_launcher_rt_io_operator_format_json(&report, json.data(), json.size(), &written);
         if (status == SAO_STATUS_OK && written != 0u)
             output(json.data(), output_user_data);
         return status;
@@ -1740,15 +1698,13 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_run(
     sao_status_t overall = SAO_STATUS_OK;
     sao_launcher_rt_io_operator_report_t preflight =
         prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT);
-    sao_status_t stage_status = sao_platform_rt_io_operator_preflight(
-        ctx, options, &preflight);
+    sao_status_t stage_status = sao_platform_rt_io_operator_preflight(ctx, options, &preflight);
     if (preflight.status == SAO_STATUS_INTERNAL)
         preflight.status = stage_status;
     if (preflight.operation_status == SAO_STATUS_INTERNAL)
         preflight.operation_status = stage_status;
     if (stage_status != SAO_STATUS_OK || preflight.success == 0u) {
-        overall = stage_status != SAO_STATUS_OK ? stage_status
-                                                : SAO_STATUS_INTERNAL;
+        overall = stage_status != SAO_STATUS_OK ? stage_status : SAO_STATUS_INTERNAL;
     }
     if (emit(preflight) != SAO_STATUS_OK)
         overall = SAO_STATUS_INTERNAL;
@@ -1770,23 +1726,20 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_run(
         if (init.operation_status == SAO_STATUS_INTERNAL)
             init.operation_status = stage_status;
         if (stage_status != SAO_STATUS_OK || init.success == 0u) {
-            overall = stage_status != SAO_STATUS_OK ? stage_status
-                                                    : SAO_STATUS_INTERNAL;
+            overall = stage_status != SAO_STATUS_OK ? stage_status : SAO_STATUS_INTERNAL;
         }
     }
     if (emit(init) != SAO_STATUS_OK)
         overall = SAO_STATUS_INTERNAL;
 
     if (overall == SAO_STATUS_OK) {
-        stage_status = sao_platform_rt_io_operator_live_validate(
-            ctx, options, &live);
+        stage_status = sao_platform_rt_io_operator_live_validate(ctx, options, &live);
         if (live.status == SAO_STATUS_INTERNAL)
             live.status = stage_status;
         if (live.operation_status == SAO_STATUS_INTERNAL)
             live.operation_status = stage_status;
         if (stage_status != SAO_STATUS_OK || live.success == 0u) {
-            overall = stage_status != SAO_STATUS_OK ? stage_status
-                                                    : SAO_STATUS_INTERNAL;
+            overall = stage_status != SAO_STATUS_OK ? stage_status : SAO_STATUS_INTERNAL;
         }
     }
     if (emit(live) != SAO_STATUS_OK)
@@ -1799,8 +1752,7 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_run(
         if (status.operation_status == SAO_STATUS_INTERNAL)
             status.operation_status = stage_status;
         if (stage_status != SAO_STATUS_OK || status.success == 0u) {
-            overall = stage_status != SAO_STATUS_OK ? stage_status
-                                                    : SAO_STATUS_INTERNAL;
+            overall = stage_status != SAO_STATUS_OK ? stage_status : SAO_STATUS_INTERNAL;
         }
     }
     if (emit(status) != SAO_STATUS_OK)
@@ -1808,15 +1760,13 @@ extern "C" sao_status_t sao_launcher_rt_io_operator_run(
 
     sao_launcher_rt_io_operator_report_t cleanup =
         prepare_not_submitted(SAO_LAUNCHER_RT_IO_STAGE_CLEANUP);
-    const sao_status_t cleanup_status = sao_platform_rt_io_operator_cleanup(
-        ctx, options, &cleanup);
+    const sao_status_t cleanup_status = sao_platform_rt_io_operator_cleanup(ctx, options, &cleanup);
     if (cleanup.status == SAO_STATUS_INTERNAL)
         cleanup.status = cleanup_status;
     if (cleanup.operation_status == SAO_STATUS_INTERNAL)
         cleanup.operation_status = cleanup_status;
     if (cleanup_status != SAO_STATUS_OK || cleanup.success == 0u) {
-        overall = cleanup_status != SAO_STATUS_OK ? cleanup_status
-                                                  : SAO_STATUS_INTERNAL;
+        overall = cleanup_status != SAO_STATUS_OK ? cleanup_status : SAO_STATUS_INTERNAL;
     }
     if (emit(cleanup) != SAO_STATUS_OK)
         overall = SAO_STATUS_INTERNAL;
@@ -1839,7 +1789,7 @@ extern "C" void sao_launcher_init_pipeline_test_set_runtime_installer_hook(
     g_runtime_installer_hook_is_production = false;
 }
 
-#if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                             \
+#if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 namespace {
 
@@ -1869,14 +1819,12 @@ AntiDebugWorkerState& anti_debug_worker_state() {
 
 void log_anti_debug_result(const char* phase, sao_status_t status,
                            const SaoSecurityAntiDebugEvidence& evidence) noexcept {
-    if (status == SAO_STATUS_OK &&
-        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_ALLOW) {
+    if (status == SAO_STATUS_OK && evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_ALLOW) {
         return;
     }
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     (void)sao_core_logf(
-        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK ? SAO_LOG_ERROR
-                                                                  : SAO_LOG_WARN,
+        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK ? SAO_LOG_ERROR : SAO_LOG_WARN,
         "launcher.security.anti_debug",
         "%s status=%d verdict=%u positive_mask=0x%llx unavailable_mask=0x%llx reason_bits=0x%llx",
         phase, static_cast<int>(status), evidence.verdict,
@@ -1884,8 +1832,7 @@ void log_anti_debug_result(const char* phase, sao_status_t status,
         static_cast<unsigned long long>(evidence.unavailable_mask),
         static_cast<unsigned long long>(evidence.reason_bits));
 #else
-    std::fprintf(stderr,
-                 "anti_debug %s status=%d verdict=%u positive=0x%llx unavailable=0x%llx\n",
+    std::fprintf(stderr, "anti_debug %s status=%d verdict=%u positive=0x%llx unavailable=0x%llx\n",
                  phase, static_cast<int>(status), evidence.verdict,
                  static_cast<unsigned long long>(evidence.positive_mask),
                  static_cast<unsigned long long>(evidence.unavailable_mask));
@@ -1911,18 +1858,17 @@ void anti_debug_worker_main(uint32_t interval_seconds, DWORD launcher_thread_id)
             log_anti_debug_result("periodic", status, evidence);
             if (status == SAO_STATUS_OK &&
                 evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK) {
-                if (!PostThreadMessageW(launcher_thread_id, WM_QUIT,
-                                        static_cast<WPARAM>(
-                                            sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL),
-                                        0)) {
+                if (!PostThreadMessageW(
+                        launcher_thread_id, WM_QUIT,
+                        static_cast<WPARAM>(sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL), 0)) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
                     (void)sao_core_logf(SAO_LOG_ERROR, "launcher.security.anti_debug",
                                         "failed to post policy shutdown error=%lu",
                                         static_cast<unsigned long>(GetLastError()));
 #endif
-                    (void)TerminateProcess(GetCurrentProcess(),
-                                           static_cast<UINT>(
-                                               sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL));
+                    (void)TerminateProcess(
+                        GetCurrentProcess(),
+                        static_cast<UINT>(sao::launcher::SAO_EXIT_PLATFORM_INIT_FAIL));
                 }
                 return;
             }
@@ -1960,8 +1906,7 @@ sao_status_t start_anti_debug_worker(uint32_t interval_seconds) noexcept {
         AntiDebugWorkerState& state = anti_debug_worker_state();
         std::lock_guard lock(state.mutex);
         state.stop_requested = false;
-        state.worker = std::thread(anti_debug_worker_main, interval_seconds,
-                                   GetCurrentThreadId());
+        state.worker = std::thread(anti_debug_worker_main, interval_seconds, GetCurrentThreadId());
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_INTERNAL;
@@ -2003,8 +1948,7 @@ UserEvasionEvidence collect_user_evasion_evidence() {
     for (const char* target : targets) {
         const uint32_t hash = user_evasion_hash(target);
         uint32_t ssn = 0;
-        const int32_t status =
-            sao_security_user_evasion_halo_gate_resolve(hash, 32u, &ssn);
+        const int32_t status = sao_security_user_evasion_halo_gate_resolve(hash, 32u, &ssn);
         if (status != SAO_STATUS_OK) {
             ++evidence.halo_unavailable_count;
             continue;
@@ -2030,25 +1974,23 @@ UserEvasionEvidence collect_user_evasion_evidence() {
 
 bool evaluate_user_evasion(bool strict) {
     const UserEvasionEvidence evidence = collect_user_evasion_evidence();
-    const bool incomplete = evidence.abi_version == 0 ||
-                            (evidence.ntdll_verify_status != SAO_STATUS_OK &&
-                             evidence.halo_resolved_count == 0);
-    const bool finding = evidence.ntdll_hook_count != 0 ||
-                         evidence.halo_hooked_count != 0 || incomplete;
+    const bool incomplete =
+        evidence.abi_version == 0 ||
+        (evidence.ntdll_verify_status != SAO_STATUS_OK && evidence.halo_resolved_count == 0);
+    const bool finding =
+        evidence.ntdll_hook_count != 0 || evidence.halo_hooked_count != 0 || incomplete;
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
-    (void)sao_core_logf(
-        finding ? SAO_LOG_WARN : SAO_LOG_INFO, "launcher.security.user_evasion",
-        "abi=0x%08x verify_status=%d hook_count=%u halo_resolved=%u halo_hooked=%u halo_unavailable=%u gadget_status=%d gadget_available=%u verdict=%s",
-        evidence.abi_version, evidence.ntdll_verify_status, evidence.ntdll_hook_count,
-        evidence.halo_resolved_count, evidence.halo_hooked_count,
-        evidence.halo_unavailable_count, evidence.syscall_gadget_status,
-        evidence.syscall_gadget_available,
-        finding ? (strict ? "block" : "warn") : "allow");
+    (void)sao_core_logf(finding ? SAO_LOG_WARN : SAO_LOG_INFO, "launcher.security.user_evasion",
+                        "abi=0x%08x verify_status=%d hook_count=%u halo_resolved=%u halo_hooked=%u "
+                        "halo_unavailable=%u gadget_status=%d gadget_available=%u verdict=%s",
+                        evidence.abi_version, evidence.ntdll_verify_status,
+                        evidence.ntdll_hook_count, evidence.halo_resolved_count,
+                        evidence.halo_hooked_count, evidence.halo_unavailable_count,
+                        evidence.syscall_gadget_status, evidence.syscall_gadget_available,
+                        finding ? (strict ? "block" : "warn") : "allow");
 #else
-    std::fprintf(stderr,
-                 "user_evasion abi=0x%08x hooks=%u halo_hooked=%u verdict=%s\n",
-                 evidence.abi_version, evidence.ntdll_hook_count,
-                 evidence.halo_hooked_count,
+    std::fprintf(stderr, "user_evasion abi=0x%08x hooks=%u halo_hooked=%u verdict=%s\n",
+                 evidence.abi_version, evidence.ntdll_hook_count, evidence.halo_hooked_count,
                  finding ? (strict ? "block" : "warn") : "allow");
 #endif
     return !finding || !strict;
@@ -2096,8 +2038,8 @@ sao_status_t sao_launcher_init_pipeline_test_bind_plugins_preserves_registry(
         return *static_cast<const sao_status_t*>(user_data);
     };
     sao_plugins_registry* current = previous;
-    const sao_status_t status = bindPluginsWithAuthority(
-        current, candidate, sync, &authority_sync_status);
+    const sao_status_t status =
+        bindPluginsWithAuthority(current, candidate, sync, &authority_sync_status);
     if (current_out != nullptr)
         *current_out = current;
     return status;
@@ -2136,11 +2078,18 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     }
     return g_composition_test_hooks.ui_take_offline(ctx, g_composition_test_hooks.user_data);
 }
-sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*,
-                                            int32_t* out_just_finished) {
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*, int32_t* out_just_finished) {
+    int32_t reason = 0;
+    return sao_ui_linkstart_poll_finished_ex(nullptr, out_just_finished, &reason);
+}
+sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx*, int32_t* out_just_finished,
+                                               int32_t* out_completion_reason) {
     if (out_just_finished == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (out_completion_reason == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_just_finished = 0;
+    *out_completion_reason = 0;
     return SAO_STATUS_OK;
 }
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
@@ -2159,10 +2108,13 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                                                             g_composition_test_hooks.user_data)
                : SAO_STATUS_OK;
 }
-sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
-sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) { return SAO_STATUS_OK; }
-sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*,
-                                                int32_t* out_presented) {
+sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) {
+    return SAO_STATUS_OK;
+}
+sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) {
+    return SAO_STATUS_OK;
+}
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*, int32_t* out_presented) {
     if (out_presented == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_presented = 1;
@@ -2172,91 +2124,85 @@ sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx*) {
     return SAO_STATUS_OK;
 }
 
-sao_status_t sao_platform_rt_io_operator_preflight(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+sao_status_t
+sao_platform_rt_io_operator_preflight(sao_platform_ctx* ctx,
+                                      const sao_launcher_rt_io_operator_options_t* options,
+                                      sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
     if (!g_composition_test_hooks.rt_io_operator_preflight) {
         if (out_report != nullptr) {
             out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
             out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
-            out_report->failure_classification =
-                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+            out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
         }
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.rt_io_operator_preflight(
-        ctx, options, out_report, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.rt_io_operator_preflight(ctx, options, out_report,
+                                                             g_composition_test_hooks.user_data);
 }
 
-sao_status_t sao_platform_rt_io_operator_init(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+sao_status_t sao_platform_rt_io_operator_init(sao_platform_ctx* ctx,
+                                              const sao_launcher_rt_io_operator_options_t* options,
+                                              sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
     if (!g_composition_test_hooks.rt_io_operator_init) {
         if (out_report != nullptr) {
             out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
             out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
-            out_report->failure_classification =
-                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+            out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
         }
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.rt_io_operator_init(
-        ctx, options, out_report, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.rt_io_operator_init(ctx, options, out_report,
+                                                        g_composition_test_hooks.user_data);
 }
-sao_status_t sao_platform_rt_io_operator_live_validate(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+sao_status_t
+sao_platform_rt_io_operator_live_validate(sao_platform_ctx* ctx,
+                                          const sao_launcher_rt_io_operator_options_t* options,
+                                          sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
     if (!g_composition_test_hooks.rt_io_operator_live_validate) {
         if (out_report != nullptr) {
             out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
             out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
-            out_report->failure_classification =
-                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+            out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
         }
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
     return g_composition_test_hooks.rt_io_operator_live_validate(
         ctx, options, out_report, g_composition_test_hooks.user_data);
 }
-sao_status_t sao_platform_rt_io_operator_status(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+sao_status_t
+sao_platform_rt_io_operator_status(sao_platform_ctx* ctx,
+                                   const sao_launcher_rt_io_operator_options_t* options,
+                                   sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
     if (!g_composition_test_hooks.rt_io_operator_status) {
         if (out_report != nullptr) {
             out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
             out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
-            out_report->failure_classification =
-                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+            out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
         }
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.rt_io_operator_status(
-        ctx, options, out_report, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.rt_io_operator_status(ctx, options, out_report,
+                                                          g_composition_test_hooks.user_data);
 }
-sao_status_t sao_platform_rt_io_operator_cleanup(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+sao_status_t
+sao_platform_rt_io_operator_cleanup(sao_platform_ctx* ctx,
+                                    const sao_launcher_rt_io_operator_options_t* options,
+                                    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
     if (!g_composition_test_hooks.rt_io_operator_cleanup) {
         if (out_report != nullptr) {
             out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
             out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
-            out_report->failure_classification =
-                SAO_LAUNCHER_RT_IO_FAILURE_CALL;
+            out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CALL;
         }
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.rt_io_operator_cleanup(
-        ctx, options, out_report, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.rt_io_operator_cleanup(ctx, options, out_report,
+                                                           g_composition_test_hooks.user_data);
 }
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 struct sao_platform_ctx {
@@ -2302,10 +2248,41 @@ struct sao_platform_ctx {
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
     // 自动播的 Link Start 开场；tick 驱动，结束时打 just_finished 边沿。
     sao_ui_linkstart_handle_t linkstart = nullptr;
-    bool linkstart_just_finished = false;
+    SaoUiLinkStartCompletionReason linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     bool linkstart_pending_completion = false;
     ULONGLONG linkstart_last_tick = 0;
 };
+
+void SAO_UI_CALL resize_linkstart_for_host(int32_t width, int32_t height,
+                                           void* user_data) noexcept {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->linkstart == nullptr || width <= 0 || height <= 0)
+        return;
+    const uint32_t dpi = sao_ui_overlay_host_current_dpi(ctx->overlay_host);
+    (void)sao_ui_linkstart_resize(ctx->linkstart, static_cast<uint32_t>(width),
+                                  static_cast<uint32_t>(height), dpi);
+}
+
+void SAO_UI_CALL resize_linkstart_for_dpi(uint32_t dpi, int32_t, int32_t, int32_t width,
+                                          int32_t height, void* user_data) noexcept {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->linkstart == nullptr || width <= 0 || height <= 0)
+        return;
+    (void)sao_ui_linkstart_resize(ctx->linkstart, static_cast<uint32_t>(width),
+                                  static_cast<uint32_t>(height), dpi);
+}
+
+void capture_linkstart_completion(sao_platform_ctx* ctx,
+                                  SaoUiLinkStartCompletionReason fallback) noexcept {
+    if (ctx == nullptr)
+        return;
+    SaoUiLinkStartCompletionReason reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+    if (ctx->linkstart != nullptr)
+        (void)sao_ui_linkstart_poll_completion(ctx->linkstart, &reason);
+    ctx->linkstart_completion_reason =
+        reason == SAO_UI_LINKSTART_COMPLETION_NONE ? fallback : reason;
+    ctx->linkstart_pending_completion = false;
+}
 
 void clear_settings_bindings() noexcept {
     (void)sao_launcher_hotkey_set_settings_owner(nullptr);
@@ -2377,8 +2354,7 @@ void SAO_UI_CALL collect_shared_panel_visibility(sao_ui_panel_handle_t,
     const bool visible = descriptor->visible;
     visibility->native_panel = visibility->native_panel || visible;
     visibility->plugin_manager = visibility->plugin_manager || (plugin_manager && visible);
-    visibility->process_selector =
-        visibility->process_selector || (process_selector && visible);
+    visibility->process_selector = visibility->process_selector || (process_selector && visible);
 }
 
 sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
@@ -2398,10 +2374,8 @@ sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
     }
 
     const sao::launcher::entity_builtin_action::SharedFisheyeVisibility visibility{
-        ctx->workshop_panel_visible,
-        panels.plugin_manager,
-        panels.process_selector,
-        entity.overlay_visible && entity.menu_visible,
+        ctx->workshop_panel_visible, panels.plugin_manager,
+        panels.process_selector,     entity.overlay_visible && entity.menu_visible,
         panels.native_panel,
     };
     if (!sao::launcher::entity_builtin_action::should_show_shared_fisheye(visibility))
@@ -2448,8 +2422,8 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
                 std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
                     ctx->compositor, [ctx] { return reload_plugins(ctx); });
             ctx->process_selector_panel =
-                std::make_unique<sao::launcher::process_selector_panel::Owner>(
-                    ctx->compositor, ctx->rt_io_proxy);
+                std::make_unique<sao::launcher::process_selector_panel::Owner>(ctx->compositor,
+                                                                               ctx->rt_io_proxy);
         }
         ctx->workshop_panel = std::make_unique<sao::launcher::workshop_panel::Owner>(
             ctx->compositor, std::filesystem::path(base_dir));
@@ -2458,8 +2432,7 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
             (void)update_shared_fisheye_visibility(ctx);
         });
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
-        ctx->license_panel = std::make_unique<sao::launcher::license_panel::Owner>(
-            ctx->compositor);
+        ctx->license_panel = std::make_unique<sao::launcher::license_panel::Owner>(ctx->compositor);
 #endif
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
@@ -2613,9 +2586,8 @@ sao_status_t trace_platform_bringup_failure(const char* stage,
                            stage != nullptr ? stage : "unknown", failure_status);
     write_platform_bringup_diagnostic(line, length);
 
-    if (stage == nullptr ||
-        (std::strcmp(stage, "rt_io_proxy_open_v2") != 0 &&
-         std::strcmp(stage, "rt_io_proxy_open_v3") != 0))
+    if (stage == nullptr || (std::strcmp(stage, "rt_io_proxy_open_v2") != 0 &&
+                             std::strcmp(stage, "rt_io_proxy_open_v3") != 0))
         return failure_status;
 
     SaoRtIoHelperLaunchDiagnostics diagnostics{};
@@ -2715,9 +2687,9 @@ sao_status_t SAO_UI_CALL unlink_z_order(void* user_data, void* hwnd, uint32_t ti
     return sao_rt_io_unlink_z_order(ctx->window_rect_controller, &token, timeout_ms, &result);
 }
 
-sao_status_t SAO_UI_CALL apply_overlay_protection_provider(
-    void* render_hwnd, void* control_hwnd, void* owner_hwnd,
-    bool enable, void* user_data) {
+sao_status_t SAO_UI_CALL apply_overlay_protection_provider(void* render_hwnd, void* control_hwnd,
+                                                           void* owner_hwnd, bool enable,
+                                                           void* user_data) {
     (void)render_hwnd;
     (void)control_hwnd;
     (void)owner_hwnd;
@@ -2844,8 +2816,8 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
         },
         [](bool exclude, void* context) {
             auto* ctx = static_cast<sao_platform_ctx*>(context);
-            return sao_ui_overlay_host_set_capture_mode(
-                ctx->overlay_host, exclude && ctx->screencap_protection);
+            return sao_ui_overlay_host_set_capture_mode(ctx->overlay_host,
+                                                        exclude && ctx->screencap_protection);
         },
         [](bool exclude, void*) -> sao_status_t {
             return sao_streaming_flow_set_mode(exclude) == 0 ? SAO_STATUS_ERR_NOT_INITIALIZED
@@ -3122,8 +3094,8 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     }
     if (ctx != nullptr && ctx->compositor != nullptr) {
         sao_ui_dialog_show_error(ctx->compositor, nullptr, "SAO Auto",
-                                  "用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。",
-                                  nullptr, nullptr);
+                                 "用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", nullptr,
+                                 nullptr);
     } else {
         MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", L"SAO Auto",
                     MB_OK | MB_ICONERROR | MB_TASKMODAL);
@@ -3131,8 +3103,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     return SAO_STATUS_ERR_NOT_FOUND;
 }
 
-uint32_t rt_io_operator_restore_mask(
-    const SaoRtIoProductionStateWireV1& state) noexcept {
+uint32_t rt_io_operator_restore_mask(const SaoRtIoProductionStateWireV1& state) noexcept {
     uint32_t mask = 0u;
     if (state.retain_for_recovery != 0u || state.restore_pending != 0u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED;
@@ -3152,21 +3123,18 @@ uint32_t rt_io_operator_restore_mask(
         state.r3_close_in_progress != 0u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_R3_ACTIVITY;
     if (state.cached_write_state == 3u || state.cached_write_state == 4u ||
-        state.cached_write_in_flight != 0u ||
-        state.cached_write_cleanup_owner != 0u)
+        state.cached_write_in_flight != 0u || state.cached_write_cleanup_owner != 0u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_CACHED_WRITE;
     if (state.r1_state == 3u || state.r3_state == 3u)
         mask |= SAO_LAUNCHER_RT_IO_RESTORE_RESOURCE_UNKNOWN;
     return mask;
 }
 
-uint32_t rt_io_operator_admission_mask(
-    const SaoRtIoProductionStateWireV1& state) noexcept {
+uint32_t rt_io_operator_admission_mask(const SaoRtIoProductionStateWireV1& state) noexcept {
     uint32_t mask = 0u;
     if (state.r3_map_admission_open != 0u)
         mask |= SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP;
-    if (state.cached_write_state == 2u &&
-        state.cached_write_binding_valid != 0u &&
+    if (state.cached_write_state == 2u && state.cached_write_binding_valid != 0u &&
         state.cached_write_binding_current != 0u)
         mask |= SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE;
     if (state.hid_shared_owner_current != 0u)
@@ -3176,8 +3144,7 @@ uint32_t rt_io_operator_admission_mask(
     return mask;
 }
 
-uint32_t rt_io_operator_capability_mask(
-    const SaoRtIoProductionStateWireV1& state) noexcept {
+uint32_t rt_io_operator_capability_mask(const SaoRtIoProductionStateWireV1& state) noexcept {
     uint32_t mask = 0u;
     if (state.hid.r3_shared_ready != 0u)
         mask |= SAO_LAUNCHER_RT_IO_CAP_R3_SHARED;
@@ -3196,63 +3163,47 @@ uint32_t rt_io_operator_capability_mask(
     return mask;
 }
 
-bool rt_io_operator_production_header_valid(
-    const SaoRtIoProductionStateWireV1& state) noexcept {
-    return std::memcmp(state.header.magic,
-                       SAO_RT_IO_PRODUCTION_STATE_WIRE_MAGIC, 4u) == 0 &&
-        state.header.version == SAO_RT_IO_PRODUCTION_STATE_WIRE_VERSION &&
-        state.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
-        state.header.struct_size == sizeof(state) &&
-        state.header.reserved == 0u;
+bool rt_io_operator_production_header_valid(const SaoRtIoProductionStateWireV1& state) noexcept {
+    return std::memcmp(state.header.magic, SAO_RT_IO_PRODUCTION_STATE_WIRE_MAGIC, 4u) == 0 &&
+           state.header.version == SAO_RT_IO_PRODUCTION_STATE_WIRE_VERSION &&
+           state.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
+           state.header.struct_size == sizeof(state) && state.header.reserved == 0u;
 }
 
-bool rt_io_operator_production_enums_known(
-    const SaoRtIoProductionStateWireV1& state) noexcept {
-    return state.r1_state <= 3u && state.reserved_resource_state_2 == 0u &&
-        state.r3_state <= 3u && state.cached_write_state <= 4u &&
-        state.hid.selected_backend <= 4u;
+bool rt_io_operator_production_enums_known(const SaoRtIoProductionStateWireV1& state) noexcept {
+    return state.r1_state <= 3u && state.reserved_resource_state_2 == 0u && state.r3_state <= 3u &&
+           state.cached_write_state <= 4u && state.hid.selected_backend <= 4u;
 }
 
-void rt_io_operator_copy_call(
-    const SaoRtIoCallResult& call,
-    sao_launcher_rt_io_operator_report_t* report) noexcept {
+void rt_io_operator_copy_call(const SaoRtIoCallResult& call,
+                              sao_launcher_rt_io_operator_report_t* report) noexcept {
     report->call_authenticated = call.authenticated != 0u ? 1u : 0u;
-    report->call_transport_complete =
-        call.transport_complete != 0u ? 1u : 0u;
-    report->call_request_id_matched =
-        call.request_id_matched != 0u ? 1u : 0u;
-    report->call_committed =
-        call.outcome == SAO_RT_IO_OUTCOME_COMMITTED ? 1u : 0u;
+    report->call_transport_complete = call.transport_complete != 0u ? 1u : 0u;
+    report->call_request_id_matched = call.request_id_matched != 0u ? 1u : 0u;
+    report->call_committed = call.outcome == SAO_RT_IO_OUTCOME_COMMITTED ? 1u : 0u;
 }
 
-void rt_io_operator_copy_state(
-    const SaoRtIoProductionStateWireV1& state,
-    sao_launcher_rt_io_operator_report_t* report) noexcept {
-    report->state_observed =
-        rt_io_operator_production_header_valid(state) ? 1u : 0u;
+void rt_io_operator_copy_state(const SaoRtIoProductionStateWireV1& state,
+                               sao_launcher_rt_io_operator_report_t* report) noexcept {
+    report->state_observed = rt_io_operator_production_header_valid(state) ? 1u : 0u;
     report->selected_backend = state.hid.selected_backend;
     report->admission_mask = rt_io_operator_admission_mask(state);
     report->capability_mask = rt_io_operator_capability_mask(state);
     report->restore_mask = rt_io_operator_restore_mask(state);
     report->provider_retained = state.retain_for_recovery != 0u ? 1u : 0u;
     report->wiper_joined = state.wiper_joined != 0u ? 1u : 0u;
-    report->engine_cleanup_confirmed =
-        state.engine_cleanup_confirmed != 0u ? 1u : 0u;
-    report->etw_restore_confirmed =
-        state.etw_restore_confirmed != 0u ? 1u : 0u;
+    report->engine_cleanup_confirmed = state.engine_cleanup_confirmed != 0u ? 1u : 0u;
+    report->etw_restore_confirmed = state.etw_restore_confirmed != 0u ? 1u : 0u;
     report->resources_absent =
-        state.r1_state == 0u && state.reserved_resource_state_2 == 0u &&
-                state.r3_state == 0u
-            ? 1u
-            : 0u;
+        state.r1_state == 0u && state.reserved_resource_state_2 == 0u && state.r3_state == 0u ? 1u
+                                                                                              : 0u;
     report->last_failure_code = state.last_failure_code;
     report->last_failure_stage = state.last_failure_stage;
     report->r3_uc_patch_failure_reason = state.r3_uc_patch_failure_reason;
     report->hid_fallback_reason = state.hid.fallback_reason;
 }
 
-static_assert(SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT ==
-              SAO_RT_IO_STRICT_CHAIN_CATEGORY_COUNT);
+static_assert(SAO_LAUNCHER_RT_IO_STRICT_CATEGORY_COUNT == SAO_RT_IO_STRICT_CHAIN_CATEGORY_COUNT);
 
 uint32_t rt_io_operator_strict_residue_gate(uint32_t strict_gate) noexcept {
     switch (strict_gate) {
@@ -3274,9 +3225,8 @@ uint32_t rt_io_operator_bit_count(uint32_t mask) noexcept {
     return count;
 }
 
-void rt_io_operator_copy_strict_response(
-    const SaoRtIoProxyStrictChainRespV1& response,
-    sao_launcher_rt_io_operator_report_t* report) noexcept {
+void rt_io_operator_copy_strict_response(const SaoRtIoProxyStrictChainRespV1& response,
+                                         sao_launcher_rt_io_operator_report_t* report) noexcept {
     if (report == nullptr)
         return;
 
@@ -3332,42 +3282,36 @@ void rt_io_operator_copy_strict_response(
     report->strict_helper_system = response.identity.helper_system != 0u ? 1u : 0u;
     report->strict_helper_identity_authenticated =
         response.identity.identity_authenticated != 0u ? 1u : 0u;
-    report->strict_helper_session_id = response.identity.helper_session_known != 0u
-        ? response.identity.helper_session_id
-        : 0u;
-    std::memcpy(report->strict_helper_actual_image,
-                response.identity.helper_actual_image_utf8,
+    report->strict_helper_session_id =
+        response.identity.helper_session_known != 0u ? response.identity.helper_session_id : 0u;
+    std::memcpy(report->strict_helper_actual_image, response.identity.helper_actual_image_utf8,
                 sizeof(report->strict_helper_actual_image));
     report->strict_helper_actual_image[sizeof(report->strict_helper_actual_image) - 1u] = '\0';
-    std::memcpy(report->strict_helper_parent_image,
-                response.identity.helper_parent_image_utf8,
+    std::memcpy(report->strict_helper_parent_image, response.identity.helper_parent_image_utf8,
                 sizeof(report->strict_helper_parent_image));
     report->strict_helper_parent_image[sizeof(report->strict_helper_parent_image) - 1u] = '\0';
 
     report->state_observed = 1u;
     report->residue_gate = rt_io_operator_strict_residue_gate(state.residue_gate);
     report->unknown_count = rt_io_operator_bit_count(state.unknown_mask) +
-        rt_io_operator_bit_count(state.category_unknown_mask);
+                            rt_io_operator_bit_count(state.category_unknown_mask);
     report->residue_count = state.residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN
-        ? 0u
-        : (report->unknown_count != 0u ? report->unknown_count : 1u);
+                                ? 0u
+                                : (report->unknown_count != 0u ? report->unknown_count : 1u);
     report->last_failure_code = state.failure_code;
     report->last_failure_stage = state.failure_stage;
-    report->selected_engine = projection.runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR
-        ? SAO_RT_IO_ENGINE_HYPERVISOR
-        : 0u;
+    report->selected_engine =
+        projection.runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR ? SAO_RT_IO_ENGINE_HYPERVISOR : 0u;
 }
 
-bool rt_io_operator_strict_success(
-    const sao_launcher_rt_io_operator_report_t& report,
-    uint64_t provider_generation) noexcept {
-    const bool chain_complete =
-        report.strict_required_mask == SAO_RT_IO_STRICT_CHAIN_STAGE_ALL &&
-        report.strict_prepared_mask == report.strict_required_mask &&
-        report.strict_committed_mask == report.strict_required_mask &&
-        report.strict_unknown_mask == 0u &&
-        report.strict_rollback_attempted_mask == 0u &&
-        report.strict_rollback_complete_mask == 0u;
+bool rt_io_operator_strict_success(const sao_launcher_rt_io_operator_report_t& report,
+                                   uint64_t provider_generation) noexcept {
+    const bool chain_complete = report.strict_required_mask == SAO_RT_IO_STRICT_CHAIN_STAGE_ALL &&
+                                report.strict_prepared_mask == report.strict_required_mask &&
+                                report.strict_committed_mask == report.strict_required_mask &&
+                                report.strict_unknown_mask == 0u &&
+                                report.strict_rollback_attempted_mask == 0u &&
+                                report.strict_rollback_complete_mask == 0u;
     const bool categories_complete =
         report.strict_category_required_mask == SAO_RT_IO_STRICT_CHAIN_CATEGORY_ALL &&
         report.strict_category_prepared_mask == report.strict_category_required_mask &&
@@ -3385,45 +3329,40 @@ bool rt_io_operator_strict_success(
         report.strict_vt_runtime_engine == SAO_RT_IO_ENGINE_HYPERVISOR &&
         report.strict_vt_load_path == SAO_RT_IO_VT_LOAD_PATH_HELPER_MANUAL_MAP &&
         report.strict_vt_stage == SAO_RT_IO_VT_STAGE_ACTIVE &&
-        report.strict_vt_control_status == 0 &&
-        report.strict_vt_capture_status == 0 &&
-        report.strict_vt_validation_status == 0 &&
-        report.strict_vt_cleanup_status == 0 &&
-        report.strict_vt_recovery_status == 0 &&
-        report.strict_vt_terminal_reason == 0;
+        report.strict_vt_control_status == 0 && report.strict_vt_capture_status == 0 &&
+        report.strict_vt_validation_status == 0 && report.strict_vt_cleanup_status == 0 &&
+        report.strict_vt_recovery_status == 0 && report.strict_vt_terminal_reason == 0;
     return report.strict_policy == SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY &&
-        report.strict_stage == SAO_RT_IO_STRICT_CHAIN_STAGE_VT_ACTIVE &&
-        report.strict_transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_ACTIVE &&
-        report.strict_transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_COMMITTED &&
-        report.strict_vt_root_active != 0u &&
-        report.strict_helper_system != 0u &&
-        report.strict_helper_identity_authenticated != 0u &&
-        report.strict_final_residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
-        active_projection_complete && chain_complete && categories_complete;
+           report.strict_stage == SAO_RT_IO_STRICT_CHAIN_STAGE_VT_ACTIVE &&
+           report.strict_transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_ACTIVE &&
+           report.strict_transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_COMMITTED &&
+           report.strict_vt_root_active != 0u && report.strict_helper_system != 0u &&
+           report.strict_helper_identity_authenticated != 0u &&
+           report.strict_final_residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
+           active_projection_complete && chain_complete && categories_complete;
 }
 
 bool rt_io_operator_strict_recovery_required(
     const SaoRtIoProxyStrictChainRespV1& response) noexcept {
     const auto& state = response.wire.snapshot.state;
     return state.transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_RECOVERY_REQUIRED ||
-        state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_RECOVERY_REQUIRED ||
-        (response.wire.response_flags &
-         (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
-          SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) != 0u;
+           state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_RECOVERY_REQUIRED ||
+           (response.wire.response_flags &
+            (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
+             SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) != 0u;
 }
 
-bool rt_io_operator_strict_terminal_clean(
-    const SaoRtIoProxyStrictChainRespV1& response) noexcept {
+bool rt_io_operator_strict_terminal_clean(const SaoRtIoProxyStrictChainRespV1& response) noexcept {
     const auto& state = response.wire.snapshot.state;
     const uint32_t flags = response.wire.response_flags;
     return state.transaction_state == SAO_RT_IO_STRICT_CHAIN_STATE_TERMINAL &&
-        state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_ROLLED_BACK &&
-        state.stage == SAO_RT_IO_STRICT_CHAIN_STAGE_TERMINAL &&
-        state.residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN &&
-        state.unknown_mask == 0u && state.category_unknown_mask == 0u &&
-        (flags & SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_TERMINAL_CLEAN) != 0u &&
-        (flags & (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
-                  SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) == 0u;
+           state.transaction_outcome == SAO_RT_IO_STRICT_CHAIN_OUTCOME_ROLLED_BACK &&
+           state.stage == SAO_RT_IO_STRICT_CHAIN_STAGE_TERMINAL &&
+           state.residue_gate == SAO_RT_IO_STRICT_CHAIN_RESIDUE_CLEAN && state.unknown_mask == 0u &&
+           state.category_unknown_mask == 0u &&
+           (flags & SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_TERMINAL_CLEAN) != 0u &&
+           (flags & (SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_KEEP_RUNNING |
+                     SAO_RT_IO_STRICT_CHAIN_RESPONSE_FLAG_RETAINED_FOR_RECOVERY)) == 0u;
 }
 
 void rt_io_operator_cache_strict_chain(sao_platform_ctx* ctx,
@@ -3440,8 +3379,7 @@ void rt_io_operator_cache_strict_chain(sao_platform_ctx* ctx,
 extern "C++" {
 
 template <typename Request>
-void rt_io_operator_initialize_strict_request(Request* request,
-                                              const char magic[4]) noexcept {
+void rt_io_operator_initialize_strict_request(Request* request, const char magic[4]) noexcept {
     *request = Request{};
     std::memcpy(request->header.magic, magic, sizeof(request->header.magic));
     request->header.version = SAO_RT_IO_STRICT_CHAIN_BODY_VERSION;
@@ -3451,38 +3389,33 @@ void rt_io_operator_initialize_strict_request(Request* request,
 
 } // extern "C++"
 
-bool rt_io_operator_call_complete(
-    const sao_launcher_rt_io_operator_report_t& report) noexcept {
-    return report.call_authenticated != 0u &&
-        report.call_transport_complete != 0u &&
-        report.call_request_id_matched != 0u &&
-        report.call_committed != 0u;
+bool rt_io_operator_call_complete(const sao_launcher_rt_io_operator_report_t& report) noexcept {
+    return report.call_authenticated != 0u && report.call_transport_complete != 0u &&
+           report.call_request_id_matched != 0u && report.call_committed != 0u;
 }
 
 bool rt_io_operator_state_has_no_unknown_or_restore(
     const SaoRtIoProductionStateWireV1& state,
     const sao_launcher_rt_io_operator_report_t& report) noexcept {
-    return report.state_observed != 0u &&
-        rt_io_operator_production_enums_known(state) &&
-        report.restore_mask == 0u;
+    return report.state_observed != 0u && rt_io_operator_production_enums_known(state) &&
+           report.restore_mask == 0u;
 }
 
-bool rt_io_operator_state_clean(
-    const SaoRtIoProductionStateWireV1& state,
-    const sao_launcher_rt_io_operator_report_t& report) noexcept {
+bool rt_io_operator_state_clean(const SaoRtIoProductionStateWireV1& state,
+                                const sao_launcher_rt_io_operator_report_t& report) noexcept {
     return rt_io_operator_state_has_no_unknown_or_restore(state, report) &&
-        report.resources_absent != 0u && state.ci_mutation_active == 0u &&
-        state.callbacks_suppressed == 0u && state.watchdog_started == 0u &&
-        state.native_io_pending == 0u && state.auxiliary_handle_count == 0u &&
-        state.r1_handle_open == 0u && state.r3_handle_open == 0u &&
-        state.cached_write_state == 0u && state.cached_write_in_flight == 0u &&
-        state.r3_map_admission_open == 0u && state.active_r3_maps == 0u &&
-        state.r3_operations_inflight == 0u && report.admission_mask == 0u &&
-        report.provider_retained == 0u;
+           report.resources_absent != 0u && state.ci_mutation_active == 0u &&
+           state.callbacks_suppressed == 0u && state.watchdog_started == 0u &&
+           state.native_io_pending == 0u && state.auxiliary_handle_count == 0u &&
+           state.r1_handle_open == 0u && state.r3_handle_open == 0u &&
+           state.cached_write_state == 0u && state.cached_write_in_flight == 0u &&
+           state.r3_map_admission_open == 0u && state.active_r3_maps == 0u &&
+           state.r3_operations_inflight == 0u && report.admission_mask == 0u &&
+           report.provider_retained == 0u;
 }
 
-uint32_t rt_io_operator_live_options(
-    const sao_launcher_rt_io_operator_options_t& options) noexcept {
+uint32_t
+rt_io_operator_live_options(const sao_launcher_rt_io_operator_options_t& options) noexcept {
     uint32_t flags = 0u;
     if (options.input_checks != 0u) {
         flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_MOUSE_ZERO_MOVE;
@@ -3504,8 +3437,8 @@ sao_status_t prepare_rt_io_operator_shutdown(sao_platform_ctx* ctx) noexcept {
         return shared_ui_status;
 #endif
     if (ctx->window_rect_registered) {
-        const sao_status_t status = sao_rt_io_window_rect_revoke(
-            ctx->window_rect_controller, &ctx->window_rect_token);
+        const sao_status_t status =
+            sao_rt_io_window_rect_revoke(ctx->window_rect_controller, &ctx->window_rect_token);
         if (status != SAO_STATUS_OK)
             return status;
         ctx->window_rect_registered = false;
@@ -3518,19 +3451,19 @@ sao_status_t prepare_rt_io_operator_shutdown(sao_platform_ctx* ctx) noexcept {
     return SAO_STATUS_OK;
 }
 
-sao_status_t sao_platform_rt_io_operator_preflight(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
-    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
-        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+sao_status_t
+sao_platform_rt_io_operator_preflight(sao_platform_ctx* ctx,
+                                      const sao_launcher_rt_io_operator_options_t* options,
+                                      sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || !rtIoOperatorOptionsValid(options) ||
+        out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 
     SaoRtIoPreflightV2Resp response{};
     SaoRtIoCallResult call{};
-    const sao_status_t status = sao_rt_io_proxy_preflight_v2(
-        ctx->rt_io_proxy, options->timeout_ms, &response, &call);
+    const sao_status_t status =
+        sao_rt_io_proxy_preflight_v2(ctx->rt_io_proxy, options->timeout_ms, &response, &call);
     out_report->status = status;
     out_report->operation_status = response.operation_status;
     rt_io_operator_copy_call(call, out_report);
@@ -3538,16 +3471,14 @@ sao_status_t sao_platform_rt_io_operator_preflight(
 
     SaoRtIoProductionCapabilitiesV2Resp capabilities{};
     SaoRtIoCallResult capabilities_call{};
-    const sao_status_t capabilities_status =
-        sao_rt_io_proxy_production_capabilities_v2(
-            ctx->rt_io_proxy, options->timeout_ms, &capabilities, &capabilities_call);
+    const sao_status_t capabilities_status = sao_rt_io_proxy_production_capabilities_v2(
+        ctx->rt_io_proxy, options->timeout_ms, &capabilities, &capabilities_call);
     const bool capabilities_response_valid =
-        capabilities_call.authenticated != 0u &&
-        capabilities_call.transport_complete != 0u &&
+        capabilities_call.authenticated != 0u && capabilities_call.transport_complete != 0u &&
         capabilities_call.request_id_matched != 0u &&
         capabilities_call.payload_bytes == sizeof(capabilities) &&
-        std::memcmp(capabilities.header.magic,
-                    SAO_RT_IO_PRODUCTION_CAPABILITIES_V2_RESPONSE_MAGIC, 4u) == 0 &&
+        std::memcmp(capabilities.header.magic, SAO_RT_IO_PRODUCTION_CAPABILITIES_V2_RESPONSE_MAGIC,
+                    4u) == 0 &&
         capabilities.header.version == SAO_RT_IO_PRODUCTION_CAPABILITIES_V2_VERSION &&
         capabilities.header.header_size == sizeof(SaoRtIoVersionedPayloadHeader) &&
         capabilities.header.struct_size == sizeof(capabilities) &&
@@ -3565,37 +3496,31 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     out_report->unknown_count = response.unknown_count;
     out_report->is_admin = response.is_admin;
     out_report->is_elevated = response.is_elevated;
-    out_report->load_driver_privilege_present =
-        response.load_driver_privilege_present;
-    out_report->load_driver_privilege_enabled =
-        response.load_driver_privilege_enabled;
+    out_report->load_driver_privilege_present = response.load_driver_privilege_present;
+    out_report->load_driver_privilege_enabled = response.load_driver_privilege_enabled;
     out_report->hvci_enabled = response.hvci_enabled;
     out_report->vbs_enabled = response.vbs_enabled;
     out_report->provider_observable = response.provider_observable;
 
     if (capabilities_operation_ok &&
-        capabilities.capabilities.vt_readiness ==
-            SAO_RT_IO_PRODUCTION_VT_READINESS_UNKNOWN)
+        capabilities.capabilities.vt_readiness == SAO_RT_IO_PRODUCTION_VT_READINESS_UNKNOWN)
         ++out_report->unknown_count;
     if (capabilities_operation_ok &&
-        capabilities.capabilities.vt_readiness ==
-            SAO_RT_IO_PRODUCTION_VT_READINESS_READY)
+        capabilities.capabilities.vt_readiness == SAO_RT_IO_PRODUCTION_VT_READINESS_READY)
         out_report->capability_mask |= SAO_LAUNCHER_RT_IO_CAP_VT_READY;
 
     const bool observations_complete = rtIoOperatorPreflightObservationsComplete(
         response.is_admin, response.is_elevated, response.load_driver_privilege_present,
         response.load_driver_privilege_enabled, response.hvci_enabled, response.vbs_enabled,
         response.provider_observable);
-    const bool capability_call_failed =
-        capabilities_status != SAO_STATUS_OK || !capabilities_response_valid ||
-        !capabilities_operation_ok;
+    const bool capability_call_failed = capabilities_status != SAO_STATUS_OK ||
+                                        !capabilities_response_valid || !capabilities_operation_ok;
     if (capability_call_failed) {
         const sao_status_t exact_capability_status =
             capabilities_status != SAO_STATUS_OK
                 ? capabilities_status
-                : (capabilities_response_valid
-                       ? capabilities.operation_status
-                       : SAO_RT_IO_ERR_PAYLOAD_MALFORMED);
+                : (capabilities_response_valid ? capabilities.operation_status
+                                               : SAO_RT_IO_ERR_PAYLOAD_MALFORMED);
         out_report->status = exact_capability_status;
         out_report->operation_status = exact_capability_status;
         rt_io_operator_copy_call(capabilities_call, out_report);
@@ -3605,43 +3530,38 @@ sao_status_t sao_platform_rt_io_operator_preflight(
         return exact_capability_status;
     }
 
-    const bool complete = status == SAO_STATUS_OK &&
-        response.operation_status == SAO_STATUS_OK &&
+    const bool complete =
+        status == SAO_STATUS_OK && response.operation_status == SAO_STATUS_OK &&
         rt_io_operator_call_complete(*out_report) &&
         response.residue_gate == SAO_RT_IO_OPERATOR_RESIDUE_GATE_CLEAN &&
         response.residue_count == 0u && response.unknown_count == 0u &&
-        response.r1_asset.status == SAO_STATUS_OK &&
-        response.r1_asset.valid != 0u &&
-        response.r3_asset.status == SAO_STATUS_OK &&
-        response.r3_asset.valid != 0u && observations_complete &&
-        rt_io_operator_state_clean(response.production, *out_report) &&
+        response.r1_asset.status == SAO_STATUS_OK && response.r1_asset.valid != 0u &&
+        response.r3_asset.status == SAO_STATUS_OK && response.r3_asset.valid != 0u &&
+        observations_complete && rt_io_operator_state_clean(response.production, *out_report) &&
         rtIoOperatorPreflightFailureStateReady(response.production.last_failure_code,
                                                response.production.last_failure_stage);
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
-    out_report->failure_classification = complete
-        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
-        : (status != SAO_STATUS_OK
-               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-               : SAO_LAUNCHER_RT_IO_FAILURE_PREFLIGHT_INCOMPLETE);
-    return complete ? SAO_STATUS_OK
-                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+    out_report->failure_classification =
+        complete ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+                 : (status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                            : SAO_LAUNCHER_RT_IO_FAILURE_PREFLIGHT_INCOMPLETE);
+    return complete ? SAO_STATUS_OK : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
 }
 
-sao_status_t sao_platform_rt_io_operator_init(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
-    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
-        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+sao_status_t sao_platform_rt_io_operator_init(sao_platform_ctx* ctx,
+                                              const sao_launcher_rt_io_operator_options_t* options,
+                                              sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || !rtIoOperatorOptionsValid(options) ||
+        out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->rt_io_strict_transaction_id == 0u)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
 
     SaoRtIoStrictChainInitV1Req request{};
-    rt_io_operator_initialize_strict_request(
-        &request, SAO_RT_IO_STRICT_CHAIN_INIT_V1_REQUEST_MAGIC);
+    rt_io_operator_initialize_strict_request(&request,
+                                             SAO_RT_IO_STRICT_CHAIN_INIT_V1_REQUEST_MAGIC);
     request.policy = SAO_RT_IO_STRICT_CHAIN_POLICY_HYPERVISOR_MANDATORY;
     request.transaction_id = ctx->rt_io_strict_transaction_id;
     request.expected_chain_generation = 0u;
@@ -3650,8 +3570,8 @@ sao_status_t sao_platform_rt_io_operator_init(
 
     SaoRtIoProxyStrictChainRespV1 response{};
     SaoRtIoCallResult call{};
-    const sao_status_t status = sao_rt_io_proxy_strict_init(
-        ctx->rt_io_proxy, &request, options->timeout_ms, &response, &call);
+    const sao_status_t status = sao_rt_io_proxy_strict_init(ctx->rt_io_proxy, &request,
+                                                            options->timeout_ms, &response, &call);
     out_report->status = status;
     out_report->operation_status = response.wire.operation_status;
     rt_io_operator_copy_call(call, out_report);
@@ -3659,39 +3579,37 @@ sao_status_t sao_platform_rt_io_operator_init(
     rt_io_operator_cache_strict_chain(ctx, response);
     out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
     out_report->loaded = out_report->strict_vt_root_active;
-    out_report->strict_success = rt_io_operator_strict_success(
-        *out_report, response.wire.snapshot.state.provider_generation) ? 1u : 0u;
+    out_report->strict_success =
+        rt_io_operator_strict_success(*out_report, response.wire.snapshot.state.provider_generation)
+            ? 1u
+            : 0u;
     out_report->probe_passed = out_report->strict_success;
-    const bool complete = status == SAO_STATUS_OK &&
-        response.wire.operation_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) &&
-        out_report->strict_success != 0u;
+    const bool complete =
+        status == SAO_STATUS_OK && response.wire.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && out_report->strict_success != 0u;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
-    out_report->failure_classification = complete
-        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
-        : (status != SAO_STATUS_OK
-               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-               : SAO_LAUNCHER_RT_IO_FAILURE_INIT_INCOMPLETE);
-    return complete ? SAO_STATUS_OK
-                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+    out_report->failure_classification =
+        complete ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+                 : (status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                            : SAO_LAUNCHER_RT_IO_FAILURE_INIT_INCOMPLETE);
+    return complete ? SAO_STATUS_OK : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
 }
 
-sao_status_t sao_platform_rt_io_operator_live_validate(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
-    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
-        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+sao_status_t
+sao_platform_rt_io_operator_live_validate(sao_platform_ctx* ctx,
+                                          const sao_launcher_rt_io_operator_options_t* options,
+                                          sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || !rtIoOperatorOptionsValid(options) ||
+        out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 
     SaoRtIoLiveValidateV1Resp response{};
     SaoRtIoCallResult call{};
     const uint32_t live_options = rt_io_operator_live_options(*options);
     const sao_status_t status = sao_rt_io_proxy_live_validate_v1(
-        ctx->rt_io_proxy, live_options, options->timeout_ms,
-        &response, &call);
+        ctx->rt_io_proxy, live_options, options->timeout_ms, &response, &call);
     out_report->status = status;
     out_report->operation_status = response.operation_status;
     rt_io_operator_copy_call(call, out_report);
@@ -3702,59 +3620,48 @@ sao_status_t sao_platform_rt_io_operator_live_validate(
     out_report->partial_step_mask = response.partial_mask;
     const uint64_t requested_mask = out_report->requested_step_mask;
     constexpr uint32_t required_admission =
-        SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP |
-        SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE |
-        SAO_LAUNCHER_RT_IO_ADMISSION_HID_OWNER |
-        SAO_LAUNCHER_RT_IO_ADMISSION_HID_PROBE;
+        SAO_LAUNCHER_RT_IO_ADMISSION_R3_MAP | SAO_LAUNCHER_RT_IO_ADMISSION_CACHED_WRITE |
+        SAO_LAUNCHER_RT_IO_ADMISSION_HID_OWNER | SAO_LAUNCHER_RT_IO_ADMISSION_HID_PROBE;
     constexpr uint32_t required_capabilities =
-        SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
-        SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
-        SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE |
-        SAO_LAUNCHER_RT_IO_CAP_OB |
+        SAO_LAUNCHER_RT_IO_CAP_R3_SHARED | SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
+        SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE | SAO_LAUNCHER_RT_IO_CAP_OB |
         SAO_LAUNCHER_RT_IO_CAP_WATCHDOG;
-    const bool complete = status == SAO_STATUS_OK &&
-        response.operation_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) &&
-        response.options == live_options && response.terminal_step == UINT32_MAX &&
+    const bool complete =
+        status == SAO_STATUS_OK && response.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && response.options == live_options &&
+        response.terminal_step == UINT32_MAX &&
         response.step_count == SAO_RT_IO_LIVE_VALIDATE_STEP_COUNT &&
-        response.attempted_mask == requested_mask &&
-        response.passed_mask == requested_mask &&
+        response.attempted_mask == requested_mask && response.passed_mask == requested_mask &&
         response.unknown_mask == 0u && response.partial_mask == 0u &&
-        response.active_r3_maps_before == 0u &&
-        response.active_r3_maps_after == 0u &&
-        rt_io_operator_state_has_no_unknown_or_restore(
-            response.final_state, *out_report) &&
+        response.active_r3_maps_before == 0u && response.active_r3_maps_after == 0u &&
+        rt_io_operator_state_has_no_unknown_or_restore(response.final_state, *out_report) &&
         (out_report->admission_mask & required_admission) == required_admission &&
-        (out_report->capability_mask & required_capabilities) ==
-            required_capabilities &&
+        (out_report->capability_mask & required_capabilities) == required_capabilities &&
         out_report->selected_backend != 0u &&
         response.final_state.last_failure_code == SAO_STATUS_OK &&
         response.final_state.last_failure_stage == SAO_RT_IO_FAILURE_STAGE_NONE;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
-    out_report->failure_classification = complete
-        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
-        : (status != SAO_STATUS_OK
-               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-               : SAO_LAUNCHER_RT_IO_FAILURE_LIVE_INCOMPLETE);
-    return complete ? SAO_STATUS_OK
-                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+    out_report->failure_classification =
+        complete ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+                 : (status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                            : SAO_LAUNCHER_RT_IO_FAILURE_LIVE_INCOMPLETE);
+    return complete ? SAO_STATUS_OK : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
 }
 
-sao_status_t sao_platform_rt_io_operator_status(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
-    if (ctx == nullptr || ctx->rt_io_proxy == nullptr ||
-        !rtIoOperatorOptionsValid(options) || out_report == nullptr)
+sao_status_t
+sao_platform_rt_io_operator_status(sao_platform_ctx* ctx,
+                                   const sao_launcher_rt_io_operator_options_t* options,
+                                   sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+    if (ctx == nullptr || ctx->rt_io_proxy == nullptr || !rtIoOperatorOptionsValid(options) ||
+        out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 
     SaoRtIoStrictChainStatusV1Req request{};
-    rt_io_operator_initialize_strict_request(
-        &request, SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
-    if (ctx->rt_io_strict_transaction_id != 0u &&
-        ctx->rt_io_strict_chain_generation != 0u) {
+    rt_io_operator_initialize_strict_request(&request,
+                                             SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
+    if (ctx->rt_io_strict_transaction_id != 0u && ctx->rt_io_strict_chain_generation != 0u) {
         request.transaction_id = ctx->rt_io_strict_transaction_id;
         request.chain_generation = ctx->rt_io_strict_chain_generation;
     }
@@ -3770,35 +3677,32 @@ sao_status_t sao_platform_rt_io_operator_status(
     rt_io_operator_cache_strict_chain(ctx, response);
     out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
     out_report->backend_ready = out_report->strict_vt_root_active;
-    out_report->strict_success = rt_io_operator_strict_success(
-        *out_report, response.wire.snapshot.state.provider_generation) ? 1u : 0u;
-    const bool complete = status == SAO_STATUS_OK &&
-        response.wire.operation_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) &&
-        out_report->strict_success != 0u;
+    out_report->strict_success =
+        rt_io_operator_strict_success(*out_report, response.wire.snapshot.state.provider_generation)
+            ? 1u
+            : 0u;
+    const bool complete =
+        status == SAO_STATUS_OK && response.wire.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && out_report->strict_success != 0u;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
-    out_report->failure_classification = complete
-        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
-        : (status != SAO_STATUS_OK
-               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-               : SAO_LAUNCHER_RT_IO_FAILURE_STATUS_INCONSISTENT);
-    return complete ? SAO_STATUS_OK
-                    : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
+    out_report->failure_classification =
+        complete ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+                 : (status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                            : SAO_LAUNCHER_RT_IO_FAILURE_STATUS_INCONSISTENT);
+    return complete ? SAO_STATUS_OK : (status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL);
 }
 
-sao_status_t sao_platform_rt_io_operator_cleanup(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
-    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) ||
-        out_report == nullptr)
+sao_status_t
+sao_platform_rt_io_operator_cleanup(sao_platform_ctx* ctx,
+                                    const sao_launcher_rt_io_operator_options_t* options,
+                                    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+    if (ctx == nullptr || !rtIoOperatorOptionsValid(options) || out_report == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->rt_io_operator_shutdown) {
         *out_report = ctx->rt_io_cleanup_report;
-        return out_report->success != 0u ? SAO_STATUS_OK
-                                         : out_report->status;
+        return out_report->success != 0u ? SAO_STATUS_OK : out_report->status;
     }
     if (ctx->rt_io_proxy == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
@@ -3807,53 +3711,49 @@ sao_status_t sao_platform_rt_io_operator_cleanup(
     if (status != SAO_STATUS_OK) {
         out_report->status = status;
         out_report->operation_status = status;
-        out_report->failure_classification =
-            SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
         return status;
     }
 
     SaoRtIoStrictChainStatusV1Req status_request{};
-    rt_io_operator_initialize_strict_request(
-        &status_request, SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
-    if (ctx->rt_io_strict_transaction_id != 0u &&
-        ctx->rt_io_strict_chain_generation != 0u) {
+    rt_io_operator_initialize_strict_request(&status_request,
+                                             SAO_RT_IO_STRICT_CHAIN_STATUS_V1_REQUEST_MAGIC);
+    if (ctx->rt_io_strict_transaction_id != 0u && ctx->rt_io_strict_chain_generation != 0u) {
         status_request.transaction_id = ctx->rt_io_strict_transaction_id;
         status_request.chain_generation = ctx->rt_io_strict_chain_generation;
     }
 
     SaoRtIoProxyStrictChainRespV1 status_response{};
     SaoRtIoCallResult status_call{};
-    status = sao_rt_io_proxy_strict_status(
-        ctx->rt_io_proxy, &status_request, options->timeout_ms,
-        &status_response, &status_call);
+    status = sao_rt_io_proxy_strict_status(ctx->rt_io_proxy, &status_request, options->timeout_ms,
+                                           &status_response, &status_call);
     out_report->status = status;
     out_report->operation_status = status_response.wire.operation_status;
     rt_io_operator_copy_call(status_call, out_report);
     rt_io_operator_copy_strict_response(status_response, out_report);
     rt_io_operator_cache_strict_chain(ctx, status_response);
     const auto& status_state = status_response.wire.snapshot.state;
-    const bool status_complete = status == SAO_STATUS_OK &&
-        status_response.wire.operation_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) &&
-        status_state.transaction_id != 0u && status_state.chain_generation != 0u;
+    const bool status_complete =
+        status == SAO_STATUS_OK && status_response.wire.operation_status == SAO_STATUS_OK &&
+        rt_io_operator_call_complete(*out_report) && status_state.transaction_id != 0u &&
+        status_state.chain_generation != 0u;
     if (!status_complete) {
-        out_report->failure_classification =
-            status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-                                    : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        out_report->failure_classification = status != SAO_STATUS_OK
+                                                 ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                                 : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
         return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
     }
 
     SaoRtIoStrictChainRecoverV1Req recover_request{};
-    rt_io_operator_initialize_strict_request(
-        &recover_request, SAO_RT_IO_STRICT_CHAIN_RECOVER_V1_REQUEST_MAGIC);
+    rt_io_operator_initialize_strict_request(&recover_request,
+                                             SAO_RT_IO_STRICT_CHAIN_RECOVER_V1_REQUEST_MAGIC);
     recover_request.transaction_id = status_state.transaction_id;
     recover_request.chain_generation = status_state.chain_generation;
 
     SaoRtIoProxyStrictChainRespV1 recover_response{};
     SaoRtIoCallResult recover_call{};
-    status = sao_rt_io_proxy_strict_recover(
-        ctx->rt_io_proxy, &recover_request, options->timeout_ms,
-        &recover_response, &recover_call);
+    status = sao_rt_io_proxy_strict_recover(ctx->rt_io_proxy, &recover_request, options->timeout_ms,
+                                            &recover_response, &recover_call);
     out_report->status = status;
     out_report->operation_status = recover_response.wire.operation_status;
     rt_io_operator_copy_call(recover_call, out_report);
@@ -3871,21 +3771,19 @@ sao_status_t sao_platform_rt_io_operator_cleanup(
         out_report->restore_mask |= SAO_LAUNCHER_RT_IO_RESTORE_PROVIDER_RETAINED;
         out_report->complete = 0u;
         out_report->success = 0u;
-        out_report->failure_classification =
-            SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
+        out_report->failure_classification = SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE;
         return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
     }
 
     const bool complete = status == SAO_STATUS_OK &&
-        recover_response.wire.operation_status == SAO_STATUS_OK &&
-        rt_io_operator_call_complete(*out_report) && terminal_clean;
+                          recover_response.wire.operation_status == SAO_STATUS_OK &&
+                          rt_io_operator_call_complete(*out_report) && terminal_clean;
     out_report->complete = complete ? 1u : 0u;
     out_report->success = out_report->complete;
-    out_report->failure_classification = complete
-        ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
-        : (status != SAO_STATUS_OK
-               ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
-               : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE);
+    out_report->failure_classification =
+        complete ? SAO_LAUNCHER_RT_IO_FAILURE_NONE
+                 : (status != SAO_STATUS_OK ? SAO_LAUNCHER_RT_IO_FAILURE_CALL
+                                            : SAO_LAUNCHER_RT_IO_FAILURE_CLEANUP_INCOMPLETE);
     if (!complete)
         return status != SAO_STATUS_OK ? status : SAO_STATUS_INTERNAL;
 
@@ -3914,8 +3812,8 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
         return failure_status;
     };
     const auto rollback_and_fail = [&](const char* stage, sao_status_t failure_status) noexcept {
-        return rollback_platform_bringup(
-            ctx, ctx_out, trace_platform_bringup_failure(stage, failure_status));
+        return rollback_platform_bringup(ctx, ctx_out,
+                                         trace_platform_bringup_failure(stage, failure_status));
     };
 
     sao_status_t status = create_ai_editor_owner(cfg->base_dir, ctx->ai_editor);
@@ -3952,8 +3850,8 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_streaming_mode", status);
     }
-    status = ctx->settings_owner->get_truthy(
-        "sao_screencap_protection", true, ctx->screencap_protection);
+    status = ctx->settings_owner->get_truthy("sao_screencap_protection", true,
+                                             ctx->screencap_protection);
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_owner_sao_screencap_protection", status);
     }
@@ -4102,6 +4000,15 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_compositor_create", status);
     }
+    status = sao_ui_overlay_host_set_size_fn(ctx->overlay_host, &resize_linkstart_for_host, ctx);
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("ui_linkstart_size_callback", status);
+    }
+    status =
+        sao_ui_overlay_host_set_dpi_changed_fn(ctx->overlay_host, &resize_linkstart_for_dpi, ctx);
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("ui_linkstart_dpi_callback", status);
+    }
     try {
         ctx->hotkey_owner = std::make_unique<sao::launcher::hotkey::Owner>(ctx->compositor);
     } catch (...) {
@@ -4189,6 +4096,16 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->overlay_host != nullptr) {
+        const sao_status_t size_status =
+            sao_ui_overlay_host_set_size_fn(ctx->overlay_host, nullptr, nullptr);
+        if (size_status != SAO_STATUS_OK)
+            return size_status;
+        const sao_status_t dpi_status =
+            sao_ui_overlay_host_set_dpi_changed_fn(ctx->overlay_host, nullptr, nullptr);
+        if (dpi_status != SAO_STATUS_OK)
+            return dpi_status;
+    }
     drain_deferred_cleanup_for_owner();
     if (ctx->ai_editor) {
         const sao_status_t ai_editor_status = ctx->ai_editor->take_offline();
@@ -4231,8 +4148,12 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         ctx->entity_shell = nullptr;
     }
     if (ctx->linkstart != nullptr) {
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart,
+                                                   SAO_UI_LINKSTART_COMPLETION_TEARDOWN);
         sao_ui_linkstart_destroy(ctx->linkstart);
         ctx->linkstart = nullptr;
+        ctx->linkstart_pending_completion = false;
+        ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     }
     if (ctx->keyboard_router != nullptr) {
         const sao_status_t router_status =
@@ -4283,8 +4204,7 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         if (ctx->rt_io_operator_shutdown) {
             sao_rt_io_proxy_destroy(ctx->rt_io_proxy);
         } else {
-            const sao_status_t proxy_status =
-                sao_rt_io_proxy_close(ctx->rt_io_proxy);
+            const sao_status_t proxy_status = sao_rt_io_proxy_close(ctx->rt_io_proxy);
             if (proxy_status != SAO_STATUS_OK) {
                 return proxy_status;
             }
@@ -4410,6 +4330,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     // launcher 轮询 sao_ui_linkstart_poll_finished 后做衔接动作。
     if (ctx->linkstart == nullptr) {
         bool linkstart_started = false;
+        ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+        ctx->linkstart_pending_completion = false;
         SaoOverlayHostClientRect host_bounds{};
         if (sao_ui_overlay_host_get_client_rect(ctx->overlay_host, &host_bounds) == SAO_STATUS_OK &&
             host_bounds.width > 0 && host_bounds.height > 0) {
@@ -4418,22 +4340,38 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
             linkstart_config.width_px = static_cast<uint32_t>(host_bounds.width);
             linkstart_config.height_px = static_cast<uint32_t>(host_bounds.height);
             sao_ui_linkstart_handle_t linkstart = nullptr;
-            if (sao_ui_linkstart_create(ctx->compositor, nullptr, &linkstart_config,
-                                        &linkstart) == SAO_STATUS_OK &&
-                linkstart != nullptr) {
-                if (sao_ui_linkstart_show(linkstart) == SAO_STATUS_OK) {
+            const sao_status_t create_status =
+                sao_ui_linkstart_create(ctx->compositor, nullptr, &linkstart_config, &linkstart);
+            if (create_status == SAO_STATUS_OK && linkstart != nullptr) {
+                const uint32_t dpi = sao_ui_overlay_host_current_dpi(ctx->overlay_host);
+                sao_status_t linkstart_status =
+                    sao_ui_linkstart_resize(linkstart, static_cast<uint32_t>(host_bounds.width),
+                                            static_cast<uint32_t>(host_bounds.height), dpi);
+                if (linkstart_status == SAO_STATUS_OK)
+                    linkstart_status = sao_ui_linkstart_show(linkstart);
+                if (linkstart_status == SAO_STATUS_OK) {
                     ctx->linkstart = linkstart;
-                    ctx->linkstart_just_finished = false;
                     ctx->linkstart_pending_completion = true;
                     ctx->linkstart_last_tick = GetTickCount64();
                     linkstart_started = true;
                 } else {
+                    SaoUiLinkStartCompletionReason reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+                    (void)sao_ui_linkstart_poll_completion(linkstart, &reason);
+                    ctx->linkstart_completion_reason =
+                        reason == SAO_UI_LINKSTART_COMPLETION_NONE
+                            ? (linkstart_status == SAO_STATUS_ERR_DEVICE_LOST
+                                   ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                   : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED)
+                            : reason;
                     sao_ui_linkstart_destroy(linkstart);
                 }
+            } else if (create_status == SAO_STATUS_ERR_DEVICE_LOST) {
+                ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST;
             }
         }
-        if (!linkstart_started)
-            ctx->linkstart_just_finished = true;
+        if (!linkstart_started &&
+            ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_NONE)
+            ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
     }
     return SAO_STATUS_OK;
 }
@@ -4442,6 +4380,15 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
+    if (ctx->linkstart != nullptr) {
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart,
+                                                   SAO_UI_LINKSTART_COMPLETION_OFFLINE);
+        sao_ui_linkstart_destroy(ctx->linkstart);
+        ctx->linkstart = nullptr;
+    }
+    ctx->linkstart_pending_completion = false;
+    ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_OFFLINE;
+    ctx->linkstart_last_tick = 0;
     // AiEditorProcessOwner::take_offline() is owned by teardown_platform_context
     // (invoked by sao_platform_teardown after this function returns) so we do
     // NOT drive it a second time here.  Calling take_offline twice was
@@ -4504,16 +4451,12 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (ctx->ai_editor) {
         const sao_status_t ai_editor_status = ctx->ai_editor->service_ui();
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
-        if (ai_editor_status != SAO_STATUS_OK &&
-            ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
-            (void)sao_core_logf(
-                SAO_LOG_WARN, "launcher.ai_editor",
-                "owner-thread UI service deferred: status=%d",
-                ai_editor_status);
+        if (ai_editor_status != SAO_STATUS_OK && ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
+            (void)sao_core_logf(SAO_LOG_WARN, "launcher.ai_editor",
+                                "owner-thread UI service deferred: status=%d", ai_editor_status);
         }
 #endif
-        if (status == SAO_STATUS_OK &&
-            ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
+        if (status == SAO_STATUS_OK && ai_editor_status != SAO_STATUS_ERR_CANCELLED) {
             status = ai_editor_status;
         }
     }
@@ -4556,21 +4499,23 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         const sao_status_t linkstart_status = sao_ui_linkstart_tick(ctx->linkstart, intro_delta);
         if (linkstart_status != SAO_STATUS_OK &&
             linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED) {
-            // An optional intro must never prevent the real UI from opening.
-            (void)sao_ui_linkstart_dismiss(ctx->linkstart);
+            const auto reason = linkstart_status == SAO_STATUS_ERR_DEVICE_LOST
+                                    ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                    : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+            (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
         }
         bool now_active = false;
         (void)sao_ui_linkstart_is_active(ctx->linkstart, &now_active);
-        if (ctx->linkstart_pending_completion && !now_active) {
-            ctx->linkstart_just_finished = true;
-            ctx->linkstart_pending_completion = false;
-        }
+        if (ctx->linkstart_pending_completion && !now_active)
+            capture_linkstart_completion(ctx, SAO_UI_LINKSTART_COMPLETION_NATURAL);
     }
     sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     if (compositor_status != SAO_STATUS_OK && ctx->linkstart_pending_completion) {
-        (void)sao_ui_linkstart_dismiss(ctx->linkstart);
-        ctx->linkstart_pending_completion = false;
-        ctx->linkstart_just_finished = true;
+        const auto reason = compositor_status == SAO_STATUS_ERR_DEVICE_LOST
+                                ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
+        capture_linkstart_completion(ctx, reason);
         compositor_status = sao_ui_compositor_tick(ctx->compositor);
     }
     // The compositor owns device recreation and retries it on the next frame.
@@ -4579,16 +4524,25 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     return status == SAO_STATUS_OK ? compositor_status : status;
 }
 
-sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx,
-                                            int32_t* out_just_finished) {
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx, int32_t* out_just_finished) {
+    int32_t reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+    return sao_ui_linkstart_poll_finished_ex(ctx, out_just_finished, &reason);
+}
+
+sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx* ctx, int32_t* out_just_finished,
+                                               int32_t* out_completion_reason) {
     if (out_just_finished == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (out_completion_reason == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_just_finished = 0;
+    *out_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     if (ctx == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (ctx->linkstart_just_finished) {
-        ctx->linkstart_just_finished = false;
+    if (ctx->linkstart_completion_reason != SAO_UI_LINKSTART_COMPLETION_NONE) {
         *out_just_finished = 1;
+        *out_completion_reason = static_cast<int32_t>(ctx->linkstart_completion_reason);
+        ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     }
     return SAO_STATUS_OK;
 }
@@ -4605,8 +4559,7 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
     }
     if (message == sao::launcher::hotkey::kCaptureCompletionMessage) {
         *out_handled = 1;
-        return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner()
-                                 : SAO_STATUS_OK;
+        return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner() : SAO_STATUS_OK;
     }
     if ((message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
          message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE) &&
@@ -4647,21 +4600,21 @@ sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_men
     if (user_menu != nullptr && ctx->user_menu != user_menu)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (ctx->user_menu != nullptr) {
-        static_cast<sao::launcher::UserMenu*>(ctx->user_menu)->unbind_hotkey_owner(ctx->hotkey_owner.get());
+        static_cast<sao::launcher::UserMenu*>(ctx->user_menu)
+            ->unbind_hotkey_owner(ctx->hotkey_owner.get());
         ctx->user_menu = nullptr;
     }
     return SAO_STATUS_OK;
 }
-sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx,
-                                                int32_t* out_presented) {
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx, int32_t* out_presented) {
     if (ctx == nullptr || out_presented == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_presented = 0;
     if (!ctx->settings_owner)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     bool presented = false;
-    const sao_status_t status = ctx->settings_owner->get_truthy(
-        "user_guide_presented", false, presented);
+    const sao_status_t status =
+        ctx->settings_owner->get_truthy("user_guide_presented", false, presented);
     if (status == SAO_STATUS_OK)
         *out_presented = presented ? 1 : 0;
     return status;
@@ -4670,8 +4623,8 @@ sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx* ctx) {
     if (ctx == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     return ctx->settings_owner
-        ? ctx->settings_owner->set_value_and_save("user_guide_presented", true)
-        : SAO_STATUS_ERR_NOT_INITIALIZED;
+               ? ctx->settings_owner->set_value_and_save("user_guide_presented", true)
+               : SAO_STATUS_ERR_NOT_INITIALIZED;
 }
 #else
 sao_status_t sao_platform_bringup(const sao_platform_config*, sao_platform_ctx**) {
@@ -4692,11 +4645,18 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx*) {
 sao_status_t sao_ui_tick(sao_platform_ctx*, uint32_t) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*,
-                                            int32_t* out_just_finished) {
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx*, int32_t* out_just_finished) {
+    int32_t reason = 0;
+    return sao_ui_linkstart_poll_finished_ex(nullptr, out_just_finished, &reason);
+}
+sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx*, int32_t* out_just_finished,
+                                               int32_t* out_completion_reason) {
     if (out_just_finished == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (out_completion_reason == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_just_finished = 0;
+    *out_completion_reason = 0;
     return SAO_STATUS_OK;
 }
 sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t, intptr_t,
@@ -4711,8 +4671,7 @@ sao_status_t sao_platform_bind_user_menu(sao_platform_ctx*, void*) {
 sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx*, void*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*,
-                                                int32_t* out_presented) {
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*, int32_t* out_presented) {
     if (out_presented == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_presented = 1;
@@ -4721,11 +4680,11 @@ sao_status_t sao_platform_user_guide_presented(sao_platform_ctx*,
 sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_rt_io_operator_preflight(
-    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
+sao_status_t
+sao_platform_rt_io_operator_preflight(sao_platform_ctx*,
+                                      const sao_launcher_rt_io_operator_options_t* options,
+                                      sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_PREFLIGHT, out_report);
     if (out_report != nullptr) {
         out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
         out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
@@ -4733,11 +4692,10 @@ sao_status_t sao_platform_rt_io_operator_preflight(
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_rt_io_operator_init(
-    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
+sao_status_t sao_platform_rt_io_operator_init(sao_platform_ctx*,
+                                              const sao_launcher_rt_io_operator_options_t* options,
+                                              sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_INIT, out_report);
     if (out_report != nullptr) {
         out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
         out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
@@ -4745,11 +4703,11 @@ sao_status_t sao_platform_rt_io_operator_init(
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_rt_io_operator_live_validate(
-    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
+sao_status_t
+sao_platform_rt_io_operator_live_validate(sao_platform_ctx*,
+                                          const sao_launcher_rt_io_operator_options_t* options,
+                                          sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_LIVE, out_report);
     if (out_report != nullptr) {
         out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
         out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
@@ -4757,11 +4715,11 @@ sao_status_t sao_platform_rt_io_operator_live_validate(
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_rt_io_operator_status(
-    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
+sao_status_t
+sao_platform_rt_io_operator_status(sao_platform_ctx*,
+                                   const sao_launcher_rt_io_operator_options_t* options,
+                                   sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_STATUS, out_report);
     if (out_report != nullptr) {
         out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
         out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;
@@ -4769,11 +4727,11 @@ sao_status_t sao_platform_rt_io_operator_status(
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_platform_rt_io_operator_cleanup(
-    sao_platform_ctx*, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report) {
-    initializeRtIoOperatorReport(
-        options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
+sao_status_t
+sao_platform_rt_io_operator_cleanup(sao_platform_ctx*,
+                                    const sao_launcher_rt_io_operator_options_t* options,
+                                    sao_launcher_rt_io_operator_report_t* out_report) {
+    initializeRtIoOperatorReport(options, SAO_LAUNCHER_RT_IO_STAGE_CLEANUP, out_report);
     if (out_report != nullptr) {
         out_report->status = SAO_STATUS_NOT_IMPLEMENTED;
         out_report->operation_status = SAO_STATUS_NOT_IMPLEMENTED;

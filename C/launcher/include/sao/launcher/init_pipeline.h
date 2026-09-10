@@ -41,14 +41,14 @@ typedef struct sao_platform_ctx sao_platform_ctx;
 typedef struct sao_plugins_registry sao_plugins_registry;
 
 typedef struct sao_platform_config {
-    const wchar_t* base_dir;    // BASE_DIR (see working_dir.h)
-    const wchar_t* config_path; // may be NULL to use default
-    const char* log_level;      // "trace" .. "critical"; NULL == "info"
-    int32_t safe_mode;          // non-zero disables non-essential threads
-    int32_t streaming_entitled; // verified paid tier or dev bypass
-    int32_t rt_io_operator;     // non-zero selects the strict HYPERVISOR chain
+    const wchar_t* base_dir;          // BASE_DIR (see working_dir.h)
+    const wchar_t* config_path;       // may be NULL to use default
+    const char* log_level;            // "trace" .. "critical"; NULL == "info"
+    int32_t safe_mode;                // non-zero disables non-essential threads
+    int32_t streaming_entitled;       // verified paid tier or dev bypass
+    int32_t rt_io_operator;           // non-zero selects the strict HYPERVISOR chain
     int32_t rt_io_dev_license_bypass; // explicit actual-Debug --no-license propagation
-    int32_t rt_io_force_status_page; // non-zero keeps the helper F12 status page
+    int32_t rt_io_force_status_page;  // non-zero keeps the helper F12 status page
                                       // enabled even when rt_io_operator would
                                       // otherwise disable it
 } sao_platform_config;
@@ -155,15 +155,15 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                                    intptr_t l_param, int32_t* out_handled);
 sao_status_t sao_platform_bind_user_menu(sao_platform_ctx* ctx, void* user_menu);
 sao_status_t sao_platform_unbind_user_menu(sao_platform_ctx* ctx, void* user_menu);
-sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx,
-                                                int32_t* out_presented);
+sao_status_t sao_platform_user_guide_presented(sao_platform_ctx* ctx, int32_t* out_presented);
 sao_status_t sao_platform_mark_user_guide_presented(sao_platform_ctx* ctx);
 
 // Link Start 开场衔接：UI 上线时自动播放，tick 驱动完成。
 // 轮询接口每次只报告一次“刚完成”边沿（读到后即清零）。
 // 非生产 provider 恒返回 *out_just_finished = 0。
-sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx,
-                                            int32_t* out_just_finished);
+sao_status_t sao_ui_linkstart_poll_finished(sao_platform_ctx* ctx, int32_t* out_just_finished);
+sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx* ctx, int32_t* out_just_finished,
+                                               int32_t* out_completion_reason);
 
 // ---------------------------------------------------------------------------
 // RT I/O operator flow.
@@ -210,14 +210,11 @@ enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
 };
 
 #ifdef __cplusplus
-static_assert(((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED |
-               SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT |
-               SAO_LAUNCHER_RT_IO_CAP_MF |
-               SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
-               SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE |
-               SAO_LAUNCHER_RT_IO_CAP_OB |
-               SAO_LAUNCHER_RT_IO_CAP_WATCHDOG) &
-                  SAO_LAUNCHER_RT_IO_CAP_VT_READY) == 0u,
+static_assert(((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED | SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT |
+                SAO_LAUNCHER_RT_IO_CAP_MF | SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
+                SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE | SAO_LAUNCHER_RT_IO_CAP_OB |
+                SAO_LAUNCHER_RT_IO_CAP_WATCHDOG) &
+               SAO_LAUNCHER_RT_IO_CAP_VT_READY) == 0u,
               "VT capability bit collides with an existing capability bit");
 #endif
 
@@ -358,33 +355,37 @@ typedef struct sao_launcher_rt_io_operator_report {
     uint32_t strict_success;
 } sao_launcher_rt_io_operator_report_t;
 
-typedef void (*sao_launcher_rt_io_operator_output_fn)(const char* line_utf8,
-                                                       void* user_data);
+typedef void (*sao_launcher_rt_io_operator_output_fn)(const char* line_utf8, void* user_data);
 
-sao_status_t sao_platform_rt_io_operator_preflight(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report);
-sao_status_t sao_platform_rt_io_operator_init(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report);
-sao_status_t sao_platform_rt_io_operator_live_validate(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report);
-sao_status_t sao_platform_rt_io_operator_status(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report);
-sao_status_t sao_platform_rt_io_operator_cleanup(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t
+sao_platform_rt_io_operator_preflight(sao_platform_ctx* ctx,
+                                      const sao_launcher_rt_io_operator_options_t* options,
+                                      sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t sao_platform_rt_io_operator_init(sao_platform_ctx* ctx,
+                                              const sao_launcher_rt_io_operator_options_t* options,
+                                              sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t
+sao_platform_rt_io_operator_live_validate(sao_platform_ctx* ctx,
+                                          const sao_launcher_rt_io_operator_options_t* options,
+                                          sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t
+sao_platform_rt_io_operator_status(sao_platform_ctx* ctx,
+                                   const sao_launcher_rt_io_operator_options_t* options,
+                                   sao_launcher_rt_io_operator_report_t* out_report);
+sao_status_t
+sao_platform_rt_io_operator_cleanup(sao_platform_ctx* ctx,
+                                    const sao_launcher_rt_io_operator_options_t* options,
+                                    sao_launcher_rt_io_operator_report_t* out_report);
 
-sao_status_t sao_launcher_rt_io_operator_format_json(
-    const sao_launcher_rt_io_operator_report_t* report, char* out_utf8,
-    size_t out_capacity, size_t* out_bytes_written);
+sao_status_t
+sao_launcher_rt_io_operator_format_json(const sao_launcher_rt_io_operator_report_t* report,
+                                        char* out_utf8, size_t out_capacity,
+                                        size_t* out_bytes_written);
 
-sao_status_t sao_launcher_rt_io_operator_run(
-    sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-    sao_launcher_rt_io_operator_output_fn output, void* output_user_data,
-    int32_t* out_ready);
+sao_status_t sao_launcher_rt_io_operator_run(sao_platform_ctx* ctx,
+                                             const sao_launcher_rt_io_operator_options_t* options,
+                                             sao_launcher_rt_io_operator_output_fn output,
+                                             void* output_user_data, int32_t* out_ready);
 
 // Test-only composition seams.  Production providers call the stable rt_io,
 // UI, and security ABIs directly; tests install these hooks to verify launch
@@ -408,21 +409,25 @@ struct sao_launcher_composition_test_hooks_t {
     sao_status_t (*ui_tick)(sao_platform_ctx* ctx, uint32_t elapsed_ms, void* user_data);
     sao_status_t (*ui_handle_message)(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
                                       intptr_t l_param, int32_t* out_handled, void* user_data);
-    sao_status_t (*rt_io_operator_preflight)(
-        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
-    sao_status_t (*rt_io_operator_init)(
-        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_preflight)(sao_platform_ctx* ctx,
+                                             const sao_launcher_rt_io_operator_options_t* options,
+                                             sao_launcher_rt_io_operator_report_t* out_report,
+                                             void* user_data);
+    sao_status_t (*rt_io_operator_init)(sao_platform_ctx* ctx,
+                                        const sao_launcher_rt_io_operator_options_t* options,
+                                        sao_launcher_rt_io_operator_report_t* out_report,
+                                        void* user_data);
     sao_status_t (*rt_io_operator_live_validate)(
         sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
         sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
-    sao_status_t (*rt_io_operator_status)(
-        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
-    sao_status_t (*rt_io_operator_cleanup)(
-        sao_platform_ctx* ctx, const sao_launcher_rt_io_operator_options_t* options,
-        sao_launcher_rt_io_operator_report_t* out_report, void* user_data);
+    sao_status_t (*rt_io_operator_status)(sao_platform_ctx* ctx,
+                                          const sao_launcher_rt_io_operator_options_t* options,
+                                          sao_launcher_rt_io_operator_report_t* out_report,
+                                          void* user_data);
+    sao_status_t (*rt_io_operator_cleanup)(sao_platform_ctx* ctx,
+                                           const sao_launcher_rt_io_operator_options_t* options,
+                                           sao_launcher_rt_io_operator_report_t* out_report,
+                                           void* user_data);
     void* user_data;
 };
 
@@ -468,8 +473,7 @@ extern wchar_t SaoLauncherBaseDir[260];
 void sao_launcher_set_base_dir(const wchar_t* base_dir);
 const wchar_t* sao_launcher_base_dir(void);
 uint32_t sao_launcher_base_dir_length(void);
-sao_status_t sao_launcher_copy_base_dir(wchar_t* out_dir,
-                                         uint32_t* inout_char_count);
+sao_status_t sao_launcher_copy_base_dir(wchar_t* out_dir, uint32_t* inout_char_count);
 
 sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
                                             const sao_launcher_init_hooks_t* hooks,
@@ -497,7 +501,7 @@ bool isPaidLicenseTier(const char* tier) noexcept;
 // Runs the configured plugin-runtime installer after platform bring-up and
 // before plugin discovery.  A configured manifest is fail-closed.
 sao_status_t ensureConfiguredPluginRuntimes(const AppState& state,
-    const PluginsProviderConfiguration& plugins) noexcept;
+                                            const PluginsProviderConfiguration& plugins) noexcept;
 
 } // namespace sao::launcher
 #endif

@@ -24,6 +24,19 @@ settings_owner::SettingsOwner* g_owner = nullptr;
 fs::path g_profiles_override;
 constexpr std::size_t kMaximumProfileNameBytes = 64U;
 constexpr std::uintmax_t kMaximumProfileBytes = 16U * 1024U * 1024U;
+void merge_live_game_cache(nlohmann::ordered_json& profile,
+                           const nlohmann::ordered_json& live) {
+    const auto live_cache = live.find("game_cache");
+    if (live_cache == live.end() || !live_cache->is_object()) return;
+    nlohmann::ordered_json merged = nlohmann::ordered_json::object();
+    const auto profile_cache = profile.find("game_cache");
+    if (profile_cache != profile.end() && profile_cache->is_object())
+        merged = *profile_cache;
+    for (auto it = live_cache->begin(); it != live_cache->end(); ++it)
+        merged[it.key()] = it.value();
+    profile["game_cache"] = std::move(merged);
+}
+
 bool valid_profile_name(std::string_view name) noexcept {
     if (name.empty() || name.size() > kMaximumProfileNameBytes || name == "." || name == "..") return false;
     return std::all_of(name.begin(), name.end(), [](unsigned char value) { return std::isalnum(value) != 0 || value == '_' || value == '-' || value == '.'; });
@@ -104,7 +117,8 @@ bool load_profile(const std::string& name) {
         const fs::path file = profile_file(name); std::error_code error; const auto size = fs::file_size(file, error); if (error || size > kMaximumProfileBytes) return false;
         auto owner = owner_snapshot(); if (!owner) return false; std::ifstream in(file, std::ios::binary); if (!in) return false; nlohmann::ordered_json profile; in >> profile; if (!profile.is_object()) return false;
         nlohmann::ordered_json before; if (owner->snapshot(before) != SAO_STATUS_OK) return false; const bool was_dirty = owner->dirty();
-        for (auto it = profile.begin(); it != profile.end(); ++it) if (owner->set_value(it.key(), it.value()) != SAO_STATUS_OK) { (void)owner->restore_snapshot(std::move(before), was_dirty); return false; }
+        merge_live_game_cache(profile, before);
+        if (owner->restore_snapshot(std::move(profile), true) != SAO_STATUS_OK) return false;
         if (owner->save() == SAO_STATUS_OK) return true; (void)owner->restore_snapshot(std::move(before), was_dirty); return false;
     } catch (...) { return false; }
 }

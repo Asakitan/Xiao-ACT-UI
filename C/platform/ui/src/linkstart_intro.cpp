@@ -33,30 +33,22 @@ constexpr uint32_t kDefaultParticleSeed = 0x51a0c3d7u;
 constexpr int32_t kLinkStartZOrder = 5000;
 constexpr uint32_t kOverlayMaxWidth = 960u;
 constexpr uint32_t kOverlayMaxHeight = 320u;
+constexpr int32_t kReducedMotionDurationMs = 450;
+constexpr uint32_t kDefaultDpi = 96u;
+constexpr uint32_t kMinimumDpi = 48u;
+constexpr uint32_t kMaximumDpi = 768u;
 
 std::atomic_uint64_t g_linkstart_sequence{};
 
-bool finite_nonnegative(float value) {
-    return std::isfinite(value) && value >= 0.0F;
+bool valid_geometry(uint32_t width, uint32_t height, uint32_t dpi) noexcept {
+    return width != 0u && height != 0u && width <= 16384u && height <= 16384u &&
+           dpi >= kMinimumDpi && dpi <= kMaximumDpi &&
+           static_cast<uint64_t>(width) * height * 4u <= SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES;
 }
 
-bool validate_timeline(const SaoUiLinkStartTimeline& timeline) {
-    const float values[] = {
-        timeline.startup_prelude, timeline.p1_end,         timeline.p2_start, timeline.p2_end,
-        timeline.p3_start,        timeline.p3_end,         timeline.p4_start, timeline.p4_hold_end,
-        timeline.p4_fade_end,     timeline.total_duration,
-    };
-    for (float value : values) {
-        if (!finite_nonnegative(value))
-            return false;
-    }
-    return timeline.startup_prelude <= timeline.p1_end && timeline.p2_start <= timeline.p2_end &&
-           timeline.p3_start <= timeline.p3_end && timeline.p4_start <= timeline.p4_hold_end &&
-           timeline.p4_hold_end <= timeline.p4_fade_end &&
-           timeline.p1_end <= timeline.total_duration &&
-           timeline.p2_end <= timeline.total_duration &&
-           timeline.p3_end <= timeline.total_duration &&
-           timeline.p4_fade_end <= timeline.total_duration && timeline.total_duration > 0.0F;
+uint32_t scaled_extent(uint32_t extent, uint32_t dpi) noexcept {
+    return static_cast<uint32_t>(
+        std::min<uint64_t>((static_cast<uint64_t>(extent) * dpi + 48u) / 96u, 16384u));
 }
 
 float interval_progress(float value, float start, float end) {
@@ -85,25 +77,128 @@ struct sao_ui_linkstart_s {
     uint32_t height{};
     uint32_t overlay_width{};
     uint32_t overlay_height{};
+    uint32_t dpi{kDefaultDpi};
     uint32_t seed{kDefaultParticleSeed};
     bool default_timeline{};
     int32_t elapsed_ms{};
     bool active{};
+    bool completion_emitted{};
+    bool completion_pending{};
     bool nervegear_sound_played{};
     bool welcome_sound_played{};
+    bool rendered_reduced_motion{};
     sao_ui_sound_group_t sound_group{};
+    SaoUiLinkStartCompletionReason completion_reason{SAO_UI_LINKSTART_COMPLETION_NONE};
+    SaoUiLinkStartAudioState audio_state{SAO_UI_LINKSTART_AUDIO_READY};
+    sao_status_t audio_status{SAO_STATUS_OK};
     int32_t rendered_motion_stage{-1};
     std::mutex mutex;
 };
 
 namespace {
 
-void release_sound_group(sao_ui_linkstart_s* handle) noexcept {
+sao_status_t release_sound_group(sao_ui_linkstart_s* handle) noexcept {
     if (handle == nullptr)
-        return;
+        return SAO_STATUS_OK;
     const sao_ui_sound_group_t group = std::exchange(handle->sound_group, 0);
-    if (group != 0)
-        (void)sao_ui_sound_group_destroy(group);
+    return group == 0 ? SAO_STATUS_OK : sao_ui_sound_group_destroy(group);
+}
+
+sao_status_t first_failure(sao_status_t current, sao_status_t candidate) noexcept {
+    return current == SAO_STATUS_OK ? candidate : current;
+}
+
+SaoUiLinkStartCompletionReason completion_reason_for_status(sao_status_t status) noexcept {
+    return status == SAO_STATUS_ERR_DEVICE_LOST ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                                : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+}
+
+void record_audio_status_locked(sao_ui_linkstart_s* handle, sao_status_t status) noexcept {
+    if (status == SAO_STATUS_OK)
+        return;
+    handle->audio_state = SAO_UI_LINKSTART_AUDIO_DEGRADED;
+    handle->audio_status = status;
+}
+
+sao_status_t complete_locked(sao_ui_linkstart_s* handle, SaoUiLinkStartCompletionReason reason,
+                             sao_status_t status, bool reset_elapsed) noexcept {
+    handle->active = false;
+    if (reset_elapsed)
+        handle->elapsed_ms = 0;
+    handle->nervegear_sound_played = false;
+    handle->welcome_sound_played = false;
+    sao_status_t result = status;
+    result = first_failure(result, sao_ui_layer_set_visible(handle->layer, false));
+    result = first_failure(result, sao_ui_layer_set_visible(handle->gpu_layer, false));
+    record_audio_status_locked(handle, release_sound_group(handle));
+    if (!reset_elapsed && reason == SAO_UI_LINKSTART_COMPLETION_NATURAL &&
+        result != SAO_STATUS_OK)
+        handle->elapsed_ms = 0;
+    if (!handle->completion_emitted) {
+        handle->completion_emitted = true;
+        handle->completion_pending = true;
+        handle->completion_reason =
+            reason == SAO_UI_LINKSTART_COMPLETION_NATURAL && result != SAO_STATUS_OK
+                ? completion_reason_for_status(result)
+                : reason;
+    }
+    return result;
+}
+
+sao_status_t configure_overlay_input(sao_ui_linkstart_s* handle, uint32_t width,
+                                     uint32_t height) noexcept {
+    sao_status_t status = sao_ui_layer_set_input_rects(handle->layer, nullptr, 0);
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (width < 160u || height < 120u)
+        return sao_ui_layer_set_input_enabled(handle->layer, false);
+    const SaoUiLayerInputRect skip_rect{static_cast<int32_t>(width / 2u) - 80,
+                                        static_cast<int32_t>(height) - 38, 160, 32};
+    status = sao_ui_layer_set_input_rects(handle->layer, &skip_rect, 1);
+    return status == SAO_STATUS_OK ? sao_ui_layer_set_input_enabled(handle->layer, true) : status;
+}
+
+sao_status_t apply_geometry_locked(sao_ui_linkstart_s* handle, uint32_t width, uint32_t height,
+                                   uint32_t dpi) noexcept {
+    const uint32_t overlay_width = std::min(width, scaled_extent(kOverlayMaxWidth, dpi));
+    const uint32_t overlay_height = std::min(height, scaled_extent(kOverlayMaxHeight, dpi));
+    const int32_t overlay_x = static_cast<int32_t>((width - overlay_width) / 2u);
+    const int32_t overlay_y = static_cast<int32_t>((height - overlay_height) / 2u);
+
+    const uint32_t old_width = handle->width;
+    const uint32_t old_height = handle->height;
+    const uint32_t old_overlay_width = handle->overlay_width;
+    const uint32_t old_overlay_height = handle->overlay_height;
+    const int32_t old_overlay_x = static_cast<int32_t>((old_width - old_overlay_width) / 2u);
+    const int32_t old_overlay_y = static_cast<int32_t>((old_height - old_overlay_height) / 2u);
+
+    sao_status_t status = sao_ui_layer_set_input_rects(handle->layer, nullptr, 0);
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_set_geometry(handle->gpu_layer, 0, 0, static_cast<int32_t>(width),
+                                           static_cast<int32_t>(height));
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_set_geometry(handle->layer, overlay_x, overlay_y,
+                                           static_cast<int32_t>(overlay_width),
+                                           static_cast<int32_t>(overlay_height));
+    if (status == SAO_STATUS_OK)
+        status = configure_overlay_input(handle, overlay_width, overlay_height);
+    if (status != SAO_STATUS_OK) {
+        (void)sao_ui_layer_set_geometry(handle->gpu_layer, 0, 0, static_cast<int32_t>(old_width),
+                                        static_cast<int32_t>(old_height));
+        (void)sao_ui_layer_set_geometry(handle->layer, old_overlay_x, old_overlay_y,
+                                        static_cast<int32_t>(old_overlay_width),
+                                        static_cast<int32_t>(old_overlay_height));
+        (void)configure_overlay_input(handle, old_overlay_width, old_overlay_height);
+        return status;
+    }
+
+    handle->width = width;
+    handle->height = height;
+    handle->overlay_width = overlay_width;
+    handle->overlay_height = overlay_height;
+    handle->dpi = dpi;
+    handle->rendered_motion_stage = -1;
+    return SAO_STATUS_OK;
 }
 
 void destroy_resources(sao_ui_linkstart_s* handle) {
@@ -117,7 +212,7 @@ void destroy_resources(sao_ui_linkstart_s* handle) {
     handle->gpu_layer = nullptr;
     sao::ui::linkstart_gpu::destroy(handle->gpu_renderer);
     handle->gpu_renderer = nullptr;
-    release_sound_group(handle);
+    (void)release_sound_group(handle);
 }
 
 sao_status_t centered_text(sao_ui_paint_ctx_handle_t ctx, float cx, float y, const char* text,
@@ -200,9 +295,15 @@ SaoUiLinkStartPhase phase_at(const sao_ui_linkstart_s& handle, float seconds, fl
 }
 
 sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
-    const float seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
-    const float scene_seconds = timeline_seconds(*handle, seconds);
     const bool reduced_motion = sao_ui_reduced_motion_enabled();
+    const float elapsed_seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
+    const float seconds =
+        reduced_motion ? handle->timeline.p4_start +
+                             (handle->default_timeline ? handle->timeline.startup_prelude : 0.0F)
+                       : elapsed_seconds;
+    const float scene_seconds = timeline_seconds(*handle, seconds);
+    if (handle->rendered_reduced_motion != reduced_motion)
+        handle->rendered_motion_stage = -1;
     float phase_progress = 0.0F;
     const SaoUiLinkStartPhase phase = phase_at(*handle, seconds, &phase_progress);
     const float connected_alpha =
@@ -410,8 +511,10 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                                            handle->timeline.p4_fade_end);
         status = sao_ui_layer_set_alpha(handle->layer, alpha);
     }
-    if (status == SAO_STATUS_OK)
+    if (status == SAO_STATUS_OK) {
         handle->rendered_motion_stage = motion_stage;
+        handle->rendered_reduced_motion = reduced_motion;
+    }
     return status;
 }
 
@@ -445,15 +548,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_create(sao_ui_compositor_ha
     *out_handle = nullptr;
     const uint32_t declared =
         config->struct_size == 0u ? SAO_UI_LINKSTART_CONFIG_V1_SIZE : config->struct_size;
-    if (declared != SAO_UI_LINKSTART_CONFIG_V1_SIZE || config->width_px == 0u ||
-        config->height_px == 0u || config->width_px > 16384u || config->height_px > 16384u ||
-        static_cast<uint64_t>(config->width_px) * config->height_px * 4u >
-            SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES) {
+    if (declared != SAO_UI_LINKSTART_CONFIG_V1_SIZE ||
+        !valid_geometry(config->width_px, config->height_px, kDefaultDpi)) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const SaoUiLinkStartTimeline timeline =
         config->timeline == nullptr ? *sao_ui_nervegear_default_timeline() : *config->timeline;
-    if (!validate_timeline(timeline))
+    if (sao_ui_nervegear_validate_timeline(&timeline) != SAO_STATUS_OK)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
     auto* handle = new (std::nothrow) sao_ui_linkstart_s();
@@ -517,18 +618,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_create(sao_ui_compositor_ha
             status = sao_ui_layer_create(compositor, &layer_config, &handle->layer);
         if (status == SAO_STATUS_OK)
             status = sao_ui_layer_set_visible(handle->layer, false);
-        if (status == SAO_STATUS_OK && handle->overlay_width >= 160 &&
-            handle->overlay_height >= 120) {
-            const SaoUiLayerInputRect skip_rect{
-                static_cast<int32_t>(handle->overlay_width / 2) - 80,
-                static_cast<int32_t>(handle->overlay_height) - 38, 160, 32};
-            status = sao_ui_layer_set_input_rects(handle->layer, &skip_rect, 1);
-            if (status == SAO_STATUS_OK)
-                status = sao_ui_layer_set_input_callbacks(handle->layer, nullptr, nullptr,
-                                                          skip_intro_click, nullptr, handle);
-        } else if (status == SAO_STATUS_OK) {
-            status = sao_ui_layer_set_input_enabled(handle->layer, false);
-        }
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_layer_set_input_callbacks(handle->layer, nullptr, nullptr,
+                                                      skip_intro_click, nullptr, handle);
+        if (status == SAO_STATUS_OK)
+            status = configure_overlay_input(handle, handle->overlay_width, handle->overlay_height);
 
         if (status == SAO_STATUS_OK) {
             if (nervegear != nullptr)
@@ -548,6 +642,40 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_create(sao_ui_compositor_ha
     }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_resize(sao_ui_linkstart_handle_t handle,
+                                                            uint32_t width_px, uint32_t height_px,
+                                                            uint32_t dpi) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (dpi == 0u)
+        dpi = kDefaultDpi;
+    if (!valid_geometry(width_px, height_px, dpi))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        sao_ui_nervegear_handle_t nervegear = nullptr;
+        sao_status_t status = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(handle->mutex);
+            if (handle->width == width_px && handle->height == height_px && handle->dpi == dpi)
+                return SAO_STATUS_OK;
+            status = apply_geometry_locked(handle, width_px, height_px, dpi);
+            if (status == SAO_STATUS_OK && handle->active)
+                status = render_frame_locked(handle);
+            if (status != SAO_STATUS_OK && handle->active) {
+                status = complete_locked(handle, completion_reason_for_status(status), status, true);
+                nervegear = handle->nervegear;
+            }
+        }
+        const sao_status_t nervegear_status =
+            nervegear == nullptr
+                ? SAO_STATUS_OK
+                : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+        return first_failure(status, nervegear_status);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 extern "C" void SAO_UI_CALL sao_ui_linkstart_destroy(sao_ui_linkstart_handle_t handle) {
     if (handle == nullptr)
         return;
@@ -555,10 +683,7 @@ extern "C" void SAO_UI_CALL sao_ui_linkstart_destroy(sao_ui_linkstart_handle_t h
     {
         std::lock_guard lock(handle->mutex);
         nervegear = handle->nervegear;
-        handle->active = false;
-        (void)sao_ui_layer_set_visible(handle->layer, false);
-        (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-        release_sound_group(handle);
+        (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_TEARDOWN, SAO_STATUS_OK, true);
     }
     if (nervegear != nullptr)
         (void)sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
@@ -572,55 +697,72 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
     sao_ui_nervegear_handle_t nervegear = nullptr;
     SaoUiLinkStartTimeline timeline{};
     try {
+        sao_status_t show_status = SAO_STATUS_OK;
         {
             std::lock_guard lock(handle->mutex);
             handle->elapsed_ms = 0;
             handle->active = true;
+            handle->completion_emitted = false;
+            handle->completion_pending = false;
+            handle->completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
             handle->nervegear_sound_played = false;
             handle->welcome_sound_played = false;
+            handle->rendered_reduced_motion = sao_ui_reduced_motion_enabled();
             handle->rendered_motion_stage = -1;
-            if (handle->sound_group != 0) {
-                (void)sao_ui_sound_group_destroy(handle->sound_group);
-                handle->sound_group = 0;
+            const sao_status_t previous_audio_status = release_sound_group(handle);
+            handle->audio_status = SAO_STATUS_OK;
+            handle->audio_state = handle->rendered_reduced_motion
+                                      ? SAO_UI_LINKSTART_AUDIO_SUPPRESSED
+                                      : SAO_UI_LINKSTART_AUDIO_READY;
+            record_audio_status_locked(handle, previous_audio_status);
+            if (!handle->rendered_reduced_motion) {
+                const sao_status_t group_status = sao_ui_sound_group_create(&handle->sound_group);
+                record_audio_status_locked(handle, group_status);
             }
-            (void)sao_ui_sound_group_create(&handle->sound_group);
             sao_status_t status = render_frame_locked(handle);
             if (status == SAO_STATUS_OK)
                 status = sao_ui_layer_set_visible(handle->gpu_layer, true);
             if (status == SAO_STATUS_OK)
                 status = sao_ui_layer_set_visible(handle->layer, true);
-            if (status == SAO_STATUS_OK && handle->sound_group != 0)
-                (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_LINK_START, 80, handle->sound_group);
+            if (status == SAO_STATUS_OK && handle->sound_group != 0) {
+                record_audio_status_locked(
+                    handle,
+                    sao_ui_sound_play_in_group(SAO_UI_SOUND_LINK_START, 80, handle->sound_group));
+            }
             if (status != SAO_STATUS_OK) {
-                handle->active = false;
-                (void)sao_ui_layer_set_visible(handle->layer, false);
-                (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-                release_sound_group(handle);
-                return status;
+                show_status =
+                    complete_locked(handle, completion_reason_for_status(status), status, true);
             }
             nervegear = handle->nervegear;
             timeline = handle->timeline;
         }
+        if (show_status != SAO_STATUS_OK) {
+            const sao_status_t nervegear_status =
+                nervegear == nullptr
+                    ? SAO_STATUS_OK
+                    : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+            return first_failure(show_status, nervegear_status);
+        }
         const sao_status_t status = reset_nervegear_for_show(nervegear, timeline);
         if (status != SAO_STATUS_OK) {
-            std::lock_guard lock(handle->mutex);
-            handle->active = false;
-            (void)sao_ui_layer_set_visible(handle->layer, false);
-            (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-            release_sound_group(handle);
+            {
+                std::lock_guard lock(handle->mutex);
+                (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED, status,
+                                      true);
+            }
+            const sao_status_t nervegear_status =
+                nervegear == nullptr
+                    ? SAO_STATUS_OK
+                    : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+            return first_failure(status, nervegear_status);
         }
-        return status;
+        return SAO_STATUS_OK;
     } catch (...) {
         sao_ui_nervegear_handle_t failed_nervegear = nullptr;
         {
             std::lock_guard lock(handle->mutex);
-            handle->active = false;
-            handle->elapsed_ms = 0;
-            handle->nervegear_sound_played = false;
-            handle->welcome_sound_played = false;
-            (void)sao_ui_layer_set_visible(handle->layer, false);
-            (void)sao_ui_layer_set_visible(handle->gpu_layer, false);
-            release_sound_group(handle);
+            (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED,
+                                  SAO_STATUS_ERR_UNKNOWN, true);
             failed_nervegear = handle->nervegear;
         }
         if (failed_nervegear != nullptr)
@@ -630,26 +772,28 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss(sao_ui_linkstart_handle_t handle) {
+    return sao_ui_linkstart_dismiss_with_reason(handle, SAO_UI_LINKSTART_COMPLETION_SKIPPED);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss_with_reason(
+    sao_ui_linkstart_handle_t handle, SaoUiLinkStartCompletionReason reason) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (reason < SAO_UI_LINKSTART_COMPLETION_SKIPPED ||
+        reason > SAO_UI_LINKSTART_COMPLETION_TEARDOWN)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     sao_ui_nervegear_handle_t nervegear = nullptr;
     sao_status_t status = SAO_STATUS_OK;
     {
         std::lock_guard lock(handle->mutex);
-        handle->active = false;
-        handle->elapsed_ms = 0;
-        handle->nervegear_sound_played = false;
-        handle->welcome_sound_played = false;
-        status = sao_ui_layer_set_visible(handle->layer, false);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_layer_set_visible(handle->gpu_layer, false);
-        release_sound_group(handle);
+        if (handle->active)
+            status = complete_locked(handle, reason, SAO_STATUS_OK, true);
         nervegear = handle->nervegear;
     }
-    if (status != SAO_STATUS_OK)
-        return status;
-    return nervegear == nullptr ? SAO_STATUS_OK
-                                : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+    const sao_status_t nervegear_status =
+        nervegear == nullptr ? SAO_STATUS_OK
+                             : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+    return first_failure(status, nervegear_status);
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_is_active(sao_ui_linkstart_handle_t handle,
@@ -671,6 +815,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     sao_ui_nervegear_handle_t nervegear = nullptr;
     int32_t nervegear_delta_ms = 0;
+    bool reset_nervegear = false;
+    sao_status_t result = SAO_STATUS_OK;
     try {
         {
             std::lock_guard lock(handle->mutex);
@@ -682,9 +828,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
             const int64_t next_elapsed = static_cast<int64_t>(previous_elapsed_ms) + delta_ms;
             handle->elapsed_ms = static_cast<int32_t>(
                 std::min<int64_t>(next_elapsed, std::numeric_limits<int32_t>::max()));
-            sao_status_t status = SAO_STATUS_OK;
             const float seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
             const float scene_seconds = timeline_seconds(*handle, seconds);
+            const bool reduced_motion = sao_ui_reduced_motion_enabled();
             const int64_t prelude_ms =
                 handle->default_timeline
                     ? static_cast<int64_t>(std::llround(
@@ -696,36 +842,51 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
                 std::max<int64_t>(0, static_cast<int64_t>(handle->elapsed_ms) - prelude_ms);
             nervegear_delta_ms = static_cast<int32_t>(std::min<int64_t>(
                 next_scene_ms - previous_scene_ms, std::numeric_limits<int32_t>::max()));
-            status = render_frame_locked(handle);
-            if (status != SAO_STATUS_OK)
-                return status;
-            if (!handle->nervegear_sound_played && scene_seconds >= 1.5F) {
+            result = render_frame_locked(handle);
+            if (result != SAO_STATUS_OK) {
+                (void)complete_locked(handle, completion_reason_for_status(result), result, true);
+                reset_nervegear = true;
+                nervegear = handle->nervegear;
+            }
+            if (result == SAO_STATUS_OK && reduced_motion) {
+                record_audio_status_locked(handle, release_sound_group(handle));
+                if (handle->audio_state != SAO_UI_LINKSTART_AUDIO_DEGRADED)
+                    handle->audio_state = SAO_UI_LINKSTART_AUDIO_SUPPRESSED;
+            }
+            if (result == SAO_STATUS_OK && !reduced_motion && !handle->nervegear_sound_played &&
+                scene_seconds >= handle->timeline.p2_start) {
                 handle->nervegear_sound_played = true;
-                if (handle->sound_group != 0)
-                    (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_NERVEGEAR, 80,
-                                                      handle->sound_group);
+                if (handle->sound_group != 0) {
+                    record_audio_status_locked(handle,
+                                               sao_ui_sound_play_in_group(SAO_UI_SOUND_NERVEGEAR,
+                                                                          80, handle->sound_group));
+                }
             }
-            if (!handle->welcome_sound_played && scene_seconds >= handle->timeline.p3_start) {
+            if (result == SAO_STATUS_OK && !reduced_motion && !handle->welcome_sound_played &&
+                scene_seconds >= handle->timeline.p3_start) {
                 handle->welcome_sound_played = true;
-                if (handle->sound_group != 0)
-                    (void)sao_ui_sound_play_in_group(SAO_UI_SOUND_ALO_WELCOME, 80,
-                                                      handle->sound_group);
+                if (handle->sound_group != 0) {
+                    record_audio_status_locked(handle,
+                                               sao_ui_sound_play_in_group(SAO_UI_SOUND_ALO_WELCOME,
+                                                                          80, handle->sound_group));
+                }
             }
-            if (scene_seconds >= handle->timeline.total_duration) {
-                handle->active = false;
-                const sao_status_t hide_status = sao_ui_layer_set_visible(handle->layer, false);
-                const sao_status_t hide_gpu_status =
-                    sao_ui_layer_set_visible(handle->gpu_layer, false);
-                if (hide_status != SAO_STATUS_OK)
-                    return hide_status;
-                if (hide_gpu_status != SAO_STATUS_OK)
-                    return hide_gpu_status;
+            const bool finished = reduced_motion ? handle->elapsed_ms >= kReducedMotionDurationMs
+                                                 : scene_seconds >= handle->timeline.total_duration;
+            if (result == SAO_STATUS_OK && finished) {
+                result = complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_NATURAL, SAO_STATUS_OK,
+                                         false);
+                reset_nervegear = reduced_motion || result != SAO_STATUS_OK;
             }
-            nervegear = handle->nervegear;
+            if (result == SAO_STATUS_OK || nervegear == nullptr)
+                nervegear = handle->nervegear;
         }
-        if (nervegear != nullptr && nervegear_delta_ms > 0)
-            return sao_ui_nervegear_tick(nervegear, nervegear_delta_ms);
-        return SAO_STATUS_OK;
+        sao_status_t nervegear_status = SAO_STATUS_OK;
+        if (nervegear != nullptr && reset_nervegear)
+            nervegear_status = sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+        else if (nervegear != nullptr && nervegear_delta_ms > 0)
+            nervegear_status = sao_ui_nervegear_tick(nervegear, nervegear_delta_ms);
+        return first_failure(result, nervegear_status);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -739,7 +900,46 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_get_phase(sao_ui_linkstart_
     if (out_phase == nullptr || out_phase_progress == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard lock(handle->mutex);
-    const float seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
+    if (handle->completion_emitted &&
+        handle->completion_reason == SAO_UI_LINKSTART_COMPLETION_NATURAL) {
+        *out_phase = SAO_UI_LINKSTART_PHASE_COMPLETE;
+        *out_phase_progress = 1.0F;
+        return SAO_STATUS_OK;
+    }
+    const float elapsed_seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
+    const float seconds =
+        handle->active && sao_ui_reduced_motion_enabled()
+            ? handle->timeline.p4_start +
+                  (handle->default_timeline ? handle->timeline.startup_prelude : 0.0F)
+            : elapsed_seconds;
     *out_phase = phase_at(*handle, seconds, out_phase_progress);
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_poll_completion(
+    sao_ui_linkstart_handle_t handle, SaoUiLinkStartCompletionReason* out_reason) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_reason == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::lock_guard lock(handle->mutex);
+    *out_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+    if (handle->completion_pending) {
+        *out_reason = handle->completion_reason;
+        handle->completion_pending = false;
+    }
+    return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_linkstart_get_audio_state(sao_ui_linkstart_handle_t handle,
+                                 SaoUiLinkStartAudioState* out_state, sao_status_t* out_status) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_state == nullptr || out_status == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::lock_guard lock(handle->mutex);
+    *out_state = handle->audio_state;
+    *out_status = handle->audio_status;
     return SAO_STATUS_OK;
 }

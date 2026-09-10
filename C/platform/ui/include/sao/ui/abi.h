@@ -25,7 +25,8 @@
 #define SAO_UI_CALL __cdecl
 
 #define SAO_UI_ABI_VERSION_MAJOR 1u
-// Minor 12 adds the append-only DirectComposition visual-slot API. Minor 10
+// Minor 13 adds append-only Link Start lifecycle/result APIs. Minor 12 adds
+// the append-only DirectComposition visual-slot API. Minor 10
 // adds the append-only sao_ui_sound_* named sound API. Minor 9
 // expands the append-only public theme color and metric tables to
 // 92/26 entries. Minor 8 added a leading uint32_t struct_size field to SaoPanelDescriptor,
@@ -35,7 +36,7 @@
 // (SAO_UI_PANEL_DESCRIPTOR_V1_SIZE / SAO_UI_COMPOSITOR_CONFIG_V1_SIZE /
 // SAO_UI_LAYER_CONFIG_V1_SIZE) so no source or binary caller has to change
 // for the guard alone. Minor 7 added sao_ui_compositor_host_dpi().
-#define SAO_UI_ABI_VERSION_MINOR 12u
+#define SAO_UI_ABI_VERSION_MINOR 13u
 #define SAO_UI_ABI_VERSION ((SAO_UI_ABI_VERSION_MAJOR << 16) | SAO_UI_ABI_VERSION_MINOR)
 
 #ifdef __cplusplus

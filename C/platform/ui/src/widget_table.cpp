@@ -1,22 +1,4 @@
-// SAO Auto — table widgets, virtual scrolling, hit testing, and sorting.
-//
-// This slice implements the Table portion of widget_table.h:
-//   * sao_ui_table_create / _set_rows / _upsert_row / _remove_row /
-//     _clear_rows / _set_sort / _set_filter / _set_row_click_handler
-//
-// Plus helpers for virtual-scroll visible-range calculation, cell
-// hit-test, and stable sort ordering.  TreeView is stubbed for a later
-// slice.
-//
-// Storage model:
-//   * columns    = owned copies of caller-supplied SaoUiTableColumn
-//                  (including UTF-8 keys/titles).
-//   * rows_all   = master, insertion-ordered list of rows.
-//   * rows_view  = filtered + sorted view (indices into rows_all).
-//     rebuild_view is idempotent and called from set_rows / set_sort /
-//     set_filter.
-//
-// UTF-8 no BOM.
+// SAO Auto — table and tree widgets with virtual scrolling and typed props.
 
 #include "sao/ui/widget_table.h"
 #include "sao/ui/widget_kit.h"
@@ -1594,7 +1576,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_table_set_row_selected(
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> lock(s->mtx);
         if (!s->spec.multi_select)
-            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         const auto found = std::find(s->selected_row_ids.begin(), s->selected_row_ids.end(),
                                      row_id);
         if (selected && found == s->selected_row_ids.end()) {

@@ -55,6 +55,7 @@ constexpr wchar_t kWorkbenchUrl[] = L"https://sao-workbench.local/ai_editor_app.
 constexpr char kChannel[] = "sao.workbench";
 constexpr size_t kMaximumMessageBytes = 4u * 1024u * 1024u + 64u * 1024u;
 constexpr int64_t kMaximumImageBytes = 3LL * 1024LL * 1024LL - 128LL * 1024LL;
+constexpr size_t kMaximumImageBase64ReplyBytes = 4u * 1024u * 1024u - 64u * 1024u;
 constexpr int32_t kSlotZOrder = 1000;
 constexpr std::chrono::seconds kHelloTimeout{4};
 
@@ -213,20 +214,28 @@ FileDialogResult choose_file(HWND owner, bool save, const wchar_t* filter,
     return FileDialogResult::selected;
 }
 
-bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>* output) {
+enum class BinaryReadResult : uint8_t {
+    ok,
+    too_large,
+    failed,
+};
+
+BinaryReadResult read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>* output) {
     if (output == nullptr)
-        return false;
+        return BinaryReadResult::failed;
     const std::wstring native = path.native();
     HANDLE file = CreateFileW(native.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
-        return false;
+        return BinaryReadResult::failed;
     LARGE_INTEGER size{};
-    const bool valid_size =
-        GetFileSizeEx(file, &size) && size.QuadPart >= 0 && size.QuadPart <= kMaximumImageBytes;
-    if (!valid_size) {
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
         CloseHandle(file);
-        return false;
+        return BinaryReadResult::failed;
+    }
+    if (size.QuadPart > kMaximumImageBytes) {
+        CloseHandle(file);
+        return BinaryReadResult::too_large;
     }
     output->resize(static_cast<size_t>(size.QuadPart));
     DWORD read = 0;
@@ -235,7 +244,17 @@ bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>* o
         (ReadFile(file, output->data(), static_cast<DWORD>(output->size()), &read, nullptr) &&
          read == output->size());
     CloseHandle(file);
-    return read_ok;
+    return read_ok ? BinaryReadResult::ok : BinaryReadResult::failed;
+}
+
+bool base64_encoded_size(size_t bytes, size_t* output) noexcept {
+    if (output == nullptr || bytes == 0 || bytes > std::numeric_limits<size_t>::max() - 2U)
+        return false;
+    const size_t groups = (bytes + 2U) / 3U;
+    if (groups > std::numeric_limits<size_t>::max() / 4U)
+        return false;
+    *output = groups * 4U;
+    return *output <= kMaximumImageBase64ReplyBytes;
 }
 
 std::string base64_encode(const std::vector<uint8_t>& bytes) {
@@ -1010,11 +1029,26 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
             result["language"] = text_language(selected);
         } else if (method == "open_file_dialog") {
             std::vector<uint8_t> bytes;
-            if (!read_binary_file(selected, &bytes))
+            const BinaryReadResult read_result = read_binary_file(selected, &bytes);
+            if (read_result == BinaryReadResult::too_large)
+                return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                     "SAO_RESPONSE_TOO_LARGE",
+                                                     "Selected image exceeds the delivery limit."));
+            if (read_result != BinaryReadResult::ok)
                 return post_json(*state,
                                  error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
                                              "Selected image could not be read."));
-            result["base64"] = base64_encode(bytes);
+            size_t expected_base64_bytes = 0;
+            if (!base64_encoded_size(bytes.size(), &expected_base64_bytes))
+                return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                     "SAO_RESPONSE_TOO_LARGE",
+                                                     "Selected image exceeds the delivery limit."));
+            std::string encoded = base64_encode(bytes);
+            if (encoded.size() != expected_base64_bytes)
+                return post_json(*state,
+                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
+                                             "Selected image could not be encoded."));
+            result["base64"] = std::move(encoded);
             result["mime"] = file_mime(selected);
         }
         return post_json(*state, {{"channel", kChannel},

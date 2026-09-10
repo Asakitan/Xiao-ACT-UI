@@ -20,6 +20,11 @@
 #include "sao/launcher/user_menu.h"
 #include "sao/launcher/working_dir.h"
 
+#ifdef SAO_STATUS_OK
+#undef SAO_STATUS_OK
+#endif
+#include "sao/ui/linkstart_intro.h"
+
 #include "launcher_lifecycle.h"
 
 #if __has_include("sao_security/anti_screencap/capture_mode.h")
@@ -56,11 +61,9 @@ void consolePrintLine(const char* line) noexcept {
     if (output != nullptr && output != INVALID_HANDLE_VALUE) {
         DWORD written = 0u;
         const DWORD size = static_cast<DWORD>(std::strlen(line));
-        if (WriteFile(output, line, size, &written, nullptr) &&
-            written == size) {
+        if (WriteFile(output, line, size, &written, nullptr) && written == size) {
             static constexpr char newline[] = "\r\n";
-            (void)WriteFile(output, newline, sizeof(newline) - 1u,
-                            &written, nullptr);
+            (void)WriteFile(output, newline, sizeof(newline) - 1u, &written, nullptr);
             return;
         }
     }
@@ -106,8 +109,7 @@ void rtIoOperatorPrint(const char* line, void*) noexcept {
 // so a hung or partially-booting launcher is diagnosable from the parent
 // console without a debugger.
 bool traceDiagnosticsEnabled(const AppState& state) noexcept {
-    return _wcsicmp(state.log_level, L"trace") == 0 ||
-        _wcsicmp(state.log_level, L"debug") == 0;
+    return _wcsicmp(state.log_level, L"trace") == 0 || _wcsicmp(state.log_level, L"debug") == 0;
 }
 
 void tracePrint(const AppState& state, const char* line) noexcept {
@@ -132,22 +134,18 @@ void logStartupConfiguration(const AppState& state) noexcept {
 #ifndef SAO_LAUNCHER_VERSION
 #define SAO_LAUNCHER_VERSION "0.0.0"
 #endif
-    tracePrintfImpl(state,
-                    "STARTUP SaoAuto " SAO_LAUNCHER_VERSION
-                    " safe_mode=%d smoke=%d rt_io_operator=%d "
-                    "preflight=%d input_checks=%d r5=%d mf=%d "
-                    "exit_after_validation=%d status_page=%d "
-                    "log_level=%ls config=%ls",
-                    state.safe_mode ? 1 : 0, state.smoke_mode ? 1 : 0,
-                    state.rt_io_operator ? 1 : 0,
-                    state.rt_io_preflight_only ? 1 : 0,
-                    state.rt_io_input_checks ? 1 : 0,
-                    state.rt_io_r5_check ? 1 : 0,
-                    state.rt_io_mf_check ? 1 : 0,
-                    state.rt_io_exit_after_validation ? 1 : 0,
-                    state.rt_io_force_status_page ? 1 : 0,
-                    state.log_level[0] ? state.log_level : L"info",
-                    state.config_path.empty() ? L"<default>" : state.config_path.c_str());
+    tracePrintfImpl(
+        state,
+        "STARTUP SaoAuto " SAO_LAUNCHER_VERSION " safe_mode=%d smoke=%d rt_io_operator=%d "
+        "preflight=%d input_checks=%d r5=%d mf=%d "
+        "exit_after_validation=%d status_page=%d "
+        "log_level=%ls config=%ls",
+        state.safe_mode ? 1 : 0, state.smoke_mode ? 1 : 0, state.rt_io_operator ? 1 : 0,
+        state.rt_io_preflight_only ? 1 : 0, state.rt_io_input_checks ? 1 : 0,
+        state.rt_io_r5_check ? 1 : 0, state.rt_io_mf_check ? 1 : 0,
+        state.rt_io_exit_after_validation ? 1 : 0, state.rt_io_force_status_page ? 1 : 0,
+        state.log_level[0] ? state.log_level : L"info",
+        state.config_path.empty() ? L"<default>" : state.config_path.c_str());
 }
 
 } // namespace
@@ -157,10 +155,8 @@ App& App::instance() noexcept {
     return instance;
 }
 
-bool shouldEmitRtIoReady(const AppState& state,
-                         bool validation_ready) noexcept {
-    return state.rt_io_operator && !state.rt_io_preflight_only &&
-        validation_ready;
+bool shouldEmitRtIoReady(const AppState& state, bool validation_ready) noexcept {
+    return state.rt_io_operator && !state.rt_io_preflight_only && validation_ready;
 }
 
 int App::run() {
@@ -179,8 +175,7 @@ int App::run() {
     }
 
     LauncherLifecycleDecision lifecycle;
-    if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) !=
-        SAO_STATUS_OK) {
+    if (prepareLauncherLifecycle(lifecycle, state_.rt_io_operator) != SAO_STATUS_OK) {
         ::sao::launcher::uninstallCrashHandler();
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
@@ -194,8 +189,8 @@ int App::run() {
         tracePrintfImpl(state_, "FAIL step=%ls hint=%s code=%d", step, hint, exit_code);
 #if defined(SAO_LAUNCHER_ACTUAL_DEBUG) || defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
         int32_t fallback_exit = 0;
-        if (sao_launcher_dual_run_maybe_fallback_to_python_v2(&lifecycle.dual_config_v2, exit_code, step,
-                                                           &fallback_exit)) {
+        if (sao_launcher_dual_run_maybe_fallback_to_python_v2(&lifecycle.dual_config_v2, exit_code,
+                                                              step, &fallback_exit)) {
             if (!shutdown())
                 return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
             completeLauncherLifecycle(lifecycle, fallback_exit, "python_handoff");
@@ -232,16 +227,16 @@ int App::run() {
                 lifecycle.selected_mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
                 plain_cpp_due_to_existing_driver = true;
             } else {
-                return finish(SAO_EXIT_PLATFORM_INIT_FAIL,
-                              "dual_run_driver_mutex");
+                return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "dual_run_driver_mutex");
             }
         }
 
         int32_t should_continue = 1;
         int32_t handoff_exit = 0;
         sao_status_t zs = plain_cpp_due_to_existing_driver
-            ? SAO_STATUS_OK
-            : sao_launcher_dual_run_step_zero_v2(&lifecycle.dual_config_v2, &should_continue, &handoff_exit);
+                              ? SAO_STATUS_OK
+                              : sao_launcher_dual_run_step_zero_v2(&lifecycle.dual_config_v2,
+                                                                   &should_continue, &handoff_exit);
         if (zs == SAO_LAUNCHER_PYTHON_UNAVAILABLE) {
             return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero", "dual_run_step_zero");
         }
@@ -276,9 +271,9 @@ int App::run() {
         return fail(rc, L"working_dir", "working_dir");
     }
 
-    if (loadLauncherProviderConfiguration(state_.base_dir.c_str(),
-                                          state_.config_path.empty() ? nullptr : state_.config_path.c_str()) !=
-        SAO_STATUS_OK) {
+    if (loadLauncherProviderConfiguration(
+            state_.base_dir.c_str(),
+            state_.config_path.empty() ? nullptr : state_.config_path.c_str()) != SAO_STATUS_OK) {
         return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"provider_config", "provider_config");
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
@@ -321,16 +316,17 @@ int App::run() {
     }
     int32_t user_guide_presented = 1;
     first_run_ =
-        sao_platform_user_guide_presented(
-            static_cast<sao_platform_ctx*>(state_.platform_ctx),
-            &user_guide_presented) == SAO_STATUS_OK &&
+        sao_platform_user_guide_presented(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                          &user_guide_presented) == SAO_STATUS_OK &&
         user_guide_presented == 0;
+    user_guide_open_pending_ = false;
+    user_guide_open_accepted_ = false;
+    user_guide_skip_intro_ = false;
+    user_guide_next_retry_ = 0;
     smokePrint(state_, "STAGE_PLATFORM");
 
-    if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) !=
-        SAO_STATUS_OK) {
-        return fail(SAO_EXIT_PLUGIN_LOAD_FAIL, L"runtime_installer",
-                    "runtime_installer");
+    if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) != SAO_STATUS_OK) {
+        return fail(SAO_EXIT_PLUGIN_LOAD_FAIL, L"runtime_installer", "runtime_installer");
     }
 
     // 9. Plugin discovery.  In safe mode we skip this entirely.
@@ -376,8 +372,7 @@ int App::run() {
     // Skipped in smoke/acceptance/operator runs and safe mode (the probe
     // suppresses safe mode internally).
     if (!state_.smoke_mode && !state_.exit_after_init && !state_.rt_io_operator) {
-        const int32_t prompt_result =
-            sao::launcher::boot_residency_prompt_if_required(nullptr);
+        const int32_t prompt_result = sao::launcher::boot_residency_prompt_if_required(nullptr);
         if (prompt_result == sao::launcher::BOOT_RESIDENCY_ERROR) {
             // A failed restart scheduling is non-fatal: the latch survives
             // and the prompt reappears on the next launch.
@@ -388,15 +383,13 @@ int App::run() {
     }
 
 #if defined(SAO_LAUNCHER_HAS_AUTO_UPDATE)
-    if (!state_.smoke_mode && !state_.exit_after_init &&
-        !state_.rt_io_operator && provider_configuration.update.enabled) {
+    if (!state_.smoke_mode && !state_.exit_after_init && !state_.rt_io_operator &&
+        provider_configuration.update.enabled) {
         MSG queue_probe{};
         (void)PeekMessageW(&queue_probe, nullptr, 0, 0, PM_NOREMOVE);
-        startAutoUpdate(provider_configuration.update,
-                        state_.base_dir,
-                        std::wstring(state_.exe_path),
-                        GetCurrentThreadId(), &auto_update_cancel_event_,
-                        &auto_update_worker_);
+        startAutoUpdate(provider_configuration.update, state_.base_dir,
+                        std::wstring(state_.exe_path), GetCurrentThreadId(),
+                        &auto_update_cancel_event_, &auto_update_worker_);
     }
 #endif
     // UI-online smoke checkpoint for callers that want to observe the
@@ -415,8 +408,7 @@ int App::run() {
         if (rc != SAO_EXIT_OK) {
             return fail(rc, L"rt_io_operator", "rt_io_operator");
         }
-        if (state_.rt_io_preflight_only ||
-            state_.rt_io_exit_after_validation ||
+        if (state_.rt_io_preflight_only || state_.rt_io_exit_after_validation ||
             acceptanceExitAfterInit(state_)) {
             if (!shutdown()) {
                 return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown");
@@ -455,8 +447,7 @@ int App::installCrashHandler() {
 }
 
 int App::acquireSingleInstance() {
-    const auto acquire_result =
-        ::sao::launcher::acquireSingleInstance(single_instance_mutex_);
+    const auto acquire_result = ::sao::launcher::acquireSingleInstance(single_instance_mutex_);
     if (acquire_result == SingleInstanceAcquireResult::already_running) {
         // Boot-residency UX: the restart prompt offers "run this program
         // again to cancel the 30-second restart".  A second launch reaches
@@ -586,7 +577,8 @@ int App::bringUpUi() {
     }
     if (sao_platform_bind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                     &user_menu_) != SAO_STATUS_OK) {
-        (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
+        (void)sao_platform_unbind_user_menu(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                            &user_menu_);
         user_menu_.destroy();
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
@@ -601,19 +593,17 @@ int App::runRtIoOperator() {
     options.input_checks = state_.rt_io_input_checks ? 1u : 0u;
     options.r5_check = state_.rt_io_r5_check ? 1u : 0u;
     options.mf_check = state_.rt_io_mf_check ? 1u : 0u;
-    options.exit_after_validation =
-        state_.rt_io_exit_after_validation ? 1u : 0u;
+    options.exit_after_validation = state_.rt_io_exit_after_validation ? 1u : 0u;
     options.timeout_ms = 120000u;
 
     int32_t ready = 0;
-    const sao_status_t status = sao_launcher_rt_io_operator_run(
-        static_cast<sao_platform_ctx*>(state_.platform_ctx), &options,
-        &rtIoOperatorPrint, nullptr, &ready);
+    const sao_status_t status =
+        sao_launcher_rt_io_operator_run(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                        &options, &rtIoOperatorPrint, nullptr, &ready);
     if (status != SAO_STATUS_OK)
         return SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
     if (state_.rt_io_preflight_only)
-        return ready == 0 ? SAO_EXIT_OK
-                          : SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
+        return ready == 0 ? SAO_EXIT_OK : SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
     if (!shouldEmitRtIoReady(state_, ready != 0))
         return SAO_EXIT_RT_IO_OPERATOR_VALIDATION_FAIL;
     consolePrintLine("RT_IO_READY");
@@ -634,22 +624,8 @@ int App::runMessageLoop() {
             handled = 1;
             status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                  kUiFrameIntervalMs);
-            // Link Start 开场衔接：动画播完后，首次运行自动打开用户指南一次。
-            if (status == SAO_STATUS_OK && first_run_) {
-                int32_t linkstart_finished = 0;
-                if (sao_ui_linkstart_poll_finished(
-                        static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                        &linkstart_finished) == SAO_STATUS_OK &&
-                    linkstart_finished != 0) {
-                    const bool guide_opened =
-                        openUserDocsIndex(state_.base_dir.c_str(), nullptr);
-                    first_run_ = false;
-                    if (guide_opened) {
-                        (void)sao_platform_mark_user_guide_presented(
-                            static_cast<sao_platform_ctx*>(state_.platform_ctx));
-                    }
-                }
-            }
+            if (status == SAO_STATUS_OK)
+                serviceFirstRunGuide();
         } else {
             status = sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                            msg.message, msg.wParam, msg.lParam, &handled);
@@ -667,6 +643,56 @@ int App::runMessageLoop() {
     if (result < 0)
         return SAO_EXIT_UI_ONLINE_FAIL;
     return static_cast<int>(msg.wParam);
+}
+
+void App::serviceFirstRunGuide() noexcept {
+    if (!first_run_ || state_.platform_ctx == nullptr)
+        return;
+    if (!user_guide_open_pending_ && !user_guide_open_accepted_) {
+        int32_t finished = 0;
+        int32_t reason_value = SAO_UI_LINKSTART_COMPLETION_NONE;
+        if (sao_ui_linkstart_poll_finished_ex(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                              &finished, &reason_value) != SAO_STATUS_OK ||
+            finished == 0) {
+            return;
+        }
+        const auto reason = static_cast<SaoUiLinkStartCompletionReason>(reason_value);
+        switch (reason) {
+        case SAO_UI_LINKSTART_COMPLETION_NATURAL:
+        case SAO_UI_LINKSTART_COMPLETION_SKIPPED:
+            user_guide_skip_intro_ = true;
+            user_guide_open_pending_ = true;
+            break;
+        case SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED:
+        case SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST:
+            user_guide_skip_intro_ = false;
+            user_guide_open_pending_ = true;
+            break;
+        case SAO_UI_LINKSTART_COMPLETION_NONE:
+        case SAO_UI_LINKSTART_COMPLETION_OFFLINE:
+        case SAO_UI_LINKSTART_COMPLETION_TEARDOWN:
+            return;
+        default:
+            return;
+        }
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    if (now < user_guide_next_retry_)
+        return;
+    user_guide_next_retry_ = now + 1000u;
+    if (!user_guide_open_accepted_) {
+        if (!openUserDocsIndex(state_.base_dir.c_str(), nullptr, user_guide_skip_intro_))
+            return;
+        user_guide_open_accepted_ = true;
+        user_guide_open_pending_ = false;
+    }
+    if (sao_platform_mark_user_guide_presented(
+            static_cast<sao_platform_ctx*>(state_.platform_ctx)) == SAO_STATUS_OK) {
+        first_run_ = false;
+        user_guide_open_accepted_ = false;
+        user_guide_next_retry_ = 0;
+    }
 }
 
 bool App::stopAutoUpdate() noexcept {

@@ -26,6 +26,22 @@ enum SaoUiLinkStartPhase : int32_t {
     SAO_UI_LINKSTART_PHASE_COMPLETE = 5,
 };
 
+enum SaoUiLinkStartCompletionReason : int32_t {
+    SAO_UI_LINKSTART_COMPLETION_NONE = 0,
+    SAO_UI_LINKSTART_COMPLETION_NATURAL = 1,
+    SAO_UI_LINKSTART_COMPLETION_SKIPPED = 2,
+    SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED = 3,
+    SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST = 4,
+    SAO_UI_LINKSTART_COMPLETION_OFFLINE = 5,
+    SAO_UI_LINKSTART_COMPLETION_TEARDOWN = 6,
+};
+
+enum SaoUiLinkStartAudioState : int32_t {
+    SAO_UI_LINKSTART_AUDIO_READY = 0,
+    SAO_UI_LINKSTART_AUDIO_SUPPRESSED = 1,
+    SAO_UI_LINKSTART_AUDIO_DEGRADED = 2,
+};
+
 struct SaoUiLinkStartConfig {
     uint32_t struct_size;
     uint32_t width_px;
@@ -47,6 +63,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss(sao_ui_linkstart_handle_t handle);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_dismiss_with_reason(
+    sao_ui_linkstart_handle_t handle, SaoUiLinkStartCompletionReason reason);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_resize(sao_ui_linkstart_handle_t handle,
+                                                            uint32_t width_px, uint32_t height_px,
+                                                            uint32_t dpi);
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_is_active(sao_ui_linkstart_handle_t handle,
                                                                bool* out_active);
 
@@ -56,6 +79,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_get_phase(sao_ui_linkstart_handle_t handle,
                                                                SaoUiLinkStartPhase* out_phase,
                                                                float* out_phase_progress);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_poll_completion(
+    sao_ui_linkstart_handle_t handle, SaoUiLinkStartCompletionReason* out_reason);
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_linkstart_get_audio_state(sao_ui_linkstart_handle_t handle,
+                                 SaoUiLinkStartAudioState* out_state, sao_status_t* out_status);
 
 #ifdef __cplusplus
 }

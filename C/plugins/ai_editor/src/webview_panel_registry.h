@@ -96,8 +96,7 @@ class WebviewPanelRegistry final {
     // `already` in `out_state.extras.already` for the caller to log.
     int32_t dispose(const std::string& panel_id, WebviewPanelState& out_state);
 
-    // Update the last-known HTML payload and reset visibility to true
-    // (VSCode contract: setting HTML implicitly reveals the panel).
+    // Update the last-known HTML payload without changing view visibility.
     int32_t set_html(const std::string& panel_id, const std::string& html,
                      WebviewPanelState& out_state);
 

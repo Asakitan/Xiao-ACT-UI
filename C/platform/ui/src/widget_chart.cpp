@@ -1,14 +1,4 @@
-// SAO Auto — time-series chart widgets and ring-buffer storage.
-//
-// This slice implements the TimeSeriesChart portion of widget_chart.h:
-//   * sao_ui_time_series_chart_create / _set_lanes / _append / _set_zoom
-//
-// Storage model: each lane owns a ring buffer sized by spec.max_visible_points.
-// Once the ring fills up further append() calls overwrite the oldest
-// slot in-place; that matches the sao_gui_graph_timeseries.py rolling
-// window semantics (memory: 4-metric graph with a sliding window).
-//
-// UTF-8 no BOM.
+// SAO Auto — time-series, bar, line, and sparkline chart widgets.
 
 #include "sao/ui/widget_chart.h"
 #include "sao/ui/widget_kit.h"

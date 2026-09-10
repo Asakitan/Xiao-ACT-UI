@@ -4,10 +4,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <objbase.h>
-#include <shellapi.h>
 #include <windows.h>
 #include <windowsx.h>
+#include <objbase.h>
+#include <shellapi.h>
 
 #include "hotkey_config_panel.h"
 #include "hotkey_manager.h"
@@ -34,6 +34,7 @@
 #include "sao/ui/theme.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -42,6 +43,7 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace sao::launcher::settings {
 // Production entry point with a status result; the public wrapper is intentionally void.
@@ -86,13 +88,16 @@ enum class InitialSurface {
     plugins,
     workshop,
     process,
-    license
+    license,
+    user,
+    about
 };
 struct Options {
     InitialSurface initial_surface{InitialSurface::root};
     bool offline{};
     bool offline_explicit{};
     bool backend_explicit{};
+    bool local_backend_fixture{};
     bool intro{};
     std::filesystem::path workspace{std::filesystem::current_path()};
     std::filesystem::path backend;
@@ -102,6 +107,18 @@ struct Options {
 std::string utf8(const std::filesystem::path& path) {
     const auto bytes = path.u8string();
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+std::filesystem::path executable_directory() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= static_cast<DWORD>(path.size()))
+        throw std::runtime_error("Preview executable path unavailable");
+    return std::filesystem::path(std::wstring_view(path.data(), length)).parent_path();
+}
+
+std::filesystem::path sibling_executable(std::wstring_view name) {
+    return executable_directory() / name;
 }
 
 // The Workshop owner remains the production page.  This provider only reads
@@ -181,11 +198,18 @@ Options options() {
                 value.initial_surface = InitialSurface::process;
             else if (page == L"license")
                 value.initial_surface = InitialSurface::license;
+            else if (page == L"user")
+                value.initial_surface = InitialSurface::user;
+            else if (page == L"about" || page == L"guide")
+                value.initial_surface = InitialSurface::about;
             else if (page == L"ai-main")
                 value.initial_surface = InitialSurface::ai_main;
             else if (page == L"ai-settings")
                 value.initial_surface = InitialSurface::ai_settings;
-            else
+            else if (page == L"link-start") {
+                value.initial_surface = InitialSurface::root;
+                value.intro = true;
+            } else
                 throw std::runtime_error("Unknown production UI page");
         } else if (arg == L"--intro")
             value.intro = true;
@@ -194,12 +218,21 @@ Options options() {
         else if (arg == L"--settings" && index + 1 < count)
             value.settings = std::filesystem::absolute(args[++index]);
         else if (arg == L"--backend" && index + 1 < count) {
+            if (value.local_backend_fixture)
+                throw std::runtime_error("Preview backend selection is ambiguous");
             value.backend = std::filesystem::absolute(args[++index]);
             value.backend_explicit = true;
+        } else if (arg == L"--local-backend") {
+            if (value.backend_explicit)
+                throw std::runtime_error("Preview backend selection is ambiguous");
+            value.backend_explicit = true;
+            value.local_backend_fixture = true;
         } else
             throw std::runtime_error(
-                "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--offline] [--backend "
-                "EXE] [--intro] [--workspace PATH] [--settings PATH]");
+                "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--page "
+                "root|settings|hotkeys|plugins|workshop|process|license|user|about|link-start] "
+                "[--offline] [--backend EXE|--local-backend] [--intro] [--workspace PATH] "
+                "[--settings PATH]");
     }
     if (value.backend_explicit && !value.offline_explicit)
         value.offline = false;
@@ -211,6 +244,7 @@ Options options() {
 // only when the caller explicitly supplies --backend without --offline.
 struct Host {
     Options config;
+    std::filesystem::path base_dir;
     HWND window{};
     sao_ui_overlay_host_handle_t overlay{};
     sao_ui_compositor_handle_t compositor{};
@@ -236,7 +270,8 @@ struct Host {
     bool sdk_bound{};
     bool closing{};
 
-    explicit Host(Options value) : config(std::move(value)) {}
+    explicit Host(Options value)
+        : config(std::move(value)), base_dir(executable_directory()) {}
     ~Host() {
         (void)close();
         (void)sao_ui_sound_shutdown();
@@ -332,12 +367,17 @@ struct Host {
         return SAO_STATUS_OK;
     }
     sao_status_t open_about_guide() noexcept {
-        return sao::launcher::openUserDocsIndex(config.workspace.c_str(), window)
+        return sao::launcher::openUserDocsIndex(base_dir.c_str(), window)
                    ? SAO_STATUS_OK
                    : SAO_STATUS_ERR_NOT_FOUND;
     }
 
     int32_t close() noexcept {
+        if (settings_owner != nullptr && settings_owner->dirty()) {
+            const sao_status_t status = settings_owner->save();
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
         if (intro != nullptr) {
             sao_ui_linkstart_destroy(intro);
             intro = nullptr;
@@ -457,6 +497,11 @@ struct Host {
             return;
         require(
             sao_ui_overlay_host_set_bounds(overlay, origin.x, origin.y, rect.right, rect.bottom));
+        if (intro != nullptr) {
+            require(sao_ui_linkstart_resize(intro, static_cast<uint32_t>(rect.right),
+                                            static_cast<uint32_t>(rect.bottom),
+                                            sao_ui_overlay_host_current_dpi(overlay)));
+        }
         require(sao_ui_overlay_host_set_visible(overlay, true));
     }
 
@@ -578,8 +623,19 @@ struct Host {
 
     void initialize() {
         if (config.backend_explicit && !config.offline) {
+            std::filesystem::path backend_workspace = config.workspace;
+            if (config.local_backend_fixture) {
+                config.backend = sibling_executable(L"SaoAiEditor.exe");
+                backend_workspace = config.workspace / L".sao" / L"ui-preview" / L"ai-backend";
+                std::error_code directory_error;
+                std::filesystem::create_directories(backend_workspace, directory_error);
+                if (directory_error || !std::filesystem::is_directory(backend_workspace))
+                    throw std::runtime_error("Preview backend workspace unavailable");
+            }
+            if (!std::filesystem::is_regular_file(config.backend))
+                throw std::runtime_error("Preview backend executable unavailable");
             const std::string executable = utf8(config.backend);
-            const std::string workspace = utf8(config.workspace);
+            const std::string workspace = utf8(backend_workspace);
             const std::string extra = "--headless --workspace \"" + workspace + "\"";
             SaoAiEditorLaunchConfig launch{};
             launch.executable_utf8 = executable.c_str();
@@ -609,7 +665,7 @@ struct Host {
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
         license = std::make_unique<sao::launcher::license_panel::Owner>(compositor);
 #endif
-        if (!user_menu.create(config.workspace.c_str()))
+        if (!user_menu.create(base_dir.c_str()))
             throw std::runtime_error("Production user menu unavailable");
         user_menu.bind_hotkey_owner(hotkey_owner.get());
         user_menu_created = true;
@@ -647,6 +703,10 @@ struct Host {
             require(open_process_selector());
         if (config.initial_surface == InitialSurface::license)
             require(open_license());
+        if (config.initial_surface == InitialSurface::user)
+            require(open_user_menu());
+        if (config.initial_surface == InitialSurface::about)
+            require(open_about_guide());
         if (config.initial_surface == InitialSurface::root)
             require(sao_ui_entity_shell_home(entity));
         resize();
@@ -657,6 +717,9 @@ struct Host {
                                        static_cast<uint32_t>(rect.right),
                                        static_cast<uint32_t>(rect.bottom), 0, nullptr};
             require(sao_ui_linkstart_create(compositor, nullptr, &start, &intro));
+            require(sao_ui_linkstart_resize(intro, static_cast<uint32_t>(rect.right),
+                                            static_cast<uint32_t>(rect.bottom),
+                                            sao_ui_overlay_host_current_dpi(overlay)));
             require(sao_ui_linkstart_show(intro));
         }
         last_tick = GetTickCount64();
@@ -680,8 +743,7 @@ struct Host {
             }
             return;
         }
-        const uint32_t elapsed =
-            static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
+        const uint32_t elapsed = static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
         require(sao_ui_entity_shell_tick(entity, elapsed));
         if (now - last_service >= 50) {
             if (ai_settings != nullptr)

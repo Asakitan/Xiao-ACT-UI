@@ -37,6 +37,7 @@ namespace {
 constexpr uint32_t kDefaultEventDrainLimit = 32U;
 constexpr uint32_t kMaximumEventDrainLimit = 64U;
 constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
+constexpr size_t kMaximumWebviewHtmlBytes = 1024U * 1024U;
 
 struct McpNotificationGate final {
     std::mutex mutex;
@@ -884,11 +885,17 @@ bool parse_scope_key(std::string_view key, std::string& scope, std::string& plug
 // registry header intentionally has no nlohmann::json dependency beyond
 // the opaque `Json extras` bag.
 Json panel_state_to_json(const WebviewPanelState& state) {
+    bool active = state.visible;
+    const auto active_value = state.options.extras.find("active");
+    if (active_value != state.options.extras.end() && active_value->is_boolean())
+        active = active_value->get<bool>();
     return Json{
         {"panelId", state.panel_id},
         {"viewType", state.view_type},
         {"title", state.title},
+        {"active", active},
         {"visible", state.visible},
+        {"viewColumn", state.options.view_column},
         {"disposed", state.disposed},
         {"htmlLength", static_cast<int64_t>(state.html.size())},
         {"createdMs", state.created_ms},
@@ -4790,12 +4797,19 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method, const Js
     }
     if (method == "vscode.window.setWebviewHtml") {
         const std::string panel_id = params.value("panelId", std::string{});
-        if (panel_id.empty()) {
+        const auto html = params.find("html");
+        if (panel_id.empty() || html == params.end() || !html->is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (html->get_ref<const std::string&>().size() > kMaximumWebviewHtmlBytes) {
+            result = Json{{"message", "webview HTML exceeds the native limit"},
+                          {"panelId", panel_id},
+                          {"maximumBytes", kMaximumWebviewHtmlBytes}};
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
         }
         WebviewPanelState state;
         const int32_t status =
-            webview_panels_.set_html(panel_id, params.value("html", std::string{}), state);
+            webview_panels_.set_html(panel_id, html->get_ref<const std::string&>(), state);
         if (status != SAO_AI_EDITOR_OK) {
             result = Json{{"message", "setWebviewHtml failed"}, {"panelId", panel_id}};
             return status;
@@ -4820,7 +4834,7 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method, const Js
         }
         if (!panel || panel->disposed)
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
-        if (panel->html.size() > options_.maximum_file_bytes)
+        if (panel->html.size() > kMaximumWebviewHtmlBytes)
             return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
         result = panel_state_to_json(*panel);
         result["html"] = panel->html;

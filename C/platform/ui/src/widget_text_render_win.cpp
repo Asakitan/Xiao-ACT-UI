@@ -32,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -104,28 +105,34 @@ struct DwriteBackend {
     }
 
     static DwriteBackend& instance() noexcept {
-        static DwriteBackend backend = [] {
-            DwriteBackend b{};
-            b.com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-            b.owns_com = b.com_result == S_OK || b.com_result == S_FALSE;
-            if (FAILED(b.com_result) && b.com_result != RPC_E_CHANGED_MODE)
-                return b;
+        // The cache outlives host-owned COM apartments and is reclaimed at process exit.
+        static DwriteBackend* backend = []() noexcept {
+            auto* value = new (std::nothrow) DwriteBackend{};
+            if (value == nullptr)
+                return value;
+            value->com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            value->owns_com = value->com_result == S_OK || value->com_result == S_FALSE;
+            if (FAILED(value->com_result) && value->com_result != RPC_E_CHANGED_MODE)
+                return value;
             if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                        IID_PPV_ARGS(&b.wic))))
-                return b;
+                                        IID_PPV_ARGS(&value->wic))))
+                return value;
             if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, __uuidof(ID2D1Factory),
-                                         &b.d2d)))
-                return b;
+                                         &value->d2d)))
+                return value;
             if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                           reinterpret_cast<IUnknown**>(b.dwrite.GetAddressOf()))))
-                return b;
+                                           reinterpret_cast<IUnknown**>(
+                                               value->dwrite.GetAddressOf()))))
+                return value;
             try {
-                b.display_font = std::make_shared<EmbeddedDisplayFont>(b.dwrite.Get());
+                value->display_font =
+                    std::make_shared<EmbeddedDisplayFont>(value->dwrite.Get());
             } catch (...) {
             }
-            return b;
+            return value;
         }();
-        return backend;
+        static DwriteBackend unavailable;
+        return backend == nullptr ? unavailable : *backend;
     }
 };
 

@@ -8,8 +8,12 @@
 
   var motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   var contrastPreference = window.matchMedia('(forced-colors: active)');
+  var nativeIntroCompleted = window.location.hash === '#sao-native-intro-complete';
   var introSeen = false;
   try { introSeen = window.sessionStorage.getItem('sao-guide-intro-seen') === '1'; } catch (error) {}
+  if (nativeIntroCompleted) {
+    try { window.sessionStorage.setItem('sao-guide-intro-seen', '1'); } catch (error) {}
+  }
   var timers = [];
   var disposed = false;
   var finishing = false;
@@ -23,6 +27,7 @@
   function removeListeners() {
     window.removeEventListener('pointerdown', skip);
     window.removeEventListener('keydown', onKeydown);
+    window.removeEventListener('hashchange', onHashChange);
     window.removeEventListener('pagehide', onPagehide);
     document.removeEventListener('visibilitychange', onVisibilityChange);
     if (motionPreference.removeEventListener) {
@@ -78,8 +83,13 @@
   function onPreferenceChange() {
     if (motionPreference.matches || contrastPreference.matches) { dispose(); }
   }
+  function onHashChange() {
+    if (window.location.hash !== '#sao-native-intro-complete') { return; }
+    try { window.sessionStorage.setItem('sao-guide-intro-seen', '1'); } catch (error) {}
+    dispose();
+  }
 
-  if (introSeen || window.location.hash || motionPreference.matches ||
+  if (introSeen || nativeIntroCompleted || window.location.hash || motionPreference.matches ||
       document.hidden || contrastPreference.matches) {
     dispose();
     return;
@@ -88,6 +98,7 @@
   document.body.classList.add('ls-locked');
   window.addEventListener('pointerdown', skip);
   window.addEventListener('keydown', onKeydown);
+  window.addEventListener('hashchange', onHashChange);
   window.addEventListener('pagehide', onPagehide);
   document.addEventListener('visibilitychange', onVisibilityChange);
   if (motionPreference.addEventListener) {

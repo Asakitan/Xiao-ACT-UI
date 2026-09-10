@@ -44,6 +44,11 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
             }
             existing->second.title = title;
             existing->second.options = options;
+            for (auto& [id, panel] : panels_) {
+                (void)id;
+                panel.options.extras["active"] = false;
+            }
+            existing->second.options.extras["active"] = true;
             existing->second.visible = true;
             existing->second.disposed = false;
             existing->second.last_reveal_ms = now_ms();
@@ -60,6 +65,7 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     state.view_type = view_type;
     state.title = title;
     state.options = options;
+    state.options.extras["active"] = true;
     state.owner = owner;
     state.visible = true;
     state.disposed = false;
@@ -68,6 +74,10 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     state.last_post_ms = 0;
     state.message_seq = 0;
     state.initial_state = Json::object();
+    for (auto& [id, panel] : panels_) {
+        (void)id;
+        panel.options.extras["active"] = false;
+    }
     panels_[panel_id] = state;
     ++total_created_;
     out_state = state;
@@ -91,6 +101,13 @@ int32_t WebviewPanelRegistry::reveal(const std::string& panel_id, int view_colum
     // ShowWindow(SW_SHOWNOACTIVATE) plumbing; the current bridge focuses on
     // reveal unconditionally.
     it->second.options.extras["preserveFocus"] = preserve_focus;
+    if (!preserve_focus) {
+        for (auto& [id, panel] : panels_) {
+            (void)id;
+            panel.options.extras["active"] = false;
+        }
+        it->second.options.extras["active"] = true;
+    }
     out_state = it->second;
     return SAO_AI_EDITOR_OK;
 }
@@ -103,6 +120,14 @@ int32_t WebviewPanelRegistry::set_view_state(const std::string& panel_id, bool a
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
     if (it->second.disposed)
         return SAO_AI_EDITOR_ERR_PROTOCOL;
+    if (active && !visible)
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (active) {
+        for (auto& [id, panel] : panels_) {
+            (void)id;
+            panel.options.extras["active"] = false;
+        }
+    }
     it->second.visible = visible;
     it->second.options.view_column = view_column;
     it->second.options.extras["active"] = active;
@@ -121,6 +146,7 @@ int32_t WebviewPanelRegistry::dispose(const std::string& panel_id, WebviewPanelS
     const bool already = it->second.disposed;
     it->second.disposed = true;
     it->second.visible = false;
+    it->second.options.extras["active"] = false;
     it->second.html.clear();
     it->second.initial_state = Json::object();
     it->second.message_seq = 0;
@@ -141,8 +167,6 @@ int32_t WebviewPanelRegistry::set_html(const std::string& panel_id, const std::s
         return SAO_AI_EDITOR_ERR_PROTOCOL;
     }
     it->second.html = html;
-    it->second.visible = true;
-    it->second.last_reveal_ms = now_ms();
     out_state = it->second;
     return SAO_AI_EDITOR_OK;
 }
@@ -217,6 +241,10 @@ std::optional<WebviewPanelState> WebviewPanelRegistry::active_panel() const {
     for (const auto& [panel_id, state] : panels_) {
         (void)panel_id;
         if (state.disposed || !state.visible)
+            continue;
+        const auto active_value = state.options.extras.find("active");
+        if (active_value != state.options.extras.end() && active_value->is_boolean() &&
+            !active_value->get<bool>())
             continue;
         if (!active.has_value() || state.last_reveal_ms > active->last_reveal_ms ||
             (state.last_reveal_ms == active->last_reveal_ms &&
