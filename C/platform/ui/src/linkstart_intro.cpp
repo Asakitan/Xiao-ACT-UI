@@ -306,13 +306,13 @@ static sao_status_t interface_frame(sao_ui_paint_ctx_handle_t ctx, float cx, flo
     const float top = cy - height * scale * 0.5F;
     const float right = left + width * scale;
     const float bottom = top + height * scale;
-    const uint32_t accent = paper ? 0xffb58c48u : 0xff6ac9e6u;
+    const uint32_t accent = paper ? 0xffb59451u : 0xff4f9789u;
     auto status = sao_ui_paint_ctx_fill_rounded_rect(ctx, left, top, width * scale,
-        height * scale, 9.0F * scale, with_alpha(paper ? 0xf0edf2f6u : 0xe90b1928u, opacity));
+        height * scale, 2.0F * scale, with_alpha(0xeef8fafbu, opacity));
     if (status == SAO_STATUS_OK)
         status = sao::ui::detail::paint_rounded_rect_stroke(ctx, left, top, width * scale,
-            height * scale, 9.0F * scale, std::max(0.75F, scale),
-            with_alpha(paper ? 0xffc9d6dfu : 0xff3b7188u, opacity * 0.78F));
+            height * scale, 2.0F * scale, std::max(0.75F, scale),
+            with_alpha(0xffc0cbd1u, opacity * 0.78F));
     for (int corner = 0; corner < 4 && status == SAO_STATUS_OK; ++corner) {
         const float x = (corner & 1) ? right : left;
         const float y = (corner & 2) ? bottom : top;
@@ -495,17 +495,14 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
     const auto draw_motion = [&](auto&& draw, float at, float motion) {
         const float amount = reduced_motion ? 0.0F : std::clamp(motion, 0.0F, 1.0F);
         if (amount > 0.01F) {
-            draw(at - 0.024F, amount * 0.045F);
-            draw(at - 0.012F, amount * 0.09F);
+            draw(at - 0.016F, amount * 0.025F);
+            draw(at - 0.008F, amount * 0.045F);
         }
         draw(at, 1.0F);
     };
     if (status == SAO_STATUS_OK) {
         SaoUiLayerEffects effects{};
         effects.struct_size = sizeof(effects);
-        effects.flags = SAO_UI_LAYER_EFFECT_SHADOW;
-        effects.shadow_sigma = (welcome_visible ? 5.0F : 7.0F) * ui_scale;
-        effects.shadow_argb = welcome_visible ? 0x70081724u : 0x605ac8f0u;
         status = sao_ui_layer_set_effects(handle->layer, &effects);
     }
     if (status == SAO_STATUS_OK && !reduced_motion && handle->timeline.startup_prelude > 0.0F &&
@@ -521,27 +518,31 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
             return;
         const float scale = ui_scale * (0.90F + entry * 0.10F);
         const float cy = center_y + 18.0F * ui_scale * (1.0F - entry);
-        status = calibration_ring(paint_ctx, center_x, cy, 168.0F * scale,
-            sample_time * 0.35F, opacity * 0.35F, 0xff8ad9f2u);
-        if (status == SAO_STATUS_OK)
-            status = calibration_ring(paint_ctx, center_x, cy, 205.0F * scale,
-                -sample_time * 0.22F, opacity * 0.14F, 0xffdceaf1u);
-        if (status == SAO_STATUS_OK)
-            status = interface_frame(paint_ctx, center_x, cy, 438.0F, 196.0F, scale, opacity, false);
-        if (status == SAO_STATUS_OK)
-            status = centered_ascii_caption(paint_ctx, center_x, cy - 68.0F * scale,
-                "FULLDIVE / SYSTEM LINK", 10.0F * scale, 2.2F * scale, with_alpha(0xff82b6ccu, opacity));
+        status = centered_ascii_caption(paint_ctx, center_x, cy - 68.0F * scale,
+            "NERVEGEAR / FULLDIVE SYSTEM", 10.0F * scale, 2.2F * scale, with_alpha(0xff71808au, opacity));
         if (status == SAO_STATUS_OK)
             status = centered_text(paint_ctx, center_x, cy - 29.0F * scale,
-                               "NERVEGEAR", 38.0F * scale, with_alpha(0xffe8f3f9u, opacity),
+                               "LINK START", 54.0F * scale, with_alpha(0xff394853u, opacity),
                                sao::ui::detail::ClassicTextRole::Display);
         if (status == SAO_STATUS_OK)
-            status = centered_ascii_caption(paint_ctx, center_x, cy + 32.0F * scale,
-                "INITIALIZING CONNECTION", 10.0F * scale, 2.0F * scale, with_alpha(0xffb4c9d7u, opacity));
+            status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 202.0F * scale,
+                cy + 41.0F * scale, center_x + 202.0F * scale, cy + 41.0F * scale,
+                scale, with_alpha(0xffb6c3cau, opacity * 0.65F));
+        constexpr std::array<const char*, 5> senses{"SIGHT", "HEARING", "TOUCH", "TASTE", "SMELL"};
+        for (size_t index = 0; index < senses.size() && status == SAO_STATUS_OK; ++index) {
+            const float x = center_x + (static_cast<float>(index) - 2.0F) * 90.0F * scale;
+            const float light = eased_progress(startup, 0.18F + static_cast<float>(index) * 0.085F,
+                                                 0.32F + static_cast<float>(index) * 0.085F);
+            status = sao_ui_paint_ctx_fill_ellipse(paint_ctx, x - 3.0F * scale, cy + 60.0F * scale,
+                6.0F * scale, 6.0F * scale, with_alpha(0xff4b9b80u, opacity * (0.18F + light * 0.82F)));
+            if (status == SAO_STATUS_OK)
+                status = centered_text(paint_ctx, x, cy + 77.0F * scale, senses[index], 9.0F * scale,
+                    with_alpha(0xff6b7c86u, opacity), sao::ui::detail::ClassicTextRole::Body);
+        }
         if (status == SAO_STATUS_OK)
             status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 174.0F * scale,
-                cy + 70.0F * scale, center_x + (-174.0F + 348.0F * startup) * scale,
-                cy + 70.0F * scale, 1.5F * scale, with_alpha(0xffe8bf79u, opacity));
+                cy + 110.0F * scale, center_x + (-174.0F + 348.0F * startup) * scale,
+                cy + 110.0F * scale, 1.5F * scale, with_alpha(0xffb79a59u, opacity));
         };
         const float travel = eased_progress(seconds, 0.0F, handle->timeline.startup_prelude * 0.48F);
         const float previous = eased_progress(seconds - 1.0F / 60.0F, 0.0F,
@@ -565,13 +566,13 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                                                                handle->timeline.p2_start + welcome_duration * 0.24F);
             if (status == SAO_STATUS_OK)
                 status = centered_ascii_caption(paint_ctx, center_x, cy - 117.0F * scale,
-                    "PERSONAL / VIRTUAL INTERFACE", 9.0F * scale, 2.0F * scale, with_alpha(0xff68808fu, text_alpha));
+                    "NEURAL CONNECTION VERIFIED", 9.0F * scale, 2.0F * scale, with_alpha(0xff74818au, text_alpha));
             if (status == SAO_STATUS_OK)
                 status = centered_ascii_caption(paint_ctx, center_x, cy - 79.0F * scale,
-                    "WELCOME TO", 25.0F * scale, 4.0F * scale, with_alpha(0xff537185u, text_alpha));
+                    "WELCOME TO", 25.0F * scale, 4.0F * scale, with_alpha(0xff64737du, text_alpha));
             if (status == SAO_STATUS_OK)
                 status = centered_text(paint_ctx, center_x, cy - 39.0F * scale, "SAO AUTO", 73.0F * scale,
-                    with_alpha(0xff243b4bu, text_alpha), sao::ui::detail::ClassicTextRole::Display);
+                    with_alpha(0xff364751u, text_alpha), sao::ui::detail::ClassicTextRole::Display);
             if (status == SAO_STATUS_OK)
                 status = centered_ascii_caption(paint_ctx, center_x, cy + 50.0F * scale,
                     "VIRTUAL DIVE INTERFACE", 10.0F * scale, 2.1F * scale, with_alpha(0xff738797u, text_alpha));
@@ -581,7 +582,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                 const float light = eased_progress(sample_time, handle->timeline.p2_start + static_cast<float>(index) * 0.08F,
                     handle->timeline.p2_start + 0.40F + static_cast<float>(index) * 0.08F);
                 status = sao_ui_paint_ctx_fill_ellipse(paint_ctx, x - 2.5F * scale, cy + 82.0F * scale,
-                    5.0F * scale, 5.0F * scale, with_alpha(0xffb69154u, text_alpha * (0.25F + light * 0.75F)));
+                    5.0F * scale, 5.0F * scale, with_alpha(0xff4f9983u, text_alpha * (0.25F + light * 0.75F)));
                 if (status == SAO_STATUS_OK)
                     status = centered_text(paint_ctx, x, cy + 97.0F * scale, senses[index], 9.0F * scale,
                         with_alpha(0xff617886u, text_alpha), sao::ui::detail::ClassicTextRole::Body);
@@ -612,26 +613,26 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
         status = interface_frame(paint_ctx, center_x, cy, 610.0F, 252.0F, scale, opacity, false);
         if (status == SAO_STATUS_OK)
             status = calibration_ring(paint_ctx, center_x, cy - 69.0F * scale, 25.0F * scale,
-                sample_time * 0.20F, opacity * 0.8F, 0xff92dbc9u);
+                sample_time * 0.20F, opacity * 0.8F, 0xff5c9b89u);
         if (status == SAO_STATUS_OK && !handle->bootstrap_hold_active) {
             const float y = cy - 69.0F * scale;
             status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 9.0F * scale, y,
-                center_x - 2.0F * scale, y + 7.0F * scale, 2.1F * scale, with_alpha(0xffc3f4e8u, opacity));
+                center_x - 2.0F * scale, y + 7.0F * scale, 2.1F * scale, with_alpha(0xff398269u, opacity));
             if (status == SAO_STATUS_OK)
                 status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 2.0F * scale, y + 7.0F * scale,
-                    center_x + 12.0F * scale, y - 9.0F * scale, 2.1F * scale, with_alpha(0xffc3f4e8u, opacity));
+                    center_x + 12.0F * scale, y - 9.0F * scale, 2.1F * scale, with_alpha(0xff398269u, opacity));
         }
         if (status == SAO_STATUS_OK)
             status = centered_text(paint_ctx, center_x, cy - 21.0F * scale,
                 handle->bootstrap_hold_active ? "SYSTEM >> LINKING" : "SYSTEM >> CONNECTED", 31.0F * scale,
-                with_alpha(0xffe8f4f7u, opacity), sao::ui::detail::ClassicTextRole::Display);
+                with_alpha(0xff41545eu, opacity), sao::ui::detail::ClassicTextRole::Display);
         if (status == SAO_STATUS_OK)
             status = centered_ascii_text(paint_ctx, center_x, cy + 43.0F * scale,
                 handle->bootstrap_hold_active ? "PREPARING INTERFACE" : "FULL DIVE INITIALIZED",
-                12.0F * scale, 2.5F * scale, with_alpha(0xff9cbdceu, opacity));
+                12.0F * scale, 2.5F * scale, with_alpha(0xff73858fu, opacity));
         if (status == SAO_STATUS_OK)
             status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 90.0F * scale, cy + 84.0F * scale,
-                center_x + 90.0F * scale, cy + 84.0F * scale, scale, with_alpha(0xff82c9b8u, opacity * 0.5F));
+                center_x + 90.0F * scale, cy + 84.0F * scale, scale, with_alpha(0xff659b89u, opacity * 0.5F));
         };
         const float entry = eased_progress(scene_seconds, handle->timeline.p4_start,
                                             entry_end);
@@ -643,7 +644,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
 
     if (status == SAO_STATUS_OK && handle->overlay_width >= 240u && handle->overlay_height >= 120u &&
         (handle->bootstrap_hold_active || scene_seconds >= handle->timeline.p4_start)) {
-        const uint32_t ink = 0xff9ccee8u;
+        const uint32_t ink = 0xff647b89u;
         const float rail_width = 176.0F * ui_scale;
         const float rail_y = static_cast<float>(handle->overlay_height) - 42.0F * ui_scale;
         // While the bootstrap hold is armed the rail reports driver/engine
@@ -672,7 +673,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                 status = sao_ui_paint_ctx_stroke_line(paint_ctx, left, rail_y,
                                                       left + segment_width * fill, rail_y,
                                                       1.4F * ui_scale,
-                                                      with_alpha(0xff8ac9f3u, 0.65F));
+                                                      with_alpha(0xff568f96u, 0.65F));
         }
         char caption[kBootstrapCaptionCapacity + 32u]{};
         if (bootstrap_telemetry) {

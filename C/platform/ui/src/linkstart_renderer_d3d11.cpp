@@ -29,9 +29,11 @@ namespace sao::ui::linkstart_gpu {
 namespace {
 
 constexpr uint32_t kParticleCount = 300u;
-constexpr uint32_t kColumnSides = 24u;
+constexpr uint32_t kColumnSides = 32u;
 constexpr uint32_t kCapBands = 4u;
-constexpr uint32_t kStreakVertexCount = kColumnSides * (6u + kCapBands * 12u);
+constexpr uint32_t kCapVertexCount = kColumnSides * kCapBands + 1u;
+constexpr uint32_t kStreakVertexCount = kCapVertexCount * 2u;
+constexpr uint32_t kStreakIndexCount = kColumnSides * kCapBands * 12u;
 constexpr float kPi = 3.14159265359F;
 
 template <typename T> void release(T*& value) noexcept {
@@ -112,8 +114,8 @@ struct VisualState {
     float startup_wave{1.0F};
     float motion_mix{0.60F};
     float cool_mix{};
-    std::array<float, 3> background{0.008F, 0.016F, 0.039F};
-    std::array<float, 3> tint{0.96F, 0.78F, 0.24F};
+    std::array<float, 3> background{0.96F, 0.97F, 0.98F};
+    std::array<float, 3> tint{0.76F, 0.88F, 0.96F};
     bool particles{};
 };
 
@@ -150,27 +152,27 @@ VisualState visual_state(const FrameState& frame) noexcept {
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
     state.startup_wave = prelude > 0.0F ? saturate(elapsed / prelude) : 1.0F;
     state.camera_z = -1200.0F;
-    state.background = {0.10F, 0.145F, 0.19F};
+    state.background = {0.98F, 0.985F, 0.995F};
     const bool blue = state.scene_time >= frame.p3_start;
     const float blue_transition = smoothstep((state.scene_time - (frame.p3_start - 0.30F)) / 0.80F);
-    state.tint = mix_color({0.96F, 0.76F, 0.28F}, {0.42F, 0.78F, 1.0F}, blue_transition);
+    state.tint = mix_color({0.84F, 0.88F, 0.94F}, {0.56F, 0.80F, 1.0F}, blue_transition);
     state.cool_mix = blue ? 1.0F : 0.0F;
     if (state.scene_time < frame.p2_start) {
         const float enter = smoothstep(state.scene_time / 0.70F);
-        state.background = mix_color({0.008F, 0.016F, 0.039F}, {0.055F, 0.095F, 0.16F}, enter);
-        state.background = mix_color(state.background, {0.10F, 0.145F, 0.19F},
+        state.background = mix_color({0.94F, 0.955F, 0.97F}, {0.995F, 0.995F, 1.0F}, enter);
+        state.background = mix_color(state.background, {0.955F, 0.965F, 0.98F},
             smoothstep((state.scene_time - (frame.p2_start - 0.55F)) / 0.55F));
     }
-    state.background = mix_color(state.background, {0.018F, 0.052F, 0.10F}, blue_transition);
+    state.background = mix_color(state.background, {0.91F, 0.955F, 0.995F}, blue_transition);
     if (blue) {
-        state.background = mix_color(state.background, {0.055F, 0.11F, 0.165F},
+        state.background = mix_color(state.background, {0.96F, 0.975F, 0.99F},
             smoothstep((state.scene_time - (frame.p3_end - 0.55F)) / 1.0F));
         const float handoff = state.scene_time - frame.p4_start;
-        state.flash = 0.60F * smoothstep(handoff / 0.32F) *
+        state.flash = 0.12F * smoothstep(handoff / 0.32F) *
                       (1.0F - smoothstep((handoff - 0.32F) / 0.60F));
     }
     if (frame.reduced_motion) {
-        state.background = {0.055F, 0.11F, 0.165F};
+        state.background = {0.96F, 0.975F, 0.99F};
         state.flash = 0.0F;
         return state;
     }
@@ -231,6 +233,7 @@ struct Renderer {
     ID3D11PixelShader* post_ps{};
     ID3D11InputLayout* streak_layout{};
     ID3D11Buffer* column_buffer{};
+    ID3D11Buffer* index_buffer{};
     ID3D11Buffer* instance_buffer{};
     ID3D11Buffer* constants{};
     ID3D11SamplerState* sampler{};
@@ -317,6 +320,7 @@ void release_device(Renderer& renderer) noexcept {
     release(renderer.sampler);
     release(renderer.constants);
     release(renderer.instance_buffer);
+    release(renderer.index_buffer);
     release(renderer.column_buffer);
     release(renderer.streak_layout);
     release(renderer.post_ps);
@@ -350,7 +354,8 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
     const bool ready = renderer.fullscreen_vs != nullptr && renderer.background_ps != nullptr &&
                        renderer.streak_vs != nullptr && renderer.streak_ps != nullptr &&
                        renderer.post_ps != nullptr && renderer.streak_layout != nullptr &&
-                       renderer.column_buffer != nullptr && renderer.instance_buffer != nullptr &&
+                       renderer.column_buffer != nullptr && renderer.index_buffer != nullptr &&
+                       renderer.instance_buffer != nullptr &&
                        renderer.constants != nullptr && renderer.sampler != nullptr &&
                        renderer.premultiplied_blend != nullptr &&
                        renderer.additive_blend != nullptr &&
@@ -405,11 +410,12 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
     }
 
     std::array<Vertex, kStreakVertexCount> vertices{};
-    size_t vertex_count = 0u;
-    const auto triangle = [&](Vertex a, Vertex b, Vertex c) {
-        vertices[vertex_count++] = a;
-        vertices[vertex_count++] = b;
-        vertices[vertex_count++] = c;
+    std::array<uint16_t, kStreakIndexCount> indices{};
+    size_t index_count = 0u;
+    const auto triangle = [&](uint32_t a, uint32_t b, uint32_t c) {
+        indices[index_count++] = static_cast<uint16_t>(a);
+        indices[index_count++] = static_cast<uint16_t>(b);
+        indices[index_count++] = static_cast<uint16_t>(c);
     };
     const auto cap_vertex = [](float angle, float latitude, float end, float direction) {
         const float radius = std::max(0.0F, std::cos(latitude));
@@ -417,26 +423,31 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
         const float y = std::sin(angle) * radius;
         return Vertex{{x, y, end}, {x, y, direction * std::sin(latitude)}};
     };
-    for (uint32_t side = 0u; side < kColumnSides; ++side) {
-        const float a = static_cast<float>(side) * 2.0F * kPi / static_cast<float>(kColumnSides);
-        const float b = static_cast<float>(side + 1u) * 2.0F * kPi / static_cast<float>(kColumnSides);
-        const Vertex a0 = cap_vertex(a, 0.0F, 0.0F, 1.0F);
-        const Vertex b0 = cap_vertex(b, 0.0F, 0.0F, 1.0F);
-        const Vertex a1 = cap_vertex(a, 0.0F, 1.0F, 1.0F);
-        const Vertex b1 = cap_vertex(b, 0.0F, 1.0F, 1.0F);
-        triangle(a0, b0, a1);
-        triangle(b0, b1, a1);
-        for (uint32_t end = 0u; end < 2u; ++end) {
-            const float direction = end == 0u ? -1.0F : 1.0F;
-            for (uint32_t ring = 0u; ring < kCapBands; ++ring) {
-                const float low = static_cast<float>(ring) * kPi / (2.0F * kCapBands);
-                const float high = static_cast<float>(ring + 1u) * kPi / (2.0F * kCapBands);
-                const Vertex p0 = cap_vertex(a, low, static_cast<float>(end), direction);
-                const Vertex p1 = cap_vertex(b, low, static_cast<float>(end), direction);
-                const Vertex p2 = cap_vertex(a, high, static_cast<float>(end), direction);
-                const Vertex p3 = cap_vertex(b, high, static_cast<float>(end), direction);
-                triangle(p0, p1, p2);
-                triangle(p1, p3, p2);
+    for (uint32_t end = 0u; end < 2u; ++end) {
+        const uint32_t base = end * kCapVertexCount;
+        const float direction = end == 0u ? -1.0F : 1.0F;
+        for (uint32_t ring = 0u; ring < kCapBands; ++ring) {
+            const float latitude = static_cast<float>(ring) * kPi / (2.0F * kCapBands);
+            for (uint32_t side = 0u; side < kColumnSides; ++side) {
+                const float angle = static_cast<float>(side) * 2.0F * kPi / kColumnSides;
+                vertices[base + ring * kColumnSides + side] =
+                    cap_vertex(angle, latitude, static_cast<float>(end), direction);
+            }
+        }
+        const uint32_t pole = base + kCapVertexCount - 1u;
+        vertices[pole] = {{0.0F, 0.0F, static_cast<float>(end)}, {0.0F, 0.0F, direction}};
+        for (uint32_t side = 0u; side < kColumnSides; ++side) {
+            const uint32_t next = (side + 1u) % kColumnSides;
+            for (uint32_t ring = 0u; ring + 1u < kCapBands; ++ring) {
+                const uint32_t row = base + ring * kColumnSides;
+                triangle(row + side, row + next, row + side + kColumnSides);
+                triangle(row + next, row + next + kColumnSides, row + side + kColumnSides);
+            }
+            const uint32_t last = base + (kCapBands - 1u) * kColumnSides;
+            triangle(last + side, last + next, pole);
+            if (end == 0u) {
+                triangle(side, next, side + kCapVertexCount);
+                triangle(next, next + kCapVertexCount, side + kCapVertexCount);
             }
         }
     }
@@ -446,6 +457,13 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
     buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     D3D11_SUBRESOURCE_DATA init{vertices.data(), 0u, 0u};
     if (FAILED(device->CreateBuffer(&buffer_desc, &init, &renderer.column_buffer))) {
+        release_device(renderer);
+        return false;
+    }
+    buffer_desc.ByteWidth = static_cast<UINT>(sizeof(indices));
+    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    init.pSysMem = indices.data();
+    if (FAILED(device->CreateBuffer(&buffer_desc, &init, &renderer.index_buffer))) {
         release_device(renderer);
         return false;
     }
@@ -625,12 +643,15 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
     auto* instances = static_cast<Instance*>(mapped.pData);
     uint32_t random = renderer.frame.seed == 0u ? 0x51a0c3d7u : renderer.frame.seed;
     for (uint32_t index = 0u; index < kParticleCount; ++index) {
-        const float angle = random_unit(random) * 2.0F * kPi;
-        const float radius = lerp(10.0F, 38.0F, random_unit(random));
-        const float length = lerp(340.0F, 460.0F, random_unit(random));
-        const float width = lerp(1.44F, 2.52F, random_unit(random));
-        const float depth = lerp(-800.0F, 1400.0F, random_unit(random));
-        const float brightness = lerp(0.80F, 1.0F, random_unit(random));
+        const float angle = static_cast<float>(index) * 2.39996323F + random_unit(random) * 0.35F;
+        const bool foreground = index % 6u == 0u;
+        const float radius = lerp(16.0F, foreground ? 44.0F : 82.0F, std::sqrt(random_unit(random)));
+        const float length = lerp(260.0F, 540.0F, random_unit(random));
+        const float width = foreground ? lerp(2.1F, 3.3F, random_unit(random))
+                          : lerp(0.9F, 1.9F, random_unit(random));
+        const float depth = -800.0F + (static_cast<float>(index) + random_unit(random)) *
+                           (2200.0F / static_cast<float>(kParticleCount));
+        const float brightness = lerp(0.90F, 1.04F, random_unit(random));
         const float flicker = random_unit(random);
         const auto& warm_color = warm[index % warm.size()];
         const auto& cool_color = cool[index % cool.size()];
@@ -784,18 +805,22 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             UINT offsets[]{0u, 0u};
             ID3D11Buffer* buffers[]{renderer->column_buffer, renderer->instance_buffer};
             device_context->IASetVertexBuffers(0u, 2u, buffers, strides, offsets);
+            device_context->IASetIndexBuffer(renderer->index_buffer, DXGI_FORMAT_R16_UINT, 0u);
             device_context->IASetInputLayout(renderer->streak_layout);
             device_context->VSSetShader(renderer->streak_vs, nullptr, 0u);
             device_context->PSSetShader(renderer->streak_ps, nullptr, 0u);
             device_context->RSSetState(renderer->no_cull_rasterizer);
 
             device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor, 0xffffffffu);
-            constexpr std::array<float, 3> shutter_offsets{1.05F / 60.0F, 0.55F / 60.0F, 0.0F};
-            constexpr std::array<float, 3> shutter_weights{0.10F, 0.18F, 1.0F};
-            constexpr std::array<float, 3> shutter_radius{1.085F, 1.045F, 1.0F};
+            constexpr std::array<float, 2> shutter_offsets{0.5F / 60.0F, 0.0F};
+            constexpr std::array<float, 2> shutter_weights{0.12F, 1.0F};
+            constexpr std::array<float, 2> shutter_radius{1.025F, 1.0F};
             for (size_t index = 0u; index < shutter_offsets.size(); ++index) {
+                const bool current_sample = index + 1u == shutter_offsets.size();
+                if (!current_sample && visual.motion_mix < 0.02F)
+                    continue;
                 device_context->OMSetDepthStencilState(
-                    index + 1u == shutter_offsets.size() ? renderer->depth_enabled : renderer->depth_disabled, 0u);
+                    current_sample ? renderer->depth_enabled : renderer->depth_disabled, 0u);
                 FrameState sample_frame = renderer->frame;
                 sample_frame.elapsed_seconds =
                     std::max(0.0F, sample_frame.elapsed_seconds - shutter_offsets[index]);
@@ -803,10 +828,11 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                 if (!upload_constants(static_cast<float>(context->width_px),
                                       static_cast<float>(context->height_px), 0.0F, 0.0F,
                                       sample.camera_z,
-                                      sample.particle_alpha * shutter_weights[index],
+                                      sample.particle_alpha * shutter_weights[index] *
+                                          (current_sample ? 1.0F : visual.motion_mix),
                                       shutter_radius[index], 0.0F, &sample))
                     return gpu_failure();
-                device_context->DrawInstanced(kStreakVertexCount, kParticleCount, 0u, 0u);
+                device_context->DrawIndexedInstanced(kStreakIndexCount, kParticleCount, 0u, 0, 0u);
             }
         }
 
@@ -821,6 +847,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         const uint32_t quarter_height = std::max(1u, context->height_px / 4u);
         device_context->RSSetState(nullptr);
         device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
+        device_context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0u);
         device_context->IASetInputLayout(nullptr);
         device_context->VSSetShader(renderer->fullscreen_vs, nullptr, 0u);
         device_context->PSSetShader(renderer->post_ps, nullptr, 0u);
@@ -863,7 +890,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                 renderer->history_seed == renderer->frame.seed &&
                 renderer->history_cool == visual.cool_mix && !renderer->frame.reduced_motion &&
                 !renderer->history_reduced;
-            const float retention = lerp(0.10F, 0.40F, visual.motion_mix);
+            const float retention = lerp(0.06F, 0.22F, visual.motion_mix);
             history_weight = continuous ? std::pow(retention, delta * 60.0F) : 0.0F;
             const uint32_t next = renderer->history_valid ? 1u - renderer->history_index : 0u;
             if (!upload_constants(static_cast<float>(context->width_px),

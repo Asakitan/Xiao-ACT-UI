@@ -32,7 +32,7 @@ struct VertexOutput {
 VertexOutput main(VertexInput input) {
     const float radius = input.radius * radiusMul;
     const float baseDepth = input.center.z - cameraZ;
-    const float rotation = sceneTime * 0.06;
+    const float rotation = sceneTime * 0.009;
     const float cr = cos(rotation), sr = sin(rotation);
     const float2 center = float2(input.center.x * cr - input.center.y * sr,
                                  input.center.x * sr + input.center.y * cr);
