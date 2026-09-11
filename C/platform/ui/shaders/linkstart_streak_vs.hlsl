@@ -3,7 +3,7 @@ cbuffer Constants : register(b0) {
     float phaseProgress; float scenePhase; float connectedAlpha; float reducedMotion;
     float cameraZ; float alphaMul; float radiusMul; float energy;
     float flash; float startupBurst; float startupWave; float motionMix;
-    float coolMix; float2 blurDirection; float padding0;
+    float coolMix; float2 blurDirection; float bloomExtract;
     float3 backgroundColor; float padding1;
     float3 effectTint; float padding2;
 };
@@ -17,50 +17,41 @@ struct VertexInput {
     float3 warmColor : INSTANCE_WARM;
     float3 coolColor : INSTANCE_COOL;
     float brightness : INSTANCE_EFFECT;
-    float flicker : INSTANCE_EFFECT1;
+    float variation : INSTANCE_EFFECT1;
 };
 
 struct VertexOutput {
     float4 position : SV_POSITION;
-    float3 world : WORLD;
-    float3 normal : NORMAL;
+    float2 beam : TEXCOORD0;
+    float3 viewPosition : TEXCOORD1;
+    float3 normal : TEXCOORD2;
     float3 color : COLOR;
     float alpha : ALPHA;
-    float fog : FOG;
 };
 
 VertexOutput main(VertexInput input) {
-    const float rotation = sceneTime * 0.06;
-    const float cr = cos(rotation);
-    const float sr = sin(rotation);
-    float3 world = input.position;
-    world.xy *= input.radius * radiusMul;
-    world.z = world.z * input.length + input.center.z;
-    world.xy += input.center.xy;
-    world.xy = float2(world.x * cr - world.y * sr,
-                      world.x * sr + world.y * cr);
-    float3 normal = input.normal;
-    normal.xy = float2(normal.x * cr - normal.y * sr,
-                       normal.x * sr + normal.y * cr);
-
-    const float zNear = input.center.z - cameraZ;
-    const float shimmer = 0.85 + 0.15 * sin(sceneTime * input.flicker +
-                                            input.center.z * 0.005);
-    const float fade = alphaMul * input.brightness * shimmer;
-    const float fog = min(0.95, max(0.0, (zNear - 150.0) / 2200.0));
-    const float focal = 720.0;
-    const float2 halfSize = max(float2(1.0, 1.0), resolution * 0.5);
-    const float2 projectionScale = focal / halfSize;
-    const float eyeZ = world.z - cameraZ;
-
+    const float radius = input.radius * radiusMul;
+    const float period = 4800.0 + input.length + radius * 2.0;
+    const float baseDepth = frac((input.center.z - cameraZ) / period) * period - input.length - radius;
+    const float rotation = sceneTime * 0.008;
+    const float cr = cos(rotation), sr = sin(rotation);
+    const float2 center = float2(input.center.x * cr - input.center.y * sr,
+                                 input.center.x * sr + input.center.y * cr);
+    const float2 crossSection = float2(input.position.x * cr - input.position.y * sr,
+                                       input.position.x * sr + input.position.y * cr);
+    const float2 xy = center + crossSection * radius;
+    const float axial = input.position.z * input.length + input.normal.z * radius;
+    const float depth = baseDepth + axial;
+    const float focalLength = resolution.y * lerp(0.88, 0.80, saturate(motionMix));
+    const float2 projection = max(1.0, focalLength) / max(1.0, resolution * 0.5);
+    const float visible = 1.0 - smoothstep(3600.0, 4800.0, baseDepth);
     VertexOutput output;
-    output.position = float4(world.x * projectionScale.x,
-                             -world.y * projectionScale.y,
-                             eyeZ - 1.0, eyeZ);
-    output.world = world;
-    output.normal = normalize(normal);
-    output.color = lerp(input.warmColor, input.coolColor, coolMix);
-    output.alpha = fade;
-    output.fog = fog;
+    output.position = float4(xy.x * projection.x, -xy.y * projection.y, depth - 1.0, depth);
+    output.beam = float2(0.0, (axial + radius) / (input.length + radius * 2.0));
+    output.viewPosition = float3(xy, depth);
+    output.normal = float3(input.normal.x * cr - input.normal.y * sr,
+                            input.normal.x * sr + input.normal.y * cr, input.normal.z);
+    output.color = lerp(input.warmColor, input.coolColor, saturate(coolMix));
+    output.alpha = alphaMul * input.brightness * visible * (0.9 + 0.1 * input.variation);
     return output;
 }

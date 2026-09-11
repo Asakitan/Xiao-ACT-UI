@@ -28,15 +28,10 @@ namespace sao::ui::linkstart_gpu {
 #if defined(_WIN32)
 namespace {
 
-constexpr uint32_t kParticleCount = 300u;
-constexpr uint32_t kCylinderSegments = 10u;
-constexpr uint32_t kCylinderVertexCount = kCylinderSegments * 6u;
+constexpr uint32_t kParticleCount = 480u;
+constexpr uint32_t kColumnSides = 12u;
+constexpr uint32_t kStreakVertexCount = kColumnSides * 30u;
 constexpr float kPi = 3.14159265359F;
-constexpr float kCameraStart = -1200.0F;
-constexpr float kCameraEnd = 1500.0F;
-constexpr float kCameraExitExtra = 900.0F;
-constexpr float kStreakLength = 420.0F;
-constexpr float kTubeRadius = 1.8F;
 
 template <typename T> void release(T*& value) noexcept {
     if (value != nullptr) {
@@ -53,55 +48,14 @@ float lerp(float a, float b, float t) noexcept {
     return a + (b - a) * saturate(t);
 }
 
-float ease_in(float t) noexcept {
-    const float x = saturate(t);
-    return x * x * x;
-}
-
-float ease_out(float t) noexcept {
-    const float x = 1.0F - saturate(t);
-    return 1.0F - x * x * x;
-}
-
 float smoothstep(float t) noexcept {
     const float x = saturate(t);
     return x * x * (3.0F - 2.0F * x);
 }
 
-float cubic_bezier_y(float time_ratio) noexcept {
-    float lo = 0.0F;
-    float hi = 1.0F;
-    for (int32_t iteration = 0; iteration < 25; ++iteration) {
-        const float s = (lo + hi) * 0.5F;
-        const float inv = 1.0F - s;
-        const float x = 3.0F * inv * inv * s * 0.8F + 3.0F * inv * s * s * 0.9F + s * s * s;
-        if (x < saturate(time_ratio))
-            lo = s;
-        else
-            hi = s;
-    }
-    const float s = (lo + hi) * 0.5F;
-    const float inv = 1.0F - s;
-    return 3.0F * inv * inv * s * 0.1F + 3.0F * inv * s * s * 0.8F + s * s * s;
-}
-
-float camera_z(float elapsed, float duration) noexcept {
-    return lerp(kCameraStart, kCameraEnd, cubic_bezier_y(elapsed / std::max(0.01F, duration)));
-}
-
-float camera_end_velocity(float duration) noexcept {
-    return (kCameraEnd - kCameraStart) * 2.0F / std::max(0.01F, duration);
-}
-
-float camera_z_with_exit(float elapsed, float duration, float exit_start,
-                         float exit_duration) noexcept {
-    if (elapsed <= exit_start || exit_duration <= 0.0F)
-        return camera_z(elapsed, duration);
-    const float exit_elapsed = std::min(std::max(0.0F, elapsed - exit_start), exit_duration);
-    const float velocity = camera_end_velocity(duration);
-    const float topup = std::max(0.0F, kCameraExitExtra - velocity * exit_duration);
-    return camera_z(exit_start, duration) + velocity * exit_elapsed +
-           topup * ease_in(exit_elapsed / exit_duration);
+float linear_channel(float value) noexcept {
+    return value <= 0.04045F ? value / 12.92F
+                             : std::pow((value + 0.055F) / 1.055F, 2.4F);
 }
 
 struct Constants {
@@ -122,7 +76,7 @@ struct Constants {
     float motion_mix;
     float cool_mix;
     float bloom_direction[2];
-    float padding0;
+    float bloom_extract;
     float background_color[3];
     float padding1;
     float effect_tint[3];
@@ -148,7 +102,7 @@ static_assert(sizeof(Instance) == 52u);
 
 struct VisualState {
     float scene_time{};
-    float camera_z{kCameraStart};
+    float camera_z{};
     float camera_velocity{};
     float particle_alpha{};
     float energy{};
@@ -168,150 +122,53 @@ std::array<float, 3> mix_color(const std::array<float, 3>& a, const std::array<f
     return {lerp(a[0], b[0], x), lerp(a[1], b[1], x), lerp(a[2], b[2], x)};
 }
 
-std::array<float, 3> background_at(float t, const FrameState& frame) noexcept {
-    constexpr std::array<float, 3> start{2.0F / 255.0F, 4.0F / 255.0F, 10.0F / 255.0F};
-    constexpr std::array<float, 3> tunnel{22.0F / 255.0F, 33.0F / 255.0F, 62.0F / 255.0F};
-    constexpr std::array<float, 3> text{42.0F / 255.0F, 42.0F / 255.0F, 58.0F / 255.0F};
-    constexpr std::array<float, 3> blue{10.0F / 255.0F, 22.0F / 255.0F, 40.0F / 255.0F};
-    constexpr std::array<float, 3> blue_exit{26.0F / 255.0F, 42.0F / 255.0F, 74.0F / 255.0F};
-    const float p1_ramp_start = frame.p1_end * (0.12F / 3.5F);
-    const float p1_ramp_end = frame.p1_end * (0.72F / 3.5F);
-    const float text_transition_start = std::max(p1_ramp_end, frame.p2_start - 0.5F);
-    const float phase3_span = std::max(0.0F, frame.p3_end - frame.p3_start);
-    const float color_transition = std::min(0.5F, phase3_span * 0.25F);
-    const float blue_transition_end = frame.p3_start + color_transition;
-    const float blue_exit_start = std::max(blue_transition_end, frame.p3_end - color_transition);
-    if (t < p1_ramp_start)
-        return start;
-    if (t < p1_ramp_end)
-        return mix_color(start, tunnel,
-                         (t - p1_ramp_start) / std::max(0.001F, p1_ramp_end - p1_ramp_start));
-    if (t < text_transition_start)
-        return tunnel;
-    if (t < frame.p2_start)
-        return mix_color(tunnel, text,
-                         (t - text_transition_start) /
-                             std::max(0.001F, frame.p2_start - text_transition_start));
-    if (t < frame.p3_start)
-        return text;
-    if (t < blue_transition_end)
-        return mix_color(text, blue,
-                         (t - frame.p3_start) /
-                             std::max(0.001F, blue_transition_end - frame.p3_start));
-    if (t < blue_exit_start)
-        return blue;
-    if (t < frame.p3_end)
-        return mix_color(blue, blue_exit,
-                         (t - blue_exit_start) / std::max(0.001F, frame.p3_end - blue_exit_start));
-    return blue_exit;
-}
-
 VisualState visual_state(const FrameState& frame) noexcept {
     VisualState state{};
     const float elapsed = std::max(0.0F, frame.elapsed_seconds);
     const float prelude = std::max(0.0F, frame.startup_prelude);
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
-    state.background = background_at(state.scene_time, frame);
-
-    if (frame.reduced_motion && elapsed < prelude) {
-        state.scene_time = frame.p2_start;
-        state.background = background_at(frame.p2_start, frame);
-        state.energy = 0.12F;
-        state.startup_burst = 0.0F;
-        state.startup_wave = 1.0F;
+    const float settle = smoothstep((state.scene_time - frame.p4_start) /
+                                    std::max(0.001F, frame.p4_hold_end - frame.p4_start));
+    state.background = mix_color({0.008F, 0.013F, 0.031F}, {0.028F, 0.046F, 0.078F}, settle);
+    state.startup_wave = prelude > 0.0F ? smoothstep(elapsed / prelude) : 1.0F;
+    const float palette_duration = frame.p3_start - frame.p1_end;
+    state.cool_mix = palette_duration > 0.0F
+                         ? smoothstep((state.scene_time - frame.p1_end) / palette_duration)
+                         : (state.scene_time >= frame.p3_start ? 1.0F : 0.0F);
+    state.tint = mix_color({0.48F, 0.56F, 0.88F}, {0.07F, 0.42F, 1.0F}, state.cool_mix);
+    if (frame.reduced_motion || elapsed < prelude)
         return state;
-    }
 
-    if (elapsed < prelude && prelude > 0.0F) {
-        state.startup_burst = std::max(0.0F, 1.0F - elapsed / 0.52F);
-        state.startup_wave = saturate(elapsed / prelude);
-        state.energy = state.startup_wave * 0.18F;
-        state.flash =
-            std::max(0.0F, 1.0F - elapsed / prelude) * 0.42F + state.startup_burst * 0.30F;
-        return state;
-    }
-
-    const float p1_duration = std::max(0.01F, frame.p1_end);
-    const float p1_time = state.scene_time;
-    if (state.scene_time < frame.p1_end + 0.5F) {
-        float fade = 1.0F;
-        if (p1_time < 0.28F)
-            fade = lerp(0.22F, 0.62F, ease_out(p1_time / 0.28F));
-        else if (p1_time < 1.0F)
-            fade = lerp(0.62F, 1.0F, ease_out((p1_time - 0.28F) / 0.72F));
-        const float exit_elapsed = std::max(0.0F, state.scene_time - frame.p1_end);
-        fade *= 1.0F - saturate(exit_elapsed / 0.5F);
-        state.particles = fade > 0.01F;
-        state.particle_alpha = fade;
-        state.camera_z = camera_z_with_exit(p1_time, p1_duration, p1_duration, 0.5F);
-        state.camera_velocity = camera_end_velocity(p1_duration);
-        const float bridge = std::min(prelude + 0.64F, elapsed);
-        state.startup_burst = std::max(0.0F, 1.0F - bridge / 1.06F);
-        state.startup_wave = saturate(bridge / std::max(0.01F, prelude + 0.64F));
-        state.energy = std::min(
-            1.0F, fade * (0.20F + 0.88F * saturate(p1_time / p1_duration) + exit_elapsed * 0.55F) +
-                      state.startup_burst * 0.28F);
-        state.flash = std::max(0.0F, 1.0F - bridge / 1.08F) * 0.30F + state.startup_burst * 0.28F +
-                      std::min(0.22F, exit_elapsed * 0.38F);
-        state.motion_mix = 0.70F;
-    }
-
-    if (state.scene_time >= frame.p3_start && state.scene_time < frame.p3_end + 0.55F) {
-        const float p3_duration = std::max(0.01F, frame.p3_end - frame.p3_start);
-        const float p3_time = state.scene_time - frame.p3_start;
-        const float p3_fade = state.scene_time < frame.p3_start + 0.5F
-                                  ? saturate((state.scene_time - frame.p3_start) / 0.5F)
-                                  : 1.0F;
-        const float exit_elapsed = std::max(0.0F, state.scene_time - frame.p3_end);
-        const float exit_tail = saturate(exit_elapsed / 0.55F);
-        const float smooth_tail = smoothstep(exit_tail);
-        const float exit_keep = 1.0F - smooth_tail;
-        const float phase = saturate(p3_time / p3_duration);
-        const float run_energy = p3_fade * (0.20F + 0.80F * phase) *
-                                 (state.scene_time >= frame.p3_end ? exit_keep : 1.0F);
-        const float exit_energy = p3_fade * std::min(0.38F, exit_elapsed * 0.70F) * exit_keep;
-        const float p4_floor = state.scene_time >= frame.p3_end ? 0.12F * smooth_tail : 0.0F;
-        state.particles = p3_fade > 0.01F;
-        state.particle_alpha = p3_fade * exit_keep;
-        state.camera_z = camera_z_with_exit(p3_time, p3_duration, p3_duration, 0.55F);
-        state.camera_velocity = camera_end_velocity(p3_duration);
-        state.energy = state.scene_time >= frame.p3_end
-                           ? std::max(0.12F, run_energy + exit_energy + p4_floor)
-                           : run_energy;
-        state.flash = std::max(0.0F, 1.0F - p3_time / 0.70F) * 0.18F +
-                      std::min(0.24F, exit_elapsed * 0.52F) * exit_keep;
-        state.startup_burst = 0.0F;
-        state.startup_wave = 1.0F;
-        state.motion_mix = exit_elapsed > 0.0F ? 0.60F + 0.32F * exit_tail : 0.60F;
-        state.cool_mix = 1.0F;
-        state.tint = {0.45F, 0.80F, 1.0F};
-    } else if (!state.particles) {
-        state.startup_burst = 0.0F;
-        state.startup_wave = 1.0F;
-        if (state.scene_time >= frame.p3_start) {
-            const float exit_elapsed = std::max(0.0F, state.scene_time - frame.p3_end);
-            const float tail = smoothstep(saturate(exit_elapsed / 0.55F));
-            state.energy = std::max(0.12F, 0.12F * tail);
-            state.flash = 0.0F;
-            state.cool_mix = 1.0F;
-            state.tint = {0.45F, 0.80F, 1.0F};
-            state.motion_mix = 0.92F;
-        } else {
-            const float fade = saturate((state.scene_time - frame.p1_end) / 1.2F);
-            state.energy = lerp(0.85F, 0.12F, ease_out(fade));
-            state.flash = lerp(0.15F, 0.0F, fade);
-        }
-    }
-
-    if (frame.reduced_motion) {
-        state.particles = false;
-        state.camera_velocity = 0.0F;
-        state.energy = std::min(state.energy, 0.16F);
-        state.flash = std::min(state.flash, 0.08F);
-        state.startup_burst = 0.0F;
-        state.startup_wave =
-            elapsed < prelude ? saturate(elapsed / std::max(0.01F, prelude)) : 1.0F;
-    }
+    float visibility = 0.0F;
+    const auto travel = [&](float start, float end, float distance) {
+        if (end <= start)
+            return;
+        const float duration = end - start;
+        const float tail = std::min(0.40F, std::max(0.001F, duration * 0.20F));
+        const float span = duration + tail;
+        const float progress = saturate((state.scene_time - start) / span);
+        const float accelerate = saturate(progress / 0.18F);
+        const float decelerate = saturate((progress - 0.72F) / 0.28F);
+        const float distance_in = accelerate * accelerate * accelerate *
+                                  (1.0F - accelerate * 0.5F);
+        const float distance_out = decelerate * decelerate * decelerate *
+                                   (1.0F - decelerate * 0.5F);
+        const float displacement =
+            (0.18F * distance_in + std::max(0.0F, progress - 0.18F) -
+             0.28F * distance_out) / 0.77F;
+        state.camera_z += distance * saturate(displacement);
+        state.camera_velocity += distance * smoothstep(accelerate) *
+                                 (1.0F - smoothstep(decelerate)) / (span * 0.77F);
+        const float enter = smoothstep((state.scene_time - start) / std::min(0.38F, duration));
+        const float leave = 1.0F - smoothstep((state.scene_time - end) / tail);
+        visibility = std::max(visibility, enter * leave);
+    };
+    travel(0.0F, frame.p1_end, 16000.0F);
+    travel(frame.p3_start, frame.p3_end, 32000.0F);
+    state.particle_alpha = visibility * 0.95F;
+    state.particles = state.particle_alpha > 0.001F;
+    state.energy = visibility * (0.30F + 0.30F * saturate(state.camera_velocity / 9000.0F));
+    state.motion_mix = saturate(state.camera_velocity / 9000.0F);
     return state;
 }
 
@@ -338,26 +195,29 @@ struct Renderer {
     ID3D11PixelShader* streak_ps{};
     ID3D11PixelShader* post_ps{};
     ID3D11InputLayout* streak_layout{};
-    ID3D11Buffer* cylinder_buffer{};
+    ID3D11Buffer* column_buffer{};
     ID3D11Buffer* instance_buffer{};
     ID3D11Buffer* constants{};
     ID3D11SamplerState* sampler{};
     ID3D11BlendState* premultiplied_blend{};
     ID3D11BlendState* additive_blend{};
-    ID3D11DepthStencilState* depth_enabled{};
     ID3D11DepthStencilState* depth_disabled{};
     ID3D11RasterizerState* no_cull_rasterizer{};
     ID3D11Texture2D* scene{};
     ID3D11RenderTargetView* scene_rtv{};
     ID3D11ShaderResourceView* scene_srv{};
-    ID3D11Texture2D* scene_depth{};
-    ID3D11DepthStencilView* scene_dsv{};
     ID3D11Texture2D* bloom_a{};
     ID3D11RenderTargetView* bloom_a_rtv{};
     ID3D11ShaderResourceView* bloom_a_srv{};
     ID3D11Texture2D* bloom_b{};
     ID3D11RenderTargetView* bloom_b_rtv{};
     ID3D11ShaderResourceView* bloom_b_srv{};
+    ID3D11Texture2D* bloom_wide_a{};
+    ID3D11RenderTargetView* bloom_wide_a_rtv{};
+    ID3D11ShaderResourceView* bloom_wide_a_srv{};
+    ID3D11Texture2D* bloom_wide_b{};
+    ID3D11RenderTargetView* bloom_wide_b_rtv{};
+    ID3D11ShaderResourceView* bloom_wide_b_srv{};
     uint32_t width{};
     uint32_t height{};
     uint32_t uploaded_seed{};
@@ -367,14 +227,18 @@ struct Renderer {
 namespace {
 
 void release_targets(Renderer& renderer) noexcept {
+    release(renderer.bloom_wide_b_srv);
+    release(renderer.bloom_wide_b_rtv);
+    release(renderer.bloom_wide_b);
+    release(renderer.bloom_wide_a_srv);
+    release(renderer.bloom_wide_a_rtv);
+    release(renderer.bloom_wide_a);
     release(renderer.bloom_b_srv);
     release(renderer.bloom_b_rtv);
     release(renderer.bloom_b);
     release(renderer.bloom_a_srv);
     release(renderer.bloom_a_rtv);
     release(renderer.bloom_a);
-    release(renderer.scene_dsv);
-    release(renderer.scene_depth);
     release(renderer.scene_srv);
     release(renderer.scene_rtv);
     release(renderer.scene);
@@ -386,13 +250,12 @@ void release_device(Renderer& renderer) noexcept {
     release_targets(renderer);
     release(renderer.no_cull_rasterizer);
     release(renderer.depth_disabled);
-    release(renderer.depth_enabled);
     release(renderer.additive_blend);
     release(renderer.premultiplied_blend);
     release(renderer.sampler);
     release(renderer.constants);
     release(renderer.instance_buffer);
-    release(renderer.cylinder_buffer);
+    release(renderer.column_buffer);
     release(renderer.streak_layout);
     release(renderer.post_ps);
     release(renderer.streak_ps);
@@ -412,7 +275,7 @@ bool create_color_target(ID3D11Device* device, uint32_t width, uint32_t height,
     desc.Height = height;
     desc.MipLevels = 1u;
     desc.ArraySize = 1u;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     desc.SampleDesc.Count = 1u;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -425,10 +288,10 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
     const bool ready = renderer.fullscreen_vs != nullptr && renderer.background_ps != nullptr &&
                        renderer.streak_vs != nullptr && renderer.streak_ps != nullptr &&
                        renderer.post_ps != nullptr && renderer.streak_layout != nullptr &&
-                       renderer.cylinder_buffer != nullptr && renderer.instance_buffer != nullptr &&
+                       renderer.column_buffer != nullptr && renderer.instance_buffer != nullptr &&
                        renderer.constants != nullptr && renderer.sampler != nullptr &&
                        renderer.premultiplied_blend != nullptr &&
-                       renderer.additive_blend != nullptr && renderer.depth_enabled != nullptr &&
+                       renderer.additive_blend != nullptr &&
                        renderer.depth_disabled != nullptr && renderer.no_cull_rasterizer != nullptr;
     if (renderer.device == device && ready)
         return true;
@@ -478,28 +341,48 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
         return false;
     }
 
-    std::array<Vertex, kCylinderVertexCount> vertices{};
-    uint32_t cursor = 0u;
-    for (uint32_t segment = 0u; segment < kCylinderSegments; ++segment) {
-        const float a0 =
-            2.0F * kPi * static_cast<float>(segment) / static_cast<float>(kCylinderSegments);
-        const float a1 =
-            2.0F * kPi * static_cast<float>(segment + 1u) / static_cast<float>(kCylinderSegments);
-        const float c0 = std::cos(a0), s0 = std::sin(a0);
-        const float c1 = std::cos(a1), s1 = std::sin(a1);
-        vertices[cursor++] = {{c0, s0, 0.0F}, {c0, s0, 0.0F}};
-        vertices[cursor++] = {{c1, s1, 0.0F}, {c1, s1, 0.0F}};
-        vertices[cursor++] = {{c0, s0, 1.0F}, {c0, s0, 0.0F}};
-        vertices[cursor++] = {{c1, s1, 0.0F}, {c1, s1, 0.0F}};
-        vertices[cursor++] = {{c1, s1, 1.0F}, {c1, s1, 0.0F}};
-        vertices[cursor++] = {{c0, s0, 1.0F}, {c0, s0, 0.0F}};
+    std::array<Vertex, kStreakVertexCount> vertices{};
+    size_t vertex_count = 0u;
+    const auto triangle = [&](Vertex a, Vertex b, Vertex c) {
+        vertices[vertex_count++] = a;
+        vertices[vertex_count++] = b;
+        vertices[vertex_count++] = c;
+    };
+    const auto cap_vertex = [](float angle, float latitude, float end, float direction) {
+        const float radius = std::max(0.0F, std::cos(latitude));
+        const float x = std::cos(angle) * radius;
+        const float y = std::sin(angle) * radius;
+        return Vertex{{x, y, end}, {x, y, direction * std::sin(latitude)}};
+    };
+    for (uint32_t side = 0u; side < kColumnSides; ++side) {
+        const float a = static_cast<float>(side) * 2.0F * kPi / static_cast<float>(kColumnSides);
+        const float b = static_cast<float>(side + 1u) * 2.0F * kPi / static_cast<float>(kColumnSides);
+        const Vertex a0 = cap_vertex(a, 0.0F, 0.0F, 1.0F);
+        const Vertex b0 = cap_vertex(b, 0.0F, 0.0F, 1.0F);
+        const Vertex a1 = cap_vertex(a, 0.0F, 1.0F, 1.0F);
+        const Vertex b1 = cap_vertex(b, 0.0F, 1.0F, 1.0F);
+        triangle(a0, b0, a1);
+        triangle(b0, b1, a1);
+        for (uint32_t end = 0u; end < 2u; ++end) {
+            const float direction = end == 0u ? -1.0F : 1.0F;
+            for (uint32_t ring = 0u; ring < 2u; ++ring) {
+                const float low = static_cast<float>(ring) * kPi * 0.25F;
+                const float high = static_cast<float>(ring + 1u) * kPi * 0.25F;
+                const Vertex p0 = cap_vertex(a, low, static_cast<float>(end), direction);
+                const Vertex p1 = cap_vertex(b, low, static_cast<float>(end), direction);
+                const Vertex p2 = cap_vertex(a, high, static_cast<float>(end), direction);
+                const Vertex p3 = cap_vertex(b, high, static_cast<float>(end), direction);
+                triangle(p0, p1, p2);
+                triangle(p1, p3, p2);
+            }
+        }
     }
     D3D11_BUFFER_DESC buffer_desc{};
     buffer_desc.ByteWidth = static_cast<UINT>(sizeof(vertices));
     buffer_desc.Usage = D3D11_USAGE_IMMUTABLE;
     buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     D3D11_SUBRESOURCE_DATA init{vertices.data(), 0u, 0u};
-    if (FAILED(device->CreateBuffer(&buffer_desc, &init, &renderer.cylinder_buffer))) {
+    if (FAILED(device->CreateBuffer(&buffer_desc, &init, &renderer.column_buffer))) {
         release_device(renderer);
         return false;
     }
@@ -550,13 +433,6 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
         return false;
     }
     D3D11_DEPTH_STENCIL_DESC depth_desc{};
-    depth_desc.DepthEnable = TRUE;
-    depth_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-    depth_desc.DepthFunc = D3D11_COMPARISON_LESS;
-    if (FAILED(device->CreateDepthStencilState(&depth_desc, &renderer.depth_enabled))) {
-        release_device(renderer);
-        return false;
-    }
     depth_desc.DepthEnable = FALSE;
     depth_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
     if (FAILED(device->CreateDepthStencilState(&depth_desc, &renderer.depth_disabled))) {
@@ -580,27 +456,20 @@ bool ensure_targets(Renderer& renderer, uint32_t width, uint32_t height) noexcep
     release_targets(renderer);
     const uint32_t half_width = std::max(1u, width / 2u);
     const uint32_t half_height = std::max(1u, height / 2u);
+    const uint32_t quarter_width = std::max(1u, width / 4u);
+    const uint32_t quarter_height = std::max(1u, height / 4u);
     if (!create_color_target(renderer.device, width, height, &renderer.scene, &renderer.scene_rtv,
                              &renderer.scene_srv) ||
         !create_color_target(renderer.device, half_width, half_height, &renderer.bloom_a,
                              &renderer.bloom_a_rtv, &renderer.bloom_a_srv) ||
         !create_color_target(renderer.device, half_width, half_height, &renderer.bloom_b,
-                             &renderer.bloom_b_rtv, &renderer.bloom_b_srv)) {
-        release_targets(renderer);
-        return false;
-    }
-    D3D11_TEXTURE2D_DESC depth_desc{};
-    depth_desc.Width = width;
-    depth_desc.Height = height;
-    depth_desc.MipLevels = 1u;
-    depth_desc.ArraySize = 1u;
-    depth_desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    depth_desc.SampleDesc.Count = 1u;
-    depth_desc.Usage = D3D11_USAGE_DEFAULT;
-    depth_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    if (FAILED(renderer.device->CreateTexture2D(&depth_desc, nullptr, &renderer.scene_depth)) ||
-        FAILED(renderer.device->CreateDepthStencilView(renderer.scene_depth, nullptr,
-                                                       &renderer.scene_dsv))) {
+                             &renderer.bloom_b_rtv, &renderer.bloom_b_srv) ||
+        !create_color_target(renderer.device, quarter_width, quarter_height,
+                             &renderer.bloom_wide_a, &renderer.bloom_wide_a_rtv,
+                             &renderer.bloom_wide_a_srv) ||
+        !create_color_target(renderer.device, quarter_width, quarter_height,
+                             &renderer.bloom_wide_b, &renderer.bloom_wide_b_rtv,
+                             &renderer.bloom_wide_b_srv)) {
         release_targets(renderer);
         return false;
     }
@@ -613,44 +482,59 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
     if (renderer.instances_ready && renderer.uploaded_seed == renderer.frame.seed)
         return true;
     constexpr std::array<std::array<float, 3>, 8> warm{{
-        {1.0F, 0.0F, 0.0F},
-        {1.0F, 1.0F, 0.0F},
-        {0.133F, 0.545F, 0.133F},
-        {0.133F, 0.133F, 0.133F},
-        {0.502F, 0.502F, 0.502F},
-        {0.0F, 0.749F, 1.0F},
-        {0.576F, 0.439F, 0.859F},
-        {1.0F, 0.078F, 0.576F},
+        {1.00F, 0.08F, 0.16F},
+        {1.00F, 0.38F, 0.04F},
+        {1.00F, 0.82F, 0.12F},
+        {0.14F, 1.00F, 0.32F},
+        {0.03F, 0.84F, 1.00F},
+        {0.12F, 0.28F, 1.00F},
+        {0.60F, 0.12F, 1.00F},
+        {1.00F, 0.12F, 0.58F},
     }};
     constexpr std::array<std::array<float, 3>, 8> cool{{
-        {0.0F, 0.267F, 0.8F},
-        {0.0F, 0.533F, 1.0F},
-        {0.0F, 0.8F, 1.0F},
-        {0.0F, 0.133F, 0.533F},
-        {0.533F, 0.933F, 1.0F},
-        {0.0F, 0.4F, 0.867F},
-        {0.667F, 0.933F, 1.0F},
-        {1.0F, 1.0F, 1.0F},
+        {0.04F, 0.24F, 1.00F},
+        {0.04F, 0.48F, 1.00F},
+        {0.08F, 0.70F, 1.00F},
+        {0.16F, 0.34F, 1.00F},
+        {0.03F, 0.38F, 0.96F},
+        {0.22F, 0.62F, 1.00F},
+        {0.06F, 0.54F, 1.00F},
+        {0.36F, 0.74F, 1.00F},
     }};
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(renderer.instance_buffer, 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped)))
         return false;
     auto* instances = static_cast<Instance*>(mapped.pData);
     uint32_t random = renderer.frame.seed == 0u ? 0x51a0c3d7u : renderer.frame.seed;
+    const float azimuth = random_unit(random) * 2.0F * kPi;
     for (uint32_t index = 0u; index < kParticleCount; ++index) {
-        const float angle = random_unit(random) * 2.0F * kPi;
-        const float radius = lerp(10.0F, 38.0F, random_unit(random));
-        const float depth = lerp(-800.0F, 1400.0F, random_unit(random));
-        const float brightness = lerp(0.7F, 1.0F, random_unit(random));
-        const float flicker = lerp(3.0F, 8.0F, random_unit(random));
-        const float width = lerp(0.8F, 1.4F, random_unit(random));
+        const bool foreground = index % 6u == 0u;
+        const bool filament = index % 6u == 1u;
+        const float angle = azimuth + static_cast<float>(index) * 2.39996323F +
+                            (random_unit(random) - 0.5F) * 0.08F;
+          const float radius = lerp(foreground ? 420.0F : 75.0F,
+                            foreground ? 1800.0F : 1300.0F, random_unit(random));
+          const float length = lerp(foreground ? 800.0F : (filament ? 100.0F : 350.0F),
+                            foreground ? 1600.0F : (filament ? 450.0F : 1150.0F),
+                                  random_unit(random));
+          const float width = lerp(foreground ? 7.0F : (filament ? 1.15F : 3.3F),
+                            foreground ? 14.0F : (filament ? 2.3F : 8.0F),
+                            random_unit(random));
+        const float depth = (static_cast<float>(index) + random_unit(random)) /
+                        static_cast<float>(kParticleCount) * (4800.0F + length + width * 2.0F);
+          const float brightness = lerp(filament ? 0.50F : 0.85F,
+                              foreground ? 1.25F : (filament ? 0.85F : 1.15F),
+                                      random_unit(random));
+        const float flicker = random_unit(random);
         const auto& warm_color = warm[index % warm.size()];
         const auto& cool_color = cool[index % cool.size()];
         instances[index] = {{radius * std::cos(angle), radius * std::sin(angle), depth},
-                            kStreakLength,
-                            kTubeRadius * width,
-                            {warm_color[0], warm_color[1], warm_color[2]},
-                            {cool_color[0], cool_color[1], cool_color[2]},
+                            length,
+                            width,
+                            {linear_channel(warm_color[0]), linear_channel(warm_color[1]),
+                             linear_channel(warm_color[2])},
+                            {linear_channel(cool_color[0]), linear_channel(cool_color[1]),
+                             linear_channel(cool_color[2])},
                             brightness,
                             flicker};
     }
@@ -710,7 +594,10 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
 
         const VisualState visual = visual_state(renderer->frame);
         const auto upload_constants = [&](float width, float height, float blur_x, float blur_y,
-                                          float camera, float alpha, float radius) noexcept {
+                                          float camera, float alpha, float radius,
+                                          float extract = 0.0F,
+                                          const VisualState* sample = nullptr) noexcept {
+            const VisualState& current = sample == nullptr ? visual : *sample;
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (FAILED(device_context->Map(renderer->constants, 0u, D3D11_MAP_WRITE_DISCARD, 0u,
                                            &mapped)))
@@ -718,7 +605,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             auto* values = static_cast<Constants*>(mapped.pData);
             *values = {{width, height},
                        renderer->frame.elapsed_seconds,
-                       visual.scene_time,
+                       current.scene_time,
                        renderer->frame.phase_progress,
                        renderer->frame.phase,
                        renderer->frame.connected_alpha,
@@ -726,14 +613,14 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                        camera,
                        alpha,
                        radius,
-                       visual.energy,
-                       visual.flash,
-                       visual.startup_burst,
-                       visual.startup_wave,
-                       visual.motion_mix,
+                       current.energy,
+                       current.flash,
+                       current.startup_burst,
+                       current.startup_wave,
+                       current.motion_mix,
                        visual.cool_mix,
                        {blur_x, blur_y},
-                       0.0F,
+                       extract,
                        {visual.background[0], visual.background[1], visual.background[2]},
                        0.0F,
                        {visual.tint[0], visual.tint[1], visual.tint[2]},
@@ -758,15 +645,13 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         constexpr UINT null_strides[2]{0u, 0u};
         constexpr UINT null_offsets[2]{0u, 0u};
         device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
-        ID3D11ShaderResourceView* null_inputs[2]{nullptr, nullptr};
-        device_context->PSSetShaderResources(0u, 2u, null_inputs);
+        ID3D11ShaderResourceView* null_inputs[3]{nullptr, nullptr, nullptr};
+        device_context->PSSetShaderResources(0u, 3u, null_inputs);
         constexpr float transparent[4]{0.0F, 0.0F, 0.0F, 0.0F};
         constexpr float blend_factor[4]{0.0F, 0.0F, 0.0F, 0.0F};
         device_context->ClearRenderTargetView(renderer->scene_rtv, transparent);
-        device_context->ClearDepthStencilView(renderer->scene_dsv,
-                                              D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0F, 0u);
         ID3D11RenderTargetView* scene_target = renderer->scene_rtv;
-        device_context->OMSetRenderTargets(1u, &scene_target, renderer->scene_dsv);
+        device_context->OMSetRenderTargets(1u, &scene_target, nullptr);
         device_context->OMSetBlendState(nullptr, blend_factor, 0xffffffffu);
         device_context->OMSetDepthStencilState(renderer->depth_disabled, 0u);
         D3D11_VIEWPORT viewport{0.0F,
@@ -788,46 +673,36 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                 return gpu_failure();
             UINT strides[]{sizeof(Vertex), sizeof(Instance)};
             UINT offsets[]{0u, 0u};
-            ID3D11Buffer* buffers[]{renderer->cylinder_buffer, renderer->instance_buffer};
+            ID3D11Buffer* buffers[]{renderer->column_buffer, renderer->instance_buffer};
             device_context->IASetVertexBuffers(0u, 2u, buffers, strides, offsets);
             device_context->IASetInputLayout(renderer->streak_layout);
             device_context->VSSetShader(renderer->streak_vs, nullptr, 0u);
             device_context->PSSetShader(renderer->streak_ps, nullptr, 0u);
             device_context->RSSetState(renderer->no_cull_rasterizer);
 
-            const float blur_strength = visual.cool_mix > 0.5F ? 0.78F : 0.70F;
             device_context->OMSetDepthStencilState(renderer->depth_disabled, 0u);
             device_context->OMSetBlendState(renderer->additive_blend, blend_factor, 0xffffffffu);
-            constexpr std::array<float, 2> ghost_steps{1.05F, 0.55F};
-            constexpr std::array<float, 2> ghost_alpha{0.16F, 0.30F};
-            constexpr std::array<float, 2> ghost_radius{1.095F, 1.055F};
-            for (size_t index = 0u; index < ghost_steps.size(); ++index) {
-                const float ghost_camera =
-                    visual.camera_z - visual.camera_velocity * (ghost_steps[index] / 60.0F);
+            constexpr std::array<float, 3> shutter_offsets{1.0F / 120.0F, 1.0F / 240.0F, 0.0F};
+            constexpr std::array<float, 3> shutter_weights{0.25F, 0.35F, 0.40F};
+            for (size_t index = 0u; index < shutter_offsets.size(); ++index) {
+                FrameState sample_frame = renderer->frame;
+                sample_frame.elapsed_seconds =
+                    std::max(0.0F, sample_frame.elapsed_seconds - shutter_offsets[index]);
+                const VisualState sample = visual_state(sample_frame);
                 if (!upload_constants(static_cast<float>(context->width_px),
                                       static_cast<float>(context->height_px), 0.0F, 0.0F,
-                                      ghost_camera,
-                                      visual.particle_alpha * ghost_alpha[index] * blur_strength,
-                                      ghost_radius[index]))
+                                      sample.camera_z,
+                                      sample.particle_alpha * shutter_weights[index],
+                                      1.0F, 0.0F, &sample))
                     return gpu_failure();
-                device_context->DrawInstanced(kCylinderVertexCount, kParticleCount, 0u, 0u);
+                device_context->DrawInstanced(kStreakVertexCount, kParticleCount, 0u, 0u);
             }
-            if (!upload_constants(static_cast<float>(context->width_px),
-                                  static_cast<float>(context->height_px), 0.0F, 0.0F,
-                                  visual.camera_z, visual.particle_alpha, 1.0F))
-                return gpu_failure();
-            device_context->OMSetDepthStencilState(renderer->depth_enabled, 0u);
-            device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor,
-                                            0xffffffffu);
-            device_context->DrawInstanced(kCylinderVertexCount, kParticleCount, 0u, 0u);
         }
 
         const uint32_t half_width = std::max(1u, context->width_px / 2u);
         const uint32_t half_height = std::max(1u, context->height_px / 2u);
-        D3D11_VIEWPORT half_viewport{
-            0.0F, 0.0F, static_cast<float>(half_width), static_cast<float>(half_height),
-            0.0F, 1.0F};
-        device_context->RSSetViewports(1u, &half_viewport);
+        const uint32_t quarter_width = std::max(1u, context->width_px / 4u);
+        const uint32_t quarter_height = std::max(1u, context->height_px / 4u);
         device_context->RSSetState(nullptr);
         device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
         device_context->IASetInputLayout(nullptr);
@@ -836,10 +711,14 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         device_context->OMSetDepthStencilState(renderer->depth_disabled, 0u);
         device_context->OMSetBlendState(nullptr, blend_factor, 0xffffffffu);
         const auto blur = [&](ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target,
-                              float x, float y) noexcept {
-            if (!upload_constants(static_cast<float>(half_width), static_cast<float>(half_height),
-                                  x, y, visual.camera_z, visual.particle_alpha, 1.0F))
+                              uint32_t width, uint32_t height, float x, float y,
+                              float extract) noexcept {
+            if (!upload_constants(static_cast<float>(width), static_cast<float>(height),
+                                  x, y, visual.camera_z, visual.particle_alpha, 1.0F, extract))
                 return false;
+            const D3D11_VIEWPORT blur_viewport{0.0F, 0.0F, static_cast<float>(width),
+                                               static_cast<float>(height), 0.0F, 1.0F};
+            device_context->RSSetViewports(1u, &blur_viewport);
             device_context->OMSetRenderTargets(1u, &target, nullptr);
             device_context->PSSetShaderResources(0u, 1u, &source);
             device_context->Draw(6u, 0u);
@@ -848,8 +727,14 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             return true;
         };
         if (!renderer->frame.reduced_motion &&
-            (!blur(renderer->scene_srv, renderer->bloom_a_rtv, 1.0F, 0.0F) ||
-             !blur(renderer->bloom_a_srv, renderer->bloom_b_rtv, 0.0F, 1.0F)))
+            (!blur(renderer->scene_srv, renderer->bloom_a_rtv,
+                 half_width, half_height, 1.0F, 0.0F, 1.0F) ||
+             !blur(renderer->bloom_a_srv, renderer->bloom_b_rtv,
+                 half_width, half_height, 0.0F, 1.0F, 0.0F) ||
+             !blur(renderer->bloom_b_srv, renderer->bloom_wide_a_rtv,
+                 quarter_width, quarter_height, 2.4F, 0.0F, 0.0F) ||
+             !blur(renderer->bloom_wide_a_srv, renderer->bloom_wide_b_rtv,
+                 quarter_width, quarter_height, 0.0F, 2.4F, 0.0F)))
             return gpu_failure();
 
         if (!upload_constants(static_cast<float>(context->width_px),
@@ -859,12 +744,13 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         device_context->RSSetViewports(1u, &viewport);
         device_context->OMSetRenderTargets(1u, &output, nullptr);
         ID3D11ShaderResourceView* sources[]{
-            renderer->scene_srv, renderer->frame.reduced_motion ? nullptr : renderer->bloom_b_srv};
-        device_context->PSSetShaderResources(0u, 2u, sources);
+            renderer->scene_srv,
+            renderer->frame.reduced_motion ? nullptr : renderer->bloom_b_srv,
+            renderer->frame.reduced_motion ? nullptr : renderer->bloom_wide_b_srv};
+        device_context->PSSetShaderResources(0u, 3u, sources);
         device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor, 0xffffffffu);
         device_context->Draw(6u, 0u);
-        ID3D11ShaderResourceView* null_sources[]{nullptr, nullptr};
-        device_context->PSSetShaderResources(0u, 2u, null_sources);
+        device_context->PSSetShaderResources(0u, 3u, null_inputs);
         return FAILED(device->GetDeviceRemovedReason()) ? SAO_STATUS_ERR_DEVICE_LOST
                                                         : SAO_STATUS_OK;
     } catch (...) {

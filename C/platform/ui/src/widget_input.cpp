@@ -3,6 +3,7 @@
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
+#include "classic_text_roles.h"
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
 #include "widget_typed_internal.h"
@@ -673,8 +674,8 @@ uint32_t resolve_button_foreground(const SaoUiButtonSpec& spec) {
         return spec.colors.active_fg_argb;
     if (spec.colors.fg_argb != 0)
         return spec.colors.fg_argb;
-    return sao::ui::detail::panel_theme_color(spec.disabled ? SAO_UI_TOKEN_APP_TEXT_2
-                                                            : SAO_UI_TOKEN_APP_TEXT);
+    return sao::ui::detail::panel_theme_color(spec.active ? SAO_UI_TOKEN_BLACK
+                                                          : SAO_UI_TOKEN_APP_TEXT);
 }
 
 uint32_t blend_argb(uint32_t from, uint32_t to, float amount) {
@@ -2527,7 +2528,7 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
                     context, static_cast<float>(x), static_cast<float>(y),
                     static_cast<float>(width), static_cast<float>(height),
-                    static_cast<float>(std::max(0, spec.radius_px)), false,
+                    static_cast<float>(std::max(0, spec.radius_px)), spec.radius_px > 0,
                     sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
                 if (focus_status != SAO_STATUS_OK)
                     return focus_status;
@@ -2542,10 +2543,17 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 if (status != SAO_STATUS_OK)
                     return status;
             }
+            const float font_size = static_cast<float>(std::clamp(height - 8, 5, 15));
+            const float text_y = static_cast<float>(y) +
+                                 std::max(static_cast<float>(std::max(2, spec.pad_y_px)),
+                                          (static_cast<float>(height) - font_size) * 0.5F) +
+                                 (pressed ? 1.0F : 0.0F);
+            const sao::ui::detail::ScopedTextRole text_role(
+                sao::ui::detail::ClassicTextRole::Body,
+                sao::ui::detail::ClassicTextWeight::SemiBold);
             return sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(x + std::max(2, spec.pad_x_px)),
-                static_cast<float>(y + std::max(2, spec.pad_y_px) + (pressed ? 1 : 0)),
-                text.c_str(), static_cast<float>(std::clamp(height - 8, 5, 15)), foreground);
+                context, static_cast<float>(x + std::max(2, spec.pad_x_px)), text_y, text.c_str(),
+                font_size, foreground);
         }
         case kIconButtonTag: {
             SaoUiIconButtonSpec spec{};
@@ -2723,12 +2731,26 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 if (status != SAO_STATUS_OK)
                     return status;
             }
+            const float dropdown_font_size =
+                static_cast<float>(std::clamp(height - 8, 5, 15));
+            const sao::ui::detail::ScopedTextRole dropdown_text_role(
+                sao::ui::detail::ClassicTextRole::Body);
             sao_status_t text_status = sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(x + 4),
-                static_cast<float>(y + 3 + (pressed && !disabled ? 1 : 0)), text.c_str(),
-                static_cast<float>(std::clamp(height - 7, 5, 15)), foreground);
+                context, static_cast<float>(x + 8),
+                static_cast<float>(y) +
+                    std::max(2.0F, (static_cast<float>(height) - dropdown_font_size) * 0.5F) +
+                    (pressed && !disabled ? 1.0F : 0.0F),
+                text.c_str(), dropdown_font_size, foreground);
             if (text_status != SAO_STATUS_OK)
                 return text_status;
+            if (width > 32 && height > 12) {
+                const float divider_x = static_cast<float>(x + width - 24);
+                status = sao_ui_paint_ctx_stroke_line(
+                    context, divider_x, static_cast<float>(y + 6), divider_x,
+                    static_cast<float>(y + height - 6), 1.0F, border);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
             const float chevron_x = static_cast<float>(x + width - 12);
             const float chevron_y = static_cast<float>(y + height / 2);
             status = sao_ui_paint_ctx_stroke_line(
@@ -2779,14 +2801,17 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 const uint32_t dim_text =
                     sao::ui::detail::panel_theme_color(
                         high_contrast ? SAO_UI_TOKEN_DISABLED_FG : SAO_UI_TOKEN_APP_TEXT_DIM);
-                status = sao_ui_paint_ctx_fill_rect(
+                const float popup_radius = static_cast<float>(
+                    sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_SMALL));
+                status = sao::ui::detail::paint_rounded_rect(
                     context, static_cast<float>(popup_x), static_cast<float>(popup_y),
-                    static_cast<float>(popup_w), static_cast<float>(popup_h), popup_fill);
+                    static_cast<float>(popup_w), static_cast<float>(popup_h), popup_radius,
+                    popup_fill);
                 if (status == SAO_STATUS_OK)
-                    status = sao_ui_paint_ctx_stroke_line(
+                    status = sao::ui::detail::paint_rounded_rect_stroke(
                         context, static_cast<float>(popup_x), static_cast<float>(popup_y),
-                        static_cast<float>(popup_x + popup_w),
-                        static_cast<float>(popup_y), 1.0F, popup_border);
+                        static_cast<float>(popup_w), static_cast<float>(popup_h), popup_radius,
+                        1.0F, popup_border);
                 for (int32_t row = 0; row < visible_rows && status == SAO_STATUS_OK; ++row) {
                     const int32_t entry_index = first_row + row;
                     if (entry_index >= static_cast<int32_t>(entries.size()))
@@ -2879,26 +2904,22 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 box_border = scale_alpha(box_border, 0.4F);
                 check = scale_alpha(check, 0.4F);
             }
+            const int32_t box_radius = std::min(
+                box / 2,
+                sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_BORDER_RADIUS_SMALL));
             if (focused && !spec.disabled) {
                 const sao_status_t focus_status = sao::ui::detail::paint_focus_ring(
                     context, static_cast<float>(x), static_cast<float>(top),
-                    static_cast<float>(box), static_cast<float>(box), 0.0F, false,
+                    static_cast<float>(box), static_cast<float>(box),
+                    static_cast<float>(box_radius), true,
                     sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING));
                 if (focus_status != SAO_STATUS_OK)
                     return focus_status;
             }
-            sao_status_t status = sao_ui_paint_ctx_fill_rect(
-                context, static_cast<float>(x), static_cast<float>(top), static_cast<float>(box),
-                static_cast<float>(box), box_border);
+            sao_status_t status =
+                paint_button_box(context, x, top, box, box, box_fill, box_border, box_radius);
             if (status != SAO_STATUS_OK)
                 return status;
-            if (box > 2) {
-                status = sao_ui_paint_ctx_fill_rect(
-                    context, static_cast<float>(x + 1), static_cast<float>(top + 1),
-                    static_cast<float>(box - 2), static_cast<float>(box - 2), box_fill);
-                if (status != SAO_STATUS_OK)
-                    return status;
-            }
             if (spec.checked) {
                 const float stroke = std::max(1.0F, static_cast<float>(box) * 0.12F);
                 status = sao_ui_paint_ctx_stroke_line(
@@ -2974,6 +2995,15 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
                 static_cast<float>(ring), ring_color);
             if (status != SAO_STATUS_OK)
                 return status;
+            if (ring > 2) {
+                const uint32_t interior = sao::ui::detail::panel_theme_color(
+                    spec.disabled ? SAO_UI_TOKEN_DISABLED_BG : SAO_UI_TOKEN_APP_CARD);
+                status = sao_ui_paint_ctx_fill_ellipse(
+                    context, static_cast<float>(x + 1), static_cast<float>(top + 1),
+                    static_cast<float>(ring - 2), static_cast<float>(ring - 2), interior);
+                if (status != SAO_STATUS_OK)
+                    return status;
+            }
             if (!high_contrast && pressed && !spec.disabled && ring > 4) {
                 const int32_t inner = std::max(2, ring / 5);
                 status = sao_ui_paint_ctx_fill_ellipse(
@@ -3042,15 +3072,17 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
             if (spec.vertical) {
                 const int32_t thickness = std::max(1, spec.track_thickness_px);
                 const int32_t track_x = x + (width - thickness) / 2;
-                sao_status_t status = sao_ui_paint_ctx_fill_rect(
+                sao_status_t status = sao::ui::detail::paint_rounded_rect(
                     context, static_cast<float>(track_x), static_cast<float>(y),
-                    static_cast<float>(thickness), static_cast<float>(height), track);
+                    static_cast<float>(thickness), static_cast<float>(height),
+                    static_cast<float>(thickness) * 0.5F, track);
                 if (status != SAO_STATUS_OK)
                     return status;
                 const int32_t filled = static_cast<int32_t>(std::lround(height * ratio));
-                status = sao_ui_paint_ctx_fill_rect(
+                status = sao::ui::detail::paint_rounded_rect(
                     context, static_cast<float>(track_x), static_cast<float>(y + height - filled),
-                    static_cast<float>(thickness), static_cast<float>(std::max(1, filled)), fill);
+                    static_cast<float>(thickness), static_cast<float>(std::max(1, filled)),
+                    static_cast<float>(thickness) * 0.5F, fill);
                 if (status != SAO_STATUS_OK)
                     return status;
                 const int32_t base_size = std::clamp(spec.thumb_size_px, 4, std::max(4, width));
@@ -3081,15 +3113,17 @@ sao_status_t sao::ui::detail::widget_input_paint(sao_ui_widget_handle_t handle, 
             }
             const int32_t thickness = std::max(1, spec.track_thickness_px);
             const int32_t track_y = y + (height - thickness) / 2;
-            sao_status_t status = sao_ui_paint_ctx_fill_rect(
+            sao_status_t status = sao::ui::detail::paint_rounded_rect(
                 context, static_cast<float>(x), static_cast<float>(track_y),
-                static_cast<float>(width), static_cast<float>(thickness), track);
+                static_cast<float>(width), static_cast<float>(thickness),
+                static_cast<float>(thickness) * 0.5F, track);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t filled = static_cast<int32_t>(std::lround(width * ratio));
-            status = sao_ui_paint_ctx_fill_rect(
+            status = sao::ui::detail::paint_rounded_rect(
                 context, static_cast<float>(x), static_cast<float>(track_y),
-                static_cast<float>(std::max(1, filled)), static_cast<float>(thickness), fill);
+                static_cast<float>(std::max(1, filled)), static_cast<float>(thickness),
+                static_cast<float>(thickness) * 0.5F, fill);
             if (status != SAO_STATUS_OK)
                 return status;
             const int32_t base_size = std::clamp(spec.thumb_size_px, 4, std::max(4, height));

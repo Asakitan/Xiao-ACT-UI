@@ -3,6 +3,7 @@
 #include "sao/ui/sound.h"
 
 #include "sound_assets.h"
+#include "sound_sequence_internal.h"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +31,16 @@
 #include <objbase.h>
 #include <xaudio2.h>
 #endif
+
+namespace sao::ui::sound_detail {
+struct LinkStartAudioPlayback {
+    std::mutex mutex;
+    LinkStartAudioSnapshot snapshot;
+#if defined(_WIN32)
+    IXAudio2SourceVoice* voice{};
+#endif
+};
+} // namespace sao::ui::sound_detail
 
 namespace {
 
@@ -138,6 +149,63 @@ sao_status_t parse_pcm_wave(const uint8_t* bytes, size_t byte_count,
     return SAO_STATUS_OK;
 }
 
+sao_status_t load_embedded_wave(SaoUiSoundCue cue, WaveResource* out_wave) noexcept {
+    if (!valid_cue(cue) || out_wave == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCWSTR>(&g_sound_volume), &module) || module == nullptr)
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    const HRSRC resource = FindResourceW(module,
+        MAKEINTRESOURCEW(kSoundResourceIds[static_cast<size_t>(cue)]), RT_RCDATA);
+    if (resource == nullptr)
+        return SAO_STATUS_ERR_NOT_FOUND;
+    const DWORD size = SizeofResource(module, resource);
+    const HGLOBAL loaded = LoadResource(module, resource);
+    const auto* bytes = loaded == nullptr ? nullptr : static_cast<const uint8_t*>(LockResource(loaded));
+    return bytes == nullptr || size == 0u ? SAO_STATUS_ERR_OS_CALL_FAILED
+                                        : parse_pcm_wave(bytes, size, out_wave);
+}
+
+sao_status_t load_linkstart_waves(std::array<WaveResource, 3>& waves,
+                                  sao::ui::sound_detail::LinkStartAudioSnapshot& output) noexcept {
+    constexpr std::array<SaoUiSoundCue, 3> cues{
+        SAO_UI_SOUND_LINK_START, SAO_UI_SOUND_NERVEGEAR, SAO_UI_SOUND_ALO_WELCOME};
+    sao::ui::sound_detail::LinkStartAudioSnapshot candidate{};
+    uint64_t frames = 0u;
+    for (size_t index = 0; index < cues.size(); ++index) {
+        const auto status = load_embedded_wave(cues[index], &waves[index]);
+        if (status != SAO_STATUS_OK)
+            return status;
+        const auto& format = waves[index].format;
+        const auto& first = waves[0].format;
+        if (format.nSamplesPerSec != first.nSamplesPerSec || format.nChannels != first.nChannels ||
+            format.nBlockAlign != first.nBlockAlign || format.wBitsPerSample != first.wBitsPerSample)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        frames += waves[index].sample_bytes / format.nBlockAlign;
+        candidate.cue_end_frames[index] = frames;
+    }
+    candidate.sample_rate = waves[0].format.nSamplesPerSec;
+    output = candidate;
+    return SAO_STATUS_OK;
+}
+
+void update_sequence_clock_locked(sao::ui::sound_detail::LinkStartAudioPlayback& playback) noexcept {
+    if (playback.voice == nullptr)
+        return;
+    XAUDIO2_VOICE_STATE state{};
+    playback.voice->GetState(&state, 0u);
+    const uint64_t total = playback.snapshot.cue_end_frames.back();
+    if (state.BuffersQueued == 0u) {
+        playback.snapshot.samples_played = total;
+        playback.snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::complete;
+    } else {
+        playback.snapshot.samples_played = std::max(playback.snapshot.samples_played,
+                                                     std::min<uint64_t>(state.SamplesPlayed, total));
+    }
+}
+
 struct SoundRequest {
     SaoUiSoundCue cue{SAO_UI_SOUND_CLICK};
     int32_t volume{};
@@ -146,6 +214,8 @@ struct SoundRequest {
     bool update_volume{};
     int32_t new_global_volume{};
     std::shared_ptr<std::vector<uint8_t>> custom_wave;
+    std::array<WaveResource, 3> sequence_waves{};
+    sao::ui::sound_detail::LinkStartAudioHandle sequence;
     sao_status_t status{SAO_STATUS_ERR_UNKNOWN};
     std::mutex done_mutex;
     std::condition_variable done_cv;
@@ -176,6 +246,27 @@ class SoundEngine final {
         request->group = group;
         request->custom_wave = std::move(bytes);
         return submit(request);
+    }
+
+    sao_status_t play_sequence(int32_t volume, sao_ui_sound_group_t group,
+                               sao::ui::sound_detail::LinkStartAudioHandle* output) {
+        auto request = std::make_shared<SoundRequest>();
+        request->volume = volume;
+        request->group = group;
+        request->sequence = std::make_shared<sao::ui::sound_detail::LinkStartAudioPlayback>();
+        const auto load_status = load_linkstart_waves(request->sequence_waves,
+                                                      request->sequence->snapshot);
+        if (load_status != SAO_STATUS_OK)
+            return load_status;
+        const auto status = submit(request);
+        if (status == SAO_STATUS_OK) {
+            std::lock_guard lock(request->sequence->mutex);
+            const auto state = request->sequence->snapshot.state;
+            if (state == sao::ui::sound_detail::LinkStartPlaybackState::playing ||
+                state == sao::ui::sound_detail::LinkStartPlaybackState::complete)
+                *output = request->sequence;
+        }
+        return status;
     }
 
     sao_status_t update_volume(int32_t volume) {
@@ -264,6 +355,86 @@ class SoundEngine final {
         std::shared_ptr<std::vector<uint8_t>> bytes;
     };
 
+    struct SequenceVoiceSlot {
+        IXAudio2SourceVoice* voice{};
+        sao_ui_sound_group_t group{};
+        int32_t requested_volume{};
+        sao::ui::sound_detail::LinkStartAudioHandle playback;
+    };
+
+    static void release_sequence_slot(SequenceVoiceSlot& slot) noexcept {
+        const auto playback = slot.playback;
+        if (slot.voice != nullptr && playback) {
+            std::lock_guard lock(playback->mutex);
+            update_sequence_clock_locked(*playback);
+            if (playback->snapshot.state != sao::ui::sound_detail::LinkStartPlaybackState::complete)
+                playback->snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::interrupted;
+            playback->voice = nullptr;
+            slot.voice->DestroyVoice();
+        }
+        slot = {};
+    }
+
+    void prune_sequence_voices_on_worker() noexcept {
+        for (auto& slot : sequence_voices_) {
+            if (slot.voice == nullptr)
+                continue;
+            bool finished = false;
+            {
+                std::lock_guard lock(slot.playback->mutex);
+                update_sequence_clock_locked(*slot.playback);
+                finished = slot.playback->snapshot.state ==
+                           sao::ui::sound_detail::LinkStartPlaybackState::complete;
+            }
+            if (finished)
+                release_sequence_slot(slot);
+        }
+    }
+
+    sao_status_t play_sequence_on_worker(const SoundRequest& request) noexcept {
+        const int32_t volume = std::min(request.volume, g_sound_volume.load(std::memory_order_acquire));
+        if (!g_sound_enabled.load(std::memory_order_acquire) || volume <= 0)
+            return SAO_STATUS_OK;
+        const auto status = ensure_engine();
+        if (status != SAO_STATUS_OK)
+            return status;
+        prune_sequence_voices_on_worker();
+        SequenceVoiceSlot* selected = nullptr;
+        for (auto& slot : sequence_voices_) {
+            if (slot.voice == nullptr) {
+                selected = &slot;
+                break;
+            }
+        }
+        if (selected == nullptr)
+            return SAO_STATUS_ERR_TIMEOUT;
+        IXAudio2SourceVoice* voice = nullptr;
+        HRESULT result = engine_->CreateSourceVoice(&voice, &request.sequence_waves[0].format);
+        if (FAILED(result) || voice == nullptr)
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        result = voice->SetVolume(static_cast<float>(volume) / 100.0F);
+        for (size_t index = 0; SUCCEEDED(result) && index < request.sequence_waves.size(); ++index) {
+            XAUDIO2_BUFFER buffer{};
+            buffer.Flags = index + 1u == request.sequence_waves.size() ? XAUDIO2_END_OF_STREAM : 0u;
+            buffer.AudioBytes = request.sequence_waves[index].sample_bytes;
+            buffer.pAudioData = request.sequence_waves[index].samples;
+            result = voice->SubmitSourceBuffer(&buffer);
+        }
+        if (SUCCEEDED(result))
+            result = voice->Start(0u);
+        if (FAILED(result)) {
+            voice->DestroyVoice();
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        {
+            std::lock_guard lock(request.sequence->mutex);
+            request.sequence->voice = voice;
+            request.sequence->snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::playing;
+        }
+        *selected = {voice, request.group, request.volume, request.sequence};
+        return SAO_STATUS_OK;
+    }
+
     static bool short_feedback_cue(SaoUiSoundCue cue) noexcept {
         return cue == SAO_UI_SOUND_CLICK || cue == SAO_UI_SOUND_SUBMENU ||
                cue == SAO_UI_SOUND_ALERT_CLOSE || cue == SAO_UI_SOUND_MESSAGE;
@@ -287,6 +458,10 @@ class SoundEngine final {
                 slot.voice->DestroyVoice();
                 slot = {};
             }
+        }
+        for (auto& slot : sequence_voices_) {
+            if (slot.group == group)
+                release_sequence_slot(slot);
         }
     }
 
@@ -433,6 +608,8 @@ class SoundEngine final {
                 update(slot);
         for (auto& slot : custom_voices_)
             update(slot);
+        for (auto& slot : sequence_voices_)
+            update(slot);
     }
 
     void prune_finished_voices_on_worker() noexcept {
@@ -451,6 +628,7 @@ class SoundEngine final {
                 prune(slot);
         for (auto& slot : custom_voices_)
             prune(slot);
+        prune_sequence_voices_on_worker();
     }
 
     sao_status_t ensure_engine() noexcept {
@@ -486,19 +664,7 @@ class SoundEngine final {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (!state->load_attempted) {
             state->load_attempted = true;
-            const int32_t resource_id = kSoundResourceIds[static_cast<size_t>(cue)];
-            const HRSRC resource = FindResourceW(module_, MAKEINTRESOURCEW(resource_id), RT_RCDATA);
-            if (resource == nullptr) {
-                state->load_status = SAO_STATUS_ERR_NOT_FOUND;
-            } else {
-                const DWORD resource_size = SizeofResource(module_, resource);
-                const HGLOBAL loaded = LoadResource(module_, resource);
-                const auto* bytes =
-                    loaded == nullptr ? nullptr : static_cast<const uint8_t*>(LockResource(loaded));
-                state->load_status = resource_size == 0U || bytes == nullptr
-                                         ? SAO_STATUS_ERR_OS_CALL_FAILED
-                                         : parse_pcm_wave(bytes, resource_size, &state->wave);
-            }
+            state->load_status = load_embedded_wave(cue, &state->wave);
         }
         if (state->load_status != SAO_STATUS_OK)
             return state->load_status;
@@ -506,6 +672,8 @@ class SoundEngine final {
     }
 
     void release_engine() noexcept {
+        for (auto& slot : sequence_voices_)
+            release_sequence_slot(slot);
         for (auto& cue : cues_) {
             for (auto& slot : cue.voices) {
                 if (slot.voice != nullptr) {
@@ -595,6 +763,8 @@ class SoundEngine final {
                 } else if (request->update_volume) {
                     update_active_volume_on_worker(request->new_global_volume);
                     complete(request, SAO_STATUS_OK);
+                } else if (request->sequence) {
+                    complete(request, play_sequence_on_worker(*request));
                 } else if (request->custom_wave != nullptr) {
                     complete(request, play_custom_on_worker(request->custom_wave, request->volume,
                                                             request->group));
@@ -615,6 +785,7 @@ class SoundEngine final {
 
     std::array<CueState, SAO_UI_SOUND_COUNT> cues_{};
     std::array<CustomVoiceSlot, 8> custom_voices_{};
+    std::array<SequenceVoiceSlot, 4> sequence_voices_{};
     std::array<std::chrono::steady_clock::time_point, SAO_UI_SOUND_COUNT> last_short_play_{};
     IXAudio2* engine_{};
     IXAudio2MasteringVoice* mastering_voice_{};
@@ -699,6 +870,64 @@ bool utf8_path_to_wide(const char* path, std::wstring* out) {
 #endif
 
 } // namespace
+
+namespace sao::ui::sound_detail {
+
+sao_status_t linkstart_audio_info(LinkStartAudioSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+#if defined(_WIN32)
+    std::array<WaveResource, 3> waves{};
+    return load_linkstart_waves(waves, *out_snapshot);
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+sao_status_t linkstart_audio_begin(sao_ui_sound_group_t group, int32_t requested_volume,
+                                   LinkStartAudioHandle* out_playback) noexcept {
+    if (out_playback == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    out_playback->reset();
+    if (group == 0u || requested_volume < 0 || requested_volume > 100)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!g_sound_enabled.load(std::memory_order_acquire) || requested_volume == 0 ||
+        g_sound_volume.load(std::memory_order_acquire) == 0)
+        return SAO_STATUS_OK;
+#if defined(_WIN32)
+    try {
+        return sound_engine().play_sequence(requested_volume, group, out_playback);
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+sao_status_t linkstart_audio_snapshot(const LinkStartAudioHandle& playback,
+                                      LinkStartAudioSnapshot* out_snapshot) noexcept {
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_snapshot = {};
+    if (!playback)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+#if defined(_WIN32)
+    try {
+        std::lock_guard lock(playback->mutex);
+        update_sequence_clock_locked(*playback);
+        *out_snapshot = playback->snapshot;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+} // namespace sao::ui::sound_detail
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_sound_play(SaoUiSoundCue cue, int32_t requested_volume) {
     return sao_ui_sound_play_in_group(cue, requested_volume, 0);

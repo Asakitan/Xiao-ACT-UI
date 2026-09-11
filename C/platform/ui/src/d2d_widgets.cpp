@@ -1043,10 +1043,10 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
     if (style == "title") {
         text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Display,
                                 sao::ui::detail::ClassicTextWeight::SemiBold);
-    } else if (style == "subtitle") {
+    } else if (style == "subtitle" || style == "label") {
         text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Body,
                                 sao::ui::detail::ClassicTextWeight::SemiBold);
-    } else if (style == "mono") {
+    } else if (style == "mono" || style == "value") {
         text_role_scope.emplace(sao::ui::detail::ClassicTextRole::Monospace);
     }
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
@@ -1118,10 +1118,11 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_rect(context, bounds, canvas_prop->second);
     }
     if (widget.kind == SAO_UI_WIDGET_INPUT || widget.kind == SAO_UI_WIDGET_TEXT_FIELD) {
-        fill_rounded_rect(context, bounds, 3.0F, focused ? accent : border);
+        const float input_radius = std::max(0.0F, widget.radius);
+        fill_rounded_rect(context, bounds, input_radius, focused ? accent : border);
         const Rect inner{bounds.x + 1, bounds.y + 1, std::max(0.0F, bounds.width - 2),
                          std::max(0.0F, bounds.height - 2)};
-        fill_rounded_rect(context, inner, 2.0F, fill);
+        fill_rounded_rect(context, inner, std::max(0.0F, input_radius - 1.0F), fill);
         const Rect text_clip{bounds.x + 8, bounds.y + 4, std::max(0.0F, bounds.width - 16),
                              std::max(0.0F, bounds.height - 8)};
         if (sao_ui_paint_ctx_push_clip(&context, text_clip.x, text_clip.y, text_clip.width,
@@ -1354,8 +1355,11 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         const float header_height =
             static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_HEADER_HEIGHT));
         fill_rect(context, {bounds.x, bounds.y, bounds.width, header_height},
-                  sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD));
+                  sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG));
         fill_rect(context, {bounds.x, bounds.y + header_height - 1.0F, bounds.width, 1.0F}, border);
+        if (!high_contrast && bounds.width > 24.0F)
+            fill_rect(context, {bounds.x, bounds.y + header_height - 1.0F,
+                                std::min(32.0F, bounds.width), 1.0F}, accent);
         for (float row = bounds.y + 20.0F; row < bounds.y + bounds.height;
              row += static_cast<float>(
                  sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_TABLE_ROW_HEIGHT)))
@@ -2474,26 +2478,18 @@ sao_status_t sao::ui::detail::paint_rounded_rect_stroke(sao_ui_paint_ctx_handle_
 static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y, float width,
                                       float height, float radius, bool rounded,
                                       uint32_t argb) noexcept {
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     const uint32_t alpha = (argb >> 24U) & 0xffU;
-    const uint32_t halo = (argb & 0x00ffffffU) | ((alpha / 3U) << 24U);
+    const uint32_t halo = (argb & 0x00ffffffU) | ((alpha / 4U) << 24U);
     const Rect halo_rect{x - 3.0F, y - 3.0F, width + 6.0F, height + 6.0F};
     const Rect ring_rect{x - 2.0F, y - 2.0F, width + 4.0F, height + 4.0F};
-    const bool halo_ok = rounded
-                             ? stroke_rounded_outline(context, halo_rect, radius + 3.0F, 1.0F, halo)
-                             : stroke_line(context, halo_rect.x, halo_rect.y,
-                                           halo_rect.x + halo_rect.width, halo_rect.y, 1.0F, halo);
-    if (!halo_ok)
+    const float halo_radius = rounded ? radius + 3.0F : 0.0F;
+    const float ring_radius = rounded ? radius + 2.0F : 0.0F;
+    if (!high_contrast &&
+        !stroke_rounded_outline(context, halo_rect, halo_radius, 1.0F, halo))
         return false;
-    if (rounded)
-        return stroke_rounded_outline(context, ring_rect, radius + 2.0F, 2.0F, argb);
-    return stroke_line(context, ring_rect.x, ring_rect.y, ring_rect.x + ring_rect.width,
-                       ring_rect.y, 2.0F, argb) &&
-           stroke_line(context, ring_rect.x + ring_rect.width, ring_rect.y,
-                       ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height, 2.0F, argb) &&
-           stroke_line(context, ring_rect.x + ring_rect.width, ring_rect.y + ring_rect.height,
-                       ring_rect.x, ring_rect.y + ring_rect.height, 2.0F, argb) &&
-           stroke_line(context, ring_rect.x, ring_rect.y + ring_rect.height, ring_rect.x,
-                       ring_rect.y, 2.0F, argb);
+    return stroke_rounded_outline(context, ring_rect, ring_radius,
+                                  high_contrast ? 2.0F : 1.5F, argb);
 }
 
 sao_status_t sao::ui::detail::paint_focus_ring(sao_ui_paint_ctx_handle_t context, float x, float y,

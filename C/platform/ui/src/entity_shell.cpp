@@ -25,6 +25,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -38,6 +39,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+namespace sao::ui::detail {
+bool measure_text_dwrite(const char*, float, float*, float*) noexcept;
+}
+#endif
 
 extern "C" {
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_handle_t handle, int32_t dt_ms);
@@ -71,6 +78,9 @@ constexpr int32_t kMenuSlot = 70;
 constexpr int32_t kMenuPad = 40;
 constexpr int32_t kMenuColumnCenter = kMenuPad + kMenuSlot / 2;
 constexpr int32_t kRootItemCount = 5;
+constexpr int32_t kRootLabelX = 118;
+constexpr int32_t kRootLabelWidth = 208;
+constexpr int32_t kRootLabelHeight = 38;
 constexpr size_t kMaxChildrenPerRoot = 256;
 constexpr size_t kMaxTotalChildren = 1024;
 constexpr size_t kMaxTreeUtf8Bytes = 64U * 1024U;
@@ -106,6 +116,24 @@ constexpr uint32_t kMouseLeave = 0x02A3;
 constexpr int32_t kWheelDeltaPerNotch = 120;
 
 static_assert(kChildPhysicalCapacity == 8);
+
+bool root_labels_visible(const sao::ui::menu_visual::Snapshot& snapshot) noexcept {
+    return snapshot.displayed_parent_idx < 0 || snapshot.rows.empty() || snapshot.fade_t >= 0.98F;
+}
+
+int32_t root_visual_center(const sao::ui::menu_visual::Snapshot& snapshot, size_t slot) noexcept {
+    const float stagger = slot < snapshot.roots.size()
+                              ? std::clamp(snapshot.roots[slot].stagger_t, 0.0F, 1.0F)
+                              : 1.0F;
+    return kMenuPad + kMenuSlot / 2 +
+           static_cast<int32_t>(std::lround(static_cast<float>(slot * kMenuSlot) * stagger));
+}
+
+SaoUiLayerInputRect root_label_rect(const sao::ui::menu_visual::Snapshot& snapshot,
+                                   size_t slot) noexcept {
+    return {kRootLabelX, root_visual_center(snapshot, slot) - kRootLabelHeight / 2,
+            kRootLabelWidth, kRootLabelHeight};
+}
 
 // Convert a desktop-space screen coordinate into a host-local coordinate,
 // dividing by host_dpi/96 before subtracting the host origin. Windows exposes
@@ -1206,33 +1234,35 @@ Raster rasterize_nervegear(SaoUiNerveGearState state) {
                                                             : state == SAO_UI_NG_STATE_HOVER ? 1U
                                                                                              : 0U]);
     if (state == SAO_UI_NG_STATE_LINKING || state == SAO_UI_NG_STATE_LINKED) {
+        const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
         stroke_circle(raster, 36, 36, state == SAO_UI_NG_STATE_LINKING ? 34 : 32, 2,
-                      Color{104, 228, 255, 165});
-        draw_line(raster, 8, 36, 20, 36, 1, Color{212, 156, 23, 145});
-        draw_line(raster, 52, 36, 64, 36, 1, Color{212, 156, 23, 145});
+                      alpha_color(accent, 165));
+        draw_line(raster, 8, 36, 20, 36, 1, alpha_color(accent, 145));
+        draw_line(raster, 52, 36, 64, 36, 1, alpha_color(accent, 145));
     }
     return raster;
 #else
     Raster raster = make_raster(SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE);
     const bool hover = state == SAO_UI_NG_STATE_HOVER;
     const bool pressed = state == SAO_UI_NG_STATE_PRESSED;
-    const Color cyan{104, 228, 255, 242};
-    const Color cyan_soft{77, 232, 244, static_cast<uint8_t>(hover ? 185 : 135)};
-    const Color gold{212, 156, 23, 242};
-    const Color body = pressed ? Color{4, 11, 17, 242}
-                       : hover ? Color{13, 36, 46, 242}
-                               : Color{8, 18, 27, 242};
-    fill_circle(raster, 36, 36, 30, body);
-    stroke_circle(raster, 36, 36, 30, pressed ? 4 : 3, cyan);
-    stroke_circle(raster, 36, 36, 22, 2, cyan_soft);
-    draw_line(raster, 19, 53, 53, 53, pressed ? 4 : 3, gold);
-    draw_line(raster, 36, 21, 47, 32, 2, cyan);
-    draw_line(raster, 47, 32, 36, 43, 2, cyan);
-    draw_line(raster, 36, 43, 25, 32, 2, gold);
-    draw_line(raster, 25, 32, 36, 21, 2, gold);
-    draw_line(raster, 22, 18, 45, 11, 2, Color{255, 255, 255, 95});
+    const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
+    const Color accent_soft = alpha_color(accent, static_cast<uint8_t>(hover ? 185 : 135));
+    const Color body = panel_color(pressed ? SAO_UI_TOKEN_CIRCLE_ACTIVE_BG
+                                   : hover ? SAO_UI_TOKEN_CIRCLE_HOVER_BG
+                                           : SAO_UI_TOKEN_CIRCLE_BG);
+    const Color glyph = panel_color(pressed ? SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON
+                                    : hover ? SAO_UI_TOKEN_CIRCLE_HOVER_ICON
+                                            : SAO_UI_TOKEN_CIRCLE_ICON);
+    fill_circle(raster, 36, 36, 30, alpha_color(body, 242));
+    stroke_circle(raster, 36, 36, 30, pressed ? 4 : 3, accent);
+    stroke_circle(raster, 36, 36, 22, 2, accent_soft);
+    draw_line(raster, 19, 53, 53, 53, pressed ? 4 : 3, accent);
+    draw_line(raster, 36, 21, 47, 32, 2, glyph);
+    draw_line(raster, 47, 32, 36, 43, 2, glyph);
+    draw_line(raster, 36, 43, 25, 32, 2, accent);
+    draw_line(raster, 25, 32, 36, 21, 2, accent);
     if (hover)
-        stroke_circle(raster, 36, 36, 33, 2, Color{104, 228, 255, 130});
+        stroke_circle(raster, 36, 36, 33, 2, alpha_color(accent, 130));
     return raster;
 #endif
 }
@@ -1249,7 +1279,7 @@ Raster rasterize_generic_menu(int32_t pressed_index, const sao::ui::menu_visual:
     const Color text = panel_color(SAO_UI_TOKEN_APP_TEXT);
     const Color text_secondary = panel_color(SAO_UI_TOKEN_APP_TEXT_2);
     const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
-    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color rule = panel_color(SAO_UI_TOKEN_APP_BORDER);
     const Color gold = panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_GOLD);
     const Color circle_bg = panel_color(SAO_UI_TOKEN_CIRCLE_BG);
     const Color circle_hover_bg = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_BG);
@@ -1266,7 +1296,7 @@ Raster rasterize_generic_menu(int32_t pressed_index, const sao::ui::menu_visual:
     if (decoration_enabled) {
         for (int32_t radius = 48; radius >= 26; radius -= 6) {
             const uint8_t alpha = static_cast<uint8_t>(12.0F * lens * (1.0F - radius / 60.0F));
-            fill_circle(raster, kMenuColumnCenter, kMenuPad, radius, alpha_color(cyan, alpha));
+            fill_circle(raster, kMenuColumnCenter, kMenuPad, radius, alpha_color(rule, alpha));
         }
     }
     const uint8_t panel_alpha =
@@ -1278,8 +1308,8 @@ Raster rasterize_generic_menu(int32_t pressed_index, const sao::ui::menu_visual:
     fill_rect(raster, 34, 34, 3, kMenuHeight - 68, alpha_color(accent, high_contrast ? 255 : 220));
     fill_rect(raster, kMenuWidth - 37, 34, 3, kMenuHeight - 68,
               alpha_color(gold, high_contrast ? 255 : 220));
-    draw_line(raster, 34, 34, 58, 34, 2, alpha_color(cyan, high_contrast ? 255 : 235));
-    draw_line(raster, 34, 34, 34, 58, 2, alpha_color(cyan, high_contrast ? 255 : 235));
+    draw_line(raster, 34, 34, 58, 34, 2, alpha_color(rule, high_contrast ? 255 : 235));
+    draw_line(raster, 34, 34, 34, 58, 2, alpha_color(rule, high_contrast ? 255 : 235));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 58, kMenuHeight - 34, 2,
               alpha_color(gold, high_contrast ? 255 : 235));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 58, 2,
@@ -1427,7 +1457,7 @@ void draw_authority_menu_accents(Raster& raster, const sao::ui::menu_visual::Sna
                                  int32_t pressed_index) {
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     const bool decoration_enabled = menu_decoration_enabled(snapshot, high_contrast);
-    const Color accent = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color accent = panel_color(SAO_UI_TOKEN_APP_ACCENT);
     const Color gold = panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_GOLD);
     const int32_t pulse_index =
         snapshot.pressed_pulse_idx >= 0 ? snapshot.pressed_pulse_idx : pressed_index;
@@ -1459,7 +1489,7 @@ void draw_finite_menu_effects(Raster& raster, const sao::ui::menu_visual::Snapsh
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     if (!menu_decoration_enabled(snapshot, high_contrast))
         return;
-    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color rule = panel_color(SAO_UI_TOKEN_APP_BORDER);
     const Color gold = panel_color(SAO_UI_TOKEN_CORNER_GOLD);
     const float spark_t = std::max(snapshot.open_spark_t, snapshot.selection_spark_t);
     const uint32_t spark_count =
@@ -1475,7 +1505,7 @@ void draw_finite_menu_effects(Raster& raster, const sao::ui::menu_visual::Snapsh
         const int32_t y1 = kMenuPad + static_cast<int32_t>(std::lround(distance * std::sin(angle)));
         draw_line(
             raster, x0, y0, x1, y1, 1,
-            alpha_color((spark & 1U) == 0U ? cyan : gold, static_cast<uint8_t>(180.0F * spark_t)));
+            alpha_color((spark & 1U) == 0U ? rule : gold, static_cast<uint8_t>(180.0F * spark_t)));
     }
 
     const float sweep = std::clamp(snapshot.ambient_phase_t, 0.0F, 1.0F);
@@ -1484,20 +1514,20 @@ void draw_finite_menu_effects(Raster& raster, const sao::ui::menu_visual::Snapsh
     const float envelope = std::sin(3.14159265359F * sweep);
     const int32_t scanline_y = 38 + static_cast<int32_t>(std::lround(sweep * (kMenuHeight - 76)));
     draw_line(raster, 38, scanline_y, kMenuWidth - 38, scanline_y, 1,
-              alpha_color(cyan, scaled_alpha(118.0, envelope)));
+              alpha_color(rule, scaled_alpha(118.0, envelope)));
     if (scanline_y > 45)
         draw_line(raster, 38, scanline_y - 7, kMenuWidth - 38, scanline_y - 7, 1,
-                  alpha_color(cyan, scaled_alpha(32.0, envelope)));
+                  alpha_color(rule, scaled_alpha(32.0, envelope)));
     if (scanline_y < kMenuHeight - 45)
         draw_line(raster, 38, scanline_y + 7, kMenuWidth - 38, scanline_y + 7, 1,
-                  alpha_color(cyan, scaled_alpha(24.0, envelope)));
-    const int32_t cyan_marker_y =
+                  alpha_color(rule, scaled_alpha(24.0, envelope)));
+    const int32_t rule_marker_y =
         34 + static_cast<int32_t>(std::lround(sweep * (kMenuHeight - 68)));
     const float gold_sweep = std::fmod(sweep + 0.5F, 1.0F);
     const int32_t gold_marker_y =
         34 + static_cast<int32_t>(std::lround(gold_sweep * (kMenuHeight - 68)));
-    draw_line(raster, 31, cyan_marker_y, 38, cyan_marker_y, 1,
-              alpha_color(cyan, scaled_alpha(110.0, envelope)));
+    draw_line(raster, 31, rule_marker_y, 38, rule_marker_y, 1,
+              alpha_color(rule, scaled_alpha(110.0, envelope)));
     draw_line(raster, kMenuWidth - 38, gold_marker_y, kMenuWidth - 31, gold_marker_y, 1,
               alpha_color(gold, scaled_alpha(96.0, envelope)));
 }
@@ -1523,11 +1553,11 @@ Raster rasterize_menu(int32_t pressed_index, int32_t pressed_child_index,
         draw_authority_menu_accents(raster, snapshot, pressed_index);
     draw_finite_menu_effects(raster, snapshot);
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
-    const Color cyan = panel_color(SAO_UI_TOKEN_CORNER_CYAN);
+    const Color rule = panel_color(SAO_UI_TOKEN_APP_BORDER);
     const Color gold =
         panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_CORNER_GOLD);
-    draw_line(raster, 34, 34, 54, 34, 2, alpha_color(cyan, high_contrast ? 255 : 210));
-    draw_line(raster, 34, 34, 34, 54, 2, alpha_color(cyan, high_contrast ? 255 : 210));
+    draw_line(raster, 34, 34, 54, 34, 2, alpha_color(rule, high_contrast ? 255 : 210));
+    draw_line(raster, 34, 34, 34, 54, 2, alpha_color(rule, high_contrast ? 255 : 210));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 54, kMenuHeight - 34, 2,
               alpha_color(gold, high_contrast ? 255 : 210));
     draw_line(raster, kMenuWidth - 34, kMenuHeight - 34, kMenuWidth - 34, kMenuHeight - 54, 2,
@@ -1578,10 +1608,50 @@ void record_ellipse_ring(sao_ui_paint_ctx_handle_t context, sao_status_t* status
 
 void record_text_clipped(sao_ui_paint_ctx_handle_t context, sao_status_t* status, float x, float y,
                          float width, float height, std::string_view text, float size,
-                         Color color) noexcept {
+                         Color color, bool ellipsis = false) noexcept {
     if (*status != SAO_STATUS_OK || text.empty() || width <= 0.0F || height <= 0.0F)
         return;
     const sao::ui::detail::ScopedTextRole body_role(sao::ui::detail::ClassicTextRole::Body);
+    std::string fitted;
+    try {
+        if (ellipsis) {
+            fitted.assign(text);
+#if defined(_WIN32)
+            float measured = 0.0F, measured_height = 0.0F;
+            if (sao::ui::detail::measure_text_dwrite(fitted.c_str(), size, &measured, &measured_height) &&
+                measured > width) {
+                constexpr char suffix[] = "…";
+                if (sao::ui::detail::measure_text_dwrite(suffix, size, &measured, &measured_height) &&
+                    measured > width)
+                    return;
+                std::vector<size_t> boundaries{0};
+                size_t offset = 0;
+                uint32_t code_point = 0;
+                while (next_utf8_code_point(text, &offset, &code_point))
+                    boundaries.push_back(offset);
+                size_t low = 0, high = boundaries.size() - 1;
+                while (low < high) {
+                    const size_t middle = low + (high - low + 1) / 2;
+                    fitted.assign(text.data(), boundaries[middle]);
+                    fitted.append(suffix);
+                    const bool fits = sao::ui::detail::measure_text_dwrite(
+                                          fitted.c_str(), size, &measured, &measured_height) &&
+                                      measured <= width;
+                    if (fits)
+                        low = middle;
+                    else
+                        high = middle - 1;
+                }
+                fitted.assign(text.data(), boundaries[low]);
+                fitted.append(suffix);
+            }
+#endif
+            text = fitted;
+        }
+    } catch (...) {
+        record_status(status, SAO_STATUS_ERR_UNKNOWN);
+        return;
+    }
     const sao_status_t push_status = sao_ui_paint_ctx_push_clip(context, x, y, width, height);
     record_status(status, push_status);
     if (push_status == SAO_STATUS_OK) {
@@ -1689,7 +1759,7 @@ sao_status_t record_nervegear_paint(sao_ui_paint_ctx_handle_t context, SaoUiNerv
     const bool linking = state == SAO_UI_NG_STATE_LINKING;
     const bool linked = state == SAO_UI_NG_STATE_LINKED;
     const Color orange = alpha_color(panel_color(SAO_UI_TOKEN_APP_ACCENT), enabled ? 245 : 120);
-    const Color orange_soft = alpha_color(orange, enabled ? (hover ? 210 : 145) : 82);
+    const Color orange_soft = alpha_color(orange, enabled ? (hover ? 110 : 65) : 45);
     const Color body = alpha_color(panel_color(pressed ? SAO_UI_TOKEN_CIRCLE_ACTIVE_BG
                                                : hover ? SAO_UI_TOKEN_CIRCLE_HOVER_BG
                                                        : SAO_UI_TOKEN_CIRCLE_BG),
@@ -1697,17 +1767,16 @@ sao_status_t record_nervegear_paint(sao_ui_paint_ctx_handle_t context, SaoUiNerv
     const Color glyph = panel_color(pressed ? SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON
                                     : hover ? SAO_UI_TOKEN_CIRCLE_HOVER_ICON
                                             : SAO_UI_TOKEN_CIRCLE_ICON);
-    record_ellipse(context, &status, 36.0F, 36.0F, 31.0F, body);
-    record_ellipse_ring(context, &status, 36.0F, 36.0F, 31.0F, pressed ? 3.5F : 2.0F, orange, body);
-    record_ellipse_ring(context, &status, 36.0F, 36.0F, 22.0F, 1.2F, orange_soft, body);
-    record_line(context, &status, 19.0F, 53.0F, 53.0F, 53.0F, pressed ? 3.0F : 2.0F, orange);
+    if (hover || linking || linked)
+        record_ellipse_ring(context, &status, 36.0F, 36.0F, linking ? 34.0F : 33.0F, 1.0F,
+                            fade_color(orange, linking ? 0.55 : 0.35), body);
+    record_ellipse_ring(context, &status, 36.0F, 36.0F, 31.0F, pressed ? 2.25F : 1.25F, orange, body);
+    record_ellipse_ring(context, &status, 36.0F, 36.0F, 22.0F, 0.7F, orange_soft, body);
+    record_line(context, &status, 24.0F, 53.0F, 48.0F, 53.0F, 1.0F, orange);
     record_line(context, &status, 36.0F, 21.0F, 47.0F, 32.0F, 1.7F, glyph);
     record_line(context, &status, 47.0F, 32.0F, 36.0F, 43.0F, 1.7F, glyph);
     record_line(context, &status, 36.0F, 43.0F, 25.0F, 32.0F, 1.7F, glyph);
     record_line(context, &status, 25.0F, 32.0F, 36.0F, 21.0F, 1.7F, glyph);
-    if (hover || linking || linked)
-        record_ellipse_ring(context, &status, 36.0F, 36.0F, linking ? 34.0F : 33.0F, 1.2F,
-                            fade_color(orange, linking ? 0.78 : 0.50), body);
     if (linking || linked) {
         record_line(context, &status, 8.0F, 36.0F, 20.0F, 36.0F, 1.0F, fade_color(orange, 0.60));
         record_line(context, &status, 52.0F, 36.0F, 64.0F, 36.0F, 1.0F, fade_color(orange, 0.60));
@@ -1721,11 +1790,19 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
                             const sao::ui::menu_visual::Snapshot& snapshot,
                             size_t first_visible_child_index,
                             int32_t pressed_child_index) noexcept {
-    const Color child_background = alpha_color(panel_color(SAO_UI_TOKEN_APP_CARD), 228);
-    const Color child_text = panel_color(SAO_UI_TOKEN_APP_TEXT);
-    const Color child_line = alpha_color(panel_color(SAO_UI_TOKEN_APP_BORDER), 190);
-    const Color child_icon = panel_color(SAO_UI_TOKEN_APP_TEXT_2);
-    const Color orange = panel_color(SAO_UI_TOKEN_APP_ACCENT);
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
+    const Color child_background =
+        alpha_color(panel_color(SAO_UI_TOKEN_CHILD_BG), high_contrast ? 255 : 238);
+    const Color child_hover = panel_color(SAO_UI_TOKEN_CHILD_HOVER);
+    const Color child_hover_text = panel_color(SAO_UI_TOKEN_CHILD_HOVER_FG);
+    const Color child_text = panel_color(SAO_UI_TOKEN_CHILD_TEXT);
+    const Color child_line =
+        alpha_color(panel_color(SAO_UI_TOKEN_CHILD_LINE), high_contrast ? 255 : 190);
+    const Color child_icon = panel_color(SAO_UI_TOKEN_CHILD_ICON);
+    const Color accent =
+        panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_ACCENT);
+    const Color active_text = panel_color(
+        high_contrast ? SAO_UI_TOKEN_WHITE : SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON);
     const Color disabled_bg = panel_color(SAO_UI_TOKEN_DISABLED_BG);
     const Color disabled_border = panel_color(SAO_UI_TOKEN_DISABLED_BORDER);
     const Color disabled_fg = panel_color(SAO_UI_TOKEN_DISABLED_FG);
@@ -1743,34 +1820,55 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
                 static_cast<float>(line_top + line_height - 5), 1.0F,
                 fade_color(child_line, opacity));
     record_line(context, status, kChildLineCenterX, line_top + 5, kChildLineCenterX,
-                static_cast<float>(line_top + line_height - 5), 1.0F,
-                fade_color(orange, opacity * 0.52F));
+                static_cast<float>(std::min(line_top + line_height - 5, line_top + 23)), 2.0F,
+                fade_color(accent, opacity));
     record_ellipse(context, status, static_cast<float>(kChildLineCenterX),
-                   static_cast<float>(line_top + 5), 2.0F, fade_color(orange, opacity));
+                   static_cast<float>(line_top + 5), 2.0F, fade_color(accent, opacity));
     for (int32_t slot = 0; slot < count; ++slot) {
         const size_t index = first_visible_child_index + static_cast<size_t>(slot);
         const auto& row = snapshot.rows[index];
         const int32_t row_width = std::clamp(row.visible_width_px, 0, kChildTargetWidth);
         if (row_width <= 1)
             continue;
+        if (*status != SAO_STATUS_OK)
+            return;
+        const sao_status_t clipped = sao_ui_paint_ctx_push_clip(
+            context, static_cast<float>(entity_child_row_x()),
+            static_cast<float>(kChildOriginY + slot * kChildRowStride),
+            static_cast<float>(row_width), static_cast<float>(kChildRowHeight));
+        record_status(status, clipped);
+        if (clipped != SAO_STATUS_OK)
+            return;
         const bool disabled = child_row_disabled(row);
         const bool pressed = !disabled && static_cast<int32_t>(index) == pressed_child_index;
         const float hover = std::clamp(row.hover_t, 0.0F, 1.0F);
+        const bool hovered = !disabled && hover > 0.05F;
         const int32_t row_y = kChildOriginY + slot * kChildRowStride + (pressed ? 1 : 0);
-        const int32_t visual_y = row_y + 5;
-        const int32_t visual_height = kChildRowHeight - 10;
-        const float radius = static_cast<float>(adaptive_corner_radius(row_width, visual_height));
-        const Color background = disabled                   ? fade_color(disabled_bg, opacity)
-                                 : pressed || hover > 0.05F ? fade_color(orange, opacity)
-                                                            : fade_color(child_background, opacity);
-        const Color foreground = disabled ? fade_color(disabled_fg, opacity)
-                                 : pressed || hover > 0.05F
-                                     ? Color{255, 255, 255, scaled_alpha(255.0, opacity)}
-                                     : fade_color(child_text, opacity);
-        const Color icon = disabled ? fade_color(disabled_fg, opacity)
-                           : pressed || hover > 0.05F
-                               ? Color{255, 255, 255, scaled_alpha(255.0, opacity)}
-                               : fade_color(child_icon, opacity);
+        const int32_t visual_y = row_y + 2;
+        const int32_t visual_height = kChildRowHeight - 4;
+        const float radius = 5.0F;
+        const Color background =
+            disabled ? fade_color(disabled_bg, opacity)
+            : pressed ? fade_color(accent, opacity)
+            : hovered ? fade_color(lerp_rgb(child_background, child_hover, hover, 255), opacity)
+                      : fade_color(child_background, opacity);
+        const Color foreground =
+            disabled ? fade_color(disabled_fg, opacity)
+            : pressed ? fade_color(active_text, opacity)
+            : hovered ? fade_color(
+                            lerp_rgb(child_text, child_hover_text, hover, 255), opacity)
+                      : fade_color(child_text, opacity);
+        const Color icon =
+            disabled ? fade_color(disabled_fg, opacity)
+            : pressed ? fade_color(active_text, opacity)
+            : hovered ? fade_color(
+                            lerp_rgb(child_icon, child_hover_text, hover, 255), opacity)
+                      : fade_color(child_icon, opacity);
+        const Color edge = disabled ? fade_color(disabled_border, opacity)
+                           : pressed ? fade_color(accent, opacity)
+                           : hovered ? fade_color(
+                                           lerp_rgb(child_line, accent, hover, 255), opacity)
+                                     : fade_color(child_line, opacity);
         if (*status == SAO_STATUS_OK)
             record_status(status,
                           sao_ui_paint_ctx_fill_rounded_rect(
@@ -1778,36 +1876,35 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
                               static_cast<float>(visual_y), static_cast<float>(row_width),
                               static_cast<float>(visual_height), radius, paint_argb(background)));
         if (*status == SAO_STATUS_OK)
-            record_status(
-                status,
-                sao::ui::detail::paint_rounded_rect_stroke(
-                    context, static_cast<float>(entity_child_row_x()), static_cast<float>(visual_y),
-                    static_cast<float>(row_width), static_cast<float>(visual_height), radius, 1.0F,
-                    paint_argb(pressed || hover > 0.05F ? fade_color(orange, opacity)
-                                                        : fade_color(child_line, opacity))));
+            record_status(status,
+                          sao::ui::detail::paint_rounded_rect_stroke(
+                              context, static_cast<float>(entity_child_row_x()),
+                              static_cast<float>(visual_y), static_cast<float>(row_width),
+                              static_cast<float>(visual_height), radius, 1.0F, paint_argb(edge)));
         record_line(context, status, static_cast<float>(entity_child_row_x() + 1),
                     static_cast<float>(visual_y + 3), static_cast<float>(entity_child_row_x() + 1),
-                    static_cast<float>(visual_y + visual_height - 3), 2.0F,
-                    disabled                   ? fade_color(disabled_border, opacity)
-                    : pressed || hover > 0.05F ? fade_color(orange, opacity)
-                                               : fade_color(child_line, opacity));
-        const int32_t icon_x = entity_child_row_x() + 10;
-        const int32_t label_x = icon_x + kChildFallbackIconWidth + kChildIconGap;
+                    static_cast<float>(visual_y + visual_height - 3), pressed ? 2.0F : 1.0F,
+                    disabled ? fade_color(disabled_border, opacity)
+                    : pressed ? fade_color(accent, opacity)
+                    : hovered ? fade_color(accent, opacity * hover)
+                              : fade_color(child_line, opacity));
+        const int32_t icon_x = entity_child_row_x() + 12;
+        const int32_t label_x = entity_child_row_x() + 42;
         const int32_t caret_x = entity_child_row_x() + row_width - kChildRowPadRight - 6;
         const int32_t label_width =
             std::max(0, caret_x - kChildCaretWidth - kChildCaretGap - label_x);
         const std::string_view icon_text(row.icon_utf8.data());
         const auto classic = record_semantic_icon(icon_text, row.action_id);
-        record_classic_icon(context, status, classic, static_cast<float>(icon_x - 2),
-                            static_cast<float>(visual_y + 5), 18.0F, icon);
+        record_classic_icon(context, status, classic, static_cast<float>(icon_x),
+                    static_cast<float>(visual_y + 11), 18.0F, icon);
         if (!classic.has_value())
             record_text_clipped(context, status, static_cast<float>(icon_x),
-                                static_cast<float>(visual_y + 7), 14.0F, 18.0F, icon_text, 11.0F,
+                                static_cast<float>(visual_y + 11), 20.0F, 22.0F, icon_text, 13.0F,
                                 icon);
         record_text_clipped(context, status, static_cast<float>(label_x),
-                            static_cast<float>(visual_y + 7), static_cast<float>(label_width),
-                            18.0F, std::string_view(row.name_utf8.data()), 10.0F, foreground);
-        if (!disabled && hover > 0.05F && row_width >= 18) {
+                            static_cast<float>(visual_y + 9), static_cast<float>(label_width),
+                            22.0F, std::string_view(row.name_utf8.data()), 13.0F, foreground, true);
+        if (hovered && row_width >= 18) {
             record_line(context, status, static_cast<float>(caret_x),
                         static_cast<float>(row_y + 15), static_cast<float>(caret_x + 3),
                         static_cast<float>(row_y + 18), 1.0F, foreground);
@@ -1815,12 +1912,13 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
                         static_cast<float>(row_y + 18), static_cast<float>(caret_x),
                         static_cast<float>(row_y + 21), 1.0F, foreground);
         }
-        if (hover > 0.05F || pressed)
+        if (hovered || pressed)
             record_line(context, status, static_cast<float>(kChildLineCenterX + 3),
                         static_cast<float>(visual_y + visual_height / 2),
                         static_cast<float>(entity_child_row_x()),
                         static_cast<float>(visual_y + visual_height / 2), 1.0F,
-                        fade_color(orange, opacity * std::max(hover, pressed ? 1.0F : 0.0F)));
+                        fade_color(accent, opacity * std::max(hover, pressed ? 1.0F : 0.0F)));
+                record_status(status, sao_ui_paint_ctx_pop_clip(context));
     }
 }
 
@@ -1830,11 +1928,18 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                        size_t first_visible_child_index, const std::vector<OwnedRootItem>& roots,
                        size_t first_visible_root_index) noexcept {
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
-    const bool decorations = menu_decoration_enabled(snapshot, high_contrast);
-    const Color paper = alpha_color(panel_color(SAO_UI_TOKEN_APP_CARD), high_contrast ? 255 : 242);
+    const Color paper =
+        alpha_color(panel_color(SAO_UI_TOKEN_CIRCLE_BG), high_contrast ? 255 : 242);
     const Color paper_border = panel_color(SAO_UI_TOKEN_CIRCLE_BORDER);
+    const Color hover_fill = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_BG);
+    const Color hover_icon = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_ICON);
+    const Color active_fill = panel_color(
+        high_contrast ? SAO_UI_TOKEN_SELECTION : SAO_UI_TOKEN_CIRCLE_ACTIVE_BG);
+    const Color active_icon = panel_color(
+        high_contrast ? SAO_UI_TOKEN_WHITE : SAO_UI_TOKEN_CIRCLE_ACTIVE_ICON);
     const Color text = panel_color(SAO_UI_TOKEN_APP_TEXT);
-    const Color orange =
+    const Color rule = panel_color(SAO_UI_TOKEN_APP_BORDER);
+    const Color accent =
         panel_color(high_contrast ? SAO_UI_TOKEN_FOCUS_RING : SAO_UI_TOKEN_APP_ACCENT);
     const Color inactive_icon = panel_color(SAO_UI_TOKEN_CIRCLE_ICON);
     const Color disabled_bg = panel_color(SAO_UI_TOKEN_DISABLED_BG);
@@ -1843,8 +1948,33 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
     const size_t available =
         first_visible_root_index < roots.size() ? roots.size() - first_visible_root_index : 0U;
     const size_t visible = std::min(available, static_cast<size_t>(kRootItemCount));
-    const bool child_menu_visible =
-        snapshot.displayed_parent_idx >= 0 && !snapshot.rows.empty() && snapshot.fade_t < 0.98F;
+    const bool child_menu_visible = !root_labels_visible(snapshot);
+    const Color secondary = panel_color(SAO_UI_TOKEN_APP_TEXT_2);
+    const float header_right = static_cast<float>(child_menu_visible
+                                  ? entity_child_row_x() + kChildTargetWidth
+                                  : kRootLabelX + kRootLabelWidth);
+    if (*status == SAO_STATUS_OK)
+        record_status(status, sao_ui_paint_ctx_fill_rounded_rect(
+                                  context, 40.0F, 8.0F, header_right - 40.0F, 28.0F,
+                                  4.0F, paint_argb(paper)));
+    record_text_clipped(context, status, 50.0F, 14.0F, 106.0F, 18.0F,
+                        "SAO MENU", 12.0F, text);
+    std::array<char, 40> range{};
+    const size_t first = child_menu_visible ? first_visible_child_index : first_visible_root_index;
+    const size_t total = child_menu_visible ? snapshot.rows.size() : roots.size();
+    const size_t capacity = child_menu_visible ? static_cast<size_t>(kChildPhysicalCapacity)
+                                              : static_cast<size_t>(kRootItemCount);
+    std::snprintf(range.data(), range.size(), "%zu-%zu / %zu", total == 0 ? 0 : first + 1,
+                  std::min(total, first + capacity), total);
+    if (child_menu_visible)
+        record_text_clipped(context, status, static_cast<float>(entity_child_row_x()), 14.0F,
+                            136.0F, 18.0F, snapshot.displayed_parent_name_utf8.data(),
+                            12.0F, text, true);
+    record_text_clipped(context, status, header_right - 86.0F, 14.0F,
+                        76.0F, 18.0F, range.data(), 11.0F, secondary, true);
+    if (visible == 0)
+        record_text_clipped(context, status, 118.0F, 64.0F, 208.0F, 28.0F,
+                            "暂无可用菜单", 14.0F, secondary, true);
     for (size_t slot = 0; slot < visible; ++slot) {
         const auto& root = roots[first_visible_root_index + slot];
         const auto row = slot < snapshot.roots.size() ? snapshot.roots[slot]
@@ -1858,28 +1988,25 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
         layout.button_max_size = sao::ui::menu_visual::kVisualButtonMaxSize;
         const int32_t diameter = sao::ui::menu_visual::visual_button_diameter(
             layout, std::clamp(row.fisheye_t, 0.0F, 1.0F) * stagger);
-        const int32_t settled_y = kMenuPad + static_cast<int32_t>(slot) * kMenuSlot + kMenuSlot / 2;
-        const int32_t center_y =
-            kMenuPad + kMenuSlot / 2 +
-            static_cast<int32_t>(std::lround((settled_y - (kMenuPad + kMenuSlot / 2)) * stagger)) +
-            ((!disabled && static_cast<int32_t>(slot) == pressed_index) ? 2 : 0);
+        const int32_t center_y = root_visual_center(snapshot, slot);
         const bool pressed = !disabled && static_cast<int32_t>(slot) == pressed_index;
-        const bool selected = active || pressed || hover > 0.01F;
-        const Color fill = disabled ? disabled_bg : selected ? orange : paper;
-        const Color edge = disabled ? disabled_border : selected ? orange : paper_border;
-        const Color icon = disabled   ? disabled_fg
-                           : selected ? Color{255, 255, 255, 255}
-                                      : inactive_icon;
-        record_ellipse(context, status, static_cast<float>(kMenuColumnCenter),
-                       static_cast<float>(center_y), static_cast<float>(diameter) * 0.5F, fill);
+        const bool hovered = !disabled && hover > 0.01F;
+        const bool selected = active || pressed;
+        const Color fill = disabled ? disabled_bg
+                           : selected ? active_fill
+                           : hovered ? lerp_rgb(paper, hover_fill, hover, 255)
+                                     : paper;
+        const Color edge = disabled ? disabled_border
+                           : selected ? accent
+                           : hovered ? lerp_rgb(paper_border, accent, hover, 255)
+                                     : paper_border;
+        const Color icon = disabled ? disabled_fg
+                           : selected ? active_icon
+                           : hovered ? hover_icon
+                                     : inactive_icon;
         record_ellipse_ring(context, status, static_cast<float>(kMenuColumnCenter),
                             static_cast<float>(center_y), static_cast<float>(diameter) * 0.5F,
-                            selected ? 2.0F : 1.0F, edge, fill);
-        if (row.selection_trail_t > 0.01F)
-            record_ellipse_ring(context, status, static_cast<float>(kMenuColumnCenter),
-                                static_cast<float>(center_y),
-                                static_cast<float>(diameter) * 0.5F + 5.0F * row.selection_trail_t,
-                                1.0F, fade_color(orange, row.selection_trail_t), fill);
+                            selected ? 2.0F : hovered ? 1.5F : 1.0F, edge, fill);
         const auto classic = record_root_icon(root);
         record_classic_icon(context, status, classic, static_cast<float>(kMenuColumnCenter - 12),
                             static_cast<float>(center_y - 12), 24.0F, icon);
@@ -1888,31 +2015,48 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                                 static_cast<float>(center_y - 9), 22.0F, 18.0F, root.icon, 14.0F,
                                 icon);
         if (!child_menu_visible) {
-            const float label_x = 118.0F;
-            const float label_y = static_cast<float>(center_y - 14);
-            const float label_width = 152.0F;
+            const auto label_rect = root_label_rect(snapshot, slot);
+            const float label_x = static_cast<float>(label_rect.x);
+            const float label_y = static_cast<float>(label_rect.y);
+            const float label_width = static_cast<float>(label_rect.width);
+            const Color label_fill =
+                disabled      ? disabled_bg
+                : high_contrast ? (selected ? active_fill : hovered ? hover_fill : paper)
+                : selected    ? lerp_rgb(paper, hover_fill, 0.65F, 246)
+                : hovered     ? lerp_rgb(paper, hover_fill, hover, 246)
+                              : paper;
+            const Color label_edge =
+                high_contrast ? (selected || hovered ? accent : paper_border)
+                : selected    ? fade_color(accent, 0.78)
+                : hovered     ? fade_color(accent, 0.48)
+                              : fade_color(paper_border, 0.42);
+            const Color connector =
+                high_contrast ? (selected || hovered ? accent : rule)
+                              : (selected || hovered ? fade_color(accent, 0.72)
+                                                     : fade_color(rule, 0.82));
+            record_line(context, status,
+                        static_cast<float>(kMenuColumnCenter) + diameter * 0.5F,
+                        static_cast<float>(center_y), label_x - 4.0F,
+                        static_cast<float>(center_y), 1.0F, connector);
             if (*status == SAO_STATUS_OK)
                 record_status(status, sao_ui_paint_ctx_fill_rounded_rect(
-                                          context, label_x, label_y, label_width, 28.0F, 8.0F,
-                                          paint_argb(selected ? fade_color(orange, 0.17)
-                                                              : fade_color(paper, 0.78))));
+                                          context, label_x, label_y, label_width,
+                                          static_cast<float>(kRootLabelHeight), 5.0F,
+                                          paint_argb(label_fill)));
             if (*status == SAO_STATUS_OK)
                 record_status(status, sao::ui::detail::paint_rounded_rect_stroke(
-                                          context, label_x, label_y, label_width, 28.0F, 8.0F, 1.0F,
-                                          paint_argb(selected ? fade_color(orange, 0.75)
-                                                              : fade_color(paper_border, 0.82))));
-            record_text_clipped(context, status, label_x + 12.0F, label_y + 8.0F,
-                                label_width - 24.0F, 17.0F, root.name, 14.0F,
-                                disabled ? disabled_fg : text);
+                                          context, label_x, label_y, label_width,
+                                          static_cast<float>(kRootLabelHeight), 5.0F, 1.0F,
+                                          paint_argb(label_edge)));
+            record_text_clipped(
+                context, status, label_x + 14.0F, label_y + 9.0F, label_width - 28.0F, 22.0F,
+                root.name, 15.0F,
+                disabled ? disabled_fg : high_contrast && selected ? active_icon : text, true);
+            if (selected)
+                record_line(context, status, label_x + 1.0F, label_y + 9.0F,
+                            label_x + 1.0F, label_y + kRootLabelHeight - 9.0F,
+                            2.0F, accent);
         }
-    }
-    if (decorations && child_menu_visible) {
-        const float sweep = std::clamp(snapshot.ambient_phase_t, 0.0F, 1.0F);
-        const float envelope = std::sin(3.14159265359F * sweep);
-        const float scan_y = 38.0F + sweep * static_cast<float>(kMenuHeight - 76);
-        record_line(context, status, static_cast<float>(entity_child_row_x()), scan_y,
-                    static_cast<float>(entity_child_row_x() + kChildTargetWidth), scan_y, 1.0F,
-                    fade_color(orange, 0.20F * envelope));
     }
     record_menu_child_rows(context, status, snapshot, first_visible_child_index,
                            pressed_child_index);
@@ -2653,13 +2797,15 @@ sao_status_t build_menu_input_rects_locked(sao_ui_entity_shell_s* shell,
     if (out_rects == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::vector<SaoUiLayerInputRect> next_rects;
-    next_rects.reserve(kRootItemCount + kChildPhysicalCapacity);
+    next_rects.reserve(kRootItemCount * 2 + kChildPhysicalCapacity);
     for (int32_t index = 0; index < static_cast<int32_t>(visible_root_count(shell)); ++index) {
         if (static_cast<size_t>(index) < snapshot.roots.size() &&
             root_row_disabled(snapshot.roots[static_cast<size_t>(index)])) {
             continue;
         }
         next_rects.push_back({kMenuPad, kMenuPad + index * kMenuSlot, kMenuSlot, kMenuSlot});
+        if (root_labels_visible(snapshot))
+            next_rects.push_back(root_label_rect(snapshot, static_cast<size_t>(index)));
     }
     const size_t available_child_count =
         shell->first_visible_child_index < snapshot.rows.size()
@@ -3224,6 +3370,21 @@ MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t 
     MenuHit hit{};
     if (child_viewport_hit_locked(shell, snapshot, screen_x, screen_y, false, &hit))
         return hit;
+
+    if (root_labels_visible(snapshot)) {
+        for (size_t index = visible_root_count(shell); index > 0; --index) {
+            const size_t slot = index - 1;
+            if (slot < snapshot.roots.size() && root_row_disabled(snapshot.roots[slot]))
+                continue;
+            const auto label = root_label_rect(snapshot, slot);
+            if (local_x >= label.x && local_x < label.x + label.width &&
+                local_y >= label.y && local_y < label.y + label.height) {
+                hit.parent = static_cast<int32_t>(slot);
+                hit.child = -1;
+                return hit;
+            }
+        }
+    }
 
     int32_t ignored_child = -1;
     if (sao_ui_menu_hit_test(shell->menu, static_cast<int32_t>(host_x),

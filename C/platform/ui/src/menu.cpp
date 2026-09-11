@@ -292,8 +292,8 @@ int32_t visible_item_count_locked(const sao_ui_menu_s* menu) {
 }
 
 float opening_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
-    const int32_t stagger_delay = index * 18;
-    const int32_t duration = menu->reduced_motion ? 1 : kMenuOpenMs;
+    const int32_t stagger_delay = menu->reduced_motion ? 0 : index * 18;
+    const int32_t duration = menu->reduced_motion ? 1 : std::max(1, kMenuOpenMs - stagger_delay);
     const float raw = std::clamp(
         static_cast<float>(menu->phase_elapsed_ms - stagger_delay) /
             static_cast<float>(duration),

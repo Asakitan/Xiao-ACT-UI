@@ -18,6 +18,9 @@
 .vscode/handoff/gpu_hunt-*
 GPU_hunt/
 
+# ── UI preview screenshots (local run artifacts) ──
+.sao/
+
 # ── Python cache ──────────────────────────────────
 __pycache__/
 *.py[cod]

@@ -1,20 +1,5 @@
-// SAO Auto — theme tokens.
-//
-// Python source of truth:
-//   - `sao_auto/python/sao_theme/colors.py`  (SAOColors class, 50+ tokens)
-//   - `sao_auto/python/sao_theme/theme_manager.py`  (panel-theme registry)
-//   - `render/tk_mirror.py`  (_theme_color runtime resolver)
-//
-// Design: token IDs are compile-time enum values; each theme is a
-// `constexpr` static table of ARGB values indexed by token.  Zero
-// runtime cost to look up "what colour is this?" — every access is a
-// single array load.
-//
-// The Python side's SAOColors is a class with 50+ named hex strings.
-// Runtime code calls `_theme_color(key, fallback)` which resolves
-// against the currently active panel theme, falling back to the
-// hardcoded SAOColors constant.  Here we consolidate: every token has
-// exactly one value per theme, chosen from the light/dark/glass tables.
+// SAO Auto — stable theme tokens and native palette tables.
+// Ordinary surfaces use warm porcelain or graphite while semantic colors retain their roles.
 
 #pragma once
 
@@ -50,15 +35,14 @@ typedef uint64_t sao_ui_theme_callback_handle_t;
 
 // ── Theme identity ────────────────────────────────────────────────
 enum SaoUiThemeId : int32_t {
-    SAO_UI_THEME_DARK  = 0,   // Entity default; APP_BG-based
-    SAO_UI_THEME_LIGHT = 1,   // Web / panel light-mode
-    SAO_UI_THEME_GLASS = 2,   // Frosted-glass HUD (buffmon / identity)
+    SAO_UI_THEME_DARK  = 0,   // Graphite surfaces
+    SAO_UI_THEME_LIGHT = 1,   // Warm porcelain surfaces
+    SAO_UI_THEME_GLASS = 2,   // Translucent porcelain surfaces
     SAO_UI_THEME_COUNT = 3,
 };
 
 // ── Color tokens (mirrors SAOColors class) ────────────────────────
-// Each token maps to exactly one ARGB per theme.  Any token that has
-// no meaningful light-mode counterpart falls back to the dark value.
+// Each token maps to exactly one ARGB per theme and keeps its stable numeric ID.
 enum SaoUiColorToken : int32_t {
     // Overlay / background
     SAO_UI_TOKEN_OVERLAY_BG                 = 0,
@@ -184,7 +168,7 @@ enum SaoUiColorToken : int32_t {
 
 // ── Static color table (compile-time constant) ────────────────────
 // Each row = one theme; each column = one token.  ARGB layout:
-// 0xAARRGGBB.  Populated by src/theme_tables.cpp at translation-unit
+// 0xAARRGGBB.  Populated by src/theme.cpp at translation-unit
 // scope with `constexpr` — zero runtime cost.
 struct SaoUiColorTable {
     uint32_t argb[SAO_UI_TOKEN_COUNT];
@@ -388,22 +372,9 @@ SAO_UI_API int32_t SAO_UI_CALL sao_ui_theme_get_metric_token_count(void);
 #endif
 
 // ── Constexpr colour + metric tables ──────────────────────────────
-// Populated verbatim from `sao_theme/colors.py` (SAOColors class),
-// `sao_gui_bosshp.py` (RED gradient), and `assets/name_tables/
-// element.json` (EDamageProperty 0..8).  Alpha defaults to 0xFF for
-// every solid token; tokens that carry a Python alpha suffix keep
-// that literal alpha (e.g. HP_BG's `#cdddf880` → alpha=0x80).
-//
-// Layout: kSaoTheme<Name>Colors[SAO_UI_COLOR_TOKEN_COUNT], indexed
-// directly by SaoUiColorToken.  All three arrays MUST hold exactly
-// SAO_UI_COLOR_TOKEN_COUNT entries (enforced by static_assert below).
-//
-// Native workbenches use porcelain, blue-gray, and near-opaque glass surfaces.
-//
-// Any token without a distinct per-theme value simply reuses the
-// canonical value (dark inherits from the SAOColors static; glass
-// inherits from dark unless explicitly overridden). This matches the
-// Python `_theme_color(key, fallback)` runtime behaviour.
+// Stable HP, element, success, and error colors remain distinct from ordinary chrome.
+// Each array is indexed directly by SaoUiColorToken and keeps all 92 entries.
+// Native workbenches use porcelain, neutral rules, ink, and restrained warm selection.
 
 #ifdef __cplusplus
 
@@ -413,164 +384,51 @@ namespace sao::ui {
 // without the C-style prefix in every entry.
 using SaoColorRgba = ::SaoColorRgba;
 
-// Sentinel helpers.  `rgba(r,g,b)` defaults alpha to 0xFF; the 4-arg
-// form is used only where the Python source pinned an explicit alpha.
+// `rgba(r,g,b)` defaults alpha to 0xFF; translucent roles use the four-argument form.
 constexpr SaoColorRgba rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) {
     return SaoColorRgba{r, g, b, a};
 }
 
-// ── Dark theme (Entity default) ────────────────────────────────────
+// ── Dark theme (graphite) ──────────────────────────────────────────
 inline constexpr SaoColorRgba kSaoThemeDarkColors[SAO_UI_COLOR_TOKEN_COUNT] = {
-    // Overlay / background — dark uses APP_BG-based backdrop, not white
-    /* [ 0] OVERLAY_BG          */ rgba(0x00, 0x00, 0x00, 0xB3), // OVERLAY_ALPHA 0.70 × 255
-    /* [ 1] APP_BG              */ rgba(0x28, 0x2A, 0x2D),
-    /* [ 2] APP_CARD            */ rgba(0x33, 0x35, 0x38),
-    /* [ 3] APP_BORDER          */ rgba(0x55, 0x58, 0x5B),
-    /* [ 4] APP_TEXT            */ rgba(0xF2, 0xF2, 0xF0),
-    /* [ 5] APP_TEXT_2          */ rgba(0xC5, 0xC5, 0xC2),
-    /* [ 6] APP_TEXT_DIM        */ rgba(0xA9, 0xAA, 0xA7),
-    /* [ 7] APP_ACCENT          */ rgba(0xF3, 0xAF, 0x12),
-    /* [ 8] APP_BLUE            */ rgba(0x5B, 0x9C, 0xBC),
-    /* [ 9] APP_GREEN           */ rgba(0x4E, 0xC9, 0xB0), // editor success
-    /* [10] APP_RED             */ rgba(0xF1, 0x4C, 0x4C), // editor error
-    /* [11] APP_ORANGE          */ rgba(0xE7, 0xB4, 0x51), // editor warning
-    /* [12] APP_GOLD            */ rgba(0xF3, 0xAF, 0x12),
-    // Circle button — SAOCircleButton (verbatim from SAOColors)
-    /* [13] CIRCLE_BORDER       */ rgba(0xBC, 0xC4, 0xCA), // #bcc4ca
-    /* [14] CIRCLE_BG           */ rgba(0xF8, 0xF8, 0xF8), // #f7f8f8
-    /* [15] CIRCLE_ICON         */ rgba(0x82, 0x86, 0x89), // #959aa0
-    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xF3, 0xAF, 0x12), // #f3af12
-    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xF3, 0xAF, 0x12), // #f4ebd7
-    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0xFF, 0xFF, 0xFF), // #6d5d40
-    /* [19] CIRCLE_HOVER_BG     */ rgba(0xFF, 0xF2, 0xD5), // #edf7fa
-    /* [20] CIRCLE_HOVER_ICON   */ rgba(0x89, 0x62, 0x1D), // #718995
-                                                           // Child menu (ChildBar)
-    /* [21] CHILD_BG            */ rgba(0xF8, 0xF8, 0xF8), // #f8f8f8
-    /* [22] CHILD_HOVER         */ rgba(0xF3, 0xAF, 0x12), // #f4eee1
-    /* [23] CHILD_HOVER_FG      */ rgba(0xFF, 0xFF, 0xFF), // #625846
-    /* [24] CHILD_TEXT          */ rgba(0x64, 0x63, 0x64), // #646364
-    /* [25] CHILD_LINE          */ rgba(0xBC, 0xC4, 0xCA), // #bcc4ca
-    /* [26] CHILD_ICON          */ rgba(0x82, 0x86, 0x89), // #8f959b
-                                                           // Left info panel (LeftInfo)
-    /* [27] INFO_BG             */ rgba(0xF8, 0xF8, 0xF8), // #fbfbfb
-    /* [28] INFO_BOTTOM         */ rgba(0xEA, 0xE9, 0xE7), // #ecebea
-    /* [29] INFO_TITLE_BORDER   */ rgba(0xBC, 0xC4, 0xCA), // #c7ccd0
-    /* [30] INFO_TRIANGLE       */ rgba(0xF8, 0xF8, 0xF8), // #f4f4f4
-    // Alert / dialog (Python explicit alpha preserved)
-    /* [31] ALERT_BG            */ rgba(0x28, 0x2A, 0x2D),
-    /* [32] ALERT_PANEL         */ rgba(0x33, 0x35, 0x38),
-    /* [33] ALERT_TITLE_FG      */ rgba(0xF2, 0xF2, 0xF0),
-    /* [34] ALERT_CONTENT_FG    */ rgba(0xC5, 0xC5, 0xC2),
-    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x30), // restrained elevation
-    /* [36] CLOSE_RED           */ rgba(0xD1, 0x3D, 0x4F),       // #d13d4f
-    /* [37] OK_BLUE             */ rgba(0x42, 0x8C, 0xE6),       // #428ce6
-    // HP bar (SAOColors HP_* — explicit alpha suffix preserved)
-    /* [38] HP_BG               */ rgba(0xCD, 0xDD, 0xF8, 0x80), // #cdddf880
-    /* [39] HP_HOVER            */ rgba(0xE5, 0xE7, 0xEC, 0x99), // #e5e7ec99
-    /* [40] HP_FONT_COLOR       */ rgba(0xE1, 0xDE, 0xDE),       // #e1dede
-    /* [41] HP_GREEN_L          */ rgba(0xD3, 0xEA, 0x7C),       // #d3ea7c
-    /* [42] HP_GREEN_R          */ rgba(0x9A, 0xD3, 0x34),       // #9ad334
-    /* [43] HP_YELLOW_L         */ rgba(0xEB, 0xEE, 0x70),       // #ebee70
-    /* [44] HP_YELLOW_R         */ rgba(0xF4, 0xFA, 0x49),       // #f4fa49
-    /* [45] HP_RED_L            */ rgba(0xF8, 0x8C, 0x7A),       // #f88c7a
-    /* [46] HP_RED_R            */ rgba(0xEF, 0x68, 0x4E),       // #ef684e
-    /* [47] HP_BORDER           */ rgba(0xDA, 0xD7, 0xD7),       // #dad7d7
-    // Boss HP bar (BossHpOverlay class constants — 4-tuple → alpha 0xFF)
-    /* [48] BOSS_HP_RED         */ rgba(0xEF, 0x68, 0x4E), // BossHpOverlay.RED tail
-    /* [49] BOSS_HP_BREAK       */ rgba(0xD4, 0x9C, 0x17), // BREAK strong (GOLD_STRONG family)
-    /* [50] BOSS_HP_SHIELD      */ rgba(0x48, 0x9C, 0xE8, 0x6B), // BossHp SHIELD_A
-    // Frosted-Glass HUD (SAOColors *_HEX in colors.py)
-    /* [51] SURFACE_LIGHT       */ rgba(0xF8, 0xF8, 0xF8),       // SURFACE_LIGHT_HEX
-    /* [52] TEXT_PRIMARY        */ rgba(0x64, 0x63, 0x64),       // TEXT_PRIMARY_HEX
-    /* [53] TEXT_SECONDARY      */ rgba(0x8C, 0x87, 0x8A),       // TEXT_SECONDARY_HEX
-    /* [54] ACCENT_GOLD_WARM    */ rgba(0xF3, 0xAF, 0x12),       // ACCENT_GOLD_WARM_HEX
-    /* [55] ACCENT_CYAN_SOFT    */ rgba(0x58, 0x98, 0xBE),       // ACCENT_CYAN_SOFT_HEX
-    /* [56] CORNER_CYAN         */ rgba(0x68, 0xE4, 0xFF),       // CORNER_CYAN tuple
-    /* [57] CORNER_GOLD         */ rgba(0xF3, 0xAF, 0x12),       // CORNER_GOLD tuple
-                                                                 // Common
-    /* [58] WHITE               */ rgba(0xFF, 0xFF, 0xFF),       // #ffffff
-    /* [59] WHITE_85            */ rgba(0xFF, 0xFF, 0xFF, 0xD9), // #ffffffd9
-    /* [60] BLACK               */ rgba(0x00, 0x00, 0x00),       // #000000
-    /* [61] TRANSPARENT_KEY     */ rgba(0x01, 0x01, 0x01),       // #010101 chroma-key
-    // Damage / DPS panel (APP_GOLD family + APP_CARD tints)
-    /* [62] DPS_GOLD            */ rgba(0xFF, 0xD7, 0x00),       // APP_GOLD
-    /* [63] DPS_ROW_ALT         */ rgba(0x11, 0x18, 0x20, 0x80), // APP_CARD × alpha 0x80
-    /* [64] DPS_ROW_SELF        */ rgba(0x1A, 0x3A, 0x4E, 0xB3), // APP_BORDER × alpha 0.70
-    /* [65] DPS_ROW_HOVER       */ rgba(0x4D, 0xE8, 0xF4, 0x40), // APP_ACCENT × alpha 0.25
-    // Element tints (assets/name_tables/element.json 0..8)
-    /* [66] ELEM_FIRE           */ rgba(0xFF, 0x6B, 0x35), // #FF6B35 (id 1)
-    /* [67] ELEM_WATER          */ rgba(0x2E, 0x9B, 0xFF), // #2E9BFF (id 2)
-    /* [68] ELEM_ELECTRIC       */ rgba(0xB4, 0x5A, 0xFF), // #B45AFF (id 3)
-    /* [69] ELEM_WOOD           */ rgba(0x3F, 0xBF, 0x5F), // #3FBF5F (id 4)
-    /* [70] ELEM_WIND           */ rgba(0x46, 0xE0, 0xB0), // #46E0B0 (id 5)
-    /* [71] ELEM_ROCK           */ rgba(0xC8, 0x92, 0x3C), // #C8923C (id 6)
-    /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A), // #FFD95A (id 7)
-    /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6), // #9B6BD6 (id 8)
-    /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4), // #B0B8C4 (id 0)
-
-    /* [75] DISABLED_FG         */ rgba(0x91, 0x92, 0x8F),
-    /* [76] DISABLED_BG         */ rgba(0x2C, 0x2E, 0x30),
-    /* [77] DISABLED_BORDER     */ rgba(0x48, 0x4B, 0x4D),
-    /* [78] HOVER_SURFACE       */ rgba(0x48, 0x42, 0x36),
-    /* [79] FOCUS_RING          */ rgba(0xF3, 0xAF, 0x12),
-    /* [80] PRESSED_SURFACE     */ rgba(0x5A, 0x48, 0x29),
-    /* [81] PLACEHOLDER         */ rgba(0xA9, 0xAA, 0xA7),
-    /* [82] SELECTION           */ rgba(0x72, 0x55, 0x22),
-    /* [83] SCROLLBAR_TRACK     */ rgba(0x3C, 0x3E, 0x40),
-    /* [84] SCROLLBAR_THUMB     */ rgba(0x78, 0x7B, 0x7E),
-    /* [85] SCROLLBAR_HOVER     */ rgba(0xAA, 0xAB, 0xA8),
-    /* [86] SCROLLBAR_PRESSED   */ rgba(0xF3, 0xAF, 0x12),
-    /* [87] TOOLTIP_SURFACE     */ rgba(0x33, 0x35, 0x38),
-    /* [88] LOADING             */ rgba(0x56, 0x4B, 0x32),
-    /* [89] SKELETON            */ rgba(0x42, 0x44, 0x47),
-    /* [90] ERROR_SURFACE       */ rgba(0xF1, 0x4C, 0x4C, 0x24),
-    /* [91] ERROR_ICON          */ rgba(0xF1, 0x4C, 0x4C),
-};
-
-// ── Light theme (SAOColors canonical CSS palette) ─────────────────
-// The Python SAOColors class is already a light-mode design; the
-// dark-only band (APP_BG..APP_GOLD) is replaced here with the CSS
-// counterpart from the original Vue source: white surfaces, dark
-// text on light background.
-inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
-    /* [ 0] OVERLAY_BG          */ rgba(0x00, 0x00, 0x00, 0xB3),
-    /* [ 1] APP_BG              */ rgba(0xF0, 0xEF, 0xED),
-    /* [ 2] APP_CARD            */ rgba(0xF8, 0xF8, 0xF8), // WHITE card surface
-    /* [ 3] APP_BORDER          */ rgba(0xBC, 0xC4, 0xCA),
-    /* [ 4] APP_TEXT            */ rgba(0x64, 0x63, 0x64),
-    /* [ 5] APP_TEXT_2          */ rgba(0x75, 0x75, 0x75),
-    /* [ 6] APP_TEXT_DIM        */ rgba(0x80, 0x80, 0x80),
-    /* [ 7] APP_ACCENT          */ rgba(0xF3, 0xAF, 0x12),
-    /* [ 8] APP_BLUE            */ rgba(0x42, 0x8C, 0xA8),
-    /* [ 9] APP_GREEN           */ rgba(0x2E, 0x7D, 0x32), // readable success
-    /* [10] APP_RED             */ rgba(0xC7, 0x2E, 0x2E), // readable error
-    /* [11] APP_ORANGE          */ rgba(0x9D, 0x6D, 0x00), // readable warning
-    /* [12] APP_GOLD            */ rgba(0xA9, 0x74, 0x08),
-    /* [13] CIRCLE_BORDER       */ rgba(0xBC, 0xC4, 0xCA),
-    /* [14] CIRCLE_BG           */ rgba(0xF8, 0xF8, 0xF8),
-    /* [15] CIRCLE_ICON         */ rgba(0x82, 0x86, 0x89),
-    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xF3, 0xAF, 0x12),
-    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xF3, 0xAF, 0x12),
-    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0xFF, 0xFF, 0xFF),
-    /* [19] CIRCLE_HOVER_BG     */ rgba(0xFF, 0xF2, 0xD5),
-    /* [20] CIRCLE_HOVER_ICON   */ rgba(0x89, 0x62, 0x1D),
-    /* [21] CHILD_BG            */ rgba(0xF8, 0xF8, 0xF8),
-    /* [22] CHILD_HOVER         */ rgba(0xF3, 0xAF, 0x12),
-    /* [23] CHILD_HOVER_FG      */ rgba(0xFF, 0xFF, 0xFF),
-    /* [24] CHILD_TEXT          */ rgba(0x64, 0x63, 0x64),
-    /* [25] CHILD_LINE          */ rgba(0xBC, 0xC4, 0xCA),
-    /* [26] CHILD_ICON          */ rgba(0x82, 0x86, 0x89),
-    /* [27] INFO_BG             */ rgba(0xF8, 0xF8, 0xF8),
-    /* [28] INFO_BOTTOM         */ rgba(0xEA, 0xE9, 0xE7),
-    /* [29] INFO_TITLE_BORDER   */ rgba(0xBC, 0xC4, 0xCA),
-    /* [30] INFO_TRIANGLE       */ rgba(0xF8, 0xF8, 0xF8),
-    /* [31] ALERT_BG            */ rgba(0xF0, 0xEF, 0xED),
-    /* [32] ALERT_PANEL         */ rgba(0xF8, 0xF8, 0xF8),
-    /* [33] ALERT_TITLE_FG      */ rgba(0x64, 0x63, 0x64),
-    /* [34] ALERT_CONTENT_FG    */ rgba(0x64, 0x63, 0x64),
-    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x22),
+    /* [ 0] OVERLAY_BG          */ rgba(0x20, 0x24, 0x21, 0xB3),
+    /* [ 1] APP_BG              */ rgba(0x20, 0x24, 0x21),
+    /* [ 2] APP_CARD            */ rgba(0x2B, 0x30, 0x2C),
+    /* [ 3] APP_BORDER          */ rgba(0x45, 0x4B, 0x46),
+    /* [ 4] APP_TEXT            */ rgba(0xEE, 0xF0, 0xE8),
+    /* [ 5] APP_TEXT_2          */ rgba(0xB2, 0xB8, 0xB1),
+    /* [ 6] APP_TEXT_DIM        */ rgba(0x8E, 0x95, 0x8F),
+    /* [ 7] APP_ACCENT          */ rgba(0xED, 0xB4, 0x5B),
+    /* [ 8] APP_BLUE            */ rgba(0x6F, 0x98, 0xA4),
+    /* [ 9] APP_GREEN           */ rgba(0x4E, 0xC9, 0xB0),
+    /* [10] APP_RED             */ rgba(0xF1, 0x4C, 0x4C),
+    /* [11] APP_ORANGE          */ rgba(0xE3, 0xA4, 0x4B),
+    /* [12] APP_GOLD            */ rgba(0xED, 0xB4, 0x5B),
+    /* [13] CIRCLE_BORDER       */ rgba(0x4E, 0x55, 0x4F),
+    /* [14] CIRCLE_BG           */ rgba(0x2B, 0x30, 0x2C),
+    /* [15] CIRCLE_ICON         */ rgba(0xC4, 0xCA, 0xC2),
+    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xED, 0xB4, 0x5B),
+    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xED, 0xB4, 0x5B),
+    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0x20, 0x24, 0x21),
+    /* [19] CIRCLE_HOVER_BG     */ rgba(0x39, 0x36, 0x2F),
+    /* [20] CIRCLE_HOVER_ICON   */ rgba(0xF0, 0xD3, 0xA4),
+    /* [21] CHILD_BG            */ rgba(0x2B, 0x30, 0x2C),
+    /* [22] CHILD_HOVER         */ rgba(0x39, 0x36, 0x2F),
+    /* [23] CHILD_HOVER_FG      */ rgba(0xEE, 0xF0, 0xE8),
+    /* [24] CHILD_TEXT          */ rgba(0xEE, 0xF0, 0xE8),
+    /* [25] CHILD_LINE          */ rgba(0x45, 0x4B, 0x46),
+    /* [26] CHILD_ICON          */ rgba(0xBC, 0xC2, 0xBA),
+    /* [27] INFO_BG             */ rgba(0x2B, 0x30, 0x2C),
+    /* [28] INFO_BOTTOM         */ rgba(0x25, 0x2A, 0x26),
+    /* [29] INFO_TITLE_BORDER   */ rgba(0x45, 0x4B, 0x46),
+    /* [30] INFO_TRIANGLE       */ rgba(0x2B, 0x30, 0x2C),
+    /* [31] ALERT_BG            */ rgba(0x20, 0x24, 0x21),
+    /* [32] ALERT_PANEL         */ rgba(0x2B, 0x30, 0x2C),
+    /* [33] ALERT_TITLE_FG      */ rgba(0xEE, 0xF0, 0xE8),
+    /* [34] ALERT_CONTENT_FG    */ rgba(0xB2, 0xB8, 0xB1),
+    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x30),
     /* [36] CLOSE_RED           */ rgba(0xD1, 0x3D, 0x4F),
-    /* [37] OK_BLUE             */ rgba(0x42, 0x8C, 0xE6),
+    /* [37] OK_BLUE             */ rgba(0xED, 0xB4, 0x5B),
     /* [38] HP_BG               */ rgba(0xCD, 0xDD, 0xF8, 0x80),
     /* [39] HP_HOVER            */ rgba(0xE5, 0xE7, 0xEC, 0x99),
     /* [40] HP_FONT_COLOR       */ rgba(0xE1, 0xDE, 0xDE),
@@ -584,21 +442,21 @@ inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [48] BOSS_HP_RED         */ rgba(0xEF, 0x68, 0x4E),
     /* [49] BOSS_HP_BREAK       */ rgba(0xD4, 0x9C, 0x17),
     /* [50] BOSS_HP_SHIELD      */ rgba(0x48, 0x9C, 0xE8, 0x6B),
-    /* [51] SURFACE_LIGHT       */ rgba(0xF8, 0xF8, 0xF8),
-    /* [52] TEXT_PRIMARY        */ rgba(0x64, 0x63, 0x64),
-    /* [53] TEXT_SECONDARY      */ rgba(0x8C, 0x87, 0x8A),
-    /* [54] ACCENT_GOLD_WARM    */ rgba(0xF3, 0xAF, 0x12),
-    /* [55] ACCENT_CYAN_SOFT    */ rgba(0x58, 0x98, 0xBE),
-    /* [56] CORNER_CYAN         */ rgba(0x68, 0xE4, 0xFF),
-    /* [57] CORNER_GOLD         */ rgba(0xF3, 0xAF, 0x12),
-    /* [58] WHITE               */ rgba(0xFF, 0xFF, 0xFF),
-    /* [59] WHITE_85            */ rgba(0xFF, 0xFF, 0xFF, 0xD9),
-    /* [60] BLACK               */ rgba(0x00, 0x00, 0x00),
+    /* [51] SURFACE_LIGHT       */ rgba(0x2B, 0x30, 0x2C),
+    /* [52] TEXT_PRIMARY        */ rgba(0xEE, 0xF0, 0xE8),
+    /* [53] TEXT_SECONDARY      */ rgba(0xAA, 0xB0, 0xA9),
+    /* [54] ACCENT_GOLD_WARM    */ rgba(0xED, 0xB4, 0x5B),
+    /* [55] ACCENT_CYAN_SOFT    */ rgba(0xAA, 0xB0, 0xA9),
+    /* [56] CORNER_CYAN         */ rgba(0x77, 0x7E, 0x78),
+    /* [57] CORNER_GOLD         */ rgba(0xED, 0xB4, 0x5B),
+    /* [58] WHITE               */ rgba(0xFA, 0xF9, 0xF6),
+    /* [59] WHITE_85            */ rgba(0xFA, 0xF9, 0xF6, 0xD9),
+    /* [60] BLACK               */ rgba(0x20, 0x24, 0x21),
     /* [61] TRANSPARENT_KEY     */ rgba(0x01, 0x01, 0x01),
-    /* [62] DPS_GOLD            */ rgba(0xD4, 0x9C, 0x17), // warm gold on light
-    /* [63] DPS_ROW_ALT         */ rgba(0xF4, 0xF4, 0xF4),
-    /* [64] DPS_ROW_SELF        */ rgba(0xF4, 0xEB, 0xD7), // CIRCLE_ACTIVE_BG
-    /* [65] DPS_ROW_HOVER       */ rgba(0xED, 0xF7, 0xFA), // CIRCLE_HOVER_BG
+    /* [62] DPS_GOLD            */ rgba(0xED, 0xB4, 0x5B),
+    /* [63] DPS_ROW_ALT         */ rgba(0x25, 0x2A, 0x26, 0x80),
+    /* [64] DPS_ROW_SELF        */ rgba(0x45, 0x3A, 0x2A, 0xB3),
+    /* [65] DPS_ROW_HOVER       */ rgba(0xED, 0xB4, 0x5B, 0x40),
     /* [66] ELEM_FIRE           */ rgba(0xFF, 0x6B, 0x35),
     /* [67] ELEM_WATER          */ rgba(0x2E, 0x9B, 0xFF),
     /* [68] ELEM_ELECTRIC       */ rgba(0xB4, 0x5A, 0xFF),
@@ -608,67 +466,161 @@ inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),
+    /* [75] DISABLED_FG         */ rgba(0x85, 0x8C, 0x86),
+    /* [76] DISABLED_BG         */ rgba(0x25, 0x2A, 0x26),
+    /* [77] DISABLED_BORDER     */ rgba(0x3C, 0x42, 0x3D),
+    /* [78] HOVER_SURFACE       */ rgba(0x39, 0x36, 0x2F),
+    /* [79] FOCUS_RING          */ rgba(0xED, 0xB4, 0x5B),
+    /* [80] PRESSED_SURFACE     */ rgba(0x4A, 0x3B, 0x27),
+    /* [81] PLACEHOLDER         */ rgba(0x85, 0x8C, 0x86),
+    /* [82] SELECTION           */ rgba(0x6A, 0x4E, 0x28),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0x30, 0x35, 0x30),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0x62, 0x68, 0x62),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x8F, 0x96, 0x8F),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xED, 0xB4, 0x5B),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0x2B, 0x30, 0x2C),
+    /* [88] LOADING             */ rgba(0x4A, 0x3C, 0x29),
+    /* [89] SKELETON            */ rgba(0x35, 0x3A, 0x36),
+    /* [90] ERROR_SURFACE       */ rgba(0xF1, 0x4C, 0x4C, 0x24),
+    /* [91] ERROR_ICON          */ rgba(0xF1, 0x4C, 0x4C),
+};
 
-    /* [75] DISABLED_FG         */ rgba(0x93, 0x97, 0x99),
-    /* [76] DISABLED_BG         */ rgba(0xE7, 0xE7, 0xE5),
-    /* [77] DISABLED_BORDER     */ rgba(0xCF, 0xD2, 0xD2),
-    /* [78] HOVER_SURFACE       */ rgba(0xFF, 0xF2, 0xD5),
-    /* [79] FOCUS_RING          */ rgba(0xCF, 0x8B, 0x00),
-    /* [80] PRESSED_SURFACE     */ rgba(0xF8, 0xD8, 0x8D),
-    /* [81] PLACEHOLDER         */ rgba(0x80, 0x80, 0x80),
-    /* [82] SELECTION           */ rgba(0xF8, 0xD8, 0x8D),
-    /* [83] SCROLLBAR_TRACK     */ rgba(0xE5, 0xE6, 0xE5),
-    /* [84] SCROLLBAR_THUMB     */ rgba(0xAD, 0xB4, 0xB8),
-    /* [85] SCROLLBAR_HOVER     */ rgba(0x87, 0x92, 0x97),
-    /* [86] SCROLLBAR_PRESSED   */ rgba(0xF3, 0xAF, 0x12),
-    /* [87] TOOLTIP_SURFACE     */ rgba(0xF8, 0xF8, 0xF8),
-    /* [88] LOADING             */ rgba(0xF7, 0xE7, 0xBC),
-    /* [89] SKELETON            */ rgba(0xE5, 0xE6, 0xE5),
+// ── Light theme (warm porcelain) ──────────────────────────────────
+inline constexpr SaoColorRgba kSaoThemeLightColors[SAO_UI_COLOR_TOKEN_COUNT] = {
+    /* [ 0] OVERLAY_BG          */ rgba(0x23, 0x27, 0x24, 0xB3),
+    /* [ 1] APP_BG              */ rgba(0xEE, 0xEA, 0xE4),
+    /* [ 2] APP_CARD            */ rgba(0xFA, 0xF9, 0xF6),
+    /* [ 3] APP_BORDER          */ rgba(0xD6, 0xD6, 0xCE),
+    /* [ 4] APP_TEXT            */ rgba(0x23, 0x27, 0x24),
+    /* [ 5] APP_TEXT_2          */ rgba(0x64, 0x6A, 0x65),
+    /* [ 6] APP_TEXT_DIM        */ rgba(0x85, 0x8A, 0x85),
+    /* [ 7] APP_ACCENT          */ rgba(0xD9, 0x95, 0x36),
+    /* [ 8] APP_BLUE            */ rgba(0x4C, 0x74, 0x84),
+    /* [ 9] APP_GREEN           */ rgba(0x2E, 0x7D, 0x32),
+    /* [10] APP_RED             */ rgba(0xC7, 0x2E, 0x2E),
+    /* [11] APP_ORANGE          */ rgba(0x9D, 0x62, 0x17),
+    /* [12] APP_GOLD            */ rgba(0x96, 0x61, 0x1F),
+    /* [13] CIRCLE_BORDER       */ rgba(0xD6, 0xD6, 0xCE),
+    /* [14] CIRCLE_BG           */ rgba(0xFA, 0xF9, 0xF6),
+    /* [15] CIRCLE_ICON         */ rgba(0x64, 0x6A, 0x65),
+    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xD9, 0x95, 0x36),
+    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xD9, 0x95, 0x36),
+    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0x23, 0x27, 0x24),
+    /* [19] CIRCLE_HOVER_BG     */ rgba(0xF2, 0xE3, 0xCE),
+    /* [20] CIRCLE_HOVER_ICON   */ rgba(0x6C, 0x4B, 0x22),
+    /* [21] CHILD_BG            */ rgba(0xFA, 0xF9, 0xF6),
+    /* [22] CHILD_HOVER         */ rgba(0xF2, 0xE3, 0xCE),
+    /* [23] CHILD_HOVER_FG      */ rgba(0x23, 0x27, 0x24),
+    /* [24] CHILD_TEXT          */ rgba(0x23, 0x27, 0x24),
+    /* [25] CHILD_LINE          */ rgba(0xD6, 0xD6, 0xCE),
+    /* [26] CHILD_ICON          */ rgba(0x64, 0x6A, 0x65),
+    /* [27] INFO_BG             */ rgba(0xFA, 0xF9, 0xF6),
+    /* [28] INFO_BOTTOM         */ rgba(0xEE, 0xEA, 0xE4),
+    /* [29] INFO_TITLE_BORDER   */ rgba(0xD6, 0xD6, 0xCE),
+    /* [30] INFO_TRIANGLE       */ rgba(0xFA, 0xF9, 0xF6),
+    /* [31] ALERT_BG            */ rgba(0xEE, 0xEA, 0xE4),
+    /* [32] ALERT_PANEL         */ rgba(0xFA, 0xF9, 0xF6),
+    /* [33] ALERT_TITLE_FG      */ rgba(0x23, 0x27, 0x24),
+    /* [34] ALERT_CONTENT_FG    */ rgba(0x64, 0x6A, 0x65),
+    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x22),
+    /* [36] CLOSE_RED           */ rgba(0xD1, 0x3D, 0x4F),
+    /* [37] OK_BLUE             */ rgba(0xD9, 0x95, 0x36),
+    /* [38] HP_BG               */ rgba(0xCD, 0xDD, 0xF8, 0x80),
+    /* [39] HP_HOVER            */ rgba(0xE5, 0xE7, 0xEC, 0x99),
+    /* [40] HP_FONT_COLOR       */ rgba(0xE1, 0xDE, 0xDE),
+    /* [41] HP_GREEN_L          */ rgba(0xD3, 0xEA, 0x7C),
+    /* [42] HP_GREEN_R          */ rgba(0x9A, 0xD3, 0x34),
+    /* [43] HP_YELLOW_L         */ rgba(0xEB, 0xEE, 0x70),
+    /* [44] HP_YELLOW_R         */ rgba(0xF4, 0xFA, 0x49),
+    /* [45] HP_RED_L            */ rgba(0xF8, 0x8C, 0x7A),
+    /* [46] HP_RED_R            */ rgba(0xEF, 0x68, 0x4E),
+    /* [47] HP_BORDER           */ rgba(0xDA, 0xD7, 0xD7),
+    /* [48] BOSS_HP_RED         */ rgba(0xEF, 0x68, 0x4E),
+    /* [49] BOSS_HP_BREAK       */ rgba(0xD4, 0x9C, 0x17),
+    /* [50] BOSS_HP_SHIELD      */ rgba(0x48, 0x9C, 0xE8, 0x6B),
+    /* [51] SURFACE_LIGHT       */ rgba(0xFA, 0xF9, 0xF6),
+    /* [52] TEXT_PRIMARY        */ rgba(0x23, 0x27, 0x24),
+    /* [53] TEXT_SECONDARY      */ rgba(0x64, 0x6A, 0x65),
+    /* [54] ACCENT_GOLD_WARM    */ rgba(0xD9, 0x95, 0x36),
+    /* [55] ACCENT_CYAN_SOFT    */ rgba(0x9A, 0x9F, 0x99),
+    /* [56] CORNER_CYAN         */ rgba(0x8A, 0x90, 0x8A),
+    /* [57] CORNER_GOLD         */ rgba(0xD9, 0x95, 0x36),
+    /* [58] WHITE               */ rgba(0xFA, 0xF9, 0xF6),
+    /* [59] WHITE_85            */ rgba(0xFA, 0xF9, 0xF6, 0xD9),
+    /* [60] BLACK               */ rgba(0x23, 0x27, 0x24),
+    /* [61] TRANSPARENT_KEY     */ rgba(0x01, 0x01, 0x01),
+    /* [62] DPS_GOLD            */ rgba(0xA6, 0x6E, 0x26),
+    /* [63] DPS_ROW_ALT         */ rgba(0xF3, 0xF0, 0xEA),
+    /* [64] DPS_ROW_SELF        */ rgba(0xF2, 0xE3, 0xCE),
+    /* [65] DPS_ROW_HOVER       */ rgba(0xF6, 0xEB, 0xDD),
+    /* [66] ELEM_FIRE           */ rgba(0xFF, 0x6B, 0x35),
+    /* [67] ELEM_WATER          */ rgba(0x2E, 0x9B, 0xFF),
+    /* [68] ELEM_ELECTRIC       */ rgba(0xB4, 0x5A, 0xFF),
+    /* [69] ELEM_WOOD           */ rgba(0x3F, 0xBF, 0x5F),
+    /* [70] ELEM_WIND           */ rgba(0x46, 0xE0, 0xB0),
+    /* [71] ELEM_ROCK           */ rgba(0xC8, 0x92, 0x3C),
+    /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),
+    /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),
+    /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),
+    /* [75] DISABLED_FG         */ rgba(0x8A, 0x8F, 0x8A),
+    /* [76] DISABLED_BG         */ rgba(0xE6, 0xE2, 0xDC),
+    /* [77] DISABLED_BORDER     */ rgba(0xCB, 0xCB, 0xC3),
+    /* [78] HOVER_SURFACE       */ rgba(0xF2, 0xE3, 0xCE),
+    /* [79] FOCUS_RING          */ rgba(0xD9, 0x95, 0x36),
+    /* [80] PRESSED_SURFACE     */ rgba(0xE8, 0xC3, 0x8C),
+    /* [81] PLACEHOLDER         */ rgba(0x7B, 0x81, 0x7C),
+    /* [82] SELECTION           */ rgba(0xE8, 0xC3, 0x8C),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0xE2, 0xDE, 0xD7),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0xAB, 0xA9, 0xA2),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x7D, 0x83, 0x7E),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xD9, 0x95, 0x36),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0xFA, 0xF9, 0xF6),
+    /* [88] LOADING             */ rgba(0xEF, 0xE0, 0xC8),
+    /* [89] SKELETON            */ rgba(0xE2, 0xDE, 0xD7),
     /* [90] ERROR_SURFACE       */ rgba(0xD1, 0x3D, 0x4F, 0x18),
     /* [91] ERROR_ICON          */ rgba(0xD1, 0x3D, 0x4F),
 };
 
-// ── Glass theme (frosted-glass HUD — dark base + translucent tint) ─
-// Glass workbench surfaces retain contrast over changing desktop backgrounds.
+// ── Glass theme (translucent porcelain) ────────────────────────────
 inline constexpr SaoColorRgba kSaoThemeGlassColors[SAO_UI_COLOR_TOKEN_COUNT] = {
-    /* [ 0] OVERLAY_BG          */ rgba(0x00, 0x00, 0x00, 0x99), // slightly clearer
-    /* [ 1] APP_BG              */ rgba(0xF0, 0xEF, 0xED, 0xEB),
-    /* [ 2] APP_CARD            */ rgba(0xF8, 0xF8, 0xF8, 0xEB),
-    /* [ 3] APP_BORDER          */ rgba(0xBC, 0xC4, 0xCA),
-    /* [ 4] APP_TEXT            */ rgba(0x64, 0x63, 0x64),
-    /* [ 5] APP_TEXT_2          */ rgba(0x75, 0x75, 0x75),
-    /* [ 6] APP_TEXT_DIM        */ rgba(0x80, 0x80, 0x80),
-    /* [ 7] APP_ACCENT          */ rgba(0xF3, 0xAF, 0x12), // CORNER_CYAN
-    /* [ 8] APP_BLUE            */ rgba(0x58, 0x98, 0xBE),
-    /* [ 9] APP_GREEN           */ rgba(0x9A, 0xD3, 0x34),
-    /* [10] APP_RED             */ rgba(0xEF, 0x68, 0x4E),
-    /* [11] APP_ORANGE          */ rgba(0xF3, 0xAF, 0x12),
-    /* [12] APP_GOLD            */ rgba(0xA9, 0x74, 0x08), // ACCENT_GOLD_WARM
-    /* [13] CIRCLE_BORDER       */ rgba(0xBC, 0xC4, 0xCA),
-    /* [14] CIRCLE_BG           */ rgba(0xF8, 0xF8, 0xF8), // translucent
-    /* [15] CIRCLE_ICON         */ rgba(0x82, 0x86, 0x89),
-    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xF3, 0xAF, 0x12),
-    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xF3, 0xAF, 0x12),
-    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0xFF, 0xFF, 0xFF),
-    /* [19] CIRCLE_HOVER_BG     */ rgba(0xFF, 0xF2, 0xD5),
-    /* [20] CIRCLE_HOVER_ICON   */ rgba(0x89, 0x62, 0x1D),
-    /* [21] CHILD_BG            */ rgba(0xF8, 0xF8, 0xF8),
-    /* [22] CHILD_HOVER         */ rgba(0xF3, 0xAF, 0x12),
-    /* [23] CHILD_HOVER_FG      */ rgba(0xFF, 0xFF, 0xFF),
-    /* [24] CHILD_TEXT          */ rgba(0x64, 0x63, 0x64),
-    /* [25] CHILD_LINE          */ rgba(0xBC, 0xC4, 0xCA),
-    /* [26] CHILD_ICON          */ rgba(0x82, 0x86, 0x89),
-    /* [27] INFO_BG             */ rgba(0xF8, 0xF8, 0xF8, 0xEB),
-    /* [28] INFO_BOTTOM         */ rgba(0xEA, 0xE9, 0xE7, 0xEB),
-    /* [29] INFO_TITLE_BORDER   */ rgba(0xBC, 0xC4, 0xCA),
-    /* [30] INFO_TRIANGLE       */ rgba(0xF8, 0xF8, 0xF8),
-    /* [31] ALERT_BG            */ rgba(0xF0, 0xEF, 0xED, 0xEB),
-    /* [32] ALERT_PANEL         */ rgba(0xF8, 0xF8, 0xF8, 0xEB),
-    /* [33] ALERT_TITLE_FG      */ rgba(0x64, 0x63, 0x64),
-    /* [34] ALERT_CONTENT_FG    */ rgba(0x64, 0x63, 0x64),
-    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x44),
+    /* [ 0] OVERLAY_BG          */ rgba(0x23, 0x27, 0x24, 0x99),
+    /* [ 1] APP_BG              */ rgba(0xEE, 0xEA, 0xE4, 0xEB),
+    /* [ 2] APP_CARD            */ rgba(0xFA, 0xF9, 0xF6, 0xEB),
+    /* [ 3] APP_BORDER          */ rgba(0xD6, 0xD6, 0xCE),
+    /* [ 4] APP_TEXT            */ rgba(0x23, 0x27, 0x24),
+    /* [ 5] APP_TEXT_2          */ rgba(0x64, 0x6A, 0x65),
+    /* [ 6] APP_TEXT_DIM        */ rgba(0x85, 0x8A, 0x85),
+    /* [ 7] APP_ACCENT          */ rgba(0xD9, 0x95, 0x36),
+    /* [ 8] APP_BLUE            */ rgba(0x4C, 0x74, 0x84),
+    /* [ 9] APP_GREEN           */ rgba(0x2E, 0x7D, 0x32),
+    /* [10] APP_RED             */ rgba(0xC7, 0x2E, 0x2E),
+    /* [11] APP_ORANGE          */ rgba(0x9D, 0x62, 0x17),
+    /* [12] APP_GOLD            */ rgba(0x96, 0x61, 0x1F),
+    /* [13] CIRCLE_BORDER       */ rgba(0xD6, 0xD6, 0xCE),
+    /* [14] CIRCLE_BG           */ rgba(0xFA, 0xF9, 0xF6, 0xF0),
+    /* [15] CIRCLE_ICON         */ rgba(0x64, 0x6A, 0x65),
+    /* [16] CIRCLE_ACTIVE_BORDER*/ rgba(0xD9, 0x95, 0x36),
+    /* [17] CIRCLE_ACTIVE_BG    */ rgba(0xD9, 0x95, 0x36),
+    /* [18] CIRCLE_ACTIVE_ICON  */ rgba(0x23, 0x27, 0x24),
+    /* [19] CIRCLE_HOVER_BG     */ rgba(0xF2, 0xE3, 0xCE, 0xF0),
+    /* [20] CIRCLE_HOVER_ICON   */ rgba(0x6C, 0x4B, 0x22),
+    /* [21] CHILD_BG            */ rgba(0xFA, 0xF9, 0xF6, 0xF0),
+    /* [22] CHILD_HOVER         */ rgba(0xF2, 0xE3, 0xCE, 0xF0),
+    /* [23] CHILD_HOVER_FG      */ rgba(0x23, 0x27, 0x24),
+    /* [24] CHILD_TEXT          */ rgba(0x23, 0x27, 0x24),
+    /* [25] CHILD_LINE          */ rgba(0xD6, 0xD6, 0xCE),
+    /* [26] CHILD_ICON          */ rgba(0x64, 0x6A, 0x65),
+    /* [27] INFO_BG             */ rgba(0xFA, 0xF9, 0xF6, 0xEB),
+    /* [28] INFO_BOTTOM         */ rgba(0xEE, 0xEA, 0xE4, 0xEB),
+    /* [29] INFO_TITLE_BORDER   */ rgba(0xD6, 0xD6, 0xCE),
+    /* [30] INFO_TRIANGLE       */ rgba(0xFA, 0xF9, 0xF6, 0xEB),
+    /* [31] ALERT_BG            */ rgba(0xEE, 0xEA, 0xE4, 0xEB),
+    /* [32] ALERT_PANEL         */ rgba(0xFA, 0xF9, 0xF6, 0xEB),
+    /* [33] ALERT_TITLE_FG      */ rgba(0x23, 0x27, 0x24),
+    /* [34] ALERT_CONTENT_FG    */ rgba(0x64, 0x6A, 0x65),
+    /* [35] ALERT_SHADOW        */ rgba(0x00, 0x00, 0x00, 0x34),
     /* [36] CLOSE_RED           */ rgba(0xD1, 0x3D, 0x4F),
-    /* [37] OK_BLUE             */ rgba(0x42, 0x8C, 0xE6),
+    /* [37] OK_BLUE             */ rgba(0xD9, 0x95, 0x36),
     /* [38] HP_BG               */ rgba(0xCD, 0xDD, 0xF8, 0x60),
     /* [39] HP_HOVER            */ rgba(0xE5, 0xE7, 0xEC, 0x80),
     /* [40] HP_FONT_COLOR       */ rgba(0xE1, 0xDE, 0xDE),
@@ -680,23 +632,23 @@ inline constexpr SaoColorRgba kSaoThemeGlassColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [46] HP_RED_R            */ rgba(0xEF, 0x68, 0x4E),
     /* [47] HP_BORDER           */ rgba(0xDA, 0xD7, 0xD7),
     /* [48] BOSS_HP_RED         */ rgba(0xEF, 0x68, 0x4E),
-    /* [49] BOSS_HP_BREAK       */ rgba(0xDE, 0xA6, 0x20),       // GOLD_STRONG
-    /* [50] BOSS_HP_SHIELD      */ rgba(0x62, 0xD0, 0xFF, 0x85), // BossHp SHIELD_B
-    /* [51] SURFACE_LIGHT       */ rgba(0xF8, 0xF8, 0xF8, 0x40), // authentic frosted glass
-    /* [52] TEXT_PRIMARY        */ rgba(0x64, 0x63, 0x64),
-    /* [53] TEXT_SECONDARY      */ rgba(0x8C, 0x87, 0x8A),
-    /* [54] ACCENT_GOLD_WARM    */ rgba(0xF3, 0xAF, 0x12),
-    /* [55] ACCENT_CYAN_SOFT    */ rgba(0x58, 0x98, 0xBE),
-    /* [56] CORNER_CYAN         */ rgba(0x68, 0xE4, 0xFF),
-    /* [57] CORNER_GOLD         */ rgba(0xF3, 0xAF, 0x12),
-    /* [58] WHITE               */ rgba(0xFF, 0xFF, 0xFF),
-    /* [59] WHITE_85            */ rgba(0xFF, 0xFF, 0xFF, 0xD9),
-    /* [60] BLACK               */ rgba(0x00, 0x00, 0x00),
+    /* [49] BOSS_HP_BREAK       */ rgba(0xDE, 0xA6, 0x20),
+    /* [50] BOSS_HP_SHIELD      */ rgba(0x62, 0xD0, 0xFF, 0x85),
+    /* [51] SURFACE_LIGHT       */ rgba(0xFA, 0xF9, 0xF6, 0x50),
+    /* [52] TEXT_PRIMARY        */ rgba(0x23, 0x27, 0x24),
+    /* [53] TEXT_SECONDARY      */ rgba(0x64, 0x6A, 0x65),
+    /* [54] ACCENT_GOLD_WARM    */ rgba(0xD9, 0x95, 0x36),
+    /* [55] ACCENT_CYAN_SOFT    */ rgba(0x9A, 0x9F, 0x99),
+    /* [56] CORNER_CYAN         */ rgba(0x8A, 0x90, 0x8A),
+    /* [57] CORNER_GOLD         */ rgba(0xD9, 0x95, 0x36),
+    /* [58] WHITE               */ rgba(0xFA, 0xF9, 0xF6),
+    /* [59] WHITE_85            */ rgba(0xFA, 0xF9, 0xF6, 0xD9),
+    /* [60] BLACK               */ rgba(0x23, 0x27, 0x24),
     /* [61] TRANSPARENT_KEY     */ rgba(0x01, 0x01, 0x01),
-    /* [62] DPS_GOLD            */ rgba(0xD4, 0x9C, 0x17),
-    /* [63] DPS_ROW_ALT         */ rgba(0xF8, 0xF8, 0xF8, 0x28),
-    /* [64] DPS_ROW_SELF        */ rgba(0x68, 0xE4, 0xFF, 0x40),
-    /* [65] DPS_ROW_HOVER       */ rgba(0x68, 0xE4, 0xFF, 0x30),
+    /* [62] DPS_GOLD            */ rgba(0xA6, 0x6E, 0x26),
+    /* [63] DPS_ROW_ALT         */ rgba(0xFA, 0xF9, 0xF6, 0x28),
+    /* [64] DPS_ROW_SELF        */ rgba(0xD9, 0x95, 0x36, 0x30),
+    /* [65] DPS_ROW_HOVER       */ rgba(0xD9, 0x95, 0x36, 0x20),
     /* [66] ELEM_FIRE           */ rgba(0xFF, 0x6B, 0x35),
     /* [67] ELEM_WATER          */ rgba(0x2E, 0x9B, 0xFF),
     /* [68] ELEM_ELECTRIC       */ rgba(0xB4, 0x5A, 0xFF),
@@ -706,22 +658,21 @@ inline constexpr SaoColorRgba kSaoThemeGlassColors[SAO_UI_COLOR_TOKEN_COUNT] = {
     /* [72] ELEM_LIGHT          */ rgba(0xFF, 0xD9, 0x5A),
     /* [73] ELEM_DARK           */ rgba(0x9B, 0x6B, 0xD6),
     /* [74] ELEM_GENERIC        */ rgba(0xB0, 0xB8, 0xC4),
-
-    /* [75] DISABLED_FG         */ rgba(0x93, 0x97, 0x99),
-    /* [76] DISABLED_BG         */ rgba(0xE7, 0xE7, 0xE5),
-    /* [77] DISABLED_BORDER     */ rgba(0xCF, 0xD2, 0xD2),
-    /* [78] HOVER_SURFACE       */ rgba(0xFF, 0xF2, 0xD5),
-    /* [79] FOCUS_RING          */ rgba(0xCF, 0x8B, 0x00),
-    /* [80] PRESSED_SURFACE     */ rgba(0xF8, 0xD8, 0x8D),
-    /* [81] PLACEHOLDER         */ rgba(0x80, 0x80, 0x80),
-    /* [82] SELECTION           */ rgba(0xF8, 0xD8, 0x8D),
-    /* [83] SCROLLBAR_TRACK     */ rgba(0xE5, 0xE6, 0xE5),
-    /* [84] SCROLLBAR_THUMB     */ rgba(0xAD, 0xB4, 0xB8),
-    /* [85] SCROLLBAR_HOVER     */ rgba(0x87, 0x92, 0x97),
-    /* [86] SCROLLBAR_PRESSED   */ rgba(0xF3, 0xAF, 0x12),
-    /* [87] TOOLTIP_SURFACE     */ rgba(0xF8, 0xF8, 0xF8),
-    /* [88] LOADING             */ rgba(0xF7, 0xE7, 0xBC),
-    /* [89] SKELETON            */ rgba(0xE5, 0xE6, 0xE5),
+    /* [75] DISABLED_FG         */ rgba(0x8A, 0x8F, 0x8A),
+    /* [76] DISABLED_BG         */ rgba(0xE6, 0xE2, 0xDC, 0xE8),
+    /* [77] DISABLED_BORDER     */ rgba(0xCB, 0xCB, 0xC3),
+    /* [78] HOVER_SURFACE       */ rgba(0xF2, 0xE3, 0xCE, 0xF0),
+    /* [79] FOCUS_RING          */ rgba(0xD9, 0x95, 0x36),
+    /* [80] PRESSED_SURFACE     */ rgba(0xE8, 0xC3, 0x8C, 0xF0),
+    /* [81] PLACEHOLDER         */ rgba(0x7B, 0x81, 0x7C),
+    /* [82] SELECTION           */ rgba(0xE8, 0xC3, 0x8C, 0xE8),
+    /* [83] SCROLLBAR_TRACK     */ rgba(0xE2, 0xDE, 0xD7, 0xD0),
+    /* [84] SCROLLBAR_THUMB     */ rgba(0xAB, 0xA9, 0xA2),
+    /* [85] SCROLLBAR_HOVER     */ rgba(0x7D, 0x83, 0x7E),
+    /* [86] SCROLLBAR_PRESSED   */ rgba(0xD9, 0x95, 0x36),
+    /* [87] TOOLTIP_SURFACE     */ rgba(0xFA, 0xF9, 0xF6, 0xF2),
+    /* [88] LOADING             */ rgba(0xEF, 0xE0, 0xC8, 0xE8),
+    /* [89] SKELETON            */ rgba(0xE2, 0xDE, 0xD7, 0xE8),
     /* [90] ERROR_SURFACE       */ rgba(0xEF, 0x68, 0x4E, 0x24),
     /* [91] ERROR_ICON          */ rgba(0xEF, 0x68, 0x4E),
 };

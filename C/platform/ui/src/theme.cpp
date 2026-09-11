@@ -180,9 +180,9 @@ constexpr uint32_t kPanelSemanticColorTable[SAO_UI_THEME_COUNT]
                                                 [static_cast<size_t>(
                                                     sao::ui::detail::PanelSemanticColorToken::
                                                         Count)] = {
-    {kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_APP_TEXT_2]},
-    {kColorTables[SAO_UI_THEME_LIGHT].argb[SAO_UI_TOKEN_APP_TEXT_2]},
-    {kColorTables[SAO_UI_THEME_GLASS].argb[SAO_UI_TOKEN_APP_TEXT_2]},
+    {kColorTables[SAO_UI_THEME_DARK].argb[SAO_UI_TOKEN_TEXT_SECONDARY]},
+    {kColorTables[SAO_UI_THEME_LIGHT].argb[SAO_UI_TOKEN_TEXT_SECONDARY]},
+    {kColorTables[SAO_UI_THEME_GLASS].argb[SAO_UI_TOKEN_TEXT_SECONDARY]},
 };
 
 // ── Token name table (parallel to SaoUiColorToken order) ──────────

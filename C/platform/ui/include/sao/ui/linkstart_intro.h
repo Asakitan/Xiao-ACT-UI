@@ -34,6 +34,9 @@ enum SaoUiLinkStartCompletionReason : int32_t {
     SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST = 4,
     SAO_UI_LINKSTART_COMPLETION_OFFLINE = 5,
     SAO_UI_LINKSTART_COMPLETION_TEARDOWN = 6,
+    // Deferred completion released as a failure edge: the holder armed a
+    // bootstrap hold and a driver/engine stage failed while it was held.
+    SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED = 7,
 };
 
 enum SaoUiLinkStartAudioState : int32_t {
@@ -51,6 +54,45 @@ struct SaoUiLinkStartConfig {
 };
 
 #define SAO_UI_LINKSTART_CONFIG_V1_SIZE 24u
+
+// Bootstrap telemetry.  The launcher arms a hold, then publishes the stage it
+// is currently bootstrapping so the intro covers driver/engine bring-up
+// instead of finishing before it starts.
+enum SaoUiLinkStartBootstrapFlags : uint32_t {
+    SAO_UI_LINKSTART_BOOTSTRAP_FLAG_NONE = 0u,
+    SAO_UI_LINKSTART_BOOTSTRAP_FLAG_FAILED = 1u << 0,
+};
+
+#define SAO_UI_LINKSTART_BOOTSTRAP_CAPTION_CAPACITY 48u
+
+struct SaoUiLinkStartBootstrap {
+    uint32_t struct_size;
+    uint32_t stage_index;     // 0-based index of the stage being bootstrapped
+    uint32_t stage_count;     // total stages; 0 → no telemetry, rail stays on time
+    uint32_t flags;           // SaoUiLinkStartBootstrapFlags bits
+    float stage_progress;     // 0..1 progress inside the current stage
+    const char* caption_utf8; // optional stage label; truncated to the capacity
+};
+
+#define SAO_UI_LINKSTART_BOOTSTRAP_V1_SIZE 32u
+
+// Arm the deferred completion: the intro freezes on the CONNECTED frame at
+// `p4_hold_end` and stops advancing until release, so whatever the caller runs
+// in the meantime happens strictly underneath the animation.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_linkstart_arm_bootstrap_hold(sao_ui_linkstart_handle_t handle);
+
+// Publish the stage currently being bootstrapped.  Ignored while no hold is
+// armed; the caption is copied under the handle mutex.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_linkstart_set_bootstrap(sao_ui_linkstart_handle_t handle,
+                               const SaoUiLinkStartBootstrap* state);
+
+// Release the hold.  `failed` non-zero completes the intro with
+// SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED; zero lets the remaining
+// p4_hold_end → p4_fade_end tail play and complete naturally.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_linkstart_release_bootstrap_hold(sao_ui_linkstart_handle_t handle, int32_t failed);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_create(sao_ui_compositor_handle_t compositor,
                                                             sao_ui_nervegear_handle_t nervegear,
@@ -91,4 +133,5 @@ sao_ui_linkstart_get_audio_state(sao_ui_linkstart_handle_t handle,
 }
 
 static_assert(sizeof(SaoUiLinkStartConfig) == SAO_UI_LINKSTART_CONFIG_V1_SIZE);
+static_assert(sizeof(SaoUiLinkStartBootstrap) == SAO_UI_LINKSTART_BOOTSTRAP_V1_SIZE);
 #endif

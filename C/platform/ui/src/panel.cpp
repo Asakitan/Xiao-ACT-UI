@@ -8,6 +8,7 @@
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
+#include "classic_text_roles.h"
 #include "layer_paint_internal.h"
 #include "native_text_edit.h"
 #include "panel_theme_internal.h"
@@ -2106,21 +2107,29 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
         status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                             static_cast<float>(std::max(1, top)),
                                             theme.colors[SAO_UI_TOKEN_APP_CARD]);
-        if (status == SAO_STATUS_OK && !theme.high_contrast && top > 4) {
-            status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F,
-                                                static_cast<float>(std::min(state.width, 72)), 2.0F,
-                                                theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
-        }
         if (status == SAO_STATUS_OK and not title.empty()) {
             const int32_t title_padding = theme.metrics[SAO_UI_METRIC_PADDING_M];
+            const int32_t marker_space = theme.high_contrast ? 0 : 10;
             const int32_t close_space = show_close_button ? top : 24;
-            const int32_t title_width = std::max(0, state.width - title_padding * 2 - close_space);
-            const std::string visible_title =
-                ellipsize_utf8(title, static_cast<size_t>(title_width / 7));
-            status = sao_ui_paint_ctx_draw_utf8(
-                context, static_cast<float>(title_padding),
-                std::max(0.0F, (static_cast<float>(top) - 14.0F) * 0.5F), visible_title.c_str(),
-                14.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+            const int32_t title_width =
+                std::max(0, state.width - title_padding * 2 - close_space - marker_space);
+            if (!theme.high_contrast && top > 12) {
+                status = sao_ui_paint_ctx_fill_rect(
+                    context, static_cast<float>(title_padding),
+                    std::max(4.0F, (static_cast<float>(top) - 16.0F) * 0.5F), 2.0F, 16.0F,
+                    theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
+            }
+            if (status == SAO_STATUS_OK) {
+                const std::string visible_title =
+                    ellipsize_utf8(title, static_cast<size_t>(title_width / 7));
+                const sao::ui::detail::ScopedTextRole title_role(
+                    sao::ui::detail::ClassicTextRole::Display,
+                    sao::ui::detail::ClassicTextWeight::SemiBold);
+                status = sao_ui_paint_ctx_draw_utf8(
+                    context, static_cast<float>(title_padding + marker_space),
+                    std::max(0.0F, (static_cast<float>(top) - 15.0F) * 0.5F),
+                    visible_title.c_str(), 15.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+            }
         }
         if (status == SAO_STATUS_OK and show_close_button) {
             const float close_x =
@@ -2184,11 +2193,15 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 const bool group_role = visual.semantic_type == "group";
                 const uint32_t fill = panel_role ? theme.colors[SAO_UI_TOKEN_APP_BG]
                                                  : theme.colors[SAO_UI_TOKEN_APP_CARD];
-                const uint32_t border =
-                    theme_color_with_alpha(panel_role || section_role || group_role || card_role
-                                               ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
-                                               : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM],
-                                           panel_role ? 0xd0U : 0xa8U);
+                const uint8_t border_alpha = panel_role     ? 0xd0U
+                                             : section_role ? 0xc8U
+                                             : card_role    ? 0xe0U
+                                                            : 0xb8U;
+                const uint32_t border = theme_color_with_alpha(
+                    panel_role || section_role || group_role || card_role
+                        ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
+                        : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM],
+                    border_alpha);
                 const float radius = static_cast<float>(
                     panel_role || card_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]
                                             : theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_SMALL]);
@@ -2204,10 +2217,16 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 if (rail_width > 0.0F && width > paint_inset * 2.0F &&
                     height > paint_inset * 2.0F) {
                     const uint32_t rail_color =
-                        theme.high_contrast ? theme.colors[SAO_UI_TOKEN_FOCUS_RING] : visual.accent;
+                        theme.high_contrast ? theme.colors[SAO_UI_TOKEN_FOCUS_RING] : border;
                     status = sao_ui_paint_ctx_stroke_line(context, x, y + paint_inset, x,
                                                           y + height - paint_inset, rail_width,
                                                           rail_color);
+                    if (status == SAO_STATUS_OK && !theme.high_contrast) {
+                        status = sao_ui_paint_ctx_stroke_line(
+                            context, x, y + paint_inset, x,
+                            y + std::min(height - paint_inset, paint_inset + 18.0F), 2.0F,
+                            visual.accent);
+                    }
                     if (status != SAO_STATUS_OK)
                         break;
                 }
@@ -2220,9 +2239,16 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 if (status != SAO_STATUS_OK)
                     break;
                 if (card_role && !theme.high_contrast && width > 24.0F && height > 12.0F) {
-                    status = sao_ui_paint_ctx_stroke_line(context, x + radius, y + 1.0F,
-                                                          x + std::min(width - radius, 48.0F),
-                                                          y + 1.0F, 1.0F, visual.accent);
+                    const float corner_span = std::min(20.0F, width - radius * 2.0F);
+                    status = sao_ui_paint_ctx_stroke_line(
+                        context, x + radius, y + 1.0F, x + radius + corner_span, y + 1.0F, 1.0F,
+                        visual.accent);
+                    if (status == SAO_STATUS_OK) {
+                        status = sao_ui_paint_ctx_stroke_line(
+                            context, x + 1.0F, y + radius, x + 1.0F,
+                            y + radius + std::min(8.0F, height - radius * 2.0F), 1.0F,
+                            theme.colors[SAO_UI_TOKEN_APP_BORDER]);
+                    }
                     if (status != SAO_STATUS_OK)
                         break;
                 }
@@ -2242,10 +2268,13 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                             title_leading);
                     const std::string visible_title =
                         ellipsize_utf8(visual.title, static_cast<size_t>(title_width / 6.5F));
+                    const sao::ui::detail::ScopedTextRole container_title_role(
+                        sao::ui::detail::ClassicTextRole::Body,
+                        sao::ui::detail::ClassicTextWeight::SemiBold);
                     status = sao_ui_paint_ctx_draw_utf8(
                         context, title_x,
                         y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
-                        visible_title.c_str(), 11.0F, title_color);
+                        visible_title.c_str(), 12.0F, title_color);
                     if (status != SAO_STATUS_OK)
                         break;
                 }
@@ -2365,11 +2394,17 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
         }
     }
     if (status == SAO_STATUS_OK) {
+        const float panel_radius =
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]);
         status = sao::ui::detail::paint_rounded_rect_stroke(
             context, 0.5F, 0.5F, static_cast<float>(std::max(1, state.width - 1)),
-            static_cast<float>(std::max(1, state.height - 1)),
-            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]), 1.0F,
+            static_cast<float>(std::max(1, state.height - 1)), panel_radius, 1.0F,
             theme_color_with_alpha(theme.colors[SAO_UI_TOKEN_APP_BORDER], 0xd0U));
+        if (status == SAO_STATUS_OK && !theme.high_contrast && !show_titlebar && state.width > 40) {
+            status = sao_ui_paint_ctx_stroke_line(
+                context, panel_radius + 4.0F, 0.5F, panel_radius + 28.0F, 0.5F, 1.0F,
+                theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
+        }
     }
     const sao_status_t end_status = sao_ui_paint_ctx_end_frame(context);
     return status == SAO_STATUS_OK ? end_status : status;

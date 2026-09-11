@@ -3,7 +3,7 @@ cbuffer Constants : register(b0) {
     float phaseProgress; float scenePhase; float connectedAlpha; float reducedMotion;
     float cameraZ; float alphaMul; float radiusMul; float energy;
     float flash; float startupBurst; float startupWave; float motionMix;
-    float coolMix; float2 blurDirection; float padding0;
+    float coolMix; float2 blurDirection; float bloomExtract;
     float3 backgroundColor; float padding1;
     float3 effectTint; float padding2;
 };
@@ -37,23 +37,23 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     const float shutterMask = (1.0 - apertureMask) * apertureFade;
     float valveLine = exp(-abs(centered.y) * lerp(300.0, 56.0, apertureOpen));
     valveLine *= 1.0 - smoothstep(slitX * 0.10, slitX * 0.92, abs(lens.x));
-    valveLine *= 0.08 + burst * 0.56 + (1.0 - apertureFade) * 0.10;
+    valveLine *= (0.08 + burst * 0.56 + (1.0 - apertureFade) * 0.10) * apertureFade;
 
-    const float spokeCount = lerp(16.0, 28.0, liveEnergy);
+    const float spokeCount = 24.0;
     const float angular = (angle / 6.2831853 + 0.5) * spokeCount;
     const float cell = floor(angular);
-    const float ray = abs(frac(angular + liveTime * (0.18 + liveEnergy * 0.42)) - 0.5);
-    const float jitter = hash11(cell + floor(liveTime * 18.0)) * 0.22;
-    const float rayMask = smoothstep(0.22 + jitter, 0.03 + radius * 0.08, ray);
-    const float rayFade = smoothstep(1.08, 0.08, radius) *
+    const float ray = abs(frac(angular + liveTime * 0.045) - 0.5);
+    const float jitter = hash11(cell) * 0.12;
+    const float rayMask = 1.0 - smoothstep(0.03 + radius * 0.04, 0.22 + jitter, ray);
+    const float rayFade = (1.0 - smoothstep(0.08, 1.08, radius)) *
                           pow(max(0.0, 1.0 - radius), 1.65);
-    const float rays = rayMask * rayFade * (0.08 + liveEnergy * 0.22);
+    const float rays = rayMask * rayFade * (0.022 + liveEnergy * 0.055);
 
-    const float core = smoothstep(0.16, 0.0, radius);
-    const float halo = smoothstep(0.48, 0.05, radius);
+    const float core = 1.0 - smoothstep(0.0, 0.16, radius);
+    const float halo = 1.0 - smoothstep(0.05, 0.48, radius);
     float flareLine = exp(-abs(centered.y) * (96.0 - liveEnergy * 24.0));
-    flareLine *= smoothstep(0.72, 0.02, abs(centered.x));
-    flareLine *= 0.05 + liveFlash * 0.12 + liveEnergy * 0.08;
+    flareLine *= exp(-lens.x * lens.x * 28.0);
+    flareLine *= liveEnergy * 0.030;
 
     const float contract = smoothstep(0.0, 0.18, start) *
                            (1.0 - smoothstep(0.18, 0.36, start));
@@ -62,24 +62,38 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
                        (1.0 - smoothstep(0.78, 1.0, start));
     const float waveRadius = lerp(0.010, 0.64, explode);
     const float waveWidth = lerp(0.018, 0.070, burst);
-    float shock = smoothstep(waveWidth, 0.0, abs(radius - waveRadius));
+    float shock = 1.0 - smoothstep(0.0, waveWidth, abs(radius - waveRadius));
     shock *= 1.0 - smoothstep(0.70, 1.0, start);
-    const float startupCore = smoothstep(0.24 - contract * 0.08, 0.0, radius) * burst;
+    const float startupCore = (1.0 - smoothstep(0.0, 0.24 - contract * 0.08, radius)) * burst;
     const float startupFlare = exp(-abs(centered.y) * 128.0) *
-                               smoothstep(0.82, 0.0, abs(centered.x)) *
-                               (0.10 + burst * 0.42);
-    const float scanRing = smoothstep(0.015, 0.0,
-                                      abs(radius - lerp(0.06, 0.72, scan))) * scan * 0.65;
-    const float ripple = smoothstep(0.022, 0.0,
-                                    abs(radius - lerp(0.05, 0.56, explode))) *
+                               (1.0 - smoothstep(0.0, 0.82, abs(centered.x))) *
+                               (0.10 + burst * 0.42) * apertureFade;
+    const float scanRing = (1.0 - smoothstep(0.0, 0.015,
+                                      abs(radius - lerp(0.06, 0.72, scan)))) * scan * 0.65;
+    const float ripple = (1.0 - smoothstep(0.0, 0.022,
+                                    abs(radius - lerp(0.05, 0.56, explode)))) *
                          (1.0 - smoothstep(0.52, 0.92, start)) *
                          (0.18 + burst * 0.34);
+
+    const float pixelWidth = max(fwidth(radius), 0.0005);
+    float guideRings = 0.0;
+    [unroll]
+    for (int ring = 0; ring < 4; ++ring) {
+        const float travel = frac(liveTime * 0.24 + float(ring) * 0.25);
+        const float ringRadius = 0.055 + travel * travel * 0.92;
+        const float outline = 1.0 - smoothstep(pixelWidth, pixelWidth * 2.5,
+                                               abs(radius - ringRadius));
+        const float arc = smoothstep(-0.15, 0.25, sin(angle * 3.0 + float(ring) * 1.7));
+        guideRings += outline * arc * smoothstep(0.0, 0.14, travel) *
+                      (1.0 - smoothstep(0.72, 1.0, travel));
+    }
 
     float3 color = backgroundColor;
     const float3 shutterColor = lerp(float3(0.005, 0.010, 0.018),
                                      backgroundColor * 0.16, apertureOpen * 0.34);
     color += effectTint * (core * (0.08 + liveFlash * 0.12));
     color += effectTint * (halo * 0.08 + rays + flareLine);
+    color += effectTint * guideRings * liveEnergy * 0.018 * (1.0 - step(0.5, reducedMotion));
     color += float3(1.0, 0.94, 0.82) * startupCore * (0.22 + burst * 0.38);
     color += effectTint * shock * (0.16 + burst * 0.34);
     color += float3(0.92, 0.98, 1.0) * startupFlare;
@@ -89,5 +103,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     color = lerp(shutterColor, color,
                  max(apertureMask * (0.22 + apertureOpen * 0.78), 1.0 - apertureFade));
     color += float3(0.86, 0.96, 1.0) * shutterMask * 0.032;
-    return float4(saturate(color), 1.0);
+    color = max(0.0, color);
+    const float3 linearColor = lerp(color / 12.92, pow((color + 0.055) / 1.055, 2.4),
+                                    step(0.04045, color));
+    return float4(linearColor, 1.0);
 }
