@@ -25,19 +25,19 @@ float4 main(PixelInput input) : SV_TARGET {
     const float3 light = normalize(float3(-input.viewPosition.xy, -18.0));
     const float3 halfVector = normalize(light + view);
     const float diffuse = saturate(dot(normal, light));
-    const float specular = pow(saturate(dot(normal, halfVector)), 32.0);
-    const float clearCoat = pow(saturate(dot(normal, halfVector)), 96.0);
+    const float specular = pow(saturate(dot(normal, halfVector)), 24.0);
+    const float clearCoat = pow(saturate(dot(normal, halfVector)), 72.0);
     const float rim = pow(1.0 - saturate(facing), 2.5);
     const float coverage = smoothstep(0.0, max(fwidth(facing) * 1.1, 0.004), facing);
     const float longitudinal = 1.0 - smoothstep(0.08, 1.0, input.beam.y) * 0.14;
-    const float3 emissive = input.color * (0.025 + energy * 0.04) * longitudinal;
-    float3 color = input.color * (0.42 + diffuse * 0.50 + rim * 0.07) + emissive;
+    const float3 emissive = input.color * (0.015 + energy * 0.025) * longitudinal;
+    float3 color = input.color * (0.36 + diffuse * 0.60 + rim * 0.07) + emissive;
     color += lerp(float3(1.0, 0.98, 0.95), float3(0.94, 0.98, 1.0), coolMix) *
-             (specular * 0.30 + clearCoat * 0.22);
+             (specular * 0.24 + clearCoat * 0.32);
     color += input.color * pow(saturate(-normal.z), 3.0) * 0.06;
     const float3 fogColor = lerp(backgroundColor / 12.92,
         pow(max(0.0, (backgroundColor + 0.055) / 1.055), 2.4), step(0.04045, backgroundColor));
-    const float fog = smoothstep(240.0, 2900.0, input.viewPosition.z) * 0.88;
+    const float fog = smoothstep(240.0, 2900.0, input.viewPosition.z) * 0.80;
     color = lerp(color, fogColor, fog);
     const float alpha = saturate(input.alpha * coverage);
     clip(alpha - 0.0001);

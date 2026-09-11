@@ -28,13 +28,15 @@ namespace sao::ui::linkstart_gpu {
 #if defined(_WIN32)
 namespace {
 
-constexpr uint32_t kParticleCount = 300u;
-constexpr uint32_t kColumnSides = 32u;
+constexpr uint32_t kParticleCount = 720u;
+constexpr uint32_t kColumnSides = 48u;
 constexpr uint32_t kCapBands = 4u;
 constexpr uint32_t kCapVertexCount = kColumnSides * kCapBands + 1u;
 constexpr uint32_t kStreakVertexCount = kCapVertexCount * 2u;
 constexpr uint32_t kStreakIndexCount = kColumnSides * kCapBands * 12u;
 constexpr float kPi = 3.14159265359F;
+constexpr float kFlightDistance = 18000.0F;
+constexpr float kFlightExitMargin = 8.0F;
 
 template <typename T> void release(T*& value) noexcept {
     if (value != nullptr) {
@@ -99,14 +101,13 @@ struct Instance {
     float warm_color[3];
     float cool_color[3];
     float brightness;
-    float flicker;
+    float birth_distance;
 };
 static_assert(sizeof(Instance) == 52u);
 
 struct VisualState {
     float scene_time{};
     float camera_z{};
-    float camera_velocity{};
     float particle_alpha{};
     float energy{};
     float flash{};
@@ -125,24 +126,8 @@ std::array<float, 3> mix_color(const std::array<float, 3>& a, const std::array<f
     return {lerp(a[0], b[0], x), lerp(a[1], b[1], x), lerp(a[2], b[2], x)};
 }
 
-float camera_position(float elapsed, float duration) noexcept {
-    const float exit_duration = std::min(0.45F, duration * 0.18F);
-    const float main_duration = std::max(0.001F, duration - exit_duration);
-    const float x = saturate(elapsed / main_duration);
-    float low = 0.0F, high = 1.0F;
-    for (int iteration = 0; iteration < 18; ++iteration) {
-        const float t = (low + high) * 0.5F;
-        const float u = 1.0F - t;
-        const float bx = 3.0F * u * u * t * 0.8F + 3.0F * u * t * t * 0.9F + t * t * t;
-        if (bx < x) low = t; else high = t;
-    }
-    const float t = (low + high) * 0.5F;
-    const float u = 1.0F - t;
-    const float bezier = 3.0F * u * u * t * 0.1F + 3.0F * u * t * t * 0.8F + t * t * t;
-    const float exit_t = saturate((elapsed - main_duration) / std::max(0.001F, exit_duration));
-    const float speed = 5400.0F / main_duration;
-    return -1200.0F + 2700.0F * bezier + speed * exit_t * exit_duration +
-           std::max(0.0F, 900.0F - speed * exit_duration) * exit_t * exit_t * exit_t;
+float camera_position(float progress) noexcept {
+    return kFlightDistance * smoothstep(progress);
 }
 
 VisualState visual_state(const FrameState& frame) noexcept {
@@ -151,7 +136,6 @@ VisualState visual_state(const FrameState& frame) noexcept {
     const float prelude = std::max(0.0F, frame.startup_prelude);
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
     state.startup_wave = prelude > 0.0F ? saturate(elapsed / prelude) : 1.0F;
-    state.camera_z = -1200.0F;
     state.background = {0.98F, 0.985F, 0.995F};
     const bool blue = state.scene_time >= frame.p3_start;
     const float blue_transition = smoothstep((state.scene_time - (frame.p3_start - 0.30F)) / 0.80F);
@@ -182,30 +166,20 @@ VisualState visual_state(const FrameState& frame) noexcept {
         state.motion_mix = 1.8F * state.startup_wave * (1.0F - state.startup_wave);
         return state;
     }
-    const float start = blue ? frame.p3_start : 0.0F;
+    const float start = blue ? frame.p3_start : (frame.scene_timeline ? 0.0F : prelude);
     const float end = blue ? frame.p3_end : frame.p1_end;
-    if (end <= start || state.scene_time < start) {
+    if (end <= start || state.scene_time < start || state.scene_time >= end) {
         state.energy = 0.16F;
         state.motion_mix = 0.0F;
         return state;
     }
     const float progress = saturate((state.scene_time - start) / (end - start));
-    const float local_time = state.scene_time - start;
-    const float settle_start = blue ? end - 0.20F : end;
-    state.energy = lerp(0.18F + 0.72F * smoothstep(progress), blue ? 0.14F : 0.16F,
-                         smoothstep((state.scene_time - settle_start) / 0.65F));
-    if (state.scene_time >= end + 0.20F) {
-        state.motion_mix = 0.0F;
-        return state;
-    }
-    state.camera_z = camera_position(local_time, end - start);
-    state.camera_velocity = (state.camera_z - camera_position(std::max(0.0F, local_time - 0.005F),
-                                                               end - start)) / 0.005F;
-    state.particle_alpha = (blue ? smoothstep(local_time / 0.60F)
-                          : lerp(0.12F, 1.0F, smoothstep(local_time / 0.65F))) *
-                      (1.0F - smoothstep((state.scene_time - (end - 0.30F)) / 0.50F));
-    state.particles = state.particle_alpha > 0.001F;
-    state.motion_mix = saturate(state.camera_velocity / 1800.0F);
+    const float bell = progress * (1.0F - progress);
+    state.motion_mix = 16.0F * bell * bell;
+    state.camera_z = camera_position(progress);
+    state.energy = lerp(0.16F, 0.90F, state.motion_mix);
+    state.particle_alpha = 1.0F;
+    state.particles = true;
     return state;
 }
 
@@ -398,7 +372,7 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
          D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"INSTANCE_EFFECT", 0, DXGI_FORMAT_R32_FLOAT, 1, offsetof(Instance, brightness),
          D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE_EFFECT", 1, DXGI_FORMAT_R32_FLOAT, 1, offsetof(Instance, flicker),
+        {"INSTANCE_EFFECT", 1, DXGI_FORMAT_R32_FLOAT, 1, offsetof(Instance, birth_distance),
          D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
     ok = ok && SUCCEEDED(device->CreateInputLayout(
@@ -646,13 +620,13 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
         const float angle = static_cast<float>(index) * 2.39996323F + random_unit(random) * 0.35F;
         const bool foreground = index % 6u == 0u;
         const float radius = lerp(16.0F, foreground ? 44.0F : 82.0F, std::sqrt(random_unit(random)));
-        const float length = lerp(260.0F, 540.0F, random_unit(random));
+        const float length = lerp(520.0F, 880.0F, random_unit(random));
         const float width = foreground ? lerp(2.1F, 3.3F, random_unit(random))
                           : lerp(0.9F, 1.9F, random_unit(random));
-        const float depth = -800.0F + (static_cast<float>(index) + random_unit(random)) *
-                           (2200.0F / static_cast<float>(kParticleCount));
+        const float depth = lerp(5200.0F, 6200.0F, random_unit(random));
         const float brightness = lerp(0.90F, 1.04F, random_unit(random));
-        const float flicker = random_unit(random);
+        const float birth_distance = (kFlightDistance - depth - length - kFlightExitMargin) *
+                         static_cast<float>(index) / static_cast<float>(kParticleCount - 1u);
         const auto& warm_color = warm[index % warm.size()];
         const auto& cool_color = cool[index % cool.size()];
         instances[index] = {{radius * std::cos(angle), radius * std::sin(angle), depth},
@@ -663,7 +637,7 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
                             {linear_channel(cool_color[0]), linear_channel(cool_color[1]),
                              linear_channel(cool_color[2])},
                             brightness,
-                            flicker};
+                            birth_distance};
     }
     context->Unmap(renderer.instance_buffer, 0u);
     renderer.uploaded_seed = renderer.frame.seed;
@@ -825,6 +799,8 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                 sample_frame.elapsed_seconds =
                     std::max(0.0F, sample_frame.elapsed_seconds - shutter_offsets[index]);
                 const VisualState sample = visual_state(sample_frame);
+                if (!sample.particles)
+                    continue;
                 if (!upload_constants(static_cast<float>(context->width_px),
                                       static_cast<float>(context->height_px), 0.0F, 0.0F,
                                       sample.camera_z,
