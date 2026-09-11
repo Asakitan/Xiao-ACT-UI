@@ -27,6 +27,7 @@
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/server/freetier/workshop_client/workshop_client.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/fisheye_backdrop.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
 #include "sao/ui/overlay_host.h"
@@ -107,6 +108,7 @@ struct Options {
     std::filesystem::path settings;
     std::filesystem::path frame_out;
     int32_t frame_ms{1000};
+    int32_t frame_count{1};
     bool frame_time_explicit{};
 };
 
@@ -229,8 +231,10 @@ Options options() {
             value.workspace = std::filesystem::absolute(args[++index]);
         else if (arg == L"--settings" && index + 1 < count)
             value.settings = std::filesystem::absolute(args[++index]);
-        else if (arg == L"--frame-out" && index + 1 < count)
-            value.frame_out = std::filesystem::absolute(args[++index]);
+        else if (arg == L"--frame-out" && index + 1 < count) {
+            const std::filesystem::path output = args[++index];
+            value.frame_out = output == L"-" ? output : std::filesystem::absolute(output);
+        }
         else if (arg == L"--frame-ms" && index + 1 < count) {
             const std::wstring input = args[++index];
             size_t consumed = 0;
@@ -239,6 +243,14 @@ Options options() {
                 throw std::runtime_error("Frame time must be 0..60000 milliseconds");
             value.frame_ms = static_cast<int32_t>(milliseconds);
             value.frame_time_explicit = true;
+        }
+        else if (arg == L"--frame-count" && index + 1 < count) {
+            const std::wstring input = args[++index];
+            size_t consumed = 0;
+            const long long frames = std::stoll(input, &consumed);
+            if (consumed != input.size() || frames < 1 || frames > 1800)
+                throw std::runtime_error("Frame count must be 1..1800");
+            value.frame_count = static_cast<int32_t>(frames);
         }
         else if (arg == L"--backend" && index + 1 < count) {
             if (value.local_backend_fixture)
@@ -255,7 +267,8 @@ Options options() {
                 "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--page "
                 "root|settings|hotkeys|plugins|workshop|process|license|user|about|link-start] "
                 "[--offline] [--backend EXE|--local-backend] [--intro|--intro-audition] [--workspace PATH] "
-                "[--settings PATH] [--frame-out BMP_PATH --frame-ms MILLISECONDS --offline]");
+                "[--settings PATH] [--frame-out BMP_PATH|- --frame-ms MILLISECONDS --offline] "
+                "[--frame-count COUNT]");
     }
     if (value.backend_explicit && !value.offline_explicit)
         value.offline = false;
@@ -264,6 +277,10 @@ Options options() {
         throw std::runtime_error("Frame export requires --offline and --frame-out");
     if (value.intro_audition && !value.frame_out.empty())
         throw std::runtime_error("Audition and muted frame export are separate modes");
+    if (value.frame_count > 1 && value.frame_out != L"-")
+        throw std::runtime_error("Continuous frames require --frame-out -");
+    if (value.frame_ms + (value.frame_count - 1) * 1000 / 60 > 60000)
+        throw std::runtime_error("Frame sequence must finish within 60000ms");
     return value;
 }
 
@@ -277,6 +294,7 @@ struct Host {
     sao_ui_overlay_host_handle_t overlay{};
     sao_ui_compositor_handle_t compositor{};
     sao_ui_entity_shell_handle_t entity{};
+    sao_ui_fisheye_backdrop_handle_t backdrop{};
     sao_ui_input_router_deep_handle_t keyboard{};
     sao_ui_linkstart_handle_t intro{};
     sao_ai_editor_settings_panel_t ai_settings{};
@@ -483,6 +501,12 @@ struct Host {
                 return status;
             entity = nullptr;
         }
+        if (backdrop != nullptr) {
+            const sao_status_t status = sao_ui_fisheye_backdrop_try_destroy(backdrop);
+            if (status != SAO_STATUS_OK)
+                return status;
+            backdrop = nullptr;
+        }
         if (keyboard != nullptr) {
             const sao_status_t status = sao_ui_input_router_deep_try_destroy(keyboard);
             if (status != SAO_STATUS_OK)
@@ -514,6 +538,23 @@ struct Host {
         return SAO_STATUS_OK;
     }
 
+    void sync_backdrop(uint32_t elapsed) {
+        if (!backdrop || !entity)
+            return;
+        SaoUiEntityShellSnapshot snapshot{};
+        require(sao_ui_entity_shell_get_snapshot(entity, &snapshot));
+        if (snapshot.menu_visible && snapshot.overlay_visible) {
+            RECT rect{};
+            if (GetClientRect(window, &rect) && rect.right > 0 && rect.bottom > 0) {
+                SaoUiFisheyeBackdropRect bounds{0, 0, rect.right, rect.bottom};
+                require(sao_ui_fisheye_backdrop_show(backdrop, &bounds, -50));
+            }
+        } else {
+            require(sao_ui_fisheye_backdrop_hide(backdrop));
+        }
+        require(sao_ui_fisheye_backdrop_advance(backdrop, elapsed));
+    }
+
     void resize() {
         if (overlay == nullptr)
             return;
@@ -534,6 +575,7 @@ struct Host {
                                             sao_ui_overlay_host_current_dpi(overlay)));
         }
         require(sao_ui_overlay_host_set_visible(overlay, true));
+        sync_backdrop(0);
     }
 
     void initialize_settings() {
@@ -683,6 +725,7 @@ struct Host {
         host.title_utf16 = L"SAO Classic — production UI shell";
         require(sao_ui_overlay_host_create(&host, &overlay));
         require(sao_ui_compositor_create(overlay, nullptr, &compositor));
+        require(sao_ui_fisheye_backdrop_create(compositor, &backdrop));
         require_sdk(sao_sdk_platform_bind_ui_compositor(compositor));
         sdk_bound = true;
         initialize_settings();
@@ -719,7 +762,9 @@ struct Host {
             !sao::launcher::hotkey::register_all().empty())
             throw std::runtime_error("Production hotkey registration unavailable");
         require(sao_ui_input_router_deep_create(compositor, &keyboard));
-        if (!config.frame_out.empty())
+        bool intro_sound_enabled = false;
+        require(sao_ui_sound_get_enabled(&intro_sound_enabled));
+        if (!config.frame_out.empty() || config.intro)
             require(sao_ui_sound_set_enabled(false));
         if (config.initial_surface == InitialSurface::ai_main)
             require(open_ai_main());
@@ -750,7 +795,8 @@ struct Host {
             else if (config.intro_audition) {
                 require(sao_ui_sound_set_enabled(true));
                 require(sao_ui_sound_set_volume(55));
-            }
+            } else
+                require(sao_ui_sound_set_enabled(intro_sound_enabled));
             RECT rect{};
             GetClientRect(window, &rect);
             SaoUiLinkStartConfig start{sizeof(SaoUiLinkStartConfig),
@@ -772,10 +818,28 @@ struct Host {
         for (int32_t remaining = config.frame_ms; remaining > 0;) {
             const int32_t step = std::min(remaining, 1000);
             require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+            sync_backdrop(static_cast<uint32_t>(step));
             remaining -= step;
         }
         if (intro != nullptr && config.frame_ms > 0)
             require(sao_ui_linkstart_tick(intro, config.frame_ms));
+        for (int32_t index = 0; index < config.frame_count; ++index) {
+            if (index > 0) {
+                const int32_t step = index * 1000 / 60 - (index - 1) * 1000 / 60;
+                require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+                sync_backdrop(static_cast<uint32_t>(step));
+                if (intro != nullptr) {
+                    bool active = false;
+                    require(sao_ui_linkstart_is_active(intro, &active));
+                    if (active)
+                        require(sao_ui_linkstart_tick(intro, step));
+                }
+            }
+            write_frame();
+        }
+    }
+
+    void write_frame() {
         uint32_t width = 0, height = 0;
         size_t bytes = 0;
         const auto query = sao_ui_compositor_snapshot_bgra(
@@ -799,6 +863,25 @@ struct Host {
         image.biBitCount = 32;
         image.biCompression = BI_RGB;
         image.biSizeImage = static_cast<DWORD>(bytes);
+        if (config.frame_out == L"-") {
+            const HANDLE pipe = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE || GetFileType(pipe) != FILE_TYPE_PIPE)
+                throw std::runtime_error("Frame stream requires a redirected stdout pipe");
+            const auto write = [pipe](const void* data, DWORD size) {
+                const auto* cursor = static_cast<const uint8_t*>(data);
+                while (size > 0) {
+                    DWORD written = 0;
+                    if (!WriteFile(pipe, cursor, size, &written, nullptr) || written == 0)
+                        throw std::runtime_error("Frame stream closed");
+                    cursor += written;
+                    size -= written;
+                }
+            };
+            write(&file, sizeof(file));
+            write(&image, sizeof(image));
+            write(pixels.data(), static_cast<DWORD>(bytes));
+            return;
+        }
         std::filesystem::create_directories(config.frame_out.parent_path());
         std::ofstream output(config.frame_out, std::ios::binary | std::ios::trunc);
         output.write(reinterpret_cast<const char*>(&file), sizeof(file));
@@ -827,6 +910,7 @@ struct Host {
         }
         const uint32_t elapsed = static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
         require(sao_ui_entity_shell_tick(entity, elapsed));
+        sync_backdrop(elapsed);
         if (now - last_service >= 50) {
             if (ai_settings != nullptr)
                 require(sao_ai_editor_settings_panel_tick(ai_settings));
@@ -1011,7 +1095,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count)) {
         for (int index = 1; index < argument_count; ++index) {
             const std::wstring_view argument(arguments[index]);
-            frame_export = frame_export || argument == L"--frame-out" || argument == L"--frame-ms";
+            frame_export = frame_export || argument == L"--frame-out" || argument == L"--frame-ms" ||
+                           argument == L"--frame-count";
         }
         LocalFree(arguments);
     }

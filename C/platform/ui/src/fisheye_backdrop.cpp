@@ -4,6 +4,8 @@
 
 #include "sao/ui/dxgi_dup.h"
 #include "sao/ui/theme.h"
+#include "sao/ui/animator.h"
+#include "fisheye_backdrop_gpu.h"
 
 #include <algorithm>
 #include <atomic>
@@ -404,6 +406,14 @@ struct sao_ui_fisheye_backdrop_s {
     SaoUiFisheyeBackdropMode applied_mode{SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL};
     BackdropGeometry applied_geometry{};
     uint64_t applied_revision{0};
+    sao::ui::fisheye_gpu::Renderer* gpu{};
+    bool gpu_bound{};
+    bool fade_target{};
+    float opacity{};
+    float fade_from{};
+    uint32_t fade_elapsed{};
+    uint64_t visual_ms{};
+    std::chrono::steady_clock::time_point last_tick{std::chrono::steady_clock::now()};
 
     bool live_available{false};
     sao_status_t last_status{SAO_STATUS_OK};
@@ -780,6 +790,80 @@ sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
                                   &required);
 }
 
+#if defined(_WIN32)
+sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGeometry& geometry,
+                              bool visible, uint64_t revision, uint32_t delta_ms) {
+    const bool reduced = sao_ui_reduced_motion_enabled();
+    float opacity = 0.0F;
+    float seconds = 0.0F;
+    sao_ui_layer_handle_t layer = nullptr;
+    {
+        std::lock_guard lock(handle->mutex);
+        if (visible != handle->fade_target) {
+            handle->fade_target = visible;
+            handle->fade_from = handle->opacity;
+            handle->fade_elapsed = 0;
+            if (visible && handle->opacity <= 0.001F)
+                handle->visual_ms = 0;
+        }
+        handle->visual_ms += delta_ms;
+        const uint32_t duration = visible ? 500u : 400u;
+        handle->fade_elapsed = std::min(duration, handle->fade_elapsed + delta_ms);
+        float t = reduced ? 1.0F : static_cast<float>(handle->fade_elapsed) / static_cast<float>(duration);
+        t = t * t * (3.0F - 2.0F * t);
+        handle->opacity = handle->fade_from + ((visible ? 1.0F : 0.0F) - handle->fade_from) * t;
+        opacity = handle->opacity;
+        seconds = static_cast<float>(handle->visual_ms) / 1000.0F;
+        layer = handle->layer;
+    }
+    if (!layer && !visible)
+        return SAO_STATUS_OK;
+    if (!layer) {
+        SaoLayerConfig config{};
+        config.struct_size = sizeof(config);
+        config.name_utf8 = handle->layer_name.c_str();
+        config.x = geometry.rect.x; config.y = geometry.rect.y;
+        config.width = geometry.rect.width; config.height = geometry.rect.height;
+        config.z_order = geometry.z_order;
+        config.click_through = true; config.bgra_swizzle = true;
+        config.high_fps = true; config.target_fps = 60;
+        const auto status = sao_ui_layer_create(handle->compositor, &config, &layer);
+        if (status != SAO_STATUS_OK) return status;
+        std::lock_guard lock(handle->mutex);
+        handle->layer = layer;
+    }
+    if (!handle->gpu) {
+        const auto status = sao::ui::fisheye_gpu::create(&handle->gpu);
+        if (status != SAO_STATUS_OK) return status;
+    }
+    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced);
+    sao_status_t status = sao_ui_layer_set_geometry(layer, geometry.rect.x, geometry.rect.y,
+                                                    geometry.rect.width, geometry.rect.height);
+    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_z_order(layer, geometry.z_order);
+    if (status == SAO_STATUS_OK && !handle->gpu_bound) {
+        status = sao_ui_layer_set_d3d11_render_fn(layer, sao::ui::fisheye_gpu::render, handle->gpu);
+        if (status == SAO_STATUS_OK) handle->gpu_bound = true;
+    }
+    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(layer, visible || opacity > 0.001F);
+    if (status == SAO_STATUS_OK && (visible || opacity > 0.001F))
+        status = sao_ui_layer_request_redraw(layer);
+    {
+        std::lock_guard lock(handle->mutex);
+        handle->last_status = status;
+        if (status == SAO_STATUS_OK && handle->desired_revision == revision) {
+            handle->layer_has_frame = true;
+            handle->applied_visible = visible || opacity > 0.001F;
+            handle->applied_mode = SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL;
+            handle->applied_geometry = geometry;
+            handle->applied_revision = revision;
+            handle->live_available = false;
+            ++handle->frame_generation;
+        }
+    }
+    return status;
+}
+#endif
+
 } // namespace
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_create(
@@ -842,7 +926,17 @@ sao_ui_fisheye_backdrop_try_destroy(sao_ui_fisheye_backdrop_handle_t handle) {
         return worker_status;
     }
 
+    if (layer != nullptr && handle->gpu_bound) {
+        const auto status = sao_ui_layer_set_d3d11_render_fn(layer, nullptr, nullptr);
+        if (status != SAO_STATUS_OK) {
+            std::lock_guard lock(handle->mutex);
+            handle->destroying = false;
+            handle->layer = layer;
+            return status;
+        }
+    }
     sao_ui_layer_destroy(layer);
+    sao::ui::fisheye_gpu::destroy(handle->gpu);
     delete handle;
     return SAO_STATUS_OK;
 }
@@ -946,8 +1040,7 @@ sao_ui_fisheye_backdrop_hide(sao_ui_fisheye_backdrop_handle_t handle) {
     return SAO_STATUS_OK;
 }
 
-extern "C" sao_status_t SAO_UI_CALL
-sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
+static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint32_t delta_ms) {
     if (handle == nullptr) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
@@ -998,6 +1091,18 @@ sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
         handle->last_status = owner_status;
         return owner_status;
     }
+
+#if defined(_WIN32)
+    if (mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL)
+        return tick_procedural(handle, geometry, visible, revision, delta_ms);
+    if (layer != nullptr && handle->gpu_bound) {
+        const auto status = sao_ui_layer_set_d3d11_render_fn(layer, nullptr, nullptr);
+        if (status != SAO_STATUS_OK) return status;
+        handle->gpu_bound = false;
+    }
+#else
+    (void)delta_ms;
+#endif
 
     if (layer == nullptr && visible) {
         SaoLayerConfig config{};
@@ -1122,6 +1227,26 @@ sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
         handle->worker_cv.notify_all();
     }
     return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_advance(sao_ui_fisheye_backdrop_handle_t handle, uint32_t delta_ms) {
+    if (!handle) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != handle->owner_thread) return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (delta_ms > 1000u) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        handle->last_tick = std::chrono::steady_clock::now();
+        return tick_backdrop(handle, delta_ms);
+    } catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle) {
+    if (!handle) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != handle->owner_thread) return SAO_STATUS_ERR_ACCESS_DENIED;
+    const auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - handle->last_tick).count();
+    return sao_ui_fisheye_backdrop_advance(handle, static_cast<uint32_t>(std::clamp<int64_t>(delta, 0, 1000)));
 }
 
 extern "C" sao_status_t SAO_UI_CALL

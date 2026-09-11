@@ -1606,6 +1606,17 @@ void record_ellipse_ring(sao_ui_paint_ctx_handle_t context, sao_status_t* status
         record_ellipse(context, status, center_x, center_y, radius - thickness, interior);
 }
 
+void record_arc(sao_ui_paint_ctx_handle_t context, sao_status_t* status, float x, float y,
+                float radius, float start, float sweep, float width, Color color) noexcept {
+    constexpr int segments = 32;
+    for (int i = 0; i < segments && *status == SAO_STATUS_OK; ++i) {
+        const float a = start + sweep * static_cast<float>(i) / segments;
+        const float b = start + sweep * static_cast<float>(i + 1) / segments;
+        record_line(context, status, x + std::cos(a) * radius, y + std::sin(a) * radius,
+                    x + std::cos(b) * radius, y + std::sin(b) * radius, width, color);
+    }
+}
+
 void record_text_clipped(sao_ui_paint_ctx_handle_t context, sao_status_t* status, float x, float y,
                          float width, float height, std::string_view text, float size,
                          Color color, bool ellipsis = false) noexcept {
@@ -1929,7 +1940,7 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                        size_t first_visible_root_index) noexcept {
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast();
     const Color paper =
-        alpha_color(panel_color(SAO_UI_TOKEN_CIRCLE_BG), high_contrast ? 255 : 242);
+        alpha_color(panel_color(SAO_UI_TOKEN_CIRCLE_BG), high_contrast ? 255 : 218);
     const Color paper_border = panel_color(SAO_UI_TOKEN_CIRCLE_BORDER);
     const Color hover_fill = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_BG);
     const Color hover_icon = panel_color(SAO_UI_TOKEN_CIRCLE_HOVER_ICON);
@@ -2004,6 +2015,24 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                            : selected ? active_icon
                            : hovered ? hover_icon
                                      : inactive_icon;
+        if (!high_contrast && !disabled) {
+            const float radius = static_cast<float>(diameter) * 0.5F + 4.0F;
+            const float angle = snapshot.ambient_phase_t * 6.2831853F +
+                                static_cast<float>(slot) * 0.65F;
+            const float focus = std::max(hover, active ? 1.0F : row.selection_trail_t);
+            const Color tint = fade_color(accent, (0.20F + focus * 0.48F) * stagger);
+            record_arc(context, status, static_cast<float>(kMenuColumnCenter),
+                       static_cast<float>(center_y), radius, angle, 1.75F, 1.0F, tint);
+            record_arc(context, status, static_cast<float>(kMenuColumnCenter),
+                       static_cast<float>(center_y), radius, angle + 3.1415927F,
+                       1.15F, 1.0F, tint);
+            if (!snapshot.reduced_motion && !snapshot.fps_pressure && row.pressed_pulse_t > 0.0F) {
+                const float pulse = row.pressed_pulse_t;
+                record_arc(context, status, static_cast<float>(kMenuColumnCenter),
+                           static_cast<float>(center_y), radius + (1.0F - pulse) * 6.0F,
+                           0.0F, 6.2831853F, 1.2F, fade_color(accent, pulse * 0.65F));
+            }
+        }
         record_ellipse_ring(context, status, static_cast<float>(kMenuColumnCenter),
                             static_cast<float>(center_y), static_cast<float>(diameter) * 0.5F,
                             selected ? 2.0F : hovered ? 1.5F : 1.0F, edge, fill);
@@ -2056,6 +2085,19 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                 record_line(context, status, label_x + 1.0F, label_y + 9.0F,
                             label_x + 1.0F, label_y + kRootLabelHeight - 9.0F,
                             2.0F, accent);
+        }
+    }
+    if (!child_menu_visible && visible != 0 && !high_contrast) {
+        record_line(context, status, 40.0F, 403.0F, header_right, 403.0F,
+                    1.0F, fade_color(paper_border, 0.65F));
+        record_text_clipped(context, status, 42.0F, 409.0F, 180.0F, 15.0F,
+                            "SYSTEM / MENU ACCESS", 10.0F, secondary);
+        for (int marker = 0; marker < 12; ++marker) {
+            const float x = header_right - 57.0F + static_cast<float>(marker) * 5.0F;
+            const float intensity = 0.25F + 0.55F *
+                (0.5F + 0.5F * std::sin(snapshot.ambient_phase_t * 6.2831853F - static_cast<float>(marker) * 0.45F));
+            record_line(context, status, x, 412.0F, x, 420.0F, 2.0F,
+                        fade_color(accent, intensity));
         }
     }
     record_menu_child_rows(context, status, snapshot, first_visible_child_index,

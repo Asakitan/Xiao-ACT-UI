@@ -62,6 +62,7 @@ add_library(sao_platform_ui SHARED
     src/dialog.cpp             # sao_theme/dialogs.py state machine
     src/fisheye.cpp             # sao_theme/menu_bar.py fisheye math
     src/fisheye_backdrop.cpp   # shared procedural/live fisheye backdrop
+    src/fisheye_backdrop_gpu.cpp
 
     # ── Panel SDK + input router + scriptable canvas ──────────────
     src/panel_sdk.cpp                # plugin_manager.register_panel
@@ -171,7 +172,7 @@ if (WIN32)
     set(_sao_shader_output "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
     foreach (_sao_shader IN ITEMS compositor_master_vs compositor_master_ps
             linkstart_fullscreen_vs linkstart_background_ps linkstart_streak_vs
-            linkstart_streak_ps linkstart_post_ps)
+            linkstart_streak_ps linkstart_post_ps fisheye_backdrop_ps)
         if (_sao_shader MATCHES "_vs$")
             set(_sao_shader_profile vs_4_0)
         else()

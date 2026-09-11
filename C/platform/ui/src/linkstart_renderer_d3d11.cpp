@@ -28,9 +28,10 @@ namespace sao::ui::linkstart_gpu {
 #if defined(_WIN32)
 namespace {
 
-constexpr uint32_t kParticleCount = 480u;
-constexpr uint32_t kColumnSides = 12u;
-constexpr uint32_t kStreakVertexCount = kColumnSides * 30u;
+constexpr uint32_t kParticleCount = 300u;
+constexpr uint32_t kColumnSides = 24u;
+constexpr uint32_t kCapBands = 4u;
+constexpr uint32_t kStreakVertexCount = kColumnSides * (6u + kCapBands * 12u);
 constexpr float kPi = 3.14159265359F;
 
 template <typename T> void release(T*& value) noexcept {
@@ -50,7 +51,7 @@ float lerp(float a, float b, float t) noexcept {
 
 float smoothstep(float t) noexcept {
     const float x = saturate(t);
-    return x * x * (3.0F - 2.0F * x);
+    return x * x * x * (x * (x * 6.0F - 15.0F) + 10.0F);
 }
 
 float linear_channel(float value) noexcept {
@@ -122,53 +123,87 @@ std::array<float, 3> mix_color(const std::array<float, 3>& a, const std::array<f
     return {lerp(a[0], b[0], x), lerp(a[1], b[1], x), lerp(a[2], b[2], x)};
 }
 
+float camera_position(float elapsed, float duration) noexcept {
+    const float exit_duration = std::min(0.45F, duration * 0.18F);
+    const float main_duration = std::max(0.001F, duration - exit_duration);
+    const float x = saturate(elapsed / main_duration);
+    float low = 0.0F, high = 1.0F;
+    for (int iteration = 0; iteration < 18; ++iteration) {
+        const float t = (low + high) * 0.5F;
+        const float u = 1.0F - t;
+        const float bx = 3.0F * u * u * t * 0.8F + 3.0F * u * t * t * 0.9F + t * t * t;
+        if (bx < x) low = t; else high = t;
+    }
+    const float t = (low + high) * 0.5F;
+    const float u = 1.0F - t;
+    const float bezier = 3.0F * u * u * t * 0.1F + 3.0F * u * t * t * 0.8F + t * t * t;
+    const float exit_t = saturate((elapsed - main_duration) / std::max(0.001F, exit_duration));
+    const float speed = 5400.0F / main_duration;
+    return -1200.0F + 2700.0F * bezier + speed * exit_t * exit_duration +
+           std::max(0.0F, 900.0F - speed * exit_duration) * exit_t * exit_t * exit_t;
+}
+
 VisualState visual_state(const FrameState& frame) noexcept {
     VisualState state{};
     const float elapsed = std::max(0.0F, frame.elapsed_seconds);
     const float prelude = std::max(0.0F, frame.startup_prelude);
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
-    const float settle = smoothstep((state.scene_time - frame.p4_start) /
-                                    std::max(0.001F, frame.p4_hold_end - frame.p4_start));
-    state.background = mix_color({0.008F, 0.013F, 0.031F}, {0.028F, 0.046F, 0.078F}, settle);
-    state.startup_wave = prelude > 0.0F ? smoothstep(elapsed / prelude) : 1.0F;
-    const float palette_duration = frame.p3_start - frame.p1_end;
-    state.cool_mix = palette_duration > 0.0F
-                         ? smoothstep((state.scene_time - frame.p1_end) / palette_duration)
-                         : (state.scene_time >= frame.p3_start ? 1.0F : 0.0F);
-    state.tint = mix_color({0.48F, 0.56F, 0.88F}, {0.07F, 0.42F, 1.0F}, state.cool_mix);
-    if (frame.reduced_motion || elapsed < prelude)
+    state.startup_wave = prelude > 0.0F ? saturate(elapsed / prelude) : 1.0F;
+    state.camera_z = -1200.0F;
+    state.background = {0.10F, 0.145F, 0.19F};
+    const bool blue = state.scene_time >= frame.p3_start;
+    const float blue_transition = smoothstep((state.scene_time - (frame.p3_start - 0.30F)) / 0.80F);
+    state.tint = mix_color({0.96F, 0.76F, 0.28F}, {0.42F, 0.78F, 1.0F}, blue_transition);
+    state.cool_mix = blue ? 1.0F : 0.0F;
+    if (state.scene_time < frame.p2_start) {
+        const float enter = smoothstep(state.scene_time / 0.70F);
+        state.background = mix_color({0.008F, 0.016F, 0.039F}, {0.055F, 0.095F, 0.16F}, enter);
+        state.background = mix_color(state.background, {0.10F, 0.145F, 0.19F},
+            smoothstep((state.scene_time - (frame.p2_start - 0.55F)) / 0.55F));
+    }
+    state.background = mix_color(state.background, {0.018F, 0.052F, 0.10F}, blue_transition);
+    if (blue) {
+        state.background = mix_color(state.background, {0.055F, 0.11F, 0.165F},
+            smoothstep((state.scene_time - (frame.p3_end - 0.55F)) / 1.0F));
+        const float handoff = state.scene_time - frame.p4_start;
+        state.flash = 0.60F * smoothstep(handoff / 0.32F) *
+                      (1.0F - smoothstep((handoff - 0.32F) / 0.60F));
+    }
+    if (frame.reduced_motion) {
+        state.background = {0.055F, 0.11F, 0.165F};
+        state.flash = 0.0F;
         return state;
-
-    float visibility = 0.0F;
-    const auto travel = [&](float start, float end, float distance) {
-        if (end <= start)
-            return;
-        const float duration = end - start;
-        const float tail = std::min(0.40F, std::max(0.001F, duration * 0.20F));
-        const float span = duration + tail;
-        const float progress = saturate((state.scene_time - start) / span);
-        const float accelerate = saturate(progress / 0.18F);
-        const float decelerate = saturate((progress - 0.72F) / 0.28F);
-        const float distance_in = accelerate * accelerate * accelerate *
-                                  (1.0F - accelerate * 0.5F);
-        const float distance_out = decelerate * decelerate * decelerate *
-                                   (1.0F - decelerate * 0.5F);
-        const float displacement =
-            (0.18F * distance_in + std::max(0.0F, progress - 0.18F) -
-             0.28F * distance_out) / 0.77F;
-        state.camera_z += distance * saturate(displacement);
-        state.camera_velocity += distance * smoothstep(accelerate) *
-                                 (1.0F - smoothstep(decelerate)) / (span * 0.77F);
-        const float enter = smoothstep((state.scene_time - start) / std::min(0.38F, duration));
-        const float leave = 1.0F - smoothstep((state.scene_time - end) / tail);
-        visibility = std::max(visibility, enter * leave);
-    };
-    travel(0.0F, frame.p1_end, 16000.0F);
-    travel(frame.p3_start, frame.p3_end, 32000.0F);
-    state.particle_alpha = visibility * 0.95F;
+    }
+    if (elapsed < prelude) {
+        state.startup_burst = 1.0F - smoothstep(state.startup_wave / 0.62F);
+        state.energy = 0.10F + smoothstep(state.startup_wave) * 0.08F;
+        state.motion_mix = 1.8F * state.startup_wave * (1.0F - state.startup_wave);
+        return state;
+    }
+    const float start = blue ? frame.p3_start : 0.0F;
+    const float end = blue ? frame.p3_end : frame.p1_end;
+    if (end <= start || state.scene_time < start) {
+        state.energy = 0.16F;
+        state.motion_mix = 0.0F;
+        return state;
+    }
+    const float progress = saturate((state.scene_time - start) / (end - start));
+    const float local_time = state.scene_time - start;
+    const float settle_start = blue ? end - 0.20F : end;
+    state.energy = lerp(0.18F + 0.72F * smoothstep(progress), blue ? 0.14F : 0.16F,
+                         smoothstep((state.scene_time - settle_start) / 0.65F));
+    if (state.scene_time >= end + 0.20F) {
+        state.motion_mix = 0.0F;
+        return state;
+    }
+    state.camera_z = camera_position(local_time, end - start);
+    state.camera_velocity = (state.camera_z - camera_position(std::max(0.0F, local_time - 0.005F),
+                                                               end - start)) / 0.005F;
+    state.particle_alpha = (blue ? smoothstep(local_time / 0.60F)
+                          : lerp(0.12F, 1.0F, smoothstep(local_time / 0.65F))) *
+                      (1.0F - smoothstep((state.scene_time - (end - 0.30F)) / 0.50F));
     state.particles = state.particle_alpha > 0.001F;
-    state.energy = visibility * (0.30F + 0.30F * saturate(state.camera_velocity / 9000.0F));
-    state.motion_mix = saturate(state.camera_velocity / 9000.0F);
+    state.motion_mix = saturate(state.camera_velocity / 1800.0F);
     return state;
 }
 
@@ -202,10 +237,16 @@ struct Renderer {
     ID3D11BlendState* premultiplied_blend{};
     ID3D11BlendState* additive_blend{};
     ID3D11DepthStencilState* depth_disabled{};
+    ID3D11DepthStencilState* depth_enabled{};
+    ID3D11Texture2D* depth{};
+    ID3D11DepthStencilView* depth_view{};
     ID3D11RasterizerState* no_cull_rasterizer{};
     ID3D11Texture2D* scene{};
     ID3D11RenderTargetView* scene_rtv{};
     ID3D11ShaderResourceView* scene_srv{};
+    ID3D11Texture2D* multisample_scene{};
+    ID3D11RenderTargetView* multisample_rtv{};
+    uint32_t sample_count{1u};
     ID3D11Texture2D* bloom_a{};
     ID3D11RenderTargetView* bloom_a_rtv{};
     ID3D11ShaderResourceView* bloom_a_srv{};
@@ -218,6 +259,15 @@ struct Renderer {
     ID3D11Texture2D* bloom_wide_b{};
     ID3D11RenderTargetView* bloom_wide_b_rtv{};
     ID3D11ShaderResourceView* bloom_wide_b_srv{};
+    std::array<ID3D11Texture2D*, 2> history{};
+    std::array<ID3D11RenderTargetView*, 2> history_rtv{};
+    std::array<ID3D11ShaderResourceView*, 2> history_srv{};
+    uint32_t history_index{};
+    uint32_t history_seed{};
+    float history_seconds{};
+    float history_cool{};
+    bool history_reduced{};
+    bool history_valid{};
     uint32_t width{};
     uint32_t height{};
     uint32_t uploaded_seed{};
@@ -227,6 +277,17 @@ struct Renderer {
 namespace {
 
 void release_targets(Renderer& renderer) noexcept {
+    for (size_t index = 0; index < renderer.history.size(); ++index) {
+        release(renderer.history_srv[index]);
+        release(renderer.history_rtv[index]);
+        release(renderer.history[index]);
+    }
+    renderer.history_valid = false;
+    release(renderer.multisample_rtv);
+    release(renderer.multisample_scene);
+    renderer.sample_count = 1u;
+    release(renderer.depth_view);
+    release(renderer.depth);
     release(renderer.bloom_wide_b_srv);
     release(renderer.bloom_wide_b_rtv);
     release(renderer.bloom_wide_b);
@@ -250,6 +311,7 @@ void release_device(Renderer& renderer) noexcept {
     release_targets(renderer);
     release(renderer.no_cull_rasterizer);
     release(renderer.depth_disabled);
+    release(renderer.depth_enabled);
     release(renderer.additive_blend);
     release(renderer.premultiplied_blend);
     release(renderer.sampler);
@@ -292,7 +354,8 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
                        renderer.constants != nullptr && renderer.sampler != nullptr &&
                        renderer.premultiplied_blend != nullptr &&
                        renderer.additive_blend != nullptr &&
-                       renderer.depth_disabled != nullptr && renderer.no_cull_rasterizer != nullptr;
+                       renderer.depth_disabled != nullptr && renderer.depth_enabled != nullptr &&
+                       renderer.no_cull_rasterizer != nullptr;
     if (renderer.device == device && ready)
         return true;
     release_device(renderer);
@@ -365,9 +428,9 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
         triangle(b0, b1, a1);
         for (uint32_t end = 0u; end < 2u; ++end) {
             const float direction = end == 0u ? -1.0F : 1.0F;
-            for (uint32_t ring = 0u; ring < 2u; ++ring) {
-                const float low = static_cast<float>(ring) * kPi * 0.25F;
-                const float high = static_cast<float>(ring + 1u) * kPi * 0.25F;
+            for (uint32_t ring = 0u; ring < kCapBands; ++ring) {
+                const float low = static_cast<float>(ring) * kPi / (2.0F * kCapBands);
+                const float high = static_cast<float>(ring + 1u) * kPi / (2.0F * kCapBands);
                 const Vertex p0 = cap_vertex(a, low, static_cast<float>(end), direction);
                 const Vertex p1 = cap_vertex(b, low, static_cast<float>(end), direction);
                 const Vertex p2 = cap_vertex(a, high, static_cast<float>(end), direction);
@@ -439,10 +502,18 @@ bool ensure_device(Renderer& renderer, ID3D11Device* device) noexcept {
         release_device(renderer);
         return false;
     }
+    depth_desc.DepthEnable = TRUE;
+    depth_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    depth_desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    if (FAILED(device->CreateDepthStencilState(&depth_desc, &renderer.depth_enabled))) {
+        release_device(renderer);
+        return false;
+    }
     D3D11_RASTERIZER_DESC rasterizer_desc{};
     rasterizer_desc.FillMode = D3D11_FILL_SOLID;
     rasterizer_desc.CullMode = D3D11_CULL_NONE;
     rasterizer_desc.DepthClipEnable = TRUE;
+    rasterizer_desc.MultisampleEnable = TRUE;
     if (FAILED(device->CreateRasterizerState(&rasterizer_desc, &renderer.no_cull_rasterizer))) {
         release_device(renderer);
         return false;
@@ -473,6 +544,57 @@ bool ensure_targets(Renderer& renderer, uint32_t width, uint32_t height) noexcep
         release_targets(renderer);
         return false;
     }
+    for (size_t index = 0; index < renderer.history.size(); ++index) {
+        if (!create_color_target(renderer.device, width, height, &renderer.history[index],
+                                 &renderer.history_rtv[index], &renderer.history_srv[index])) {
+            release_targets(renderer);
+            return false;
+        }
+    }
+    UINT format_support = 0u;
+    const bool can_resolve = SUCCEEDED(renderer.device->CheckFormatSupport(
+        DXGI_FORMAT_R16G16B16A16_FLOAT, &format_support)) &&
+        (format_support & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE) != 0u;
+    const uint32_t preferred_samples = !can_resolve ? 1u :
+        static_cast<uint64_t>(width) * height > 2560u * 1440u ? 2u : 4u;
+    for (uint32_t samples = preferred_samples; samples > 1u; samples /= 2u) {
+        UINT color_levels = 0u, depth_levels = 0u;
+        if (SUCCEEDED(renderer.device->CheckMultisampleQualityLevels(
+                DXGI_FORMAT_R16G16B16A16_FLOAT, samples, &color_levels)) && color_levels > 0u &&
+            SUCCEEDED(renderer.device->CheckMultisampleQualityLevels(
+                DXGI_FORMAT_D32_FLOAT, samples, &depth_levels)) && depth_levels > 0u) {
+            renderer.sample_count = samples;
+            break;
+        }
+    }
+    if (renderer.sample_count > 1u) {
+        D3D11_TEXTURE2D_DESC color_desc{};
+        color_desc.Width = width;
+        color_desc.Height = height;
+        color_desc.MipLevels = color_desc.ArraySize = 1u;
+        color_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        color_desc.SampleDesc.Count = renderer.sample_count;
+        color_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        if (FAILED(renderer.device->CreateTexture2D(&color_desc, nullptr, &renderer.multisample_scene)) ||
+            FAILED(renderer.device->CreateRenderTargetView(renderer.multisample_scene, nullptr,
+                                                            &renderer.multisample_rtv))) {
+            release_targets(renderer);
+            return false;
+        }
+    }
+    D3D11_TEXTURE2D_DESC depth_desc{};
+    depth_desc.Width = width;
+    depth_desc.Height = height;
+    depth_desc.MipLevels = 1u;
+    depth_desc.ArraySize = 1u;
+    depth_desc.Format = DXGI_FORMAT_D32_FLOAT;
+    depth_desc.SampleDesc.Count = renderer.sample_count;
+    depth_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    if (FAILED(renderer.device->CreateTexture2D(&depth_desc, nullptr, &renderer.depth)) ||
+        FAILED(renderer.device->CreateDepthStencilView(renderer.depth, nullptr, &renderer.depth_view))) {
+        release_targets(renderer);
+        return false;
+    }
     renderer.width = width;
     renderer.height = height;
     return true;
@@ -482,49 +604,33 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
     if (renderer.instances_ready && renderer.uploaded_seed == renderer.frame.seed)
         return true;
     constexpr std::array<std::array<float, 3>, 8> warm{{
-        {1.00F, 0.08F, 0.16F},
-        {1.00F, 0.38F, 0.04F},
-        {1.00F, 0.82F, 0.12F},
-        {0.14F, 1.00F, 0.32F},
-        {0.03F, 0.84F, 1.00F},
-        {0.12F, 0.28F, 1.00F},
-        {0.60F, 0.12F, 1.00F},
-        {1.00F, 0.12F, 0.58F},
+        {1.00F, 0.00F, 0.00F}, {1.00F, 1.00F, 0.00F},
+        {0.133F, 0.545F, 0.133F}, {0.133F, 0.133F, 0.133F},
+        {0.502F, 0.502F, 0.502F}, {0.00F, 0.749F, 1.00F},
+        {0.576F, 0.439F, 0.859F}, {1.00F, 0.078F, 0.576F},
     }};
     constexpr std::array<std::array<float, 3>, 8> cool{{
-        {0.04F, 0.24F, 1.00F},
-        {0.04F, 0.48F, 1.00F},
-        {0.08F, 0.70F, 1.00F},
-        {0.16F, 0.34F, 1.00F},
-        {0.03F, 0.38F, 0.96F},
-        {0.22F, 0.62F, 1.00F},
-        {0.06F, 0.54F, 1.00F},
-        {0.36F, 0.74F, 1.00F},
+        {0.00F, 0.267F, 0.80F},
+        {0.00F, 0.533F, 1.00F},
+        {0.00F, 0.80F, 1.00F},
+        {0.00F, 0.133F, 0.533F},
+        {0.533F, 0.933F, 1.00F},
+        {0.00F, 0.40F, 0.867F},
+        {0.667F, 0.933F, 1.00F},
+        {1.00F, 1.00F, 1.00F},
     }};
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(renderer.instance_buffer, 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped)))
         return false;
     auto* instances = static_cast<Instance*>(mapped.pData);
     uint32_t random = renderer.frame.seed == 0u ? 0x51a0c3d7u : renderer.frame.seed;
-    const float azimuth = random_unit(random) * 2.0F * kPi;
     for (uint32_t index = 0u; index < kParticleCount; ++index) {
-        const bool foreground = index % 6u == 0u;
-        const bool filament = index % 6u == 1u;
-        const float angle = azimuth + static_cast<float>(index) * 2.39996323F +
-                            (random_unit(random) - 0.5F) * 0.08F;
-          const float radius = lerp(foreground ? 420.0F : 75.0F,
-                            foreground ? 1800.0F : 1300.0F, random_unit(random));
-          const float length = lerp(foreground ? 800.0F : (filament ? 100.0F : 350.0F),
-                            foreground ? 1600.0F : (filament ? 450.0F : 1150.0F),
-                                  random_unit(random));
-          const float width = lerp(foreground ? 7.0F : (filament ? 1.15F : 3.3F),
-                            foreground ? 14.0F : (filament ? 2.3F : 8.0F),
-                            random_unit(random));
-        const float depth = (static_cast<float>(index) + random_unit(random)) /
-                        static_cast<float>(kParticleCount) * (4800.0F + length + width * 2.0F);
-          const float brightness = lerp(filament ? 0.50F : 0.85F,
-                              foreground ? 1.25F : (filament ? 0.85F : 1.15F),
-                                      random_unit(random));
+        const float angle = random_unit(random) * 2.0F * kPi;
+        const float radius = lerp(10.0F, 38.0F, random_unit(random));
+        const float length = lerp(340.0F, 460.0F, random_unit(random));
+        const float width = lerp(1.44F, 2.52F, random_unit(random));
+        const float depth = lerp(-800.0F, 1400.0F, random_unit(random));
+        const float brightness = lerp(0.80F, 1.0F, random_unit(random));
         const float flicker = random_unit(random);
         const auto& warm_color = warm[index % warm.size()];
         const auto& cool_color = cool[index % cool.size()];
@@ -593,6 +699,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             return gpu_failure();
 
         const VisualState visual = visual_state(renderer->frame);
+        float history_weight = 0.0F;
         const auto upload_constants = [&](float width, float height, float blur_x, float blur_y,
                                           float camera, float alpha, float radius,
                                           float extract = 0.0F,
@@ -622,7 +729,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                        {blur_x, blur_y},
                        extract,
                        {visual.background[0], visual.background[1], visual.background[2]},
-                       0.0F,
+                       history_weight,
                        {visual.tint[0], visual.tint[1], visual.tint[2]},
                        0.0F};
             device_context->Unmap(renderer->constants, 0u);
@@ -645,13 +752,15 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         constexpr UINT null_strides[2]{0u, 0u};
         constexpr UINT null_offsets[2]{0u, 0u};
         device_context->IASetVertexBuffers(0u, 2u, null_vertex_buffers, null_strides, null_offsets);
-        ID3D11ShaderResourceView* null_inputs[3]{nullptr, nullptr, nullptr};
-        device_context->PSSetShaderResources(0u, 3u, null_inputs);
+        ID3D11ShaderResourceView* null_inputs[4]{nullptr, nullptr, nullptr, nullptr};
+        device_context->PSSetShaderResources(0u, 4u, null_inputs);
         constexpr float transparent[4]{0.0F, 0.0F, 0.0F, 0.0F};
         constexpr float blend_factor[4]{0.0F, 0.0F, 0.0F, 0.0F};
-        device_context->ClearRenderTargetView(renderer->scene_rtv, transparent);
-        ID3D11RenderTargetView* scene_target = renderer->scene_rtv;
-        device_context->OMSetRenderTargets(1u, &scene_target, nullptr);
+        ID3D11RenderTargetView* scene_target = renderer->multisample_rtv != nullptr
+            ? renderer->multisample_rtv : renderer->scene_rtv;
+        device_context->ClearRenderTargetView(scene_target, transparent);
+        device_context->ClearDepthStencilView(renderer->depth_view, D3D11_CLEAR_DEPTH, 1.0F, 0u);
+        device_context->OMSetRenderTargets(1u, &scene_target, renderer->depth_view);
         device_context->OMSetBlendState(nullptr, blend_factor, 0xffffffffu);
         device_context->OMSetDepthStencilState(renderer->depth_disabled, 0u);
         D3D11_VIEWPORT viewport{0.0F,
@@ -680,11 +789,13 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             device_context->PSSetShader(renderer->streak_ps, nullptr, 0u);
             device_context->RSSetState(renderer->no_cull_rasterizer);
 
-            device_context->OMSetDepthStencilState(renderer->depth_disabled, 0u);
-            device_context->OMSetBlendState(renderer->additive_blend, blend_factor, 0xffffffffu);
-            constexpr std::array<float, 3> shutter_offsets{1.0F / 120.0F, 1.0F / 240.0F, 0.0F};
-            constexpr std::array<float, 3> shutter_weights{0.25F, 0.35F, 0.40F};
+            device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor, 0xffffffffu);
+            constexpr std::array<float, 3> shutter_offsets{1.05F / 60.0F, 0.55F / 60.0F, 0.0F};
+            constexpr std::array<float, 3> shutter_weights{0.10F, 0.18F, 1.0F};
+            constexpr std::array<float, 3> shutter_radius{1.085F, 1.045F, 1.0F};
             for (size_t index = 0u; index < shutter_offsets.size(); ++index) {
+                device_context->OMSetDepthStencilState(
+                    index + 1u == shutter_offsets.size() ? renderer->depth_enabled : renderer->depth_disabled, 0u);
                 FrameState sample_frame = renderer->frame;
                 sample_frame.elapsed_seconds =
                     std::max(0.0F, sample_frame.elapsed_seconds - shutter_offsets[index]);
@@ -693,12 +804,17 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                                       static_cast<float>(context->height_px), 0.0F, 0.0F,
                                       sample.camera_z,
                                       sample.particle_alpha * shutter_weights[index],
-                                      1.0F, 0.0F, &sample))
+                                      shutter_radius[index], 0.0F, &sample))
                     return gpu_failure();
                 device_context->DrawInstanced(kStreakVertexCount, kParticleCount, 0u, 0u);
             }
         }
 
+        if (renderer->multisample_scene != nullptr) {
+            device_context->OMSetRenderTargets(0u, nullptr, nullptr);
+            device_context->ResolveSubresource(renderer->scene, 0u, renderer->multisample_scene, 0u,
+                                               DXGI_FORMAT_R16G16B16A16_FLOAT);
+        }
         const uint32_t half_width = std::max(1u, context->width_px / 2u);
         const uint32_t half_height = std::max(1u, context->height_px / 2u);
         const uint32_t quarter_width = std::max(1u, context->width_px / 4u);
@@ -737,20 +853,47 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                  quarter_width, quarter_height, 0.0F, 2.4F, 0.0F)))
             return gpu_failure();
 
+        device_context->RSSetViewports(1u, &viewport);
+        const float delta = renderer->frame.elapsed_seconds - renderer->history_seconds;
+        const bool same_frame = renderer->history_valid && delta == 0.0F &&
+            renderer->history_seed == renderer->frame.seed &&
+            renderer->history_reduced == renderer->frame.reduced_motion;
+        if (!same_frame) {
+            const bool continuous = renderer->history_valid && delta > 0.0F && delta < 0.15F &&
+                renderer->history_seed == renderer->frame.seed &&
+                renderer->history_cool == visual.cool_mix && !renderer->frame.reduced_motion &&
+                !renderer->history_reduced;
+            const float retention = lerp(0.10F, 0.40F, visual.motion_mix);
+            history_weight = continuous ? std::pow(retention, delta * 60.0F) : 0.0F;
+            const uint32_t next = renderer->history_valid ? 1u - renderer->history_index : 0u;
+            if (!upload_constants(static_cast<float>(context->width_px),
+                                  static_cast<float>(context->height_px), 0.0F, 0.0F, visual.camera_z,
+                                  visual.particle_alpha, 1.0F, 2.0F))
+                return gpu_failure();
+            ID3D11ShaderResourceView* inputs[]{renderer->scene_srv,
+                renderer->frame.reduced_motion ? nullptr : renderer->bloom_b_srv,
+                renderer->frame.reduced_motion ? nullptr : renderer->bloom_wide_b_srv,
+                renderer->history_valid ? renderer->history_srv[renderer->history_index] : nullptr};
+            device_context->OMSetRenderTargets(1u, &renderer->history_rtv[next], nullptr);
+            device_context->PSSetShaderResources(0u, 4u, inputs);
+            device_context->Draw(6u, 0u);
+            device_context->PSSetShaderResources(0u, 4u, null_inputs);
+            renderer->history_index = next;
+            renderer->history_valid = true;
+            renderer->history_seconds = renderer->frame.elapsed_seconds;
+            renderer->history_seed = renderer->frame.seed;
+            renderer->history_cool = visual.cool_mix;
+            renderer->history_reduced = renderer->frame.reduced_motion;
+        }
         if (!upload_constants(static_cast<float>(context->width_px),
                               static_cast<float>(context->height_px), 0.0F, 0.0F, visual.camera_z,
                               visual.particle_alpha, 1.0F))
             return gpu_failure();
-        device_context->RSSetViewports(1u, &viewport);
         device_context->OMSetRenderTargets(1u, &output, nullptr);
-        ID3D11ShaderResourceView* sources[]{
-            renderer->scene_srv,
-            renderer->frame.reduced_motion ? nullptr : renderer->bloom_b_srv,
-            renderer->frame.reduced_motion ? nullptr : renderer->bloom_wide_b_srv};
-        device_context->PSSetShaderResources(0u, 3u, sources);
+        device_context->PSSetShaderResources(0u, 1u, &renderer->history_srv[renderer->history_index]);
         device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor, 0xffffffffu);
         device_context->Draw(6u, 0u);
-        device_context->PSSetShaderResources(0u, 3u, null_inputs);
+        device_context->PSSetShaderResources(0u, 4u, null_inputs);
         return FAILED(device->GetDeviceRemovedReason()) ? SAO_STATUS_ERR_DEVICE_LOST
                                                         : SAO_STATUS_OK;
     } catch (...) {

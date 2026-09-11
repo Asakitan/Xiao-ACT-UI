@@ -38,6 +38,21 @@ struct LinkStartAudioPlayback {
     LinkStartAudioSnapshot snapshot;
 #if defined(_WIN32)
     IXAudio2SourceVoice* voice{};
+    struct Callbacks final : IXAudio2VoiceCallback {
+        std::atomic_bool ended{};
+        std::atomic_bool failed{};
+        void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) noexcept override {}
+        void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() noexcept override {}
+        void STDMETHODCALLTYPE OnStreamEnd() noexcept override {
+            ended.store(true, std::memory_order_release);
+        }
+        void STDMETHODCALLTYPE OnBufferStart(void*) noexcept override {}
+        void STDMETHODCALLTYPE OnBufferEnd(void*) noexcept override {}
+        void STDMETHODCALLTYPE OnLoopEnd(void*) noexcept override {}
+        void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT) noexcept override {
+            failed.store(true, std::memory_order_release);
+        }
+    } callbacks;
 #endif
 };
 } // namespace sao::ui::sound_detail
@@ -197,7 +212,9 @@ void update_sequence_clock_locked(sao::ui::sound_detail::LinkStartAudioPlayback&
     XAUDIO2_VOICE_STATE state{};
     playback.voice->GetState(&state, 0u);
     const uint64_t total = playback.snapshot.cue_end_frames.back();
-    if (state.BuffersQueued == 0u) {
+    if (playback.callbacks.failed.load(std::memory_order_acquire)) {
+        playback.snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::interrupted;
+    } else if (playback.callbacks.ended.load(std::memory_order_acquire)) {
         playback.snapshot.samples_played = total;
         playback.snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::complete;
     } else {
@@ -370,8 +387,9 @@ class SoundEngine final {
             if (playback->snapshot.state != sao::ui::sound_detail::LinkStartPlaybackState::complete)
                 playback->snapshot.state = sao::ui::sound_detail::LinkStartPlaybackState::interrupted;
             playback->voice = nullptr;
-            slot.voice->DestroyVoice();
         }
+        if (slot.voice != nullptr)
+            slot.voice->DestroyVoice();
         slot = {};
     }
 
@@ -384,7 +402,9 @@ class SoundEngine final {
                 std::lock_guard lock(slot.playback->mutex);
                 update_sequence_clock_locked(*slot.playback);
                 finished = slot.playback->snapshot.state ==
-                           sao::ui::sound_detail::LinkStartPlaybackState::complete;
+                               sao::ui::sound_detail::LinkStartPlaybackState::complete ||
+                           slot.playback->snapshot.state ==
+                               sao::ui::sound_detail::LinkStartPlaybackState::interrupted;
             }
             if (finished)
                 release_sequence_slot(slot);
@@ -409,7 +429,8 @@ class SoundEngine final {
         if (selected == nullptr)
             return SAO_STATUS_ERR_TIMEOUT;
         IXAudio2SourceVoice* voice = nullptr;
-        HRESULT result = engine_->CreateSourceVoice(&voice, &request.sequence_waves[0].format);
+        HRESULT result = engine_->CreateSourceVoice(&voice, &request.sequence_waves[0].format,
+            0u, XAUDIO2_DEFAULT_FREQ_RATIO, &request.sequence->callbacks);
         if (FAILED(result) || voice == nullptr)
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         result = voice->SetVolume(static_cast<float>(volume) / 100.0F);

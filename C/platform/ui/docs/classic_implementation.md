@@ -31,6 +31,16 @@ by the workbench stylesheet; DOM, JS and backend contracts did not change.
 - Workbench controls keep conventional readable geometry; success, warning, error, HP, shield, and element colors remain semantic rather than becoming chrome accents.
 
 ## Implemented contracts
+
+Current Link Start references are the frozen `python/sao_theme/link_start.py` and Python
+fisheye/menu shaders, plus the public MakeAGif `DZ4lIe` and Tenor `24757565` scene excerpts.
+The Python file credits Cad-noob/SAO-UI; this is reference-guided reconstruction, not a claim
+of frame-exact parity with an official Season 1 master. Reference locations:
+```
+https://github.com/Cad-noob/SAO-UI
+https://makeagif.com/gif/sword-art-online-link-start-DZ4lIe
+https://tenor.com/view/link-start-sao-gif-24757565
+```
 - Classic light remains the default: porcelain `#eeeae4`, card white `#faf9f6`, ink `#232724`, muted `#646a65`, rules `#d6d6ce`, and selection `#d99536`. Persisted dark uses graphite `#202421` / `#2b302c`, pale text `#eef0e8`, and `#edb45b` accent.
 - Display/Chinese body/monospace roles share DirectWrite measurement and paint configuration. The existing SAO UI font is embedded privately, with no system font installation. Resource provenance is in `classic_asset_sources.md` and the asset manifests; original repository font/audio rights remain unverified.
 - Public sound cue 0–10 and Link Start config sizes remain unchanged. Cue 11–14, sound sessions, event prioritization, custom PCM WAV playback and dialog password options are append-only.
@@ -44,21 +54,23 @@ by the workbench stylesheet; DOM, JS and backend contracts did not change.
 - Panels, Entity/NerveGear and Link Start text record immutable drawing commands. Direct2D 1.1 draws those primitives and DirectWrite text directly into compositor-owned BGRA8 D3D11 textures. Normal native pages no longer rasterize/upload complete CPU frames. Explicit panel rasterization and local image/custom-canvas content retain their separate CPU paths.
 - The one DirectComposition target now owns explicit `BELOW_NATIVE` and `ABOVE_NATIVE` external visual slots around the flattened native swapchain. Slot targets are generation-scoped across device loss, participate in host clipping and exact chorded L/R/M/X raw input without entering native snapshots/effects, and remain on the compositor owner thread.
 - AI main prefers an in-process WebView2 CompositionController bound to the full-client `ABOVE_NATIVE` slot and fixed `https://sao-workbench.local/ai_editor_app.html` origin. It issues a fresh challenge after each completed navigation, accepts only challenge-bound `sao.workbench` hello/request envelopes, supplies a light-default bootstrap config plus `win_close`, returns structured errors for unavailable adapters, and keeps the existing native panel as startup/runtime fallback.
-- GPU Link Start keeps 300 six-vertex columns, divided into 60 foreground shafts, 180 middle-distance columns and 60 fine tracks. A capsule profile, luminous core/local halo and depth attenuation replace flat wide bands. Seeded golden-angle azimuths and stratified depths reduce random clustering. Three fixed shutter samples use weights 0.25/0.35/0.40; palette selection stays on the current frame so P3 is blue even at a zero-gap boundary. Accumulated 12500/16000-unit flights use smooth acceleration, cruise and deceleration, continuing through their fade tails.
-- Scene and narrow/wide bloom targets use internal RGBA16F linear light; authored colors are decoded before accumulation. Bloom extraction occurs once with a soft knee, followed by half- and quarter-resolution filtering. Peak-based compression, explicit sRGB output and static sub-code-value dithering preserve color and dark gradients on the existing SDR compositor. This does not change system/display HDR or the swap chain.
-- The latest on-disk aperture/light-valve opening is retained, with its background rays/rings subordinated to the columns; flash remains zero and no chromatic-split or white-field pass is added. The full-window measured fly-out remains. Body-role tracked ASCII captions, a larger hold wordmark and a quieter four-segment `LINK SEQUENCE` footer refine hierarchy. Reduced motion retains its 450ms fade and one-shot completion.
+- The pale/flat reconstruction was rejected. The actual frozen Python GL path uses dark blue/gray, axial Blinn-Phong lighting, Fresnel, fog, ghost geometry, temporal history and radial/chromatic post-processing; its old pale-background comments are not authoritative. Current native rendering restores these layers rather than treating fewer effects as an upgrade.
+- GPU Link Start uses300 finite columns with24 sides/four cap bands (1296 vertices). Caps are shallow beveled ellipsoids with corrected normals, not bulbous hemispheres; fragment depth fog and axial emission falloff preserve longitudinal gradients. Existing placement/Bezier/velocity-continuous exit and current-depth plus two ghost passes remain. Zero-alpha fragments do not occlude later geometry.
+- Seven single-sample RGBA16F targets are retained. A separate MSAA scene target and matching D32 depth prefer4 samples,2 above2560x1440,then1 if format/depth/resolve support is absent; resolve precedes bloom/history sampling. History retention varies0.10..0.40 with motion and decays with actual frame interval; discontinuity/seed/reduced/blue-boundary resets and same-frame reuse remain. Radial/chromatic filtering, bloom, edge resolve and one sRGB conversion stay in the existing SDR compositor.
+- User-facing five beats are scanning boot HUD, colored flight, pearl welcome-menu card, blue flight and a dark Connected confirmation card. Quintic easing, overlap, soft corner accents and complete reading holds replace abrupt cuts/oversized text fly-out. Startup/welcome/Connected use12/24ms old-position samples only while moving; at rest only the current interface is painted. Background is opaque from the first frame; custom zero prelude never creates an extra boot card. Reduced motion remains450ms, with no motion samples; public enums and bootstrap contracts are unchanged.
+- The shared procedural fisheye service renders an 85%-resolution GPU field and then applies lens distortion, blur and chromatic offsets. It includes frost noise, five rays, three data-rain layers, four drifting segmented gauge rings, three scanning beams, grid cells, six motes, scanlines and vignette. One layer is reused across 500ms show/400ms hide transitions; reduced motion freezes procedural time and resolves opacity immediately. The existing live-image and CPU inspection paths remain separate. `sao_ui_fisheye_backdrop_advance` adds deterministic owner-thread stepping (0..1000ms) without changing existing structure sizes.
+- Native menu keeps 70px slots, 54..70px circles and two-neighbor focus. Orbit arcs, selection trails/press pulses and a status marker strip accompany translucent menu surfaces. Root hover is 200ms in/out; child entry is 240ms with 28ms row stagger; the bounded existing 450ms root popup remains. Existing hit regions, callbacks, scrolling and high-contrast action colors are preserved.
 - Native pointer and keyboard skip affordances are removed. Both intro layers retain full rectangular input coverage; Launcher and production Preview consume intro keys without dismissal. Public programmatic dismissal, window shutdown and error completion remain unchanged. Late ticks do not replay expired cues. Preview parent-window input still uses the compositor and screen-space wheel coordinates.
 - Guide intro owns focus and makes existing background nodes inert through its exit, restores their prior state, and supports short keyboard/complete-pointer skip. The native completion fragment and existing session preference still suppress duplicate introductions.
 - Zero-duration P1/P3 phases do not synthesize new particle tails; nonzero phases retain their existing tails and wall-clock completion. Guide pointer leave and lost capture clear only the matching armed pointer. These two read-only review findings were fixed directly and rebuilt in Debug and both release acceptance configurations.
-- One monotonic production clock coordinates the opening and sound phases. The default retains the 0.72-second prelude plus 10-second scene; custom timelines retain their wall-clock duration. Entry and exit use matching premultiplied fades for background and typography.
-- The embedded Link Start voice has 44116 frames at 44100 Hz (1.000362812s). NerveGear starts on the first non-overdue tick at or after 1001ms, rather than waiting for the title phase. Online/Welcome remains tied to the blue-flight P3 entrance (5.92s by default). These are visual-clock triggers, not a sample-accurate audio playlist.
-- Successful natural completion retains the sound group so the 5.600317s Online/Welcome cue can finish its remaining tail. Explicit dismissal also stops this tail when the intro is already inactive; error, offline, teardown, destruction and replay retain immediate group cleanup without a second completion edge. Reduced-motion suppression remains.
+- Default sound is one source voice with all three buffers queued before Start: LINK_START (44116 frames), NERVEGEAR (171990), ALO_WELCOME (246974), all PCM16/stereo/44100Hz. Only the last buffer carries END_OF_STREAM. SamplesPlayed drives visual time and the atomic OnStreamEnd callback confirms completion; callbacks do not take the playback mutex and voices are destroyed outside it. Four bounded sequence slots are pruned on the worker's 50ms wake-up.
+- Default boundaries: voice/first flight1.000363s; Online/title4.900363s; blue6.655363s; title end7.150363s (card exit through7.330363s); Connected entry10.100680s; audio end10.500680s; hold end11.400680s; completion12.150680s. The interface frame starts preparing0.20s before Online, but title text never appears early. Silent/interrupted/750ms stalled fallback, explicit custom timing/natural audio tails, cancellation/error/destruction/replay and reduced-motion suppression remain.
 - Bootstrap/hold integration was added concurrently in session-31 and is outside this visual/audio slice's changes and verification; the separate section below describes that work. Offline frame export runs without backend activation or telemetry.
 
 ## Source coverage and remaining acceptance
 | Surface | Source change | Visual/runtime acceptance |
 | --- | --- | --- |
-| Entity root/child menu | Shared label paint/hit geometry, larger measured/ellipsized text, contained child paint, category/range header, quiet circles and corrected hover draw order | Native GPU static export inspected; full DPI/data/interaction matrix remains open |
+| Entity root/child menu | GPU fisheye backdrop, segmented arcs/pulses, translucent surfaces, shared label paint/hit geometry, contained child rows and reference hover/child timing | Fullscreen backdrop and all five readable menu rows verified in native export; full DPI/data/interaction matrix remains open |
 | Launcher settings | Fixed header/footer, independent category/content scroll, checkbox, volume slider, theme dropdown, 15-cue audition | Production binding compiled; full backend session pending |
 | Hotkeys / plugins / license / user menu | Classic tokens, fixed status and scrollable content, shorter labels | Production binding compiled; real data/empty/error/manual gates pending |
 | Workshop | Catalog connectivity is separate from owner/worker lifetime; stale catalog actions are disabled when the latest validated list is disconnected | Detached production Preview observed `目录未连接`, structured list failure and normal retry/empty layout; connected backend still pending |
@@ -67,9 +79,11 @@ by the workbench stylesheet; DOM, JS and backend contracts did not change.
 | AI main / Control Center | Full Workbench asset hosted by CompositionController; native panel retained as fallback | Debug production Preview created the AIWorkbench WebView2 process tree and completed hello/ready; adapter slices and full visual/input/backend acceptance remain open |
 | Embedded AI pages | Classic light/default and neutral-dark CSS | Source review; hosted WebView runtime pending |
 | User guide | Classic CSS, shorter interactions, native sound bridge and real WAV copies | Browser inspected at 1280×900 and 390×844, no horizontal overflow or broken images |
-| Link Start | Linear HDR light columns, layered bloom, normalized shutter samples, three depth/size groups, cruise camera, refined type/footer, no interactive skip and aligned audio | Fresh Debug UI/Preview, 14 native intro times plus menu and PCM metadata inspected. Corrected central horizon haze; multicolor/blue and title hold/fly-out remain readable and unclipped internally. Independent review pending; continuous motion/audio-device/input/DPI acceptance remains open |
+| Link Start | Five overlapping beats, MSAA, beveled columns, speed-dependent temporal/UI blur, clear reading holds, serial PCM clock | Final UI rebuild14:50:20 UTC;20stills+menu,780-frame/60fps/13s movie fully decoded and played locally. Short/zero-hold repairs verified on disk; follow-up Review pass, no findings. No live FPS/DPI/device/acoustic acceptance claimed |
 
 ## Manual gates (not claimed as passed)
+- Five-beat code review passed after parent repaired short-hold opacity: entry ends by the hold boundary, overall entrance ends by its absolute timestamp, old samples stop after entry, active hold forces opacity1, and parking rounds upward to a representable millisecond. Zero/100ms/submillisecond/early holds were statically reviewed, not claimed as a live runtime matrix; default timing remains unchanged. The previous review/persistence blocker is resolved.
+- Current full preview is `.sao/ui-preview/linkstart-five-stage.mp4` (SHA256 `3053cc7cf460a07cdcea4b2a74a4e575597f301daf478a8aa73a4dae361d4557`); it has a distinct filename to avoid confusing an already-open old movie with this update.
 - 1080p / 1440p / 4K and 100% / 150% / 200% DPI; high contrast, reduced motion, long Chinese labels, dense/empty/loading/error/disabled pages.
 - Chinese IME composition/candidate positioning, selection/paste/password, stable refresh, nested scroll, fixed composer and modal focus.
 - Rapid click/focus sound deduplication, live master/local mute, custom WAV playback, unskippable intro with normal shutdown and no residual sound, subjective A/B timbre matching.
@@ -93,6 +107,8 @@ Developer preview: target `sao_ui_preview`; uses the real overlay host + DComp c
 - `--main` / `--ai-main` / `--ai-settings`: start a particular AI surface instead of the root menu.
 - `--intro`: run the native GPU intro. `--settings PATH` chooses a preview settings file; its saved Profiles use a sibling `profiles/` directory. Without the option, `.sao/ui-preview/settings.json` and `.sao/ui-preview/profiles/` stay separate from production preferences and profile snapshots.
 - `--offline --frame-out PATH.bmp --frame-ms N`: advance native UI on its owner thread and export a frame, then close; add `--intro` for Link Start. N is 0..60000 (default 1000). Export skips global hotkey registration and is muted. It handles the snapshot sizing query's BUFFER_TOO_SMALL result and advances Entity in steps of at most 1000ms. External WebView visuals are not included; this developer executable is not shipped.
+- Preview owns the shared fisheye backdrop, resized to its client rectangle and shown behind a visible root/child menu; hide and retryable teardown use the same service. Other standalone Preview pages do not force it on. `--intro-audition` enables offline audio at volume 55 without global hotkeys, suppresses the initial menu-open cue, logs phases and closes on natural completion.
+- `--offline --intro --frame-ms 0 --frame-out - --frame-count 780` streams13s of concatenated BMP from one renderer at deterministic60fps (16/17ms steps); max1800frames and endpoint<=60000ms. Tick stops after intro completion while subsequent menu frames remain exportable; single-file BMP stays unchanged. Exported60fps is not a measured live rendering-FPS claim.
 - Current owner-thread inspection also exercised a real Launcher Settings Audio click, a `WM_CANCELMODE` between down/up with no stuck press or action, a successful click immediately afterward, the detached Workshop error state and the populated Process Selector first page.
 Close an active AI run with its Stop action before closing the host. Busy retirement retains the UI and dependencies instead of freeing borrowed backend handles.
 
@@ -116,13 +132,16 @@ correcting the zero-gap palette boundary. The final UI DLL rebuilt successfully;
 frames were regenerated and the five saved key images retained identical hashes. Custom
 zero-gap runtime behavior remains source-reviewed rather than live-validated.
 
-The cinematic-lighting/audio slice changes the two Link Start C++ implementations and four
-existing shaders, plus a formatting repair for concurrently joined include directives. Debug
-UI/Preview artifacts postdate these sources; 14 intro times plus menu were exported muted.
-PCM inspection confirms the voice's 44116 frames, the first effect's 3.9s and Online/Welcome's
-5.600317s. Native snapshots validate appearance, not actual playback or motion. Independent
-review is pending. No new shipped asset or Markdown file; concurrent session-31 additions
-were preserved and no driver/engine/Launcher initialization was run for this slice.
+The 11:37 UTC pale reconstruction was visually rejected despite successful compilation.
+The subsequent actual-GL rework built Debug UI/Preview at12:39:01/12:39:07 UTC and exported
+15 still times through11700ms plus menu. One native renderer then generated720 consecutive
+frames (12s/60fps); the frozen Python class generated644frames using its original GL shaders,
+without launching its application/backend or modifying legacy files. The audio run logged
+first_flight1016/text4907/post-title6907/connected10063/complete11641ms, always audio0/status0.
+Full source review passed with no defects; final low-emission/edge shader polish is undergoing
+incremental verification. Both MP4 previews live under.sao/ui-preview; renderer-frame exports
+do not measure speaker acoustics or live frame-time performance. Release/Hardened unchanged;
+no new audio resource or Markdown file, no production startup execution.
 
 ## Bootstrap-covered intro (session-31)
 
