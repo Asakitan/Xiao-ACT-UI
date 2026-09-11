@@ -20,6 +20,36 @@ if (NOT DEFINED SAO_AUDIT_PROJECT_OWNED_PES OR
         "SAO_AUDIT_PROJECT_OWNED_PES must provide explicit project-owned PE paths")
 endif()
 
+set(_sao_helper_binary
+    "${SAO_AUDIT_SHIP_DIRECTORY}/bin/runtime/helper/WdiSvcHost.exe")
+set(_sao_helper_identity "${_sao_helper_binary}.identity")
+if (EXISTS "${_sao_helper_binary}" OR EXISTS "${_sao_helper_identity}")
+    if (NOT EXISTS "${_sao_helper_binary}" OR NOT EXISTS "${_sao_helper_identity}")
+        message(FATAL_ERROR "Staged helper executable and identity sidecar must both exist")
+    endif()
+    if (NOT DEFINED SAO_AUDIT_SOURCE_ROOT OR
+        NOT IS_DIRECTORY "${SAO_AUDIT_SOURCE_ROOT}")
+        message(FATAL_ERROR "SAO_AUDIT_SOURCE_ROOT is required for helper identity closure")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            "-DSAO_RT_IO_IDENTITY_VERIFY_ONLY=ON"
+            "-DSAO_RT_IO_HELPER_BINARY=${_sao_helper_binary}"
+            "-DSAO_RT_IO_HELPER_IDENTITY_INPUT=${_sao_helper_identity}"
+            "-DSAO_RT_IO_ABI_HEADER=${SAO_AUDIT_SOURCE_ROOT}/platform/rt_io/include/sao/rt_io/abi.h"
+            "-DSAO_RT_IO_PROTOCOL_HEADER=${SAO_AUDIT_SOURCE_ROOT}/platform/rt_io/include/sao/rt_io/protocol.h"
+            "-DSAO_RT_IO_HELPER_BOOTSTRAP_HEADER=${SAO_AUDIT_SOURCE_ROOT}/platform/rt_io/include/sao/rt_io/helper_bootstrap.h"
+            -P "${SAO_AUDIT_SOURCE_ROOT}/platform/rt_io/cmake/generate_helper_identity.cmake"
+        RESULT_VARIABLE _sao_helper_identity_result
+        OUTPUT_VARIABLE _sao_helper_identity_output
+        ERROR_VARIABLE _sao_helper_identity_error)
+    if (NOT _sao_helper_identity_result EQUAL 0)
+        message(FATAL_ERROR
+            "Staged helper identity closure failed: ${_sao_helper_identity_output}${_sao_helper_identity_error}")
+    endif()
+    message(STATUS "Staged helper protocol/ABI identity closure passed")
+endif()
+
 set(_sao_ship_bin_directory "${SAO_AUDIT_SHIP_DIRECTORY}/bin")
 if (NOT IS_DIRECTORY "${_sao_ship_bin_directory}")
     message(FATAL_ERROR "Staged install tree is missing bin/: ${_sao_ship_bin_directory}")

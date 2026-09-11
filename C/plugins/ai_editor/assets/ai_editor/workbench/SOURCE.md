@@ -6,18 +6,27 @@
 - Source SHA-256: `FE9CD236F9B8C519F1382FDD260DF1273C2EEF50452752368A7B25EF4875DC8D`
 - Source logical line count: `59517`
 - Copied workbench page: `ai_editor_app.html`
-- Copy delta: one early external `native-bridge.js` script tag and one final `classic-theme.css` link tag. The copied inline HTML, CSS, DOM, and JavaScript are retained as the frozen source content; neither the legacy Python file nor its inline bundle was edited.
+- Copy delta: the external `native-bridge.js` script and `classic-theme.css` overlay, matching light/dark fallback CSS tokens, and the appended `sao-ordinary-control-accessibility` script for existing clickable controls. Existing IDs, commands and RPC names are retained. The legacy Python source remains unchanged; this native copy is no longer byte-identical to its original inline bundle.
 
 ## New local resources and licensing provenance
 
 | Resource | Origin | License/provenance |
 | --- | --- | --- |
 | `ai_editor_app.html` | Frozen in-repository source listed above | Repository source; see `E:\VC\SAO-UI\sao_auto\LICENSE` for repository licensing. |
-| `classic-theme.css` | New local SAO Classic token and typography overlay | Authored for this workbench asset; no third-party code, font file, image, or network asset is bundled. System font names are only CSS fallbacks. |
+| `classic-theme.css` | Neutral light/charcoal IDE presentation with restrained warm accents | Authored for this workbench asset; no third-party code, font file, image, or network asset is bundled. System font names are only CSS fallbacks. |
 | `native-bridge.js` | New local WebView2 transport/compatibility facade | Authored for this workbench asset; no third-party code or network dependency. |
 | `SOURCE.md` | New local provenance/contract record | Authored for this workbench asset. |
 
 ## WebView2 transport contract
+
+The editor presentation override replaces the earlier decorative treatment rather than
+stacking another theme on top. It leaves code-layer font metrics, padding and transparent
+overlays to the document, aligns conversation and composer widths, wraps existing controls
+inside narrow panes, and stacks editor/chat below 760px without changing their actions.
+The original inline fallback tokens remain; this external stylesheet is the normal visual
+authority. Browser inspection covered light/dark, desktop split panes, 430px stacked panes,
+settings and matching editor overlay coordinates. Backend calls remained offline; appearance
+inspection does not establish backend parity or user approval of the design.
 
 After the native host sends a fresh post-navigation challenge, the page echoes it in every
 document-bound envelope through `window.chrome.webview.postMessage`:
@@ -40,7 +49,7 @@ The native host must return messages with `CoreWebView2.PostWebMessageAsJson`; t
 
 Native events become `sao:workbench-event` / `sao:workbench:EVENT_NAME` browser events. They also call the copied page's `_onEditorEvent`; an early event is queued until that legacy callback exists. Window `postMessage` is not a native reply channel.
 
-## Native host adapter requirements and gaps
+## Native host adapter contracts and acceptance
 
 The compatibility facade dynamically maps legacy `window.pywebview.api.METHOD(...args)` calls to `request` envelopes. The host needs an explicit allow-list and real result/error envelopes for the ordinary workbench families that it chooses to support:
 
@@ -63,13 +72,14 @@ ignored), and every other navigation is cancelled. Slot geometry, DPI, raw
 mouse input, focus, device-generation rebind, and teardown remain on the one
 compositor/`hRender` owner thread.
 
-Current integration gaps are the vertical native adapters beyond the
-light-default `load_config` bootstrap and `win_close`:
-configuration and window/dialog operations, file/editor services,
-chat/history/providers, agents/workflows, terminal/tasks/diagnostics, extensions
-and embedded webviews. Unknown methods receive a structured
-`SAO_METHOD_UNAVAILABLE` reply; no frontend method is treated as implemented by
-its mere presence in the frozen page.
+`src/workbench_native_adapter.cpp` implements the native dispatch for configuration,
+file/editor services, chat/history/providers, agents/workflows, terminal/tasks,
+diagnostics, extensions and embedded webview requests. The composition host drains
+its document-bound replies and events. These are implemented adapters, not a
+bootstrap-only host; backend-dependent methods still report explicit failures when
+the backend is absent. Unknown methods receive a structured `SAO_METHOD_UNAVAILABLE`
+reply. Complete interactive acceptance of these families is still pending; neither
+the frontend's presence nor an adapter branch proves a successful live workflow.
 
 ## Execution note
 

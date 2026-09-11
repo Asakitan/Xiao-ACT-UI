@@ -6,49 +6,49 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SAO AI Editor</title>
 <style>
-:root, [data-theme="dark"] {
-  --bg: #1e1e1e; --bg2: #252526; --bg3: #2d2d2d; --bg-sidebar: #181818;
-  --bg-input: #1e1e1e; --bg-editor: #1e1e1e; --bg-panel: #1e1e1e;
-  --bg-code: #0d1117; --bg-tool: #1a2a1a; --bg-tool-result: #0d1a0d;
-  --bg-hover: #2a2d2e; --bg-active: #37373d; --bg-tab-active: #1e1e1e;
-  --bg-tab: #2d2d2d; --bg-badge: #007acc;
-  --fg: #cccccc; --fg-dim: #9b9b9b; --fg-bright: #e0e0e0;
-  --fg-accent: #68e4ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
-  --fg-warning: #cca700; --fg-tool: #dcdcaa; --fg-code: #d4d4d4;
-  --fg-kw: #569cd6; --fg-str: #ce9178; --fg-num: #b5cea8; --fg-cmt: #6a9955;
-  --fg-fn: #dcdcaa; --fg-type: #4ec9b0;
-  --border: #3c3c3c; --border-focus: #007acc;
-  --btn: #0e639c; --btn-hover: #1177bb;
-  --scrollbar: #424242; --scrollbar-hover: #4f4f4f;
-  --selection: #264f78; --line-highlight: #ffffff0a;
-  --statusbar-bg: #181818; --statusbar-fg: #cccccc;
-  --radius: 4px;
-  --mono: 'Cascadia Code','Fira Code','Consolas','Courier New',monospace;
-  --sans: 'Segoe UI',system-ui,-apple-system,sans-serif;
+:root, [data-theme="light"] {
+  --bg: #eeeae4; --bg2: #e8e4de; --bg3: #faf9f6; --bg-sidebar: #f1eee8;
+  --bg-input: #faf9f6; --bg-editor: #faf9f6; --bg-panel: #f4f1eb;
+  --bg-code: #f1eee8; --bg-tool: #f4eddf; --bg-tool-result: #eee6d7;
+  --bg-hover: #e7e1d8; --bg-active: #ddd5c8; --bg-tab-active: #faf9f6;
+  --bg-tab: #e9e5df; --bg-badge: #d99536;
+  --fg: #232724; --fg-dim: #646a65; --fg-bright: #171b18;
+  --fg-accent: #985d18; --fg-success: #4b765b; --fg-error: #a5483f;
+  --fg-warning: #906122; --fg-tool: #76562d; --fg-code: #282d29;
+  --fg-kw: #805946; --fg-str: #914b40; --fg-num: #52715e; --fg-cmt: #747a70;
+  --fg-fn: #795d31; --fg-type: #566f61;
+  --border: #d6d6ce; --border-focus: #985d18;
+  --btn: #d99536; --btn-hover: #c47d25;
+  --scrollbar: #c8c5bc; --scrollbar-hover: #a9a69c;
+  --selection: #efd5ad; --line-highlight: #d9953612;
+  --statusbar-bg: #e7e2da; --statusbar-fg: #3f4540;
+  --radius: 3px;
+  --mono: "Cascadia Mono", "Cascadia Code", "Microsoft YaHei UI", Consolas, monospace;
+  --sans: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --activity-w: 48px; --sidebar-w: 260px; --panel-h: 45%;
   --motion-fast: 100ms; --motion-base: 180ms; --motion-slow: 320ms; --motion-flash: 600ms;
   --ease-standard: cubic-bezier(.4,0,.2,1); --ease-emphasized: cubic-bezier(.2,0,0,1);
   --ease-decelerate: cubic-bezier(0,0,.2,1); --ease-accelerate: cubic-bezier(.4,0,1,1);
 }
+[data-theme="dark"] {
+  --bg: #202421; --bg2: #262b27; --bg3: #2b302c; --bg-sidebar: #232824;
+  --bg-input: #202421; --bg-editor: #202421; --bg-panel: #252a26;
+  --bg-code: #191d1a; --bg-tool: #302d24; --bg-tool-result: #292b23;
+  --bg-hover: #323832; --bg-active: #3a413a; --bg-tab-active: #202421;
+  --bg-tab: #292e2a; --bg-badge: #edb45b;
+  --fg: #eef0e8; --fg-dim: #adb3aa; --fg-bright: #ffffff;
+  --fg-accent: #edb45b; --fg-success: #83b792; --fg-error: #e58a80;
+  --fg-warning: #edc47f; --fg-tool: #dbc08f; --fg-code: #eef0e8;
+  --fg-kw: #d8a87e; --fg-str: #dfa093; --fg-num: #9fc4a8; --fg-cmt: #929a90;
+  --fg-fn: #e2c17e; --fg-type: #a7c2ac;
+  --border: #464c46; --border-focus: #edb45b;
+  --btn: #edb45b; --btn-hover: #f3c579;
+  --scrollbar: #4a504a; --scrollbar-hover: #656d65;
+  --selection: #765a32; --line-highlight: #edb45b10;
+  --statusbar-bg: #1b1f1c; --statusbar-fg: #eef0e8;
+}
 @media (prefers-reduced-motion: reduce) {
   :root, [data-theme] { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; --motion-flash: 0ms; }
-}
-[data-theme="light"] {
-  --bg: #f5f5f5; --bg2: #e8ebee; --bg3: #ffffff; --bg-sidebar: #f0f0f0;
-  --bg-input: #ffffff; --bg-editor: #ffffff; --bg-panel: #fafafa;
-  --bg-code: #f6f8fa; --bg-tool: #e8f5e9; --bg-tool-result: #e0f2e0;
-  --bg-hover: #e0e0e0; --bg-active: #d0d0d0; --bg-tab-active: #ffffff;
-  --bg-tab: #ececec; --bg-badge: #007acc;
-  --fg: #3b3a3c; --fg-dim: #666166; --fg-bright: #1e1e1e;
-  --fg-accent: #16a9d6; --fg-success: #3fae5a; --fg-error: #ef684e;
-  --fg-warning: #bf8803; --fg-tool: #795e26; --fg-code: #24292e;
-  --fg-kw: #0000ff; --fg-str: #a31515; --fg-num: #098658; --fg-cmt: #008000;
-  --fg-fn: #795e26; --fg-type: #267f99;
-  --border: #d0d0d0; --border-focus: #007acc;
-  --btn: #0e639c; --btn-hover: #1177bb;
-  --scrollbar: #c0c0c0; --scrollbar-hover: #a0a0a0;
-  --selection: #add6ff; --line-highlight: #00000008;
-  --statusbar-bg: #f0f0f0; --statusbar-fg: #3b3a3c;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 .sr-only { position:absolute !important; width:1px !important; height:1px !important; padding:0 !important;
@@ -32345,8 +32345,8 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'--vscode-input-background:'+cssValue('--bg-elev','#252526')+';'
     +'--vscode-input-foreground:'+cssValue('--fg','#d4d4d4')+';'
     +'--vscode-input-border:'+cssValue('--border','#3c3c3c')+';'
-    +'--vscode-focusBorder:'+cssValue('--accent','#007acc')+';'
-    +'--vscode-button-background:'+cssValue('--accent','#0e639c')+';'
+    +'--vscode-focusBorder:'+cssValue('--accent','#d99536')+';'
+    +'--vscode-button-background:'+cssValue('--accent','#d99536')+';'
     +'--vscode-button-foreground:#ffffff;'
     +'--vscode-descriptionForeground:'+cssValue('--fg-dim','#8b949e')+';'
     +'--vscode-widget-border:'+cssValue('--border','#3c3c3c')+';'
@@ -43149,7 +43149,7 @@ async function renderMcpServers(){
   r.servers.forEach(s=>{
     const row=document.createElement('div');
     row.style.cssText='display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)';
-    const alive=s.connected||s.alive;const dot=document.createElement('span');dot.style.cssText='width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;background:'+(alive?'#4ec9b0':s.configured?'#f14c4c':'#808080');dot.title=alive?'Running':(s.configured?'Stopped':'Not started');
+    const alive=s.connected||s.alive;const dot=document.createElement('span');dot.style.cssText='width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;background:'+(alive?'#83b792':s.configured?'#e58a80':'#646a65');dot.title=alive?'Running':(s.configured?'Stopped':'Not started');
     const info=document.createElement('span');info.style.cssText='flex:1;font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     info.textContent=s.id+' ('+s.transport+')'+(s.tools?' — '+s.tools+' tools':'');
     const rbtn=document.createElement('span');rbtn.style.cssText='cursor:pointer;color:var(--fg-dim);padding:0 3px;font-size:12px';rbtn.textContent='↻';rbtn.title='Restart server';rbtn.onclick=async()=>{rbtn.textContent='...';const res=await call('restart_mcp_server',s.id);if(res&&res.ok)showToast('Restarted '+s.id+' ('+res.tools+' tools)','success');else showToast('Restart failed: '+((res&&res.error)||'unknown'),'error');renderMcpServers()};
@@ -59513,6 +59513,153 @@ if(window.pywebview){
   installLanguageActionGuards();
   setTimeout(installLanguageActionGuards, 700);
   setTimeout(installLanguageActionGuards, 2200);
+})();
+</script>
+<script id="sao-ordinary-control-accessibility">
+(function(){
+  "use strict";
+
+  var clickableSelector=[
+    "[onclick]",
+    ".tb-menu-item:not(.app-icon)",
+    ".dd-item",
+    ".tb-act",
+    ".tb-btn",
+    ".sb-action",
+    ".tab",
+    ".tab-add",
+    ".ptab",
+    ".rtab",
+    ".tree-row",
+    ".find-toggle",
+    ".toolbar-btn",
+    ".scroll-down-btn",
+    ".breadcrumb-seg",
+    ".bc-item"
+  ].join(",");
+
+  function isNativeInteractive(node){
+    var tag=String(node&&node.tagName||"").toLowerCase();
+    if(["button","input","select","textarea","option","label","summary"].indexOf(tag)>=0)return true;
+    if(tag==="a"&&node.hasAttribute("href"))return true;
+    return !!(node&&(node.isContentEditable||node.closest("[contenteditable='true'],[contenteditable='']")));
+  }
+
+  function ownsKeyboard(node){
+    return !!(node&&(typeof node.onkeydown==="function"||node.hasAttribute("onkeydown")||
+      node.dataset.activityKeydownBound==="1"||node.dataset.saoKeyboardOwned==="true"));
+  }
+
+  function inferredRole(node){
+    if(node.matches(".dd-item"))return"menuitem";
+    if(node.matches(".tab,.ptab,.rtab"))return"tab";
+    if(node.matches(".tree-row"))return"treeitem";
+    return"button";
+  }
+
+  function inferredLabel(node){
+    var title=String(node.getAttribute("title")||"").trim();
+    if(title)return title;
+    if(node.matches(".tab-add"))return"New tab";
+    if(node.matches(".close"))return"Close";
+    var text=String(node.textContent||"").replace(/\s+/g," ").trim();
+    if(text==="↻")return"Refresh";
+    if(text==="✚"||text==="+")return"Add";
+    if(text==="◷")return"History";
+    if(text==="×"||text==="✕")return"Close";
+    return"";
+  }
+
+  function syncState(node){
+    if(!node||node.dataset.saoKeyboardControl!=="true")return;
+    var classDisabled=node.classList.contains("disabled")||node.hasAttribute("disabled");
+    var disabled=classDisabled||node.getAttribute("aria-disabled")==="true";
+    if(classDisabled){
+      if(node.getAttribute("aria-disabled")!=="true")node.setAttribute("aria-disabled","true");
+      node.dataset.saoAriaDisabledManaged="true";
+    }else if(node.dataset.saoAriaDisabledManaged==="true"){
+      node.removeAttribute("aria-disabled");
+      delete node.dataset.saoAriaDisabledManaged;
+      disabled=false;
+    }
+    if(node.dataset.saoTabindexManaged==="true")node.tabIndex=disabled?-1:0;
+    if(node.getAttribute("role")==="tab")node.setAttribute("aria-selected",String(node.classList.contains("active")));
+    if(node.matches(".find-toggle,.tb-act"))node.setAttribute("aria-pressed",String(node.classList.contains("active")));
+  }
+
+  function normalizeControl(node){
+    if(!node||node.nodeType!==1||!node.matches(clickableSelector)||isNativeInteractive(node))return;
+    if(node.closest("[inert],[aria-hidden='true']"))return;
+    var addedRole=false;
+    var addedTabindex=false;
+    if(!node.hasAttribute("role")){
+      node.setAttribute("role",inferredRole(node));
+      addedRole=true;
+    }
+    if(!node.hasAttribute("tabindex")){
+      node.tabIndex=0;
+      node.dataset.saoTabindexManaged="true";
+      addedTabindex=true;
+    }
+    if(!node.hasAttribute("aria-label")){
+      var label=inferredLabel(node);
+      if(label)node.setAttribute("aria-label",label);
+    }
+    if(node.getAttribute("role")==="tab"){
+      var tablist=node.closest(".tab-bar,.panel-tabs,.right-tabs");
+      if(tablist&&!tablist.hasAttribute("role"))tablist.setAttribute("role","tablist");
+    }else if(node.getAttribute("role")==="menuitem"){
+      var menu=node.closest(".tb-dropdown");
+      if(menu&&!menu.hasAttribute("role"))menu.setAttribute("role","menu");
+    }else if(node.getAttribute("role")==="treeitem"){
+      var tree=node.closest(".tree-root");
+      if(tree&&!tree.hasAttribute("role"))tree.setAttribute("role","tree");
+    }
+    if((addedRole||addedTabindex)&&!ownsKeyboard(node))node.dataset.saoKeyboardControl="true";
+    syncState(node);
+  }
+
+  function scan(root){
+    if(!root||root.nodeType!==1)return;
+    if(root.matches(clickableSelector))normalizeControl(root);
+    root.querySelectorAll(clickableSelector).forEach(normalizeControl);
+  }
+
+  function nestedNativeTarget(target,control){
+    if(!target||!target.closest)return false;
+    var nativeTarget=target.closest("button,input,select,textarea,a[href],summary,label,[contenteditable='true'],[contenteditable='']");
+    return !!(nativeTarget&&nativeTarget!==control);
+  }
+
+  document.addEventListener("keydown",function(event){
+    if(event.defaultPrevented||event.isComposing||event.repeat||event.altKey||event.ctrlKey||event.metaKey)return;
+    if(event.key!=="Enter"&&event.key!==" ")return;
+    var target=event.target;
+    var control=target&&target.closest?target.closest("[data-sao-keyboard-control='true']"):null;
+    if(!control||nestedNativeTarget(target,control)||control.closest("[inert],[aria-hidden='true']"))return;
+    if(control.classList.contains("disabled")||control.getAttribute("aria-disabled")==="true")return;
+    event.preventDefault();
+    control.click();
+  });
+
+  document.addEventListener("click",function(event){
+    var control=event.target&&event.target.closest?event.target.closest("[data-sao-keyboard-control='true']"):null;
+    if(control)setTimeout(function(){syncState(control);},0);
+  },true);
+
+  scan(document.body);
+  if(typeof MutationObserver==="function"){
+    new MutationObserver(function(records){
+      records.forEach(function(record){
+        if(record.type==="attributes"){
+          normalizeControl(record.target);
+          syncState(record.target);
+          return;
+        }
+        Array.prototype.forEach.call(record.addedNodes,function(node){if(node&&node.nodeType===1)scan(node);});
+      });
+    }).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["class","disabled","aria-disabled","onclick"]});
+  }
 })();
 </script>
 </body>
