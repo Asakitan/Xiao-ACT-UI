@@ -260,26 +260,64 @@ std::string summary(const Json& value) {
     return bounded(value.dump(), 320U) + " — configure in the settings file or a dedicated panel.";
 }
 
-std::string value_label(const Json& value) {
-    if (value.is_boolean())
-        return value.get<bool>() ? "ON" : "OFF";
-    if (value.is_string())
-        return bounded(value.get<std::string>(), 160U);
-    if (value.is_number())
-        return format_number(value);
-    return bounded(value.dump(), 160U);
+std::string humanize_key(std::string_view key) {
+    std::string label;
+    label.reserve(key.size());
+    bool capitalize = true;
+    for (const unsigned char character : key) {
+        if (character == '_' || character == '-') {
+            if (!label.empty() && label.back() != ' ')
+                label.push_back(' ');
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && character >= 'a' && character <= 'z')
+            label.push_back(static_cast<char>(character - ('a' - 'A')));
+        else
+            label.push_back(static_cast<char>(character));
+        capitalize = false;
+    }
+    return label.empty() ? std::string(key) : label;
+}
+
+std::string setting_label(std::string_view key) {
+    if (key == "sound_enabled") return "UI sound / 界面音效";
+    if (key == "sound_volume") return "Sound volume / 音效音量";
+    if (key == "master_volume") return "Master volume / 主音量";
+    if (key == "audio_volume" || key == "volume") return "Audio volume / 音频音量";
+    if (key == "tts_volume") return "Speech volume / 语音音量";
+    if (key == "overlay_opacity") return "Overlay opacity / 覆盖层不透明度";
+    if (key == "plugins_enabled") return "Enabled plugins / 已启用插件";
+    if (key == "hotkeys") return "Hotkeys / 快捷键";
+    if (key == "game_cache") return "Game cache / 游戏缓存";
+    if (key == "license_tier") return "License tier / 许可证等级";
+    if (key == "theme_id") return "Theme identifier / 主题标识";
+    return humanize_key(key) + " (" + std::string(key) + ")";
+}
+
+std::string percent_label(double value) {
+    if (!std::isfinite(value))
+        return "Invalid / 无效";
+    const double rounded = std::round(std::clamp(value, 0.0, 100.0) * 10.0) / 10.0;
+    return format_number(Json(rounded)) + "%";
+}
+
+std::string draft_feedback(std::string label, std::string value) {
+    return std::move(label) + ": " + std::move(value) +
+           " — unsaved draft; Apply saves it and Discard restores the committed value. / "
+           "未保存草稿；应用会保存，丢弃会恢复已提交值。";
 }
 
 Json build_theme_row(const settings_theme::PanelTheme theme) {
     Json children = Json::array();
-    children.push_back(text_node("界面外观", "value", 28));
+    children.push_back(text_node("Panel appearance / 界面外观", "value", 28));
     children.push_back(Json{{"type", "dropdown"},
                             {"id", "settings.theme"},
                             {"action", "settings.theme.select"},
                             {"selected_id", theme == settings_theme::PanelTheme::light ? 0 : 1},
                             {"items", Json::array({
-                                          {{"id", 0}, {"label", "经典浅色"}, {"value", "light"}},
-                                          {{"id", 1}, {"label", "深色"}, {"value", "dark"}},
+                                          {{"id", 0}, {"label", "Light / 浅色"}, {"value", "light"}},
+                                          {{"id", 1}, {"label", "Dark / 深色"}, {"value", "dark"}},
                                       })}});
     return row_node(std::move(children));
 }
@@ -296,12 +334,20 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     const std::string_view overview_accent =
         status_code == SAO_STATUS_OK ? (dirty ? "gold" : "ok") : "danger";
     Json overview = Json::array();
-    overview.push_back(status_strip_node(dirty ? "Draft / 草稿" : "Ready / 就绪",
-                                         std::string(status), overview_accent));
-    overview.push_back(
-        text_node("Edit a draft, then apply to save. / 编辑草稿后点击应用保存。", "muted", 32));
+    overview.push_back(status_strip_node(
+        status_code != SAO_STATUS_OK
+            ? "Action failed / 操作失败"
+            : dirty ? "Unsaved draft / 草稿未保存" : "No pending changes / 无待处理更改",
+        std::string(status), overview_accent));
+    overview.push_back(text_node(
+        dirty ? "Changes are previewed live but are not saved yet. Apply saves this draft; "
+                "Discard restores the last committed values. / 更改已实时预览但尚未保存；应用会保存草稿，"
+                "丢弃会恢复上次提交的值。"
+              : "Edits are previewed immediately and become a draft until applied. / "
+                "编辑会立即预览，并在应用前保留为草稿。",
+        dirty ? "warn" : "muted", 42));
     if (!path.empty())
-        overview.push_back(text_node("Path: " + std::string(path), "mono", 24));
+        overview.push_back(text_node("Settings file / 设置文件: " + std::string(path), "mono", 24));
 
     settings_theme::PanelTheme theme = settings_theme::PanelTheme::light;
     if (const auto panel_themes = snapshot.find("panel_themes");
@@ -330,43 +376,51 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
             const int index = section_index(key, value);
             if (static_cast<std::size_t>(index) != selected_section)
                 continue;
-            const std::string display_key = key == "sound_enabled"  ? "界面音效"
-                                            : key == "sound_volume" ? "音效音量"
-                                                                    : key;
+            const std::string display_key = setting_label(key);
             if (value.is_boolean()) {
                 section_children[index].push_back(row_node(Json::array({
-                    button_node("settings.bool." + key, display_key + ": " + value_label(value),
-                                kSettingsActionToggle, {{"key", key}},
-                                value.get<bool>() ? "primary" : "ghost", value.get<bool>()),
+                    button_node("settings.bool." + key, display_key, kSettingsActionToggle,
+                                {{"key", key}}, value.get<bool>() ? "primary" : "ghost",
+                                value.get<bool>()),
+                    badge_node(value.get<bool>() ? "On / 开" : "Off / 关",
+                               value.get<bool>() ? "ok" : "muted"),
                 })));
             } else if (is_numeric_control(key) && value.is_number()) {
+                const double numeric_value = value.get<double>();
+                const double effective_value =
+                    std::isfinite(numeric_value) ? std::clamp(numeric_value, 0.0, 100.0) : 0.0;
                 Json controls = Json::array(
                     {text_node(display_key, "value", 28),
                      Json{{"type", "slider"},
                           {"id", "settings.volume." + key},
                           {"action", "settings.volume.set"},
                           {"payload", {{"key", key}}},
-                          {"value", std::clamp(value.get<double>() / 100.0, 0.0, 1.0)}}});
+                          {"value", effective_value / 100.0},
+                          {"show_value_label", false}},
+                     badge_node(percent_label(numeric_value), "accent")});
                 section_children[index].push_back(row_node(std::move(controls)));
             } else {
-                section_children[index].push_back(
-                    text_node(key + ": " + summary(value), "muted", 32));
+                section_children[index].push_back(text_node(display_key + ": " + summary(value), "muted", 32));
             }
         }
     }
     if (!has_sound_enabled) {
         section_children[3].push_back(row_node(Json::array({
-            button_node("settings.bool.sound_enabled", "界面音效: ON", kSettingsActionToggle,
-                        {{"key", "sound_enabled"}}, "primary", true),
+            button_node("settings.bool.sound_enabled", "UI sound / 界面音效",
+                        kSettingsActionToggle, {{"key", "sound_enabled"}}, "primary", true),
+            badge_node("On / 开", "ok"),
         })));
     }
     if (!has_sound_volume) {
         Json controls = Json::array(
-            {text_node("音效音量", "value", 28), Json{{"type", "slider"},
-                                                      {"id", "settings.volume.sound_volume"},
-                                                      {"action", "settings.volume.set"},
-                                                      {"payload", {{"key", "sound_volume"}}},
-                                                      {"value", 0.7}}});
+            {text_node("Sound volume / 音效音量", "value", 28),
+             Json{{"type", "slider"},
+                  {"id", "settings.volume.sound_volume"},
+                  {"action", "settings.volume.set"},
+                  {"payload", {{"key", "sound_volume"}}},
+                  {"value", 0.7},
+                  {"show_value_label", false}},
+             badge_node("70%", "accent")});
         section_children[3].push_back(row_node(std::move(controls)));
     }
 
@@ -430,16 +484,16 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     }
 
     Json actions = Json::array();
-    actions.push_back(button_node("settings.apply", "应用并保存", "settings.apply", Json::object(),
-                                  "primary", false, !dirty));
-    actions.push_back(button_node("settings.cancel", "撤销草稿", "settings.cancel", Json::object(),
-                                  "ghost", false, !dirty));
-    actions.push_back(
-        button_node("settings.defaults", "恢复默认", "settings.defaults", Json::object(), "ghost"));
-    actions.push_back(button_node("settings.refresh", "Refresh", kSettingsActionRefresh,
+    actions.push_back(button_node("settings.apply", "应用更改", "settings.apply",
+                                  Json::object(), "primary", false, !dirty));
+    actions.push_back(button_node("settings.cancel", "丢弃草稿", "settings.cancel",
+                                  Json::object(), "ghost", false, !dirty));
+    actions.push_back(button_node("settings.defaults", "恢复默认",
+                                  "settings.defaults", Json::object(), "ghost"));
+    actions.push_back(button_node("settings.refresh", "刷新", kSettingsActionRefresh,
                                   Json::object(), "ghost"));
-    actions.push_back(
-        button_node("settings.close", "Close", kSettingsActionClose, Json::object(), "ghost"));
+    actions.push_back(button_node("settings.close", "关闭", kSettingsActionClose,
+                                  Json::object(), "ghost"));
     Json footer = row_node(std::move(actions));
     footer["id"] = "settings-footer";
     footer["dock"] = "bottom";
@@ -450,7 +504,7 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     Json header = card_node("设置", std::move(overview), overview_accent);
     header["id"] = "settings-header";
     header["dock"] = "top";
-    header["height"] = 112;
+    header["height"] = 142;
     nodes.push_back(std::move(header));
     nodes.push_back(std::move(footer));
     Json navigation = Json::array();
@@ -1118,7 +1172,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
 
     if (action == kSettingsActionRefresh) {
         refresh_profile_names();
-        status = update_status(SAO_STATUS_OK, "Refreshed");
+        status = update_status(
+            SAO_STATUS_OK,
+            dirty ? "Refreshed; the current draft is still unsaved. / 已刷新；当前草稿仍未保存。"
+                  : "Refreshed; there are no pending changes. / 已刷新；没有待处理更改。");
 #if defined(SAO_SETTINGS_PANEL_UI)
         if (state().body != nullptr)
             return publish();
@@ -1143,14 +1200,17 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 state().draft_dirty = false;
                 state().committed_owner_dirty = false;
             }
-            return publish_after_draft_mutation(status, "Saved just now");
+            return publish_after_draft_mutation(
+                status, "Draft applied and saved. / 草稿已应用并保存。");
         }
         const sao_status_t save_status = status;
         const sao_status_t rollback_status = rollback_draft_mutation(
             owner_lease, committed, committed_owner_dirty, false);
         return publish_after_draft_mutation(
             rollback_status == SAO_STATUS_OK ? save_status : rollback_status,
-            rollback_status == SAO_STATUS_OK ? "Save failed" : "Save failed; rollback failed");
+            rollback_status == SAO_STATUS_OK
+                ? "Save failed; committed settings were restored and the draft was cleared. / 保存失败；已恢复提交值并清除草稿。"
+                : "Save failed and committed settings could not be fully restored. / 保存失败，且提交值未能完整恢复。");
     }
 
     if (action == "settings.cancel") {
@@ -1169,8 +1229,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         }
         if (status == SAO_STATUS_OK)
             status = restore_runtime_settings(committed);
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK ? "Changes cancelled"
-                                                                            : "Cancel failed");
+        return publish_after_draft_mutation(
+            status, status == SAO_STATUS_OK
+                        ? "Draft discarded; committed settings restored. / 草稿已丢弃；已恢复提交值。"
+                        : "Discard failed; review the current values. / 丢弃失败；请检查当前值。");
     }
 
     if (action == "settings.defaults") {
@@ -1188,9 +1250,11 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 status = first_error(runtime_status, rollback_status);
             }
         }
-        return publish_after_draft_mutation(status, status == SAO_STATUS_OK
-                                                        ? "Defaults restored in draft"
-                                                        : "Restore defaults failed");
+        return publish_after_draft_mutation(
+            status,
+            status == SAO_STATUS_OK
+                ? "Defaults loaded into the draft. Apply to save or discard to restore committed settings. / 默认值已载入草稿；应用以保存，丢弃以恢复提交值。"
+                : "Defaults could not be loaded into the draft. / 默认值未能载入草稿。");
     }
 
     if (action == kSettingsActionToggle) {
@@ -1225,7 +1289,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             }
         }
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
+            status, status == SAO_STATUS_OK
+                        ? draft_feedback(setting_label(key), next ? "On / 开" : "Off / 关")
+                        : setting_label(key) + " could not be changed. / 更改失败。");
     }
 
     if (action == "settings.volume.set") {
@@ -1258,7 +1324,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             }
         }
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Volume change failed");
+            status, status == SAO_STATUS_OK
+                        ? draft_feedback(setting_label(key), percent_label(next))
+                        : setting_label(key) + " could not be changed. / 更改失败。");
     }
 
     if (action == kSettingsActionNumericAdjust) {
@@ -1299,7 +1367,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             sao::launcher::refreshUserGuideSoundPolicy();
         }
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Change failed");
+            status, status == SAO_STATUS_OK
+                        ? draft_feedback(setting_label(key), percent_label(next))
+                        : setting_label(key) + " could not be changed. / 更改失败。");
     }
 
     if (action == kSettingsActionTheme || action == "settings.theme.select") {
@@ -1334,7 +1404,12 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             }
         }
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK ? "Draft changes pending" : "Theme change failed");
+            status,
+            status == SAO_STATUS_OK
+                ? draft_feedback("Panel appearance / 界面外观",
+                                 next == settings_theme::PanelTheme::light ? "Light / 浅色"
+                                                                          : "Dark / 深色")
+                : "Theme could not be changed. / 主题更改失败。");
     }
 
     if (action == "settings.profile.save_as") {
@@ -1404,8 +1479,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             }
         }
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK ? "Profile loaded into draft"
-                                            : profile_failure_text(status, "Load profile"));
+            status,
+            status == SAO_STATUS_OK
+                ? "Profile loaded into the draft. Apply to save or discard to restore committed settings. / 配置已载入草稿；应用以保存，丢弃以恢复提交值。"
+                : profile_failure_text(status, "Load profile"));
     }
     return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_FOUND, "Unknown settings action");
 }

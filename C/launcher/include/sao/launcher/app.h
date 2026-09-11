@@ -110,6 +110,13 @@ class App {
     int verifyShellIntegrity();
     int initSecurity();
     int bringUpPlatform();
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    // Animation-covered bring-up: surfaces first, then the driver chain, the
+    // engine surfaces, the plugin runtimes and the plugin engines underneath
+    // the Link Start intro.
+    int bringUpSurface();
+    int runBootstrapUnderIntro();
+#endif
     int discoverPlugins();
     int bringUpUi();
     int runRtIoOperator();

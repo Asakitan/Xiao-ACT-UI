@@ -32,12 +32,14 @@
 #define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
 #endif
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <iterator>
 #include <string>
+#include <thread>
 
 namespace sao::launcher {
 
@@ -147,6 +149,136 @@ void logStartupConfiguration(const AppState& state) noexcept {
         state.log_level[0] ? state.log_level : L"info",
         state.config_path.empty() ? L"<default>" : state.config_path.c_str());
 }
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+
+// Driver/engine bootstrap stages rendered on the Link Start rail while the
+// launcher is still initialising.  Ordering is the historical bring-up order:
+// driver chain, engine surfaces, capture shield, tagWND scrub, plugin
+// runtimes, then plugin engines.
+constexpr uint32_t kBootstrapStageCount = 6u;
+constexpr const char* kBootstrapCaptions[kBootstrapStageCount] = {
+    "DRIVER CHAIN",  "ENGINE SURFACES", "CAPTURE SHIELD",
+    "WINDOW SCRUB",  "ENGINE RUNTIMES", "PLUGIN ENGINES",
+};
+
+// Runs the driver chain off the owner thread so the intro keeps animating while
+// the helper/driver bootstrap blocks.  The stage list is fixed before start();
+// the owner thread only reads the telemetry atomics.
+class IntroBootstrapWorker {
+  public:
+    using Step = sao_status_t (*)(void* user_data);
+
+    void add(const char* caption, Step step, void* user_data) noexcept {
+        if (stage_count_ < kCapacity)
+            stages_[stage_count_++] = Stage{caption, step, user_data};
+    }
+
+    void start() noexcept {
+        thread_ = std::thread([this] { execute(); });
+    }
+
+    void join() noexcept {
+        if (thread_.joinable())
+            thread_.join();
+    }
+
+    bool finished() const noexcept {
+        return finished_.load(std::memory_order_acquire);
+    }
+
+    sao_status_t result() const noexcept {
+        return result_.load(std::memory_order_relaxed);
+    }
+
+  private:
+    struct Stage {
+        const char* caption;
+        Step step;
+        void* user_data;
+    };
+    static constexpr uint32_t kCapacity = 6u;
+
+    void execute() noexcept {
+        sao_status_t status = SAO_STATUS_OK;
+        for (uint32_t index = 0; index < stage_count_; ++index) {
+            status = stages_[index].step != nullptr ? stages_[index].step(stages_[index].user_data)
+                                                    : SAO_STATUS_OK;
+            if (status != SAO_STATUS_OK)
+                break;
+        }
+        result_.store(status, std::memory_order_relaxed);
+        finished_.store(true, std::memory_order_release);
+    }
+
+    Stage stages_[kCapacity]{};
+    uint32_t stage_count_ = 0u;
+    std::atomic<sao_status_t> result_{SAO_STATUS_OK};
+    std::atomic<bool> finished_{false};
+    std::thread thread_;
+};
+
+struct BootstrapStageContext {
+    const sao_platform_config* cfg = nullptr;
+    sao_platform_ctx* platform = nullptr;
+};
+
+sao_status_t bootstrap_step_drivers(void* user_data) {
+    auto* context = static_cast<BootstrapStageContext*>(user_data);
+    return sao_platform_bringup_drivers(context->cfg, context->platform);
+}
+
+sao_status_t bootstrap_step_capture_shield(void* user_data) {
+    auto* context = static_cast<BootstrapStageContext*>(user_data);
+    return sao_platform_bringup_capture_shield(context->cfg, context->platform);
+}
+
+sao_status_t bootstrap_step_wnd_scrub(void* user_data) {
+    auto* context = static_cast<BootstrapStageContext*>(user_data);
+    return sao_platform_bringup_wnd_scrub(context->cfg, context->platform);
+}
+
+// Publishes the stage currently being bootstrapped to the intro rail.
+void publish_intro_bootstrap(sao_platform_ctx* ctx, uint32_t stage_index, bool failed) {
+    SaoUiLinkStartBootstrap state{};
+    state.struct_size = sizeof(state);
+    state.stage_index = stage_index;
+    state.stage_count = kBootstrapStageCount;
+    state.stage_progress = 0.0F;
+    state.flags = failed ? SAO_UI_LINKSTART_BOOTSTRAP_FLAG_FAILED : 0u;
+    state.caption_utf8 = stage_index < kBootstrapStageCount ? kBootstrapCaptions[stage_index]
+                                                            : kBootstrapCaptions[0];
+    (void)sao_ui_intro_publish_bootstrap(ctx, &state);
+}
+
+// Drains the owner-thread window queue and advances the intro one frame.
+// Returns false once WM_QUIT was seen; the quit request is pushed back so the
+// later runMessageLoop() still observes it.
+bool pump_intro_frame(sao_platform_ctx* ctx) {
+    bool alive = true;
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) {
+            PostQuitMessage(static_cast<int>(msg.wParam));
+            alive = false;
+            continue;
+        }
+        int32_t handled = 0;
+        if (sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled) !=
+            SAO_STATUS_OK) {
+            handled = 0;
+        }
+        if (!handled) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    if (alive)
+        (void)sao_ui_intro_pump(ctx);
+    return alive;
+}
+
+#endif // SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER
 
 } // namespace
 
@@ -309,8 +441,14 @@ int App::run() {
     }
     smokePrint(state_, "STAGE_SECURITY");
 
-    // 8. Platform bring-up.  From here on, subsystems are alive.
+    // 8. Platform bring-up.  From here on, subsystems are alive.  The
+    //    production composition provider brings the surfaces up first so the
+    //    Link Start intro can cover the driver/engine bootstrap that follows.
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    rc = bringUpSurface();
+#else
     rc = bringUpPlatform();
+#endif
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"platform_bringup", "platform_bringup");
     }
@@ -325,6 +463,14 @@ int App::run() {
     user_guide_next_retry_ = 0;
     smokePrint(state_, "STAGE_PLATFORM");
 
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    // 8.5 + 9 — the driver chain, the engine surfaces, the plugin runtimes and
+    // the plugin engines bootstrap underneath the intro animation.
+    rc = runBootstrapUnderIntro();
+    if (rc != SAO_EXIT_OK) {
+        return fail(rc, L"bootstrap_under_intro", "bootstrap_under_intro");
+    }
+#else
     if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) != SAO_STATUS_OK) {
         return fail(SAO_EXIT_PLUGIN_LOAD_FAIL, L"runtime_installer", "runtime_installer");
     }
@@ -336,6 +482,7 @@ int App::run() {
             return fail(rc, L"plugins_discover", "plugins_discover");
         }
     }
+#endif
     smokePrint(state_, "STAGE_PLUGINS");
 
     // Platform-ready smoke checkpoint — the pipeline just reached "every
@@ -547,6 +694,159 @@ int App::bringUpPlatform() {
     return SAO_EXIT_OK;
 }
 
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+int App::bringUpSurface() {
+    char log_level[32]{};
+    sao_platform_config cfg{};
+    if (!buildPlatformConfig(state_, cfg, log_level, sizeof(log_level))) {
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+
+    sao_platform_ctx* ctx = nullptr;
+    const sao_status_t status = sao_platform_bringup_surface(&cfg, &ctx);
+    state_.platform_ctx = ctx;
+    if (status != SAO_STATUS_OK || ctx == nullptr) {
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+    return SAO_EXIT_OK;
+}
+
+// Bootstraps the driver and engine stages with the Link Start intro on screen.
+// The intro parks on the CONNECTED frame until every stage below is done, so
+// the helper/driver chain, the plugin runtimes and the plugin engines all run
+// strictly underneath the animation.
+int App::runBootstrapUnderIntro() {
+    char log_level[32]{};
+    sao_platform_config cfg{};
+    if (!buildPlatformConfig(state_, cfg, log_level, sizeof(log_level))) {
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+    const PluginsProviderConfiguration plugins_configuration =
+        launcherProviderConfigurationSnapshot().plugins;
+    sao_platform_ctx* platform = static_cast<sao_platform_ctx*>(state_.platform_ctx);
+    if (platform == nullptr) {
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+
+    // Smoke/operator/safe runs keep the historical order and never present the
+    // overlay surface; only an interactive launch is covered by the intro.
+    const bool headless = state_.smoke_mode || state_.rt_io_operator || state_.safe_mode;
+    const bool cover_with_intro = !headless && sao_ui_intro_show(platform, 1) == SAO_STATUS_OK;
+    bool quit_requested = false;
+    const auto release_intro = [&](bool failed) {
+        if (cover_with_intro && platform != nullptr)
+            (void)sao_ui_intro_release_bootstrap(platform, failed ? 1 : 0);
+    };
+    const auto advance_intro = [&]() {
+        if (!quit_requested)
+            quit_requested = !pump_intro_frame(platform);
+    };
+
+    // Stage 1 — driver chain, off the owner thread while the intro animates.
+    BootstrapStageContext context{};
+    context.cfg = &cfg;
+    context.platform = platform;
+    sao_status_t stage_status = SAO_STATUS_OK;
+    if (cover_with_intro) {
+        IntroBootstrapWorker worker;
+        worker.add(kBootstrapCaptions[0], &bootstrap_step_drivers, &context);
+        publish_intro_bootstrap(platform, 0u, false);
+        worker.start();
+        while (!worker.finished()) {
+            if (quit_requested)
+                Sleep(1u);
+            else
+                advance_intro();
+        }
+        worker.join();
+        stage_status = worker.result();
+    } else {
+        stage_status = sao_platform_bringup_drivers(&cfg, platform);
+    }
+    if (stage_status != SAO_STATUS_OK) {
+        // The driver stage leaves rollback to the owner thread: dismiss the
+        // intro here and let shutdown() tear the context down.
+        release_intro(true);
+        state_.platform_ctx = platform;
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+    state_.platform_ctx = platform;
+
+    // Stage 2 — engine surfaces (panels, window-rect registration, capture
+    // shield, entity shell).  Owner thread only.
+    if (cover_with_intro) {
+        publish_intro_bootstrap(platform, 1u, false);
+        advance_intro();
+    }
+    sao_platform_ctx* surface_rolled_back_to = nullptr;
+    stage_status = sao_platform_bringup_engines(&cfg, platform, &surface_rolled_back_to);
+    if (stage_status != SAO_STATUS_OK) {
+        // A clean rollback destroyed the context; only a failed teardown hands
+        // it back for shutdown() to retry.
+        platform = surface_rolled_back_to;
+        release_intro(true);
+        state_.platform_ctx = platform;
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+    state_.platform_ctx = platform;
+
+    // Stage 3 — capture shield: the anti-screencap chain over every window the
+    // process owns, plus the tagWND rcWindow/ExStyle scrub.  Both need the
+    // overlay HWNDs, so they follow the engine stage.
+    if (cover_with_intro) {
+        publish_intro_bootstrap(platform, 2u, false);
+        advance_intro();
+    }
+    stage_status = sao_platform_bringup_capture_shield(&cfg, platform);
+    if (stage_status != SAO_STATUS_OK) {
+        release_intro(true);
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+
+    if (cover_with_intro) {
+        publish_intro_bootstrap(platform, 3u, false);
+        advance_intro();
+    }
+    stage_status = sao_platform_bringup_wnd_scrub(&cfg, platform);
+    if (stage_status != SAO_STATUS_OK) {
+        release_intro(true);
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
+    }
+
+    // Stage 4 — configured plugin runtimes.
+    if (cover_with_intro) {
+        publish_intro_bootstrap(platform, 4u, false);
+        advance_intro();
+    }
+    if (ensureConfiguredPluginRuntimes(state_, plugins_configuration) != SAO_STATUS_OK) {
+        release_intro(true);
+        return SAO_EXIT_PLUGIN_LOAD_FAIL;
+    }
+
+    // Stage 5 — plugin engines.  In safe mode plugin discovery is skipped.
+    if (!state_.safe_mode && plugins_configuration.enabled) {
+        if (cover_with_intro) {
+            publish_intro_bootstrap(platform, 5u, false);
+            advance_intro();
+        }
+        const int plugin_exit = discoverPlugins();
+        if (plugin_exit != SAO_EXIT_OK) {
+            release_intro(true);
+            return plugin_exit;
+        }
+    }
+
+    // Late windows (guide host, AI editor, plugin panels) exist by now: repeat
+    // the registration sweep so the shield covers them too.
+    (void)sao_platform_bringup_capture_sweep(platform);
+
+    // Bootstrap done: release the hold so the CONNECTED → fade tail plays out
+    // and the intro completes on the normal end edge.
+    release_intro(false);
+    return SAO_EXIT_OK;
+}
+#endif // SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER
+
 int App::discoverPlugins() {
     sao_plugins_registry* reg = nullptr;
     const sao_status_t status =
@@ -671,6 +971,7 @@ void App::serviceFirstRunGuide() noexcept {
         case SAO_UI_LINKSTART_COMPLETION_NONE:
         case SAO_UI_LINKSTART_COMPLETION_OFFLINE:
         case SAO_UI_LINKSTART_COMPLETION_TEARDOWN:
+        case SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED:
             return;
         default:
             return;

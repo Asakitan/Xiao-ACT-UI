@@ -166,6 +166,47 @@ sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx* ctx, int32_t* o
                                                int32_t* out_completion_reason);
 
 // ---------------------------------------------------------------------------
+// Animation-covered bring-up.
+//
+// App::run() shows the Link Start intro as soon as the surfaces exist, then
+// bootstraps the driver and engine stages underneath it:
+//   surface (settings + compositor) -> intro on screen -> drivers (rt_io
+//   helper/driver chain) -> engines (panels, window-rect, streaming, entity
+//   shell, plugin runtimes).
+//
+// `SaoUiLinkStartBootstrap` is `struct SaoUiLinkStartBootstrap` from
+// sao/ui/linkstart_intro.h; only the pointer form crosses this boundary.
+// ---------------------------------------------------------------------------
+struct SaoUiLinkStartBootstrap;
+
+sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
+                                          sao_platform_ctx** ctx_out);
+// The driver stage never rolls the platform back itself (it may run off the
+// owner thread); the owner-thread caller tears the context down on failure.
+sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_platform_ctx* ctx);
+sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_platform_ctx* ctx,
+                                          sao_platform_ctx** ctx_out);
+// Capture shield: the anti-screencap chain (method availability, syscall/stub
+// affinity, DWM-thumbnail denial, process-wide registration sweep, threat
+// reaction) over every window the process owns.  Needs the overlay HWNDs.
+sao_status_t sao_platform_bringup_capture_shield(const sao_platform_config* cfg,
+                                                 sao_platform_ctx* ctx);
+// Registration sweep only.  Repeatable; also run after late window creation.
+sao_status_t sao_platform_bringup_capture_sweep(sao_platform_ctx* ctx);
+// tagWND chain: rcWindow decoy scrub plus the OVERLAY_EXSTYLE_MASK ExStyle
+// scrub for hRender/hControl/owner, committed before the caller proceeds.
+sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_platform_ctx* ctx);
+
+// `hold_for_bootstrap` non-zero parks the intro on the CONNECTED frame until
+// sao_ui_intro_release_bootstrap.  Failure to start the intro is reported but
+// never fatal: startup continues without the animation.
+sao_status_t sao_ui_intro_show(sao_platform_ctx* ctx, int32_t hold_for_bootstrap);
+sao_status_t sao_ui_intro_publish_bootstrap(sao_platform_ctx* ctx,
+                                            const SaoUiLinkStartBootstrap* state);
+sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx* ctx, int32_t failed);
+sao_status_t sao_ui_intro_pump(sao_platform_ctx* ctx);
+
+// ---------------------------------------------------------------------------
 // RT I/O operator flow.
 //
 // The launcher-facing structs deliberately contain only sanitized scalar

@@ -38,12 +38,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <memory>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sao::launcher::settings {
 // Production entry point with a status result; the public wrapper is intentionally void.
@@ -99,9 +101,13 @@ struct Options {
     bool backend_explicit{};
     bool local_backend_fixture{};
     bool intro{};
+    bool intro_audition{};
     std::filesystem::path workspace{std::filesystem::current_path()};
     std::filesystem::path backend;
     std::filesystem::path settings;
+    std::filesystem::path frame_out;
+    int32_t frame_ms{1000};
+    bool frame_time_explicit{};
 };
 
 std::string utf8(const std::filesystem::path& path) {
@@ -213,10 +219,27 @@ Options options() {
                 throw std::runtime_error("Unknown production UI page");
         } else if (arg == L"--intro")
             value.intro = true;
+        else if (arg == L"--intro-audition") {
+            value.intro = true;
+            value.intro_audition = true;
+            value.offline = true;
+            value.offline_explicit = true;
+        }
         else if (arg == L"--workspace" && index + 1 < count)
             value.workspace = std::filesystem::absolute(args[++index]);
         else if (arg == L"--settings" && index + 1 < count)
             value.settings = std::filesystem::absolute(args[++index]);
+        else if (arg == L"--frame-out" && index + 1 < count)
+            value.frame_out = std::filesystem::absolute(args[++index]);
+        else if (arg == L"--frame-ms" && index + 1 < count) {
+            const std::wstring input = args[++index];
+            size_t consumed = 0;
+            const long long milliseconds = std::stoll(input, &consumed);
+            if (consumed != input.size() || milliseconds < 0 || milliseconds > 60000)
+                throw std::runtime_error("Frame time must be 0..60000 milliseconds");
+            value.frame_ms = static_cast<int32_t>(milliseconds);
+            value.frame_time_explicit = true;
+        }
         else if (arg == L"--backend" && index + 1 < count) {
             if (value.local_backend_fixture)
                 throw std::runtime_error("Preview backend selection is ambiguous");
@@ -231,11 +254,16 @@ Options options() {
             throw std::runtime_error(
                 "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--page "
                 "root|settings|hotkeys|plugins|workshop|process|license|user|about|link-start] "
-                "[--offline] [--backend EXE|--local-backend] [--intro] [--workspace PATH] "
-                "[--settings PATH]");
+                "[--offline] [--backend EXE|--local-backend] [--intro|--intro-audition] [--workspace PATH] "
+                "[--settings PATH] [--frame-out BMP_PATH --frame-ms MILLISECONDS --offline]");
     }
     if (value.backend_explicit && !value.offline_explicit)
         value.offline = false;
+    if ((!value.frame_out.empty() && !value.offline) ||
+        (value.frame_time_explicit && value.frame_out.empty()))
+        throw std::runtime_error("Frame export requires --offline and --frame-out");
+    if (value.intro_audition && !value.frame_out.empty())
+        throw std::runtime_error("Audition and muted frame export are separate modes");
     return value;
 }
 
@@ -267,6 +295,9 @@ struct Host {
     ULONGLONG last_tick{};
     ULONGLONG last_service{};
     ULONGLONG close_started{};
+    ULONGLONG intro_started{};
+    int32_t audition_phase{-1};
+    bool audition_flight_reported{};
     bool sdk_bound{};
     bool closing{};
 
@@ -684,9 +715,12 @@ struct Host {
             {"toggle_sao_menu", "Home", VK_HOME, MOD_NOREPEAT},
             {"toggle_float_button", "Insert", VK_INSERT, MOD_NOREPEAT},
         });
-        if (!sao::launcher::hotkey::register_all().empty())
+        if (config.frame_out.empty() && !config.intro_audition &&
+            !sao::launcher::hotkey::register_all().empty())
             throw std::runtime_error("Production hotkey registration unavailable");
         require(sao_ui_input_router_deep_create(compositor, &keyboard));
+        if (!config.frame_out.empty())
+            require(sao_ui_sound_set_enabled(false));
         if (config.initial_surface == InitialSurface::ai_main)
             require(open_ai_main());
         if (config.initial_surface == InitialSurface::ai_settings)
@@ -711,6 +745,12 @@ struct Host {
             require(sao_ui_entity_shell_home(entity));
         resize();
         if (config.intro) {
+            if (!config.frame_out.empty())
+                require(sao_ui_sound_set_enabled(false));
+            else if (config.intro_audition) {
+                require(sao_ui_sound_set_enabled(true));
+                require(sao_ui_sound_set_volume(55));
+            }
             RECT rect{};
             GetClientRect(window, &rect);
             SaoUiLinkStartConfig start{sizeof(SaoUiLinkStartConfig),
@@ -721,10 +761,52 @@ struct Host {
                                             static_cast<uint32_t>(rect.bottom),
                                             sao_ui_overlay_host_current_dpi(overlay)));
             require(sao_ui_linkstart_show(intro));
+            intro_started = GetTickCount64();
         }
         last_tick = GetTickCount64();
         if (!SetTimer(window, kUiService, 16, nullptr))
             throw std::runtime_error("UI timer unavailable");
+    }
+
+    void export_frame() {
+        for (int32_t remaining = config.frame_ms; remaining > 0;) {
+            const int32_t step = std::min(remaining, 1000);
+            require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+            remaining -= step;
+        }
+        if (intro != nullptr && config.frame_ms > 0)
+            require(sao_ui_linkstart_tick(intro, config.frame_ms));
+        uint32_t width = 0, height = 0;
+        size_t bytes = 0;
+        const auto query = sao_ui_compositor_snapshot_bgra(
+            compositor, nullptr, 0, &width, &height, &bytes);
+        if (query != SAO_STATUS_ERR_BUFFER_TOO_SMALL)
+            require(query);
+        if (bytes == 0 || bytes > UINT32_MAX - sizeof(BITMAPFILEHEADER) - sizeof(BITMAPINFOHEADER))
+            throw std::runtime_error("Invalid native frame dimensions");
+        std::vector<uint8_t> pixels(bytes);
+        require(sao_ui_compositor_snapshot_bgra(compositor, pixels.data(), pixels.size(),
+                                                 &width, &height, &bytes));
+        BITMAPFILEHEADER file{};
+        file.bfType = 0x4d42;
+        file.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        file.bfSize = file.bfOffBits + static_cast<DWORD>(bytes);
+        BITMAPINFOHEADER image{};
+        image.biSize = sizeof(image);
+        image.biWidth = static_cast<LONG>(width);
+        image.biHeight = -static_cast<LONG>(height);
+        image.biPlanes = 1;
+        image.biBitCount = 32;
+        image.biCompression = BI_RGB;
+        image.biSizeImage = static_cast<DWORD>(bytes);
+        std::filesystem::create_directories(config.frame_out.parent_path());
+        std::ofstream output(config.frame_out, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(&file), sizeof(file));
+        output.write(reinterpret_cast<const char*>(&image), sizeof(image));
+        output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(bytes));
+        output.close();
+        if (!output)
+            throw std::runtime_error("Native frame export failed");
     }
 
     void service() {
@@ -765,9 +847,34 @@ struct Host {
         if (intro != nullptr) {
             bool active = false;
             require(sao_ui_linkstart_is_active(intro, &active));
+            const auto intro_elapsed = static_cast<int32_t>(
+                std::min<ULONGLONG>(now - last_tick, static_cast<ULONGLONG>(INT32_MAX)));
             if (active &&
-                sao_ui_linkstart_tick(intro, static_cast<int32_t>(elapsed)) != SAO_STATUS_OK)
+                sao_ui_linkstart_tick(intro, intro_elapsed) != SAO_STATUS_OK)
                 (void)sao_ui_linkstart_dismiss(intro);
+            if (config.intro_audition) {
+                SaoUiLinkStartPhase phase = SAO_UI_LINKSTART_PHASE_HIDDEN;
+                float progress = 0.0F;
+                require(sao_ui_linkstart_get_phase(intro, &phase, &progress));
+                SaoUiLinkStartAudioState audio = SAO_UI_LINKSTART_AUDIO_READY;
+                sao_status_t audio_status = SAO_STATUS_OK;
+                require(sao_ui_linkstart_get_audio_state(intro, &audio, &audio_status));
+                if (audition_phase != phase) {
+                    std::fprintf(stderr, "intro phase=%d wall_ms=%llu audio=%d status=%d\n",
+                                 static_cast<int>(phase), GetTickCount64() - intro_started,
+                                 static_cast<int>(audio), audio_status);
+                    audition_phase = phase;
+                }
+                if (!audition_flight_reported && phase == SAO_UI_LINKSTART_PHASE_PARTICLE_TUNNEL &&
+                    progress > 0.0F) {
+                    std::fprintf(stderr, "intro first_flight wall_ms=%llu\n",
+                                 GetTickCount64() - intro_started);
+                    audition_flight_reported = true;
+                }
+                require(sao_ui_linkstart_is_active(intro, &active));
+                if (!active)
+                    closing = true;
+            }
         }
         last_tick = now;
         if (!IsIconic(window)) {
@@ -782,10 +889,11 @@ struct Host {
     }
 
     void mouse(UINT message, WPARAM wp, LPARAM lp) noexcept {
-        if (entity == nullptr)
+        if (compositor == nullptr)
             return;
         POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        ClientToScreen(window, &point);
+        if (message != WM_MOUSEWHEEL)
+            ClientToScreen(window, &point);
         int32_t button = -1;
         if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)
             button = 0;
@@ -794,10 +902,19 @@ struct Host {
         else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP)
             button = 2;
         const int32_t wheel = message == WM_MOUSEWHEEL ? GET_WHEEL_DELTA_WPARAM(wp) : 0;
-        (void)sao_ui_entity_shell_handle_mouse(entity, message, point.x, point.y, button, wheel);
+        (void)sao_ui_compositor_dispatch_mouse(compositor, message, point.x, point.y, button, wheel);
     }
 
     bool key(const MSG& message) {
+        if (intro != nullptr &&
+            (message.message == WM_KEYDOWN || message.message == WM_KEYUP ||
+             message.message == WM_CHAR || message.message == WM_HOTKEY ||
+             message.message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE)) {
+            bool intro_active = false;
+            require(sao_ui_linkstart_is_active(intro, &intro_active));
+            if (intro_active)
+                return true;
+        }
         if (message.message == WM_HOTKEY)
             return sao::launcher::hotkey::dispatch_by_native_id(static_cast<int>(message.wParam));
         if (message.message == sao::launcher::hotkey::kCaptureCompletionMessage &&
@@ -853,6 +970,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         case WM_MOUSEWHEEL:
             host->mouse(message, wp, lp);
             return 0;
+        case WM_CANCELMODE:
+        case WM_CAPTURECHANGED:
+            host->mouse(message, 0, 0);
+            return DefWindowProcW(window, message, wp, lp);
         case WM_TIMER:
             if (wp == kUiService)
                 host->service();
@@ -885,16 +1006,30 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     (void)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    bool frame_export = false;
+    int argument_count = 0;
+    if (LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count)) {
+        for (int index = 1; index < argument_count; ++index) {
+            const std::wstring_view argument(arguments[index]);
+            frame_export = frame_export || argument == L"--frame-out" || argument == L"--frame-ms";
+        }
+        LocalFree(arguments);
+    }
     const HRESULT com_status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(com_status)) {
-        const std::wstring message =
-            L"STA COM initialization failed: " + std::to_wstring(com_status);
-        MessageBoxW(nullptr, message.c_str(), L"Production UI host", MB_OK | MB_ICONERROR);
+        std::fprintf(stderr, "STA COM initialization failed: %ld\n", static_cast<long>(com_status));
+        std::fflush(stderr);
+        if (!frame_export) {
+            const std::wstring message =
+                L"STA COM initialization failed: " + std::to_wstring(com_status);
+            MessageBoxW(nullptr, message.c_str(), L"Production UI host", MB_OK | MB_ICONERROR);
+        }
         return 1;
     }
     int code = 1;
     try {
         Host host(options());
+        frame_export = !host.config.frame_out.empty();
         WNDCLASSW cls{};
         cls.lpfnWndProc = window_proc;
         cls.hInstance = instance;
@@ -910,16 +1045,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             throw std::runtime_error("Window creation failed");
         try {
             host.initialize();
-            ShowWindow(window, show);
-            MSG message{};
-            BOOL received = 0;
-            while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-                if (!host.key(message)) {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
+            if (frame_export) {
+                host.export_frame();
+                require(host.close());
+                code = 0;
+            } else {
+                ShowWindow(window, show);
+                MSG message{};
+                BOOL received = 0;
+                while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+                    if (!host.key(message)) {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
                 }
+                code = received == 0 ? 0 : 1;
             }
-            code = received == 0 ? 0 : 1;
             if (IsWindow(window))
                 DestroyWindow(window);
         } catch (...) {
@@ -930,7 +1071,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Production UI startup: %s\n", error.what());
         std::fflush(stderr);
-        MessageBoxA(nullptr, error.what(), "Production UI host", MB_OK | MB_ICONERROR);
+        if (!frame_export)
+            MessageBoxA(nullptr, error.what(), "Production UI host", MB_OK | MB_ICONERROR);
     }
     CoUninitialize();
     return code;

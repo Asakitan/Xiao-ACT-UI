@@ -42,10 +42,19 @@ constexpr std::string_view kActionReloadAll = "plugin_manager.reload_all";
 constexpr std::string_view kActionEnable = "plugin_manager.enable";
 constexpr std::string_view kActionDisable = "plugin_manager.disable";
 constexpr std::string_view kActionReload = "plugin_manager.reload";
+constexpr std::string_view kActionCatalogSearch = "plugin_manager.catalog.search";
+constexpr std::string_view kActionCatalogState = "plugin_manager.catalog.state";
+constexpr std::string_view kActionCatalogSource = "plugin_manager.catalog.source";
+constexpr std::string_view kActionCatalogClear = "plugin_manager.catalog.clear";
 constexpr std::size_t kMaximumActionPayloadBytes = 4096U;
+constexpr std::size_t kMaximumCatalogQueryBytes = 256U;
+constexpr std::size_t kMaximumCatalogQueryCharacters = 64U;
 constexpr std::size_t kMaximumPluginIdBytes = 256U;
 constexpr std::size_t kMaximumPanelSpecBytes = 256U * 1024U;
 constexpr std::size_t kMaximumTaskQueue = 32U;
+
+enum class CatalogStateFilter : std::uint8_t { all, enabled, inactive, failed };
+enum class CatalogSourceFilter : std::uint8_t { all, built_in, user };
 
 bool valid_utf8(std::string_view value) noexcept {
     std::size_t offset = 0;
@@ -150,6 +159,17 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
     return node;
 }
 
+Json input_node(std::string value) {
+    return Json{{"type", "input"},
+                {"id", "plugin-manager.catalog-search"},
+                {"value", clamp_utf8(std::move(value), kMaximumCatalogQueryBytes)},
+                {"input_type", "text"},
+                {"max_length", static_cast<std::int32_t>(kMaximumCatalogQueryCharacters)},
+                {"placeholder", "Search name, ID, language, or description / 搜索名称、ID、语言或说明"},
+                {"action", std::string(kActionCatalogSearch)},
+                {"height", 38}};
+}
+
 Json row_node(Json children) {
     return Json{{"type", "row"}, {"align", "left"}, {"children", std::move(children)}};
 }
@@ -178,10 +198,91 @@ std::string_view source_label(PluginSource source) noexcept {
     return index < labels.size() ? labels[index] : labels.front();
 }
 
+std::string normalized_catalog_query(std::string_view value) {
+    std::size_t first = 0;
+    std::size_t last = value.size();
+    const auto is_space = [](unsigned char character) {
+        return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+    };
+    while (first < last && is_space(static_cast<unsigned char>(value[first])))
+        ++first;
+    while (last > first && is_space(static_cast<unsigned char>(value[last - 1U])))
+        --last;
+    std::string result(value.substr(first, last - first));
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char character) {
+        return character >= 'A' && character <= 'Z'
+                   ? static_cast<char>(character + ('a' - 'A'))
+                   : static_cast<char>(character);
+    });
+    return result;
+}
+
+bool catalog_text_contains(std::string_view value, std::string_view normalized_query) {
+    if (normalized_query.empty())
+        return true;
+    std::string normalized(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char character) {
+                       return character >= 'A' && character <= 'Z'
+                                  ? static_cast<char>(character + ('a' - 'A'))
+                                  : static_cast<char>(character);
+                   });
+    return normalized.find(normalized_query) != std::string::npos;
+}
+
+bool catalog_query_matches(const PluginSnapshot& plugin, std::string_view normalized_query) {
+    return normalized_query.empty() || catalog_text_contains(plugin.name, normalized_query) ||
+           catalog_text_contains(plugin.plugin_id, normalized_query) ||
+           catalog_text_contains(plugin.version, normalized_query) ||
+           catalog_text_contains(plugin.language, normalized_query) ||
+           catalog_text_contains(plugin.description, normalized_query) ||
+           catalog_text_contains(plugin.source_path, normalized_query) ||
+           catalog_text_contains(plugin_state_label(plugin.state), normalized_query) ||
+           catalog_text_contains(source_label(plugin.source), normalized_query);
+}
+
+bool catalog_state_matches(const PluginSnapshot& plugin, CatalogStateFilter filter) noexcept {
+    switch (filter) {
+    case CatalogStateFilter::enabled:
+        return plugin_state_is_enabled(plugin.state);
+    case CatalogStateFilter::inactive:
+        return !plugin_state_is_enabled(plugin.state) &&
+               !plugin_state_is_transitioning(plugin.state) && plugin.state != PluginState::failed;
+    case CatalogStateFilter::failed:
+        return plugin.state == PluginState::failed;
+    case CatalogStateFilter::all:
+    default:
+        return true;
+    }
+}
+
+bool catalog_source_matches(const PluginSnapshot& plugin, CatalogSourceFilter filter) noexcept {
+    if (filter == CatalogSourceFilter::built_in)
+        return plugin.source == PluginSource::built_in;
+    if (filter == CatalogSourceFilter::user)
+        return plugin.source == PluginSource::user;
+    return true;
+}
+
+std::optional<CatalogStateFilter> catalog_state_filter(std::string_view value) noexcept {
+    if (value == "all") return CatalogStateFilter::all;
+    if (value == "enabled") return CatalogStateFilter::enabled;
+    if (value == "inactive") return CatalogStateFilter::inactive;
+    if (value == "failed") return CatalogStateFilter::failed;
+    return std::nullopt;
+}
+
+std::optional<CatalogSourceFilter> catalog_source_filter(std::string_view value) noexcept {
+    if (value == "all") return CatalogSourceFilter::all;
+    if (value == "built_in") return CatalogSourceFilter::built_in;
+    if (value == "user") return CatalogSourceFilter::user;
+    return std::nullopt;
+}
+
 enum class ManagerState : std::uint8_t { initializing, loading, ready, empty, unavailable, error };
 
 ManagerState manager_state(const Snapshot& snapshot) {
-    if (snapshot.busy)
+    if (snapshot.busy && snapshot.plugins.empty())
         return ManagerState::loading;
     if (!snapshot.loader_available) {
         if (snapshot.error_message.find("Loading") != std::string::npos)
@@ -489,24 +590,56 @@ std::string_view plugin_accent(PluginState state) noexcept {
     return "cyan";
 }
 
-Json status_strip_node(const Snapshot& snapshot, ManagerState manager) {
-    const std::string_view accent = manager_accent(manager);
-    return card_node(
-        "状态",
-        Json::array({row_node(Json::array(
-            {badge_node(std::string(manager_state_label(manager)), accent),
-             badge_node(std::to_string(snapshot.plugins.size()) + " 个插件", "cyan")}))}),
-        accent);
+Json status_strip_node(const Snapshot& snapshot, ManagerState manager,
+                       std::size_t visible_count, bool filters_active) {
+    const std::string_view accent = snapshot.busy ? "gold" : manager_accent(manager);
+    Json badges = Json::array({
+        badge_node(snapshot.busy ? "Working / 操作中"
+                                 : std::string(manager_state_label(manager)),
+                   accent),
+        badge_node(std::to_string(snapshot.plugins.size()) + " total / 插件总数", "cyan"),
+    });
+    if (filters_active)
+        badges.push_back(
+            badge_node(std::to_string(visible_count) + " shown / 当前显示", "accent"));
+    return card_node("状态", Json::array({row_node(std::move(badges))}), accent);
 }
+
 std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
-                       const std::unordered_set<std::string>& busy_plugins) {
+                       const std::unordered_set<std::string>& busy_plugins,
+                       std::string_view catalog_query, CatalogStateFilter state_filter,
+                       CatalogSourceFilter source_filter) {
     const ManagerState manager = manager_state(snapshot);
+    const std::string normalized_query = normalized_catalog_query(catalog_query);
+    const bool filters_active = !normalized_query.empty() || state_filter != CatalogStateFilter::all ||
+                                source_filter != CatalogSourceFilter::all;
+    std::vector<std::size_t> visible_plugins;
+    visible_plugins.reserve(snapshot.plugins.size());
+    std::size_t enabled_count = 0;
+    std::size_t inactive_count = 0;
+    std::size_t failed_count = 0;
+    std::size_t built_in_count = 0;
+    std::size_t user_count = 0;
+    for (std::size_t index = 0; index < snapshot.plugins.size(); ++index) {
+        const PluginSnapshot& plugin = snapshot.plugins[index];
+        enabled_count += plugin_state_is_enabled(plugin.state) ? 1U : 0U;
+        inactive_count += catalog_state_matches(plugin, CatalogStateFilter::inactive) ? 1U : 0U;
+        failed_count += plugin.state == PluginState::failed ? 1U : 0U;
+        built_in_count += plugin.source == PluginSource::built_in ? 1U : 0U;
+        user_count += plugin.source == PluginSource::user ? 1U : 0U;
+        if (catalog_query_matches(plugin, normalized_query) &&
+            catalog_state_matches(plugin, state_filter) &&
+            catalog_source_matches(plugin, source_filter)) {
+            visible_plugins.push_back(index);
+        }
+    }
+
     Json nodes = Json::array();
-    nodes.push_back(status_strip_node(snapshot, manager));
+    nodes.push_back(status_strip_node(snapshot, manager, visible_plugins.size(), filters_active));
+
     Json overview = Json::array();
     overview.push_back(
-        text_node("Refresh discovers the current plugin catalog; actions run in the background. / "
-                  "刷新当前插件目录；操作在后台执行。",
+        text_node("Refresh discovers the current plugin catalog; lifecycle actions run in the background. / 刷新会重新发现当前插件目录；生命周期操作在后台执行。",
                   "muted", 34));
     Json toolbar = Json::array();
     toolbar.push_back(button_node("plugin-manager.refresh",
@@ -517,7 +650,66 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
                                   std::string(kActionReloadAll), Json(), "default",
                                   !snapshot.reload_all_available || snapshot.busy));
     overview.push_back(row_node(std::move(toolbar)));
-    nodes.push_back(card_node("插件库 / Library", std::move(overview), manager_accent(manager)));
+    if (snapshot.busy && !snapshot.plugins.empty())
+        overview.push_back(text_node(
+            "An operation is pending. Catalog search and filter selection remain available; lifecycle buttons stay disabled until the refreshed snapshot arrives. / 操作正在进行；仍可搜索和筛选，刷新快照到达前生命周期按钮保持禁用。",
+            "warn", 42));
+    nodes.push_back(card_node("插件库 / Library", std::move(overview),
+                              snapshot.busy ? "gold" : manager_accent(manager)));
+
+    Json filters = Json::array();
+    filters.push_back(input_node(std::string(catalog_query)));
+    Json filter_actions = Json::array();
+    filter_actions.push_back(button_node("plugin-manager.catalog-clear", "清除筛选 / Clear",
+                                         std::string(kActionCatalogClear), Json::object(), "ghost",
+                                         !filters_active && catalog_query.empty()));
+    filter_actions.push_back(badge_node(
+        std::to_string(visible_plugins.size()) + " / " +
+            std::to_string(snapshot.plugins.size()) + " shown",
+        filters_active ? "accent" : "muted"));
+    filters.push_back(row_node(std::move(filter_actions)));
+    filters.push_back(text_node(
+        "Search matches name, stable ID, version, language, description, path, state, and source. / 搜索匹配名称、稳定 ID、版本、语言、说明、路径、状态和来源。",
+        "muted", 34));
+    Json state_filters = Json::array();
+    state_filters.push_back(button_node(
+        "plugin-manager.catalog-state.all",
+        "全部 (" + std::to_string(snapshot.plugins.size()) + ")",
+        std::string(kActionCatalogState), {{"value", "all"}},
+        state_filter == CatalogStateFilter::all ? "primary" : "ghost"));
+    state_filters.push_back(button_node(
+        "plugin-manager.catalog-state.enabled",
+        "已启用 (" + std::to_string(enabled_count) + ")", std::string(kActionCatalogState),
+        {{"value", "enabled"}},
+        state_filter == CatalogStateFilter::enabled ? "primary" : "ghost"));
+    state_filters.push_back(button_node(
+        "plugin-manager.catalog-state.inactive",
+        "未运行 (" + std::to_string(inactive_count) + ")", std::string(kActionCatalogState),
+        {{"value", "inactive"}},
+        state_filter == CatalogStateFilter::inactive ? "primary" : "ghost"));
+    state_filters.push_back(button_node(
+        "plugin-manager.catalog-state.failed",
+        "失败 (" + std::to_string(failed_count) + ")", std::string(kActionCatalogState),
+        {{"value", "failed"}},
+        state_filter == CatalogStateFilter::failed ? "primary" : "ghost"));
+    filters.push_back(row_node(std::move(state_filters)));
+    Json source_filters = Json::array();
+    source_filters.push_back(button_node(
+        "plugin-manager.catalog-source.all", "全部来源", std::string(kActionCatalogSource),
+        {{"value", "all"}}, source_filter == CatalogSourceFilter::all ? "primary" : "ghost"));
+    source_filters.push_back(button_node(
+        "plugin-manager.catalog-source.built-in",
+        "内置 (" + std::to_string(built_in_count) + ")", std::string(kActionCatalogSource),
+        {{"value", "built_in"}},
+        source_filter == CatalogSourceFilter::built_in ? "primary" : "ghost"));
+    source_filters.push_back(button_node(
+        "plugin-manager.catalog-source.user", "用户 (" + std::to_string(user_count) + ")",
+        std::string(kActionCatalogSource), {{"value", "user"}},
+        source_filter == CatalogSourceFilter::user ? "primary" : "ghost"));
+    filters.push_back(row_node(std::move(source_filters)));
+    nodes.push_back(card_node("Catalog search & filters / 目录搜索与筛选", std::move(filters),
+                              filters_active ? "cyan" : "muted"));
+
     if (manager == ManagerState::initializing || manager == ManagerState::loading) {
         Json loader = Json::array();
         loader.push_back(text_node("正在加载插件目录…", "warn", 42));
@@ -544,14 +736,23 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
         empty.push_back(button_node("plugin-manager.empty-retry", "刷新",
                                     std::string(kActionRefresh), Json(), "primary", snapshot.busy));
         nodes.push_back(section_node("Plugins / 插件", std::move(empty), "cyan"));
+    } else if (visible_plugins.empty()) {
+        Json empty = Json::array();
+        empty.push_back(text_node(
+            "No plugins match the current search and filters. Clear filters or adjust the query; the catalog and pending lifecycle state are unchanged. / 当前搜索与筛选没有匹配项；可清除筛选或修改查询，插件目录和待处理生命周期状态不会改变。",
+            "muted", 48));
+        empty.push_back(button_node("plugin-manager.no-match-clear", "清除筛选 / Clear",
+                                    std::string(kActionCatalogClear), Json::object(), "primary"));
+        nodes.push_back(section_node("Plugins / 插件", std::move(empty), "cyan"));
     } else {
         Json plugin_cards = Json::array();
-        for (std::size_t index = 0; index < snapshot.plugins.size(); ++index) {
+        for (const std::size_t index : visible_plugins) {
             const PluginSnapshot& plugin = snapshot.plugins[index];
             const bool transitioning = plugin_state_is_transitioning(plugin.state);
             const bool active = plugin_state_is_enabled(plugin.state);
-            const bool row_busy = reload_all_busy || snapshot.busy ||
-                                  busy_plugins.find(plugin.plugin_id) != busy_plugins.end();
+            const bool operation_pending =
+                busy_plugins.find(plugin.plugin_id) != busy_plugins.end();
+            const bool row_busy = reload_all_busy || snapshot.busy || operation_pending;
             const std::string widget_suffix =
                 valid_text(plugin.plugin_id, kMaximumPluginIdBytes, true)
                     ? plugin.plugin_id
@@ -561,25 +762,30 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
             metadata.push_back(badge_node("v" + plugin.version, "cyan"));
             metadata.push_back(badge_node(std::string(plugin_state_label(plugin.state)),
                                           state_style(plugin.state)));
+            if (operation_pending || transitioning)
+                metadata.push_back(badge_node("Pending / 处理中", "warn"));
             details.push_back(row_node(std::move(metadata)));
-            details.push_back(text_node("Language / 语言: " + (plugin.language.empty() ? "Unknown / 未知" : plugin.language) +
-                                           " · Source / 来源: " + std::string(source_label(plugin.source)), "muted", 24));
+            details.push_back(text_node(
+                "Language / 语言: " +
+                    (plugin.language.empty() ? "Unknown / 未知" : plugin.language) +
+                    " · Source / 来源: " + std::string(source_label(plugin.source)),
+                "muted", 24));
             if (!plugin.description.empty())
                 details.push_back(text_node(clamp_utf8(plugin.description, 320U), "value", 42));
             details.push_back(text_node("ID: " + plugin.plugin_id, "muted", 24));
             if (!plugin.source_path.empty())
-                details.push_back(text_node("Path / 路径: " + clamp_utf8(plugin.source_path, 320U),
-                                           "mono", 30));
+                details.push_back(text_node(
+                    "Path / 路径: " + clamp_utf8(plugin.source_path, 320U), "mono", 30));
             Json actions = Json::array();
             actions.push_back(button_node(
                 "plugin-manager.toggle." + widget_suffix, active ? "禁用" : "启用",
                 active ? std::string(kActionDisable) : std::string(kActionEnable),
                 Json(plugin.plugin_id), active ? "danger" : "primary",
                 row_busy || transitioning || !plugin_state_allows_enable(plugin.state)));
-            actions.push_back(button_node("plugin-manager.reload." + widget_suffix, "重载",
-                                          std::string(kActionReload), Json(plugin.plugin_id),
-                                          "default",
-                                          row_busy || !plugin_state_allows_reload(plugin.state)));
+            actions.push_back(button_node(
+                "plugin-manager.reload." + widget_suffix, "重载", std::string(kActionReload),
+                Json(plugin.plugin_id), "default",
+                row_busy || !plugin_state_allows_reload(plugin.state)));
             details.push_back(row_node(std::move(actions)));
             plugin_cards.push_back(card_node(plugin.name.empty() ? plugin.plugin_id : plugin.name,
                                               std::move(details), plugin_accent(plugin.state)));
@@ -590,14 +796,21 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
     if (spec.size() <= kMaximumPanelSpecBytes)
         return spec;
     Json compact = Json::array();
-    compact.push_back(text_node("Plugin Manager content exceeded the panel budget.", "bad", 44));
-    compact.push_back(button_node("plugin-manager.budget-retry", "重试",
+    compact.push_back(text_node(
+        "Plugin Manager content exceeded the panel budget. Narrow the local catalog with search. / 插件管理器内容超出面板预算，请使用搜索缩小本地目录。",
+        "bad", 44));
+    compact.push_back(input_node(std::string(catalog_query)));
+    compact.push_back(button_node("plugin-manager.budget-clear", "清除筛选 / Clear",
+                                  std::string(kActionCatalogClear), Json::object(), "ghost",
+                                  !filters_active && catalog_query.empty()));
+    compact.push_back(button_node("plugin-manager.budget-retry", "刷新",
                                   std::string(kActionRefresh), Json(), "primary", snapshot.busy));
     return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
 
 std::string build_spec_for_testing(const Snapshot& snapshot) {
-    return build_spec(snapshot, snapshot.busy, {});
+    return build_spec(snapshot, snapshot.busy, {}, {}, CatalogStateFilter::all,
+                      CatalogSourceFilter::all);
 }
 
 struct Owner::Impl {
@@ -813,7 +1026,10 @@ struct Owner::Impl {
         try {
             sao_ui_panel_body_handle_t target_body = nullptr;
             std::string pending_error;
+            std::string catalog_query_value;
             std::unordered_set<std::string> busy_plugins;
+            CatalogStateFilter catalog_state = CatalogStateFilter::all;
+            CatalogSourceFilter catalog_source = CatalogSourceFilter::all;
             bool reload_all_busy = false;
             bool reload_all_available = false;
             {
@@ -821,6 +1037,9 @@ struct Owner::Impl {
                 target_body = body;
                 reload_all_available = static_cast<bool>(operations.reload_all);
                 pending_error = operation_error;
+                catalog_query_value = catalog_query;
+                catalog_state = selected_catalog_state;
+                catalog_source = selected_catalog_source;
                 busy_plugins = busy_plugin_ids;
                 reload_all_busy = reload_all_pending;
                 snapshot.busy = worker_active || refresh_running || !tasks.empty();
@@ -833,7 +1052,9 @@ struct Owner::Impl {
                     snapshot.error_message.append(" ");
                 snapshot.error_message.append(pending_error);
             }
-            const std::string spec = build_spec(snapshot, reload_all_busy, busy_plugins);
+            const std::string spec =
+                build_spec(snapshot, reload_all_busy, busy_plugins, catalog_query_value,
+                           catalog_state, catalog_source);
             {
                 std::lock_guard lock(mutex);
                 if (body == target_body && last_published_body == target_body &&
@@ -1060,6 +1281,63 @@ struct Owner::Impl {
             payload_json.size() > kMaximumActionPayloadBytes ||
             payload_json.find('\0') != std::string_view::npos || !valid_utf8(payload_json)) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        if (action_id == kActionCatalogSearch || action_id == kActionCatalogState ||
+            action_id == kActionCatalogSource || action_id == kActionCatalogClear) {
+            try {
+                Json payload = payload_json.empty()
+                                   ? Json::object()
+                                   : Json::parse(payload_json.begin(), payload_json.end(), nullptr,
+                                                 false, false);
+                if (!payload.is_object())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                if (action_id == kActionCatalogClear) {
+                    std::lock_guard lock(mutex);
+                    catalog_query.clear();
+                    selected_catalog_state = CatalogStateFilter::all;
+                    selected_catalog_source = CatalogSourceFilter::all;
+                    cache_dirty = true;
+                } else if (action_id == kActionCatalogSearch) {
+                    const auto text = payload.find("text");
+                    const auto value = payload.find("value");
+                    const Json* source = text != payload.end() && text->is_string()
+                                             ? &*text
+                                         : value != payload.end() && value->is_string()
+                                             ? &*value
+                                             : nullptr;
+                    if (source == nullptr)
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    std::string query = source->get<std::string>();
+                    if (!valid_text(query, kMaximumCatalogQueryBytes, false))
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    std::lock_guard lock(mutex);
+                    catalog_query = std::move(query);
+                    cache_dirty = true;
+                } else {
+                    const auto value = payload.find("value");
+                    if (value == payload.end() || !value->is_string())
+                        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                    if (action_id == kActionCatalogState) {
+                        const auto filter = catalog_state_filter(value->get_ref<const std::string&>());
+                        if (!filter.has_value())
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        std::lock_guard lock(mutex);
+                        selected_catalog_state = *filter;
+                        cache_dirty = true;
+                    } else {
+                        const auto filter =
+                            catalog_source_filter(value->get_ref<const std::string&>());
+                        if (!filter.has_value())
+                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                        std::lock_guard lock(mutex);
+                        selected_catalog_source = *filter;
+                        cache_dirty = true;
+                    }
+                }
+                return publish_cached_state(true);
+            } catch (...) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
         }
         if (action_id == kActionRefresh) {
             clear_operation_message();
@@ -1317,7 +1595,10 @@ struct Owner::Impl {
     Operations operations;
     Snapshot last_snapshot;
     std::string operation_error;
+    std::string catalog_query;
     std::unordered_set<std::string> busy_plugin_ids;
+    CatalogStateFilter selected_catalog_state{CatalogStateFilter::all};
+    CatalogSourceFilter selected_catalog_source{CatalogSourceFilter::all};
     bool reload_all_pending{};
     bool refresh_queued{};
     bool refresh_running{};

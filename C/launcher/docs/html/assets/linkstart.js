@@ -18,6 +18,10 @@
   var disposed = false;
   var finishing = false;
   var removalTimer = 0;
+  var pressedPointer = null;
+  var isolatedNodes = [];
+  var previousFocus = document.activeElement;
+  var ownsFocus = false;
 
   function clearTimers() {
     for (var i = 0; i < timers.length; i++) { window.clearTimeout(timers[i]); }
@@ -25,8 +29,12 @@
     if (removalTimer) { window.clearTimeout(removalTimer); removalTimer = 0; }
   }
   function removeListeners() {
-    window.removeEventListener('pointerdown', skip);
-    window.removeEventListener('keydown', onKeydown);
+    overlay.removeEventListener('pointerdown', onPointerDown);
+    overlay.removeEventListener('pointerup', skip);
+    overlay.removeEventListener('pointercancel', onPointerCancel);
+    overlay.removeEventListener('pointerleave', onPointerCancel);
+    overlay.removeEventListener('lostpointercapture', onPointerCancel);
+    window.removeEventListener('keydown', onKeydown, true);
     window.removeEventListener('hashchange', onHashChange);
     window.removeEventListener('pagehide', onPagehide);
     document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -41,21 +49,28 @@
     clearTimers();
     removeListeners();
     document.body.classList.remove('ls-locked');
+    isolatedNodes.forEach(function (state) {
+      if (!state.inert) { state.node.removeAttribute('inert'); }
+    });
+    isolatedNodes.length = 0;
     if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
+    if (ownsFocus && previousFocus && document.contains(previousFocus)) {
+      previousFocus.focus({ preventScroll: true });
+    }
   }
-  function finish() {
+  function finish(skipped) {
     if (disposed || finishing) { return; }
     finishing = true;
     try { window.sessionStorage.setItem('sao-guide-intro-seen', '1'); } catch (error) {}
     clearTimers();
-    window.removeEventListener('pointerdown', skip);
-    window.removeEventListener('keydown', onKeydown);
+    var duration = skipped ? 180 : 900;
+    overlay.style.transition = 'opacity ' + duration + 'ms ease, visibility 0s linear ' + duration + 'ms';
+    overlay.style.pointerEvents = 'auto';
     overlay.classList.add('done');
-    document.body.classList.remove('ls-locked');
     removalTimer = window.setTimeout(function () {
       removalTimer = 0;
       dispose();
-    }, 1100);
+    }, duration + 30);
   }
   function schedule(fn, ms) {
     if (disposed || finishing) { return; }
@@ -68,11 +83,28 @@
     }, ms);
     timers.push(id);
   }
-  function skip() {
-    if (!disposed) { finish(); }
+  function onPointerDown(e) {
+    if (!e.isPrimary || e.button !== 0) { return; }
+    pressedPointer = e.pointerId;
+    e.preventDefault();
+  }
+  function onPointerCancel(e) {
+    if (e.pointerId === pressedPointer) { pressedPointer = null; }
+  }
+  function skip(e) {
+    if (e.pointerId !== pressedPointer) { return; }
+    pressedPointer = null;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disposed) { finish(true); }
   }
   function onKeydown(e) {
-    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') { skip(); }
+    e.stopPropagation();
+    if (e.key === 'Tab') { e.preventDefault(); }
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      finish(true);
+    }
   }
   function onPagehide() {
     dispose();
@@ -96,8 +128,23 @@
   }
 
   document.body.classList.add('ls-locked');
-  window.addEventListener('pointerdown', skip);
-  window.addEventListener('keydown', onKeydown);
+  Array.prototype.forEach.call(document.body.children, function (node) {
+    if (node === overlay || node.tagName === 'SCRIPT') { return; }
+    isolatedNodes.push({ node: node, inert: node.hasAttribute('inert') });
+    node.setAttribute('inert', '');
+  });
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Link Start 开场');
+  overlay.setAttribute('tabindex', '-1');
+  overlay.focus({ preventScroll: true });
+  ownsFocus = true;
+  overlay.addEventListener('pointerdown', onPointerDown);
+  overlay.addEventListener('pointerup', skip);
+  overlay.addEventListener('pointercancel', onPointerCancel);
+  overlay.addEventListener('pointerleave', onPointerCancel);
+  overlay.addEventListener('lostpointercapture', onPointerCancel);
+  window.addEventListener('keydown', onKeydown, true);
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('pagehide', onPagehide);
   document.addEventListener('visibilitychange', onVisibilityChange);

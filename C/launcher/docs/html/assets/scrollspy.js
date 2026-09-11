@@ -7,6 +7,16 @@
   var sections = Array.prototype.slice.call(document.querySelectorAll('.manual-section[id]'));
   var tocLinks = document.querySelectorAll('.toc a[data-target]');
   var chapterSelect = document.getElementById('chapter-select');
+
+  function focusSection(section) {
+    section.setAttribute('tabindex', '-1');
+    try {
+      section.focus({ preventScroll: true });
+    } catch (error) {
+      section.focus();
+    }
+  }
+
   if (chapterSelect) {
     for (var chapterIndex = 0; chapterIndex < tocLinks.length; chapterIndex++) {
       var option = document.createElement('option');
@@ -22,8 +32,7 @@
       } else {
         window.location.hash = target.id;
       }
-      target.setAttribute('tabindex', '-1');
-      target.focus({ preventScroll: true });
+      focusSection(target);
     });
   }
   var sectionPositions = [];
@@ -199,6 +208,9 @@
     if (window.location.hash === href) {
       animateSection(section);
       showSectionPopup(section);
+    }
+    if (e.detail === 0) {
+      window.setTimeout(function () { focusSection(section); }, 0);
     }
     scheduleUpdate();
   });

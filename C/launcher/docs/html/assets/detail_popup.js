@@ -29,7 +29,7 @@
     },
     t2: {
       section: '02 系统托盘菜单', title: '左键双击托盘图标',
-      html: '<p>左键双击托盘图标打开 Settings（设置）。通过概览、外观、行为、音频、高级和配置分类查看对应内容；宽屏左右排列，窄屏上下排列。</p><p>切换分类不丢弃草稿。顶部“应用并保存”保存当前更改，“撤销草稿”恢复已提交设置；不是只保存或撤销当前分类。</p>'
+      html: '<p>左键双击托盘图标打开 Settings（设置）。通过概览、外观、行为、音频、高级和配置分类查看对应内容；宽屏左右排列，窄屏上下排列。</p><p>切换分类不丢弃草稿。底部“应用更改”保存当前更改，“丢弃草稿”恢复已提交设置；不是只保存或丢弃当前分类。</p>'
     },
     t3: {
       section: '02 系统托盘菜单', title: '快捷键',
@@ -168,6 +168,7 @@
   var focusTimer = 0;
   var activeTrigger = null;
   var savedScroll = null;
+  var isolatedNodes = [];
 
   function isOpen() {
     return overlay && overlay.classList.contains('visible');
@@ -247,10 +248,39 @@
 
   function focusableElements() {
     var candidates = Array.prototype.slice.call(
-      overlay.querySelectorAll('a[href], area[href], button, input, select, textarea, [tabindex]'));
+      overlay.querySelectorAll('a[href], area[href], button, input, select, textarea, [contenteditable="true"], [tabindex]'));
     return candidates.filter(function (element) {
-      return !element.disabled && element.getAttribute('tabindex') !== '-1';
+      var style = window.getComputedStyle(element);
+      return !element.disabled && element.getAttribute('tabindex') !== '-1' &&
+        element.getAttribute('aria-hidden') !== 'true' && style.visibility !== 'hidden' &&
+        style.display !== 'none' && element.getClientRects().length > 0;
     });
+  }
+
+  function isolatePage() {
+    if (isolatedNodes.length > 0) { return; }
+    Array.prototype.slice.call(document.body.children).forEach(function (node) {
+      if (node === overlay || node.tagName === 'SCRIPT') { return; }
+      isolatedNodes.push({
+        node: node,
+        hadInert: node.hasAttribute('inert'),
+        ariaHidden: node.getAttribute('aria-hidden')
+      });
+      node.setAttribute('inert', '');
+      node.setAttribute('aria-hidden', 'true');
+    });
+  }
+
+  function restorePage() {
+    isolatedNodes.forEach(function (state) {
+      if (!state.hadInert) { state.node.removeAttribute('inert'); }
+      if (state.ariaHidden === null) {
+        state.node.removeAttribute('aria-hidden');
+      } else {
+        state.node.setAttribute('aria-hidden', state.ariaHidden);
+      }
+    });
+    isolatedNodes.length = 0;
   }
 
   function open(key, trigger) {
@@ -278,6 +308,7 @@
     }
     overlay.classList.add('visible');
     document.body.classList.add('dp-locked');
+    isolatePage();
     window.clearTimeout(focusTimer);
     focusTimer = window.setTimeout(function () {
       focusTimer = 0;
@@ -299,6 +330,7 @@
     overlay.classList.remove('visible');
     overlay.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('dp-locked');
+    restorePage();
     setTriggerExpanded(trigger, false);
     activeTrigger = null;
     savedScroll = null;
@@ -341,6 +373,10 @@
       e.preventDefault();
       first.focus();
     }
+  });
+
+  document.addEventListener('focusin', function (e) {
+    if (isOpen() && !overlay.contains(e.target)) { focusDialog(); }
   });
 
   Array.prototype.slice.call(document.querySelectorAll('[data-detail]')).forEach(function (trigger) {

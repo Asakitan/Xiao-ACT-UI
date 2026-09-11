@@ -137,7 +137,7 @@ std::string status_label(PanelStatus status) {
     case PanelStatus::cancelled: return "Cancelled / 已取消";
     case PanelStatus::conflict: return "Conflict / 冲突";
     case PanelStatus::system_error: return "System error / 系统错误";
-    case PanelStatus::save_error: return "Save rollback / 保存回滚";
+    case PanelStatus::save_error: return "Not saved / 未保存";
     case PanelStatus::ready: default: return "Ready / 就绪";
     }
 }
@@ -220,40 +220,72 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 520) {
                 {"nodes", Json::array({std::move(top), std::move(content)})}};
 }
 
-Json status_strip_node(std::string message, std::string_view accent, bool capturing) {
-    Json children = Json::array();
-    children.push_back(row_node(Json::array({text_node(std::move(message), accent, 24)})));
-    if (capturing)
-        children.push_back(row_node(Json::array({button_node(
-            "capture.cancel", "取消捕获", "hotkey.capture.cancel", Json::object(), "ghost")})));
-    return card_node("状态", std::move(children), accent);
+std::string_view status_accent(PanelStatus status) noexcept {
+    switch (status) {
+    case PanelStatus::capturing: return "gold";
+    case PanelStatus::success: return "ok";
+    case PanelStatus::conflict:
+    case PanelStatus::system_error:
+    case PanelStatus::save_error: return "danger";
+    case PanelStatus::cancelled: return "muted";
+    case PanelStatus::ready: default: return "cyan";
+    }
 }
 
-std::string_view panel_accent(const std::unordered_map<std::string, PanelStatus>& statuses,
-                              std::string_view message, bool capturing) {
-    if (capturing) return "gold";
-    if (message.find("Conflict") != std::string_view::npos ||
-        message.find("failed") != std::string_view::npos ||
-        message.find("error") != std::string_view::npos ||
-        message.find("rollback") != std::string_view::npos) return "danger";
-    bool have_success = false;
-    for (const auto& [id, status] : statuses) {
-        (void)id;
-        if (status == PanelStatus::conflict || status == PanelStatus::system_error ||
-            status == PanelStatus::save_error) return "danger";
-        have_success = have_success || status == PanelStatus::success;
+std::string_view status_detail(PanelStatus status) noexcept {
+    switch (status) {
+    case PanelStatus::capturing:
+        return "Listening now; no change is saved until a key is accepted. / 正在监听；接受按键前不会保存更改。";
+    case PanelStatus::success:
+        return "Saved immediately; there is no separate Apply step. / 已立即保存，无需另行应用。";
+    case PanelStatus::cancelled:
+        return "No change was made; the previous shortcut is still active. / 未作更改，原快捷键仍然有效。";
+    case PanelStatus::conflict:
+        return "The attempted combination was not saved; the previous shortcut was kept. / 冲突组合未保存，原快捷键已保留。";
+    case PanelStatus::save_error:
+        return "Saving failed and the previous shortcut was restored. / 保存失败，已恢复原快捷键。";
+    case PanelStatus::system_error:
+        return "Review the current shortcut before retrying. / 重试前请核对当前快捷键。";
+    case PanelStatus::ready: default: return "";
     }
-    return have_success ? "ok" : "cyan";
+}
+
+Json status_strip_node(std::string message, std::string_view accent, PanelStatus status,
+                       bool capturing, std::string_view capturing_binding_id) {
+    Json children = Json::array();
+    children.push_back(row_node(Json::array({
+        Json{{"type", "badge"},
+             {"text", status_label(status)},
+             {"style", status_style(status)},
+             {"height", 22}},
+        text_node(std::move(message), accent, 34),
+    })));
+    if (capturing) {
+        if (!capturing_binding_id.empty())
+            children.push_back(text_node("Recording / 正在录入: " +
+                                             std::string(capturing_binding_id),
+                                         "warn", 24));
+        children.push_back(row_node(Json::array({button_node(
+            "capture.cancel", "取消录入 / Cancel", "hotkey.capture.cancel", Json::object(),
+            "ghost")})));
+    }
+    return card_node("状态", std::move(children), accent);
 }
 
 std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
                              const std::unordered_map<std::string, PanelStatus>& statuses,
-                             std::string_view message, bool capture_running) {
-    const std::string visible_message = message.empty() ? "Ready / 就绪" : std::string(message);
-    const std::string_view accent = panel_accent(statuses, visible_message, capture_running);
+                             std::string_view message, PanelStatus panel_status,
+                             bool capture_running, std::string_view capturing_binding_id) {
+    const std::string visible_message =
+        message.empty()
+            ? "Ready. Choose Record to replace a shortcut; successful changes save immediately. / 就绪；选择录入以替换快捷键，成功后会立即保存。"
+            : std::string(message);
+    const std::string_view accent = status_accent(panel_status);
     const auto compact_spec = [&](std::string_view reason) {
         Json nodes = Json::array();
-        nodes.push_back(status_strip_node(std::string(reason), "danger", capture_running));
+        nodes.push_back(status_strip_node(std::string(reason), "danger",
+                                                PanelStatus::system_error, capture_running,
+                                                capturing_binding_id));
         nodes.push_back(card_node(
             "Bindings / 快捷键",
             Json::array({text_node("The hotkey list exceeded the panel budget. Reduce the number "
@@ -274,10 +306,15 @@ std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
     if (bindings.size() > kMaximumBindingCount)
         return compact_spec("Hotkey list exceeded the panel item limit / 快捷键列表超出项目限制");
     Json nodes = Json::array();
-    nodes.push_back(status_strip_node(visible_message, accent, capture_running));
+    nodes.push_back(status_strip_node(visible_message, accent, panel_status, capture_running,
+                                            capturing_binding_id));
     Json rows = Json::array();
-    rows.push_back(
-        text_node("选择要更改的快捷键，点击录入后按下组合键；重置恢复该项默认值。", "muted", 38));
+    rows.push_back(text_node(
+        "1. Click Record and release any held non-modifier key. 2. Optionally hold Ctrl, Alt, Shift, or Win, then press one non-modifier key. Esc cancels; recording times out after 10 seconds. / 1. 点击录入并松开已按住的普通键；2. 可按住 Ctrl、Alt、Shift 或 Win，再按一个普通键。Esc 取消，10 秒后超时。",
+        "muted", 58));
+    rows.push_back(text_node(
+        "A successful capture saves immediately. A conflict or cancellation keeps the previous shortcut unchanged. / 录入成功会立即保存；发生冲突或取消时保留原快捷键。",
+        "muted", 38));
     for (std::size_t index = 0; index < bindings.size(); ++index) {
         const auto& binding = bindings[index];
         const auto found = statuses.find(binding.id);
@@ -289,27 +326,29 @@ std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
             binding.description, kMaximumTextBytes, "Invalid description / 无效描述");
         const Json payload = identity_safe ? Json(binding.id) : Json();
         const bool action_disabled = capture_running || !identity_safe;
-        rows.push_back(card_node(
-            description.empty() ? display_id : description,
-            Json::array({
-                row_node(Json::array({
-                    text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 30),
-                    Json{{"type", "badge"},
-                         {"text", identity_safe ? status_label(status) : "Unavailable / 不可用"},
-                         {"style", status_style(status)},
-                         {"height", 22}},
-                })),
-                row_node(Json::array({
-                    button_node(
-                        bounded_action_node_id("capture.", binding.id, index, identity_safe),
-                        "录入组合键", kCaptureAction, payload, "primary", action_disabled),
-                    button_node(bounded_action_node_id("reset.", binding.id, index, identity_safe),
-                                "恢复默认", kResetAction, payload, "ghost", action_disabled),
-                })),
-                text_node(display_id, "muted", 22),
-            }),
-            identity_safe ? (status == PanelStatus::ready ? "cyan" : status_style(status))
-                          : "bad"));
+        const bool capturing_this = capture_running && capturing_binding_id == binding.id;
+        Json details = Json::array();
+        details.push_back(row_node(Json::array({
+            Json{{"type", "badge"}, {"text", "Current / 当前"}, {"style", "muted"}, {"height", 22}},
+            text_node(format_combo_utf8(binding.vk, binding.modifiers), "accent", 30),
+            Json{{"type", "badge"},
+                 {"text", identity_safe ? status_label(status) : "Unavailable / 不可用"},
+                 {"style", status_style(status)},
+                 {"height", 22}},
+        })));
+        if (status != PanelStatus::ready)
+            details.push_back(text_node(std::string(status_detail(status)), status_style(status), 34));
+        details.push_back(row_node(Json::array({
+            button_node(bounded_action_node_id("capture.", binding.id, index, identity_safe),
+                        capturing_this ? "正在录入…" : "录入组合键", kCaptureAction, payload,
+                        "primary", action_disabled),
+            button_node(bounded_action_node_id("reset.", binding.id, index, identity_safe),
+                        "恢复默认", kResetAction, payload, "ghost", action_disabled),
+        })));
+        details.push_back(text_node("ID: " + display_id, "muted", 22));
+        rows.push_back(card_node(description.empty() ? display_id : description,
+                                 std::move(details),
+                                 identity_safe ? status_accent(status) : "danger"));
     }
     if (bindings.empty())
         rows.push_back(text_node("No bindings configured. / 尚未配置快捷键。", "muted", 30));
@@ -513,27 +552,41 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void complete_capture(const CaptureResult& result) {
         {
             std::lock_guard lock(mutex);
-            if (result.generation != capture_generation || panel == nullptr || retirement != RetirementState::online) return;
+            if (result.generation != capture_generation || panel == nullptr ||
+                retirement != RetirementState::online)
+                return;
         }
         if (result.timed_out) {
-            set_status(result.id, PanelStatus::cancelled, "Timeout / 超时");
+            set_status(result.id, PanelStatus::cancelled,
+                       "Recording timed out after 10 seconds; no changes were made. / 录入已在 10 秒后超时，未作更改。");
         } else if (result.system_error) {
             set_status(result.id, PanelStatus::system_error,
-                       result.error_message.empty() ? "System error / 捕获完成失败"
-                                                    : result.error_message);
+                       result.error_message.empty()
+                           ? "Capture failed; review the current shortcut before retrying. / 捕获失败；重试前请核对当前快捷键。"
+                           : "Capture failed / 捕获失败: " + result.error_message);
         } else if (result.cancelled) {
-            set_status(result.id, PanelStatus::cancelled, "Cancelled / 已取消");
+            set_status(result.id, PanelStatus::cancelled,
+                       "Recording cancelled; no changes were made. / 已取消录入，未作更改。");
         } else {
+            const std::string combo = format_combo_utf8(result.vk, result.modifiers);
             std::string reason;
-            const RebindResult result_code = rebind_live(result.id, result.vk, result.modifiers, &reason);
-            if (result_code == RebindResult::success)
-                set_status(result.id, PanelStatus::success, "Saved / 已保存");
-            else if (result_code == RebindResult::conflict)
-                set_status(result.id, PanelStatus::conflict, "Conflict / 冲突: " + reason);
-            else if (result_code == RebindResult::save_error)
-                set_status(result.id, PanelStatus::save_error, "Save rollback / 保存回滚: " + reason);
-            else
-                set_status(result.id, PanelStatus::system_error, "System error / 系统错误: " + reason);
+            const RebindResult result_code =
+                rebind_live(result.id, result.vk, result.modifiers, &reason);
+            if (result_code == RebindResult::success) {
+                set_status(result.id, PanelStatus::success,
+                           "Saved immediately / 已立即保存: " + combo);
+            } else if (result_code == RebindResult::conflict) {
+                set_status(result.id, PanelStatus::conflict,
+                           "Not saved / 未保存: " + combo + " is already assigned to " +
+                               (reason.empty() ? "another binding" : reason) +
+                               "; the previous shortcut was kept. / 该组合已被占用，原快捷键已保留。");
+            } else if (result_code == RebindResult::save_error) {
+                set_status(result.id, PanelStatus::save_error,
+                           "Not saved; the previous shortcut was restored. / 未保存；已恢复原快捷键: " + reason);
+            } else {
+                set_status(result.id, PanelStatus::system_error,
+                           "Shortcut update needs review / 快捷键更新需要检查: " + reason);
+            }
         }
         (void)refresh_now();
     }
@@ -541,6 +594,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     void set_status(const std::string& id, PanelStatus status, std::string message) {
         std::lock_guard lock(mutex);
         row_status[id] = status;
+        panel_status = status;
         status_message = bounded_utf8(std::move(message), kMaximumTextBytes,
                                       "Status unavailable / 状态不可用");
     }
@@ -562,7 +616,9 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     }
 
     sao_status_t start_capture(const std::string& id) noexcept {
-        if (!query_binding(id).has_value()) return SAO_STATUS_ERR_NOT_FOUND;
+        const std::optional<HotkeyBinding> binding = query_binding(id);
+        if (!binding.has_value()) return SAO_STATUS_ERR_NOT_FOUND;
+        const std::string target = binding->description.empty() ? id : binding->description;
         std::string previous_id;
         { std::lock_guard lock(mutex); previous_id = capturing_binding_id; }
         stop_capture();
@@ -579,7 +635,11 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             capturing_binding_id = id;
             capture_running = true;
             row_status[id] = PanelStatus::capturing;
-            status_message = "Press a key; Esc cancels / 按键；Esc 取消";
+            panel_status = PanelStatus::capturing;
+            status_message = bounded_utf8(
+                "Recording " + target +
+                    ". Release any held non-modifier key, optionally hold Ctrl/Alt/Shift/Win, then press one key. Esc cancels; timeout is 10 seconds. / 正在录入；松开已按住的普通键，可按住修饰键后再按一个键。Esc 取消，10 秒超时。",
+                kMaximumTextBytes, "Recording / 正在录入");
         }
         try {
             auto self = shared_from_this();
@@ -745,18 +805,24 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
         sao_ui_panel_body_handle_t target_body = nullptr;
         std::unordered_map<std::string, PanelStatus> statuses;
         std::string message;
+        std::string capturing_binding_id_local;
+        PanelStatus panel_status_local = PanelStatus::ready;
         bool capture_running_local = false;
         {
             std::lock_guard lock(mutex);
             target_body = body;
             statuses = row_status;
             message = status_message;
+            capturing_binding_id_local = capturing_binding_id;
+            panel_status_local = panel_status;
             capture_running_local = capture_running;
         }
         if (target_body == nullptr)
             return SAO_STATUS_ERR_NOT_INITIALIZED;
-        const std::string spec =
-            build_panel_spec(snapshot(), statuses, message, capture_running_local);
+        const std::string spec = build_panel_spec(snapshot(), statuses, message,
+                                                        panel_status_local,
+                                                        capture_running_local,
+                                                        capturing_binding_id_local);
         {
             std::lock_guard lock(mutex);
             if (body == target_body && rendered_body == target_body && rendered_spec == spec)
@@ -783,7 +849,9 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             std::string old_id;
             { std::lock_guard lock(mutex); old_id = capturing_binding_id; }
             stop_capture();
-            if (!old_id.empty()) set_status(old_id, PanelStatus::cancelled, "Cancelled / 已取消");
+            if (!old_id.empty())
+                set_status(old_id, PanelStatus::cancelled,
+                           "Recording cancelled; no changes were made. / 已取消录入，未作更改。");
             return refresh_now();
         }
         const std::string id = payload_id(payload_json);
@@ -793,10 +861,24 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
             stop_capture();
             std::string reason;
             const RebindResult result = reset_to_default(id, &reason);
-            if (result == RebindResult::success) set_status(id, PanelStatus::success, "Reset and saved / 已重置并保存");
-            else if (result == RebindResult::conflict) set_status(id, PanelStatus::conflict, "Conflict / 冲突: " + reason);
-            else if (result == RebindResult::save_error) set_status(id, PanelStatus::save_error, "Save rollback / 保存回滚: " + reason);
-            else set_status(id, PanelStatus::system_error, "System error / 系统错误: " + reason);
+            if (result == RebindResult::success) {
+                const auto current = query_binding(id);
+                set_status(id, PanelStatus::success,
+                           "Default restored and saved / 默认值已恢复并保存: " +
+                               (current.has_value()
+                                    ? format_combo_utf8(current->vk, current->modifiers)
+                                    : std::string("Unknown / 未知")));
+            } else if (result == RebindResult::conflict) {
+                set_status(id, PanelStatus::conflict,
+                           "Default not restored because it conflicts with " + reason +
+                               ". The previous shortcut was kept. / 默认值存在冲突，原快捷键已保留。");
+            } else if (result == RebindResult::save_error) {
+                set_status(id, PanelStatus::save_error,
+                           "Default was not saved; the previous shortcut was restored. / 默认值未保存，已恢复原快捷键: " + reason);
+            } else {
+                set_status(id, PanelStatus::system_error,
+                           "Default restore needs review / 默认值恢复需要检查: " + reason);
+            }
             return refresh_now();
         }
         return SAO_STATUS_ERR_NOT_FOUND;
@@ -850,6 +932,7 @@ struct Owner::Impl final : std::enable_shared_from_this<Owner::Impl> {
     std::string rendered_spec;
     std::unordered_map<std::string, PanelStatus> row_status;
     std::string status_message;
+    PanelStatus panel_status{PanelStatus::ready};
     CaptureHooks capture_hooks;
     std::jthread capture_thread;
     std::optional<CaptureResult> pending_capture;
@@ -898,7 +981,7 @@ std::string format_combo_utf8(std::uint32_t vk, std::uint32_t modifiers) {
 }
 
 std::string build_panel_spec_for_testing() {
-    return build_panel_spec(snapshot(), {}, {}, false);
+    return build_panel_spec(snapshot(), {}, {}, PanelStatus::ready, false, {});
 }
 
 Owner::Owner(sao_ui_compositor_handle_t compositor) noexcept {
