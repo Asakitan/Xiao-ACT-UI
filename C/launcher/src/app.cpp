@@ -922,10 +922,16 @@ int App::runMessageLoop() {
         sao_status_t status = SAO_STATUS_OK;
         if (msg.message == WM_TIMER && msg.wParam == timer_id) {
             handled = 1;
+            tickUserGuideWebView();
             status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                  kUiFrameIntervalMs);
             if (status == SAO_STATUS_OK)
                 serviceFirstRunGuide();
+            const int32_t restart_result = boot_residency_take_prompt_result();
+            if (restart_result == BOOT_RESIDENCY_RESTART_ACCEPTED)
+                consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULED");
+            else if (restart_result == BOOT_RESIDENCY_ERROR)
+                consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULE_FAILED");
         } else {
             status = sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
                                            msg.message, msg.wParam, msg.lParam, &handled);
@@ -988,6 +994,8 @@ void App::serviceFirstRunGuide() noexcept {
         user_guide_open_accepted_ = true;
         user_guide_open_pending_ = false;
     }
+    if (!userGuideWebViewReady())
+        return;
     if (sao_platform_mark_user_guide_presented(
             static_cast<sao_platform_ctx*>(state_.platform_ctx)) == SAO_STATUS_OK) {
         first_run_ = false;
@@ -1024,9 +1032,11 @@ bool App::shutdown() noexcept {
     if (shutdown_called_) {
         return stopAutoUpdate();
     }
-    constexpr int kMaximumShutdownAttempts = 3;
-    for (int attempt = 0; attempt < kMaximumShutdownAttempts; ++attempt) {
-        if (stopAutoUpdate() && shutdownUserGuideWebView()) {
+    const ULONGLONG deadline = GetTickCount64() + 5000u;
+    bool quit_pending = false;
+    int quit_code = 0;
+    for (;;) {
+        if (stopAutoUpdate() && boot_residency_close_prompt() && shutdownUserGuideWebView()) {
             if (state_.platform_ctx != nullptr) {
                 (void)sao_platform_unbind_user_menu(
                     static_cast<sao_platform_ctx*>(state_.platform_ctx), &user_menu_);
@@ -1041,17 +1051,29 @@ bool App::shutdown() noexcept {
                     dual_run_driver_acquired_ = false;
                 }
                 shutdown_called_ = true;
+                if (quit_pending) PostQuitMessage(quit_code);
                 return true;
             }
         }
-        if (attempt + 1 < kMaximumShutdownAttempts) {
-            if (state_.platform_ctx != nullptr) {
-                (void)sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                                  kUiFrameIntervalMs);
+        if (GetTickCount64() >= deadline)
+            break;
+        MSG pending{};
+        for (unsigned count = 0; count < 64 && PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE); ++count) {
+            if (pending.message == WM_QUIT) {
+                quit_pending = true;
+                quit_code = static_cast<int>(pending.wParam);
+                continue;
             }
-            Sleep(2u);
+            TranslateMessage(&pending);
+            DispatchMessageW(&pending);
         }
+        if (state_.platform_ctx != nullptr) {
+            (void)sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                              kUiFrameIntervalMs);
+        }
+        (void)MsgWaitForMultipleObjectsEx(0, nullptr, 2u, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
+    if (quit_pending) PostQuitMessage(quit_code);
     return false;
 }
 

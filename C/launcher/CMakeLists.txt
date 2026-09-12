@@ -65,7 +65,7 @@ set(SAO_LAUNCHER_SOURCES
     src/provider_config.cpp
     src/launcher_lifecycle.cpp
     src/user_menu.cpp
-    # WebView2-hosted user guide (dynamic loader, ShellExecute fallback).
+    # User guide shares the central compositor's visual tree.
     src/user_guide_webview.cpp
     # Phase 12 (Python parity closure): hotkey manager.
     src/hotkey_manager.cpp
@@ -78,7 +78,7 @@ set(SAO_LAUNCHER_SOURCES
 # ---------------------------------------------------------------------------
 # WebView2 (user guide host).  Mirrors the AI Editor probe: NuGet layout
 # %USERPROFILE%/.nuget/packages/microsoft.web.webview2/<ver>/build/native.
-# When absent the guide falls back to ShellExecute (default browser).
+# A missing runtime is reported inside the compositor, without a browser fallback.
 # ---------------------------------------------------------------------------
 set(_SAO_GUIDE_WEBVIEW2_CANDIDATE_DIRS
     "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
@@ -109,7 +109,7 @@ endif()
 if (_SAO_GUIDE_WEBVIEW2_ROOT)
     message(STATUS "sao_launcher: WebView2 SDK at ${_SAO_GUIDE_WEBVIEW2_ROOT}")
 else()
-    message(STATUS "sao_launcher: WebView2 SDK not located; user guide falls back to default browser")
+    message(STATUS "sao_launcher: WebView2 SDK not located; compositor guide unavailable")
 endif()
 set(SAO_LAUNCHER_GUIDE_WEBVIEW2_ENABLED FALSE CACHE INTERNAL
     "Whether the native launcher guide host stages WebView2Loader" FORCE)

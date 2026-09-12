@@ -14,9 +14,11 @@
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/dialog.h"
+#include "sao/ui/panel.h"
 #endif
 
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -60,16 +62,6 @@ const char* menu_status_text(sao_status_t status) noexcept {
     return sao_status_str(status);
 #endif
 }
-std::wstring menu_status_suffix(sao_status_t status) {
-    if (status == SAO_STATUS_OK)
-        return {};
-    std::wstring result = L" [";
-    const char* text = menu_status_text(status);
-    while (text != nullptr && *text != '\0')
-        result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*text++)));
-    result += L" " + std::to_wstring(status) + L"]";
-    return result;
-}
 void show_menu_open_failure(HWND owner, const char* panel, sao_status_t status) noexcept {
     char buffer[256]{};
     std::snprintf(buffer, sizeof(buffer), "launcher menu open %s failed: %s (%d)\n", panel,
@@ -84,38 +76,12 @@ void show_menu_open_failure(HWND owner, const char* panel, sao_status_t status) 
         return;
     }
 #endif
-    MessageBoxA(owner, message.c_str(), "SAO Auto", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    (void)owner;
 }
 constexpr wchar_t kDocsIndexSuffix[] = L"\\docs\\html\\index.html";
 constexpr wchar_t kMenuTitle[] = L"SAO Auto";
 constexpr UINT kNotificationIconId = 1;
 constexpr UINT kNotificationMessage = WM_APP + 1;
-constexpr UINT kOpenUserGuideCommand = 1001;
-constexpr UINT kOpenSettingsCommand = 1002;
-constexpr UINT kOpenHotkeysCommand = 1003;
-constexpr UINT kExitCommand = 1004;
-constexpr wchar_t kNativeIntroFragment[] = L"#sao-native-intro-complete";
-
-class PopupMenu final {
-  public:
-    PopupMenu() noexcept : handle_(CreatePopupMenu()) {}
-
-    ~PopupMenu() noexcept {
-        if (handle_) {
-            DestroyMenu(handle_);
-        }
-    }
-
-    PopupMenu(const PopupMenu&) = delete;
-    PopupMenu& operator=(const PopupMenu&) = delete;
-
-    [[nodiscard]] HMENU get() const noexcept {
-        return handle_;
-    }
-
-  private:
-    HMENU handle_ = nullptr;
-};
 
 UINT notificationEvent(LPARAM l_param) noexcept {
     const UINT packed = LOWORD(static_cast<DWORD_PTR>(l_param));
@@ -132,25 +98,6 @@ UINT notificationEvent(LPARAM l_param) noexcept {
     }
 }
 
-std::wstring docsLaunchTarget(const wchar_t* docs_index_path, bool native_intro_completed) {
-    if (!native_intro_completed)
-        return docs_index_path;
-    std::wstring target = L"file:///";
-    for (const wchar_t* value = docs_index_path; *value != L'\0'; ++value) {
-        if (*value == L'\\')
-            target.push_back(L'/');
-        else if (*value == L'%')
-            target.append(L"%25");
-        else if (*value == L'#')
-            target.append(L"%23");
-        else if (*value == L' ')
-            target.append(L"%20");
-        else
-            target.push_back(*value);
-    }
-    target.append(kNativeIntroFragment);
-    return target;
-}
 
 bool openExistingUserDocsIndex(const wchar_t* docs_index_path, HWND owner,
                                bool native_intro_completed) noexcept {
@@ -160,18 +107,8 @@ bool openExistingUserDocsIndex(const wchar_t* docs_index_path, HWND owner,
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
         return false;
     }
-    // 优先用程序内 WebView2 打开；不可用时退回默认浏览器。
-    if (openUserGuideInWebView(docs_index_path, native_intro_completed)) {
-        return true;
-    }
-    try {
-        const std::wstring target = docsLaunchTarget(docs_index_path, native_intro_completed);
-        const HINSTANCE result =
-            ShellExecuteW(owner, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return reinterpret_cast<INT_PTR>(result) > 32;
-    } catch (...) {
-        return false;
-    }
+    (void)owner;
+    return openUserGuideInWebView(docs_index_path, native_intro_completed);
 }
 
 } // namespace
@@ -263,6 +200,14 @@ bool UserMenu::create(const wchar_t* base_dir) noexcept {
 }
 
 void UserMenu::destroy() noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (menu_panel_) {
+        auto panel = static_cast<sao_ui_panel_handle_t>(menu_panel_);
+        (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+        sao_ui_panel_destroy(panel);
+        menu_panel_ = nullptr;
+    }
+#endif
     g_settings_menu_status = SAO_STATUS_OK;
     g_hotkey_menu_status = SAO_STATUS_OK;
     hotkey_owner_ = nullptr;
@@ -304,8 +249,6 @@ void UserMenu::processCommandLine(const wchar_t* command_line, bool show_menu_wh
     if (!parseCommandLineText(command_line, command_state, should_exit, exit_code))
         return;
 
-    ShowWindow(window_, SW_SHOWNOACTIVATE);
-    SetForegroundWindow(window_);
     if (!command_state.open_path.empty()) {
         if (!openExistingUserDocsIndex(command_state.open_path.c_str(), window_, false))
             showUserGuideUnavailableError();
@@ -439,42 +382,69 @@ bool UserMenu::addNotificationIcon() noexcept {
 }
 
 void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
-    PopupMenu menu;
-    const std::wstring settings_label = L"设置" + menu_status_suffix(g_settings_menu_status);
-    const std::wstring hotkey_label = L"快捷键" + menu_status_suffix(g_hotkey_menu_status);
-    if (!menu.get() ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenSettingsCommand, settings_label.c_str()) ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenHotkeysCommand, hotkey_label.c_str()) ||
-        !AppendMenuW(menu.get(), MF_STRING, kOpenUserGuideCommand, L"关于与用户指南") ||
-        !AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr) ||
-        !AppendMenuW(menu.get(), MF_STRING, kExitCommand, L"退出")) {
-        showMenuUnavailableError();
-        return;
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto compositor = borrow_platform_compositor();
+    if (!compositor) { showMenuUnavailableError(); return; }
+    auto panel = static_cast<sao_ui_panel_handle_t>(menu_panel_);
+    if (!panel) {
+        SaoPanelConfig config{};
+        config.panel_id_utf8 = "sao.user-menu"; config.title_utf8 = "SAO Auto";
+        config.default_width = 400; config.default_height = 390;
+        config.min_width = 340; config.min_height = 340;
+        config.show_titlebar = true; config.show_close_button = true;
+        config.movable = true; config.single_instance = true;
+        if (sao_ui_panel_create(compositor, &config, &panel) != SAO_STATUS_OK) {
+            showMenuUnavailableError(); return;
+        }
+        constexpr char spec[] = R"({"version":1,"nodes":[
+          {"type":"text","text":"偏好设置与帮助","style":"title","height":32},
+          {"type":"text","text":"在当前界面管理应用，无需打开额外窗口。","style":"muted","height":40},
+          {"type":"button","id":"user.settings","label":"设置  /  外观、音效与偏好","action":"settings","height":46},
+          {"type":"button","id":"user.hotkeys","label":"快捷键  /  录入与冲突检查","action":"hotkeys","height":46},
+          {"type":"button","id":"user.guide","label":"用户指南  /  离线手册","action":"guide","height":46},
+          {"type":"text","text":"关闭此面板不会退出 SAO Auto。","style":"muted","height":32},
+          {"type":"button","id":"user.exit","label":"退出 SAO Auto","action":"exit","style":"danger","height":40}
+        ]})";
+        if (sao_ui_panel_set_action_handler(panel, &UserMenu::menuAction, this) != SAO_STATUS_OK ||
+            sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec), sizeof(spec) - 1) != SAO_STATUS_OK) {
+            (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+            sao_ui_panel_destroy(panel);
+            showMenuUnavailableError(); return;
+        }
+        menu_panel_ = panel;
     }
-    (void)SetMenuDefaultItem(menu.get(), kOpenSettingsCommand, FALSE);
-
-    POINT cursor = activation_point == nullptr ? POINT{} : *activation_point;
-    if (activation_point == nullptr && !GetCursorPos(&cursor)) {
-        showMenuUnavailableError();
-        return;
+    POINT cursor{};
+    if (activation_point) cursor = *activation_point;
+    else (void)GetCursorPos(&cursor);
+    SaoOverlayHostClientRect client{};
+    if (sao_ui_overlay_host_get_client_rect(sao_ui_compositor_host(compositor), &client) == SAO_STATUS_OK) {
+        (void)sao_ui_panel_set_position(panel,
+            std::clamp(static_cast<int>(cursor.x - client.x), 0, std::max(0, client.width - 400)),
+            std::clamp(static_cast<int>(cursor.y - client.y - 390), 0, std::max(0, client.height - 390)));
     }
+    (void)sao_ui_layer_set_z_order(sao_ui_panel_layer(panel), 2100);
+    if (sao_ui_panel_set_visible(panel, true) != SAO_STATUS_OK) showMenuUnavailableError();
+#else
+    (void)activation_point;
+    showMenuUnavailableError();
+#endif
+}
 
-    SetForegroundWindow(window_);
-    const UINT command = TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                                        cursor.x, cursor.y, 0, window_, nullptr);
-    (void)PostMessageW(window_, WM_NULL, 0, 0);
-
-    if (command == kOpenSettingsCommand) {
-        g_settings_menu_status = sao::launcher::settings::open_config_panel_status();
-        if (g_settings_menu_status != SAO_STATUS_OK)
-            show_menu_open_failure(window_, "Settings", g_settings_menu_status);
-    } else if (command == kOpenHotkeysCommand) {
-        g_hotkey_menu_status = sao::launcher::hotkey::open_config_panel_status(hotkey_owner_);
-        if (g_hotkey_menu_status != SAO_STATUS_OK)
-            show_menu_open_failure(window_, "Hotkeys", g_hotkey_menu_status);
-    } else if (command == kOpenUserGuideCommand) {
-        openUserGuide();
-    } else if (command == kExitCommand) {
+void UserMenu::menuAction(const char* action, const uint8_t*, std::size_t, void* data) noexcept {
+    auto& menu = *static_cast<UserMenu*>(data);
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (menu.menu_panel_) (void)sao_ui_panel_set_visible(static_cast<sao_ui_panel_handle_t>(menu.menu_panel_), false);
+#endif
+    if (!action) return;
+    if (std::strcmp(action, "settings") == 0) {
+        g_settings_menu_status = settings::open_config_panel_status();
+        if (g_settings_menu_status != SAO_STATUS_OK) show_menu_open_failure(menu.window_, "Settings", g_settings_menu_status);
+    } else if (std::strcmp(action, "hotkeys") == 0) {
+        g_hotkey_menu_status = hotkey::open_config_panel_status(menu.hotkey_owner_);
+        if (g_hotkey_menu_status != SAO_STATUS_OK) show_menu_open_failure(menu.window_, "Hotkeys", g_hotkey_menu_status);
+    } else if (std::strcmp(action, "guide") == 0) {
+        menu.openUserGuide();
+    } else if (std::strcmp(action, "exit") == 0) {
         PostQuitMessage(0);
     }
 }
@@ -493,8 +463,7 @@ void UserMenu::showMenuUnavailableError() const noexcept {
         return;
     }
 #endif
-    MessageBoxW(window_, L"启动器菜单暂时不可用，请稍后重试。", kMenuTitle,
-                MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    OutputDebugStringW(L"启动器菜单暂时不可用：compositor 尚未就绪。\n");
 }
 
 void UserMenu::showUserGuideUnavailableError() const noexcept {
@@ -506,8 +475,7 @@ void UserMenu::showUserGuideUnavailableError() const noexcept {
         return;
     }
 #endif
-    MessageBoxW(window_, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", kMenuTitle,
-                MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    OutputDebugStringW(L"用户指南暂时不可用。\n");
 }
 
 } // namespace sao::launcher

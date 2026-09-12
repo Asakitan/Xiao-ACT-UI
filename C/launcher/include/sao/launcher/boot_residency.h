@@ -57,12 +57,13 @@ enum BootResidencyPromptResult : int32_t {
     BOOT_RESIDENCY_NOT_REQUIRED = 0,
     BOOT_RESIDENCY_RESTART_ACCEPTED = 1,
     BOOT_RESIDENCY_RESTART_DECLINED = 2,
+    BOOT_RESIDENCY_PROMPT_PENDING = 3,
     BOOT_RESIDENCY_ERROR = -1,
 };
 
-// Full UX path: probe gates, scan the latch, show a modal prompt (owner may
-// be null), and on acceptance run the restart executor.  Safe mode skips the
-// prompt (boot-start drivers do not load there).
+// Presentation is asynchronous on the compositor owner thread.
 int32_t boot_residency_prompt_if_required(void* owner_hwnd) noexcept;
+int32_t boot_residency_take_prompt_result() noexcept;
+bool boot_residency_close_prompt() noexcept;
 
 } // namespace sao::launcher

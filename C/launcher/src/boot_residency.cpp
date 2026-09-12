@@ -5,7 +5,13 @@
 
 #include "sao/core/status.h"
 #include "sao_security/obfuscation/enc_str.h"
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/dialog.h"
+#endif
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
@@ -21,6 +27,17 @@
 
 namespace sao::launcher {
 namespace {
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+sao_ui_dialog_handle_t restart_dialog{};
+sao_ui_compositor_handle_t restart_compositor{};
+int32_t restart_result = BOOT_RESIDENCY_NOT_REQUIRED;
+std::chrono::steady_clock::time_point restart_tick{};
+void SAO_UI_CALL restart_answer(SaoUiDialogButton answer, const char*, size_t, void*) {
+    restart_result = answer == SAO_UI_DIALOG_BTN_YES
+        ? BOOT_RESIDENCY_RESTART_ACCEPTED : BOOT_RESIDENCY_RESTART_DECLINED;
+}
+#endif
 
 #if defined(_WIN32)
 
@@ -242,7 +259,9 @@ void abort_machine_restart() noexcept {
 }
 
 int32_t boot_residency_prompt_if_required(void* owner_hwnd) noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    (void)owner_hwnd;
+    if (restart_dialog != nullptr) return BOOT_RESIDENCY_PROMPT_PENDING;
     BootEnvironmentGates gates{};
     boot_environment_probe(&gates);
     // Safe mode never loads boot-start drivers; prompting is pointless there.
@@ -272,28 +291,85 @@ int32_t boot_residency_prompt_if_required(void* owner_hwnd) noexcept {
     if (offset == 0u)
         append("(none)");
 
-    wchar_t message[512]{};
-    // Same concise copy for the countdown dialog shown by the executor.
-    const wchar_t* text =
-        L"SAO 驱动启动驻留已部署，需要一次重启完成引导加载。\n"
-        L"环境: %hs\n"
-        L"请使用「重启」而不是「关机」——快速启动不会重新加载引导驱动。\n\n"
-        L"立即重启（30 秒后执行，可再次运行本程序取消）？";
-    _snwprintf_s(message, _countof(message), _TRUNCATE, text, gate_note);
-
-    const HWND owner = static_cast<HWND>(owner_hwnd);
-    const int choice = ::MessageBoxW(owner, message, L"SAO — Boot residency restart required",
-                                     MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
-    if (choice != IDYES)
-        return BOOT_RESIDENCY_RESTART_DECLINED;
-    const int status = request_machine_restart(
-        L"SAO 驱动启动驻留需要重启完成引导加载。", 30u);
-    return status == SAO_STATUS_OK ? BOOT_RESIDENCY_RESTART_ACCEPTED
-                                   : BOOT_RESIDENCY_ERROR;
+    void* raw = nullptr;
+    if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK || raw == nullptr)
+        return BOOT_RESIDENCY_ERROR;
+    restart_compositor = static_cast<sao_ui_compositor_handle_t>(raw);
+    if (sao_ui_compositor_require_owner_thread(restart_compositor) != SAO_STATUS_OK)
+        return BOOT_RESIDENCY_ERROR;
+    char message[1024]{};
+    std::snprintf(message, sizeof(message),
+        "SAO 启动驻留已部署，需要一次重启完成引导加载。\n环境：%s\n"
+        "请先保存其他应用中的工作；快速启动下的关机不会替代重启。\n是否在 30 秒后重启？", gate_note);
+    const SaoUiDialogButtonSpec buttons[] = {
+        {SAO_UI_DIALOG_BTN_CANCEL, "暂不重启", 0},
+        {SAO_UI_DIALOG_BTN_YES, "30秒后重启", 0}
+    };
+    SaoUiDialogSpec spec{};
+    spec.kind = SAO_UI_DIALOG_ASK;
+    spec.title_utf8 = "需要重启";
+    spec.message_utf8 = message;
+    spec.buttons = buttons;
+    spec.button_count = 2;
+    spec.width = 620;
+    spec.height = 340;
+    spec.theme_override = SAO_UI_THEME_COUNT;
+    spec.dismiss_on_esc = true;
+    if (sao_ui_dialog_create(restart_compositor, nullptr, &restart_dialog) != SAO_STATUS_OK)
+        return BOOT_RESIDENCY_ERROR;
+    restart_result = BOOT_RESIDENCY_PROMPT_PENDING;
+    restart_tick = std::chrono::steady_clock::now();
+    if (sao_ui_dialog_show(restart_dialog, &spec, restart_answer, nullptr) != SAO_STATUS_OK) {
+        sao_ui_dialog_destroy(restart_dialog);
+        restart_dialog = nullptr;
+        restart_compositor = nullptr;
+        restart_result = BOOT_RESIDENCY_ERROR;
+        return BOOT_RESIDENCY_ERROR;
+    }
+    return BOOT_RESIDENCY_PROMPT_PENDING;
 #else
     (void)owner_hwnd;
     return BOOT_RESIDENCY_NOT_REQUIRED;
 #endif
+}
+
+int32_t boot_residency_take_prompt_result() noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (!restart_dialog) return BOOT_RESIDENCY_NOT_REQUIRED;
+    if (sao_ui_compositor_require_owner_thread(restart_compositor) != SAO_STATUS_OK)
+        return BOOT_RESIDENCY_ERROR;
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - restart_tick).count();
+    restart_tick = now;
+    const auto status = sao_ui_dialog_tick(restart_dialog, static_cast<int32_t>(std::clamp<int64_t>(elapsed, 0, 250)));
+    if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_INITIALIZED)
+        restart_result = BOOT_RESIDENCY_ERROR;
+    if (restart_result == BOOT_RESIDENCY_PROMPT_PENDING) return BOOT_RESIDENCY_NOT_REQUIRED;
+    const int32_t result = restart_result;
+    sao_ui_dialog_destroy(restart_dialog);
+    restart_dialog = nullptr;
+    restart_compositor = nullptr;
+    restart_result = BOOT_RESIDENCY_NOT_REQUIRED;
+    if (result == BOOT_RESIDENCY_RESTART_ACCEPTED &&
+        request_machine_restart(L"SAO 启动驻留需要重启完成引导加载。", 30u) != SAO_STATUS_OK)
+        return BOOT_RESIDENCY_ERROR;
+    return result;
+#else
+    return BOOT_RESIDENCY_NOT_REQUIRED;
+#endif
+}
+
+bool boot_residency_close_prompt() noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (!restart_dialog) return true;
+    if (sao_ui_compositor_require_owner_thread(restart_compositor) != SAO_STATUS_OK) return false;
+    if (sao_ui_dialog_hide(restart_dialog) != SAO_STATUS_OK) return false;
+    sao_ui_dialog_destroy(restart_dialog);
+    restart_dialog = nullptr;
+    restart_compositor = nullptr;
+    restart_result = BOOT_RESIDENCY_NOT_REQUIRED;
+#endif
+    return true;
 }
 
 } // namespace sao::launcher

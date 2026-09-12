@@ -151,7 +151,7 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
               {"label", std::move(label)},
               {"action", std::move(action)},
               {"style", style},
-              {"height", 28}};
+              {"height", 36}};
     if (!payload.is_null())
         node["payload"] = std::move(payload);
     if (disabled)
@@ -558,7 +558,11 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
         return Json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     Json top = std::move(nodes.front());
     nodes.erase(nodes.begin());
-    top["dock"] = "top";
+    top["dock"] = "bottom";
+    top["title"] = "";
+    Json toolbar = nodes.empty() ? Json{{"type", "section"}, {"children", Json::array()}} : std::move(nodes.front());
+    if (!nodes.empty()) nodes.erase(nodes.begin());
+    toolbar["dock"] = "top";
     Json content{{"type", "section"},
                  {"id", std::move(content_id)},
                  {"container", true},
@@ -572,7 +576,7 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
     return Json{{"version", 1},
                 {"title", ""},
                 {"layout", "dock"},
-                {"nodes", Json::array({std::move(top), std::move(content)})}};
+                {"nodes", Json::array({std::move(toolbar), std::move(top), std::move(content)})}};
 }
 
 std::string_view manager_accent(ManagerState state) noexcept {
@@ -639,7 +643,7 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
 
     Json overview = Json::array();
     overview.push_back(
-        text_node("Refresh discovers the current plugin catalog; lifecycle actions run in the background. / 刷新会重新发现当前插件目录；生命周期操作在后台执行。",
+        text_node("刷新插件目录，在下方搜索和筛选；加载、启用与重载操作在后台执行。",
                   "muted", 34));
     Json toolbar = Json::array();
     toolbar.push_back(button_node("plugin-manager.refresh",

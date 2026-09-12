@@ -39,6 +39,13 @@
   applyTheme(saved === 'dark');
 
   document.addEventListener('DOMContentLoaded', function () {
+    var close = document.getElementById('native-guide-close');
+    if (close && window.chrome && window.chrome.webview) {
+      close.hidden = false;
+      close.addEventListener('click', function () {
+        window.chrome.webview.postMessage('sao-guide-close');
+      });
+    }
     var toggle = document.getElementById('theme-toggle');
     if (!toggle) {
       return;

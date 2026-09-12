@@ -333,7 +333,14 @@ json dock_document(json nodes, std::string content_id, int min_width = 640) {
         return json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     json top = std::move(nodes.front());
     nodes.erase(nodes.begin());
-    top["dock"] = "top";
+    top["dock"] = "bottom";
+    top["title"] = "";
+    top["id"] = content_id + "-status";
+    top["height"] = 64;
+    top["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    json toolbar = nodes.empty() ? json{{"type", "section"}, {"children", json::array()}} : std::move(nodes.front());
+    if (!nodes.empty()) nodes.erase(nodes.begin());
+    toolbar["dock"] = "top";
     json content{{"type", "section"},
                  {"id", std::move(content_id)},
                  {"container", true},
@@ -347,7 +354,7 @@ json dock_document(json nodes, std::string content_id, int min_width = 640) {
     return json{{"version", 1},
                 {"title", ""},
                 {"layout", "dock"},
-                {"nodes", json::array({std::move(top), std::move(content)})}};
+                {"nodes", json::array({std::move(toolbar), std::move(top), std::move(content)})}};
 }
 
 json status_strip_node(std::string label, std::string message, std::string_view accent) {
@@ -365,7 +372,7 @@ json button_node(std::string id, std::string label, std::string action, json pay
               {"label", bounded_text(std::move(label), 256U)},
               {"action", std::move(action)},
               {"style", style},
-              {"height", 28}};
+              {"height", 36}};
     if (!payload.empty())
         node["payload"] = std::move(payload);
     if (disabled)
@@ -1457,7 +1464,7 @@ class Owner::Impl final {
             catalog.push_back(text_node(!error_text_.empty() ? error_text_
                                         : connecting ? "正在连接并加载插件目录…"
                                         : !catalog_connected_
-                                            ? "插件目录未连接，请查看上方状态后重试。"
+                                            ? "插件目录未连接，请查看底部状态后重试。"
                                         : busy ? "正在加载插件目录…"
                                                : "此页暂无插件",
                                         has_error ? "bad" : catalog_connected_ ? "value" : "muted", 32));

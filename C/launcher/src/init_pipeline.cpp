@@ -18,6 +18,7 @@
 #include "sao/launcher/shutdown.h"
 #include "sao/launcher/single_instance.h"
 #include "sao/launcher/user_menu.h"
+#include "sao/launcher/user_guide_webview.h"
 #include "sao/launcher/working_dir.h"
 
 #include "launcher_lifecycle.h"
@@ -3138,6 +3139,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (ctx == nullptr || !ctx->ai_editor) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
+        sao::launcher::hideUserGuideWebView();
         // The callback reports request acceptance. The detached owner records
         // completion state and emits asynchronous failures through core logs.
         return sao::launcher::tool_launch::open_ai_editor(ctx->ai_editor.get());
@@ -3177,8 +3179,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
                                  "用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", nullptr,
                                  nullptr);
     } else {
-        MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", L"SAO Auto",
-                    MB_OK | MB_ICONERROR | MB_TASKMODAL);
+        OutputDebugStringW(L"用户指南暂时不可用：compositor 尚未就绪。\n");
     }
     return SAO_STATUS_ERR_NOT_FOUND;
 }

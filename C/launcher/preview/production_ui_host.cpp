@@ -24,9 +24,11 @@
 #include "sao/ai_editor/ai_editor_main_panel.h"
 #include "sao/ai_editor/ai_editor_settings_panel.h"
 #include "sao/launcher/user_menu.h"
+#include "sao/launcher/user_guide_webview.h"
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/server/freetier/workshop_client/workshop_client.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/file_picker.h"
 #include "sao/ui/fisheye_backdrop.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
@@ -93,6 +95,7 @@ enum class InitialSurface {
     process,
     license,
     user,
+    files,
     about
 };
 struct Options {
@@ -208,6 +211,8 @@ Options options() {
                 value.initial_surface = InitialSurface::license;
             else if (page == L"user")
                 value.initial_surface = InitialSurface::user;
+            else if (page == L"files")
+                value.initial_surface = InitialSurface::files;
             else if (page == L"about" || page == L"guide")
                 value.initial_surface = InitialSurface::about;
             else if (page == L"ai-main")
@@ -300,6 +305,7 @@ struct Host {
     sao_ai_editor_settings_panel_t ai_settings{};
     sao_ai_editor_main_panel_t ai_main{};
     sao_ai_editor_launcher_t backend{};
+    sao_ui_file_picker_handle_t file_picker{};
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::hotkey::Owner> hotkey_owner;
     std::unique_ptr<sao::launcher::plugin_manager_panel::Owner> plugin_manager;
@@ -382,6 +388,7 @@ struct Host {
         return status;
     }
     sao_status_t open_ai_main() noexcept {
+        sao::launcher::hideUserGuideWebView();
         if (ai_main == nullptr) {
             const sao_status_t status =
                 sao_ai_editor_main_panel_create(compositor, backend, &ai_main);
@@ -421,7 +428,34 @@ struct Host {
                    : SAO_STATUS_ERR_NOT_FOUND;
     }
 
+    int32_t drain_close() noexcept {
+        closing = true;
+        const ULONGLONG deadline = GetTickCount64() + 5000;
+        int32_t status = SAO_STATUS_ERR_CANCELLED;
+        do {
+            status = close();
+            if (status == SAO_STATUS_OK) return status;
+            MSG message{};
+              for (unsigned dispatched = 0; dispatched < 64 && GetTickCount64() < deadline &&
+                  PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++dispatched) {
+                if (message.message == WM_QUIT ||
+                    (message.hwnd == window && message.message == WM_TIMER)) continue;
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            (void)MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        } while (GetTickCount64() < deadline);
+        return status;
+    }
+
     int32_t close() noexcept {
+        if (file_picker != nullptr) {
+            const auto status = sao_ui_file_picker_try_destroy(file_picker);
+            if (status != SAO_STATUS_OK) return status;
+            file_picker = nullptr;
+        }
+        if (!sao::launcher::shutdownUserGuideWebView())
+            return SAO_STATUS_ERR_CANCELLED;
         if (settings_owner != nullptr && settings_owner->dirty()) {
             const sao_status_t status = settings_owner->save();
             if (status != SAO_STATUS_OK)
@@ -612,7 +646,7 @@ struct Host {
              {false, false, false}},
         };
         static constexpr SaoUiMenuItem tools[] = {
-            {"AI 工作台", "sao:chat", kOpenAiMain, true, {false, false, false}},
+            {"AI 编辑器", "sao:chat", kOpenAiMain, true, {false, false, false}},
             {"AI 设置", "sao:settings", kOpenAiSettings, true, {false, false, false}},
             {"创意工坊", "sao:workshop", kOpenWorkshop, true, {false, false, false}},
             {"进程选择", "sao:process", kOpenProcessSelector, true, {false, false, false}},
@@ -784,6 +818,13 @@ struct Host {
             require(open_license());
         if (config.initial_surface == InitialSurface::user)
             require(open_user_menu());
+        if (config.initial_surface == InitialSurface::files) {
+            require(sao_ui_file_picker_create(compositor, &file_picker));
+            const auto location = utf8(config.workspace);
+            const SaoUiFilePickerConfig picker{"选择文件", location.c_str(), "全部文件", SAO_UI_FILE_PICKER_OPEN};
+            require(sao_ui_file_picker_show(file_picker, &picker,
+                [](sao_status_t, const char*, void*) {}, nullptr));
+        }
         if (config.initial_surface == InitialSurface::about)
             require(open_about_guide());
         if (config.initial_surface == InitialSurface::root)
@@ -909,6 +950,7 @@ struct Host {
             return;
         }
         const uint32_t elapsed = static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
+        sao::launcher::tickUserGuideWebView();
         require(sao_ui_entity_shell_tick(entity, elapsed));
         sync_backdrop(elapsed);
         if (now - last_service >= 50) {
@@ -1104,16 +1146,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (FAILED(com_status)) {
         std::fprintf(stderr, "STA COM initialization failed: %ld\n", static_cast<long>(com_status));
         std::fflush(stderr);
-        if (!frame_export) {
-            const std::wstring message =
-                L"STA COM initialization failed: " + std::to_wstring(com_status);
-            MessageBoxW(nullptr, message.c_str(), L"Production UI host", MB_OK | MB_ICONERROR);
-        }
         return 1;
     }
     int code = 1;
+    bool retained_host = false;
     try {
-        Host host(options());
+        auto owner = std::make_unique<Host>(options());
+        Host& host = *owner;
         frame_export = !host.config.frame_out.empty();
         WNDCLASSW cls{};
         cls.lpfnWndProc = window_proc;
@@ -1132,33 +1171,42 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             host.initialize();
             if (frame_export) {
                 host.export_frame();
-                require(host.close());
+                require(host.drain_close());
                 code = 0;
             } else {
                 ShowWindow(window, show);
                 MSG message{};
                 BOOL received = 0;
-                while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+                for (;;) {
+                    received = GetMessageW(&message, nullptr, 0, 0);
+                    if (received == 0 && IsWindow(window)) {
+                        host.closing = true;
+                        continue;
+                    }
+                    if (received <= 0) break;
                     if (!host.key(message)) {
                         TranslateMessage(&message);
                         DispatchMessageW(&message);
                     }
                 }
+                require(host.drain_close());
                 code = received == 0 ? 0 : 1;
             }
             if (IsWindow(window))
                 DestroyWindow(window);
         } catch (...) {
-            (void)host.close();
-            DestroyWindow(window);
+            if (host.drain_close() == SAO_STATUS_OK) {
+                if (IsWindow(window)) DestroyWindow(window);
+            } else {
+                (void)owner.release();
+                retained_host = true;
+            }
             throw;
         }
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Production UI startup: %s\n", error.what());
         std::fflush(stderr);
-        if (!frame_export)
-            MessageBoxA(nullptr, error.what(), "Production UI host", MB_OK | MB_ICONERROR);
     }
-    CoUninitialize();
+    if (!retained_host) CoUninitialize();
     return code;
 }

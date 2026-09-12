@@ -229,7 +229,7 @@ json button_node(std::string id, std::string label, std::string action, json pay
               {"label", std::move(label)},
               {"action", std::move(action)},
               {"style", style},
-              {"height", 30}};
+              {"height", 36}};
     if (!payload.empty())
         node["payload"] = std::move(payload);
     if (disabled)
@@ -244,7 +244,7 @@ json input_node(std::string id, std::string value, std::string action,
                {"value", std::move(value)},
                {"action", std::move(action)},
                {"style", style},
-               {"height", 32}};
+               {"height", 40}};
 }
 
 json row_node(json children) {
@@ -271,7 +271,11 @@ json dock_document(json nodes, std::string content_id, int min_width = 520) {
         return json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     json top = std::move(nodes.front());
     nodes.erase(nodes.begin());
-    top["dock"] = "top";
+    top["dock"] = "bottom";
+    top["title"] = "";
+    top["id"] = content_id + "-status";
+    top["height"] = 64;
+    top["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
     json content{{"type", "section"},
                  {"id", std::move(content_id)},
                  {"container", true},

@@ -182,7 +182,7 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
               {"action", std::move(action)},
               {"style", style},
               {"active", active},
-              {"height", 30}};
+              {"height", 36}};
     if (!payload.empty())
         node["payload"] = std::move(payload);
     if (disabled)
@@ -505,6 +505,7 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     header["id"] = "settings-header";
     header["dock"] = "top";
     header["height"] = 142;
+    header["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
     nodes.push_back(std::move(header));
     nodes.push_back(std::move(footer));
     Json navigation = Json::array();
@@ -517,8 +518,23 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     rail["id"] = "settings-category-rail";
     rail["width"] = 190;
     rail["min_width"] = 160;
+    rail["min_height"] = 96;
     rail["weight"] = 0;
     rail["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
+    if (section_children[0].empty()) {
+        section_children[0] = Json::array({
+            text_node("从常用设置开始，或在左侧选择完整分类。", "muted", 32),
+            card_node("外观与显示", Json::array({
+                text_node("调整浅色、深色与各面板的显示偏好。", "muted", 32),
+                button_node("settings.overview.appearance", "打开外观设置", "settings.section.select", {{"section", 1}}, "ghost") })),
+            card_node("音效与提示", Json::array({
+                text_node("管理界面提示音、音量和试听；更改会即时预览。", "muted", 32),
+                button_node("settings.overview.audio", "打开音频设置", "settings.section.select", {{"section", 3}}, "ghost") })),
+            card_node("配置与草稿", Json::array({
+                text_node("切换分类不会丢弃草稿；使用底部操作应用或撤销更改。", "muted", 42),
+                button_node("settings.overview.profiles", "管理配置", "settings.section.select", {{"section", 5}}, "ghost") }))
+        });
+    }
     if (section_children[selected_section].empty())
         section_children[selected_section].push_back(
             text_node("选择分类查看对应设置；切换分类不会丢弃当前草稿。", "muted", 42));

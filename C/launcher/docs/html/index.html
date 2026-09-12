@@ -38,6 +38,7 @@
       <a href="#quick-start">快速开始</a><a href="#hotkeys">快捷键</a><a href="#cli">启动参数</a><a href="#faq">常见问题</a>
     </nav>
     <div class="header-actions">
+      <button type="button" id="native-guide-close" class="theme-switch" aria-label="关闭指南，返回 SAO Auto" title="关闭指南" hidden>×</button>
       <div class="chapter-picker"><label for="chapter-select">章节</label><select id="chapter-select" aria-label="跳转到指南章节"></select></div>
       <span class="offline-badge"><i aria-hidden="true"></i>离线可用</span>
       <button type="button" id="sound-toggle" class="theme-switch sound-toggle" aria-label="关闭音效" title="音效开 / 关" aria-pressed="true">
@@ -128,14 +129,14 @@
               <div data-detail="t1"><dt><span>左键单击 / 右键</span>托盘图标</dt><dd>弹出 SAO Auto 菜单。</dd></div>
               <div data-detail="t2"><dt><span>左键双击</span>托盘图标</dt><dd>直接打开 Settings（设置）面板。</dd></div>
               <div data-detail="t3"><dt><span>快捷键</span>打开快捷键</dt><dd>录入组合键后自动保存，以卡片上的“已保存”状态为准。</dd></div>
-              <div data-detail="t4"><dt><span>关于 / 用户指南</span>打开本指南</dt><dd>在程序内打开离线手册；组件不可用时改用默认浏览器。</dd></div>
+              <div data-detail="t4"><dt><span>关于 / 用户指南</span>打开本指南</dt><dd>离线手册显示在 SAO Auto 当前界面中，关闭后返回原来的面板。</dd></div>
               <div data-detail="t5"><dt><span>退出</span>退出</dt><dd>关闭 SAO Auto，面板、快捷键和托盘图标会一并清理。</dd></div>
             </dl>
           </div>
           <div class="menu-route" aria-label="托盘菜单项概览">
             <div data-detail="t2"><span>设置</span><strong>常规设置</strong><small>左键双击托盘图标打开</small></div>
             <div data-detail="t3"><span>快捷键</span><strong>修改快捷键</strong><small>录入成功后自动保存</small></div>
-            <div data-detail="t4"><span>关于 / 用户指南</span><strong>打开本手册</strong><small>程序内打开，浏览器备用</small></div>
+            <div data-detail="t4"><span>关于 / 用户指南</span><strong>打开本手册</strong><small>当前界面内打开与关闭</small></div>
             <div data-detail="t5"><span>退出</span><strong>退出 SAO Auto</strong><small>面板和托盘图标一并关闭</small></div>
           </div>
         </section>
@@ -185,8 +186,8 @@
             <div class="ai-copy">
               <p class="route-label">怎么打开</p><p class="route-path"><span>SAO 菜单</span><b>›</b><span>Tools</span><b>›</b><span>AI Editor (LLM)</span></p>
               <h3>SAO AI Editor 主面板</h3>
-              <p>Native AI Editor 是对话工作台，不是完整的文件编辑器或终端。主区域包含<strong>对话 / Conversation</strong>和<strong>输入消息 / Compose</strong>，辅助区域使用 <strong>Inspector</strong>、<strong>History</strong>、<strong>Logs</strong> 等标签切换；宽度不足时上下排列。点击<strong>编辑器设置</strong>配置模型服务与偏好。</p>
-              <p>对话记录按页浏览，每页最多六条已载入消息；阅读旧页时可用<strong>回到最新</strong>查看实时回复，分页不改变会话数据。</p>
+              <p>AI Editor 使用完整 HTML 编辑界面，将<strong>文件编辑</strong>、<strong>助手对话</strong>和<strong>设置</strong>放在一起。原有检查器、历史、日志和工具融入右侧<strong>工具与状态</strong>；宽度不足时上下排列。</p>
+              <p>编辑器与文件选择均显示在当前界面中。打开或另存为时可浏览目录、输入路径；覆盖已有文件需要明确确认。</p>
               <ol>
                 <li data-detail="a1">第一次打开先进入“编辑器设置”，确认模型服务和基础偏好。</li>
                 <li data-detail="a2">回到 <strong>SAO AI Editor</strong> 主面板，按当前界面选择需要的子面板。</li>
@@ -197,7 +198,7 @@
             <div class="editor-sketch" aria-hidden="true">
               <div class="sketch-title"><i></i><i></i><i></i><span>AI EDITOR</span></div>
               <div class="workbench-preview">
-                <header><strong>对话工作台</strong><span>会话状态</span></header>
+                <header><strong>文件编辑与助手</strong><span>工具与状态</span></header>
                 <div class="workbench-preview-grid">
                   <div><p class="workbench-preview-message"><strong>你</strong>帮我理解这段代码。</p><p class="workbench-preview-message"><strong>Assistant</strong>对话内容与回答显示在这里。</p><div class="workbench-preview-compose">输入消息 / Compose</div></div>
                   <nav><span>Inspector</span><span>History</span><span>Logs</span></nav>
@@ -239,7 +240,7 @@
         <!-- 07 启动参数 -->
         <section class="manual-section" id="cli" aria-labelledby="cli-title">
           <header class="section-heading"><span class="section-number">07</span><div><p>COMMAND LINE</p><h2 id="cli-title">启动参数</h2></div></header>
-          <p class="section-intro">日常使用直接双击 <kbd>SaoAuto.exe</kbd> 即可。下面列出常用公开参数；运行 <code>--help</code> 会打开内置帮助窗口，显示更多可用选项。</p>
+          <p class="section-intro">日常使用直接双击 <kbd>SaoAuto.exe</kbd> 即可。下面列出常用公开参数；在终端运行 <code>--help</code> 会输出内置帮助和更多可用选项，不打开新窗口。</p>
           <div class="hotkey-table-wrap">
             <table class="hotkey-table">
               <thead><tr><th scope="col">参数</th><th scope="col">类别</th><th scope="col">说明</th></tr></thead>
@@ -247,8 +248,8 @@
                 <tr data-detail="c1"><td><code>--safe-mode</code></td><td>常规</td><td>跳过插件和扩展组件，只启动核心界面，排查问题时先用它</td></tr>
                 <tr data-detail="c2"><td><code>--config=&lt;path&gt;</code></td><td>Provider</td><td>指定 provider 配置文件路径，不是普通 Settings 面板使用的用户设置文件</td></tr>
                 <tr data-detail="c3"><td><code>--log-level=&lt;lvl&gt;</code></td><td>常规</td><td>日志级别：trace / debug / info / warn / error / critical</td></tr>
-                <tr data-detail="c4"><td><code>--version</code> / <code>-v</code></td><td>常规</td><td>在版本窗口显示当前版本，然后退出</td></tr>
-                <tr data-detail="c5"><td><code>--help</code> / <code>-h</code></td><td>常规</td><td>打开内置帮助窗口，然后退出</td></tr>
+                <tr data-detail="c4"><td><code>--version</code> / <code>-v</code></td><td>常规</td><td>输出当前版本，然后退出</td></tr>
+                <tr data-detail="c5"><td><code>--help</code> / <code>-h</code></td><td>常规</td><td>输出内置帮助，然后退出</td></tr>
               </tbody>
             </table>
           </div>

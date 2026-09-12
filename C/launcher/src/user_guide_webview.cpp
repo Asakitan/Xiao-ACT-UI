@@ -1,822 +1,649 @@
-// SAO Auto — launcher/user_guide_webview.cpp
-//
-// In-process WebView2 host for the offline user guide.  Loads
-// WebView2Loader.dll dynamically (same pattern as the AI Editor webview
-// bridge) so a machine without the WebView2 runtime keeps working via the
-// ShellExecute fallback.  A dedicated STA thread owns the window, COM
-// apartment, WebView objects, callbacks, and message loop.  Environment
-// creation tries a writable LocalAppData profile, then Temp, before the
-// default-browser fallback.
-
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "sao/launcher/user_guide_webview.h"
+
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/ui/compositor.h"
+#include "sao/ui/panel.h"
 #include "sao/ui/sound.h"
-
-#include <combaseapi.h>
-#include <objbase.h>
-#include <process.h>
-#include <shellapi.h>
-#include <windows.h>
-
-#include <algorithm>
-#include <atomic>
-#include <cstdint>
-#include <cwchar>
-#include <memory>
-#include <mutex>
-#include <new>
-#include <string>
-#include <string_view>
-#include <utility>
-
-#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
-#include <WebView2.h>
-#include <wrl/async.h>
-#include <wrl/client.h>
+#include <nlohmann/json.hpp>
 #endif
 
+#include <windows.h>
+#include <objbase.h>
+#include <combaseapi.h>
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <source_location>
+
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+#include <WebView2.h>
+#include <wrl.h>
+
 namespace {
-
-#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
-
 using Microsoft::WRL::ComPtr;
-
-using CreateEnvironmentFn =
-    HRESULT(WINAPI*)(PCWSTR environment_options, PCWSTR user_data_folder,
-                     ICoreWebView2EnvironmentOptions* environment_options_struct,
-                     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* handler);
-
-constexpr wchar_t kWindowClassName[] = L"SAO_USER_GUIDE_WEBVIEW_WND";
-constexpr wchar_t kWindowTitle[] = L"SAO Auto \u2014 \u7528\u6237\u6307\u5357";
-constexpr UINT kShowWindowMessage = WM_APP + 0x47u;
-constexpr UINT kRefreshSoundPolicyMessage = WM_APP + 0x48u;
-constexpr DWORD kStartupWaitMs = 5000u;
-constexpr DWORD kShutdownWaitMs = 5000u;
-constexpr wchar_t kNativeIntroFragment[] = L"#sao-native-intro-complete";
-constexpr wchar_t kNativeIntroScript[] = L"window.location.hash='sao-native-intro-complete';";
-
-enum class GuideHostPhase : uint32_t {
-    idle = 0u,
-    starting = 1u,
-    running = 2u,
-    stopping = 3u,
-};
-
-std::mutex g_host_mutex;
-HANDLE g_thread_handle = nullptr;
-std::atomic<HWND> g_published_window{nullptr};
-std::atomic<DWORD> g_thread_id{0u};
-std::atomic<GuideHostPhase> g_host_phase{GuideHostPhase::idle};
-
-struct StartupContext {
-    std::atomic<long> references{2};
-    HANDLE ready_event = nullptr;
-    std::atomic<bool> started{false};
-    std::atomic<bool> cancel_requested{false};
-    bool native_intro_completed = false;
-    std::wstring url;
-    std::wstring fallback_path;
-};
+using nlohmann::json;
+using CreateEnvironmentFn = HRESULT(WINAPI*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
 
 struct GuideState {
-    HWND window = nullptr;
-    bool closing = false;
-    bool fallback_started = false;
-    bool native_intro_completed = false;
-    std::wstring fallback_path;
-    std::wstring retry_user_data_folder;
-    bool user_data_retry_started = false;
-    CreateEnvironmentFn create_environment = nullptr;
-    std::shared_ptr<void> loader_lease;
-    ComPtr<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> environment_handler;
-    ComPtr<ICoreWebView2Environment> environment;
-    ComPtr<ICoreWebView2Controller> controller;
-    ComPtr<ICoreWebView2> webview;
-    EventRegistrationToken navigation_completed_token{};
-    bool navigation_handler_registered = false;
-    EventRegistrationToken web_message_token{};
-    bool web_message_handler_registered = false;
-    std::wstring guide_url;
+    sao_ui_compositor_handle_t compositor{};
+    sao_ui_composition_slot_handle_t slot{};
+    sao_ui_panel_handle_t status_panel{};
     sao_ui_sound_group_t sound_group{};
+    HWND parent{};
+    DWORD owner{};
+    HMODULE loader{};
+    CreateEnvironmentFn create_environment{};
+    bool com_initialized{}, ready{}, presented{}, failed{}, closing{}, retry_requested{};
+    bool visible{true};
+    bool native_intro_completed{}, profile_retried{};
+    uint32_t pending_async{}, callback_depth{}, mouse_buttons{};
+    POINT mouse{};
+    uint64_t target_generation{};
+    ULONGLONG startup_deadline{};
+    std::wstring path, url, retry_profile;
+    ComPtr<ICoreWebView2Environment> environment;
+    ComPtr<ICoreWebView2CompositionController> composition;
+    ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2Controller3> controller3;
+    ComPtr<ICoreWebView2> view;
+    EventRegistrationToken navigation_starting{}, navigation_completed{}, web_message{};
+    EventRegistrationToken cursor_changed{}, process_failed{}, new_window{};
+    bool navigation_starting_set{}, navigation_completed_set{}, web_message_set{};
+    bool cursor_changed_set{}, process_failed_set{}, new_window_set{};
+    int32_t width{}, height{}, host_x{}, host_y{};
+    uint32_t dpi{96};
+
     ~GuideState() {
-        if (sound_group != 0)
-            (void)sao_ui_sound_group_destroy(sound_group);
+        view.Reset();
+        controller3.Reset();
+        if (controller) (void)controller->Close();
+        controller.Reset();
+        composition.Reset();
+        environment.Reset();
+        if (sound_group) (void)sao_ui_sound_group_destroy(sound_group);
+        if (loader) FreeLibrary(loader);
+        if (com_initialized) CoUninitialize();
     }
 };
 
-void routeGuideSound(GuideState& state, std::wstring_view message) noexcept {
-    if (message == L"sao-guide-sfx-stop") {
-        if (state.sound_group != 0)
-            (void)sao_ui_sound_group_stop(state.sound_group);
-        return;
+std::atomic<std::shared_ptr<GuideState>> g_guide;
+struct CallbackScope {
+    GuideState& state;
+    explicit CallbackScope(GuideState& value) : state(value) { ++state.callback_depth; }
+    ~CallbackScope() { --state.callback_depth; }
+};
+
+bool transient(sao_status_t status) noexcept {
+    return status == SAO_STATUS_ERR_DEVICE_LOST || status == SAO_STATUS_ERR_NOT_INITIALIZED ||
+           status == SAO_STATUS_ERR_CANCELLED;
+}
+
+std::wstring file_uri(const wchar_t* path) {
+    std::wstring result = L"file:///";
+    for (; *path; ++path) {
+        switch (*path) {
+        case L'\\': result += L'/'; break;
+        case L'%': result += L"%25"; break;
+        case L'#': result += L"%23"; break;
+        case L'?': result += L"%3F"; break;
+        case L' ': result += L"%20"; break;
+        default: result += *path; break;
+        }
     }
-    constexpr std::wstring_view prefix = L"sao-guide-sfx-play:";
-    if (!message.starts_with(prefix) || message.size() > 64)
-        return;
-    message.remove_prefix(prefix.size());
-    const size_t delimiter = message.find(L':');
-    if (delimiter == std::wstring_view::npos)
-        return;
-    const auto name = message.substr(0, delimiter);
-    const auto gain = message.substr(delimiter + 1);
-    if (gain.empty() || gain.size() > 3)
-        return;
-    int volume = 0;
-    for (wchar_t character : gain) {
-        if (character < L'0' || character > L'9')
-            return;
-        volume = volume * 10 + character - L'0';
+    return result;
+}
+
+bool same_document(const GuideState& state, const wchar_t* uri) noexcept {
+    if (!uri) return false;
+    const std::wstring_view value(uri);
+    return value.substr(0, value.find(L'#')) == state.url;
+}
+
+std::wstring profile_path(bool temporary) {
+    wchar_t base[32768]{};
+    const DWORD count = temporary ? GetTempPathW(_countof(base), base)
+        : GetEnvironmentVariableW(L"LOCALAPPDATA", base, _countof(base));
+    if (!count || count >= _countof(base)) return {};
+    std::wstring path(base, count);
+    if (path.back() != L'\\') path += L'\\';
+    path += L"SaoAuto.UserGuide.WebView2";
+    if (!CreateDirectoryW(path.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return {};
+    const std::wstring probe = path + L"\\.write-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+    HANDLE file = CreateFileW(probe.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return {};
+    CloseHandle(file);
+    return path;
+}
+
+void cancel_mouse(GuideState& state) noexcept {
+    if (!state.composition) return;
+    const uint32_t masks[]{MK_LBUTTON, MK_RBUTTON, MK_MBUTTON, MK_XBUTTON1, MK_XBUTTON2};
+    const COREWEBVIEW2_MOUSE_EVENT_KIND kinds[]{COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+        COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP,
+        COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP};
+    for (size_t i = 0; i < _countof(masks); ++i) {
+        if ((state.mouse_buttons & masks[i]) == 0) continue;
+        state.mouse_buttons &= ~masks[i];
+        (void)state.composition->SendMouseInput(kinds[i],
+            static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(state.mouse_buttons),
+            i < 3 ? 0u : (i == 3 ? XBUTTON1 : XBUTTON2), state.mouse);
     }
-    if (volume > 100)
-        return;
-    SaoUiSoundCue cue = SAO_UI_SOUND_COUNT;
-    if (name == L"click")
-        cue = SAO_UI_SOUND_CLICK;
-    else if (name == L"menu_open")
-        cue = SAO_UI_SOUND_MENU_OPEN;
-    else if (name == L"menu_close")
-        cue = SAO_UI_SOUND_MENU_CLOSE;
-    else if (name == L"submenu")
-        cue = SAO_UI_SOUND_SUBMENU;
-    else if (name == L"panel")
-        cue = SAO_UI_SOUND_PANEL;
-    else if (name == L"alert_close")
-        cue = SAO_UI_SOUND_ALERT_CLOSE;
-    if (cue == SAO_UI_SOUND_COUNT)
-        return;
-    if (state.sound_group == 0 && sao_ui_sound_group_create(&state.sound_group) != SAO_STATUS_OK)
-        return;
-    (void)sao_ui_sound_play_in_group(cue, volume, state.sound_group);
+    (void)state.composition->SendMouseInput(COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
+        COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, POINT{});
 }
 
-void releaseStartupContext(StartupContext* context) noexcept {
-    if (context == nullptr || context->references.fetch_sub(1) != 1)
-        return;
-    if (context->ready_event != nullptr)
-        CloseHandle(context->ready_event);
-    delete context;
-}
-
-void signalStartup(StartupContext* context, bool started) noexcept {
-    context->started.store(started, std::memory_order_release);
-    SetEvent(context->ready_event);
-    releaseStartupContext(context);
-}
-
-void clearPublishedWindow(HWND window) noexcept {
-    HWND expected = window;
-    (void)g_published_window.compare_exchange_strong(expected, nullptr);
-}
-
-void removeNavigationHandler(GuideState& state) noexcept {
-    if (state.webview && state.navigation_handler_registered) {
-        (void)state.webview->remove_NavigationCompleted(state.navigation_completed_token);
+void apply_visibility(GuideState& state) noexcept {
+    const bool shown = state.visible && state.ready && !state.failed && !state.closing &&
+                       state.target_generation != 0;
+    if (!shown) cancel_mouse(state);
+    sao_status_t status = SAO_STATUS_OK;
+    if (state.slot) {
+        status = sao_ui_composition_slot_set_input_policy(state.slot, shown, true);
+        if (status == SAO_STATUS_OK) status = sao_ui_composition_slot_set_visible(state.slot, shown);
     }
-    state.navigation_handler_registered = false;
-    state.navigation_completed_token = {};
+    const HRESULT visible_status = state.controller ? state.controller->put_IsVisible(shown ? TRUE : FALSE) : S_OK;
+    if (shown && status == SAO_STATUS_OK && SUCCEEDED(visible_status)) state.presented = true;
+    if (state.status_panel)
+        (void)sao_ui_panel_set_visible(state.status_panel, state.visible && !state.ready && !state.closing);
+    if (!shown && state.sound_group) (void)sao_ui_sound_group_stop(state.sound_group);
 }
 
-void removeWebMessageHandler(GuideState& state) noexcept {
-    if (state.webview && state.web_message_handler_registered) {
-        (void)state.webview->remove_WebMessageReceived(state.web_message_token);
-    }
-    state.web_message_handler_registered = false;
-    state.web_message_token = {};
+void status_body(GuideState& state, bool failure) {
+    const json document{{"version", 1}, {"title", ""}, {"nodes", json::array({
+        {{"type", "section"}, {"title", failure ? "指南加载失败" : "用户指南"},
+         {"children", json::array({
+            {{"type", "text"}, {"text", failure
+                ? "WebView2 页面尚未就绪。检查运行时及安装目录中的指南资源，然后重试。"
+                : "正在载入离线手册，页面将在当前界面中显示。"}, {"wrap", true}, {"height", 64}},
+            {{"type", "row"}, {"children", json::array({
+                {{"type", "button"}, {"id", "guide-retry"}, {"label", "重新加载"},
+                 {"action", "guide.retry"}, {"disabled", !failure}, {"style", "primary"}, {"height", 36}},
+                {{"type", "button"}, {"id", "guide-close"}, {"label", "关闭指南"},
+                 {"action", "guide.close"}, {"height", 36}}})}}})}}
+    })}};
+    const std::string text = document.dump();
+    (void)sao_ui_panel_set_spec(state.status_panel,
+        reinterpret_cast<const uint8_t*>(text.data()), text.size());
 }
 
-void postSoundPolicy(GuideState* state) noexcept {
-    if (state == nullptr || !state->webview || state->closing)
-        return;
+void fail(GuideState& state, const std::source_location location = std::source_location::current()) noexcept {
+    if (state.closing || state.failed) return;
+    state.failed = true;
+    std::fprintf(stderr, "Guide composition failed at %s:%u\n", location.function_name(), location.line());
+    state.ready = false;
+    try { status_body(state, true); } catch (...) { OutputDebugStringW(L"Guide error UI failed\n"); }
+    apply_visibility(state);
+}
+
+void post_sound_policy(GuideState& state) noexcept {
+    if (!state.view || state.closing) return;
     bool enabled = true;
     int32_t volume = 70;
     (void)sao_ui_sound_get_enabled(&enabled);
     (void)sao_ui_sound_get_volume(&volume);
-    const std::wstring policy = std::wstring(L"{\"type\":\"sao-guide-sfx-policy\",\"enabled\":") +
-                                (enabled ? L"true" : L"false") + L",\"volume\":" +
-                                std::to_wstring(std::clamp(volume, 0, 100)) + L"}";
-    (void)state->webview->PostWebMessageAsJson(policy.c_str());
+    try {
+        const std::wstring policy = std::wstring(L"{\"type\":\"sao-guide-sfx-policy\",\"enabled\":") +
+            (enabled ? L"true" : L"false") + L",\"volume\":" +
+            std::to_wstring(std::clamp(volume, 0, 100)) + L"}";
+        (void)state.view->PostWebMessageAsJson(policy.c_str());
+    } catch (...) {}
 }
 
-void closeController(GuideState& state) noexcept {
-    if (state.sound_group != 0)
-        (void)sao_ui_sound_group_stop(state.sound_group);
-    removeWebMessageHandler(state);
-    removeNavigationHandler(state);
-    state.webview.Reset();
-    if (state.controller) {
-        (void)state.controller->Close();
-        state.controller.Reset();
-    }
-    state.environment.Reset();
-    state.environment_handler.Reset();
-}
-
-void requestWindowClose(const std::shared_ptr<GuideState>& state) noexcept {
-    if (state->window != nullptr && IsWindow(state->window))
-        (void)PostMessageW(state->window, WM_CLOSE, 0, 0);
-}
-
-void fallbackAndClose(const std::shared_ptr<GuideState>& state) noexcept {
-    if (!state->closing && !state->fallback_started && !state->fallback_path.empty()) {
-        state->fallback_started = true;
-        (void)ShellExecuteW(nullptr, L"open", state->fallback_path.c_str(), nullptr, nullptr,
-                            SW_SHOWNORMAL);
-    }
-    g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-    requestWindowClose(state);
-}
-
-LRESULT CALLBACK guideWindowProc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
-    auto* state = reinterpret_cast<GuideState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-    if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(l_param);
-        state = static_cast<GuideState*>(create->lpCreateParams);
-        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
-        state->window = window;
-        g_published_window.store(window, std::memory_order_release);
-    }
-
-    switch (message) {
-    case WM_SIZE:
-        if (state != nullptr && state->controller && w_param != SIZE_MINIMIZED) {
-            RECT bounds{};
-            GetClientRect(window, &bounds);
-            (void)state->controller->put_Bounds(bounds);
-        }
-        return 0;
-    case kShowWindowMessage:
-        if (state != nullptr && w_param != 0) {
-            state->native_intro_completed = true;
-            if (state->webview)
-                (void)state->webview->ExecuteScript(kNativeIntroScript, nullptr);
-        }
-        ShowWindow(window, SW_RESTORE);
-        (void)SetForegroundWindow(window);
-        return 0;
-    case kRefreshSoundPolicyMessage:
-        postSoundPolicy(state);
-        return 0;
-    case WM_CLOSE:
-        if (state != nullptr)
-            state->closing = true;
-        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-        DestroyWindow(window);
-        return 0;
-    case WM_DESTROY:
-        if (state != nullptr) {
-            state->closing = true;
-            closeController(*state);
-            state->window = nullptr;
-        }
-        clearPublishedWindow(window);
-        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-        PostQuitMessage(0);
-        return 0;
-    default:
-        return DefWindowProcW(window, message, w_param, l_param);
-    }
-}
-
-std::wstring toFileUri(const wchar_t* path) {
-    std::wstring uri = L"file:///";
-    for (const wchar_t* c = path; *c != L'\0'; ++c) {
-        if (*c == L'\\') {
-            uri += L'/';
-        } else if (*c == L'%') {
-            uri += L"%25";
-        } else if (*c == L'#') {
-            uri += L"%23";
-        } else if (*c == L' ') {
-            uri += L"%20";
-        } else {
-            uri += *c;
-        }
-    }
-    return uri;
-}
-
-std::wstring loaderPath() {
-    wchar_t buffer[MAX_PATH + 1]{};
-    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (length == 0 || length > MAX_PATH)
-        return L"WebView2Loader.dll";
-    std::wstring path(buffer, length);
-    const size_t slash = path.find_last_of(L"\\/");
-    if (slash == std::wstring::npos)
-        return L"WebView2Loader.dll";
-    return path.substr(0, slash + 1) + L"WebView2Loader.dll";
-}
-
-std::wstring tryUserDataFolder(const wchar_t* base, DWORD length) {
-    if (base == nullptr || length == 0u || length >= 32768u)
-        return {};
-    std::wstring path(base, length);
-    if (!path.empty() && path.back() != L'\\' && path.back() != L'/')
-        path += L'\\';
-    path += L"SaoAuto.UserGuide.WebView2";
-    if (!CreateDirectoryW(path.c_str(), nullptr)) {
-        const DWORD attributes = GetFileAttributesW(path.c_str());
-        if (attributes == INVALID_FILE_ATTRIBUTES ||
-            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u) {
-            return {};
-        }
-    }
-
-    std::wstring probe_path = path;
-    probe_path += L"\\.sao-write-probe-";
-    probe_path += std::to_wstring(GetCurrentProcessId());
-    probe_path += L"-";
-    probe_path += std::to_wstring(GetCurrentThreadId());
-    probe_path += L".tmp";
-    const HANDLE probe = CreateFileW(
-        probe_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-    if (probe == INVALID_HANDLE_VALUE)
-        return {};
-    CloseHandle(probe);
-    return path;
-}
-
-struct UserDataFolderCandidates {
-    std::wstring primary;
-    std::wstring retry;
-};
-
-UserDataFolderCandidates userDataFolderPaths() {
-    UserDataFolderCandidates candidates;
-    wchar_t base[32768]{};
-    DWORD length =
-        GetEnvironmentVariableW(L"LOCALAPPDATA", base, static_cast<DWORD>(_countof(base)));
-    candidates.primary = tryUserDataFolder(base, length);
-
-    base[0] = L'\0';
-    length = GetTempPathW(static_cast<DWORD>(_countof(base)), base);
-    std::wstring temporary = tryUserDataFolder(base, length);
-    if (candidates.primary.empty()) {
-        candidates.primary = std::move(temporary);
-    } else if (!temporary.empty() && _wcsicmp(candidates.primary.c_str(), temporary.c_str()) != 0) {
-        candidates.retry = std::move(temporary);
-    }
-    return candidates;
-}
-
-bool registerWindowClass(HINSTANCE instance) {
-    WNDCLASSEXW existing{};
-    existing.cbSize = sizeof(existing);
-    if (GetClassInfoExW(instance, kWindowClassName, &existing) != 0)
-        return existing.lpfnWndProc == guideWindowProc;
-
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = guideWindowProc;
-    wc.hInstance = instance;
-    wc.lpszClassName = kWindowClassName;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    return RegisterClassExW(&wc) != 0;
-}
-
-void reapGuideThreadLocked() noexcept {
-    if (g_thread_handle == nullptr || WaitForSingleObject(g_thread_handle, 0) != WAIT_OBJECT_0) {
+void route_sound(GuideState& state, std::wstring_view message) noexcept {
+    if (message == L"sao-guide-sfx-stop") {
+        if (state.sound_group) (void)sao_ui_sound_group_stop(state.sound_group);
         return;
     }
-    CloseHandle(g_thread_handle);
-    g_thread_handle = nullptr;
-    g_published_window.store(nullptr, std::memory_order_release);
-    g_thread_id.store(0u, std::memory_order_release);
-    g_host_phase.store(GuideHostPhase::idle, std::memory_order_release);
+    constexpr std::wstring_view prefix = L"sao-guide-sfx-play:";
+    if (!state.visible || !message.starts_with(prefix) || message.size() > 64) return;
+    message.remove_prefix(prefix.size());
+    const size_t delimiter = message.find(L':');
+    if (delimiter == std::wstring_view::npos) return;
+    const auto name = message.substr(0, delimiter), gain = message.substr(delimiter + 1);
+    if (gain.empty() || gain.size() > 3) return;
+    int volume = 0;
+    for (wchar_t value : gain) {
+        if (value < L'0' || value > L'9') return;
+        volume = volume * 10 + value - L'0';
+    }
+    if (volume > 100) return;
+    SaoUiSoundCue cue = SAO_UI_SOUND_COUNT;
+    if (name == L"click") cue = SAO_UI_SOUND_CLICK;
+    else if (name == L"menu_open") cue = SAO_UI_SOUND_MENU_OPEN;
+    else if (name == L"menu_close") cue = SAO_UI_SOUND_MENU_CLOSE;
+    else if (name == L"submenu") cue = SAO_UI_SOUND_SUBMENU;
+    else if (name == L"panel") cue = SAO_UI_SOUND_PANEL;
+    else if (name == L"alert_close") cue = SAO_UI_SOUND_ALERT_CLOSE;
+    if (cue == SAO_UI_SOUND_COUNT) return;
+    if (!state.sound_group && sao_ui_sound_group_create(&state.sound_group) != SAO_STATUS_OK) return;
+    (void)sao_ui_sound_play_in_group(cue, volume, state.sound_group);
 }
 
-unsigned __stdcall guideThreadMain(void* parameter) {
-    auto* startup = static_cast<StartupContext*>(parameter);
-    bool startup_pending = true;
-    bool com_initialized = false;
-    HMODULE unleased_loader = nullptr;
-    std::shared_ptr<void> loader_lease;
-    std::shared_ptr<GuideState> state;
+void SAO_UI_CALL mouse_input(uint32_t message, uint32_t keys, float x, float y,
+                            int32_t button, int32_t wheel, void* data) {
+    auto& state = *static_cast<GuideState*>(data);
+    if (state.owner != GetCurrentThreadId() || !state.composition || state.closing) return;
+    CallbackScope scope(state);
+    if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED) { cancel_mouse(state); return; }
+    if (!state.ready || !state.visible || state.failed || !std::isfinite(x) || !std::isfinite(y) ||
+        x < -1000000 || x > 1000000 || y < -1000000 || y > 1000000) return;
+    const bool down = message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK ||
+        message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK ||
+        message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK ||
+        message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK;
+    const bool up = message == WM_LBUTTONUP || message == WM_RBUTTONUP ||
+        message == WM_MBUTTONUP || message == WM_XBUTTONUP;
+    const bool x_button = message == WM_XBUTTONDOWN || message == WM_XBUTTONUP || message == WM_XBUTTONDBLCLK;
+    if ((!down && !up && message != WM_MOUSEMOVE && message != WM_MOUSELEAVE &&
+         message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL) ||
+        (x_button && button != 3 && button != 4)) return;
+    if (down) {
+        (void)SetFocus(state.parent);
+        (void)state.controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    }
+    state.mouse = {static_cast<LONG>(std::lround(x)), static_cast<LONG>(std::lround(y))};
+    const bool leaving = message == WM_MOUSELEAVE;
+    const uint32_t mask = button == 0 ? MK_LBUTTON : button == 1 ? MK_RBUTTON :
+        button == 2 ? MK_MBUTTON : button == 3 ? MK_XBUTTON1 : button == 4 ? MK_XBUTTON2 : 0;
+    if (down) state.mouse_buttons |= mask;
+    if (up) state.mouse_buttons &= ~mask;
+    const UINT32 extra = x_button ? (button == 3 ? XBUTTON1 : XBUTTON2) :
+        (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) ? static_cast<UINT32>(wheel) : 0;
+    const HRESULT status = state.composition->SendMouseInput(
+        static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(message),
+        static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(leaving ? 0 : keys),
+        extra, leaving ? POINT{} : state.mouse);
+    if (FAILED(status)) fail(state);
+}
 
-    auto complete_startup = [&](bool started) noexcept {
-        if (!startup_pending)
-            return;
-        startup_pending = false;
-        signalStartup(startup, started);
-    };
-    auto cleanup = [&]() noexcept {
-        if (state) {
-            if (state->window != nullptr && IsWindow(state->window)) {
-                state->closing = true;
-                DestroyWindow(state->window);
-            }
-            closeController(*state);
-            state.reset();
-        }
-        loader_lease.reset();
-        if (unleased_loader != nullptr)
-            FreeLibrary(unleased_loader);
-        g_published_window.store(nullptr, std::memory_order_release);
-        g_thread_id.store(0u, std::memory_order_release);
-        g_host_phase.store(GuideHostPhase::idle, std::memory_order_release);
-        if (com_initialized)
-            CoUninitialize();
-    };
+void SAO_UI_CALL status_action(const char* action, const uint8_t*, size_t, void* data) {
+    auto& state = *static_cast<GuideState*>(data);
+    CallbackScope scope(state);
+    if (state.closing || !action) return;
+    if (std::string_view(action) == "guide.retry") state.retry_requested = true;
+    else if (std::string_view(action) == "guide.close") state.visible = false;
+    apply_visibility(state);
+}
 
-    try {
-        std::wstring url;
-        url.swap(startup->url);
-        std::wstring fallback_path;
-        fallback_path.swap(startup->fallback_path);
-        const bool native_intro_completed = startup->native_intro_completed;
+void SAO_UI_CALL status_event(int32_t event, void* data) {
+    auto& state = *static_cast<GuideState*>(data);
+    if (event == SAO_UI_PANEL_EVENT_CLOSE) {
+        CallbackScope scope(state);
+        state.visible = false;
+        apply_visibility(state);
+    }
+}
 
-        MSG queue_probe{};
-        (void)PeekMessageW(&queue_probe, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
-        g_thread_id.store(GetCurrentThreadId(), std::memory_order_release);
+sao_status_t sync_target(GuideState& state) noexcept {
+    SaoOverlayHostClientRect client{};
+    sao_status_t status = sao_ui_overlay_host_get_client_rect(sao_ui_compositor_host(state.compositor), &client);
+    if (status != SAO_STATUS_OK) return status;
+    const int width = std::max(1, client.width), height = std::max(1, client.height);
+    if (width != state.width || height != state.height) {
+        status = sao_ui_composition_slot_set_geometry(state.slot, 0, 0, width, height);
+        if (status != SAO_STATUS_OK) return status;
+        state.width = width; state.height = height;
+        if (state.controller && FAILED(state.controller->put_Bounds(RECT{0, 0, width, height}))) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    if (state.controller && (state.host_x != client.x || state.host_y != client.y))
+        (void)state.controller->NotifyParentWindowPositionChanged();
+    state.host_x = client.x; state.host_y = client.y;
+    uint32_t dpi = 96;
+    (void)sao_ui_compositor_host_dpi(state.compositor, &dpi, nullptr);
+    if (state.controller3 && state.dpi != dpi &&
+        FAILED(state.controller3->put_RasterizationScale(static_cast<double>(dpi) / 96.0))) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    state.dpi = dpi;
+    if (!state.composition) return SAO_STATUS_OK;
+    SaoUiCompositionTarget target{};
+    target.struct_size = sizeof(target);
+    status = sao_ui_composition_slot_get_target(state.slot, &target);
+    if (status != SAO_STATUS_OK) return status;
+    if (target.target_generation != state.target_generation || !target.root_visual_target) {
+        if (FAILED(state.composition->put_RootVisualTarget(static_cast<IUnknown*>(target.root_visual_target))))
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        state.target_generation = target.root_visual_target ? target.target_generation : 0;
+        status = sao_ui_composition_slot_commit(state.slot);
+        if (status != SAO_STATUS_OK && !transient(status)) return status;
+        apply_visibility(state);
+    }
+    return SAO_STATUS_OK;
+}
 
-        const HRESULT com_status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        if (FAILED(com_status)) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-        com_initialized = true;
-
-        if (startup->cancel_requested.load(std::memory_order_acquire)) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-
-        unleased_loader = LoadLibraryW(loaderPath().c_str());
-        if (unleased_loader == nullptr) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-        loader_lease = std::shared_ptr<void>(unleased_loader, [](void* module) noexcept {
-            if (module != nullptr)
-                FreeLibrary(reinterpret_cast<HMODULE>(module));
+HRESULT setup_controller(const std::shared_ptr<GuideState>& state, ICoreWebView2CompositionController* composition) {
+    state->composition = composition;
+    HRESULT hr = composition->QueryInterface(IID_PPV_ARGS(&state->controller));
+    if (FAILED(hr)) return hr;
+    hr = state->controller.As(&state->controller3);
+    if (FAILED(hr)) return hr;
+    if (FAILED(hr = state->controller3->put_ShouldDetectMonitorScaleChanges(FALSE)) ||
+        FAILED(hr = state->controller3->put_RasterizationScale(state->dpi / 96.0)) ||
+        FAILED(hr = state->controller->put_Bounds(RECT{0, 0, state->width, state->height})) ||
+        FAILED(hr = state->controller->put_IsVisible(FALSE)) ||
+        FAILED(hr = state->controller->get_CoreWebView2(&state->view))) return hr;
+    ComPtr<ICoreWebView2Settings> settings;
+    if (FAILED(hr = state->view->get_Settings(&settings))) return hr;
+    (void)settings->put_IsWebMessageEnabled(TRUE);
+    (void)settings->put_AreDefaultContextMenusEnabled(FALSE);
+    (void)settings->put_AreDefaultScriptDialogsEnabled(FALSE);
+    (void)settings->put_AreDevToolsEnabled(FALSE);
+    (void)settings->put_IsStatusBarEnabled(FALSE);
+    ComPtr<ICoreWebView2Settings3> settings3;
+    if (SUCCEEDED(settings.As(&settings3))) (void)settings3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+    auto starting = Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
+        [state](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            CallbackScope scope(*state);
+            LPWSTR uri = nullptr;
+            const bool allowed = !state->closing && SUCCEEDED(args->get_Uri(&uri)) && same_document(*state, uri);
+            CoTaskMemFree(uri);
+            if (!allowed) (void)args->put_Cancel(TRUE);
+            else { state->ready = false; apply_visibility(*state); }
+            return S_OK;
         });
-        HMODULE loader = unleased_loader;
-        unleased_loader = nullptr;
-        const auto create_environment = reinterpret_cast<CreateEnvironmentFn>(
-            GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions"));
-        if (create_environment == nullptr) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
+    if (FAILED(hr = state->view->add_NavigationStarting(starting.Get(), &state->navigation_starting))) return hr;
+    state->navigation_starting_set = true;
+    auto completed = Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
+        [state](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+            CallbackScope scope(*state);
+            if (state->closing || state->failed) return S_OK;
+            BOOL success = FALSE;
+            if (FAILED(args->get_IsSuccess(&success)) || !success) { fail(*state); return S_OK; }
+            state->ready = true;
+            apply_visibility(*state);
+#ifndef NDEBUG
+            std::fprintf(stderr, "USER_GUIDE_HTML_READY compositor=%d\n", state->presented ? 1 : 0);
+            std::fflush(stderr);
+#endif
+            post_sound_policy(*state);
+            return S_OK;
+        });
+    if (FAILED(hr = state->view->add_NavigationCompleted(completed.Get(), &state->navigation_completed))) return hr;
+    state->navigation_completed_set = true;
+    auto messages = Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+        [state](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+            CallbackScope scope(*state);
+            if (state->closing) return S_OK;
+            LPWSTR source = nullptr, message = nullptr;
+            const bool allowed = SUCCEEDED(args->get_Source(&source)) && same_document(*state, source);
+            const HRESULT result = args->TryGetWebMessageAsString(&message);
+            if (allowed && SUCCEEDED(result) && message) {
+                const std::wstring_view value(message);
+                if (value == L"sao-guide-close") { state->visible = false; apply_visibility(*state); }
+                else if (value == L"sao-guide-sfx-ready" || value == L"sao-guide-sfx-refresh") post_sound_policy(*state);
+                else route_sound(*state, value);
+            }
+            CoTaskMemFree(source); CoTaskMemFree(message);
+            return S_OK;
+        });
+    if (FAILED(hr = state->view->add_WebMessageReceived(messages.Get(), &state->web_message))) return hr;
+    state->web_message_set = true;
+    auto cursor = Microsoft::WRL::Callback<ICoreWebView2CursorChangedEventHandler>(
+        [state](ICoreWebView2CompositionController* sender, IUnknown*) -> HRESULT {
+            CallbackScope scope(*state);
+            HCURSOR value = nullptr;
+            if (state->visible && !state->closing && SUCCEEDED(sender->get_Cursor(&value))) SetCursor(value);
+            return S_OK;
+        });
+    if (FAILED(hr = composition->add_CursorChanged(cursor.Get(), &state->cursor_changed))) return hr;
+    state->cursor_changed_set = true;
+    auto crashed = Microsoft::WRL::Callback<ICoreWebView2ProcessFailedEventHandler>(
+        [state](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs*) -> HRESULT {
+            CallbackScope scope(*state); fail(*state); return S_OK;
+        });
+    if (FAILED(hr = state->view->add_ProcessFailed(crashed.Get(), &state->process_failed))) return hr;
+    state->process_failed_set = true;
+    auto popup = Microsoft::WRL::Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT { return args->put_Handled(TRUE); });
+    if (FAILED(hr = state->view->add_NewWindowRequested(popup.Get(), &state->new_window))) return hr;
+    state->new_window_set = true;
+    const sao_status_t target_status = sync_target(*state);
+    if (target_status != SAO_STATUS_OK && !transient(target_status)) return E_FAIL;
+    const std::wstring url = state->url + (state->native_intro_completed ? L"#sao-native-intro-complete" : L"");
+    return state->view->Navigate(url.c_str());
+}
 
-        const HINSTANCE instance = GetModuleHandleW(nullptr);
-        if (!registerWindowClass(instance)) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-
-        state = std::make_shared<GuideState>();
-        state->fallback_path = std::move(fallback_path);
-        state->create_environment = create_environment;
-        state->loader_lease = loader_lease;
-        state->guide_url = url;
-        state->native_intro_completed = native_intro_completed;
-
-        constexpr int width = 960;
-        constexpr int height = 780;
-        const int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
-        const int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-        HWND window = CreateWindowExW(0, kWindowClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, x, y,
-                                      width, height, nullptr, nullptr, instance, state.get());
-        if (window == nullptr) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-        ShowWindow(window, SW_SHOWNORMAL);
-        UpdateWindow(window);
-
-        UserDataFolderCandidates user_data_folders = userDataFolderPaths();
-        if (user_data_folders.primary.empty() ||
-            startup->cancel_requested.load(std::memory_order_acquire)) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-        state->retry_user_data_folder = std::move(user_data_folders.retry);
-
-        state->environment_handler = Microsoft::WRL::Callback<
-            ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [state](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
-                if (state->closing || state->window == nullptr)
-                    return S_OK;
-                if (FAILED(result) || environment == nullptr) {
-                    if (!state->user_data_retry_started && !state->retry_user_data_folder.empty()) {
-                        state->user_data_retry_started = true;
-                        const HRESULT retry_status = state->create_environment(
-                            nullptr, state->retry_user_data_folder.c_str(), nullptr,
-                            state->environment_handler.Get());
-                        if (SUCCEEDED(retry_status))
-                            return S_OK;
+HRESULT start_environment(const std::shared_ptr<GuideState>& state, const std::wstring& profile) {
+    auto handler = Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+        [state](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
+            CallbackScope scope(*state);
+            --state->pending_async;
+            if (state->closing || state->failed) return S_OK;
+            try {
+                if (FAILED(result) || !environment) {
+                    if (!state->profile_retried && !state->retry_profile.empty()) {
+                        state->profile_retried = true;
+                        if (SUCCEEDED(start_environment(state, state->retry_profile))) return S_OK;
                     }
-                    fallbackAndClose(state);
-                    return S_OK;
+                    fail(*state); return S_OK;
                 }
-
-                state->environment_handler.Reset();
                 state->environment = environment;
-                auto controller_handler = Microsoft::WRL::Callback<
-                    ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                    [state](HRESULT controller_result,
-                            ICoreWebView2Controller* controller) -> HRESULT {
-                        if (state->closing || state->window == nullptr)
-                            return S_OK;
-                        if (FAILED(controller_result) || controller == nullptr) {
-                            fallbackAndClose(state);
-                            return S_OK;
-                        }
-
-                        state->controller = controller;
-                        RECT bounds{};
-                        GetClientRect(state->window, &bounds);
-                        (void)controller->put_Bounds(bounds);
-
-                        ComPtr<ICoreWebView2> webview;
-                        if (FAILED(controller->get_CoreWebView2(&webview)) || !webview) {
-                            fallbackAndClose(state);
+                ComPtr<ICoreWebView2Environment3> environment3;
+                if (FAILED(environment->QueryInterface(IID_PPV_ARGS(&environment3)))) { fail(*state); return S_OK; }
+                auto controller_handler = Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                    [state](HRESULT controller_result, ICoreWebView2CompositionController* controller) -> HRESULT {
+                        CallbackScope controller_scope(*state);
+                        --state->pending_async;
+                        if (state->closing || state->failed) {
+                            ComPtr<ICoreWebView2Controller> base;
+                            if (controller && SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&base)))) (void)base->Close();
                             return S_OK;
                         }
-                        state->webview = webview;
-                        ComPtr<ICoreWebView2Settings> web_settings;
-                        if (SUCCEEDED(webview->get_Settings(&web_settings)) && web_settings)
-                            (void)web_settings->put_IsWebMessageEnabled(TRUE);
-
-                        auto web_message_handler =
-                            Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                [state](ICoreWebView2*,
-                                        ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                                    if (state->closing || args == nullptr)
-                                        return S_OK;
-                                    LPWSTR source = nullptr;
-                                    LPWSTR message = nullptr;
-                                    const HRESULT source_status = args->get_Source(&source);
-                                    const HRESULT message_status =
-                                        args->TryGetWebMessageAsString(&message);
-                                    const std::wstring_view source_view = source ? source : L"";
-                                    const bool local_guide =
-                                        SUCCEEDED(source_status) && source != nullptr &&
-                                        source_view.substr(0, source_view.find(L'#')) ==
-                                            state->guide_url;
-                                    const bool requested =
-                                        SUCCEEDED(message_status) && message != nullptr &&
-                                        (std::wcscmp(message, L"sao-guide-sfx-ready") == 0 ||
-                                         std::wcscmp(message, L"sao-guide-sfx-refresh") == 0);
-                                    if (local_guide && SUCCEEDED(message_status) &&
-                                        message != nullptr)
-                                        routeGuideSound(*state, message);
-                                    if (source != nullptr)
-                                        CoTaskMemFree(source);
-                                    if (message != nullptr)
-                                        CoTaskMemFree(message);
-                                    if (local_guide && requested)
-                                        postSoundPolicy(state.get());
-                                    return S_OK;
-                                });
-                        EventRegistrationToken web_message_token{};
-                        if (!web_message_handler ||
-                            FAILED(webview->add_WebMessageReceived(web_message_handler.Get(),
-                                                                   &web_message_token))) {
-                            fallbackAndClose(state);
-                            return S_OK;
-                        }
-                        state->web_message_token = web_message_token;
-                        state->web_message_handler_registered = true;
-
-                        auto navigation_handler =
-                            Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                [state](
-                                    ICoreWebView2*,
-                                    ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
-                                    if (state->closing || state->window == nullptr)
-                                        return S_OK;
-                                    BOOL succeeded = FALSE;
-                                    const HRESULT status = args == nullptr
-                                                               ? E_POINTER
-                                                               : args->get_IsSuccess(&succeeded);
-                                    removeNavigationHandler(*state);
-                                    if (FAILED(status) || succeeded == FALSE) {
-                                        fallbackAndClose(state);
-                                    } else {
-                                        g_host_phase.store(GuideHostPhase::running,
-                                                           std::memory_order_release);
-                                        postSoundPolicy(state.get());
-                                    }
-                                    return S_OK;
-                                });
-                        EventRegistrationToken token{};
-                        if (!navigation_handler || FAILED(webview->add_NavigationCompleted(
-                                                       navigation_handler.Get(), &token))) {
-                            fallbackAndClose(state);
-                            return S_OK;
-                        }
-                        state->navigation_completed_token = token;
-                        state->navigation_handler_registered = true;
-                        std::wstring navigation_url = state->guide_url;
-                        if (state->native_intro_completed)
-                            navigation_url.append(kNativeIntroFragment);
-                        if (FAILED(webview->Navigate(navigation_url.c_str())))
-                            fallbackAndClose(state);
+                        try {
+                            if (FAILED(controller_result) || !controller || FAILED(setup_controller(state, controller))) fail(*state);
+                        } catch (...) { fail(*state); }
                         return S_OK;
                     });
-                if (!controller_handler || FAILED(environment->CreateCoreWebView2Controller(
-                                               state->window, controller_handler.Get()))) {
-                    fallbackAndClose(state);
+                if (!controller_handler) { fail(*state); return S_OK; }
+                ++state->pending_async;
+                if (FAILED(environment3->CreateCoreWebView2CompositionController(state->parent, controller_handler.Get()))) {
+                    --state->pending_async; fail(*state);
                 }
-                return S_OK;
-            });
-        HRESULT environment_status =
-            state->environment_handler
-                ? create_environment(nullptr, user_data_folders.primary.c_str(), nullptr,
-                                     state->environment_handler.Get())
-                : E_OUTOFMEMORY;
-        if (FAILED(environment_status) && !state->retry_user_data_folder.empty()) {
-            state->user_data_retry_started = true;
-            environment_status = create_environment(nullptr, state->retry_user_data_folder.c_str(),
-                                                    nullptr, state->environment_handler.Get());
-        }
-        if (FAILED(environment_status) ||
-            startup->cancel_requested.load(std::memory_order_acquire)) {
-            complete_startup(false);
-            cleanup();
-            return 0u;
-        }
-
-        complete_startup(true);
-
-        MSG message{};
-        while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    } catch (...) {
-        if (startup_pending) {
-            complete_startup(false);
-        } else if (state && !state->closing) {
-            fallbackAndClose(state);
-        }
-    }
-
-    cleanup();
-    return 0u;
+            } catch (...) { fail(*state); }
+            return S_OK;
+        });
+    if (!handler) return E_OUTOFMEMORY;
+    ++state->pending_async;
+    const HRESULT status = state->create_environment(nullptr, profile.c_str(), nullptr, handler.Get());
+    if (FAILED(status)) --state->pending_async;
+    return status;
 }
 
-#endif // SAO_LAUNCHER_HAS_WEBVIEW2
-
+bool destroy_state(const std::shared_ptr<GuideState>& state) noexcept {
+    if (state->owner != GetCurrentThreadId() || state->callback_depth) return false;
+    state->closing = true;
+    apply_visibility(*state);
+    if (state->pending_async) return false;
+    if (state->view) {
+        if (state->navigation_starting_set) (void)state->view->remove_NavigationStarting(state->navigation_starting);
+        if (state->navigation_completed_set) (void)state->view->remove_NavigationCompleted(state->navigation_completed);
+        if (state->web_message_set) (void)state->view->remove_WebMessageReceived(state->web_message);
+        if (state->process_failed_set) (void)state->view->remove_ProcessFailed(state->process_failed);
+        if (state->new_window_set) (void)state->view->remove_NewWindowRequested(state->new_window);
+        state->navigation_starting_set = state->navigation_completed_set = state->web_message_set = false;
+        state->process_failed_set = state->new_window_set = false;
+    }
+    if (state->composition) {
+        if (state->cursor_changed_set) (void)state->composition->remove_CursorChanged(state->cursor_changed);
+        state->cursor_changed_set = false;
+        (void)state->composition->put_RootVisualTarget(nullptr);
+        if (state->slot) (void)sao_ui_composition_slot_commit(state->slot);
+    }
+    if (state->controller) (void)state->controller->Close();
+    state->view.Reset(); state->controller3.Reset(); state->controller.Reset();
+    state->composition.Reset(); state->environment.Reset();
+    if (state->slot) {
+        if (sao_ui_composition_slot_set_mouse_handler(state->slot, nullptr, nullptr) != SAO_STATUS_OK ||
+            sao_ui_composition_slot_try_destroy(state->slot) != SAO_STATUS_OK) return false;
+        state->slot = nullptr;
+    }
+    if (state->status_panel) {
+        (void)sao_ui_panel_set_action_handler(state->status_panel, nullptr, nullptr);
+        (void)sao_ui_panel_set_event_handler(state->status_panel, nullptr, nullptr);
+        sao_ui_panel_destroy(state->status_panel);
+        state->status_panel = nullptr;
+    }
+    return true;
+}
 } // namespace
+#endif
 
 namespace sao::launcher {
+bool openUserGuideInWebView(const wchar_t* path) noexcept { return openUserGuideInWebView(path, false); }
 
-void refreshUserGuideSoundPolicy() noexcept {
-#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
-    const HWND window = g_published_window.load(std::memory_order_acquire);
-    if (window != nullptr && IsWindow(window))
-        (void)PostMessageW(window, kRefreshSoundPolicyMessage, 0, 0);
-#endif
-}
-
-bool openUserGuideInWebView(const wchar_t* docs_index_path) noexcept {
-    return openUserGuideInWebView(docs_index_path, false);
-}
-
-bool openUserGuideInWebView(const wchar_t* docs_index_path, bool native_intro_completed) noexcept {
-#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
-    if (docs_index_path == nullptr || docs_index_path[0] == L'\0')
-        return false;
-
-    StartupContext* startup = nullptr;
-    bool thread_started = false;
+bool openUserGuideInWebView(const wchar_t* path, bool native_intro_completed) noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (!path || !*path) return false;
     try {
-        std::unique_lock<std::mutex> lock(g_host_mutex);
-        reapGuideThreadLocked();
-        const GuideHostPhase existing_phase = g_host_phase.load(std::memory_order_acquire);
-        if (g_thread_handle != nullptr && existing_phase != GuideHostPhase::starting &&
-            existing_phase != GuideHostPhase::running) {
-            if (WaitForSingleObject(g_thread_handle, kShutdownWaitMs) != WAIT_OBJECT_0) {
-                return false;
-            }
-            reapGuideThreadLocked();
-        }
-        if (g_thread_handle != nullptr) {
-            const HWND window = g_published_window.load(std::memory_order_acquire);
-            lock.unlock();
-            return window != nullptr &&
-                   PostMessageW(window, kShowWindowMessage,
-                                native_intro_completed ? 1u : 0u, 0) != FALSE;
-        }
-
-        startup = new (std::nothrow) StartupContext();
-        if (startup == nullptr)
-            return false;
-        startup->ready_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (startup->ready_event == nullptr) {
-            releaseStartupContext(startup);
-            releaseStartupContext(startup);
-            startup = nullptr;
-            return false;
-        }
-        startup->native_intro_completed = native_intro_completed;
-        startup->url = toFileUri(docs_index_path);
-        startup->fallback_path = native_intro_completed ? startup->url + kNativeIntroFragment
-                                                        : std::wstring(docs_index_path);
-
-        unsigned thread_id = 0u;
-        g_host_phase.store(GuideHostPhase::starting, std::memory_order_release);
-        const uintptr_t thread =
-            _beginthreadex(nullptr, 0u, guideThreadMain, startup, 0u, &thread_id);
-        if (thread == 0u) {
-            g_host_phase.store(GuideHostPhase::idle, std::memory_order_release);
-            releaseStartupContext(startup);
-            releaseStartupContext(startup);
-            startup = nullptr;
-            return false;
-        }
-        thread_started = true;
-        g_thread_handle = reinterpret_cast<HANDLE>(thread);
-        const HANDLE ready_event = startup->ready_event;
-
-        const DWORD wait_result = WaitForSingleObject(ready_event, kStartupWaitMs);
-        if (wait_result != WAIT_OBJECT_0) {
-            startup->cancel_requested.store(true, std::memory_order_release);
-            g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-            const HWND window = g_published_window.load(std::memory_order_acquire);
-            const DWORD host_thread_id = g_thread_id.load(std::memory_order_acquire);
-            if (window != nullptr) {
-                (void)PostMessageW(window, WM_CLOSE, 0, 0);
-            } else if (host_thread_id != 0u) {
-                (void)PostThreadMessageW(host_thread_id, WM_QUIT, 0, 0);
-            }
-            releaseStartupContext(startup);
-            startup = nullptr;
-            return false;
-        }
-
-        const bool started = startup->started.load(std::memory_order_acquire);
-        releaseStartupContext(startup);
-        startup = nullptr;
-        return started;
-    } catch (...) {
-        if (startup != nullptr) {
-            if (thread_started) {
-                startup->cancel_requested.store(true, std::memory_order_release);
-                g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-                const HWND window = g_published_window.load(std::memory_order_acquire);
-                const DWORD host_thread_id = g_thread_id.load(std::memory_order_acquire);
-                if (window != nullptr) {
-                    (void)PostMessageW(window, WM_CLOSE, 0, 0);
-                } else if (host_thread_id != 0u) {
-                    (void)PostThreadMessageW(host_thread_id, WM_QUIT, 0, 0);
+        void* raw = nullptr;
+        if (sao_sdk_platform_get_ui_compositor(&raw) != SAO_SDK_OK || !raw) return false;
+        const auto compositor = static_cast<sao_ui_compositor_handle_t>(raw);
+        if (sao_ui_compositor_require_owner_thread(compositor) != SAO_STATUS_OK) return false;
+        auto state = g_guide.load();
+        if (state) {
+            if (state->owner != GetCurrentThreadId() || state->compositor != compositor) return false;
+            if (!state->failed && !state->closing && state->path == path) {
+                state->visible = true;
+                if (native_intro_completed) {
+                    state->native_intro_completed = true;
+                    if (state->view) (void)state->view->ExecuteScript(L"window.location.hash='sao-native-intro-complete';", nullptr);
                 }
-                releaseStartupContext(startup);
-            } else {
-                releaseStartupContext(startup);
-                releaseStartupContext(startup);
+                apply_visibility(*state);
+                return true;
             }
+            if (!destroy_state(state)) return false;
+            g_guide.store(nullptr);
+            state.reset();
         }
+        state = std::make_shared<GuideState>();
+        state->compositor = compositor;
+        state->parent = static_cast<HWND>(sao_ui_compositor_host_hwnd(compositor));
+        state->owner = GetCurrentThreadId();
+        state->path = path; state->url = file_uri(path);
+        state->native_intro_completed = native_intro_completed;
+        state->startup_deadline = GetTickCount64() + 15000;
+        if (!state->parent) return false;
+        SaoOverlayHostClientRect client{};
+        if (sao_ui_overlay_host_get_client_rect(sao_ui_compositor_host(compositor), &client) != SAO_STATUS_OK) return false;
+        SaoPanelConfig panel{};
+        panel.panel_id_utf8 = "sao.user-guide.status"; panel.title_utf8 = "用户指南";
+        panel.default_width = std::min(620, std::max(400, client.width)); panel.default_height = 260;
+        panel.default_x = std::max(0, (client.width - panel.default_width) / 2);
+        panel.default_y = std::max(0, (client.height - panel.default_height) / 2);
+        panel.min_width = 360; panel.min_height = 240;
+        panel.movable = true; panel.resizable = true; panel.show_titlebar = true;
+        panel.show_close_button = true; panel.single_instance = true;
+        if (sao_ui_panel_create(compositor, &panel, &state->status_panel) != SAO_STATUS_OK) return false;
+        g_guide.store(state);
+        (void)sao_ui_panel_set_action_handler(state->status_panel, status_action, state.get());
+        (void)sao_ui_panel_set_event_handler(state->status_panel, status_event, state.get());
+        status_body(*state, false);
+        apply_visibility(*state);
+        SaoUiCompositionSlotConfig slot{};
+        slot.struct_size = sizeof(slot); slot.name_utf8 = "sao.user-guide";
+        slot.width = std::max(1, client.width); slot.height = std::max(1, client.height);
+        slot.z_order = 2000; slot.band = SAO_UI_COMPOSITION_BAND_BELOW_NATIVE;
+        slot.opacity = 1.0F; slot.focusable = true;
+        if (sao_ui_composition_slot_create(compositor, &slot, &state->slot) != SAO_STATUS_OK ||
+            sao_ui_composition_slot_set_mouse_handler(state->slot, mouse_input, state.get()) != SAO_STATUS_OK) {
+            fail(*state); return true;
+        }
+        if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) { fail(*state); return true; }
+        state->com_initialized = true;
+        wchar_t module[32768]{};
+        const DWORD length = GetModuleFileNameW(nullptr, module, _countof(module));
+        if (!length || length >= _countof(module)) { fail(*state); return true; }
+        std::wstring loader_path(module, length);
+        loader_path.erase(loader_path.find_last_of(L"\\/") + 1);
+        loader_path += L"WebView2Loader.dll";
+        state->loader = LoadLibraryW(loader_path.c_str());
+        if (!state->loader) { fail(*state); return true; }
+        state->create_environment = reinterpret_cast<CreateEnvironmentFn>(GetProcAddress(state->loader, "CreateCoreWebView2EnvironmentWithOptions"));
+        if (!state->create_environment) { fail(*state); return true; }
+        std::wstring profile = profile_path(false);
+        state->retry_profile = profile_path(true);
+        if (profile.empty()) { profile.swap(state->retry_profile); state->profile_retried = true; }
+        if (profile.empty()) { fail(*state); return true; }
+        const sao_status_t target_status = sync_target(*state);
+        if (target_status != SAO_STATUS_OK && !transient(target_status)) { fail(*state); return true; }
+        HRESULT started = start_environment(state, profile);
+        if (FAILED(started) && !state->profile_retried && !state->retry_profile.empty()) {
+            state->profile_retried = true;
+            started = start_environment(state, state->retry_profile);
+        }
+        if (FAILED(started)) fail(*state);
+        return true;
+    } catch (...) {
+        if (auto state = g_guide.load(); state && state->owner == GetCurrentThreadId()) fail(*state);
         return false;
     }
 #else
-    (void)docs_index_path;
-    (void)native_intro_completed;
+    (void)path; (void)native_intro_completed;
+    return false;
+#endif
+}
+
+void tickUserGuideWebView() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    auto state = g_guide.load();
+    if (!state || state->owner != GetCurrentThreadId()) return;
+    if (state->retry_requested) {
+        try {
+            const auto path = state->path;
+            if (openUserGuideInWebView(path.c_str(), state->native_intro_completed)) state->retry_requested = false;
+        } catch (...) { fail(*state); }
+        return;
+    }
+    if (state->closing || state->failed) return;
+    if (!state->ready && GetTickCount64() >= state->startup_deadline) { fail(*state); return; }
+    const sao_status_t status = sync_target(*state);
+    if (status != SAO_STATUS_OK && !transient(status)) fail(*state);
+#endif
+}
+
+void hideUserGuideWebView() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto state = g_guide.load();
+    if (state && state->owner == GetCurrentThreadId()) {
+        state->visible = false;
+        apply_visibility(*state);
+    }
+#endif
+}
+
+bool userGuideWebViewReady() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto state = g_guide.load();
+    return state && state->owner == GetCurrentThreadId() && state->presented;
+#else
     return false;
 #endif
 }
 
 bool shutdownUserGuideWebView() noexcept {
-#if defined(SAO_LAUNCHER_HAS_WEBVIEW2)
-    try {
-        std::unique_lock<std::mutex> lock(g_host_mutex);
-        reapGuideThreadLocked();
-        if (g_thread_handle == nullptr)
-            return true;
-
-        const HANDLE thread = g_thread_handle;
-        const HWND window = g_published_window.load(std::memory_order_acquire);
-        const DWORD thread_id = g_thread_id.load(std::memory_order_acquire);
-        g_host_phase.store(GuideHostPhase::stopping, std::memory_order_release);
-        bool posted = false;
-        if (window != nullptr)
-            posted = PostMessageW(window, WM_CLOSE, 0, 0) != FALSE;
-        if (!posted && thread_id != 0u)
-            (void)PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
-
-        if (WaitForSingleObject(thread, kShutdownWaitMs) != WAIT_OBJECT_0)
-            return false;
-
-        reapGuideThreadLocked();
-        return g_thread_handle == nullptr;
-    } catch (...) {
-        return false;
-    }
-#else
-    return true;
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto state = g_guide.load();
+    if (!state) return true;
+    if (!destroy_state(state)) return false;
+    g_guide.store(nullptr);
 #endif
+    return true;
 }
 
+void refreshUserGuideSoundPolicy() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto state = g_guide.load();
+    if (state && state->owner == GetCurrentThreadId()) post_sound_policy(*state);
+#endif
+}
 } // namespace sao::launcher

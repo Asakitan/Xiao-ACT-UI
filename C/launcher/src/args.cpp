@@ -8,6 +8,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <cwchar>
+#include <cstring>
+#include <string>
 
 // RT I/O command-line contract. The long spellings remain accepted for
 // compatibility with internal tools and documents; neutral aliases are the
@@ -88,6 +90,33 @@ const wchar_t* normalizedLogLevel(const wchar_t* value) {
         if (wcsEqualsCI(value, level)) return level;
     }
     return nullptr;
+}
+
+void write_cli_text(const char* text) noexcept {
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE) {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+            OutputDebugStringA(text);
+            return;
+        }
+        output = GetStdHandle(STD_OUTPUT_HANDLE);
+    }
+    DWORD mode = 0;
+    DWORD written = 0;
+    if (GetConsoleMode(output, &mode)) {
+        try {
+            const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
+            if (size <= 0) return;
+            std::wstring wide(static_cast<size_t>(size), L'\0');
+            if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide.data(), size) == size)
+                (void)WriteConsoleW(output, wide.data(), static_cast<DWORD>(size - 1), &written, nullptr);
+        } catch (...) { OutputDebugStringA(text); }
+    } else {
+        const size_t size = std::strlen(text);
+        size_t offset = 0;
+        while (offset < size && WriteFile(output, text + offset, static_cast<DWORD>(size - offset), &written, nullptr) && written != 0)
+            offset += written;
+    }
 }
 
 } // namespace
@@ -242,40 +271,34 @@ bool parseCommandLineFromArgv(int argc,
 }
 
 void printHelp() noexcept {
-    // TODO(console-output): Attach a console via AttachConsole(ATTACH_PARENT_PROCESS)
-    // and write to stdout when available; fall back to MessageBoxW.  For now
-    // the stub uses MessageBoxW so the launcher stays purely GUI.
-    static const wchar_t* help =
-        L"SaoAuto.exe [options]\r\n\r\n"
-        L"  --safe-mode           Skip plugins and privileged RT I/O; load core UI only\r\n"
-        L"  --no-license          Bypass license verification (Debug only)\r\n"
+    static const char* help =
+        "SaoAuto.exe [options]\r\n\r\n"
+        "  --safe-mode           Skip plugins and privileged RT I/O; load core UI only\r\n"
+        "  --no-license          Bypass license verification (Debug only)\r\n"
     #if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
-        L"  --smoke               Enable console-attached full-stack smoke mode;\r\n"
-        L"                        skip GUI message loop, print READY on stdout\r\n"
-        L"  --exit-after-init     With --smoke, return after platform init is ready\r\n"
+        "  --smoke               Enable console-attached full-stack smoke mode;\r\n"
+        "                        skip GUI message loop, print READY on stdout\r\n"
+        "  --exit-after-init     With --smoke, return after platform init is ready\r\n"
     #endif
-        L"  --s1                  Runtime option S1\r\n"
-        L"  --s2                  Runtime option S2\r\n"
-        L"  --s3                  Runtime option S3\r\n"
-        L"  --s4                  Runtime option S4\r\n"
-        L"  --s5                  Runtime option S5\r\n"
-        L"  --s6                  Runtime option S6\r\n"
-        L"  --s7                  Runtime option S7\r\n"
-        L"  --config=<path>       Override config file location\r\n"
-        L"  --log-level=<lvl>     trace|debug|info|warn|error|critical\r\n"
-        L"  --version, -v         Print version and exit\r\n"
-        L"  --help, -h            Print this help and exit\r\n";
-    MessageBoxW(nullptr, help, L"SaoAuto — Help", MB_OK | MB_ICONINFORMATION);
+        "  --s1                  Runtime option S1\r\n"
+        "  --s2                  Runtime option S2\r\n"
+        "  --s3                  Runtime option S3\r\n"
+        "  --s4                  Runtime option S4\r\n"
+        "  --s5                  Runtime option S5\r\n"
+        "  --s6                  Runtime option S6\r\n"
+        "  --s7                  Runtime option S7\r\n"
+        "  --config=<path>       Override config file location\r\n"
+        "  --log-level=<lvl>     trace|debug|info|warn|error|critical\r\n"
+        "  --version, -v         Print version and exit\r\n"
+        "  --help, -h            Print this help and exit\r\n";
+    write_cli_text(help);
 }
 
 void printVersion() noexcept {
 #ifndef SAO_LAUNCHER_VERSION
 #define SAO_LAUNCHER_VERSION "0.0.0"
 #endif
-    MessageBoxA(nullptr,
-                "SaoAuto " SAO_LAUNCHER_VERSION,
-                "SaoAuto — Version",
-                MB_OK | MB_ICONINFORMATION);
+    write_cli_text("SaoAuto " SAO_LAUNCHER_VERSION "\r\n");
 }
 
 } // namespace sao::launcher

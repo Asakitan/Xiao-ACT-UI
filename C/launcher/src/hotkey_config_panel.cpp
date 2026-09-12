@@ -169,7 +169,7 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
               {"label", bounded_utf8(std::move(label), kMaximumLabelBytes, "Action")},
               {"action", bounded_utf8(std::move(action), kMaximumActionIdBytes, "")},
               {"style", style},
-              {"height", 28}};
+              {"height", 36}};
     if (!payload.is_null()) node["payload"] = std::move(payload);
     if (disabled) node["disabled"] = true;
     return node;
@@ -310,10 +310,10 @@ std::string build_panel_spec(const std::vector<HotkeyBinding>& bindings,
                                             capturing_binding_id));
     Json rows = Json::array();
     rows.push_back(text_node(
-        "1. Click Record and release any held non-modifier key. 2. Optionally hold Ctrl, Alt, Shift, or Win, then press one non-modifier key. Esc cancels; recording times out after 10 seconds. / 1. 点击录入并松开已按住的普通键；2. 可按住 Ctrl、Alt、Shift 或 Win，再按一个普通键。Esc 取消，10 秒后超时。",
+        "点击“录入组合键”，松开普通键后按下新组合。可搭配 Ctrl、Alt、Shift 或 Win；Esc 取消，10 秒后超时。",
         "muted", 58));
     rows.push_back(text_node(
-        "A successful capture saves immediately. A conflict or cancellation keeps the previous shortcut unchanged. / 录入成功会立即保存；发生冲突或取消时保留原快捷键。",
+        "录入成功即保存。发生冲突或取消时，原快捷键保持有效。",
         "muted", 38));
     for (std::size_t index = 0; index < bindings.size(); ++index) {
         const auto& binding = bindings[index];

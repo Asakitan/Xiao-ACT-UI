@@ -239,7 +239,7 @@ Json button_node(std::string id, std::string label, std::string action, Json pay
               {"label", std::move(label)},
               {"action", std::move(action)},
               {"style", style},
-              {"height", 30}};
+              {"height", 36}};
     if (!payload.empty())
         node["payload"] = std::move(payload);
     if (disabled)
@@ -277,7 +277,11 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
         return Json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     Json top = std::move(nodes.front());
     nodes.erase(nodes.begin());
-    top["dock"] = "top";
+    top["dock"] = "bottom";
+    top["title"] = "";
+    Json toolbar = nodes.empty() ? Json{{"type", "section"}, {"children", Json::array()}} : std::move(nodes.front());
+    if (!nodes.empty()) nodes.erase(nodes.begin());
+    toolbar["dock"] = "top";
     Json content{{"type", "section"},
                  {"id", std::move(content_id)},
                  {"container", true},
@@ -291,7 +295,7 @@ Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
     return Json{{"version", 1},
                 {"title", ""},
                 {"layout", "dock"},
-                {"nodes", Json::array({std::move(top), std::move(content)})}};
+                {"nodes", Json::array({std::move(toolbar), std::move(top), std::move(content)})}};
 }
 
 std::string_view snapshot_accent(SnapshotState state) noexcept {

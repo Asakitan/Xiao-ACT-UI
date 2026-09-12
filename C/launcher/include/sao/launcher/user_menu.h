@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace sao::launcher {
@@ -42,12 +43,14 @@ class UserMenu final {
     LRESULT handleMessage(HWND window, UINT message, WPARAM w_param, LPARAM l_param) noexcept;
     bool addNotificationIcon() noexcept;
     void showContextMenu(const POINT* activation_point = nullptr) noexcept;
+    static void menuAction(const char*, const uint8_t*, std::size_t, void*) noexcept;
     void openUserGuide() noexcept;
     void showMenuUnavailableError() const noexcept;
     void showUserGuideUnavailableError() const noexcept;
 
     HINSTANCE instance_ = nullptr;
     HWND window_ = nullptr;
+    void* menu_panel_ = nullptr;
     NOTIFYICONDATAW notification_icon_{};
     UINT taskbar_created_message_ = 0;
     bool notification_icon_added_ = false;
