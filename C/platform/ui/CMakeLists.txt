@@ -98,7 +98,8 @@ add_library(sao_platform_ui SHARED
 
     # ── Phase 13 (Python parity closure): new dialog widgets ──
     src/dialog_leaderboard.cpp # SAOLeaderboardDialog port
-    src/dialog_file_picker.cpp # SAOFilePicker port (native IFileDialog)
+    src/dialog_file_picker.cpp
+    src/file_picker.cpp
     src/dialog_native_comdlg32.cpp # comdlg32 GetOpenFileNameW fallback
     # Phase 14: DWM chrome tweaks (dark caption / rounded / shadow).
     src/window_effects.cpp

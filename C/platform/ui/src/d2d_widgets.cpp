@@ -474,6 +474,8 @@ uint32_t darken_argb(uint32_t color, float amount) {
 static bool paint_focus_ring_unlocked(sao_ui_paint_ctx_s& context, float x, float y, float width,
                                       float height, float radius, bool rounded,
                                       uint32_t argb) noexcept;
+bool stroke_rounded_outline(sao_ui_paint_ctx_s& context, Rect rect, float radius, float width,
+                            uint32_t argb);
 
 bool contains(Rect rect, float x, float y) {
     return valid_rect(rect.width, rect.height) && x >= rect.x && y >= rect.y &&
@@ -904,6 +906,26 @@ std::string ellipsize_utf8(std::string_view text, float size, float available_wi
     }
     return result;
 }
+size_t wrap_prefix(std::string_view text, float size, float width) {
+    if (text.empty()) return 0;
+    std::vector<size_t> ends{0};
+    for (size_t i = 1; i <= text.size(); ++i)
+        if (i == text.size() || (static_cast<unsigned char>(text[i]) & 0xc0U) != 0x80U)
+            ends.push_back(i);
+    size_t low = 0, high = ends.size() - 1;
+    while (low < high) {
+        const size_t middle = low + (high - low + 1) / 2;
+        if (measured_text_width(text.substr(0, ends[middle]), size) <= width) low = middle;
+        else high = middle - 1;
+    }
+    size_t length = ends[std::max<size_t>(1, low)];
+    if (length < text.size()) {
+        const size_t space = text.substr(0, length).find_last_of(" \t");
+        if (space != std::string_view::npos && space > length / 2) length = space + 1;
+    }
+    return length;
+}
+
 void draw_widget_text(sao_ui_paint_ctx_s& context, Rect widget_bounds, float x, float y,
                       std::string_view text, float size, uint32_t argb) {
     if (text.empty() || x >= widget_bounds.x + widget_bounds.width)
@@ -1329,17 +1351,17 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
 
     if (widget.kind != SAO_UI_WIDGET_TEXT && widget.kind != SAO_UI_WIDGET_MORE_INDICATOR) {
         if (rounded)
-            fill_rounded_rect(context, bounds, widget.radius, border);
+            fill_rounded_rect(context, bounds, widget.radius, fill);
         else
             fill_rect(context, bounds, fill);
     }
     if (rounded) {
         const float line =
             std::clamp(widget.border_width, 0.0F, std::min(bounds.width, bounds.height) * 0.5F);
-        const Rect inner{bounds.x + line, bounds.y + line, bounds.width - line * 2.0F,
-                         bounds.height - line * 2.0F};
-        if (valid_rect(inner.width, inner.height))
-            fill_rounded_rect(context, inner, std::max(0.0F, widget.radius - line), fill);
+        const Rect outline{bounds.x + line * 0.5F, bounds.y + line * 0.5F,
+                           bounds.width - line, bounds.height - line};
+        if (line > 0.0F && valid_rect(outline.width, outline.height))
+            (void)stroke_rounded_outline(context, outline, std::max(0.0F, widget.radius - line * 0.5F), line, border);
     }
     if (widget.kind == SAO_UI_WIDGET_BAR)
         fill_rect(context,
@@ -1372,7 +1394,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
                                                  widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON)
                                          ? 1.0F
                                          : 0.0F;
-        const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - padding));
+        const float preferred_size = widget.kind == SAO_UI_WIDGET_TEXT && style != "title" ? 13.0F : 15.0F;
+        const float text_size = std::max(5.0F, std::min(preferred_size, bounds.height - padding));
         const bool centered = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
                               widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
                               widget.kind == SAO_UI_WIDGET_ICON;
@@ -1383,8 +1406,25 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         const float text_y = centered || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON
                                  ? std::max(0.0F, (bounds.height - text_size) * 0.5F)
                                  : padding;
-        draw_widget_text(context, bounds, bounds.x + text_x, bounds.y + text_y + pressed_offset,
-                         widget.text, text_size, foreground);
+        const float line_height = text_size + 4.0F;
+        const int lines = widget.kind == SAO_UI_WIDGET_TEXT
+            ? std::clamp(static_cast<int>((bounds.height - text_y) / line_height), 1, 256) : 1;
+        std::string_view remaining(widget.text);
+        for (int line = 0; line < lines && !remaining.empty(); ++line) {
+            const size_t newline = remaining.find('\n');
+            const auto paragraph = remaining.substr(0, newline);
+            const size_t length = line + 1 == lines ? paragraph.size()
+                : wrap_prefix(paragraph, text_size, std::max(0.0F, bounds.width - text_x - padding));
+            std::string display(paragraph.substr(0, length));
+            if (line + 1 == lines && newline != std::string_view::npos) display += "…";
+            draw_widget_text(context, bounds, bounds.x + text_x,
+                bounds.y + text_y + pressed_offset + static_cast<float>(line) * line_height,
+                display, text_size, foreground);
+            size_t consumed = length;
+            if (length == paragraph.size() && newline != std::string_view::npos) ++consumed;
+            if (consumed == 0) break;
+            remaining.remove_prefix(std::min(consumed, remaining.size()));
+        }
     }
 }
 

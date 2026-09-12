@@ -1389,13 +1389,13 @@ SaoUiLayoutSpec container_spec_for_theme(std::string_view semantic_type, bool ha
         spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_M];
     } else {
         spec.pad_top_px = pad_s;
-        spec.pad_right_px = pad_s;
-        spec.pad_bottom_px = pad_s;
-        spec.pad_left_px = pad_s;
+        spec.pad_right_px = pad_m;
+        spec.pad_bottom_px = pad_m;
+        spec.pad_left_px = pad_m;
         spec.gap_px = theme.metrics[SAO_UI_METRIC_GAP_S];
     }
     if (has_title && semantic_type != "row")
-        spec.pad_top_px += pad_m + 14;
+        spec.pad_top_px += pad_m + 18;
     return spec;
 }
 
@@ -1436,6 +1436,24 @@ size_t utf8_codepoint_count(std::string_view text) noexcept {
             ++count;
     }
     return count;
+}
+
+std::string fit_title(std::string_view text, float width, float size) {
+    float measured = 0.0F;
+    float measured_height = 0.0F;
+    const std::string original(text);
+    if (sao::ui::detail::measure_text_dwrite(original.c_str(), size, &measured, &measured_height) && measured <= width)
+        return original;
+    size_t low = 0, high = utf8_codepoint_count(text);
+    while (low < high) {
+        const size_t middle = low + (high - low + 1) / 2;
+        const auto candidate = ellipsize_utf8(text, middle);
+        if (!sao::ui::detail::measure_text_dwrite(candidate.c_str(), size, &measured, &measured_height))
+            return ellipsize_utf8(text, static_cast<size_t>(std::max(0.0F, width / size)));
+        if (measured <= width) low = middle;
+        else high = middle - 1;
+    }
+    return ellipsize_utf8(text, low);
 }
 
 sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t parent,
@@ -1656,6 +1674,17 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             text_value = node["label"].get<std::string>();
         else if (node.contains("value") and node["value"].is_string())
             text_value = node["value"].get<std::string>();
+        if (type == "badge" && parent_type == "row" && spec.fixed_width_px == 0) {
+            float width = 0.0F, height = 0.0F;
+            const sao::ui::detail::ScopedTextRole role(sao::ui::detail::ClassicTextRole::Auto);
+            if (sao::ui::detail::measure_text_dwrite(text_value.c_str(), 15.0F, &width, &height)) {
+                const int32_t intrinsic_width = std::clamp(static_cast<int32_t>(std::ceil(width)) + 20, 48,
+                    std::max(48, std::min(400, viewport_width - 24)));
+                spec.fixed_width_px = std::max(spec.min_width_px, intrinsic_width);
+                if (spec.max_width_px > 0) spec.fixed_width_px = std::min(spec.fixed_width_px, spec.max_width_px);
+                spec.weight = 0.0F;
+            }
+        }
         if (not text_value.empty() and (type == "text" or type == "kv" or type == "input")) {
             SaoUiWidgetSizeHint hint{};
             if (sao_ui_widget_get_size_hint(owned->handle, std::max(0, viewport_width), 1 << 30,
@@ -2120,11 +2149,10 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                     theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
             }
             if (status == SAO_STATUS_OK) {
-                const std::string visible_title =
-                    ellipsize_utf8(title, static_cast<size_t>(title_width / 7));
                 const sao::ui::detail::ScopedTextRole title_role(
-                    sao::ui::detail::ClassicTextRole::Display,
+                    sao::ui::detail::ClassicTextRole::Body,
                     sao::ui::detail::ClassicTextWeight::SemiBold);
+                const std::string visible_title = fit_title(title, static_cast<float>(title_width), 15.0F);
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(title_padding + marker_space),
                     std::max(0.0F, (static_cast<float>(top) - 15.0F) * 0.5F),
@@ -2213,7 +2241,7 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                                                                 radius, fill);
                 if (status != SAO_STATUS_OK)
                     break;
-                const float rail_width = section_role ? 1.0F : 0.0F;
+                const float rail_width = section_role && theme.high_contrast ? 1.0F : 0.0F;
                 if (rail_width > 0.0F && width > paint_inset * 2.0F &&
                     height > paint_inset * 2.0F) {
                     const uint32_t rail_color =
@@ -2238,20 +2266,6 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                         context, x, y, width, height, radius, stroke_width, border);
                 if (status != SAO_STATUS_OK)
                     break;
-                if (card_role && !theme.high_contrast && width > 24.0F && height > 12.0F) {
-                    const float corner_span = std::min(20.0F, width - radius * 2.0F);
-                    status = sao_ui_paint_ctx_stroke_line(
-                        context, x + radius, y + 1.0F, x + radius + corner_span, y + 1.0F, 1.0F,
-                        visual.accent);
-                    if (status == SAO_STATUS_OK) {
-                        status = sao_ui_paint_ctx_stroke_line(
-                            context, x + 1.0F, y + radius, x + 1.0F,
-                            y + radius + std::min(8.0F, height - radius * 2.0F), 1.0F,
-                            theme.colors[SAO_UI_TOKEN_APP_BORDER]);
-                    }
-                    if (status != SAO_STATUS_OK)
-                        break;
-                }
                 if (!visual.title.empty()) {
                     const uint32_t title_color = section_role
                                                      ? theme.colors[SAO_UI_TOKEN_APP_TEXT_2]
@@ -2260,21 +2274,20 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                                                 : group_role ? paint_inset
                                                              : 0.0F;
                     const float title_x =
-                        x + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) +
+                        x + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_M]) +
                         title_leading;
                     const float title_width = std::max(
                         0.0F,
-                        width - static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]) * 2.0F -
+                        width - static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_M]) * 2.0F -
                             title_leading);
-                    const std::string visible_title =
-                        ellipsize_utf8(visual.title, static_cast<size_t>(title_width / 6.5F));
                     const sao::ui::detail::ScopedTextRole container_title_role(
                         sao::ui::detail::ClassicTextRole::Body,
                         sao::ui::detail::ClassicTextWeight::SemiBold);
+                    const std::string visible_title = fit_title(visual.title, title_width, 14.0F);
                     status = sao_ui_paint_ctx_draw_utf8(
                         context, title_x,
                         y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
-                        visible_title.c_str(), 12.0F, title_color);
+                        visible_title.c_str(), 14.0F, title_color);
                     if (status != SAO_STATUS_OK)
                         break;
                 }

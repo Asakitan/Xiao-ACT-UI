@@ -1,10 +1,35 @@
 # Classic SAO implementation and acceptance
 
 ## Current reconstruction status
+Session-32 makes the original HTML the editor surface, with its former native tools exposed
+inside an HTML tab; the native main now displays only loading/error/retry. The guide uses an
+owner-thread CompositionController on the same compositor, and the tray menu and asynchronous
+file picker are native compositor panels. Launcher establishes STA before the first font-cache
+initialization. Shared native headings use measured text ellipsis and clearer spacing; management
+toolbars/status areas remain visible while content scrolls. Shared rounded controls now paint a
+real outline instead of filling a transparent interior with the border color; native text wraps
+within its allocated height and badges use constrained intrinsic width. Review findings were
+applied by the parent. Final Debug compilation and staged-asset hashes passed; eight native pages
+exported and exited with code 0, and both guide/editor reported HTML_READY compositor=1 and exited
+normally. Full interaction, DPI/IME, backend and subjective visual acceptance remain open; legacy
+synchronous dialog compatibility paths are not claimed to be fully migrated.
+
+The September 12 continuation connects top-document script alert/confirm/prompt to an owned
+compositor dialog and WebView2 deferral, cancelled on navigation/hide/failure/close. Handle-based
+dialogs are explicitly advanced on the owner thread; only convenience one-shots auto-tick.
+Runtime information/warning/error events use the existing HTML toast and notification history.
+Legacy shim notifications require a registered host and otherwise return a structured error.
+Launcher restart confirmation is asynchronous, defaults to Cancel, and invokes the unchanged
+executor only after explicit approval is consumed by the owner tick. CLI help/version writes
+console or redirected output; shutdown drains at most 64 queued messages per iteration.
+Debug compilation, the eight-page exports and guide/editor readiness plus normal exit passed
+again. New confirmation/input behavior is source-reviewed only; independent review is pending.
+Dedicated Kernel Map selection and legacy synchronous/developer windows remain unchanged.
+
 The previous generic-card/AI-only Preview result was rejected as a complete visual rebuild.
 The native GPU rendering foundations below are implemented, but full visual and functional
 parity with the complete Python editor and the supplied SAO Utils references remains open.
-The legacy `python/web/ai_editor_app.html` supplies the hosted Workbench structure through
+The legacy `python/web/ai_editor_app.html` supplies the original editor structure through
 the native CompositionController path. The native copy adds visual and keyboard refinements;
 the Python source remains unchanged. `workbench_native_adapter.cpp` implements ordinary
 method families, but their complete interactive backend acceptance remains open.
@@ -55,7 +80,7 @@ https://tenor.com/view/link-start-sao-gif-24757565
 - Public types, enum values, callbacks and destruction contracts are unchanged. Native root-label paint and input now share an additive 208x38 clickable area; circle slots retain their existing bounds. The production GPU menu uses ellipsized labels, clipped child rows and quieter decoration; legacy CPU resource-inspection paint remains unchanged.
 - Panels, Entity/NerveGear and Link Start text record immutable drawing commands. Direct2D 1.1 draws those primitives and DirectWrite text directly into compositor-owned BGRA8 D3D11 textures. Normal native pages no longer rasterize/upload complete CPU frames. Explicit panel rasterization and local image/custom-canvas content retain their separate CPU paths.
 - The one DirectComposition target now owns explicit `BELOW_NATIVE` and `ABOVE_NATIVE` external visual slots around the flattened native swapchain. Slot targets are generation-scoped across device loss, participate in host clipping and exact chorded L/R/M/X raw input without entering native snapshots/effects, and remain on the compositor owner thread.
-- AI main prefers an in-process WebView2 CompositionController bound to the full-client `ABOVE_NATIVE` slot and fixed `https://sao-workbench.local/ai_editor_app.html` origin. It issues a fresh challenge after each completed navigation, accepts only challenge-bound `sao.workbench` hello/request envelopes, supplies a light-default bootstrap config plus `win_close`, returns structured errors for unavailable adapters, and keeps the existing native panel as startup/runtime fallback.
+- AI main uses an in-process WebView2 CompositionController in the `BELOW_NATIVE` band at the fixed `https://sao-workbench.local/ai_editor_app.html` origin. Navigation challenges still bind requests and events. Native panels, menus and file selection can render above HTML; editor window commands no longer manipulate the platform HWND. The old main body is only a loading/error/retry view, not a native workbench fallback.
 - The current first-generation-inspired direction replaces the previous dark neon field with luminous white space, solid colored cylinders, pearl UI and blue/white second flight. Depth lighting, shallow bevels, restrained highlights and distance fog remain; it is not a return to flat ribbons or a claim of frame-exact official footage.
 - Each flight emits 720 finite columns using a 48-sided/four-band shared mesh (386 vertices, 2304 uint16 indices). Camera travel is 18000 times quintic smoothstep; normalized speed rises and falls symmetrically. Birth distance is `(18000 - spawnDepth - baseLength - 8) * i / 719`; geometry starts at zero size at the exact center and expands continuously over 320 travel units at far depth. Once born, it is not removed by density/near-alpha/group-fade gates: ordinary frustum clipping follows the complete body/tail leaving view. Physical length plus a bounded speed-driven extension produces straight trails; one 8.33ms exposure remains.
 - Distant columns retain a birth-scaled 0.85px minimum projected radius rather than disappearing below raster coverage. Stable material brightness, broader highlights and white depth fog replace shimmer. At phase end speed is zero and every tail, including the bevel, is behind the near plane with margin; zero-duration phases emit nothing. These are source-level lifecycle properties, not an all-resolution visual-parity claim.
@@ -81,7 +106,7 @@ https://tenor.com/view/link-start-sao-gif-24757565
 | Workshop | Catalog connectivity is separate from owner/worker lifetime; stale catalog actions are disabled when the latest validated list is disconnected | Detached production Preview observed `目录未连接`, structured list failure and normal retry/empty layout; connected backend still pending |
 | Process selector | Full process snapshot with 32-row materialization pages; core enumeration remains available without RT I/O while attach is explicitly disabled | Production Preview observed 1–32 of 357, Page 1/12, `Attach off / 未连接`, disabled attach actions and clean close |
 | AI settings | Scope rail, actual text search, independent scroll, bottom save area, checkbox/dropdown fields | Native offline renderer inspected at 1264×820; initial Dock/resize/TextField dispatch defects found and corrected; input frame visually rechecked; full editing/scroll acceptance remains open |
-| AI main / Control Center | Full Workbench asset hosted by CompositionController; native panel retained as fallback | Debug production Preview created the AIWorkbench WebView2 process tree and completed hello/ready; adapter slices and full visual/input/backend acceptance remain open |
+| AI main / Control Center | Full original editor HTML, native tools tab, single-path HTML actions, script dialogs and runtime notifications; native loading/error/retry only | Session-32 Debug build and HTML_READY compositor=1 with normal exit verified; generic picker frame exported; full interaction/backend and new script-dialog result delivery still pending |
 | Embedded AI pages | Classic light/default and neutral-dark CSS | Source review; hosted WebView runtime pending |
 | User guide | Classic CSS, shorter interactions, native sound bridge and real WAV copies | Browser inspected at 1280×900 and 390×844, no horizontal overflow or broken images |
 | Link Start | Center-born 720-column flights, 48-sided mesh, complete exit instead of visibility toggles, slow-fast-slow travel, stable highlights and unchanged three-cue audio | Review's custom-prelude start defect fixed by parent and read back; four shaders /WX and Debug UI/Preview rebuilt;22stills and780-frame/60fps/13s movie regenerated and decoded, audio=0/status=0 with natural exit. Three180-frame render/readback runs approximately1.03s, not presentationFPS. Custom boundaries are source-reviewed; appearance/DPI/device/acoustic acceptance remains open |

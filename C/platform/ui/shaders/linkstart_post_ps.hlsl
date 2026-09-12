@@ -6,12 +6,12 @@ SamplerState linearSampler : register(s0);
 
 cbuffer Constants : register(b0) {
     float2 resolution; float time; float sceneTime;
-    float phaseProgress; float scenePhase; float connectedAlpha; float reducedMotion;
+    float flightSpan; float historyScale; float connectedAlpha; float reducedMotion;
     float cameraZ; float alphaMul; float radiusMul; float energy;
-    float flash; float startupBurst; float startupWave; float motionMix;
+    float flash; float birthLead; float startupWave; float motionMix;
     float coolMix; float2 blurDirection; float bloomExtract;
     float3 backgroundColor; float padding1;
-    float3 effectTint; float padding2;
+    float3 effectTint; float exitProgress;
 };
 
 float3 bloom_sample(float2 uv) {
@@ -44,15 +44,11 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     const float smear = min(7.0 / max(resolution.y, 1.0), 0.009 * speed) *
                          speed * smoothstep(0.03, 0.50, radius);
     float3 color = 0.0;
-    float3 neighborhoodMin = float3(10000.0, 10000.0, 10000.0);
-    float3 neighborhoodMax = 0.0;
     const float weights[5] = {0.40, 0.25, 0.18, 0.11, 0.06};
     [unroll] for (int sampleIndex = 0; sampleIndex < 5; ++sampleIndex) {
         const float2 sampleUv = uv - direction * smear * float(sampleIndex) * 0.40;
         const float3 sampleColor = sceneTexture.Sample(linearSampler, sampleUv).rgb;
         color += sampleColor * weights[sampleIndex];
-        neighborhoodMin = min(neighborhoodMin, sampleColor);
-        neighborhoodMax = max(neighborhoodMax, sampleColor);
     }
     const float split = speed * smoothstep(0.18, 0.65, radius) * 0.65 / max(1.0, resolution.x);
     const float2 dispersed = float2(sceneTexture.Sample(linearSampler, uv + direction * split).r,
@@ -63,8 +59,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         glow = bloomTexture.Sample(linearSampler, uv).rgb * 0.22 +
                wideBloomTexture.Sample(linearSampler, uv).rgb * 0.08;
     }
-    const float3 history = clamp(historyTexture.Sample(linearSampler, uv).rgb,
-                                 neighborhoodMin + glow - 0.025, neighborhoodMax + glow + 0.025);
+    const float2 historyUv = 0.5 + (uv - 0.5) / max(1.0, historyScale);
+    const float3 history = max(0.0, historyTexture.Sample(linearSampler, historyUv).rgb);
     color = lerp(max(0.0, color + glow), history, saturate(padding1));
     return float4(color, 1.0);
     }
@@ -93,6 +89,12 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     const float dither = frac(52.9829189 * frac(dot(floor(position.xy),
                                                     float2(0.06711056, 0.00583715))));
     color = saturate(color + (dither - 0.5) / 255.0);
-    const float alpha = saturate(connectedAlpha);
+    float alpha = saturate(connectedAlpha);
+    if (reducedMotion < 0.5 && exitProgress > 0.80) {
+        const float edgeWidth = 1.5 / max(1.0, resolution.y);
+        const float extent = length(float2(aspect, 1.0)) * 0.5 + edgeWidth * 3.0;
+        const float aperture = extent * smoothstep(0.80, 1.0, exitProgress);
+        alpha *= smoothstep(aperture - edgeWidth, aperture + edgeWidth, radius);
+    }
     return float4(color * alpha, alpha);
 }
