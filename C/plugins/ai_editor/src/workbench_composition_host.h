@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 #include "sao/ai_editor/ai_editor_launcher.h"
 #include "sao/core/status.h"
@@ -7,6 +8,10 @@
 namespace sao::ai_editor::workbench {
 
 struct CompositionHost;
+using PanelSnapshotFn = std::string (*)(void*);
+using PanelActionFn = void (*)(const char*, const uint8_t*, size_t, void*);
+void set_panel_bridge(CompositionHost* host, PanelSnapshotFn snapshot,
+                      PanelActionFn action, void* user_data) noexcept;
 
 sao_status_t create(sao_ui_compositor_handle_t compositor,
                     sao_ai_editor_launcher_t launcher,

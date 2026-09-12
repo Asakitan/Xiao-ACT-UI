@@ -278,17 +278,18 @@ extern "C" int sao_ai_editor_vscode_shim_dispatch(
                                                        {"message", error.what()}};
                         }
                     }
-                } else if (method == "vscode.window.showInformationMessage") {
-                    const std::string message =
-                        params.value("message", std::string{});
-#if defined(_WIN32)
-                    const std::wstring wide_message =
-                        sao::ai_editor::native::utf8_to_wide(message);
-                    const std::wstring wide_title = L"SAO AI Editor";
-                    ::MessageBoxW(nullptr, wide_message.c_str(),
-                                  wide_title.c_str(), MB_OK | MB_ICONINFORMATION);
-#endif
-                    response["result"] = message;
+                } else if (method == "vscode.window.showInformationMessage" ||
+                           method == "vscode.window.showWarningMessage" ||
+                           method == "vscode.window.showErrorMessage") {
+                    CommandHandler handler;
+                    {
+                        std::lock_guard<std::mutex> guard(g_mu);
+                        const auto found = g_commands.find(method);
+                        if (found != g_commands.end()) handler = found->second;
+                    }
+                    if (handler) response["result"] = handler(params);
+                    else response["error"] = json{{"code", -32002},
+                        {"message", "No compositor notification host is registered."}};
                 } else if (method == "vscode.workspace.fs.readFile") {
                     const json uri = params.value("uri", json::object());
                     const std::string raw_path = uri.is_object()

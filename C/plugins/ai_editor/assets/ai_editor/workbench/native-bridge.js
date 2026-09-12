@@ -11,7 +11,8 @@
     "memviewer_read_value",
     "memviewer_status"
   ]);
-  const LONG_REQUEST_METHODS = new Set(["run_workflow", "retry_workflow_step"]);
+  const LONG_REQUEST_METHODS = new Set(["run_workflow", "retry_workflow_step",
+    "open_text_file", "open_file_dialog", "save_file_dialog", "save_file_as"]);
   const state = {
     status: "connecting",
     connected: false,
@@ -140,6 +141,26 @@
   }
 
   function callLegacyEvent(name, payload) {
+    const eventName = name === "editor_event" && payload && typeof payload.event === "string"
+      ? payload.event : name;
+    const eventPayload = name === "editor_event" && payload ? payload.data : payload;
+    const notificationLevels = {
+      "vscode.window.InformationMessage": "info",
+      "vscode.window.WarningMessage": "warning",
+      "vscode.window.ErrorMessage": "error"
+    };
+    const level = Object.prototype.hasOwnProperty.call(notificationLevels, eventName)
+      ? notificationLevels[eventName] : null;
+    if (level) {
+      const container = document.getElementById("toast-container");
+      if (typeof window.showToast !== "function" || !container) return false;
+      const message = eventPayload && typeof eventPayload.message === "string" ? eventPayload.message : "";
+      if (message) {
+        window.showToast(message.slice(0, 4096), level, level === "error" ? 8000 : 5000);
+        while (container.children.length > 8) container.firstElementChild.remove();
+      }
+      return true;
+    }
     if (typeof window._onEditorEvent !== "function") return false;
     try {
       if (name === "editor_event" && payload && typeof payload === "object" && typeof payload.event === "string") {
@@ -155,9 +176,10 @@
   }
 
   function flushLegacyEvents() {
-    while (queuedLegacyEvents.length && typeof window._onEditorEvent === "function") {
-      const item = queuedLegacyEvents.shift();
-      callLegacyEvent(item.name, item.payload);
+    while (queuedLegacyEvents.length) {
+      const item = queuedLegacyEvents[0];
+      if (!callLegacyEvent(item.name, item.payload)) break;
+      queuedLegacyEvents.shift();
     }
   }
 
@@ -307,4 +329,161 @@
     if (!state.challenge)
       armHandshakeTimeout("Native workbench host did not issue a document challenge.");
   }, { once: true });
+})();
+
+(function installEditorTools() {
+  "use strict";
+  let loading = false;
+  let actionQueue = Promise.resolve();
+  let actionCount = 0;
+  let actionRevision = 0;
+  let toolsSelected = false;
+  let lastDocument = "";
+  let refreshTimer = 0;
+  function panel() { return document.getElementById("rp-native-tools"); }
+  function render(model) {
+    const host = panel();
+    if (!host) return;
+    const content = host.querySelector(".native-tools-content");
+    const signature = JSON.stringify(model);
+    if (signature === lastDocument || content.contains(document.activeElement) &&
+        /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    const oldFocus = document.activeElement && document.activeElement.dataset.nativeId;
+    const scroll = content.scrollTop;
+    let count = 0;
+    function node(spec, depth) {
+      if (!spec || typeof spec !== "object" || depth > 40 || ++count > 16000) return document.createTextNode("");
+      const kind = String(spec.type || "section").toLowerCase();
+      const element = document.createElement(kind === "button" ? "button" :
+        kind === "input" ? (spec.multiline || spec.input_type === "multiline" ? "textarea" : "input") :
+        kind === "text" || kind === "label" ? "p" : kind === "badge" ? "span" : "section");
+      element.className = "native-tool-node native-tool-" + kind.replace(/[^a-z-]/g, "");
+      const style = String(spec.style || spec.accent || "").replace(/[^a-z-]/g, "");
+      if (style) element.classList.add("native-tool-" + style);
+      if (spec.id) element.dataset.nativeId = String(spec.id);
+      if (spec.title) {
+        const title = document.createElement("h3"); title.textContent = String(spec.title); element.appendChild(title);
+      }
+      if (kind === "button") {
+        element.type = "button"; element.textContent = String(spec.label || spec.text || "操作");
+        element.disabled = !!spec.disabled;
+        element.addEventListener("click", function () { act(spec.action, spec.payload || {}); });
+      } else if (kind === "input") {
+        element.value = String(spec.value || ""); element.disabled = !!spec.disabled;
+        element.setAttribute("aria-label", String(spec.label || spec.id || "工具参数"));
+        element.addEventListener("change", function () {
+          act(spec.action, Object.assign({}, spec.payload || {}, { text: element.value, value: element.value }));
+        });
+      } else if (spec.text !== undefined) element.textContent = String(spec.text);
+      (Array.isArray(spec.children) ? spec.children : Array.isArray(spec.nodes) ? spec.nodes : [])
+        .forEach(function (child) { element.appendChild(node(child, depth + 1)); });
+      return element;
+    }
+    content.replaceChildren(node(model, 0));
+    content.scrollTop = scroll;
+    if (oldFocus) {
+      const target = Array.from(content.querySelectorAll("[data-native-id]"))
+        .find(function (entry) { return entry.dataset.nativeId === oldFocus; });
+      if (target) target.focus({ preventScroll: true });
+    }
+    lastDocument = signature;
+    host.querySelector(".native-tools-status").textContent = "与原生编辑器状态同步";
+  }
+  function act(action, payload) {
+    if (!action) return;
+    ++actionCount;
+    ++actionRevision;
+    actionQueue = actionQueue.then(async function () {
+      if (action === "settings.open" && typeof window.openSettings === "function") {
+        window.openSettings();
+        return;
+      }
+      if (action === "history.load" && typeof window.loadHistoryConv === "function") {
+        await window.loadHistoryConv(payload.id);
+        return;
+      }
+      if ((action === "control.use_agent" || action === "select.agent") &&
+          typeof window.selectAgentFromPopup === "function") {
+        await window.selectAgentFromPopup(payload.id || payload.value || "");
+        return;
+      }
+      if (action === "select.model" && typeof window.selectModelFromPopup === "function") {
+        await window.selectModelFromPopup(payload.value);
+        return;
+      }
+      if (action === "control.use_prompt" && typeof window.setChatInputValue === "function") {
+        window.setChatInputValue("Use prompt " + payload.id + " in the next request.", { focus: true });
+        return;
+      }
+      const model = await window.SaoWorkbenchBridge.request("native_panel_action", [String(action), payload]);
+      lastDocument = ""; render(model);
+    }).catch(showError).finally(function () { --actionCount; });
+    return actionQueue;
+  }
+  function showError(error) {
+    const host = panel();
+    if (host) host.querySelector(".native-tools-status").textContent =
+      error && error.message ? error.message : "工具暂不可用，请刷新重试。";
+  }
+  async function refresh() {
+    const host = panel();
+    if (loading || actionCount || !host || !host.classList.contains("active") || document.hidden) return;
+    loading = true;
+    const revision = actionRevision;
+    try {
+      const model = await window.SaoWorkbenchBridge.request("native_panel_snapshot", []);
+      if (revision === actionRevision && !actionCount) render(model);
+    }
+    catch (error) { showError(error); }
+    finally { loading = false; }
+  }
+  function install() {
+    const tabs = document.getElementById("right-tabs"), panels = document.getElementById("right-panels");
+    if (!tabs || !panels) return;
+    if (!panel()) {
+      lastDocument = "";
+      const host = document.createElement("div"); host.id = "rp-native-tools";
+      host.className = "right-panel native-tools"; host.setAttribute("role", "tabpanel");
+      host.setAttribute("aria-label", "编辑器工具与状态");
+      const toolbar = document.createElement("header"); toolbar.className = "native-tools-toolbar";
+      const heading = document.createElement("strong"); heading.textContent = "工具与状态";
+      const reload = document.createElement("button"); reload.type = "button"; reload.textContent = "刷新";
+      reload.addEventListener("click", refresh); toolbar.append(heading, reload);
+      const status = document.createElement("p"); status.className = "native-tools-status";
+      status.setAttribute("role", "status"); status.textContent = "打开后同步已有检查器、历史、日志和工具。";
+      const content = document.createElement("div"); content.className = "native-tools-content";
+      host.append(toolbar, status, content); panels.appendChild(host);
+    }
+    if (!document.getElementById("native-tools-tab")) {
+      const button = document.createElement("button"); button.id = "native-tools-tab";
+      button.type = "button"; button.className = "rtab"; button.dataset.rtab = "native-tools";
+      button.textContent = "工具与状态"; button.setAttribute("aria-controls", "rp-native-tools");
+      button.addEventListener("click", function (event) {
+        event.stopPropagation();
+        toolsSelected = true;
+        document.querySelectorAll(".right-panel,.rtab").forEach(function (entry) { entry.classList.remove("active"); });
+        panel().classList.add("active"); button.classList.add("active"); refresh();
+      });
+      tabs.appendChild(button);
+    }
+    if (toolsSelected && !panel().classList.contains("active")) {
+      document.querySelectorAll(".right-panel,.rtab").forEach(function (entry) { entry.classList.remove("active"); });
+      panel().classList.add("active");
+      document.getElementById("native-tools-tab").classList.add("active");
+    }
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    install();
+    const tabs = document.getElementById("right-tabs");
+    const panels = document.getElementById("right-panels");
+    const observer = new MutationObserver(install);
+    if (tabs) observer.observe(tabs, { childList: true });
+    if (panels) observer.observe(panels, { childList: true });
+    document.addEventListener("click", function (event) {
+      const tab = event.target.closest && event.target.closest(".rtab");
+      if (tab && tab.id !== "native-tools-tab") toolsSelected = false;
+    }, true);
+    refreshTimer = window.setInterval(refresh, 1000);
+  });
+  window.addEventListener("pagehide", function () { window.clearInterval(refreshTimer); });
 })();

@@ -53292,17 +53292,27 @@ async function revertNotebookTab(tab){
   return {ok:true};
 }
 async function saveTextTabAs(tab,options){
+  if(!tab||!tabs.includes(tab))return {ok:false,error:'no active text document'};
+  const sourceTabId=tab.id;
   const opts=isPlainObject(options)?options:{};
-  if(!opts.skipSaveParticipants)await runEditorSaveParticipants();
-  const content=$('editor-text').value;
+  if(!opts.skipSaveParticipants&&activeTab===sourceTabId)await runEditorSaveParticipants();
+  if(!tabs.includes(tab))return {ok:false,cancelled:true};
+  const content=activeTab===sourceTabId?$('editor-text').value:(tab.content||'');
+  const language=tab.language||editorLang;
   const r=await call('save_file_as',content,saveAsSuggestedName(tab));
   if(r&&r.ok){
-    if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang;tab.originalContent=content;tab.content=content}
-    editorDirty=false;
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
-    renderEditorVisualDecorations();
-    const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
-    if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
+    if(tabs.includes(tab)){
+      const currentContent=activeTab===sourceTabId?$('editor-text').value:(tab.content||'');
+      tab.filePath=r.path;tab.name=r.name;tab.language=r.language||language;
+      tab.originalContent=content;tab.content=currentContent;tab.dirty=currentContent!==content;
+      if(activeTab===sourceTabId){
+        editorDirty=tab.dirty;
+        _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
+        renderEditorVisualDecorations();
+      }
+      const tabEl=document.querySelector('.tab[data-tab-id="'+sourceTabId+'"]');
+      if(tabEl)tabEl.classList.toggle('dirty',tab.dirty);
+    }
     renderTabs();
     showToast('Saved: '+r.path,'success',1500);
     return r;

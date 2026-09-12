@@ -10,6 +10,7 @@
 #include "sao/ui/theme.h"
 
 #include "workbench_composition_host.h"
+#include <cstdio>
 
 #include <nlohmann/json.hpp>
 
@@ -230,6 +231,8 @@ struct AiEditorMainPanelState {
     sao_ui_panel_body_handle_t body{};
     sao_ui_dialog_handle_t dialog{};
     sao::ai_editor::workbench::CompositionHost* workbench_host{};
+    sao_status_t html_status{SAO_STATUS_OK};
+    bool html_retry_requested{};
     std::mutex mutex;
     std::mutex publish_mutex;
     std::condition_variable worker_cv;
@@ -3409,7 +3412,7 @@ json choice_row(std::string title, std::string action, const std::vector<ChoiceI
     return row_node(std::move(children));
 }
 
-std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_bound) {
+std::string build_tool_spec(const AiEditorMainPanelState& state, bool launcher_bound) {
     json nodes = json::array();
     const bool history_actions_disabled =
         !launcher_bound || run_is_active(state.run_phase) || state.history_task_pending;
@@ -3890,7 +3893,7 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
     const std::string secondary_accent = current_view == "diagnostics" && has_status_error ? "bad"
                                          : current_view == "history"                       ? "gold"
                                                                                            : "cyan";
-    secondary_children.push_back(card_node("Workbench · " + view_label(current_view),
+    secondary_children.push_back(card_node("编辑器工具 · " + view_label(current_view),
                                            std::move(view_navigation), secondary_accent));
     secondary_children.push_back(std::move(active_secondary_view));
     json secondary_section = section_node("", std::move(secondary_children));
@@ -4047,14 +4050,21 @@ std::string build_panel_spec(const AiEditorMainPanelState& state, bool launcher_
 
 sao_status_t refresh_body(AiEditorMainPanelState& state, bool force) {
     std::lock_guard publish_lock(state.publish_mutex);
-    const bool launcher_bound = state.launcher != nullptr;
     const auto now = std::chrono::steady_clock::now();
     std::string spec;
     {
         std::lock_guard lock(state.mutex);
         if (!force && !state.refresh_retry_pending && now < state.next_refresh_allowed)
             return SAO_STATUS_OK;
-        spec = build_panel_spec(state, launcher_bound);
+        const bool failed = state.html_status != SAO_STATUS_OK;
+        spec = json{{"version", 1}, {"title", ""}, {"nodes", json::array({
+            text_node(failed ? "AI 编辑器加载失败" : "正在打开 AI 编辑器", "title", 32),
+            text_node(failed ? "完整 HTML 编辑器尚未就绪，请检查 WebView2 与本地页面资源。错误代码：" + std::to_string(state.html_status)
+                             : "正在连接原生 HTML 编辑器，文件编辑、对话和工具将在同一界面显示。",
+                      failed ? "warn" : "muted", 64),
+            button_node("editor.retry", "重新加载编辑器", "editor.retry", json::object(),
+                        "primary", !failed)
+        })}}.dump();
         if (spec == state.last_spec) {
             state.refresh_retry_pending = false;
             state.next_refresh_allowed = now + kPanelRefreshInterval;
@@ -5365,7 +5375,10 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     }
 
     const std::string_view action = action_id_utf8;
-    if (action == "control.palette") {
+    if (action == "editor.retry") {
+        std::lock_guard lock(state->mutex);
+        state->html_retry_requested = true;
+    } else if (action == "control.palette") {
         show_control_palette_dialog(*state);
     } else if (action == "control.advanced.toggle") {
         std::lock_guard lock(state->mutex);
@@ -6020,10 +6033,10 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         descriptor.panel_id_utf8 = SAO_AI_EDITOR_MAIN_PANEL_ID;
         descriptor.title_utf8 = "AI Editor";
         descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
-        descriptor.default_width_px = kDefaultPanelWidth;
-        descriptor.default_height_px = 760;
-        descriptor.min_width_px = kDefaultPanelMinWidth;
-        descriptor.min_height_px = 520;
+        descriptor.default_width_px = 640;
+        descriptor.default_height_px = 300;
+        descriptor.min_width_px = 360;
+        descriptor.min_height_px = 240;
         descriptor.movable = true;
         descriptor.resizable = true;
         descriptor.show_titlebar = true;
@@ -6083,7 +6096,26 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
             std::lock_guard lock(raw_state->mutex);
             raw_state->workbench_host = workbench_host;
             raw_state->workbench_active = true;
+            sao::ai_editor::workbench::set_panel_bridge(workbench_host,
+                [](void* data) -> std::string {
+                    auto& state = *static_cast<AiEditorMainPanelState*>(data);
+                    std::lock_guard lock(state.mutex);
+                    const json document = json::parse(build_tool_spec(state, state.launcher != nullptr));
+                    for (const auto& node : document.at("nodes")) {
+                        if (node.value("id", "") == "ai-editor-columns")
+                            return node.at("children").back().dump();
+                    }
+                    return document.dump();
+                }, &panel_action_callback, raw_state);
+        } else {
+            raw_state->html_status = workbench_status == SAO_STATUS_OK
+                ? SAO_STATUS_ERR_NOT_INITIALIZED : workbench_status;
+#ifndef NDEBUG
+            std::fprintf(stderr, "AI_EDITOR_HTML_UNAVAILABLE status=%d\n", raw_state->html_status);
+            std::fflush(stderr);
+#endif
         }
+        (void)refresh_body(*raw_state, true);
         *out_panel = handle;
         return SAO_AI_EDITOR_OK;
     } catch (const std::bad_alloc&) {
@@ -6104,6 +6136,7 @@ sao_ai_editor_main_panel_show(sao_ai_editor_main_panel_t panel) {
     if (use_workbench) {
         status = sao::ai_editor::workbench::show(state.workbench_host);
         if (status != SAO_STATUS_OK && sao::ai_editor::workbench::failed(state.workbench_host)) {
+            state.html_status = status;
             state.workbench_active = false;
             use_workbench = false;
             status = SAO_STATUS_OK;
@@ -6164,6 +6197,7 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
             }
             if (workbench_status != SAO_STATUS_OK &&
                 sao::ai_editor::workbench::failed(state.workbench_host)) {
+                state.html_status = workbench_status;
                 state.workbench_active = false;
             } else if (workbench_status != SAO_STATUS_OK) {
                 return map_ui_status(workbench_status);
@@ -6211,6 +6245,28 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
                 sao::ai_editor::workbench::try_destroy(state.workbench_host);
             if (destroy_status == SAO_STATUS_OK)
                 state.workbench_host = nullptr;
+        }
+    }
+    if (state.html_retry_requested && state.workbench_host == nullptr) {
+        state.html_retry_requested = false;
+        const sao_status_t created = sao::ai_editor::workbench::create(
+            state.compositor, state.launcher, &state.workbench_host);
+        state.workbench_active = created == SAO_STATUS_OK && state.workbench_host != nullptr;
+        state.html_status = state.workbench_active ? SAO_STATUS_OK :
+            (created == SAO_STATUS_OK ? SAO_STATUS_ERR_NOT_INITIALIZED : created);
+        if (state.workbench_active) {
+            sao::ai_editor::workbench::set_panel_bridge(state.workbench_host,
+                [](void* data) -> std::string {
+                    auto& state = *static_cast<AiEditorMainPanelState*>(data);
+                    std::lock_guard lock(state.mutex);
+                    const json document = json::parse(build_tool_spec(state, state.launcher != nullptr));
+                    for (const auto& node : document.at("nodes")) {
+                        if (node.value("id", "") == "ai-editor-columns")
+                            return node.at("children").back().dump();
+                    }
+                    return document.dump();
+                }, &panel_action_callback, &state);
+            if (state.visible) (void)sao::ai_editor::workbench::show(state.workbench_host);
         }
     }
     const int32_t dialog_status = tick_dialog(lease.state());
