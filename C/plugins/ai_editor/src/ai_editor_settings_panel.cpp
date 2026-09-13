@@ -4619,6 +4619,19 @@ sao_ai_editor_settings_panel_show(sao_ai_editor_settings_panel_t panel) {
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_settings_panel_is_visible(sao_ai_editor_settings_panel_t panel, bool* out_visible) {
+    if (!out_visible) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    *out_visible = false;
+    try {
+        ApiLease lease(panel, true);
+        if (!lease) return lease.status();
+        std::lock_guard lock(lease.state().mutex);
+        *out_visible = lease.state().visible;
+        return SAO_AI_EDITOR_OK;
+    } catch (...) { return SAO_AI_EDITOR_ERR_OS_CALL_FAILED; }
+}
+
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_settings_panel_hide(sao_ai_editor_settings_panel_t panel) {
     ApiLease lease(panel, true);
     if (!lease)

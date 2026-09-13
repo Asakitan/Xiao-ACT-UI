@@ -1,3 +1,15 @@
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/SAOUI.ttf") format("truetype"), url("https://sao-fonts.local/SAOUI.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0000-024F, U+1E00-1EFF;
+}
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/ZhuZiAYuanJWD.ttf") format("truetype"), url("https://sao-fonts.local/ZhuZiAYuanJWD.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0250-1DFF, U+1F00-10FFFF;
+}
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -29,8 +41,8 @@
   --motion-fast: 110ms;
   --motion-state: 150ms;
   --motion-ease: cubic-bezier(.2, .75, .25, 1);
-  --font: 13px/1.55 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  --mono: 11px/1.55 "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  --font: 14px/1.55 "SAO Product";
+  --mono: 13px/1.55 "SAO Product";
 }
 
 :root[data-theme="light"],
@@ -109,7 +121,7 @@ input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; box-
 .eyebrow {
   margin-bottom: 6px;
   color: var(--accent-text);
-  font: 600 10px/1.2 "Cascadia Mono", Consolas, monospace;
+  font: 600 11px/1.4 "SAO Product";
   letter-spacing: .12em;
   text-transform: uppercase;
 }
@@ -219,7 +231,7 @@ input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; box-
 .empty-state--error { border-color: var(--danger); background: var(--danger-surface); color: var(--danger-text); }
 
 .panel-log { padding: 14px; }
-.log-title { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--accent-text); font: 600 10px/1.2 "Cascadia Mono", Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.log-title { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--accent-text); font: 600 11px/1.4 "SAO Product"; letter-spacing: .12em; text-transform: uppercase; }
 .log-entries { max-height: 180px; overflow-y: auto; margin: 0; padding: 0 0 0 24px; color: var(--muted); font: var(--mono); scrollbar-gutter: stable; }
 .log-entries li { padding: 2px 0; overflow-wrap: anywhere; }
 .log-entries li.log--info { color: var(--text); }

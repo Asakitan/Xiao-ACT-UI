@@ -23,14 +23,11 @@ class ToolResultFilterRegistry;
 // SAO_AI_EDITOR_ERR_INVALID_ARGUMENT and populates `errors` with an array of
 // `{path, reason}` objects.  `path` uses JSONPath-lite (`$`, `$.field`,
 // `$.arr[0]`) so callers can point at the offending argument.
-int32_t validate_json_against_schema(const Json& arguments,
-                                     const Json& schema,
-                                     Json& errors);
+int32_t validate_json_against_schema(const Json& arguments, const Json& schema, Json& errors);
 
 class NativeToolRegistry final {
-public:
-    using CustomExecuteFn =
-        int32_t (*)(const Json& arguments, Json& result, void* user);
+  public:
+    using CustomExecuteFn = int32_t (*)(const Json& arguments, Json& result, void* user);
 
     using CustomToolOwner = const void*;
 
@@ -45,8 +42,7 @@ public:
         bool explicit_confirmation_required = false;
     };
 
-    NativeToolRegistry(const ScopeStore& scopes,
-                       uint32_t maximum_file_bytes,
+    NativeToolRegistry(const ScopeStore& scopes, uint32_t maximum_file_bytes,
                        uint32_t maximum_search_results) noexcept;
 
     // Wire in a filter registry so tools.call output runs through the
@@ -56,9 +52,7 @@ public:
     void set_filter_registry(const ToolResultFilterRegistry* registry) noexcept;
 
     Json describe(std::string_view mode) const;
-    int32_t execute(std::string_view mode,
-                    std::string_view name,
-                    const Json& arguments,
+    int32_t execute(std::string_view mode, std::string_view name, const Json& arguments,
                     Json& result) const;
 
     // Register a caller-defined tool.  The tool is kept only in-memory
@@ -68,19 +62,14 @@ public:
     // custom name updates the descriptor. `execute_fn` is optional; when it
     // is null execute() preserves the historical passthrough response. The
     // callback user pointer is non-owning and must outlive the registration.
-    int32_t register_custom(std::string_view name,
-                            std::string_view description,
-                            const Json& parameters,
-                            bool read_only,
-                            CustomExecuteFn execute_fn = nullptr,
-                            void* execute_user = nullptr,
+    int32_t register_custom(std::string_view name, std::string_view description,
+                            const Json& parameters, bool read_only,
+                            CustomExecuteFn execute_fn = nullptr, void* execute_user = nullptr,
                             bool explicit_confirmation_required = false);
 
-    int32_t upsert_custom_batch(
-        const std::vector<CustomToolDescriptor>& descriptors,
-        CustomToolOwner owner);
-    int32_t remove_custom_batch(const std::vector<std::string>& names,
+    int32_t upsert_custom_batch(const std::vector<CustomToolDescriptor>& descriptors,
                                 CustomToolOwner owner);
+    int32_t remove_custom_batch(const std::vector<std::string>& names, CustomToolOwner owner);
 
     // Remove a previously registered custom tool.  Returning NOT_FOUND lets
     // callers distinguish "already gone" from "argument was rubbish".
@@ -111,10 +100,8 @@ public:
     // `emit_event` is the sao.event name used when the hook fires.
     // Re-registering the same id updates the descriptor in place, which lets
     // the UI switch a hook's phase without racing an unregister.
-    int32_t register_hook(std::string_view id,
-                          std::string_view phase,
-                          const std::vector<std::string>& tool_filter,
-                          std::string_view emit_event);
+    int32_t register_hook(std::string_view id, std::string_view phase,
+                          const std::vector<std::string>& tool_filter, std::string_view emit_event);
     int32_t unregister_hook(std::string_view id);
 
     struct HookFire final {
@@ -125,14 +112,14 @@ public:
     // value so the dispatch layer can iterate + emit events without holding
     // the internal mutex — hooks may transitively call back into the runtime
     // and grabbing the mutex again would deadlock.
-    std::vector<HookFire> snapshot_hooks(std::string_view phase,
-                                         std::string_view tool_name) const;
+    std::vector<HookFire> snapshot_hooks(std::string_view phase, std::string_view tool_name) const;
 
-private:
+  private:
     int32_t read_file(const Json& arguments, Json& result) const;
     int32_t list_files(const Json& arguments, Json& result) const;
     int32_t search_files(const Json& arguments, Json& result) const;
     int32_t edit_file(const Json& arguments, Json& result) const;
+    int32_t dump_sdk(const Json& arguments, Json& result, bool unreal) const;
 
     // Non-locking helpers used by both register_alias() and the constructor
     // for the built-in name check.  Kept close to the built-in dispatch list
@@ -182,4 +169,4 @@ private:
     const ToolResultFilterRegistry* filter_registry_ = nullptr;
 };
 
-}  // namespace sao::ai_editor::native
+} // namespace sao::ai_editor::native

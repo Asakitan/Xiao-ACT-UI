@@ -58,6 +58,22 @@ sao_ai_editor_main_panel_show(sao_ai_editor_main_panel_t panel);
 
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_main_panel_hide(sao_ai_editor_main_panel_t panel);
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_main_panel_is_visible(sao_ai_editor_main_panel_t panel, bool* out_visible);
+
+// Bind the Process Selector's already-authenticated RTIO target to the
+// workbench memory viewer. The proxy remains borrowed by the launcher and
+// must outlive a successful clear or panel retirement. This additive call
+// does not alter the RTIO wire or any existing panel structure.
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_main_panel_bind_memory_target(
+    sao_ai_editor_main_panel_t panel, void* borrowed_rt_io_proxy,
+    uint32_t pid, uint64_t start_time_100ns,
+    uint64_t selection_generation);
+
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_main_panel_clear_memory_target(
+    sao_ai_editor_main_panel_t panel);
 
 // Owner-thread periodic service. Merges background RPC completions, schedules
 // bounded events.drain delivery for the active run plus run.status fallback,

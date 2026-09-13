@@ -35,46 +35,43 @@
 namespace sao::ai_editor {
 
 class MmfFrameWriter {
-public:
+  public:
     MmfFrameWriter() = default;
-    ~MmfFrameWriter() { shutdown(); }
+    ~MmfFrameWriter() {
+        shutdown();
+    }
 
     MmfFrameWriter(const MmfFrameWriter&) = delete;
     MmfFrameWriter& operator=(const MmfFrameWriter&) = delete;
 
-    bool init(const wchar_t* mmf_name, uint32_t width, uint32_t height,
-              uint32_t slot_count = 3u) {
+    bool init(const wchar_t* mmf_name, uint32_t width, uint32_t height, uint32_t slot_count = 3u) {
         shutdown();
-        if (mmf_name == nullptr || *mmf_name == L'\0' || width == 0 ||
-            height == 0 ||
+        if (mmf_name == nullptr || *mmf_name == L'\0' || width == 0 || height == 0 ||
             slot_count < SAO_UI_SOPF_MMF_V1_MIN_SLOT_COUNT ||
             slot_count > SAO_UI_SOPF_MMF_MAX_SLOT_COUNT) {
             return false;
         }
-        const uint64_t pixel_count = static_cast<uint64_t>(width) *
-                                      static_cast<uint64_t>(height);
+        const uint64_t pixel_count = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
         if (pixel_count == 0 || pixel_count > UINT64_MAX / 4ull)
             return false;
         const uint64_t pixel_bytes = pixel_count * 4ull;
         if (pixel_bytes > UINT64_MAX - 4095ull)
             return false;
         const uint64_t slot_stride = ((pixel_bytes + 4095ull) / 4096ull) * 4096ull;
-        if (slot_stride == 0 ||
-            slot_count > (UINT64_MAX -
-                          static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES)) /
-                             slot_stride)
+        if (slot_stride == 0 || slot_stride > std::numeric_limits<uint32_t>::max() ||
+            slot_count >
+                (UINT64_MAX - static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES)) / slot_stride) {
             return false;
-        const uint64_t total =
-            static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES) +
-            static_cast<uint64_t>(slot_count) * slot_stride;
+        }
+        const uint64_t total = static_cast<uint64_t>(SAO_UI_SOPF_MMF_HEADER_BYTES) +
+                               static_cast<uint64_t>(slot_count) * slot_stride;
         if (total > SAO_UI_SOPF_MMF_MAX_MAPPING_BYTES ||
             total > static_cast<uint64_t>(std::numeric_limits<SIZE_T>::max())) {
             return false;
         }
-        mmf_handle_ = ::CreateFileMappingW(
-            INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-            static_cast<DWORD>((total >> 32) & 0xFFFFFFFFu),
-            static_cast<DWORD>(total & 0xFFFFFFFFu), mmf_name);
+        mmf_handle_ = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                           static_cast<DWORD>(total >> 32u),
+                                           static_cast<DWORD>(total & 0xffffffffu), mmf_name);
         if (mmf_handle_ == nullptr) {
             return false;
         }
@@ -83,8 +80,8 @@ public:
             mmf_handle_ = nullptr;
             return false;
         }
-        view_ = static_cast<uint8_t*>(::MapViewOfFile(
-            mmf_handle_, FILE_MAP_WRITE, 0, 0, static_cast<SIZE_T>(total)));
+        view_ = static_cast<uint8_t*>(
+            ::MapViewOfFile(mmf_handle_, FILE_MAP_WRITE, 0, 0, static_cast<SIZE_T>(total)));
         if (view_ == nullptr) {
             ::CloseHandle(mmf_handle_);
             mmf_handle_ = nullptr;
@@ -129,17 +126,29 @@ public:
         write_seq_ = 0u;
     }
 
-    bool is_initialized() const { return view_ != nullptr; }
-    uint32_t width() const { return width_; }
-    uint32_t height() const { return height_; }
-    uint32_t slot_stride() const { return slot_stride_; }
-    uint64_t last_committed_generation() const { return write_seq_; }
+    bool is_initialized() const {
+        return view_ != nullptr;
+    }
+    uint32_t width() const {
+        return width_;
+    }
+    uint32_t height() const {
+        return height_;
+    }
+    uint32_t slot_stride() const {
+        return slot_stride_;
+    }
+    uint64_t last_committed_generation() const {
+        return write_seq_;
+    }
 
     // Return the byte address of the current write slot's payload.  Caller
     // writes width*height BGRA (premultiplied alpha) into it, then calls
     // commit_frame().  Only one begin/commit pair may be in flight per
     // writer instance.
     uint8_t* current_slot_pixels() {
+        if (slots_ == nullptr || slot_count_ == 0u || write_slot_ >= slot_count_)
+            return nullptr;
         return slots_ + static_cast<size_t>(write_slot_) * slot_stride_;
     }
     size_t current_slot_bytes() const {
@@ -148,55 +157,37 @@ public:
 
     // Complete the slot that current_slot_pixels() points at.  SOPF V1
     // publishes the next write slot; readers consume its predecessor.
-    void commit_frame() {
-        if (header_ == nullptr) {
-            return;
-        }
-        write_seq_ += 1ull;
+    bool commit_frame() {
+        if (header_ == nullptr || slot_count_ == 0u || write_seq_ == UINT64_MAX)
+            return false;
+        ++write_seq_;
         const uint32_t next_write_slot = (write_slot_ + 1u) % slot_count_;
         std::atomic_ref<uint32_t> published_slot_ref(header_->published_slot);
-        std::atomic_ref<uint64_t> published_gen_ref(
-            header_->published_generation);
-        // Slot pointer must land before generation bumps -- readers that see
-        // the new generation must be able to compute (slot + N - 1) % N and
-        // land on the freshly written payload.
+        std::atomic_ref<uint64_t> published_gen_ref(header_->published_generation);
         published_slot_ref.store(next_write_slot, std::memory_order_release);
         published_gen_ref.store(write_seq_, std::memory_order_release);
         write_slot_ = next_write_slot;
+        return true;
     }
 
-    bool restore_frame(const uint8_t* pixels, size_t bytes,
-                       uint64_t generation) {
-        if (header_ == nullptr || pixels == nullptr ||
-            bytes != current_slot_bytes()) {
+    bool restore_frame(const uint8_t* pixels, size_t bytes, uint64_t generation) {
+        if (header_ == nullptr || pixels == nullptr || bytes != current_slot_bytes() ||
+            current_slot_pixels() == nullptr || generation == 0 || generation <= write_seq_ ||
+            generation == UINT64_MAX) {
             return false;
         }
         ::memcpy(current_slot_pixels(), pixels, bytes);
         write_seq_ = generation;
         const uint32_t next_write_slot = (write_slot_ + 1u) % slot_count_;
         std::atomic_ref<uint32_t> published_slot_ref(header_->published_slot);
-        std::atomic_ref<uint64_t> published_gen_ref(
-            header_->published_generation);
+        std::atomic_ref<uint64_t> published_gen_ref(header_->published_generation);
         published_slot_ref.store(next_write_slot, std::memory_order_release);
         published_gen_ref.store(generation, std::memory_order_release);
         write_slot_ = next_write_slot;
         return true;
     }
 
-    // Destroy the MMF and re-create with new dimensions.  Consumers
-    // (compositor) re-open the MMF every tick and will pick up the new
-    // header on the next poll.  Layer geometry mismatch will be detected
-    // by compositor validate_mmf_header_locked() and the consumer must
-    // re-create its layer with matching size before re-attaching.
-    bool resize(const wchar_t* mmf_name, uint32_t new_width,
-                uint32_t new_height) {
-        (void)mmf_name;
-        (void)new_width;
-        (void)new_height;
-        return false;
-    }
-
-private:
+  private:
     HANDLE mmf_handle_ = nullptr;
     uint8_t* view_ = nullptr;
     SaoUiSopfMmfHeaderV1* header_ = nullptr;
@@ -209,6 +200,6 @@ private:
     uint64_t write_seq_ = 0u;
 };
 
-}  // namespace sao::ai_editor
+} // namespace sao::ai_editor
 
-#endif  // _WIN32
+#endif // _WIN32

@@ -59,7 +59,7 @@ enum SaoAiEditorStatus : int32_t {
 // ABI version. Bump minor when adding new entrypoints; bump major
 // when the launcher/ipc structs change layout.
 #define SAO_AI_EDITOR_ABI_VERSION_MAJOR 1u
-#define SAO_AI_EDITOR_ABI_VERSION_MINOR 1u
+#define SAO_AI_EDITOR_ABI_VERSION_MINOR 2u
 #define SAO_AI_EDITOR_ABI_VERSION \
     ((SAO_AI_EDITOR_ABI_VERSION_MAJOR << 16) | SAO_AI_EDITOR_ABI_VERSION_MINOR)
 

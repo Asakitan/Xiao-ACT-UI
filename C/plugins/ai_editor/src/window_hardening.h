@@ -13,38 +13,75 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <utility>
 
+#include "sao/runtime/runtime_key.h"
 #include "sao_core/sao_status.h"
 #include "sao_security/abi.h"
 #include "sao_security/anti_screencap/window_affinity.h"
 
 namespace sao::ai_editor {
 
+inline HMODULE load_anti_screencap_module() noexcept {
+    try {
+        const auto load_from_directory = [](std::wstring directory) -> HMODULE {
+            if (directory.empty())
+                return nullptr;
+            const DWORD attributes = ::GetFileAttributesW(directory.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES ||
+                (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u ||
+                (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+                return nullptr;
+            }
+            if (directory.back() != L'\\' && directory.back() != L'/')
+                directory.push_back(L'\\');
+            directory.append(sao::runtime::kAntiScreencapDll);
+            return ::LoadLibraryExW(directory.c_str(), nullptr,
+                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        };
+
+        constexpr wchar_t kRuntimeStageVariable[] = L"SAO_RUNTIME_STAGE";
+        const DWORD required = ::GetEnvironmentVariableW(kRuntimeStageVariable, nullptr, 0u);
+        if (required > 1u && required <= 32'768u) {
+            std::wstring runtime_stage(required, L'\0');
+            const DWORD written =
+                ::GetEnvironmentVariableW(kRuntimeStageVariable, runtime_stage.data(),
+                                          static_cast<DWORD>(runtime_stage.size()));
+            if (written != 0u && written < runtime_stage.size()) {
+                runtime_stage.resize(written);
+                if (HMODULE module = load_from_directory(std::move(runtime_stage));
+                    module != nullptr)
+                    return module;
+            }
+        }
+
+        std::wstring executable_path(32'768u, L'\0');
+        const DWORD written = ::GetModuleFileNameW(nullptr, executable_path.data(),
+                                                   static_cast<DWORD>(executable_path.size()));
+        if (written == 0u || written >= executable_path.size())
+            return nullptr;
+        executable_path.resize(written);
+        const std::size_t separator = executable_path.find_last_of(L"\\/");
+        if (separator == std::wstring::npos)
+            return nullptr;
+        executable_path.resize(separator);
+        return load_from_directory(std::move(executable_path));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 inline HMODULE anti_screencap_module() noexcept {
     static std::mutex module_mutex;
     static HMODULE module = nullptr;
     std::lock_guard<std::mutex> lock(module_mutex);
-    if (module != nullptr) return module;
+    if (module != nullptr)
+        return module;
 
-    std::wstring executable_path(32768u, L'\0');
-    const DWORD written = ::GetModuleFileNameW(
-        nullptr, executable_path.data(),
-        static_cast<DWORD>(executable_path.size()));
-    if (written == 0u || written >= executable_path.size()) return nullptr;
-    executable_path.resize(written);
-
-    const size_t separator = executable_path.find_last_of(L"\\/");
-    if (separator == std::wstring::npos) return nullptr;
-    executable_path.resize(separator + 1u);
-    executable_path += L"sao_security_anti_screencap.dll";
-
-    module = ::GetModuleHandleW(executable_path.c_str());
-    if (module != nullptr) return module;
-
-    module = ::LoadLibraryExW(
-        executable_path.c_str(), nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-            LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    module = ::GetModuleHandleW(sao::runtime::kAntiScreencapDll);
+    if (module == nullptr)
+        module = load_anti_screencap_module();
     return module;
 }
 
@@ -76,14 +113,16 @@ inline HMODULE anti_screencap_module() noexcept {
 // kWindowClassName definitions in each translation unit), so an extra
 // SetWindowTextW would be redundant and adds a spurious user32 write.
 inline int32_t register_capture_protection_window_status(HWND hwnd) {
-    if (hwnd == nullptr) return SAO_ERR_HANDLE_INVALID;
+    if (hwnd == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
     const HMODULE anti_screencap = anti_screencap_module();
-    if (anti_screencap == nullptr) return SAO_ERR_NOT_FOUND;
-    using RegisterWindowFn = int32_t (SAO_SECURITY_CALL*)(void*);
+    if (anti_screencap == nullptr)
+        return SAO_ERR_NOT_FOUND;
+    using RegisterWindowFn = int32_t(SAO_SECURITY_CALL*)(void*);
     const auto register_window = reinterpret_cast<RegisterWindowFn>(
-        ::GetProcAddress(anti_screencap,
-                         "sao_security_anti_screencap_register_window"));
-    if (register_window == nullptr) return SAO_ERR_NOT_FOUND;
+        ::GetProcAddress(anti_screencap, "sao_security_anti_screencap_register_window"));
+    if (register_window == nullptr)
+        return SAO_ERR_NOT_FOUND;
     return register_window(hwnd);
 }
 
@@ -92,14 +131,16 @@ inline bool register_capture_protection_window(HWND hwnd) {
 }
 
 inline int32_t unregister_capture_protection_window_status(HWND hwnd) {
-    if (hwnd == nullptr) return SAO_ERR_HANDLE_INVALID;
+    if (hwnd == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
     const HMODULE anti_screencap = anti_screencap_module();
-    if (anti_screencap == nullptr) return SAO_ERR_NOT_FOUND;
-    using UnregisterWindowFn = int32_t (SAO_SECURITY_CALL*)(void*);
+    if (anti_screencap == nullptr)
+        return SAO_ERR_NOT_FOUND;
+    using UnregisterWindowFn = int32_t(SAO_SECURITY_CALL*)(void*);
     const auto unregister_window = reinterpret_cast<UnregisterWindowFn>(
-        ::GetProcAddress(anti_screencap,
-                         "sao_security_anti_screencap_unregister_window"));
-    if (unregister_window == nullptr) return SAO_ERR_NOT_FOUND;
+        ::GetProcAddress(anti_screencap, "sao_security_anti_screencap_unregister_window"));
+    if (unregister_window == nullptr)
+        return SAO_ERR_NOT_FOUND;
     return unregister_window(hwnd);
 }
 
@@ -114,25 +155,23 @@ enum class WebviewHardeningStatus : uint8_t {
     kInvalidWindow = 4,
 };
 
-inline WebviewHardeningStatus classify_webview_hardening(
-    bool affinity_applied, bool coordinator_registered) noexcept {
+inline WebviewHardeningStatus classify_webview_hardening(bool affinity_applied,
+                                                         bool coordinator_registered) noexcept {
     if (!coordinator_registered) {
         return WebviewHardeningStatus::kRegistrationFailed;
     }
-    return affinity_applied
-        ? WebviewHardeningStatus::kApplied
-        : WebviewHardeningStatus::kAffinityApplyFailed;
+    return affinity_applied ? WebviewHardeningStatus::kApplied
+                            : WebviewHardeningStatus::kAffinityApplyFailed;
 }
 
-inline bool webview_hardening_registered(
-    WebviewHardeningStatus status) noexcept {
+inline bool webview_hardening_registered(WebviewHardeningStatus status) noexcept {
     return status == WebviewHardeningStatus::kApplied ||
            status == WebviewHardeningStatus::kDeferredByPolicy ||
            status == WebviewHardeningStatus::kAffinityApplyFailed;
 }
 
-inline WebviewHardeningStatus classify_webview_hardening_status(
-    int32_t affinity_status, int32_t registration_status) noexcept {
+inline WebviewHardeningStatus
+classify_webview_hardening_status(int32_t affinity_status, int32_t registration_status) noexcept {
     if (registration_status != SAO_OK) {
         return WebviewHardeningStatus::kRegistrationFailed;
     }
@@ -145,35 +184,31 @@ inline WebviewHardeningStatus classify_webview_hardening_status(
     return WebviewHardeningStatus::kAffinityApplyFailed;
 }
 
-inline int32_t apply_stealth_window_status(
-    HWND hwnd, bool bypass_streaming_policy = true) {
-    if (hwnd == nullptr) return SAO_ERR_HANDLE_INVALID;
+inline int32_t apply_stealth_window_status(HWND hwnd, bool bypass_streaming_policy = true) {
+    if (hwnd == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
     const HMODULE anti_screencap = anti_screencap_module();
-    if (anti_screencap == nullptr) return SAO_ERR_NOT_FOUND;
-    using ApplySingleWindowFn = int32_t (SAO_SECURITY_CALL*)(
-        void*, uint32_t, bool, bool);
+    if (anti_screencap == nullptr)
+        return SAO_ERR_NOT_FOUND;
+    using ApplySingleWindowFn = int32_t(SAO_SECURITY_CALL*)(void*, uint32_t, bool, bool);
     const auto apply_single_window = reinterpret_cast<ApplySingleWindowFn>(
-        ::GetProcAddress(anti_screencap,
-                         "sao_security_anti_screencap_apply_single_window_policy"));
-    if (apply_single_window == nullptr) return SAO_ERR_NOT_FOUND;
-    return apply_single_window(
-        hwnd, SAO_ASC_AFFINITY_EXCLUDE_FROM_CAPTURE, true,
-        bypass_streaming_policy);
+        ::GetProcAddress(anti_screencap, "sao_security_anti_screencap_apply_single_window_policy"));
+    if (apply_single_window == nullptr)
+        return SAO_ERR_NOT_FOUND;
+    return apply_single_window(hwnd, SAO_ASC_AFFINITY_EXCLUDE_FROM_CAPTURE, true,
+                               bypass_streaming_policy);
 }
 
 inline bool apply_stealth_window(HWND hwnd) {
     return apply_stealth_window_status(hwnd) == SAO_OK;
 }
 
-inline WebviewHardeningStatus harden_window(
-    HWND hwnd, bool bypass_streaming_policy) {
-    if (hwnd == nullptr) return WebviewHardeningStatus::kInvalidWindow;
-    const int32_t affinity_status =
-        apply_stealth_window_status(hwnd, bypass_streaming_policy);
-    const int32_t registration_status =
-        register_capture_protection_window_status(hwnd);
-    return classify_webview_hardening_status(affinity_status,
-                                             registration_status);
+inline WebviewHardeningStatus harden_window(HWND hwnd, bool bypass_streaming_policy) {
+    if (hwnd == nullptr)
+        return WebviewHardeningStatus::kInvalidWindow;
+    const int32_t affinity_status = apply_stealth_window_status(hwnd, bypass_streaming_policy);
+    const int32_t registration_status = register_capture_protection_window_status(hwnd);
+    return classify_webview_hardening_status(affinity_status, registration_status);
 }
 
 inline WebviewHardeningStatus harden_webview_window(HWND hwnd) {
@@ -181,6 +216,6 @@ inline WebviewHardeningStatus harden_webview_window(HWND hwnd) {
     return harden_window(hwnd, false);
 }
 
-}  // namespace sao::ai_editor
+} // namespace sao::ai_editor
 
-#endif  // _WIN32
+#endif // _WIN32

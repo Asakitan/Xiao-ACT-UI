@@ -104,6 +104,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/mcp_client.cpp
     src/mcp_codec.cpp
     src/mcp_server.cpp
+    src/memory_viewer_provider.cpp
     src/native_secret_store.cpp
     src/native_tool_registry.cpp
     src/native_utils.cpp
@@ -159,6 +160,14 @@ add_custom_command(TARGET sao_plugin_ai_editor POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workbench"
         "$<TARGET_FILE_DIR:sao_plugin_ai_editor>/assets/ai_editor/workbench"
     VERBATIM)
+
+foreach (_sao_panel IN ITEMS kernel_map_panel mcp_management_panel)
+    add_custom_command(TARGET sao_plugin_ai_editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/${_sao_panel}"
+            "$<TARGET_FILE_DIR:sao_plugin_ai_editor>/assets/ai_editor/${_sao_panel}"
+        VERBATIM)
+endforeach()
 
 target_include_directories(sao_plugin_ai_editor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -227,10 +236,16 @@ add_custom_command(TARGET sao_ai_editor POST_BUILD
         "$<TARGET_FILE_DIR:sao_ai_editor>/assets/ai_editor/extension_host_shim.js"
     VERBATIM)
 
-install(TARGETS sao_ai_editor sao_plugin_ai_editor
+install(TARGETS sao_ai_editor
     RUNTIME DESTINATION "bin"
     COMPONENT ship
 )
+if (NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
+    install(TARGETS sao_plugin_ai_editor
+        RUNTIME DESTINATION "bin"
+        COMPONENT ship
+    )
+endif()
 
 if (SAO_BUILD_WEBVIEW_BRIDGE)
     install(FILES "${_SAO_WEBVIEW2_DLL}"
@@ -253,6 +268,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workbench/"
         PATTERN "*.js"
         PATTERN "*.css"
         PATTERN "*.md"
+        PATTERN "*.ttf"
 )
 
 # Market presets: bundled agent/workflow definitions surfaced by
@@ -285,6 +301,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel
         PATTERN "*.html"
         PATTERN "*.js"
         PATTERN "*.css"
+        PATTERN "*.ttf"
 )
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/mcp_management_panel/"
@@ -294,5 +311,6 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/kernel_map_panel
         PATTERN "*.html"
         PATTERN "*.js"
         PATTERN "*.css"
+        PATTERN "*.ttf"
     )
 

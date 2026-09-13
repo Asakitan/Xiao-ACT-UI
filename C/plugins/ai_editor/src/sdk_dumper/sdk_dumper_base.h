@@ -14,6 +14,7 @@ enum class DumpKind { IL2CPP, Mono, Unreal, Source };
 
 struct DumpConfig {
     uint32_t target_pid = 0;
+    std::string workspace_root;
     std::string output_dir;      // 输出目录 (per-plugin working dir).
     uint32_t max_classes = 100'000; // safety cap
     uint32_t timeout_ms = 60'000;

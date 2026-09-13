@@ -1,8 +1,8 @@
 #include "workbench_composition_host.h"
 #include "native_utils.h"
-#include "workbench_native_adapter.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/file_picker.h"
+#include "workbench_native_adapter.h"
 
 #if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
 
@@ -32,6 +32,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -424,20 +425,27 @@ bool callback_on_owner(const std::shared_ptr<HostState>& state) noexcept {
 }
 
 void SAO_UI_CALL on_script_answer(SaoUiDialogButton answer, const char* text, size_t size,
-                                 void* data) {
+                                  void* data) {
     auto& state = *static_cast<HostState*>(data);
     state.script_answer = answer;
     state.script_answer_pending = true;
-    try { state.script_input.assign(text ? text : "", text ? size : 0); }
-    catch (...) { state.script_answer = SAO_UI_DIALOG_BTN_DISMISS; state.script_input.clear(); }
+    try {
+        state.script_input.assign(text ? text : "", text ? size : 0);
+    } catch (...) {
+        state.script_answer = SAO_UI_DIALOG_BTN_DISMISS;
+        state.script_input.clear();
+    }
 }
 
 void complete_script_dialog(HostState& state, bool cancel) noexcept {
-    if (!cancel && !state.script_answer_pending) return;
-    const bool accept = !cancel && state.requested_visible && state.phase == HostState::Phase::ready &&
-        state.navigation_completed && state.handshake_complete &&
-        state.script_generation == state.navigation_generation &&
-        (state.script_answer == SAO_UI_DIALOG_BTN_OK || state.script_answer == SAO_UI_DIALOG_BTN_YES);
+    if (!cancel && !state.script_answer_pending)
+        return;
+    const bool accept = !cancel && state.requested_visible &&
+                        state.phase == HostState::Phase::ready && state.navigation_completed &&
+                        state.handshake_complete &&
+                        state.script_generation == state.navigation_generation &&
+                        (state.script_answer == SAO_UI_DIALOG_BTN_OK ||
+                         state.script_answer == SAO_UI_DIALOG_BTN_YES);
     auto args = std::move(state.script_args);
     auto deferral = std::move(state.script_deferral);
     if (state.script_dialog) {
@@ -454,22 +462,27 @@ void complete_script_dialog(HostState& state, bool cancel) noexcept {
             std::wstring input;
             if (SUCCEEDED(args->get_Kind(&kind)) &&
                 (kind != COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT ||
-                 (utf8_to_wide(state.script_input, &input) && SUCCEEDED(args->put_ResultText(input.c_str())))))
+                 (utf8_to_wide(state.script_input, &input) &&
+                  SUCCEEDED(args->put_ResultText(input.c_str())))))
                 (void)args->Accept();
-        } catch (...) {}
+        } catch (...) {
+        }
     }
     state.script_input.clear();
-    if (deferral) (void)deferral->Complete();
+    if (deferral)
+        (void)deferral->Complete();
     --state.callback_depth;
 }
 
 HRESULT open_script_dialog(const std::shared_ptr<HostState>& state,
-                          ICoreWebView2ScriptDialogOpeningEventArgs* args) noexcept {
-    if (!callback_on_owner(state)) return RPC_E_WRONG_THREAD;
+                           ICoreWebView2ScriptDialogOpeningEventArgs* args) noexcept {
+    if (!callback_on_owner(state))
+        return RPC_E_WRONG_THREAD;
     CallbackScope callback(state);
     if (!args || state->phase != HostState::Phase::ready || !state->requested_visible ||
         !state->navigation_completed || !state->handshake_complete || state->script_args ||
-        state->picker_completion) return S_OK;
+        state->picker_completion)
+        return S_OK;
     LPWSTR raw_uri = nullptr, raw_message = nullptr, raw_default = nullptr;
     const HRESULT uri_status = args->get_Uri(&raw_uri);
     const HRESULT message_status = args->get_Message(&raw_message);
@@ -477,21 +490,24 @@ HRESULT open_script_dialog(const std::shared_ptr<HostState>& state,
     const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> uri(raw_uri, &CoTaskMemFree);
     const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> message(raw_message, &CoTaskMemFree);
     const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> initial(raw_default, &CoTaskMemFree);
-    if (FAILED(uri_status) || !raw_uri || !is_workbench_document(raw_uri) ||
-        FAILED(message_status)) return S_OK;
+    if (FAILED(uri_status) || !raw_uri || !is_workbench_document(raw_uri) || FAILED(message_status))
+        return S_OK;
     try {
         COREWEBVIEW2_SCRIPT_DIALOG_KIND kind{};
         std::string text, initial_text;
-        if (FAILED(args->get_Kind(&kind)) || !wide_to_utf8(raw_message ? raw_message : L"", &text) ||
-            text.size() > 16384) return S_OK;
+        if (FAILED(args->get_Kind(&kind)) ||
+            !wide_to_utf8(raw_message ? raw_message : L"", &text) || text.size() > 16384)
+            return S_OK;
         const bool prompt = kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT;
         const bool alert = kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT;
-        if (prompt && (FAILED(default_status) || !wide_to_utf8(raw_default ? raw_default : L"", &initial_text) ||
-                       initial_text.size() > 4096)) return S_OK;
+        if (prompt && (FAILED(default_status) ||
+                       !wide_to_utf8(raw_default ? raw_default : L"", &initial_text) ||
+                       initial_text.size() > 4096))
+            return S_OK;
         if (kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_BEFOREUNLOAD)
             text = "离开编辑器页面？未保存的内容可能丢失。";
-        const SaoUiDialogButtonSpec buttons[] = {
-            {SAO_UI_DIALOG_BTN_CANCEL, "取消", 0}, {SAO_UI_DIALOG_BTN_OK, "确定", 0}};
+        const SaoUiDialogButtonSpec buttons[] = {{SAO_UI_DIALOG_BTN_CANCEL, "取消", 0},
+                                                 {SAO_UI_DIALOG_BTN_OK, "确定", 0}};
         SaoUiDialogSpec spec{};
         spec.kind = prompt ? SAO_UI_DIALOG_INPUT : alert ? SAO_UI_DIALOG_INFO : SAO_UI_DIALOG_ASK;
         spec.title_utf8 = "AI 编辑器";
@@ -500,11 +516,13 @@ HRESULT open_script_dialog(const std::shared_ptr<HostState>& state,
         spec.input_max_length = 4096;
         spec.buttons = alert ? buttons + 1 : buttons;
         spec.button_count = alert ? 1 : 2;
-        spec.width = 600; spec.height = prompt ? 360 : 300;
+        spec.width = 600;
+        spec.height = prompt ? 360 : 300;
         spec.theme_override = SAO_UI_THEME_COUNT;
         spec.mirror_z = 2300;
         spec.dismiss_on_esc = true;
-        if (sao_ui_dialog_create(state->compositor, nullptr, &state->script_dialog) != SAO_STATUS_OK)
+        if (sao_ui_dialog_create(state->compositor, nullptr, &state->script_dialog) !=
+            SAO_STATUS_OK)
             return S_OK;
         if (FAILED(args->GetDeferral(&state->script_deferral))) {
             complete_script_dialog(*state, true);
@@ -514,9 +532,12 @@ HRESULT open_script_dialog(const std::shared_ptr<HostState>& state,
         state->script_generation = state->navigation_generation;
         state->script_tick_at = std::chrono::steady_clock::now();
         state->script_answer_pending = false;
-        if (sao_ui_dialog_show(state->script_dialog, &spec, on_script_answer, state.get()) != SAO_STATUS_OK)
+        if (sao_ui_dialog_show(state->script_dialog, &spec, on_script_answer, state.get()) !=
+            SAO_STATUS_OK)
             complete_script_dialog(*state, true);
-    } catch (...) { complete_script_dialog(*state, true); }
+    } catch (...) {
+        complete_script_dialog(*state, true);
+    }
     return S_OK;
 }
 
@@ -529,7 +550,8 @@ void fail_state(HostState& state, sao_status_t status) noexcept {
 #endif
     state.phase = HostState::Phase::failed;
     state.requested_visible = false;
-    if (state.file_picker) (void)sao_ui_file_picker_cancel(state.file_picker);
+    if (state.file_picker)
+        (void)sao_ui_file_picker_cancel(state.file_picker);
     complete_script_dialog(state, true);
     if (state.slot != nullptr) {
         (void)sao_ui_composition_slot_set_input_policy(state.slot, false, true);
@@ -556,6 +578,78 @@ sao_status_t post_json(HostState& state, const json& message) noexcept {
         return SUCCEEDED(state.view->PostWebMessageAsJson(wide.c_str()))
                    ? SAO_STATUS_OK
                    : SAO_STATUS_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+std::string memory_bridge_bootstrap(std::string_view challenge) {
+    const std::string encoded_challenge = json(std::string(challenge)).dump();
+    return R"JS((function(challenge){
+"use strict";
+const webview=window.chrome&&window.chrome.webview;
+if(!webview||typeof webview.postMessage!=="function"||typeof webview.addEventListener!=="function")return false;
+const methods=new Set(["memviewer_status","memviewer_regions","memviewer_read","memviewer_read_value"]);
+const pending=new Map();let sequence=0;
+function nativeError(source,method){const value=source&&typeof source==="object"?source:{};const error=new Error(typeof value.message==="string"&&value.message?value.message:"Native memory request failed.");error.code=typeof value.code==="string"&&value.code?value.code:"SAO_NATIVE_ERROR";error.method=method;error.data=value.data===undefined?null:value.data;return error;}
+function request(method,args){if(!window.SaoWorkbenchBridge||window.SaoWorkbenchBridge.connected!==true)return Promise.reject(nativeError({code:"SAO_NATIVE_UNAVAILABLE",message:"Native workbench host is not ready."},method));const id="sao-memory-"+Date.now().toString(36)+"-"+(++sequence).toString(36);return new Promise(function(resolve,reject){const timer=window.setTimeout(function(){pending.delete(id);reject(nativeError({code:"SAO_NATIVE_TIMEOUT",message:"Native memory request timed out."},method));},30000);pending.set(id,{method:method,resolve:resolve,reject:reject,timer:timer});try{webview.postMessage({channel:"sao.workbench",kind:"request",challenge:challenge,id:id,method:method,args:args||[]});}catch(error){window.clearTimeout(timer);pending.delete(id);reject(nativeError({code:"SAO_NATIVE_TRANSPORT_ERROR",message:error&&error.message?error.message:"Native memory transport failed."},method));}});}
+webview.addEventListener("message",function(event){const message=event&&event.data;if(!message||message.channel!=="sao.workbench"||message.kind!=="reply"||message.challenge!==challenge||typeof message.id!=="string"||!message.id.startsWith("sao-memory-"))return;const entry=pending.get(message.id);if(!entry)return;window.clearTimeout(entry.timer);pending.delete(message.id);if(message.ok===true)entry.resolve(message.result);else entry.reject(nativeError(message.error,entry.method));});
+function wrap(base){if(!base||base.__saoMemoryBridge===challenge)return base;return new Proxy(base,{get:function(target,property,receiver){if(property==="__saoMemoryBridge")return challenge;if(typeof property==="string"&&methods.has(property))return function(){return request(property,Array.prototype.slice.call(arguments));};return Reflect.get(target,property,receiver);},has:function(target,property){return typeof property==="string"&&methods.has(property)||Reflect.has(target,property);}});}
+const holder=window.pywebview=window.pywebview||{};let facade=holder.api;try{Object.defineProperty(holder,"api",{configurable:true,enumerable:true,get:function(){return facade;},set:function(value){facade=wrap(value);}});facade=wrap(facade);}catch(error){return false;}return true;
+})()JS" + encoded_challenge +
+           ");";
+}
+
+sao_status_t
+install_memory_bridge_and_post_challenge(const std::shared_ptr<HostState>& state) noexcept {
+    if (!state || !state->view || state->handshake_challenge.empty() ||
+        state->navigation_generation == 0 || state->current_navigation_id == 0)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    try {
+        const std::uint64_t navigation_generation = state->navigation_generation;
+        const std::uint64_t navigation_id = state->current_navigation_id;
+        const std::string challenge = state->handshake_challenge;
+        std::wstring script;
+        if (!utf8_to_wide(memory_bridge_bootstrap(challenge), &script))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        auto completion = Microsoft::WRL::Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [state, navigation_generation, navigation_id, challenge](HRESULT script_status,
+                                                                     LPCWSTR result) -> HRESULT {
+                if (!callback_on_owner(state))
+                    return RPC_E_WRONG_THREAD;
+                CallbackScope callback(state);
+                if (state->pending_async != 0)
+                    --state->pending_async;
+                if (state->phase == HostState::Phase::closing ||
+                    state->phase == HostState::Phase::failed ||
+                    state->navigation_generation != navigation_generation ||
+                    state->current_navigation_id != navigation_id ||
+                    state->handshake_challenge != challenge) {
+                    return S_OK;
+                }
+                if (FAILED(script_status) || result == nullptr ||
+                    std::wcscmp(result, L"true") != 0) {
+                    fail_state(state, SAO_STATUS_ERR_OS_CALL_FAILED);
+                    return S_OK;
+                }
+                const sao_status_t challenge_status = post_json(
+                    *state,
+                    {{"channel", kChannel}, {"kind", "challenge"}, {"challenge", challenge}});
+                if (challenge_status != SAO_STATUS_OK)
+                    fail_state(state, challenge_status);
+                return S_OK;
+            });
+        if (!completion || state->pending_async == (std::numeric_limits<std::uint32_t>::max)())
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        ++state->pending_async;
+        state->hello_deadline = std::chrono::steady_clock::now() + kHelloTimeout;
+        const HRESULT execute_status = state->view->ExecuteScript(script.c_str(), completion.Get());
+        if (FAILED(execute_status)) {
+            --state->pending_async;
+            state->hello_deadline = {};
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -634,8 +728,10 @@ sao_status_t update_bounds_and_dpi(HostState& state) noexcept {
     sao_status_t status = sao_ui_overlay_host_get_client_rect(host, &client);
     if (status != SAO_STATUS_OK)
         return status;
-    const int32_t width = std::max(1, state.full_client ? client.width : std::min(client.width, 1120));
-    const int32_t height = std::max(1, state.full_client ? client.height : std::min(client.height, 760));
+    const int32_t width =
+        std::max(1, state.full_client ? client.width : std::min(client.width, 1120));
+    const int32_t height =
+        std::max(1, state.full_client ? client.height : std::min(client.height, 760));
     const int32_t x = state.full_client ? 0 : std::max(0, (client.width - width) / 2);
     const int32_t y = state.full_client ? 0 : std::max(0, (client.height - height) / 2);
     const bool moved = client.x != state.host_x || client.y != state.host_y;
@@ -932,7 +1028,8 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
 #ifndef NDEBUG
             if (!already_ready) {
                 std::fprintf(stderr, "AI_EDITOR_HTML_READY compositor=%d\n",
-                    status == SAO_STATUS_OK && state->bound_target_generation != 0 ? 1 : 0);
+                             status == SAO_STATUS_OK && state->bound_target_generation != 0 ? 1
+                                                                                            : 0);
                 std::fflush(stderr);
             }
 #endif
@@ -966,28 +1063,38 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
         return invalid_arguments();
     if (method == "native_panel_snapshot" || method == "native_panel_action") {
         if (!state->panel_snapshot || !state->panel_action)
-            return post_json(*state, error_reply(state->handshake_challenge, id,
-                "SAO_PANEL_UNAVAILABLE", "Editor tools are not attached."));
+            return post_json(*state,
+                             error_reply(state->handshake_challenge, id, "SAO_PANEL_UNAVAILABLE",
+                                         "Editor tools are not attached."));
         if (method == "native_panel_action") {
             if (args_it->size() != 2 || !(*args_it)[0].is_string() || !(*args_it)[1].is_object())
                 return invalid_arguments();
             const std::string action = (*args_it)[0].get<std::string>();
             const std::string action_payload = (*args_it)[1].dump();
-            if (action.size() > 128 || action_payload.size() > 16384) return invalid_arguments();
-            state->panel_action(action.c_str(), reinterpret_cast<const uint8_t*>(action_payload.data()),
+            if (action.size() > 128 || action_payload.size() > 16384)
+                return invalid_arguments();
+            state->panel_action(action.c_str(),
+                                reinterpret_cast<const uint8_t*>(action_payload.data()),
                                 action_payload.size(), state->panel_data);
-        } else if (!args_it->empty()) return invalid_arguments();
+        } else if (!args_it->empty())
+            return invalid_arguments();
         const json result = json::parse(state->panel_snapshot(state->panel_data), nullptr, false);
-        if (result.is_discarded()) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        return post_json(*state, {{"channel", kChannel}, {"kind", "reply"}, {"id", id},
-            {"challenge", state->handshake_challenge}, {"ok", true}, {"result", result}});
+        if (result.is_discarded())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return post_json(*state, {{"channel", kChannel},
+                                  {"kind", "reply"},
+                                  {"id", id},
+                                  {"challenge", state->handshake_challenge},
+                                  {"ok", true},
+                                  {"result", result}});
     }
     if (method == "win_close") {
         if (!args_it->empty())
             return invalid_arguments();
         state->close_requested = true;
         state->requested_visible = false;
-        if (state->file_picker) (void)sao_ui_file_picker_cancel(state->file_picker);
+        if (state->file_picker)
+            (void)sao_ui_file_picker_cancel(state->file_picker);
         complete_script_dialog(*state, true);
         const sao_status_t hide_status = apply_requested_visibility(*state);
         if (hide_status != SAO_STATUS_OK && !transient_composition_status(hide_status)) {
@@ -1012,13 +1119,15 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
         if (method == "win_minimize") {
             state->close_requested = true;
             state->requested_visible = false;
-            if (state->file_picker) (void)sao_ui_file_picker_cancel(state->file_picker);
+            if (state->file_picker)
+                (void)sao_ui_file_picker_cancel(state->file_picker);
             complete_script_dialog(*state, true);
             (void)apply_requested_visibility(*state);
         } else {
             state->full_client = !state->full_client;
             const sao_status_t resized = update_bounds_and_dpi(*state);
-            if (resized != SAO_STATUS_OK && !transient_composition_status(resized)) return resized;
+            if (resized != SAO_STATUS_OK && !transient_composition_status(resized))
+                return resized;
         }
         return post_json(*state, {{"channel", kChannel},
                                   {"kind", "reply"},
@@ -1041,8 +1150,8 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
              edge != "nw" && edge != "se" && edge != "sw")) {
             return invalid_arguments();
         }
-        return post_json(*state, error_reply(state->handshake_challenge, id,
-            "SAO_LAYOUT_MANAGED", "Editor sizing is managed by the compositor."));
+        return post_json(*state, error_reply(state->handshake_challenge, id, "SAO_LAYOUT_MANAGED",
+                                             "Editor sizing is managed by the compositor."));
     }
     if (method == "open_external_uri") {
         if (args_it->size() != 1 || !(*args_it)[0].is_string())
@@ -1084,105 +1193,124 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
             save_content ? (args_it->size() > 1 ? (*args_it)[1].get<std::string>() : "untitled.txt")
                          : (!args_it->empty() ? (*args_it)[0].get<std::string>() : "");
         if (state->picker_completion)
-            return post_json(*state, error_reply(state->handshake_challenge, id,
-                "SAO_PICKER_BUSY", "Finish the current file selection first."));
+            return post_json(*state, error_reply(state->handshake_challenge, id, "SAO_PICKER_BUSY",
+                                                 "Finish the current file selection first."));
         if (!state->file_picker) {
             const auto created = sao_ui_file_picker_create(state->compositor, &state->file_picker);
-            if (created != SAO_STATUS_OK) return created;
+            if (created != SAO_STATUS_OK)
+                return created;
         }
-        state->picker_completion = [state, id, method, save_content, arguments = *args_it,
-            challenge = state->handshake_challenge](sao_status_t selection_status, const char* selected_utf8) -> sao_status_t {
-        if (state->phase == HostState::Phase::closing || state->phase == HostState::Phase::failed ||
-            challenge != state->handshake_challenge) return SAO_STATUS_OK;
-        if (selection_status == SAO_STATUS_OK && (!state->requested_visible ||
-            !state->navigation_completed || !state->handshake_complete ||
-            state->handshake_generation != state->navigation_generation))
-            selection_status = SAO_STATUS_ERR_CANCELLED;
-        const json envelope{{"args", arguments}};
-        const auto args_it = envelope.find("args");
-        if (selection_status == SAO_STATUS_ERR_CANCELLED) {
+        state->picker_completion =
+            [state, id, method, save_content, arguments = *args_it,
+             challenge = state->handshake_challenge](sao_status_t selection_status,
+                                                     const char* selected_utf8) -> sao_status_t {
+            if (state->phase == HostState::Phase::closing ||
+                state->phase == HostState::Phase::failed || challenge != state->handshake_challenge)
+                return SAO_STATUS_OK;
+            if (selection_status == SAO_STATUS_OK &&
+                (!state->requested_visible || !state->navigation_completed ||
+                 !state->handshake_complete ||
+                 state->handshake_generation != state->navigation_generation))
+                selection_status = SAO_STATUS_ERR_CANCELLED;
+            const json envelope{{"args", arguments}};
+            const auto args_it = envelope.find("args");
+            if (selection_status == SAO_STATUS_ERR_CANCELLED) {
+                return post_json(*state, {{"channel", kChannel},
+                                          {"kind", "reply"},
+                                          {"id", id},
+                                          {"challenge", state->handshake_challenge},
+                                          {"ok", true},
+                                          {"result", {{"ok", false}, {"cancelled", true}}}});
+            }
+            if (selection_status != SAO_STATUS_OK || !selected_utf8)
+                return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                     "SAO_FILE_DIALOG_FAILED",
+                                                     "Native file dialog failed."));
+            std::wstring selected_wide;
+            if (!utf8_to_wide(selected_utf8, &selected_wide))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const std::filesystem::path selected(selected_wide);
+            const std::string path = sao::ai_editor::native::wide_to_utf8(selected.native());
+            const std::string name =
+                sao::ai_editor::native::wide_to_utf8(selected.filename().native());
+            json result{{"ok", true}, {"path", path}, {"name", name}};
+            if (save_content) {
+                const std::string content = (*args_it)[0].get<std::string>();
+                if (content.size() > 4U * 1024U * 1024U ||
+                    sao::ai_editor::native::write_text_atomic(selected, content) !=
+                        SAO_AI_EDITOR_OK) {
+                    return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                         "SAO_FILE_SAVE_FAILED",
+                                                         "Selected file could not be saved."));
+                }
+            } else if (method == "open_text_file") {
+                std::string content;
+                if (sao::ai_editor::native::read_text_file(selected, 4U * 1024U * 1024U, content) !=
+                    SAO_AI_EDITOR_OK) {
+                    return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                         "SAO_FILE_READ_FAILED",
+                                                         "Selected text file could not be read."));
+                }
+                result["content"] = std::move(content);
+                result["language"] = text_language(selected);
+            } else if (method == "open_file_dialog") {
+                std::vector<uint8_t> bytes;
+                const BinaryReadResult read_result = read_binary_file(selected, &bytes);
+                if (read_result == BinaryReadResult::too_large)
+                    return post_json(*state,
+                                     error_reply(state->handshake_challenge, id,
+                                                 "SAO_RESPONSE_TOO_LARGE",
+                                                 "Selected image exceeds the delivery limit."));
+                if (read_result != BinaryReadResult::ok)
+                    return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                         "SAO_FILE_READ_FAILED",
+                                                         "Selected image could not be read."));
+                size_t expected_base64_bytes = 0;
+                if (!base64_encoded_size(bytes.size(), &expected_base64_bytes))
+                    return post_json(*state,
+                                     error_reply(state->handshake_challenge, id,
+                                                 "SAO_RESPONSE_TOO_LARGE",
+                                                 "Selected image exceeds the delivery limit."));
+                std::string encoded = base64_encode(bytes);
+                if (encoded.size() != expected_base64_bytes)
+                    return post_json(*state, error_reply(state->handshake_challenge, id,
+                                                         "SAO_FILE_READ_FAILED",
+                                                         "Selected image could not be encoded."));
+                result["base64"] = std::move(encoded);
+                result["mime"] = file_mime(selected);
+            }
             return post_json(*state, {{"channel", kChannel},
                                       {"kind", "reply"},
                                       {"id", id},
                                       {"challenge", state->handshake_challenge},
                                       {"ok", true},
-                                      {"result", {{"ok", false}, {"cancelled", true}}}});
-        }
-        if (selection_status != SAO_STATUS_OK || !selected_utf8)
-            return post_json(*state,
-                             error_reply(state->handshake_challenge, id, "SAO_FILE_DIALOG_FAILED",
-                                         "Native file dialog failed."));
-                        std::wstring selected_wide;
-                        if (!utf8_to_wide(selected_utf8, &selected_wide)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-                        const std::filesystem::path selected(selected_wide);
-        const std::string path = sao::ai_editor::native::wide_to_utf8(selected.native());
-        const std::string name = sao::ai_editor::native::wide_to_utf8(selected.filename().native());
-        json result{{"ok", true}, {"path", path}, {"name", name}};
-        if (save_content) {
-            const std::string content = (*args_it)[0].get<std::string>();
-            if (content.size() > 4U * 1024U * 1024U ||
-                sao::ai_editor::native::write_text_atomic(selected, content) != SAO_AI_EDITOR_OK) {
-                return post_json(*state,
-                                 error_reply(state->handshake_challenge, id, "SAO_FILE_SAVE_FAILED",
-                                             "Selected file could not be saved."));
-            }
-        } else if (method == "open_text_file") {
-            std::string content;
-            if (sao::ai_editor::native::read_text_file(selected, 4U * 1024U * 1024U, content) !=
-                SAO_AI_EDITOR_OK) {
-                return post_json(*state,
-                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
-                                             "Selected text file could not be read."));
-            }
-            result["content"] = std::move(content);
-            result["language"] = text_language(selected);
-        } else if (method == "open_file_dialog") {
-            std::vector<uint8_t> bytes;
-            const BinaryReadResult read_result = read_binary_file(selected, &bytes);
-            if (read_result == BinaryReadResult::too_large)
-                return post_json(*state, error_reply(state->handshake_challenge, id,
-                                                     "SAO_RESPONSE_TOO_LARGE",
-                                                     "Selected image exceeds the delivery limit."));
-            if (read_result != BinaryReadResult::ok)
-                return post_json(*state,
-                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
-                                             "Selected image could not be read."));
-            size_t expected_base64_bytes = 0;
-            if (!base64_encoded_size(bytes.size(), &expected_base64_bytes))
-                return post_json(*state, error_reply(state->handshake_challenge, id,
-                                                     "SAO_RESPONSE_TOO_LARGE",
-                                                     "Selected image exceeds the delivery limit."));
-            std::string encoded = base64_encode(bytes);
-            if (encoded.size() != expected_base64_bytes)
-                return post_json(*state,
-                                 error_reply(state->handshake_challenge, id, "SAO_FILE_READ_FAILED",
-                                             "Selected image could not be encoded."));
-            result["base64"] = std::move(encoded);
-            result["mime"] = file_mime(selected);
-        }
-        return post_json(*state, {{"channel", kChannel},
-                                  {"kind", "reply"},
-                                  {"id", id},
-                                  {"challenge", state->handshake_challenge},
-                                  {"ok", true},
-                                  {"result", std::move(result)}});
+                                      {"result", std::move(result)}});
         };
         const SaoUiFilePickerConfig picker_config{
             save_dialog ? "另存为" : "打开文件", suggested_utf8.c_str(),
-            method == "open_file_dialog" ? "图片 (*.png;*.jpg;*.jpeg;*.gif;*.webp)" : "文本与源代码文件",
+            method == "open_file_dialog" ? "图片 (*.png;*.jpg;*.jpeg;*.gif;*.webp)"
+                                         : "文本与源代码文件",
             save_dialog ? SAO_UI_FILE_PICKER_SAVE : SAO_UI_FILE_PICKER_OPEN};
-        const auto opened = sao_ui_file_picker_show(state->file_picker, &picker_config,
+        const auto opened = sao_ui_file_picker_show(
+            state->file_picker, &picker_config,
             [](sao_status_t status, const char* path, void* data) {
                 auto& state = *static_cast<HostState*>(data);
                 auto completion = std::move(state.picker_completion);
-                if (!completion) return;
-                try { (void)completion(status, path); }
-                catch (...) { fail_state(state, SAO_STATUS_ERR_UNKNOWN); }
-            }, state.get());
-        if (opened == SAO_STATUS_OK) return SAO_STATUS_OK;
+                if (!completion)
+                    return;
+                try {
+                    (void)completion(status, path);
+                } catch (...) {
+                    fail_state(state, SAO_STATUS_ERR_UNKNOWN);
+                }
+            },
+            state.get());
+        if (opened == SAO_STATUS_OK)
+            return SAO_STATUS_OK;
         state->picker_completion = {};
-        return post_json(*state, error_reply(state->handshake_challenge, id,
-            "SAO_FILE_DIALOG_FAILED", "File selection could not be opened."));
+        return post_json(*state,
+                         error_reply(state->handshake_challenge, id, "SAO_FILE_DIALOG_FAILED",
+                                     "File selection could not be opened."));
     }
     const sao_status_t submit_status = native_adapter_submit(
         state->native_adapter, state->handshake_challenge, id, method, *args_it);
@@ -1197,14 +1325,16 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
         [state](ICoreWebView2*, ICoreWebView2ScriptDialogOpeningEventArgs* args) -> HRESULT {
             return open_script_dialog(state, args);
         });
-    if (!script_dialog || FAILED(state->view->add_ScriptDialogOpening(script_dialog.Get(), &state->script_dialog_token)))
+    if (!script_dialog || FAILED(state->view->add_ScriptDialogOpening(script_dialog.Get(),
+                                                                      &state->script_dialog_token)))
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     state->script_dialog_registered = true;
     auto new_window = Microsoft::WRL::Callback<ICoreWebView2NewWindowRequestedEventHandler>(
         [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
             return args ? args->put_Handled(TRUE) : E_POINTER;
         });
-    if (!new_window || FAILED(state->view->add_NewWindowRequested(new_window.Get(), &state->new_window_token)))
+    if (!new_window ||
+        FAILED(state->view->add_NewWindowRequested(new_window.Get(), &state->new_window_token)))
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     state->new_window_registered = true;
     auto navigation_starting =
@@ -1244,7 +1374,8 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
                 state->handshake_complete = false;
                 state->handshake_generation = 0;
                 state->handshake_challenge.clear();
-                if (state->file_picker) (void)sao_ui_file_picker_cancel(state->file_picker);
+                if (state->file_picker)
+                    (void)sao_ui_file_picker_cancel(state->file_picker);
                 complete_script_dialog(*state, true);
                 const sao_status_t document_status =
                     native_adapter_set_document(state->native_adapter, {});
@@ -1300,14 +1431,11 @@ sao_status_t register_view_events(const std::shared_ptr<HostState>& state) noexc
                 }
                 state->handshake_challenge = std::move(challenge);
                 const sao_status_t challenge_status =
-                    post_json(*state, {{"channel", kChannel},
-                                       {"kind", "challenge"},
-                                       {"challenge", state->handshake_challenge}});
+                    install_memory_bridge_and_post_challenge(state);
                 if (challenge_status != SAO_STATUS_OK) {
                     fail_state(state, challenge_status);
                     return S_OK;
                 }
-                state->hello_deadline = std::chrono::steady_clock::now() + kHelloTimeout;
                 return S_OK;
             });
     if (!navigation_completed ||
@@ -1420,6 +1548,11 @@ sao_status_t finish_controller_setup(const std::shared_ptr<HostState>& state,
             COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS))) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+    const auto fonts = state->asset_root / L"fonts";
+    if (!regular_file(fonts / L"SAOUI.ttf") || !regular_file(fonts / L"ZhuZiAYuanJWD.ttf") ||
+        FAILED(view3->SetVirtualHostNameToFolderMapping(
+            L"sao-fonts.local", fonts.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW)))
+        return SAO_STATUS_ERR_NOT_FOUND;
     sao_status_t status = bind_current_target(*state);
     if (status != SAO_STATUS_OK && !transient_composition_status(status))
         return status;
@@ -1512,7 +1645,8 @@ sao_status_t start_environment(const std::shared_ptr<HostState>& state) noexcept
 sao_status_t remove_handlers(HostState& state) noexcept {
     if (state.view && state.script_dialog_registered) {
         const HRESULT status = state.view->remove_ScriptDialogOpening(state.script_dialog_token);
-        if (FAILED(status) && !state.process_failed) return SAO_STATUS_ERR_OS_CALL_FAILED;
+        if (FAILED(status) && !state.process_failed)
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
         state.script_dialog_registered = false;
     }
     if (state.view && state.new_window_registered) {
@@ -1632,9 +1766,10 @@ struct CompositionHost {
     std::shared_ptr<HostState> state;
 };
 
-void set_panel_bridge(CompositionHost* host, PanelSnapshotFn snapshot,
-                      PanelActionFn action, void* data) noexcept {
-    if (!host || !host->state || host->state->owner_thread != GetCurrentThreadId()) return;
+void set_panel_bridge(CompositionHost* host, PanelSnapshotFn snapshot, PanelActionFn action,
+                      void* data) noexcept {
+    if (!host || !host->state || host->state->owner_thread != GetCurrentThreadId())
+        return;
     host->state->panel_snapshot = snapshot;
     host->state->panel_action = action;
     host->state->panel_data = data;
@@ -1769,7 +1904,8 @@ sao_status_t hide(CompositionHost* host) noexcept {
     if (state.owner_thread != GetCurrentThreadId())
         return SAO_STATUS_ERR_ACCESS_DENIED;
     state.requested_visible = false;
-    if (state.file_picker) (void)sao_ui_file_picker_cancel(state.file_picker);
+    if (state.file_picker)
+        (void)sao_ui_file_picker_cancel(state.file_picker);
     complete_script_dialog(state, true);
     cancel_mouse_state(state);
     const sao_status_t status = apply_requested_visibility(state);
@@ -1792,9 +1928,12 @@ sao_status_t tick(CompositionHost* host) noexcept {
         return SAO_STATUS_ERR_CANCELLED;
     if (state.script_dialog) {
         const auto now = std::chrono::steady_clock::now();
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.script_tick_at).count();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - state.script_tick_at)
+                .count();
         state.script_tick_at = now;
-        const auto dialog_status = sao_ui_dialog_tick(state.script_dialog, static_cast<int32_t>(std::clamp<int64_t>(elapsed, 0, 250)));
+        const auto dialog_status = sao_ui_dialog_tick(
+            state.script_dialog, static_cast<int32_t>(std::clamp<int64_t>(elapsed, 0, 250)));
         if (dialog_status != SAO_STATUS_OK && dialog_status != SAO_STATUS_ERR_NOT_INITIALIZED)
             complete_script_dialog(state, true);
     }
@@ -1834,6 +1973,33 @@ sao_status_t tick(CompositionHost* host) noexcept {
     return status;
 }
 
+sao_status_t bind_memory_target(CompositionHost* host, sao_rt_io_proxy_handle_t proxy,
+                                std::uint32_t pid, std::uint64_t start_time_100ns,
+                                std::uint64_t selection_generation) noexcept {
+    if (host == nullptr || !host->state)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto& state = *host->state;
+    if (state.owner_thread != GetCurrentThreadId())
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (state.phase == HostState::Phase::closing)
+        return SAO_STATUS_ERR_CANCELLED;
+    if (state.native_adapter == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    return native_adapter_bind_memory_target(state.native_adapter, proxy, pid, start_time_100ns,
+                                             selection_generation);
+}
+
+sao_status_t clear_memory_target(CompositionHost* host) noexcept {
+    if (host == nullptr || !host->state)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    auto& state = *host->state;
+    if (state.owner_thread != GetCurrentThreadId())
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (state.native_adapter == nullptr)
+        return SAO_STATUS_OK;
+    return native_adapter_clear_memory_target(state.native_adapter);
+}
+
 sao_status_t try_destroy(CompositionHost* host) noexcept {
     if (host == nullptr)
         return SAO_STATUS_OK;
@@ -1842,7 +2008,8 @@ sao_status_t try_destroy(CompositionHost* host) noexcept {
     auto state = host->state;
     if (state->owner_thread != GetCurrentThreadId())
         return SAO_STATUS_ERR_ACCESS_DENIED;
-    if (state->callback_depth != 0) return SAO_STATUS_ERR_CANCELLED;
+    if (state->callback_depth != 0)
+        return SAO_STATUS_ERR_CANCELLED;
     state->phase = HostState::Phase::closing;
     state->requested_visible = false;
     state->panel_snapshot = nullptr;
@@ -1851,7 +2018,8 @@ sao_status_t try_destroy(CompositionHost* host) noexcept {
     complete_script_dialog(*state, true);
     if (state->file_picker) {
         const auto status = sao_ui_file_picker_try_destroy(state->file_picker);
-        if (status != SAO_STATUS_OK) return status;
+        if (status != SAO_STATUS_OK)
+            return status;
         state->file_picker = nullptr;
         state->picker_completion = {};
     }
@@ -1966,6 +2134,13 @@ sao_status_t tick(CompositionHost*) noexcept {
 sao_status_t try_destroy(CompositionHost* host) noexcept {
     delete host;
     return SAO_STATUS_OK;
+}
+sao_status_t bind_memory_target(CompositionHost*, sao_rt_io_proxy_handle_t, std::uint32_t,
+                                std::uint64_t, std::uint64_t) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+sao_status_t clear_memory_target(CompositionHost*) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 bool available(const CompositionHost*) noexcept {
     return false;

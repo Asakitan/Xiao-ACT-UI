@@ -27,19 +27,38 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace sao::ai_editor {
+
+inline bool checked_gdi_rect(int x, int y, int width, int height, RECT& result) noexcept {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const int64_t right = static_cast<int64_t>(x) + width;
+    const int64_t bottom = static_cast<int64_t>(y) + height;
+    if (right < std::numeric_limits<LONG>::min() || right > std::numeric_limits<LONG>::max() ||
+        bottom < std::numeric_limits<LONG>::min() || bottom > std::numeric_limits<LONG>::max()) {
+        return false;
+    }
+    result = RECT{static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(right),
+                  static_cast<LONG>(bottom)};
+    return true;
+}
+
+inline bool valid_gdi_object(HGDIOBJ object) noexcept {
+    return object != nullptr && object != HGDI_ERROR;
+}
 
 // BGRA colour helper: input R,G,B,A → 0xAARRGGBB packing.  The DIB
 // section stores bytes as B,G,R,A in memory (little-endian 0xAARRGGBB),
 // which matches SOPF BGRA premultiplied-alpha contract when alpha is 255.
 inline uint32_t bgra_rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFFu) {
-    return (static_cast<uint32_t>(a) << 24) |
-           (static_cast<uint32_t>(r) << 16) |
-           (static_cast<uint32_t>(g) << 8) |
-           static_cast<uint32_t>(b);
+    return (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(r) << 16) |
+           (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
 }
 
 // GDI COLORREF is 0x00BBGGRR; convert from packed BGRA.
@@ -51,22 +70,28 @@ inline COLORREF bgra_to_colorref(uint32_t bgra) {
 }
 
 class GdiFramebuffer {
-public:
+  public:
     GdiFramebuffer() = default;
-    ~GdiFramebuffer() { shutdown(); }
+    ~GdiFramebuffer() {
+        shutdown();
+    }
 
     GdiFramebuffer(const GdiFramebuffer&) = delete;
     GdiFramebuffer& operator=(const GdiFramebuffer&) = delete;
 
     bool init(int width, int height) {
         shutdown();
-        if (width <= 0 || height <= 0) {
+        if (width <= 0 || height <= 0 || width > std::numeric_limits<int>::max() / 4) {
+            return false;
+        }
+        const uint64_t pixel_count = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+        if (pixel_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) / 4u) {
             return false;
         }
         BITMAPINFO bmi{};
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = width;
-        bmi.bmiHeader.biHeight = -height;  // top-down DIB
+        bmi.bmiHeader.biHeight = -height; // top-down DIB
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -80,14 +105,25 @@ public:
             return false;
         }
         void* pixels = nullptr;
-        bitmap_ = ::CreateDIBSection(dc_, &bmi, DIB_RGB_COLORS, &pixels,
-                                      nullptr, 0);
+        bitmap_ = ::CreateDIBSection(dc_, &bmi, DIB_RGB_COLORS, &pixels, nullptr, 0);
         if (bitmap_ == nullptr || pixels == nullptr) {
+            if (bitmap_ != nullptr) {
+                ::DeleteObject(bitmap_);
+                bitmap_ = nullptr;
+            }
             ::DeleteDC(dc_);
             dc_ = nullptr;
             return false;
         }
-        old_bitmap_ = static_cast<HBITMAP>(::SelectObject(dc_, bitmap_));
+        const HGDIOBJ old_bitmap = ::SelectObject(dc_, bitmap_);
+        if (!valid_gdi_object(old_bitmap)) {
+            ::DeleteObject(bitmap_);
+            bitmap_ = nullptr;
+            ::DeleteDC(dc_);
+            dc_ = nullptr;
+            return false;
+        }
+        old_bitmap_ = static_cast<HBITMAP>(old_bitmap);
         pixels_ = static_cast<uint8_t*>(pixels);
         width_ = width;
         height_ = height;
@@ -116,13 +152,27 @@ public:
         stride_ = 0;
     }
 
-    bool is_initialized() const { return dc_ != nullptr; }
-    HDC dc() const { return dc_; }
-    const uint8_t* pixels() const { return pixels_; }
-    uint8_t* pixels_mutable() { return pixels_; }
-    int width() const { return width_; }
-    int height() const { return height_; }
-    int stride() const { return stride_; }
+    bool is_initialized() const {
+        return dc_ != nullptr;
+    }
+    HDC dc() const {
+        return dc_;
+    }
+    const uint8_t* pixels() const {
+        return pixels_;
+    }
+    uint8_t* pixels_mutable() {
+        return pixels_;
+    }
+    int width() const {
+        return width_;
+    }
+    int height() const {
+        return height_;
+    }
+    int stride() const {
+        return stride_;
+    }
     size_t byte_size() const {
         return static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u;
     }
@@ -132,8 +182,7 @@ public:
         if (pixels_ == nullptr) {
             return;
         }
-        const size_t pixel_count =
-            static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        const size_t pixel_count = static_cast<size_t>(width_) * static_cast<size_t>(height_);
         uint32_t* p = reinterpret_cast<uint32_t*>(pixels_);
         for (size_t i = 0; i < pixel_count; ++i) {
             p[i] = bgra;
@@ -144,7 +193,10 @@ public:
         if (pixels_ == nullptr || w <= 0 || h <= 0) {
             return;
         }
-        RECT requested{x, y, x + w, y + h};
+        RECT requested{};
+        if (!checked_gdi_rect(x, y, w, h, requested)) {
+            return;
+        }
         RECT bounds{0, 0, width_, height_};
         RECT clipped{};
         if (::IntersectRect(&clipped, &requested, &bounds) == FALSE) {
@@ -165,48 +217,78 @@ public:
         if (dc_ == nullptr || w <= 0 || h <= 0) {
             return;
         }
+        RECT rect{};
+        if (!checked_gdi_rect(x, y, w, h, rect)) {
+            return;
+        }
         HBRUSH brush = ::CreateSolidBrush(bgra_to_colorref(fill_bgra));
-        HPEN pen = border_width > 0
-                       ? ::CreatePen(PS_SOLID, border_width,
-                                     bgra_to_colorref(border_bgra))
-                       : static_cast<HPEN>(::GetStockObject(NULL_PEN));
+        if (brush == nullptr) {
+            return;
+        }
+        const int pen_width = border_width > 0 ? (std::min)(border_width, (std::min)(w, h)) : 0;
+        HPEN pen = pen_width > 0 ? ::CreatePen(PS_SOLID, pen_width, bgra_to_colorref(border_bgra))
+                                 : static_cast<HPEN>(::GetStockObject(NULL_PEN));
+        if (!valid_gdi_object(pen)) {
+            ::DeleteObject(brush);
+            return;
+        }
         HGDIOBJ old_brush = ::SelectObject(dc_, brush);
+        if (!valid_gdi_object(old_brush)) {
+            if (pen_width > 0) {
+                ::DeleteObject(pen);
+            }
+            ::DeleteObject(brush);
+            return;
+        }
         HGDIOBJ old_pen = ::SelectObject(dc_, pen);
-        ::RoundRect(dc_, x, y, x + w, y + h, radius * 2, radius * 2);
+        if (!valid_gdi_object(old_pen)) {
+            ::SelectObject(dc_, old_brush);
+            if (pen_width > 0) {
+                ::DeleteObject(pen);
+            }
+            ::DeleteObject(brush);
+            return;
+        }
+        const int bounded_radius = (std::clamp)(radius, 0, (std::min)(w, h) / 2);
+        const int diameter = bounded_radius * 2;
+        ::RoundRect(dc_, rect.left, rect.top, rect.right, rect.bottom, diameter, diameter);
         ::SelectObject(dc_, old_brush);
         ::SelectObject(dc_, old_pen);
         ::DeleteObject(brush);
-        if (border_width > 0) {
+        if (pen_width > 0) {
             ::DeleteObject(pen);
         }
     }
 
     // Draw wide-char text into a rectangle using the currently-selected
     // font (or a newly-selected one).  align uses DrawText DT_* flags.
-    void draw_text(const wchar_t* text, int x, int y, int w, int h,
-                   uint32_t bgra, HFONT font, UINT align) {
+    void draw_text(const wchar_t* text, int x, int y, int w, int h, uint32_t bgra, HFONT font,
+                   UINT align) {
         if (dc_ == nullptr || text == nullptr) {
+            return;
+        }
+        RECT rect{};
+        if (!checked_gdi_rect(x, y, w, h, rect)) {
             return;
         }
         HGDIOBJ old_font = nullptr;
         if (font != nullptr) {
             old_font = ::SelectObject(dc_, font);
+            if (!valid_gdi_object(old_font)) {
+                return;
+            }
         }
         ::SetTextColor(dc_, bgra_to_colorref(bgra));
-        RECT r{x, y, x + w, y + h};
-        ::DrawTextW(dc_, text, -1, &r, align);
+        ::DrawTextW(dc_, text, -1, &rect, align);
         if (old_font != nullptr) {
             ::SelectObject(dc_, old_font);
         }
     }
 
-    static HFONT create_font(const wchar_t* face, int pixel_size,
-                             bool bold = false) {
-        return ::CreateFontW(pixel_size, 0, 0, 0,
-                             bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                             DEFAULT_PITCH | FF_DONTCARE, face);
+    static HFONT create_font(const wchar_t* face, int pixel_size, bool bold = false) {
+        return ::CreateFontW(pixel_size, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
     }
 
     // BGRA output is not premultiplied by GDI; the SOPF contract wants
@@ -217,8 +299,7 @@ public:
         if (pixels_ == nullptr) {
             return;
         }
-        const size_t pixel_count =
-            static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        const size_t pixel_count = static_cast<size_t>(width_) * static_cast<size_t>(height_);
         uint8_t* p = pixels_;
         for (size_t i = 0; i < pixel_count; ++i, p += 4) {
             const uint32_t a = p[3];
@@ -235,7 +316,7 @@ public:
         }
     }
 
-private:
+  private:
     HDC dc_ = nullptr;
     HBITMAP bitmap_ = nullptr;
     HBITMAP old_bitmap_ = nullptr;
@@ -245,6 +326,6 @@ private:
     int stride_ = 0;
 };
 
-}  // namespace sao::ai_editor
+} // namespace sao::ai_editor
 
-#endif  // _WIN32
+#endif // _WIN32

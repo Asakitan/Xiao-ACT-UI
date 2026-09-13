@@ -5,6 +5,12 @@
 
 namespace sao::ai_editor::native {
 
+namespace {
+
+constexpr uint64_t kMaximumSafeJsonInteger = 9007199254740991ULL;
+
+} // namespace
+
 int64_t WebviewPanelRegistry::now_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
@@ -54,7 +60,6 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
             existing->second.last_reveal_ms = now_ms();
             existing->second.html.clear();
             existing->second.initial_state = Json::object();
-            existing->second.message_seq = 0;
             existing->second.last_post_ms = 0;
             out_state = existing->second;
             return SAO_AI_EDITOR_OK;
@@ -149,7 +154,6 @@ int32_t WebviewPanelRegistry::dispose(const std::string& panel_id, WebviewPanelS
     it->second.options.extras["active"] = false;
     it->second.html.clear();
     it->second.initial_state = Json::object();
-    it->second.message_seq = 0;
     it->second.last_post_ms = 0;
     out_state = it->second;
     out_state.options.extras["already"] = already;
@@ -180,6 +184,9 @@ int32_t WebviewPanelRegistry::note_post_message(const std::string& panel_id,
     }
     if (it->second.disposed) {
         return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+    if (it->second.message_seq >= kMaximumSafeJsonInteger) {
+        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
     }
     ++it->second.message_seq;
     it->second.last_post_ms = now_ms();

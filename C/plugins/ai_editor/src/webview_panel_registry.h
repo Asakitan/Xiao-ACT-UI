@@ -60,7 +60,7 @@ struct WebviewPanelState final {
     int64_t created_ms = 0;
     int64_t last_reveal_ms = 0;
     int64_t last_post_ms = 0;
-    uint64_t message_seq = 0; // monotonic id assigned to native→web posts
+    uint64_t message_seq = 0; // Monotonic across disposal/revival of this panel id.
     Json initial_state = Json::object();
 };
 

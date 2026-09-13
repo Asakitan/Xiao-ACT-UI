@@ -23,8 +23,8 @@
   --selection: #efd5ad; --line-highlight: #d9953612;
   --statusbar-bg: #e7e2da; --statusbar-fg: #3f4540;
   --radius: 3px;
-  --mono: "Cascadia Mono", "Cascadia Code", "Microsoft YaHei UI", Consolas, monospace;
-  --sans: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "SAO Product";
+  --sans: "SAO Product";
   --activity-w: 48px; --sidebar-w: 260px; --panel-h: 45%;
   --motion-fast: 100ms; --motion-base: 180ms; --motion-slow: 320ms; --motion-flash: 600ms;
   --ease-standard: cubic-bezier(.4,0,.2,1); --ease-emphasized: cubic-bezier(.2,0,0,1);
@@ -25189,14 +25189,51 @@ function extensionContainerIdFromPanel(panel){
   const raw=String(panel||'');
   return raw.startsWith('ext-vc-')?raw.slice(7):'';
 }
-function reportExtensionActivityVisibilityForPanel(panel,visible){
+let _extVisibilityQueue=Promise.resolve();
+function reportExtensionActivityVisibilityForPanel(panel,visible,containerOverride){
+  const run=()=>reportExtensionActivityVisibilityForPanelNow(panel,visible,containerOverride);
+  const pending=_extVisibilityQueue.then(run,run);
+  _extVisibilityQueue=pending.then(()=>undefined,()=>undefined);
+  return pending;
+}
+async function reportExtensionActivityVisibilityForPanelNow(panel,visible,containerOverride){
   const containerId=extensionContainerIdFromPanel(panel);
-  if(!containerId)return;
-  call('set_extension_activity_view_visibility',containerId,!!visible);
+  if(!containerId)return true;
+  const items=typeof _extActBarItems!=='undefined'&&Array.isArray(_extActBarItems)?_extActBarItems:[];
+  const container=containerOverride&&String(containerOverride.id||'')===containerId
+    ?containerOverride
+    :items.find(item=>item&&String(item.id||'')===containerId);
+  const views=container&&Array.isArray(container.views)?container.views:[];
+  const treeViews=views.filter(view=>view&&
+    (view.runtimeKind==='treeView'||(view.runtimeState&&view.runtimeState.kind==='treeView'))&&
+    view.runtimeAvailable!==false);
+  if(!treeViews.length)return true;
+  const results=await Promise.all(treeViews.map(view=>{
+    const state=view.runtimeState||{};
+    const viewId=String(view.id||state.viewId||'');
+    const viewVersion=Number(state.refreshVersion)||0;
+    return requestExtensionTreeOperation('set_extension_activity_view_visibility',[viewId,!!visible,viewVersion],{viewId,viewVersion,allowItems:false});
+  }));
+  const failed=results.find(result=>!extensionTreeResponseApplied(result));
+  if(failed){
+    const rollbackResults=await Promise.all(treeViews.map((view,index)=>{
+      if(!extensionTreeResponseApplied(results[index]))return Promise.resolve(null);
+      const state=view.runtimeState||{};
+      const viewId=String(view.id||state.viewId||'');
+      const viewVersion=Number(results[index].result.viewVersion)||Number(state.refreshVersion)||0;
+      return requestExtensionTreeOperation('set_extension_activity_view_visibility',[viewId,!visible,viewVersion],{viewId,viewVersion,allowItems:false});
+    }));
+    const rollbackFailed=rollbackResults.find(result=>result&&!extensionTreeResponseApplied(result));
+    const failedResult=failed&&failed.result;
+    const detail=extensionTreeErrorText(failedResult,failedResult&&failedResult.available===false?'Tree visibility unavailable':'Tree visibility update failed');
+    setStatus(rollbackFailed?detail+'; visibility rollback failed':detail);
+    return false;
+  }
+  return true;
 }
 function reportActiveExtensionActivityVisibility(visible){
-  if(typeof _activeSidebarPanel==='undefined')return;
-  reportExtensionActivityVisibilityForPanel(_activeSidebarPanel,visible);
+  if(typeof _activeSidebarPanel==='undefined')return Promise.resolve(true);
+  return reportExtensionActivityVisibilityForPanel(_activeSidebarPanel,visible);
 }
 let _scmLoaded=false;
 function scmCommandSpec(raw){
@@ -26068,10 +26105,12 @@ function runActivityCommand(command){
   const cmd=String(command||'').trim();
   if(cmd==='toggle-theme'){toggleTheme();return true}
   if(cmd==='open-settings'){
-    reportActiveExtensionActivityVisibility(false);
-    _activeSidebarPanel='settings';
-    switchSidebar('settings');
-    if(typeof _saveLayoutImmediate==='function')_saveLayoutImmediate();
+    void (async()=>{
+      if(!(await reportActiveExtensionActivityVisibility(false)))return;
+      _activeSidebarPanel='settings';
+      switchSidebar('settings');
+      if(typeof _saveLayoutImmediate==='function')_saveLayoutImmediate();
+    })();
     return true;
   }
   return false;
@@ -26095,11 +26134,11 @@ function setupActivityButtonAccessibility(btn){
 let _activeSidebarPanel='chat';
 document.querySelectorAll('.ab-icon[data-panel],.ab-icon[data-command]').forEach(i=>{
   setupActivityButtonAccessibility(i);
-  i.addEventListener('click',function(){
+  i.addEventListener('click',async function(){
     if(i.dataset.command&&runActivityCommand(i.dataset.command))return;
     const panel=i.dataset.panel;
-    if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
-    reportActiveExtensionActivityVisibility(false);
+    if(panel===_activeSidebarPanel&&_sidebarVis){await toggleSidebarVis();return}
+    if(!(await reportActiveExtensionActivityVisibility(false)))return;
     if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
     _activeSidebarPanel=panel;switchSidebar(panel);_saveLayoutImmediate();
   });
@@ -32336,7 +32375,10 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   const rootStyle=getComputedStyle(document.documentElement);
   const cssValue=(name,fallback)=>String(rootStyle.getPropertyValue(name)||fallback||'').trim().replace(/[;<>]/g,'')||fallback;
   const themeKind=(document.documentElement.getAttribute('data-theme')==='light')?'light':'dark';
-  const themeStyle='<style id="sao-vscode-webview-theme">:root{'
+  const themeStyle='<style id="sao-vscode-webview-theme">'
+    +'@font-face{font-family:"SAO Product";src:url("https://sao-fonts.local/SAOUI.ttf") format("truetype");font-display:block;unicode-range:U+0-24F,U+1E00-1EFF;}'
+    +'@font-face{font-family:"SAO Product";src:url("https://sao-fonts.local/ZhuZiAYuanJWD.ttf") format("truetype");font-display:block;unicode-range:U+250-1DFF,U+1F00-10FFFF;}'
+    +':root{--vscode-font-family:"SAO Product";--vscode-editor-font-family:"SAO Product";'
     +'color-scheme:'+themeKind+';'
     +'--vscode-editor-background:'+cssValue('--bg','#1e1e1e')+';'
     +'--vscode-editor-foreground:'+cssValue('--fg','#d4d4d4')+';'
@@ -32350,7 +32392,9 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'--vscode-button-foreground:#ffffff;'
     +'--vscode-descriptionForeground:'+cssValue('--fg-dim','#8b949e')+';'
     +'--vscode-widget-border:'+cssValue('--border','#3c3c3c')+';'
-    +'}html,body{background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);}</style>';
+    +'}html,body{background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);font-family:var(--vscode-font-family);}'
+    +'button,input,select,textarea{font-family:var(--vscode-font-family);}'
+    +'pre,code,kbd,samp{font-family:var(--vscode-editor-font-family);}</style>';
   // Build bridge script that defines acquireVsCodeApi for the extension
   const tokenJson=JSON.stringify(token);
   const bridgeScript='<scr'+'ipt>'
@@ -45267,6 +45311,8 @@ function extensionRuntimeSurfaceRows(data){
 }
 let extensionRuntimeSurfaceCache=null;
 let extensionRuntimeSurfaceInflight=null;
+let extensionRuntimeSurfaceInflightId=0;
+let extensionRuntimeSurfaceRequestSeq=0;
 let extensionRuntimeSurfaceRowsLast=[];
 let extensionRuntimeSurfaceDataLast=null;
 const EXTENSION_RUNTIME_SURFACE_CACHE_MS=900;
@@ -45367,8 +45413,7 @@ async function openExtensionRuntimeViewContainer(containerId){
     }catch(_e){item=null}
   }
   if(item&&typeof activateExtensionActivityItem==='function'){
-    activateExtensionActivityItem(item);
-    return true;
+    return await activateExtensionActivityItem(item);
   }
   switchSidebar('extensions');
   return false;
@@ -45666,7 +45711,9 @@ function renderExtensionRuntimeHealthDeck(rows,summary){
     btn.dataset.runtimeHealthState=card.state;
     btn.dataset.runtimeHealthFilter=card.filter;
     btn.title='Filter runtime surfaces by '+card.filter;
-    btn.innerHTML='<strong>'+esc(card.value+' '+card.label)+'</strong><span>'+esc(card.detail)+'</span>';
+    const value=document.createElement('strong');value.textContent=card.value+' '+card.label;
+    const detail=document.createElement('span');detail.textContent=card.detail;
+    btn.appendChild(value);btn.appendChild(detail);
     btn.onclick=ev=>{
       if(ev){ev.preventDefault();ev.stopPropagation()}
       const evidenceSel=$('extension-runtime-filter-evidence');
@@ -45823,7 +45870,8 @@ function syncExtensionWebviewResourceSummary(rows){
     btn.dataset.extensionWebviewResourcePill=item.label.toLowerCase();
     btn.dataset.extensionWebviewResourceFilter=item.filter;
     btn.title='Filter webview resources by '+item.filter;
-    btn.innerHTML='<strong>'+esc(item.value)+'</strong>'+esc(item.label);
+    const value=document.createElement('strong');value.textContent=item.value;
+    btn.appendChild(value);btn.appendChild(document.createTextNode(item.label));
     btn.onclick=ev=>{
       if(ev){ev.preventDefault();ev.stopPropagation()}
       const evidenceSel=$('extension-runtime-filter-evidence');
@@ -45841,6 +45889,11 @@ function renderExtensionRuntimeSurfacePanel(data){
   extensionRuntimeSurfaceDataLast=data;
   const summary=data.summary||{};
   const rows=extensionRuntimeSurfaceRows(data);
+  const inventoryState=rows.length?'ready':'empty';
+  [panel,summaryEl,listEl,statusEl].filter(Boolean).forEach(el=>{
+    el.dataset.extensionInventoryState=inventoryState;
+    delete el.dataset.runtimeAvailability;
+  });
   extensionRuntimeSurfaceRowsLast=rows.slice();
   populateExtensionRuntimeKindFilter(rows);
   const healthCards=renderExtensionRuntimeHealthDeck(rows,summary);
@@ -45948,7 +46001,8 @@ function renderExtensionRuntimeSurfacePanel(data){
   summaryEl.innerHTML='';
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
-    chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
+    const strong=document.createElement('strong');strong.textContent=String(value);
+    chip.appendChild(strong);chip.appendChild(document.createTextNode(label));
     if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Custom Lifecycle','Custom Resources','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Notebook Lifecycle','Notebook Execution','Command','TextEditorCommand','Keybinding','Keybinding Commands','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','LanguageProvider','Formatter Provider','Code Action Provider','Provider Matched','DiagnosticCollection','Diagnostics','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','TextEditorDecoration','Editor Decoration Ranges','Editor Decoration Events','Editor Decorations Disposed','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Webview Links','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
@@ -46633,6 +46687,38 @@ function renderExtensionRuntimeSurfacePanel(data){
   applyExtensionRuntimeSurfaceFilter();
   if(statusEl&&!rows.length)statusEl.textContent='Runtime surfaces: '+String(summary.dynamicSurfaces||0)+' dynamic entries'+(data._frontendCacheHit?' · cached in frontend':summary.cacheHit?' · cached in backend':'')+'.';
 }
+function renderExtensionRuntimeInventoryState(state,detail){
+  extensionRuntimeSurfaceCache=null;
+  extensionRuntimeSurfaceRowsLast=[];
+  extensionRuntimeSurfaceDataLast={ok:state!=='error',available:false,items:[]};
+  const panel=$('extension-runtime-panel'),summary=$('extension-runtime-summary');
+  const health=$('extension-runtime-health'),resources=$('extension-webview-resource-summary');
+  const list=$('extension-runtime-list'),status=$('extension-runtime-status');
+  [panel,summary,health,resources,list,status].filter(Boolean).forEach(el=>{
+    el.dataset.extensionInventoryState=state;
+    el.dataset.runtimeAvailability=state;
+  });
+  if(panel){
+    panel.dataset.runtimeSurfaceCount='0';
+    panel.dataset.runtimeOnlySurfaceCount='0';
+    panel.dataset.providerBackedWebviewCount='0';
+    panel.dataset.runtimeHealthCardCount='0';
+    panel.dataset.runtimeWebviewResourceRows='0';
+    delete panel.dataset.cacheHit;
+  }
+  if(summary)summary.replaceChildren();
+  if(health)health.replaceChildren();
+  if(resources){resources.replaceChildren();resources.classList.remove('active')}
+  if(list){
+    const empty=document.createElement('div');
+    empty.className='extension-runtime-empty';
+    empty.dataset.runtimeAvailability=state;
+    empty.textContent=detail;
+    list.replaceChildren(empty);
+  }
+  if(status)status.textContent=detail;
+  populateExtensionRuntimeKindFilter([]);
+}
 async function renderExtensionRuntimeSurfaces(force){
   const statusEl=$('extension-runtime-status'),listEl=$('extension-runtime-list');
   if(extensionRuntimeSurfaceCacheFresh(force)){
@@ -46640,28 +46726,47 @@ async function renderExtensionRuntimeSurfaces(force){
     return extensionRuntimeSurfaceCache.data;
   }
   if(extensionRuntimeSurfaceInflight&&!force){
-    const cached=await extensionRuntimeSurfaceInflight;
-    if(cached&&!cached.error)renderExtensionRuntimeSurfacePanel({...cached,_frontendCacheHit:true});
+    const pending=extensionRuntimeSurfaceInflight;
+    const pendingId=extensionRuntimeSurfaceInflightId;
+    const cached=await pending;
+    if(pendingId===extensionRuntimeSurfaceRequestSeq&&cached&&cached.ok!==false&&cached.available!==false&&!cached.error)renderExtensionRuntimeSurfacePanel({...cached,_frontendCacheHit:true});
     return cached;
   }
   setExtensionRuntimeSurfaceLoading(true);
   if(statusEl)statusEl.textContent='Loading extension runtime surfaces...';
-  if(listEl&&!listEl.children.length)listEl.innerHTML='<div class="extension-runtime-empty">Loading...</div>';
+  if(listEl&&!listEl.children.length){
+    const loading=document.createElement('div');loading.className='extension-runtime-empty';loading.textContent='Loading...';
+    listEl.replaceChildren(loading);
+  }
   const request=call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{});
+  const requestId=++extensionRuntimeSurfaceRequestSeq;
   extensionRuntimeSurfaceInflight=request;
+  extensionRuntimeSurfaceInflightId=requestId;
   try{
     const r=await request;
-    if(!r||r.error){
-      if(statusEl)statusEl.textContent='Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable');
-      if(listEl)listEl.innerHTML='<div class="extension-runtime-empty">Unable to load extension runtime surfaces.</div>';
+    if(requestId!==extensionRuntimeSurfaceRequestSeq)return r;
+    if(!r||r.ok===false){
+      renderExtensionRuntimeInventoryState('error','Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable'));
+      return r;
+    }
+    if(r&&r.available===false){
+      const detail=extensionTreeErrorText(r,'Extension contribution inventory unavailable');
+      renderExtensionRuntimeInventoryState('unavailable',detail);
+      return r;
+    }
+    if(r.error){
+      renderExtensionRuntimeInventoryState('error','Extension runtime surfaces unavailable: '+callFailedMessage(r,'backend unavailable'));
       return r;
     }
     extensionRuntimeSurfaceCache={time:Date.now(),data:r};
     renderExtensionRuntimeSurfacePanel(r);
     return r;
   }finally{
-    if(extensionRuntimeSurfaceInflight===request)extensionRuntimeSurfaceInflight=null;
-    setExtensionRuntimeSurfaceLoading(false);
+    if(extensionRuntimeSurfaceInflight===request&&extensionRuntimeSurfaceInflightId===requestId){
+      extensionRuntimeSurfaceInflight=null;
+      extensionRuntimeSurfaceInflightId=0;
+      setExtensionRuntimeSurfaceLoading(false);
+    }
   }
 }
 window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
@@ -46692,19 +46797,45 @@ async function searchExtensions(query,page){
   renderExtensionActivityBar();
 }
 
+let _extInstalledRequestSeq=0;
 async function refreshInstalledExts(){
+  const requestId=++_extInstalledRequestSeq;
   const r=await call('list_installed_extensions');
+  if(requestId!==_extInstalledRequestSeq)return r;
   const list=$('ext-installed-list');
   const header=$('ext-installed-header');
-  if(!r||!r.extensions||!r.extensions.length){
+  if(!list||!header)return r;
+  const renderState=(state,detail)=>{
+    list.dataset.extensionInventoryState=state;
+    list.replaceChildren();
+    if(detail){
+      const row=document.createElement('div');
+      row.style.cssText='padding:8px 16px;color:var(--fg-warning);font-size:12px';
+      row.textContent=detail;
+      list.appendChild(row);
+    }
+  };
+  if(!r||r.ok===false){
+    const detail=callFailedMessage(r,'Extension inventory unavailable');
+    renderState('error',detail);
+    header.style.display='';
+    return r;
+  }
+  if(r.available===false){
+    renderState('unavailable',extensionTreeErrorText(r,'Extension inventory unavailable'));
+    header.style.display='';
+    return r;
+  }
+  if(!r.extensions||!r.extensions.length){
     extInstalledById=Object.create(null);
     extCache=extCache.map(ext=>({...ext,installed:false,state:'uninstalled',runtimeState:'uninstalled',canUninstall:false}));
-    list.innerHTML='';header.style.display='none';
+    renderState('empty','');header.style.display='none';
     if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
-    return;
+    return r;
   }
+  list.dataset.extensionInventoryState='ready';
   header.style.display='';
-  list.innerHTML='';
+  list.replaceChildren();
   extInstalledById=mergeInstalledExtensionMetadata(r.extensions||[]);
   r.extensions.forEach(e=>{
     const cached=extCache.find(c=>String(c.id||'').toLowerCase()===String(e.id||'').toLowerCase());
@@ -46714,6 +46845,7 @@ async function refreshInstalledExts(){
     }
   });
   if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+  return r;
 }
 
 function handleExtensionsChanged(data){
@@ -46734,6 +46866,9 @@ function handleExtensionsChanged(data){
 let _extActBarItems=[];
 let _extTreeRefreshTimer=0;
 let _extTreeChildRequestSeq=0;
+let _extActivityRequestSeq=0;
+let _extPanelRequestSeq=0;
+let _extExplorerRequestSeq=0;
 function scheduleExtensionActivityRefresh(){
   clearTimeout(_extTreeRefreshTimer);
   _extTreeRefreshTimer=setTimeout(()=>{
@@ -47141,19 +47276,173 @@ function appendExtensionWelcomeContent(parent,entries){
   parent.appendChild(box);
   return true;
 }
-function runExtensionTreeItemAction(viewId,node,action){
+const EXTENSION_TREE_CHILD_LIMIT=500;
+const EXTENSION_TREE_DEPTH_LIMIT=64;
+const EXTENSION_TREE_LABEL_BYTE_LIMIT=64*1024;
+const EXTENSION_TREE_RESPONSE_BYTE_LIMIT=512*1024;
+const EXTENSION_TREE_NODE_LIMIT=16384;
+const EXTENSION_TREE_ACTION_LIMIT=64;
+const EXTENSION_TREE_REQUEST_FENCE_LIMIT=4096;
+const _extensionTreeRequestFlights=new Map();
+const _extensionTreeRequestSequences=new Map();
+let _extensionTreeRequestSequence=0;
+const _extensionTreeTextEncoder=new TextEncoder();
+function extensionTreeTextBytes(value){return _extensionTreeTextEncoder.encode(String(value||'')).byteLength}
+function extensionTreeValidText(value,maximum,required){
+  return typeof value==='string'&&(!required||value.length>0)&&extensionTreeTextBytes(value)<=maximum&&!/[\u0000-\u001f\u007f]/.test(value);
+}
+function extensionTreeHandleParts(value){
+  if(typeof value!=='string'||value.length<7||value.length>128)return null;
+  const parts=value.split(':');
+  if(parts.length!==4)return null;
+  const numbers=parts.map(part=>/^\d+$/.test(part)?Number(part):NaN);
+  return numbers.every(number=>Number.isSafeInteger(number)&&number>0)?numbers:null;
+}
+function extensionTreeValidateItems(items,depth,generation,version,budget){
+  if(!Array.isArray(items)||items.length>EXTENSION_TREE_CHILD_LIMIT||depth>=EXTENSION_TREE_DEPTH_LIMIT)return false;
+  for(const item of items){
+    if(!item||typeof item!=='object'||Array.isArray(item)||++budget.nodes>EXTENSION_TREE_NODE_LIMIT)return false;
+    const parts=extensionTreeHandleParts(item.handle);
+    if(!parts||parts[0]!==generation||parts[2]!==version||budget.handles.has(item.handle))return false;
+    budget.handles.add(item.handle);
+    for(const [key,required] of [['label',true],['description',false],['tooltip',false],['contextValue',false],['resourceUri',false]]){
+      if(!(key in item)){if(required)return false;continue}
+      if(!extensionTreeValidText(item[key],EXTENSION_TREE_LABEL_BYTE_LIMIT,required))return false;
+      budget.labels+=extensionTreeTextBytes(item[key]);
+      if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+    }
+    if(!Number.isSafeInteger(item.collapsibleState)||item.collapsibleState<0||item.collapsibleState>2||typeof item.childrenLoaded!=='boolean'||typeof item.lazyChildren!=='boolean')return false;
+    if(item.command!==undefined&&item.command!==null){
+      const command=item.command;
+      if(!command||typeof command!=='object'||Array.isArray(command)||!extensionTreeValidText(command.command,256,true)||!extensionTreeValidText(command.title,EXTENSION_TREE_LABEL_BYTE_LIMIT,false)||!extensionTreeValidText(command.tooltip||'',EXTENSION_TREE_LABEL_BYTE_LIMIT,false)||!Array.isArray(command.arguments)||command.arguments.length>EXTENSION_TREE_ACTION_LIMIT)return false;
+      budget.labels+=extensionTreeTextBytes(command.command)+extensionTreeTextBytes(command.title)+extensionTreeTextBytes(command.tooltip||'');
+      if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+    }
+    if(item.checkbox!==undefined&&item.checkbox!==null){
+      if(!item.checkbox||typeof item.checkbox!=='object'||Array.isArray(item.checkbox)||typeof item.checkbox.isChecked!=='boolean'||!extensionTreeValidText(item.checkbox.tooltip||'',EXTENSION_TREE_LABEL_BYTE_LIMIT,false))return false;
+      budget.labels+=extensionTreeTextBytes(item.checkbox.tooltip||'');
+      if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+    }
+    if(item.accessibilityInformation!==undefined&&item.accessibilityInformation!==null){
+      const info=item.accessibilityInformation;
+      if(!info||typeof info!=='object'||Array.isArray(info)||!extensionTreeValidText(info.label||'',EXTENSION_TREE_LABEL_BYTE_LIMIT,false)||!extensionTreeValidText(info.role||'',EXTENSION_TREE_LABEL_BYTE_LIMIT,false))return false;
+      budget.labels+=extensionTreeTextBytes(info.label||'')+extensionTreeTextBytes(info.role||'');
+      if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+    }
+    if(!Array.isArray(item.actions)||item.actions.length>EXTENSION_TREE_ACTION_LIMIT)return false;
+    for(const action of item.actions){
+      if(!action||typeof action!=='object'||Array.isArray(action))return false;
+      const command=typeof action.command==='string'?action.command:'';
+      const submenu=typeof action.submenu==='string'?action.submenu:'';
+      if((!command&&!submenu)||(command&&submenu)||command&&!extensionTreeValidText(command,256,true)||submenu&&!extensionTreeValidText(submenu,256,true))return false;
+      budget.labels+=extensionTreeTextBytes(command)+extensionTreeTextBytes(submenu);
+      if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+      for(const key of ['group','title','tooltip','disabledReason']){
+        if(action[key]!==undefined){
+          if(!extensionTreeValidText(action[key],EXTENSION_TREE_LABEL_BYTE_LIMIT,false))return false;
+          budget.labels+=extensionTreeTextBytes(action[key]);
+          if(budget.labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+        }
+      }
+      if(action.arguments!==undefined&&(!Array.isArray(action.arguments)||action.arguments.length>EXTENSION_TREE_ACTION_LIMIT))return false;
+      for(const key of ['runtimeAvailable','enabled','disabled','inline'])if(action[key]!==undefined&&typeof action[key]!=='boolean')return false;
+    }
+    if(!Array.isArray(item.children)||(item.children.length&&!extensionTreeValidateItems(item.children,depth+1,generation,version,budget)))return false;
+  }
+  return true;
+}
+function extensionTreeResponseSchemaValid(result,expected){
+  expected=expected||{};
+  if(!result||typeof result!=='object'||Array.isArray(result))return false;
+  let payload='';try{payload=JSON.stringify(result)}catch(_e){return false}
+  if(extensionTreeTextBytes(payload)>EXTENSION_TREE_RESPONSE_BYTE_LIMIT)return false;
+  if(typeof result.ok!=='boolean'||typeof result.available!=='boolean'||typeof result.applied!=='boolean'||!Array.isArray(result.items)||typeof result.errorCode!=='string'||typeof result.error!=='string'||!Number.isSafeInteger(result.viewVersion)||result.viewVersion<0||!extensionTreeValidText(result.errorCode,128,false)||!extensionTreeValidText(result.error,4096,false))return false;
+  if(typeof result.viewId!=='string'||(expected.viewId!==undefined&&result.viewId!==String(expected.viewId)))return false;
+  if(result.applied&&(!result.ok||!result.available||result.errorCode||result.error)||!result.applied&&result.items.length||!result.ok&&(!result.errorCode||!result.error)||result.ok&&!result.applied)return false;
+  const hasOwner=Object.prototype.hasOwnProperty.call(result,'extensionId');
+  const hasGeneration=Object.prototype.hasOwnProperty.call(result,'generation');
+  if(hasOwner!==hasGeneration||result.applied&&!hasOwner)return false;
+  let generation=0;
+  if(hasOwner){
+    if(!extensionTreeValidText(result.extensionId,128,true)||!/^[A-Za-z0-9_.-]+$/.test(result.extensionId)||result.extensionId.includes('..')||!Number.isSafeInteger(result.generation)||result.generation<=0)return false;
+    generation=result.generation;
+  }
+  if(result.applied&&(!Number.isSafeInteger(result.viewVersion)||result.viewVersion<=0))return false;
+  if(result.applied&&expected.viewVersion&&result.viewVersion!==Number(expected.viewVersion))return false;
+  const expectedHandles=Array.isArray(expected.handles)?expected.handles:(expected.handle?[expected.handle]:[]);
+  if(result.applied&&expectedHandles.length){
+    for(const handle of expectedHandles){
+      const parts=extensionTreeHandleParts(handle);
+      if(!parts||parts[0]!==generation||parts[2]!==result.viewVersion)return false;
+    }
+  }
+  let labels=0;
+  for(const key of ['title','description','message'])if(result[key]!==undefined){if(!extensionTreeValidText(result[key],EXTENSION_TREE_LABEL_BYTE_LIMIT,false))return false;labels+=extensionTreeTextBytes(result[key])}
+  if(result.badge!==undefined&&result.badge!==null){if(!result.badge||typeof result.badge!=='object'||Array.isArray(result.badge)||!Number.isSafeInteger(result.badge.value)||result.badge.value<0||!extensionTreeValidText(result.badge.tooltip||'',EXTENSION_TREE_LABEL_BYTE_LIMIT,false))return false;labels+=extensionTreeTextBytes(result.badge.tooltip||'')}
+  if(labels>EXTENSION_TREE_LABEL_BYTE_LIMIT)return false;
+  if(result.visible!==undefined&&typeof result.visible!=='boolean')return false;
+  if(result.dragAndDrop!==undefined){
+    const dnd=result.dragAndDrop;
+    if(!dnd||typeof dnd!=='object'||Array.isArray(dnd)||typeof dnd.canDrag!=='boolean'||typeof dnd.canDrop!=='boolean')return false;
+    for(const key of ['dragMimeTypes','dropMimeTypes'])if(dnd[key]!==undefined&&(!Array.isArray(dnd[key])||dnd[key].length>64||dnd[key].some(value=>!extensionTreeValidText(value,256,false))))return false;
+  }
+  if(expected.allowItems===false&&result.items.length)return false;
+  return extensionTreeValidateItems(result.items,0,generation,result.viewVersion,{labels,nodes:0,handles:new Set()});
+}
+function requestExtensionTreeOperation(method,args,expected){
+  const key=method+'\n'+JSON.stringify(args);
+  const existing=_extensionTreeRequestFlights.get(key);
+  if(existing)return existing;
+  if(!Number.isSafeInteger(_extensionTreeRequestSequence)||_extensionTreeRequestSequence>=Number.MAX_SAFE_INTEGER){
+    _extensionTreeRequestSequences.clear();
+    _extensionTreeRequestSequence=0;
+  }
+  while(_extensionTreeRequestSequences.size>=EXTENSION_TREE_REQUEST_FENCE_LIMIT){
+    const oldest=_extensionTreeRequestSequences.keys().next();
+    if(oldest.done)break;
+    _extensionTreeRequestSequences.delete(oldest.value);
+  }
+  const sequence=++_extensionTreeRequestSequence;
+  _extensionTreeRequestSequences.set(key,sequence);
+  const promise=(async()=>{
+    let result;
+    try{result=await call(method,...args)}catch(_error){
+      result={ok:false,available:false,applied:false,items:[],errorCode:'TREE_TRANSPORT_ERROR',error:'Extension tree request failed.',viewVersion:Number(expected&&expected.viewVersion)||0,viewId:String(expected&&expected.viewId||'')};
+    }
+    return {result,key,sequence,valid:extensionTreeResponseSchemaValid(result,expected),isCurrent:()=>_extensionTreeRequestSequences.get(key)===sequence};
+  })();
+  const flight=promise.finally(()=>{if(_extensionTreeRequestFlights.get(key)===flight)_extensionTreeRequestFlights.delete(key)});
+  _extensionTreeRequestFlights.set(key,flight);
+  return flight;
+}
+function extensionTreeResponseApplied(ticket){
+  return !!(ticket&&ticket.valid&&ticket.isCurrent()&&ticket.result&&ticket.result.ok===true&&ticket.result.available===true&&ticket.result.applied===true);
+}
+async function runExtensionTreeItemAction(viewId,node,action){
   if(!action||!action.command)return;
   if(extensionActionDisabled(action)){
     if(action.disabledReason)setStatus(String(action.disabledReason));
     return;
   }
-  if(viewId&&node&&node.handle)call('execute_extension_tree_item_action',viewId,node.handle,action.command,...(action.arguments||[]));
-  else call('execute_command',action.command,...(action.arguments||[]));
+  if(viewId&&node&&node.handle){
+    if(node._actionPending)return false;
+    node._actionPending=true;
+    try{
+      const viewVersion=Number(node.refreshVersion)||0;
+      const ticket=await requestExtensionTreeOperation('execute_extension_tree_item_action',[viewId,node.handle,action.command,action.arguments||[],viewVersion],{viewId,viewVersion,handle:node.handle,allowItems:false});
+      const r=ticket.result;
+      if(extensionTreeResponseApplied(ticket)){setStatus('Extension tree action applied: '+action.command);return true}
+      setStatus(extensionTreeErrorText(r,r&&r.available===false?'Tree action unavailable':'Tree action failed'));
+      return false;
+    }finally{node._actionPending=false}
+  }
+  setStatus('Tree action unavailable: current item handle is missing');
+  return false;
 }
 function extensionTreeStatusRow(depth,text,kind,retry){
   const row=document.createElement('div');
   row.className='ext-tree-status '+(kind||'');
-  const color=kind==='error'?'var(--fg-error)':'var(--fg-dim)';
+  const color=kind==='error'?'var(--fg-error)':kind==='unavailable'?'var(--fg-warning)':'var(--fg-dim)';
   row.style.cssText='display:flex;align-items:center;gap:6px;color:'+color+';font-size:11px;padding:3px 0 3px '+((depth+1)*12+18)+'px';
   const label=document.createElement('span');
   label.style.cssText='min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -47169,12 +47458,12 @@ function extensionTreeStatusRow(depth,text,kind,retry){
   return row;
 }
 function setExtensionTreeStatus(childBox,depth,text,kind,retry){
-  childBox.innerHTML='';
-  childBox.appendChild(extensionTreeStatusRow(depth,text,kind,retry));
+  childBox.replaceChildren(extensionTreeStatusRow(depth,text,kind,retry));
 }
 function extensionTreeErrorText(error,fallback){
   const msg=error&&error.error?error.error:(error&&error.message?error.message:'');
-  return msg?fallback+': '+String(msg):fallback;
+  const code=error&&error.errorCode?String(error.errorCode):'';
+  return msg?fallback+(code?' ['+code+']':'')+': '+String(msg):fallback+(code?' ['+code+']':'');
 }
 async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd){
   if(!viewId||!node||!node.handle||node.childrenLoaded)return true;
@@ -47182,47 +47471,65 @@ async function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,
   node._childRequestId=requestId;
   const expectedVersion=Number(viewVersion||node.refreshVersion||0)||0;
   setExtensionTreeStatus(childBox,depth,'Loading...','loading');
-  const r=await call('load_extension_tree_children',viewId,node.handle);
-  if(node._childRequestId!==requestId||!childBox.isConnected)return false;
-  const responseVersion=Number(r&&r.refreshVersion)||0;
+  const ticket=await requestExtensionTreeOperation('load_extension_tree_children',[viewId,node.handle,expectedVersion],{viewId,viewVersion:expectedVersion,handle:node.handle,allowItems:true});
+  const r=ticket.result;
+  if(node._childRequestId!==requestId||!childBox.isConnected||!ticket.isCurrent())return false;
+  const responseVersion=Number(r&&r.viewVersion)||0;
   if(expectedVersion&&responseVersion&&expectedVersion!==responseVersion){
     node.childrenLoaded=false;node.lazyChildren=true;
     setExtensionTreeStatus(childBox,depth,'Tree refreshed. Expand again to load current children.','stale');
     return false;
   }
-  if(!r||r.error){
+  if(!extensionTreeResponseApplied(ticket)){
     node.childrenLoaded=false;node.lazyChildren=true;
+    const unavailable=!!(r&&r.available===false);
     setExtensionTreeStatus(
-      childBox,depth,extensionTreeErrorText(r,'Unable to load children'),'error',
+      childBox,depth,extensionTreeErrorText(r,unavailable?'Tree provider unavailable':'Unable to load children'),unavailable?'unavailable':'error',
       ()=>{node.childrenLoaded=false;node.lazyChildren=true;void loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd)});
     return false;
   }
-  const nodes=Array.isArray(r.nodes)?r.nodes:[];
+  const nodes=Array.isArray(r.items)?r.items:[];
   const nextVersion=responseVersion||expectedVersion;
   node.children=nodes;node.childrenLoaded=true;node.lazyChildren=false;
-  childBox.innerHTML='';
-  nodes.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd,index,nodes.length)));
+  childBox.replaceChildren();
+  if(nodes.length)nodes.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd,index,nodes.length)));
+  else childBox.appendChild(extensionTreeStatusRow(depth,'No children.','empty'));
   return true;
 }
-function reportExtensionTreeExpanded(viewId,node,expanded){
-  if(viewId&&node&&node.handle)call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded);
+async function reportExtensionTreeExpanded(viewId,node,expanded){
+  if(!viewId||!node||!node.handle)return null;
+  const viewVersion=Number(node.refreshVersion)||0;
+  return requestExtensionTreeOperation('set_extension_tree_item_expanded',[viewId,node.handle,!!expanded,viewVersion],{viewId,viewVersion,handle:node.handle,allowItems:true});
 }
 async function toggleExtensionTreeCheckbox(viewId,node,box,event){
   if(event){event.preventDefault();event.stopPropagation()}
-  if(!viewId||!node||!node.handle||!node.checkbox)return;
+  if(!viewId||!node||!node.handle||!node.checkbox||node._checkboxPending)return;
   const previous=!!node.checkbox.isChecked;
   const next=!previous;
-  node.checkbox.isChecked=next;
-  box.textContent=next?'☑':'☐';
-  box.setAttribute('aria-checked',next?'true':'false');
-  const r=await call('set_extension_tree_item_checkbox_state',viewId,node.handle,next);
-  if(!r||r.error){
-    node.checkbox.isChecked=previous;
+  node._checkboxPending=true;
+  box.setAttribute('aria-busy','true');
+  box.textContent='…';
+  try{
+    const viewVersion=Number(node.refreshVersion)||0;
+    const ticket=await requestExtensionTreeOperation('set_extension_tree_item_checkbox_state',[viewId,node.handle,next,viewVersion],{viewId,viewVersion,handle:node.handle,allowItems:false});
+    const r=ticket.result;
+    if(extensionTreeResponseApplied(ticket)){
+      node.checkbox.isChecked=next;
+      if(Number(r.viewVersion))node.refreshVersion=Number(r.viewVersion);
+      box.textContent=next?'☑':'☐';
+      box.setAttribute('aria-checked',next?'true':'false');
+      return;
+    }
     box.textContent=previous?'☑':'☐';
     box.setAttribute('aria-checked',previous?'true':'false');
+    setStatus(extensionTreeErrorText(r,r&&r.available===false?'Tree checkbox unavailable':'Tree checkbox update failed'));
+  }finally{
+    node._checkboxPending=false;
+    box.removeAttribute('aria-busy');
   }
 }
 let _extTreeDragPayload=null;
+let _extTreeDropPending=false;
 function extensionTreeDndState(view,state){
   const dnd=(state&&state.dragAndDrop)||(view&&view.dragAndDrop)||{};
   return dnd&&typeof dnd==='object'?dnd:{};
@@ -47254,13 +47561,44 @@ function allowExtensionTreeDrop(event,viewId,dnd){
   try{event.dataTransfer.dropEffect='move'}catch(e){}
   return true;
 }
+function extensionTreeDropData(event,dnd){
+  const transfer=event&&event.dataTransfer;
+  if(!transfer)return {};
+  const requested=Array.isArray(dnd&&dnd.dropMimeTypes)?dnd.dropMimeTypes:[];
+  const types=[...new Set([...requested,'text/plain'].map(value=>String(value||'')).filter(Boolean))].slice(0,64);
+  const data=Object.create(null),encoder=new TextEncoder();
+  let bytes=0;
+  for(const type of types){
+    const typeSize=encoder.encode(type).byteLength;
+    if(typeSize>256)continue;
+    let value='';
+    try{value=String(transfer.getData(type)||'')}catch(e){continue}
+    const size=encoder.encode(value).byteLength;
+    if(bytes+typeSize+size>64*1024)break;
+    bytes+=typeSize+size;
+    if(value)data[type]=value;
+  }
+  return data;
+}
 async function dropExtensionTreeItems(event,viewId,targetNode,dnd){
+  if(_extTreeDropPending){event.preventDefault();event.stopPropagation();return}
   if(!allowExtensionTreeDrop(event,viewId,dnd))return;
   const payload=extensionTreeDragPayload(event);
   const targetHandle=targetNode&&targetNode.handle?String(targetNode.handle):'';
-  const r=await call('drop_extension_tree_items',viewId,payload.sourceHandles,targetHandle,{});
-  _extTreeDragPayload=null;
-  if(r&&r.ok)renderExtensionActivityBar();
+  const tree=event&&event.currentTarget&&event.currentTarget.closest?event.currentTarget.closest('[role="tree"]'):null;
+  const viewVersion=Number(targetNode&&targetNode.refreshVersion||(tree&&tree.dataset.refreshVersion)||0)||0;
+  const data=extensionTreeDropData(event,dnd);
+  _extTreeDropPending=true;
+  try{
+    const handles=payload.sourceHandles.concat(targetHandle?[targetHandle]:[]);
+    const ticket=await requestExtensionTreeOperation('drop_extension_tree_items',[viewId,payload.sourceHandles,targetHandle,data,viewVersion],{viewId,viewVersion,handles,allowItems:false});
+    const r=ticket.result;
+    if(extensionTreeResponseApplied(ticket)){renderExtensionActivityBar();return}
+    setStatus(extensionTreeErrorText(r,r&&r.available===false?'Tree drop unavailable':'Tree drop failed'));
+  }finally{
+    _extTreeDragPayload=null;
+    _extTreeDropPending=false;
+  }
 }
 function focusRevealedExtensionTree(tree){
   if(!tree)return;
@@ -47408,6 +47746,7 @@ function appendExtensionTitleActions(title,view,state){
 function renderExtensionTreeView(view){
   const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
   const state=view.runtimeState||{};
+  applyExtensionRuntimeViewMetadata(card,view,state,'treeView');
   card.setAttribute('role','group');
   card.setAttribute('aria-label','Extension TreeView '+(state.title||extensionViewTitle(view)));
   const welcomeEntries=extensionWelcomeEntries(view,state);
@@ -47433,10 +47772,19 @@ function renderExtensionTreeView(view){
     msg.textContent=message;
     body.appendChild(msg);
   }
-  const nodes=Array.isArray(state.nodes)&&state.nodes.length
+  const nodes=Array.isArray(state.items)&&state.items.length
+    ?state.items
+    :(Array.isArray(state.nodes)&&state.nodes.length
     ?state.nodes
-    :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]);
-  if(nodes.length){
+    :(Array.isArray(state.children)?state.children.map(label=>({label:String(label),children:[]})):[]));
+  const runtimeUnavailable=state.available===false||view.runtimeAvailable===false;
+  const renderState=runtimeUnavailable?'unavailable':nodes.length?(state.treeError?'error':'ready'):(state.treeError||state.error?'error':'empty');
+  card.dataset.extensionTreeState=renderState;
+  body.dataset.extensionTreeState=renderState;
+  if(runtimeUnavailable){
+    body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state,'Tree provider unavailable'),'unavailable',()=>renderExtensionActivityBar()));
+    appendExtensionWelcomeContent(body,welcomeEntries);
+  }else if(nodes.length){
     const tree=document.createElement('div');tree.setAttribute('role','tree');
     tree.setAttribute('aria-label',state.title||extensionViewTitle(view));
     tree.dataset.viewId=view.id||state.view_id||state.viewId||'';
@@ -47452,8 +47800,8 @@ function renderExtensionTreeView(view){
       body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
     }
     focusRevealedExtensionTree(tree);
-  }else if(state.treeError){
-    body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
+  }else if(state.treeError||state.error){
+    body.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(state.treeError||state,'Unable to load tree items'),'error',()=>renderExtensionActivityBar()));
   }else{
     const hasWelcome=appendExtensionWelcomeContent(body,welcomeEntries);
     if(!hasWelcome){
@@ -47542,38 +47890,74 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion,dnd,posInSet,setS
     row.appendChild(actionBtn);
   }
   applyExplorerDecoration(row,label,node);
-  const childBox=document.createElement('div');childBox.style.display=collapsible===2?'':'none';
-  if(collapsible)wrap.setAttribute('aria-expanded',collapsible===2?'true':'false');
+  const childBox=document.createElement('div');childBox.style.display='none';
+  if(collapsible)wrap.setAttribute('aria-expanded','false');
   children.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,viewVersion,dnd,index,children.length)));
-  const setOpen=async (open,notify=true)=>{
-    if(open&&collapsible&&node.lazyChildren&&!node.childrenLoaded){
-      const loaded=await loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion,dnd);
-      if(!loaded)return;
+  const setOpen=async open=>{
+    if(node._expandPending)return false;
+    node._expandPending=true;
+    twist.disabled=true;
+    try{
+      const ticket=await reportExtensionTreeExpanded(viewId,node,open);
+      const r=ticket&&ticket.result;
+      if(!extensionTreeResponseApplied(ticket)||!wrap.isConnected){
+        setStatus(extensionTreeErrorText(r,r&&r.available===false?'Tree expansion unavailable':'Tree expansion failed'));
+        return false;
+      }
+      const nextVersion=Number(r.viewVersion)||Number(node.refreshVersion)||0;
+      node.refreshVersion=nextVersion;
+      const tree=wrap.closest('[role="tree"]');if(tree)tree.dataset.refreshVersion=String(nextVersion);
+      if(open&&Array.isArray(r.items)){
+        node.children=r.items;node.childrenLoaded=true;node.lazyChildren=false;
+        childBox.replaceChildren();
+        if(r.items.length)r.items.forEach((child,index)=>childBox.appendChild(renderExtensionTreeNode(viewId,child,depth+1,nextVersion,dnd,index,r.items.length)));
+        else childBox.appendChild(extensionTreeStatusRow(depth,'No children.','empty'));
+      }
+      childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false');
+      return true;
+    }finally{
+      node._expandPending=false;
+      twist.disabled=!collapsible;
     }
-    childBox.style.display=open?'':'none';twist.textContent=open?'▾':'▸';wrap.setAttribute('aria-expanded',open?'true':'false');
-    if(collapsible&&notify)reportExtensionTreeExpanded(viewId,node,open);
   };
-  const selectNode=()=>{selectExtensionTreeNode(row,wrap);if(viewId&&node.handle)call('select_extension_tree_item',viewId,node.handle)};
-  void setOpen(collapsible===2,false);
+  const selectNode=async()=>{
+    if(!viewId||!node.handle){setStatus('Tree selection unavailable: current item handle is missing');return false}
+    if(node._selectPending)return false;
+    node._selectPending=true;
+    try{
+      const viewVersion=Number(node.refreshVersion)||0;
+      const ticket=await requestExtensionTreeOperation('select_extension_tree_item',[viewId,node.handle,viewVersion],{viewId,viewVersion,handle:node.handle,allowItems:false});
+      const r=ticket.result;
+      if(!extensionTreeResponseApplied(ticket)||!wrap.isConnected){
+        setStatus(extensionTreeErrorText(r,r&&r.available===false?'Tree selection unavailable':'Tree selection failed'));
+        return false;
+      }
+      if(Number(r.viewVersion))node.refreshVersion=Number(r.viewVersion);
+      selectExtensionTreeNode(row,wrap);return true;
+    }finally{
+      node._selectPending=false;
+    }
+  };
+  if(collapsible===2)void setOpen(true);
   twist.onclick=e=>{e.stopPropagation();if(collapsible)void setOpen(childBox.style.display==='none')};
-  const activateNode=()=>{
-    selectNode();
-    if(node.command&&node.command.command&&window.pywebview&&window.pywebview.api){
-      window.pywebview.api.execute_command(node.command.command,...(node.command.arguments||[]));
+  const activateNode=async()=>{
+    if(node.command&&node.command.command){
+      if(await runExtensionTreeItemAction(viewId,node,node.command))selectExtensionTreeNode(row,wrap);
     }else if(collapsible){
-      void setOpen(childBox.style.display==='none');
+      await setOpen(childBox.style.display==='none');
+    }else{
+      await selectNode();
     }
   };
-  row.onclick=activateNode;
+  row.onclick=()=>{void activateNode()};
   row.onkeydown=e=>{
-    if(e.key==='Enter'||e.key===' '){e.preventDefault();activateNode()}
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();void activateNode()}
     else if(e.key==='ArrowRight'&&collapsible&&childBox.style.display==='none'){e.preventDefault();void setOpen(true)}
     else if(e.key==='ArrowLeft'&&collapsible&&childBox.style.display!=='none'){e.preventDefault();void setOpen(false)}
   };
-  row.oncontextmenu=e=>{
+  row.oncontextmenu=async e=>{
     if(!actionBuckets.context.length)return;
     e.preventDefault();e.stopPropagation();
-    selectNode();
     showExtensionActionMenu(e.clientX,e.clientY,actionBuckets.context,action=>runExtensionTreeItemAction(viewId,node,action),actionContext());
   };
   wrap.appendChild(row);wrap.appendChild(childBox);return wrap;
@@ -48250,9 +48634,10 @@ function renderExtensionViewsInto(contentEl,item,options){
   const views=Array.isArray(item.views)?item.views:[];
   contentEl.dataset.extensionContainerId=String(item.id||'');
   contentEl.dataset.extensionContainerLocation=String(item.location||'');
+  contentEl.dataset.extensionInventoryState=views.length?'ready':'empty';
   contentEl.setAttribute('role','group');
   contentEl.setAttribute('aria-label',(item.title||item.id||'Extension')+' views');
-  contentEl.innerHTML='';
+  contentEl.replaceChildren();
   if(options.showContainerActions!==false&&Array.isArray(item.titleActions)&&item.titleActions.length){
     const toolbar=document.createElement('div');
     toolbar.style.cssText='display:flex;align-items:center;gap:6px;color:var(--fg-dim);font-size:11px;margin-bottom:8px;min-height:24px';
@@ -48284,6 +48669,21 @@ function renderExtensionViewsInto(contentEl,item,options){
     else contentEl.appendChild(renderExtensionManifestView(view));
   });
 }
+function syncExtensionContainerTreeViews(content,item){
+  if(!content||!item)return;
+  content.dataset.extensionInventoryState='ready';
+  const treeViews=(Array.isArray(item.views)?item.views:[]).filter(view=>view&&
+    (view.runtimeKind==='treeView'||(view.runtimeState&&view.runtimeState.kind==='treeView')));
+  const freshIds=new Set(treeViews.map(view=>String(view.id||(view.runtimeState&&view.runtimeState.viewId)||'')));
+  const existing=Array.from(content.children).filter(node=>node.dataset&&node.dataset.runtimeKind==='treeView');
+  existing.forEach(node=>{if(!freshIds.has(String(node.dataset.viewId||'')))node.remove()});
+  treeViews.forEach(view=>{
+    const id=String(view.id||(view.runtimeState&&view.runtimeState.viewId)||'');
+    const old=existing.find(node=>String(node.dataset.viewId||'')===id&&node.isConnected);
+    const next=renderExtensionTreeView(view);
+    if(old)old.replaceWith(next);else content.appendChild(next);
+  });
+}
 function renderExtensionContainerContent(item){
   renderExtensionViewsInto($('ext-vc-content'),item,{showMeta:true});
 }
@@ -48291,15 +48691,49 @@ async function renderExplorerExtensionViews(){
   const block=$('explorer-extension-views-block');
   const contentEl=$('explorer-extension-views');
   if(!block||!contentEl)return;
+  const requestId=++_extExplorerRequestSeq;
   let item={views:[]};
+  let response=null;
   try{
-    const r=await call('list_extension_container_views','explorer');
-    item=(r&&r.item)?r.item:{views:[]};
+    response=await call('list_extension_container_views','explorer');
+    item=(response&&response.item)?response.item:{views:[]};
   }catch(e){item={views:[],error:String(e)}}
+  if(requestId!==_extExplorerRequestSeq)return response;
+  const missing=!!(response&&response.errorCode==='EXTENSION_CONTAINER_NOT_FOUND');
+  if(!response||(response.ok===false&&!missing)){
+    block.style.display='';contentEl.replaceChildren();
+    contentEl.dataset.extensionInventoryState='error';
+    block.dataset.extensionInventoryState='error';
+    contentEl.appendChild(extensionTreeStatusRow(-1,extensionTreeErrorText(response,'Extension views unavailable'),'error',()=>renderExplorerExtensionViews()));
+    return response;
+  }
+  if(missing){
+    contentEl.dataset.extensionInventoryState='empty';
+    block.dataset.extensionInventoryState='empty';
+    block.style.display='';
+    contentEl.replaceChildren(extensionTreeStatusRow(-1,'No extension views registered for Explorer.','empty'));
+    return response;
+  }
+  if(response.available===false){
+    contentEl.dataset.extensionInventoryState='unavailable';
+    block.dataset.extensionInventoryState='unavailable';
+    block.style.display='';
+    contentEl.replaceChildren(extensionTreeStatusRow(-1,extensionTreeErrorText(response,'Extension views unavailable'),'unavailable'));
+    return response;
+  }
   const views=Array.isArray(item.views)?item.views:[];
-  if(!views.length){block.style.display='none';contentEl.innerHTML='';return}
+  if(!views.length){
+    contentEl.dataset.extensionInventoryState='empty';
+    block.dataset.extensionInventoryState='empty';
+    block.style.display='';
+    contentEl.replaceChildren(extensionTreeStatusRow(-1,'No extension views registered for Explorer.','empty'));
+    return response;
+  }
+  contentEl.dataset.extensionInventoryState='ready';
+  block.dataset.extensionInventoryState='ready';
   block.style.display='';
   renderExtensionViewsInto(contentEl,item,{showMeta:false,emptyText:''});
+  return response;
 }
 function extensionContainerIconUri(item){
   if(!item||typeof item!=='object')return '';
@@ -48348,8 +48782,11 @@ function renderExtensionPanelTabLabel(tab,item){
   tab.appendChild(icon);
   tab.appendChild(label);
 }
-function extensionPanelTabKey(id){return 'ext-panel-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
-function extensionPanelContentId(id){return 'extension-panel-content-'+String(id||'').replace(/[^a-zA-Z0-9_-]/g,'_')}
+function extensionPanelDomKey(id){
+  return Array.from(String(id||'')).map(ch=>ch.codePointAt(0).toString(16)).join('-')||'extension';
+}
+function extensionPanelTabKey(id){return 'ext-panel-'+extensionPanelDomKey(id)}
+function extensionPanelContentId(id){return 'extension-panel-content-'+extensionPanelDomKey(id)}
 function ensureExtensionPanelContainer(item){
   const panelArea=$('panel-area');
   if(!panelArea||!item||!item.id)return null;
@@ -48385,32 +48822,48 @@ function ensureExtensionPanelContainer(item){
   return {tab,panel};
 }
 async function renderExtensionPanelContainers(){
+  const requestId=++_extPanelRequestSeq;
   let items=[];
+  let response=null;
   try{
-    const r=await call('list_extension_view_containers','panel');
-    items=(r&&Array.isArray(r.items))?r.items:[];
+    response=await call('list_extension_view_containers','panel');
+    items=(response&&response.available!==false&&Array.isArray(response.items))?response.items:[];
   }catch(e){items=[]}
-  const seen=new Set(items.map(item=>extensionPanelTabKey(item.id)));
+  if(requestId!==_extPanelRequestSeq)return response;
+  const panelArea=$('panel-area');
+  const state=!response||response.ok===false?'error':response.available===false?'unavailable':items.length?'ready':'empty';
+  if(panelArea)panelArea.dataset.extensionInventoryState=state;
+  if(state==='error')return response;
+  const seen=new Set(state==='ready'?items.map(item=>extensionPanelTabKey(item.id)):[]);
   document.querySelectorAll('.extension-panel-tab').forEach(tab=>{
     if(!seen.has(tab.dataset.ptab))tab.remove();
   });
   document.querySelectorAll('.extension-panel-container').forEach(panel=>{
     if(!seen.has(panel.dataset.ptab))panel.remove();
   });
+  if(state!=='ready')return response;
   items.forEach(item=>{
     const refs=ensureExtensionPanelContainer(item);
     if(refs&&refs.tab&&refs.tab.classList.contains('active')){
-      renderExtensionViewsInto($(extensionPanelContentId(item.id)),item,{showMeta:true});
+      const content=$(extensionPanelContentId(item.id));
+      if(content&&(content.dataset.extensionContainerId!==String(item.id)||!content.children.length))renderExtensionViewsInto(content,item,{showMeta:true});
+      else syncExtensionContainerTreeViews(content,item);
     }
   });
+  return response;
 }
-function activateExtensionActivityItem(item){
+async function activateExtensionActivityItem(item){
   const panel='ext-vc-'+item.id;
-  if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
-  reportActiveExtensionActivityVisibility(false);
+  if(panel===_activeSidebarPanel&&_sidebarVis)return toggleSidebarVis();
+  const previousPanel=_activeSidebarPanel;
+  const previousVisible=_sidebarVis;
+  if(previousVisible&&!(await reportActiveExtensionActivityVisibility(false)))return false;
+  if(!(await reportExtensionActivityVisibilityForPanel(panel,true,item))){
+    if(previousVisible)await reportExtensionActivityVisibilityForPanel(previousPanel,true);
+    return false;
+  }
   if(!_sidebarVis){_sidebarVis=true;$('sidebar').style.display='';$('tb-toggle-sidebar').classList.add('active')}
   _activeSidebarPanel=panel;
-  reportExtensionActivityVisibilityForPanel(panel,true);
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
   syncActivityOverflowSelection(panel);
   closeActivityOverflow(false);
@@ -48431,6 +48884,7 @@ function activateExtensionActivityItem(item){
     resolveUnresolvedExtensionWebviewViews(item);
   }
   $('sidebar').classList.remove('hidden');
+  return true;
 }
 // Real VS Code only resolves a webview-view's content when it actually
 // becomes visible, not at extension activation time. Trigger that now for
@@ -48444,37 +48898,83 @@ async function resolveUnresolvedExtensionWebviewViews(item){
   if(!pending.length)return;
   await Promise.all(pending.map(v=>call('resolve_extension_webview_view',v.id).catch(()=>null)));
   if(_activeSidebarPanel!=='ext-vc-'+item.id)return;
-  const r=await call('list_extension_activity_bar_items').catch(()=>null);
-  const fresh=(r&&r.items||[]).find(i=>i.id===item.id);
+  await renderExtensionActivityBar();
+  const fresh=_extActBarItems.find(i=>i.id===item.id);
   if(fresh&&_activeSidebarPanel==='ext-vc-'+fresh.id)renderExtensionContainerContent(fresh);
 }
 function createExtensionActivityButton(item){
   const btn=document.createElement('div');
   btn.className='ab-icon';
   btn.dataset.panel='ext-vc-'+item.id;
+  if(typeof _activeSidebarPanel!=='undefined'&&_activeSidebarPanel===btn.dataset.panel&&_sidebarVis)btn.classList.add('active');
   btn.title=item.title;
   btn.tabIndex=0;
   btn.setAttribute('role','button');
   btn.setAttribute('aria-label','Open '+(item.title||item.id||'extension view'));
   renderExtensionContainerIcon(btn,item);
-  btn.addEventListener('click',()=>activateExtensionActivityItem(item));
+  btn.addEventListener('click',()=>{void activateExtensionActivityItem(item)});
   btn.addEventListener('keydown',function(e){
-    if(e.key==='Enter'||e.key===' '){e.preventDefault();activateExtensionActivityItem(item)}
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();void activateExtensionActivityItem(item)}
   });
   return btn;
 }
+function syncActiveExtensionContainerInventoryState(state,response){
+  const activeId=extensionContainerIdFromPanel(typeof _activeSidebarPanel==='undefined'?'':_activeSidebarPanel);
+  if(!activeId)return;
+  const current=_extActBarItems.find(item=>item&&String(item.id||'')===activeId);
+  const view=$('sb-ext-viewcontainer'),content=$('ext-vc-content');
+  if(state==='ready'&&current){
+    if(view)view.dataset.extensionInventoryState='ready';
+    if(!content)return;
+    content.querySelectorAll('[data-extension-inventory-marker="1"]').forEach(node=>node.remove());
+    if(content.dataset.extensionContainerId!==activeId||!content.children.length){
+      renderExtensionContainerContent(current);
+      return;
+    }
+    syncExtensionContainerTreeViews(content,current);
+    return;
+  }
+  const actualState=state==='ready'?'empty':state;
+  if(view)view.dataset.extensionInventoryState=actualState;
+  if(!content)return;
+  content.dataset.extensionInventoryState=actualState;
+  const fallback=actualState==='empty'?'Extension view container is no longer registered.':'Extension contribution inventory unavailable';
+  const text=actualState==='empty'?fallback:extensionTreeErrorText(response,fallback);
+  const marker=extensionTreeStatusRow(-1,text,actualState);
+  marker.dataset.extensionInventoryMarker='1';
+  content.querySelectorAll('[data-extension-inventory-marker="1"]').forEach(node=>node.remove());
+  if(actualState==='empty')content.replaceChildren(marker);
+  else content.prepend(marker);
+}
 async function renderExtensionActivityBar(){
+  const requestId=++_extActivityRequestSeq;
+  let response=null,error=null;
   try{
-    const r=await call('list_extension_activity_bar_items');
-    _extActBarItems=(r&&r.items)?r.items:[];
-  }catch(e){_extActBarItems=[];}
-  renderExtensionPanelContainers();
+    response=await call('list_extension_activity_bar_items');
+  }catch(e){error=e;}
+  if(requestId!==_extActivityRequestSeq)return response;
+  const failed=!!error||!response||response.ok===false;
+  _extActBarItems=!failed&&response.available!==false&&Array.isArray(response.items)?response.items:[];
+  void renderExtensionPanelContainers();
   const container=$('ext-actbar-items');
-  if(!container)return;
-  container.innerHTML='';
+  const state=failed?'error':response.available===false?'unavailable':_extActBarItems.length?'ready':'empty';
+  syncActiveExtensionContainerInventoryState(state,response);
+  if(!container)return response;
+  container.replaceChildren();
+  container.dataset.extensionInventoryState=state;
+  if(state==='error'||state==='unavailable'){
+    const marker=document.createElement('div');marker.className='ab-icon';marker.textContent='!';
+    marker.setAttribute('role','status');marker.setAttribute('aria-disabled','true');
+    marker.dataset.extensionInventoryState=state;
+    marker.title=state==='unavailable'?extensionTreeErrorText(response,'Extension contribution inventory unavailable'):'Extension contribution inventory error';
+    container.appendChild(marker);
+    return response;
+  }
   _extActBarItems.forEach(item=>{
     container.appendChild(createExtensionActivityButton(item));
   });
+  if(typeof _activeSidebarPanel!=='undefined')syncActivityOverflowSelection(_activeSidebarPanel);
+  return response;
 }
 async function extensionRuntimeDomSelfCheckSnapshot(){
   const root=document.createElement('div');
@@ -49562,6 +50062,8 @@ function extensionActiveBadge(ext){
 function extensionStateBadge(ext){
   const state=String(ext&&ext.runtimeState||ext&&ext.state||'').toLowerCase();
   if(state==='active')return '<span class="ext-badge active">Active</span>';
+  if(state==='quarantined'||state==='unknown')return '<span class="ext-badge" title="Runtime state is unknown">Quarantined</span>';
+  if(state==='activating'||state==='deactivating'||state==='unregistering')return '<span class="ext-badge">'+esc(state)+'</span>';
   if(state==='loaded')return '<span class="ext-badge runtime">Loaded</span>';
   if(state==='installed')return '<span class="ext-badge persisted">Installed</span>';
   return '';
@@ -53120,14 +53622,15 @@ function focusBestTarget(){
   const ci=$('chat-input');if(ci&&ci.offsetParent){ci.focus();return}
   const ti=$('term-input');if(ti&&ti.offsetParent){ti.focus();return}
 }
-function toggleSidebarVis(){
+async function toggleSidebarVis(){
   const nextVisible=!_sidebarVis;
-  reportActiveExtensionActivityVisibility(nextVisible);
+  if(!(await reportActiveExtensionActivityVisibility(nextVisible)))return false;
   _sidebarVis=nextVisible;
   _applyPaneVisibility();
   $('tb-toggle-sidebar').classList.toggle('active',_sidebarVis);
   _clampLayoutDimensions();
   focusBestTarget();_saveLayoutImmediate();
+  return true;
 }
 function toggleEditorVis(){
   if(_editorVis)hideEditorArea();else showEditorArea();
@@ -56736,7 +57239,7 @@ if(window.pywebview){
     border-radius: 6px;
     background: rgba(31,31,31,.92);
     color: rgba(232,232,232,.9);
-    font: 11px/1.35 "Segoe UI", system-ui, sans-serif;
+    font: 11px/1.35 "SAO Product";
     pointer-events: none;
     opacity: 0;
     transform: translateY(4px);

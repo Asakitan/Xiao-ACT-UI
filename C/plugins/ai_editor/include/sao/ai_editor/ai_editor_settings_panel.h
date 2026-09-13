@@ -36,6 +36,8 @@ sao_ai_editor_settings_panel_show(sao_ai_editor_settings_panel_t panel);
 
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_settings_panel_hide(sao_ai_editor_settings_panel_t panel);
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_settings_panel_is_visible(sao_ai_editor_settings_panel_t panel, bool* out_visible);
 
 // Hide also dismisses and fully advances any active settings dialog before
 // returning, so no modal remains visible after the panel is hidden.

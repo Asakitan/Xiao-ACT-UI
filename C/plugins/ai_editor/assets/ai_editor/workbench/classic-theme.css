@@ -1,4 +1,16 @@
 /* Editor text layers keep their document-owned geometry and transparency. */
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/SAOUI.ttf") format("truetype"), url("https://sao-fonts.local/SAOUI.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0000-024F, U+1E00-1EFF;
+}
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/ZhuZiAYuanJWD.ttf") format("truetype"), url("https://sao-fonts.local/ZhuZiAYuanJWD.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0250-1DFF, U+1F00-10FFFF;
+}
 :root,
 :root[data-theme="light"] {
   color-scheme: light;
@@ -48,8 +60,8 @@
   --popup-shadow: 0 8px 32px #1921321a;
   --composer-shadow: 0 2px 10px #19213208;
   --radius: 6px;
-  --sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-  --mono: "Cascadia Code", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --sans: "SAO Product";
+  --mono: "SAO Product";
   --ui: var(--sans);
   --activitybar-bg: var(--bg-sidebar);
   --warn: var(--fg-warning);
@@ -106,6 +118,7 @@
 }
 
 body { font-family: var(--sans); letter-spacing: normal; }
+button, input, select, textarea { font-family: var(--sans); }
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 .editor-textarea:focus-visible { outline: none; }
 ::selection { background: var(--selection); }

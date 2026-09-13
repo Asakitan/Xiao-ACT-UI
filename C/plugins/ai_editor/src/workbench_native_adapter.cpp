@@ -1,5 +1,6 @@
 #include "workbench_native_adapter.h"
 
+#include "memory_viewer_provider.h"
 #include "native_utils.h"
 #include "sao/ai_editor/ai_editor_status.h"
 #include "sao/ai_editor/mcp_server.h"
@@ -7,11 +8,14 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <initializer_list>
 #include <limits>
@@ -22,6 +26,7 @@
 #include <optional>
 #include <regex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -64,6 +69,11 @@ constexpr std::chrono::minutes kEventPollLifetime{10};
 constexpr size_t kMaximumJsonDepth = 64;
 constexpr size_t kMaximumJsonNodes = 16384;
 constexpr size_t kMaximumJsonStringBytes = 1024U * 1024U;
+constexpr size_t kMaximumTreeChildren = 500;
+constexpr size_t kMaximumTreeDepth = 64;
+constexpr size_t kMaximumTreeLabelBytes = 64U * 1024U;
+constexpr size_t kMaximumTreePayloadBytes = 512U * 1024U;
+constexpr uint64_t kMaximumSafeJsonInteger = 9007199254740991ULL;
 constexpr size_t kMaximumImageBinaryBytes = 3U * 1024U * 1024U - 128U * 1024U;
 
 struct AdapterJob {
@@ -72,6 +82,9 @@ struct AdapterJob {
     std::string method;
     json args;
     uint64_t document_generation{};
+    sao::ai_editor::native::MemoryViewerBindingIdentity memory_binding{};
+    std::uint64_t memory_binding_epoch{};
+    bool memory_binding_captured{};
 };
 
 struct RpcReply {
@@ -99,6 +112,10 @@ std::string transport_error_code(int32_t status) {
         return "SAO_INVALID_ARGUMENT";
     case SAO_AI_EDITOR_ERR_PERMISSION_DENIED:
         return "SAO_PERMISSION_DENIED";
+    case SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION:
+        return "SAO_WORKSPACE_BOUNDARY";
+    case SAO_AI_EDITOR_ERR_BUSY:
+        return "SAO_WORKSPACE_BUSY";
     case SAO_AI_EDITOR_ERR_CANCELLED:
         return "SAO_CANCELLED";
     default:
@@ -152,6 +169,344 @@ bool json_within_budget(const json& value, size_t depth, size_t* nodes) {
 bool json_within_budget(const json& value) {
     size_t nodes = 0;
     return json_within_budget(value, 0, &nodes);
+}
+
+bool nonnegative_safe_integer(const json& value) {
+    if (value.is_number_unsigned())
+        return value.get<uint64_t>() <= kMaximumSafeJsonInteger;
+    return value.is_number_integer() && value.get<int64_t>() >= 0 &&
+           static_cast<uint64_t>(value.get<int64_t>()) <= kMaximumSafeJsonInteger;
+}
+
+bool parse_tree_handle(std::string_view value, uint64_t expected_generation = 0,
+                       uint64_t expected_version = 0) {
+    if (value.empty() || value.size() > 128 || value.find('\0') != std::string_view::npos)
+        return false;
+    std::array<uint64_t, 4> parts{};
+    size_t offset = 0;
+    for (size_t index = 0; index < parts.size(); ++index) {
+        const size_t separator = value.find(':', offset);
+        const bool last = index + 1 == parts.size();
+        if ((last && separator != std::string_view::npos) ||
+            (!last && separator == std::string_view::npos))
+            return false;
+        const size_t end = last ? value.size() : separator;
+        if (end == offset)
+            return false;
+        const char* first = value.data() + offset;
+        const char* final = value.data() + end;
+        const auto parsed = std::from_chars(first, final, parts[index]);
+        if (parsed.ec != std::errc{} || parsed.ptr != final || parts[index] == 0 ||
+            parts[index] > kMaximumSafeJsonInteger)
+            return false;
+        offset = end + 1;
+    }
+    return (expected_generation == 0 || parts[0] == expected_generation) &&
+           (expected_version == 0 || parts[2] == expected_version);
+}
+
+bool consume_tree_text(const json& object, std::string_view key, size_t* labels,
+                       bool required = false) {
+    const auto value = object.find(std::string(key));
+    if (value == object.end())
+        return !required;
+    if (!value->is_string())
+        return false;
+    const auto& text = value->get_ref<const std::string&>();
+    if (!sao::ai_editor::native::valid_utf8(text))
+        return false;
+    const size_t bytes = text.size();
+    if (bytes > kMaximumTreeLabelBytes - *labels)
+        return false;
+    *labels += bytes;
+    return true;
+}
+
+bool tree_items_within_budget(const json& items, size_t depth, size_t* labels, size_t* nodes,
+                              uint64_t generation, uint64_t version,
+                              std::unordered_set<std::string>* handles) {
+    if (!items.is_array() || items.size() > kMaximumTreeChildren || depth >= kMaximumTreeDepth)
+        return false;
+    for (const auto& item : items) {
+        if (!item.is_object() || ++*nodes > kMaximumJsonNodes)
+            return false;
+        const auto handle = item.find("handle");
+        if (handle == item.end() || !handle->is_string() ||
+            !parse_tree_handle(handle->get_ref<const std::string&>(), generation, version) ||
+            !handles->insert(handle->get<std::string>()).second)
+            return false;
+        for (const char* key : {"label", "description", "tooltip", "contextValue", "resourceUri"}) {
+            if (!consume_tree_text(item, key, labels, std::string_view(key) == "label"))
+                return false;
+        }
+        const auto command = item.find("command");
+        if (command != item.end() && !command->is_null()) {
+            if (!command->is_object())
+                return false;
+            for (const char* key : {"command", "title", "tooltip"})
+                if (!consume_tree_text(*command, key, labels))
+                    return false;
+            const auto arguments = command->find("arguments");
+            if (arguments != command->end() && (!arguments->is_array() || arguments->size() > 64))
+                return false;
+        }
+        const auto checkbox = item.find("checkbox");
+        if (checkbox != item.end() && !checkbox->is_null() &&
+            (!checkbox->is_object() || !consume_tree_text(*checkbox, "tooltip", labels)))
+            return false;
+        const auto accessibility = item.find("accessibilityInformation");
+        if (accessibility != item.end() && !accessibility->is_null() &&
+            (!accessibility->is_object() || !consume_tree_text(*accessibility, "label", labels) ||
+             !consume_tree_text(*accessibility, "role", labels)))
+            return false;
+        const auto actions = item.find("actions");
+        if (actions != item.end()) {
+            if (!actions->is_array() || actions->size() > 64)
+                return false;
+            for (const auto& action : *actions) {
+                if (!action.is_object())
+                    return false;
+                for (const char* key :
+                     {"command", "submenu", "group", "title", "tooltip", "disabledReason"})
+                    if (!consume_tree_text(action, key, labels))
+                        return false;
+            }
+        }
+        const auto children = item.find("children");
+        if (children != item.end() &&
+            (!children->is_array() ||
+             (!children->empty() && !tree_items_within_budget(*children, depth + 1, labels, nodes,
+                                                              generation, version, handles))))
+            return false;
+    }
+    return true;
+}
+
+bool valid_tree_items(const json& items, uint64_t generation, uint64_t version,
+                      size_t initial_labels = 0) {
+    size_t labels = initial_labels;
+    size_t nodes = 0;
+    std::unordered_set<std::string> handles;
+    if (!tree_items_within_budget(items, 0, &labels, &nodes, generation, version, &handles))
+        return false;
+    try {
+        return items.dump().size() <= kMaximumTreePayloadBytes;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool valid_tree_operation_response(const json& result, std::string_view expected_view_id,
+                                   uint64_t requested_version, bool allow_items) {
+    if (!result.is_object() || !result.contains("ok") || !result["ok"].is_boolean() ||
+        !result.contains("available") || !result["available"].is_boolean() ||
+        !result.contains("applied") || !result["applied"].is_boolean() ||
+        !result.contains("items") || !result["items"].is_array() || !result.contains("errorCode") ||
+        !result["errorCode"].is_string() || !result.contains("error") ||
+        !result["error"].is_string() || !result.contains("viewVersion") ||
+        !nonnegative_safe_integer(result["viewVersion"])) {
+        return false;
+    }
+    const auto view = result.find("viewId");
+    if (view == result.end() || !view->is_string() ||
+        view->get_ref<const std::string&>() != expected_view_id) {
+        return false;
+    }
+    const bool ok = result["ok"].get<bool>();
+    const bool available = result["available"].get<bool>();
+    const bool applied = result["applied"].get<bool>();
+    const auto& error_code = result["errorCode"].get_ref<const std::string&>();
+    const auto& error = result["error"].get_ref<const std::string&>();
+    if (error_code.size() > 128 || error.size() > 4096 ||
+        !sao::ai_editor::native::valid_utf8(error_code) ||
+        !sao::ai_editor::native::valid_utf8(error) ||
+        (applied && (!ok || !available || !error_code.empty() || !error.empty())) ||
+        (!applied && !result["items"].empty()) || (!ok && (error_code.empty() || error.empty())) ||
+        (ok && !applied) || (!allow_items && !result["items"].empty())) {
+        return false;
+    }
+
+    uint64_t response_generation = 0;
+    const auto owner = result.find("extensionId");
+    const auto generation = result.find("generation");
+    const bool has_owner = owner != result.end();
+    const bool has_generation = generation != result.end();
+    if (has_owner != has_generation || (applied && !has_owner))
+        return false;
+    if (has_owner &&
+        (!owner->is_string() ||
+         !sao::ai_editor::native::valid_simple_id(owner->get_ref<const std::string&>()) ||
+         !nonnegative_safe_integer(*generation) ||
+         (response_generation = generation->get<uint64_t>()) == 0)) {
+        return false;
+    }
+
+    const uint64_t response_version = result["viewVersion"].get<uint64_t>();
+    if (applied && requested_version != 0 && requested_version != response_version) {
+        return false;
+    }
+    size_t labels = 0;
+    for (const char* key : {"title", "description", "message"})
+        if (!consume_tree_text(result, key, &labels))
+            return false;
+    const auto badge = result.find("badge");
+    if (badge != result.end() && !badge->is_null() &&
+        (!badge->is_object() || !consume_tree_text(*badge, "tooltip", &labels))) {
+        return false;
+    }
+    const auto drag_and_drop = result.find("dragAndDrop");
+    if (drag_and_drop != result.end()) {
+        if (!drag_and_drop->is_object())
+            return false;
+        for (const char* key : {"dragMimeTypes", "dropMimeTypes"}) {
+            const auto values = drag_and_drop->find(key);
+            if (values == drag_and_drop->end())
+                continue;
+            if (!values->is_array() || values->size() > 64)
+                return false;
+            for (const auto& value : *values) {
+                if (!value.is_string() || value.get_ref<const std::string&>().size() > 256 ||
+                    !sao::ai_editor::native::valid_utf8(value.get_ref<const std::string&>())) {
+                    return false;
+                }
+            }
+        }
+    }
+    return valid_tree_items(result["items"], response_generation, response_version, labels);
+}
+
+bool tree_request_within_budget(const json& value, size_t depth, size_t* nodes) {
+    if (depth > kMaximumTreeDepth || *nodes >= kMaximumJsonNodes)
+        return false;
+    ++*nodes;
+    if (value.is_string())
+        return value.get_ref<const std::string&>().size() <= kMaximumTreeLabelBytes;
+    if (value.is_array()) {
+        for (const auto& item : value)
+            if (!tree_request_within_budget(item, depth + 1, nodes))
+                return false;
+    } else if (value.is_object()) {
+        for (const auto& [key, item] : value.items())
+            if (key.size() > 256 || !tree_request_within_budget(item, depth + 1, nodes))
+                return false;
+    }
+    return true;
+}
+
+bool valid_tree_request(const json& value) {
+    size_t nodes = 0;
+    try {
+        return tree_request_within_budget(value, 0, &nodes) &&
+               value.dump().size() <= kMaximumTreePayloadBytes;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool valid_extension_inventory_result(const json& result) {
+    try {
+        if (!json_within_budget(result) || result.dump().size() > kMaximumResponseBytes) {
+            return false;
+        }
+    } catch (...) {
+        return false;
+    }
+    if (!result.is_object() || !result.contains("ok") || !result["ok"].is_boolean() ||
+        !result["ok"].get<bool>() || !result.contains("available") ||
+        !result["available"].is_boolean() || !result.contains("inventory") ||
+        !result["inventory"].is_object() || !result.contains("runtime") ||
+        !result["runtime"].is_object() || !result.contains("summary") ||
+        !result["summary"].is_object()) {
+        return false;
+    }
+    const auto inventory_available = result["inventory"].find("available");
+    if (inventory_available == result["inventory"].end() || !inventory_available->is_boolean() ||
+        inventory_available->get<bool>() != result["available"].get<bool>()) {
+        return false;
+    }
+    for (const char* key :
+         {"items", "extensions", "commands", "viewContainers", "activityBarItems", "views",
+          "treeViews", "webviewViews", "menus", "configurations", "notebooks", "debuggers",
+          "taskDefinitions", "customEditors", "mcpServers", "chatProviders"}) {
+        const auto value = result.find(key);
+        if (value == result.end() || !value->is_array() || value->size() > 4096)
+            return false;
+    }
+    if (result["items"] != result["extensions"] ||
+        result["available"].get<bool>() != !result["extensions"].empty()) {
+        return false;
+    }
+    const auto total = result.find("total");
+    if (total == result.end() || !nonnegative_safe_integer(*total) ||
+        total->get<uint64_t>() != result["extensions"].size()) {
+        return false;
+    }
+    std::unordered_set<std::string> extension_ids;
+    for (const auto& extension : result["extensions"]) {
+        if (!extension.is_object() || !valid_string_member(extension, "id") ||
+            !sao::ai_editor::native::valid_simple_id(
+                extension["id"].get_ref<const std::string&>()) ||
+            !extension_ids.insert(extension["id"].get<std::string>()).second ||
+            !extension.contains("generation") ||
+            !nonnegative_safe_integer(extension["generation"]) ||
+            !valid_string_member(extension, "runtimeState") || !extension.contains("inventory") ||
+            !extension["inventory"].is_object()) {
+            return false;
+        }
+    }
+    const json& summary = result["summary"];
+    const json inventory_summary = result["inventory"].value("summary", json::object());
+    if (inventory_summary != summary) {
+        return false;
+    }
+    for (const auto [summary_key, array_key] :
+         {std::pair<const char*, const char*>{"extensions", "extensions"},
+          {"commands", "commands"},
+          {"viewContainers", "viewContainers"},
+          {"views", "views"},
+          {"treeViews", "treeViews"},
+          {"webviewViews", "webviewViews"},
+          {"menus", "menus"},
+          {"configurations", "configurations"},
+          {"notebooks", "notebooks"},
+          {"debuggers", "debuggers"},
+          {"taskDefinitions", "taskDefinitions"},
+          {"customEditors", "customEditors"},
+          {"mcpServers", "mcpServers"},
+          {"chatProviders", "chatProviders"}}) {
+        const auto count = summary.find(summary_key);
+        if (count == summary.end() || !nonnegative_safe_integer(*count) ||
+            count->get<uint64_t>() != result[array_key].size()) {
+            return false;
+        }
+    }
+    const std::size_t dynamic_surfaces =
+        result["commands"].size() + result["viewContainers"].size() + result["views"].size() +
+        result["menus"].size() + result["configurations"].size() + result["notebooks"].size() +
+        result["debuggers"].size() + result["taskDefinitions"].size() +
+        result["customEditors"].size() + result["mcpServers"].size() +
+        result["chatProviders"].size();
+    const auto dynamic_count = summary.find("dynamicSurfaces");
+    if (dynamic_count == summary.end() || !nonnegative_safe_integer(*dynamic_count) ||
+        dynamic_count->get<uint64_t>() != dynamic_surfaces) {
+        return false;
+    }
+    for (const auto [key, maximum] : {std::pair<std::string_view, size_t>{"errorCode", 128},
+                                      {"error", 4096},
+                                      {"reason", 4096}}) {
+        const auto value = result.find(std::string(key));
+        if (value != result.end() &&
+            (!value->is_string() || value->get_ref<const std::string&>().size() > maximum ||
+             !sao::ai_editor::native::valid_utf8(value->get_ref<const std::string&>()))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool valid_extension_id_segment(std::string_view value) {
+    return value.find('.') == std::string_view::npos &&
+           sao::ai_editor::native::valid_simple_id(value);
 }
 
 bool ascii_alphanumeric(unsigned char value) noexcept {
@@ -298,6 +653,11 @@ NativeAdapterCompletion failed_completion(const AdapterJob& job, std::string cod
     completion.error_code = std::move(code);
     completion.error_message = std::move(message);
     completion.error_data = std::move(error_data);
+    completion.memory_pid = job.memory_binding.pid;
+    completion.memory_start_time_100ns = job.memory_binding.start_time_100ns;
+    completion.memory_selection_generation = job.memory_binding.selection_generation;
+    completion.memory_binding_epoch = job.memory_binding_epoch;
+    completion.memory_binding_captured = job.memory_binding_captured;
     return completion;
 }
 
@@ -310,6 +670,11 @@ NativeAdapterCompletion successful_completion(const AdapterJob& job, json result
     completion.request_id = job.request_id;
     completion.ok = true;
     completion.result = std::move(result);
+    completion.memory_pid = job.memory_binding.pid;
+    completion.memory_start_time_100ns = job.memory_binding.start_time_100ns;
+    completion.memory_selection_generation = job.memory_binding.selection_generation;
+    completion.memory_binding_epoch = job.memory_binding_epoch;
+    completion.memory_binding_captured = job.memory_binding_captured;
     return completion;
 }
 
@@ -393,6 +758,9 @@ struct NativeAdapter {
     std::deque<std::string> orphan_run_ids;
     std::deque<std::string> orphan_workflow_ids;
     std::filesystem::path workspace_root;
+    std::unique_ptr<sao::ai_editor::native::MemoryViewerProvider> memory_viewer;
+    sao::ai_editor::native::MemoryViewerBindingIdentity memory_binding{};
+    std::uint64_t memory_binding_epoch{1u};
     json editor_state = json::object();
     std::unordered_map<std::string, std::vector<int64_t>> breakpoints;
     json task_definitions = json::array();
@@ -576,6 +944,25 @@ RpcReply call_backend(NativeAdapter& adapter, std::string_view method, const jso
     return reply;
 }
 
+const json* backend_error_details(const RpcReply& reply) {
+    if (!reply.error_data.is_object())
+        return nullptr;
+    const auto details = reply.error_data.find("details");
+    return details != reply.error_data.end() && details->is_object() ? &*details : nullptr;
+}
+
+std::optional<int32_t> backend_error_status(const RpcReply& reply) {
+    if (!reply.error_data.is_object())
+        return std::nullopt;
+    const auto status = reply.error_data.find("status");
+    if (status == reply.error_data.end() || !status->is_number_integer())
+        return std::nullopt;
+    const int64_t value = status->get<int64_t>();
+    if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max())
+        return std::nullopt;
+    return static_cast<int32_t>(value);
+}
+
 std::string workspace_resource_path(std::string value);
 
 RpcReply ensure_workspace(NativeAdapter& adapter) {
@@ -614,6 +1001,23 @@ std::string relative_workspace_path(const NativeAdapter& adapter,
     std::error_code error;
     const auto relative = std::filesystem::relative(path, adapter.workspace_root, error);
     return error ? std::string{} : sao::ai_editor::native::wide_to_utf8(relative.native());
+}
+
+int32_t write_workspace_text_cas(const NativeAdapter& adapter,
+                                 const std::filesystem::path& path,
+                                 std::string_view content) {
+    std::string expected;
+    const int32_t read_status = sao::ai_editor::native::read_text_file_bounded(
+        adapter.workspace_root, path, static_cast<uint32_t>(kMaximumResponseBytes), expected);
+    if (read_status == SAO_AI_EDITOR_OK) {
+        return sao::ai_editor::native::write_text_atomic_bounded_if_unchanged(
+            adapter.workspace_root, path, expected, content);
+    }
+    if (read_status == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+        return sao::ai_editor::native::create_text_atomic_bounded(adapter.workspace_root, path,
+                                                                  content);
+    }
+    return read_status;
 }
 
 std::string file_language(std::string_view path) {
@@ -2291,8 +2695,8 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             return failed_completion(job, "SAO_WORKSPACE_BOUNDARY",
                                      "Resource is outside the active workspace.");
         std::string content;
-        const int32_t status = sao::ai_editor::native::read_text_file(
-            path, static_cast<uint32_t>(kMaximumResponseBytes), content);
+        const int32_t status = sao::ai_editor::native::read_text_file_bounded(
+            adapter.workspace_root, path, static_cast<uint32_t>(kMaximumResponseBytes), content);
         if (status != SAO_AI_EDITOR_OK)
             return failed_completion(job, transport_error_code(status),
                                      "Workspace file read failed.");
@@ -2319,11 +2723,11 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
                 return failed_completion(job, "SAO_WORKSPACE_IO_FAILED",
                                          "Workspace directory creation failed.");
         } else {
-            std::filesystem::create_directories(path.parent_path(), error);
-            if (error || std::filesystem::exists(path, error))
+            const int32_t status = sao::ai_editor::native::create_text_atomic_bounded(
+                adapter.workspace_root, path, {});
+            if (status == SAO_AI_EDITOR_ERR_BUSY)
                 return failed_completion(job, "SAO_WORKSPACE_ALREADY_EXISTS",
                                          "Workspace file already exists.");
-            const int32_t status = sao::ai_editor::native::write_text_atomic(path, {});
             if (status != SAO_AI_EDITOR_OK)
                 return failed_completion(job, transport_error_code(status),
                                          "Workspace file creation failed.");
@@ -2419,9 +2823,9 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
         std::regex expression;
         try {
             expression_text =
-                use_regex ? query
-                          : std::regex_replace(query, std::regex(R"([.^$|()\[\]{}*+?\\])"),
-                                               R"(\$&)");
+                use_regex
+                    ? query
+                    : std::regex_replace(query, std::regex(R"([.^$|()\[\]{}*+?\\])"), R"(\$&)");
             if (whole_word)
                 expression_text = "\\b(?:" + expression_text + ")\\b";
             expression =
@@ -2487,12 +2891,12 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
         const size_t result_count = normalized.size();
         const size_t backend_total =
             reply.result.value("originalTotal", reply.result.value("total", size_t{0}));
-        return successful_completion(job, {{"query", query},
-                                           {"results", std::move(normalized)},
-                                           {"fileCount", files.size()},
-                                           {"resultCount", result_count},
-                                           {"truncated", backend_total > result_count ||
-                                                             backend_total >= limit}});
+        return successful_completion(
+            job, {{"query", query},
+                  {"results", std::move(normalized)},
+                  {"fileCount", files.size()},
+                  {"resultCount", result_count},
+                  {"truncated", backend_total > result_count || backend_total >= limit}});
     }
     if (job.method == "editor_surface_state" || job.method == "report_editor_options" ||
         job.method == "report_editor_selection" || job.method == "report_editor_visible_ranges") {
@@ -2619,9 +3023,9 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
                 continue;
             }
             std::string source;
-            if (sao::ai_editor::native::read_text_file(path,
-                                                       static_cast<uint32_t>(kMaximumResponseBytes),
-                                                       source) != SAO_AI_EDITOR_OK) {
+            if (sao::ai_editor::native::read_text_file_bounded(
+                    adapter.workspace_root, path, static_cast<uint32_t>(kMaximumResponseBytes),
+                    source) != SAO_AI_EDITOR_OK) {
                 errors.push_back(
                     {{"path", resource}, {"error", "Workspace edit target could not be read."}});
                 continue;
@@ -2675,7 +3079,8 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             for (const auto& [start, end, replacement] : operations)
                 text.replace(start, end - start, replacement);
             const std::string output = sao::ai_editor::native::wide_to_utf8(text);
-            if (sao::ai_editor::native::write_text_atomic(path, output) != SAO_AI_EDITOR_OK) {
+            if (sao::ai_editor::native::write_text_atomic_bounded_if_unchanged(
+                    adapter.workspace_root, path, source, output) != SAO_AI_EDITOR_OK) {
                 errors.push_back(
                     {{"path", resource}, {"error", "Workspace edit target could not be saved."}});
                 continue;
@@ -2704,8 +3109,8 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             if (!count(1, 1) || !job.args[0].is_string())
                 return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                          "Instruction text is required.");
-            const int32_t status = sao::ai_editor::native::write_text_atomic(
-                user_file, job.args[0].get_ref<const std::string&>());
+            const int32_t status = write_workspace_text_cas(
+                adapter, user_file, job.args[0].get_ref<const std::string&>());
             return status == SAO_AI_EDITOR_OK
                        ? successful_completion(job, {{"ok", true}})
                        : failed_completion(job, transport_error_code(status),
@@ -2726,8 +3131,8 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             if (!resolve_workspace_path(adapter, relative, true, path))
                 return failed_completion(job, "SAO_WORKSPACE_BOUNDARY",
                                          "Instruction file is outside the workspace.");
-            const int32_t status = sao::ai_editor::native::write_text_atomic(
-                path, job.args[1].get_ref<const std::string&>());
+            const int32_t status = write_workspace_text_cas(
+                adapter, path, job.args[1].get_ref<const std::string&>());
             return status == SAO_AI_EDITOR_OK
                        ? successful_completion(job, {{"ok", true}, {"name", name}})
                        : failed_completion(job, transport_error_code(status),
@@ -2758,7 +3163,8 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "get_instructions takes no arguments.");
         std::string user_text;
-        (void)sao::ai_editor::native::read_text_file(user_file, 1024U * 1024U, user_text);
+        (void)sao::ai_editor::native::read_text_file_bounded(adapter.workspace_root, user_file,
+                                                             1024U * 1024U, user_text);
         json files = json::array();
         std::string combined = user_text;
         std::error_code error;
@@ -2775,8 +3181,9 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
                                             false, bounded))
                     continue;
                 std::string content;
-                if (sao::ai_editor::native::read_text_file(bounded, 1024U * 1024U, content) !=
-                    SAO_AI_EDITOR_OK)
+                if (sao::ai_editor::native::read_text_file_bounded(adapter.workspace_root, bounded,
+                                                                   1024U * 1024U,
+                                                                   content) != SAO_AI_EDITOR_OK)
                     continue;
                 const std::string name =
                     sao::ai_editor::native::wide_to_utf8(bounded.filename().native());
@@ -2800,7 +3207,7 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
                                      "Notebook path is outside the workspace.");
         const std::string content =
             job.args[1].is_string() ? job.args[1].get<std::string>() : job.args[1].dump(2);
-        const int32_t status = sao::ai_editor::native::write_text_atomic(path, content);
+        const int32_t status = write_workspace_text_cas(adapter, path, content);
         return status == SAO_AI_EDITOR_OK
                    ? successful_completion(
                          job, {{"ok", true}, {"path", relative_workspace_path(adapter, path)}})
@@ -2981,51 +3388,299 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
         job.method == "list_extension_activity_bar_items" ||
         job.method == "list_extension_view_containers" ||
         job.method == "list_extension_container_views") {
-        if (!count(0, 1))
+        const bool valid_arguments =
+            ((job.method == "list_installed_extensions" ||
+              job.method == "list_extension_activity_bar_items") &&
+             count(0, 0)) ||
+            (job.method == "list_extension_runtime_surfaces" && count(0, 1) &&
+             (job.args.empty() || job.args[0].is_object())) ||
+            (job.method == "list_extension_view_containers" && count(0, 1) &&
+             (job.args.empty() || job.args[0].is_string())) ||
+            (job.method == "list_extension_container_views" && count(1, 1) &&
+             job.args[0].is_string() && !job.args[0].get_ref<const std::string&>().empty() &&
+             job.args[0].get_ref<const std::string&>().size() <= 256 &&
+             job.args[0].get_ref<const std::string&>().find('\0') == std::string::npos &&
+             sao::ai_editor::native::valid_utf8(job.args[0].get_ref<const std::string&>()));
+        if (!valid_arguments)
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Extension list arguments are invalid.");
-        if (job.method != "list_installed_extensions") {
-            return successful_completion(
-                job, {{"available", false},
-                      {"items", json::array()},
-                      {"reason", "Extension contribution inventory is unavailable."}});
-        }
+        const auto inventory_failure = [&](std::string code, std::string error) {
+            json unavailable{{"ok", false},
+                             {"available", false},
+                             {"applied", false},
+                             {"items", json::array()},
+                             {"extensions", json::array()},
+                             {"errorCode", std::move(code)},
+                             {"error", error},
+                             {"reason", std::move(error)}};
+            if (job.method == "list_extension_container_views")
+                unavailable["item"] = nullptr;
+            return successful_completion(job, std::move(unavailable));
+        };
         RpcReply reply = call_backend(adapter, "extensions.list", json::object());
-        if (!reply.ok)
-            return rpc_completion(job, std::move(reply));
-        json items = array_from_result(
-            reply.result, {"extensions", "items", "activityBarItems", "viewContainers", "views"});
-        return successful_completion(
-            job, {{job.method == "list_installed_extensions" ? "extensions" : "items",
-                   std::move(items)}});
+        if (!reply.ok) {
+            return inventory_failure(
+                reply.error_code.empty() ? "SAO_EXTENSION_INVENTORY_UNAVAILABLE"
+                                         : std::move(reply.error_code),
+                reply.error_message.empty() ? "Extension inventory is unavailable."
+                                            : std::move(reply.error_message));
+        }
+        if (!valid_extension_inventory_result(reply.result)) {
+            return inventory_failure("SAO_BACKEND_PROTOCOL_ERROR",
+                                     "Native extension inventory response is invalid.");
+        }
+        const json& inventory = reply.result["inventory"];
+        const bool available = reply.result["available"].get<bool>();
+        const std::string reason = string_member_or(
+            inventory, "reason",
+            string_member_or(reply.result, "reason",
+                             available ? std::string{} : "No extension inventory is registered."));
+        const std::string error_code = string_member_or(
+            reply.result, "errorCode", available ? std::string{} : "EXTENSION_INVENTORY_EMPTY");
+        const std::string error =
+            string_member_or(reply.result, "error", available ? std::string{} : reason);
+        if (job.method == "list_installed_extensions") {
+            return successful_completion(job, {{"ok", true},
+                                               {"available", available},
+                                               {"applied", false},
+                                               {"extensions", reply.result["extensions"]},
+                                               {"inventory", inventory},
+                                               {"runtime", reply.result["runtime"]},
+                                               {"summary", reply.result["summary"]},
+                                               {"errorCode", error_code},
+                                               {"error", error}});
+        }
+        if (!available) {
+            json unavailable{{"ok", true},
+                             {"available", false},
+                             {"applied", false},
+                             {"items", json::array()},
+                             {"errorCode", error_code},
+                             {"error", error},
+                             {"reason", reason}};
+            if (job.method == "list_extension_container_views")
+                unavailable["item"] = nullptr;
+            return successful_completion(job, std::move(unavailable));
+        }
+        if (job.method == "list_extension_runtime_surfaces") {
+            json result = reply.result;
+            result.erase("items");
+            result.erase("extensions");
+            result["ok"] = true;
+            result["available"] = true;
+            result["applied"] = false;
+            result["errorCode"] = error_code;
+            result["error"] = error;
+            return successful_completion(job, std::move(result));
+        }
+        if (job.method == "list_extension_activity_bar_items") {
+            return successful_completion(job, {{"ok", true},
+                                               {"available", true},
+                                               {"applied", false},
+                                               {"items", reply.result["activityBarItems"]},
+                                               {"summary", reply.result["summary"]},
+                                               {"errorCode", error_code},
+                                               {"error", error}});
+        }
+        json containers = reply.result["viewContainers"];
+        for (const auto& item : containers) {
+            if (!item.is_object() || !valid_string_member(item, "id") ||
+                !valid_string_member(item, "location") || !item.contains("views") ||
+                !item["views"].is_array()) {
+                return inventory_failure("SAO_BACKEND_PROTOCOL_ERROR",
+                                         "Native extension view-container inventory is invalid.");
+            }
+        }
+        if (job.method == "list_extension_view_containers") {
+            if (!job.args.empty()) {
+                const std::string location = job.args[0].get<std::string>();
+                json filtered = json::array();
+                for (const auto& item : containers)
+                    if (item.is_object() && string_member_or(item, "location") == location)
+                        filtered.push_back(item);
+                containers = std::move(filtered);
+            }
+            return successful_completion(job, {{"ok", true},
+                                               {"available", true},
+                                               {"applied", false},
+                                               {"items", std::move(containers)},
+                                               {"errorCode", error_code},
+                                               {"error", error}});
+        }
+        const std::string container_id = job.args[0].get<std::string>();
+        json matches = json::array();
+        for (const auto& item : containers)
+            if (item.is_object() && string_member_or(item, "id") == container_id)
+                matches.push_back(item);
+        if (matches.size() != 1) {
+            const bool ambiguous = matches.size() > 1;
+            return successful_completion(
+                job, {{"ok", false},
+                      {"available", false},
+                      {"applied", false},
+                      {"items", json::array()},
+                      {"item", nullptr},
+                      {"errorCode", ambiguous ? "EXTENSION_CONTAINER_AMBIGUOUS"
+                                              : "EXTENSION_CONTAINER_NOT_FOUND"},
+                      {"error", ambiguous ? "Extension view-container id is ambiguous."
+                                          : "Extension view-container was not found."}});
+        }
+        return successful_completion(job, {{"ok", true},
+                                           {"available", true},
+                                           {"applied", false},
+                                           {"items", matches[0]["views"]},
+                                           {"item", matches[0]},
+                                           {"errorCode", error_code},
+                                           {"error", error}});
     }
     if (job.method == "uninstall_extension") {
         if (!count(1, 2) || !job.args[0].is_string())
             return failed_completion(job, "SAO_INVALID_ARGUMENT", "Extension id is required.");
-        return rpc_completion(
-            job, call_backend(adapter, "extensions.unregister", {{"extensionId", job.args[0]}}));
+        RpcReply reply =
+            call_backend(adapter, "extensions.unregister", {{"extensionId", job.args[0]}});
+        if (reply.ok)
+            return successful_completion(job, std::move(reply.result));
+        const json* details = backend_error_details(reply);
+        return details != nullptr ? successful_completion(job, *details)
+                                  : rpc_completion(job, std::move(reply));
     }
     if (job.method == "verify_installed_extension_activation") {
         if (!count(0, 1) || (!job.args.empty() && !job.args[0].is_boolean()))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Activation verification argument is invalid.");
-        return rpc_completion(job, call_backend(adapter, "extensions.snapshot", json::object()));
+        const bool activate_missing = job.args.empty() || job.args[0].get<bool>();
+        RpcReply listed = call_backend(adapter, "extensions.list", json::object());
+        if (!listed.ok)
+            return rpc_completion(job, std::move(listed));
+        json rows = array_from_result(listed.result, {"extensions", "items"});
+        json outcomes = json::array();
+        size_t activated = 0;
+        size_t activation_callbacks = 0;
+        size_t failed = 0;
+        for (const auto& extension : rows) {
+            if (!extension.is_object())
+                continue;
+            const std::string id = string_member_or(extension, "id");
+            if (id.empty())
+                continue;
+            if (extension.value("activated", false)) {
+                outcomes.push_back(extension);
+                ++activated;
+                continue;
+            }
+            if (!activate_missing) {
+                json outcome = extension;
+                outcome["activated"] = false;
+                outcome["error"] = "Extension is inactive.";
+                outcomes.push_back(std::move(outcome));
+                ++failed;
+                continue;
+            }
+            RpcReply activation = call_backend(adapter, "extensions.activate",
+                                               {{"extensionId", id}, {"timeoutMs", 12000}}, 13000);
+            if (activation.ok && activation.result.is_object() &&
+                activation.result.contains("ok") && activation.result["ok"].is_boolean() &&
+                activation.result["ok"].get<bool>() && activation.result.contains("available") &&
+                activation.result["available"].is_boolean() &&
+                activation.result["available"].get<bool>() &&
+                activation.result.contains("applied") &&
+                activation.result["applied"].is_boolean() &&
+                activation.result["applied"].get<bool>() &&
+                activation.result.contains("activated") &&
+                activation.result["activated"].is_boolean() &&
+                activation.result["activated"].get<bool>() &&
+                string_member_or(activation.result, "id") == id) {
+                outcomes.push_back(activation.result);
+                ++activated;
+                ++activation_callbacks;
+            } else {
+                json outcome = extension;
+                outcome["activated"] = false;
+                const json* details = backend_error_details(activation);
+                if (details != nullptr) {
+                    for (const char* key :
+                         {"available", "applied", "errorCode", "error", "runtimeState",
+                          "runtimeStateWasKnown", "lastKnownActive"}) {
+                        const auto value = details->find(key);
+                        if (value != details->end())
+                            outcome[key] = *value;
+                    }
+                }
+                const std::string activation_code =
+                    string_member_or(outcome, "errorCode", activation.error_code);
+                const std::string activation_error =
+                    string_member_or(outcome, "error", activation.error_message);
+                const std::optional<int32_t> native_status = backend_error_status(activation);
+                const bool unknown = native_status == SAO_AI_EDITOR_ERR_NOT_INITIALIZED ||
+                                     native_status == SAO_AI_EDITOR_ERR_TIMEOUT ||
+                                     native_status == SAO_AI_EDITOR_ERR_IPC_CLOSED ||
+                                     native_status == SAO_AI_EDITOR_ERR_PROTOCOL ||
+                                     activation_code == "SAO_BACKEND_TIMEOUT" ||
+                                     activation_code == "SAO_BACKEND_CLOSED" ||
+                                     activation_code == "SAO_BACKEND_PROTOCOL_ERROR";
+                if (unknown && !outcome.contains("runtimeState"))
+                    outcome["runtimeState"] = "quarantined";
+                outcome["error"] = activation_error.empty()
+                                       ? "Extension activation callback failed."
+                                       : activation_error;
+                outcome["errorCode"] =
+                    activation_code.empty() ? "EXTENSION_ACTIVATION_FAILED" : activation_code;
+                outcomes.push_back(std::move(outcome));
+                ++failed;
+            }
+        }
+        const bool ok = failed == 0;
+        return successful_completion(
+            job, {{"ok", ok},
+                  {"available", listed.result.value("available", false)},
+                  {"applied", activate_missing && ok && activation_callbacks > 0},
+                  {"total", outcomes.size()},
+                  {"activated", activated},
+                  {"failed", failed},
+                  {"errorCode", ok ? "" : "EXTENSION_ACTIVATION_PARTIAL_FAILURE"},
+                  {"error", ok ? "" : "One or more extension activation callbacks failed."},
+                  {"extensions", std::move(outcomes)}});
     }
     if (job.method == "get_extension_detail") {
-        if (!count(2, 2) || !job.args[0].is_string() || !job.args[1].is_string())
+        if (!count(2, 2) || !job.args[0].is_string() || !job.args[1].is_string() ||
+            !valid_extension_id_segment(job.args[0].get_ref<const std::string&>()) ||
+            !valid_extension_id_segment(job.args[1].get_ref<const std::string&>())) {
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Extension publisher/name are required.");
+        }
+        const std::string publisher = job.args[0].get<std::string>();
+        const std::string name = job.args[1].get<std::string>();
+        const std::string id = publisher + "." + name;
+        if (!sao::ai_editor::native::valid_simple_id(id))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Extension publisher/name are invalid.");
         RpcReply reply = call_backend(adapter, "extensions.list", json::object());
         if (!reply.ok)
             return rpc_completion(job, std::move(reply));
-        const std::string id =
-            job.args[0].get<std::string>() + "." + job.args[1].get<std::string>();
-        for (const auto& item : array_from_result(reply.result, {"extensions", "items"})) {
-            if (item.is_object() &&
-                (string_member_or(item, "id") == id ||
-                 string_member_or(item, "name") == job.args[1].get<std::string>()))
-                return successful_completion(job, item);
+        if (!valid_extension_inventory_result(reply.result))
+            return failed_completion(job, "SAO_BACKEND_PROTOCOL_ERROR",
+                                     "Native extension inventory response is invalid.");
+        json match;
+        size_t matches = 0;
+        for (const auto& item : reply.result["extensions"]) {
+            if (!item.is_object() || !valid_string_member(item, "id"))
+                return failed_completion(job, "SAO_BACKEND_PROTOCOL_ERROR",
+                                         "Native extension identity is invalid.");
+            if (item["id"].get_ref<const std::string&>() != id)
+                continue;
+            if (string_member_or(item, "publisher") != publisher ||
+                string_member_or(item, "name") != name) {
+                return failed_completion(job, "SAO_BACKEND_PROTOCOL_ERROR",
+                                         "Native extension identity is inconsistent.");
+            }
+            match = item;
+            ++matches;
         }
+        if (matches == 1)
+            return successful_completion(job, std::move(match));
+        if (matches > 1)
+            return failed_completion(job, "SAO_BACKEND_PROTOCOL_ERROR",
+                                     "Native extension inventory contains a duplicate id.");
         return failed_completion(job, "SAO_EXTENSION_NOT_FOUND", "Extension is not installed.");
     }
     if (job.method == "webview_panel_dispose") {
@@ -3047,10 +3702,19 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
                                             {"viewColumn", view_state.value("viewColumn", 1)}}));
     }
     if (job.method == "resolve_extension_webview_view") {
-        if (!count(1, 1) || !job.args[0].is_string())
-            return failed_completion(job, "SAO_INVALID_ARGUMENT", "WebView panel id is required.");
-        return rpc_completion(job, call_backend(adapter, "vscode.window.revealWebviewPanel",
-                                                {{"panelId", job.args[0]}}));
+        if (!count(1, 1) || !job.args[0].is_string() ||
+            job.args[0].get_ref<const std::string&>().empty() ||
+            job.args[0].get_ref<const std::string&>().size() > 256 ||
+            job.args[0].get_ref<const std::string&>().find('\0') != std::string::npos)
+            return failed_completion(job, "SAO_INVALID_ARGUMENT", "WebviewView id is required.");
+        RpcReply reply = call_backend(adapter, "extensions.execute_command",
+                                      {{"command", "resolve_extension_webview_view"},
+                                       {"arguments", {{"viewId", job.args[0]}}}});
+        if (reply.ok)
+            return successful_completion(job, std::move(reply.result));
+        const json* details = backend_error_details(reply);
+        return details != nullptr ? successful_completion(job, *details)
+                                  : rpc_completion(job, std::move(reply));
     }
     if (job.method == "webview_post_message") {
         if (!count(2, 3) || !job.args[0].is_string())
@@ -3136,6 +3800,242 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
         return job.args.is_array() && job.args.size() >= minimum && job.args.size() <= maximum;
     };
 #if defined(_WIN32)
+    const auto parse_bounded_unsigned = [](const json& value, std::uint64_t maximum,
+                                           std::uint64_t& output) {
+        if (value.is_number_unsigned()) {
+            output = value.get<std::uint64_t>();
+        } else if (value.is_number_integer()) {
+            const std::int64_t signed_value = value.get<std::int64_t>();
+            if (signed_value < 0)
+                return false;
+            output = static_cast<std::uint64_t>(signed_value);
+        } else {
+            return false;
+        }
+        return output <= maximum;
+    };
+    const auto parse_address = [](const json& value, std::uint64_t& address) {
+        if (!value.is_string())
+            return false;
+        std::string_view text = value.get_ref<const std::string&>();
+        if (text.empty() || text.size() > 20u)
+            return false;
+        int base = 10;
+        if (text.size() > 2u && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+            text.remove_prefix(2u);
+            base = 16;
+        }
+        if (text.empty() || text.front() == '+' || text.front() == '-')
+            return false;
+        std::uint64_t parsed_address = 0u;
+        const auto parsed =
+            std::from_chars(text.data(), text.data() + text.size(), parsed_address, base);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+            return false;
+        address = parsed_address;
+        return true;
+    };
+    const auto format_address = [](std::uint64_t address) {
+        std::array<char, 16> digits{};
+        const auto converted =
+            std::to_chars(digits.data(), digits.data() + digits.size(), address, 16);
+        std::string value{"0x"};
+        if (converted.ec == std::errc{})
+            value.append(digits.data(), converted.ptr);
+        else
+            value.push_back('0');
+        return value;
+    };
+    const auto memory_read_failure = [&job](sao::ai_editor::native::MemoryViewerError error,
+                                            sao_status_t status, std::uint64_t address,
+                                            std::size_t requested_size) {
+        sao::ai_editor::native::MemoryViewerReadResult failure{};
+        failure.outcome = {error, status};
+        failure.binding = job.memory_binding;
+        failure.address = address;
+        failure.requested_size = requested_size;
+        return successful_completion(
+            job, {{"ok", false},
+                  {"error", std::string(sao::ai_editor::native::memory_viewer_error_name(error))},
+                  {"details", sao::ai_editor::native::memory_viewer_read_to_json(failure)}});
+    };
+    const auto invalid_memory_read = [&](std::uint64_t address, std::size_t requested_size) {
+        return memory_read_failure(sao::ai_editor::native::MemoryViewerError::invalid_argument,
+                                   SAO_STATUS_ERR_INVALID_ARGUMENT, address, requested_size);
+    };
+    if (job.method == "memviewer_status") {
+        if (!count(0, 0))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Memory status takes no arguments.");
+        if (!adapter.memory_viewer)
+            return failed_completion(job, "SAO_MEMORY_PROVIDER_UNAVAILABLE",
+                                     "Memory provider is unavailable.");
+        const auto status = adapter.memory_viewer->status();
+        return successful_completion(
+            job,
+            {{"ok", true},
+             {"attached",
+              status.bound() && status.state == sao::ai_editor::native::MemoryViewerState::ready},
+             {"available", status.state == sao::ai_editor::native::MemoryViewerState::ready},
+             {"pid", status.binding.pid},
+             {"name", status.binding.pid == 0u ? std::string{}
+                                               : "PID " + std::to_string(status.binding.pid)},
+             {"engine", "RTIO"},
+             {"state", std::string(sao::ai_editor::native::memory_viewer_state_name(status.state))},
+             {"details", sao::ai_editor::native::memory_viewer_status_to_json(status)}});
+    }
+    if (job.method == "memviewer_regions") {
+        if (!count(0, 2) || (!job.args.empty() && !job.args[0].is_number_integer()) ||
+            (job.args.size() > 1u && !job.args[1].is_number_integer())) {
+            return failed_completion(job, "SAO_INVALID_ARGUMENT", "Memory region page is invalid.");
+        }
+        std::uint64_t offset = 0u;
+        std::uint64_t limit = 256u;
+        if ((!job.args.empty() &&
+             !parse_bounded_unsigned(job.args[0], (std::numeric_limits<std::uint64_t>::max)(),
+                                     offset)) ||
+            (job.args.size() > 1u &&
+             !parse_bounded_unsigned(job.args[1], (std::numeric_limits<std::uint64_t>::max)(),
+                                     limit)) ||
+            limit == 0u || !adapter.memory_viewer) {
+            return failed_completion(job, "SAO_INVALID_ARGUMENT", "Memory region page is invalid.");
+        }
+        if (offset > sao::ai_editor::native::kMemoryViewerMaximumRegions ||
+            limit > sao::ai_editor::native::kMemoryViewerMaximumRegions) {
+            sao::ai_editor::native::MemoryViewerRegionsResult failure{};
+            failure.outcome = {sao::ai_editor::native::MemoryViewerError::limit,
+                               SAO_STATUS_ERR_BUFFER_TOO_SMALL};
+            failure.binding = job.memory_binding;
+            failure.page_offset = static_cast<std::size_t>((std::min)(
+                offset, static_cast<std::uint64_t>(
+                            sao::ai_editor::native::kMemoryViewerMaximumRegions + 1u)));
+            failure.page_limit = static_cast<std::size_t>((std::min)(
+                limit, static_cast<std::uint64_t>(
+                           sao::ai_editor::native::kMemoryViewerMaximumRegions + 1u)));
+            return successful_completion(
+                job, sao::ai_editor::native::memory_viewer_regions_to_json(failure));
+        }
+        const auto* expected = job.memory_binding_captured ? &job.memory_binding : nullptr;
+        return successful_completion(
+            job,
+            sao::ai_editor::native::memory_viewer_regions_to_json(adapter.memory_viewer->regions(
+                static_cast<std::size_t>(offset), static_cast<std::size_t>(limit), expected)));
+    }
+    if (job.method == "memviewer_read") {
+        if (!count(2, 2) || !job.args[1].is_number_integer())
+            return invalid_memory_read(0u, 0u);
+        if (!adapter.memory_viewer)
+            return failed_completion(job, "SAO_MEMORY_PROVIDER_UNAVAILABLE",
+                                     "Memory provider is unavailable.");
+        std::uint64_t address = 0u;
+        std::uint64_t length = 0u;
+        if (!parse_address(job.args[0], address) ||
+            !parse_bounded_unsigned(job.args[1], (std::numeric_limits<std::uint64_t>::max)(),
+                                    length) ||
+            length == 0u)
+            return invalid_memory_read(
+                address, length <= sao::ai_editor::native::kMemoryViewerMaximumReadBytes
+                             ? static_cast<std::size_t>(length)
+                             : 0u);
+        if (length > sao::ai_editor::native::kMemoryViewerMaximumReadBytes) {
+            return memory_read_failure(sao::ai_editor::native::MemoryViewerError::limit,
+                                       SAO_RT_IO_ERR_PAYLOAD_TOO_LARGE, address,
+                                       sao::ai_editor::native::kMemoryViewerMaximumReadBytes + 1u);
+        }
+        auto read = adapter.memory_viewer->read(address, static_cast<std::size_t>(length),
+                                                job.memory_binding_captured ? &job.memory_binding
+                                                                            : nullptr);
+        if (!read.outcome.ok()) {
+            return successful_completion(
+                job, {{"ok", false},
+                      {"error", std::string(sao::ai_editor::native::memory_viewer_error_name(
+                                    read.outcome.error))},
+                      {"details", sao::ai_editor::native::memory_viewer_read_to_json(read)}});
+        }
+        std::string hexadecimal(read.bytes.size() * 2u, '0');
+        std::string ascii(read.bytes.size(), '.');
+        constexpr char digits[] = "0123456789abcdef";
+        for (std::size_t index = 0u; index < read.bytes.size(); ++index) {
+            const std::uint8_t byte = read.bytes[index];
+            hexadecimal[index * 2u] = digits[byte >> 4u];
+            hexadecimal[index * 2u + 1u] = digits[byte & 0x0fu];
+            if (byte >= 0x20u && byte <= 0x7eu)
+                ascii[index] = static_cast<char>(byte);
+        }
+        return successful_completion(job, {{"ok", true},
+                                           {"address", format_address(address)},
+                                           {"length", read.bytes.size()},
+                                           {"hex", std::move(hexadecimal)},
+                                           {"ascii", std::move(ascii)}});
+    }
+    if (job.method == "memviewer_read_value") {
+        if (!count(2, 2) || !job.args[1].is_string())
+            return invalid_memory_read(0u, 0u);
+        if (!adapter.memory_viewer)
+            return failed_completion(job, "SAO_MEMORY_PROVIDER_UNAVAILABLE",
+                                     "Memory provider is unavailable.");
+        std::uint64_t address = 0u;
+        const std::string dtype = job.args[1].get<std::string>();
+        const std::unordered_map<std::string, std::size_t> sizes{
+            {"u8", 1u},  {"i8", 1u},  {"u16", 2u}, {"i16", 2u}, {"u32", 4u},
+            {"i32", 4u}, {"u64", 8u}, {"i64", 8u}, {"f32", 4u}, {"f64", 8u}};
+        const auto size = dtype.size() <= 8u ? sizes.find(dtype) : sizes.end();
+        if (!parse_address(job.args[0], address) || size == sizes.end())
+            return invalid_memory_read(address, size == sizes.end() ? 0u : size->second);
+        auto read = adapter.memory_viewer->read(
+            address, size->second, job.memory_binding_captured ? &job.memory_binding : nullptr);
+        if (!read.outcome.ok()) {
+            return successful_completion(
+                job, {{"ok", false},
+                      {"error", std::string(sao::ai_editor::native::memory_viewer_error_name(
+                                    read.outcome.error))},
+                      {"details", sao::ai_editor::native::memory_viewer_read_to_json(read)}});
+        }
+        const auto unsigned_little_endian = [&read](std::size_t byte_count) {
+            std::uint64_t value = 0u;
+            for (std::size_t index = 0u; index < byte_count; ++index)
+                value |= static_cast<std::uint64_t>(read.bytes[index]) << (index * 8u);
+            return value;
+        };
+        json value;
+        if (dtype == "u8")
+            value = read.bytes[0];
+        else if (dtype == "i8")
+            value = std::bit_cast<std::int8_t>(read.bytes[0]);
+        else if (dtype == "u16")
+            value = static_cast<std::uint16_t>(unsigned_little_endian(2u));
+        else if (dtype == "i16")
+            value =
+                std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(unsigned_little_endian(2u)));
+        else if (dtype == "u32")
+            value = static_cast<std::uint32_t>(unsigned_little_endian(4u));
+        else if (dtype == "i32")
+            value =
+                std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(unsigned_little_endian(4u)));
+        else if (dtype == "u64")
+            value = std::to_string(unsigned_little_endian(8u));
+        else if (dtype == "i64")
+            value = std::to_string(std::bit_cast<std::int64_t>(unsigned_little_endian(8u)));
+        else if (dtype == "f32") {
+            const float decoded =
+                std::bit_cast<float>(static_cast<std::uint32_t>(unsigned_little_endian(4u)));
+            value = std::isfinite(decoded) ? json(decoded)
+                                           : json(std::isnan(decoded)     ? "nan"
+                                                  : std::signbit(decoded) ? "-infinity"
+                                                                          : "infinity");
+        } else {
+            const double decoded = std::bit_cast<double>(unsigned_little_endian(8u));
+            value = std::isfinite(decoded) ? json(decoded)
+                                           : json(std::isnan(decoded)     ? "nan"
+                                                  : std::signbit(decoded) ? "-infinity"
+                                                                          : "infinity");
+        }
+        return successful_completion(job, {{"ok", true},
+                                           {"address", format_address(address)},
+                                           {"dtype", dtype},
+                                           {"endianness", "little"},
+                                           {"value", std::move(value)}});
+    }
     if (job.method == "list_tasks" || job.method == "list_debug_configurations") {
         if (!count(0, 0))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
@@ -3148,7 +4048,8 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
             adapter.workspace_root / L".vscode" / (debug ? L"launch.json" : L"tasks.json");
         std::string text;
         json definitions = json::array();
-        if (sao::ai_editor::native::read_text_file(path, 1024U * 1024U, text) == SAO_AI_EDITOR_OK) {
+        if (sao::ai_editor::native::read_text_file_bounded(
+                adapter.workspace_root, path, 1024U * 1024U, text) == SAO_AI_EDITOR_OK) {
             json document = json::parse(text, nullptr, false, true);
             if (document.is_object() && json_within_budget(document)) {
                 const auto items = document.find(debug ? "configurations" : "tasks");
@@ -3384,24 +4285,91 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         if (!count(0, 3))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Action list arguments are invalid.");
-        return successful_completion(job, {{"actions", json::array()}});
+        RpcReply listed = call_backend(adapter, "extensions.list", json::object());
+        if (!listed.ok)
+            return successful_completion(job, {{"ok", false},
+                                               {"available", false},
+                                               {"actions", json::array()},
+                                               {"errorCode", listed.error_code},
+                                               {"error", listed.error_message}});
+        const bool available = listed.result.value("available", false);
+        const std::string menu_id =
+            job.method == "list_editor_title_actions" ? "editor/title" : "webview/context";
+        std::unordered_map<std::string, std::string> command_titles;
+        for (const auto& command : array_from_result(listed.result, {"commands"})) {
+            if (!command.is_object())
+                continue;
+            const std::string id = string_member_or(command, "command");
+            if (!id.empty())
+                command_titles[id] = string_member_or(command, "title", id);
+        }
+        json actions = json::array();
+        for (const auto& menu : array_from_result(listed.result, {"menus"})) {
+            if (!menu.is_object() || string_member_or(menu, "menu") != menu_id)
+                continue;
+            json action = menu;
+            const std::string command = string_member_or(action, "command");
+            if (!action.contains("title") || !action["title"].is_string()) {
+                const auto title = command_titles.find(command);
+                action["title"] = title == command_titles.end() ? command : title->second;
+            }
+            action["disabled"] = !action.value("runtimeAvailable", false);
+            if (action["disabled"])
+                action["disabledReason"] = "Extension command handler is unavailable.";
+            actions.push_back(std::move(action));
+        }
+        return successful_completion(
+            job, {{"ok", true},
+                  {"available", available},
+                  {"actions", std::move(actions)},
+                  {"errorCode", available ? "" : "EXTENSION_INVENTORY_EMPTY"},
+                  {"error", available ? "" : "No extension inventory is registered."}});
     }
     if (job.method == "editor_language_provider") {
         if (!count(1, 1) || !job.args[0].is_object())
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Language provider payload is invalid.");
-        return successful_completion(job,
-                                     {{"requestId", job.args[0].value("requestId", json(nullptr))},
-                                      {"items", json::array()},
-                                      {"providerErrors", json::array()},
-                                      {"skipped", true}});
+        return successful_completion(
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"requestId", job.args[0].value("requestId", json(nullptr))},
+                  {"items", json::array()},
+                  {"providerErrors", json::array()},
+                  {"skipped", true},
+                  {"errorCode", "LANGUAGE_PROVIDER_UNAVAILABLE"},
+                  {"error", "No extension language provider callback is registered."}});
     }
     if (job.method == "list_extension_settings") {
         if (!count(0, 0))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Extension settings take no arguments.");
+        RpcReply listed = call_backend(adapter, "extensions.list", json::object());
+        if (!listed.ok)
+            return successful_completion(job, {{"ok", false},
+                                               {"available", false},
+                                               {"configurations", json::array()},
+                                               {"languageDefaults", json::array()},
+                                               {"errorCode", listed.error_code},
+                                               {"error", listed.error_message}});
+        const json inventory = listed.result.value("inventory", json::object());
+        const json configurations = array_from_result(listed.result, {"configurations"});
+        const bool inventory_available =
+            inventory.value("available", listed.result.value("available", false));
+        const bool available = inventory_available && !configurations.empty();
         return successful_completion(
-            job, {{"configurations", json::array()}, {"languageDefaults", json::array()}});
+            job, {{"ok", true},
+                  {"available", available},
+                  {"applied", false},
+                  {"configurations", configurations},
+                  {"languageDefaults", json::array()},
+                  {"errorCode", available             ? ""
+                                : inventory_available ? "EXTENSION_CONFIGURATION_EMPTY"
+                                                      : "EXTENSION_INVENTORY_EMPTY"},
+                  {"error", available ? ""
+                            : inventory_available
+                                ? "No extension configuration contribution is registered."
+                                : "No extension inventory is registered."}});
     }
     if (job.method == "set_extension_setting" || job.method == "reset_extension_setting" ||
         job.method == "set_extension_language_setting" ||
@@ -3412,13 +4380,21 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         return successful_completion(
             job, {{"ok", false},
                   {"available", false},
-                  {"error", "No native extension configuration contribution is active."}});
+                  {"applied", false},
+                  {"errorCode", "EXTENSION_CONFIGURATION_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension configuration callback is registered."}});
     }
     if (job.method == "list_scm_providers") {
         if (!count(0, 0))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "SCM provider list takes no arguments.");
-        return successful_completion(job, {{"providers", json::array()}});
+        return successful_completion(
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"providers", json::array()},
+                  {"errorCode", "SCM_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension SCM provider callback is registered."}});
     }
     if (job.method == "get_scm_quick_diff_baseline" ||
         job.method == "request_scm_quick_diff_original_resource" ||
@@ -3427,41 +4403,70 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "SCM request arguments are invalid.");
         return successful_completion(
-            job, {{"available", false}, {"reason", "No native SCM provider is active."}});
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"errorCode", "SCM_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension SCM provider callback is registered."},
+                  {"reason", "No extension SCM provider callback is registered."}});
     }
     if (job.method == "validate_scm_input") {
         if (!count(2, 3))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "SCM input arguments are invalid.");
-        return successful_completion(job, {{"validation", nullptr}});
+        return successful_completion(job,
+                                     {{"ok", false},
+                                      {"available", false},
+                                      {"applied", false},
+                                      {"validation", nullptr},
+                                      {"errorCode", "SCM_RUNTIME_UNAVAILABLE"},
+                                      {"error", "No extension SCM input callback is registered."}});
     }
     if (job.method == "set_scm_input_value" || job.method == "accept_scm_input") {
         if (!count(2, 2))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "SCM input arguments are invalid.");
-        return successful_completion(
-            job,
-            {{"ok", false}, {"available", false}, {"error", "No native SCM provider is active."}});
+        return successful_completion(job,
+                                     {{"ok", false},
+                                      {"available", false},
+                                      {"applied", false},
+                                      {"errorCode", "SCM_RUNTIME_UNAVAILABLE"},
+                                      {"error", "No extension SCM input callback is registered."}});
     }
     if (job.method == "notebook_controllers") {
         if (!count(0, 1))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Notebook controller arguments are invalid.");
-        return successful_completion(job, {{"controllers", json::array()}});
+        return successful_completion(
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"controllers", json::array()},
+                  {"errorCode", "NOTEBOOK_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension notebook controller callback is registered."}});
     }
     if (job.method == "notebook_cell_status_bar_items") {
         if (!count(4, 5))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Notebook status arguments are invalid.");
-        return successful_completion(job, {{"items", json::array()}});
+        return successful_completion(
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"items", json::array()},
+                  {"errorCode", "NOTEBOOK_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension notebook status callback is registered."}});
     }
     if (job.method == "select_notebook_controller" || job.method == "execute_notebook_controller") {
         if (!count(5, 7))
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Notebook controller request is invalid.");
         return successful_completion(
-            job,
-            {{"ok", false}, {"available", false}, {"error", "No notebook controller is active."}});
+            job, {{"ok", false},
+                  {"available", false},
+                  {"applied", false},
+                  {"errorCode", "NOTEBOOK_RUNTIME_UNAVAILABLE"},
+                  {"error", "No extension notebook controller callback is registered."}});
     }
     if (job.method == "search_extensions") {
         if (!count(0, 2))
@@ -3491,6 +4496,8 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         return successful_completion(
             job, {{"ok", false},
                   {"available", false},
+                  {"applied", false},
+                  {"errorCode", "EXTENSION_INSTALL_RUNTIME_UNAVAILABLE"},
                   {"error", "Native extension package installation is not configured."}});
     }
     if (job.method == "start_claude_proxy" || job.method == "stop_claude_proxy" ||
@@ -3498,6 +4505,8 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         return successful_completion(job,
                                      {{"ok", false},
                                       {"available", false},
+                                      {"applied", false},
+                                      {"errorCode", "PROVIDER_PROCESS_RUNTIME_UNAVAILABLE"},
                                       {"error", "External provider process is not configured."}});
     }
     if (job.method == "test_connection") {
@@ -3519,32 +4528,170 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         return successful_completion(
             job, {{"ok", false},
                   {"available", false},
+                  {"applied", false},
+                  {"errorCode", "ASSISTANT_FIXTURE_UNAVAILABLE"},
                   {"error", "Assistant fixture actions are disabled in production."}});
     }
     if (job.method == "extension_quick_input_action" ||
         job.method == "extension_window_message_action" ||
-        job.method == "execute_extension_tree_item_action" ||
         job.method == "run_extension_task_type" || job.method == "start_extension_debugger_type" ||
         job.method == "save_extension_custom_editor" ||
         job.method == "save_extension_custom_editor_as" ||
         job.method == "revert_extension_custom_editor" ||
         job.method == "undo_extension_custom_editor" ||
         job.method == "redo_extension_custom_editor") {
-        json arguments = job.args;
-        return rpc_completion(
-            job, call_backend(adapter, "extensions.execute_command",
-                              {{"command", job.method}, {"arguments", std::move(arguments)}}));
+        std::string code = "EXTENSION_UI_CALLBACK_UNAVAILABLE";
+        std::string error = "No extension UI callback is registered.";
+        if (job.method == "run_extension_task_type") {
+            code = "EXTENSION_TASK_RUNTIME_UNAVAILABLE";
+            error = "No extension task provider callback is registered.";
+        } else if (job.method == "start_extension_debugger_type") {
+            code = "EXTENSION_DEBUG_RUNTIME_UNAVAILABLE";
+            error = "No extension debugger provider callback is registered.";
+        } else if (job.method.find("extension_custom_editor") != std::string::npos) {
+            code = "CUSTOM_EDITOR_RUNTIME_UNAVAILABLE";
+            error = "No extension custom editor callback is registered.";
+        }
+        return successful_completion(job, {{"ok", false},
+                                           {"available", false},
+                                           {"applied", false},
+                                           {"errorCode", code},
+                                           {"error", error}});
     }
     if (job.method == "load_extension_tree_children" ||
         job.method == "set_extension_tree_item_expanded" ||
         job.method == "set_extension_tree_item_checkbox_state" ||
         job.method == "drop_extension_tree_items" || job.method == "select_extension_tree_item" ||
+        job.method == "execute_extension_tree_item_action" ||
         job.method == "set_extension_activity_view_visibility") {
-        if (!count(1, 5))
-            return failed_completion(job, "SAO_INVALID_ARGUMENT",
-                                     "Extension tree request is invalid.");
-        return successful_completion(job,
-                                     {{"ok", true}, {"items", json::array()}, {"applied", true}});
+        uint64_t requested_version = 0;
+        const auto invalid = [&]() {
+            json view_id = "";
+            if (job.args.is_array() && !job.args.empty() && job.args[0].is_string())
+                view_id = job.args[0];
+            return successful_completion(job, {{"ok", false},
+                                               {"available", false},
+                                               {"applied", false},
+                                               {"items", json::array()},
+                                               {"errorCode", "TREE_INVALID_ARGUMENT"},
+                                               {"error", "Extension tree request is invalid."},
+                                               {"viewVersion", requested_version},
+                                               {"viewId", std::move(view_id)}});
+        };
+        if (!job.args.is_array() || job.args.empty() || !job.args[0].is_string() ||
+            job.args[0].get_ref<const std::string&>().empty() ||
+            job.args[0].get_ref<const std::string&>().size() > 256 ||
+            job.args[0].get_ref<const std::string&>().find('\0') != std::string::npos ||
+            !sao::ai_editor::native::valid_utf8(job.args[0].get_ref<const std::string&>()))
+            return invalid();
+        json params{{"viewId", job.args[0]}};
+        const auto add_version = [&](size_t index) {
+            if (index >= job.args.size())
+                return true;
+            const json& value = job.args[index];
+            if (!nonnegative_safe_integer(value))
+                return false;
+            requested_version = value.is_number_unsigned()
+                                    ? value.get<uint64_t>()
+                                    : static_cast<uint64_t>(value.get<int64_t>());
+            params["viewVersion"] = value;
+            return true;
+        };
+        const auto valid_handle = [](const json& value, bool allow_empty) {
+            if (!value.is_string())
+                return false;
+            const auto& handle = value.get_ref<const std::string&>();
+            return (allow_empty && handle.empty()) || parse_tree_handle(handle);
+        };
+        if (job.method == "load_extension_tree_children") {
+            if (!count(2, 3) || !valid_handle(job.args[1], false) || !add_version(2))
+                return invalid();
+            params["handle"] = job.args[1];
+        } else if (job.method == "set_extension_tree_item_expanded") {
+            if (!count(3, 4) || !valid_handle(job.args[1], false) || !job.args[2].is_boolean() ||
+                !add_version(3))
+                return invalid();
+            params["handle"] = job.args[1];
+            params["expanded"] = job.args[2];
+        } else if (job.method == "set_extension_tree_item_checkbox_state") {
+            if (!count(3, 4) || !valid_handle(job.args[1], false) || !job.args[2].is_boolean() ||
+                !add_version(3))
+                return invalid();
+            params["handle"] = job.args[1];
+            params["checked"] = job.args[2];
+        } else if (job.method == "select_extension_tree_item") {
+            if (!count(2, 3) || !valid_handle(job.args[1], false) || !add_version(2))
+                return invalid();
+            params["handle"] = job.args[1];
+        } else if (job.method == "drop_extension_tree_items") {
+            if (!count(3, 5) || !job.args[1].is_array() || !valid_handle(job.args[2], true) ||
+                (job.args.size() > 3 && !job.args[3].is_object()) || !add_version(4) ||
+                job.args[1].empty() || job.args[1].size() > kMaximumTreeChildren)
+                return invalid();
+            std::unordered_set<std::string> handles;
+            for (const auto& handle : job.args[1])
+                if (!valid_handle(handle, false) ||
+                    !handles.insert(handle.get<std::string>()).second)
+                    return invalid();
+            params["sourceHandles"] = job.args[1];
+            params["targetHandle"] = job.args[2];
+            params["data"] = job.args.size() > 3 ? job.args[3] : json::object();
+        } else if (job.method == "execute_extension_tree_item_action") {
+            if (!count(4, 5) || !valid_handle(job.args[1], false) || !job.args[2].is_string() ||
+                job.args[2].get_ref<const std::string&>().empty() ||
+                job.args[2].get_ref<const std::string&>().size() > 256 ||
+                job.args[2].get_ref<const std::string&>().find('\0') != std::string::npos ||
+                !sao::ai_editor::native::valid_utf8(job.args[2].get_ref<const std::string&>()) ||
+                !job.args[3].is_array() || job.args[3].size() > 64 || !add_version(4))
+                return invalid();
+            params["handle"] = job.args[1];
+            params["command"] = job.args[2];
+            params["arguments"] = job.args[3];
+        } else {
+            if (!count(2, 3) || !job.args[1].is_boolean() || !add_version(2))
+                return invalid();
+            params["visible"] = job.args[1];
+        }
+        if (!valid_tree_request(params))
+            return invalid();
+        RpcReply reply = call_backend(adapter, "extensions.execute_command",
+                                      {{"command", job.method}, {"arguments", std::move(params)}});
+        json result{{"ok", false},
+                    {"available", false},
+                    {"applied", false},
+                    {"items", json::array()},
+                    {"errorCode", ""},
+                    {"error", ""},
+                    {"viewVersion", requested_version},
+                    {"viewId", job.args[0]}};
+        if (!reply.ok) {
+            const json* details = backend_error_details(reply);
+            if (details != nullptr) {
+                result = *details;
+            } else {
+                result["errorCode"] =
+                    reply.error_code.empty() ? "TREE_HOST_ERROR" : reply.error_code;
+                result["error"] = reply.error_message.empty()
+                                      ? "Extension tree host request failed."
+                                      : reply.error_message;
+            }
+        } else {
+            result = reply.result;
+        }
+        const bool allow_items = job.method == "load_extension_tree_children" ||
+                                 job.method == "set_extension_tree_item_expanded";
+        if (!valid_tree_operation_response(result, job.args[0].get_ref<const std::string&>(),
+                                           requested_version, allow_items)) {
+            result = json{{"ok", false},
+                          {"available", false},
+                          {"applied", false},
+                          {"items", json::array()},
+                          {"errorCode", "TREE_PROTOCOL_ERROR"},
+                          {"error", "Extension tree host returned an invalid response."},
+                          {"viewVersion", requested_version},
+                          {"viewId", job.args[0]}};
+        }
+        return successful_completion(job, std::move(result));
     }
     *handled = false;
     return {};
@@ -3691,6 +4838,9 @@ void translate_event_locked(NativeAdapter& adapter, const json& notification,
         emit(provider_id.empty() ? "tool_progress" : "provider_tool_progress", payload);
     } else if (native_name == "chat.metrics") {
         emit(provider_id.empty() ? "token_warning" : "provider_token_warning", payload);
+    } else if (native_name == "host.log" &&
+               string_member_or(payload, "kind") == "extension_tree_changed") {
+        emit("extension_tree_changed", payload);
     } else if (native_name != "run.started") {
         emit(native_name, payload);
     }
@@ -4140,6 +5290,7 @@ sao_status_t native_adapter_create(sao_ai_editor_launcher_t launcher,
             return SAO_STATUS_ERR_UNKNOWN;
         adapter->launcher = launcher;
         adapter->owner_thread = std::this_thread::get_id();
+        adapter->memory_viewer = std::make_unique<sao::ai_editor::native::MemoryViewerProvider>();
         adapter->worker = std::thread(worker_main, adapter.get());
         *out_adapter = adapter.release();
         return SAO_STATUS_OK;
@@ -4162,6 +5313,8 @@ sao_status_t native_adapter_set_document(NativeAdapter* adapter,
             return SAO_STATUS_ERR_CANCELLED;
         if (document_token == adapter->document_token)
             return SAO_STATUS_OK;
+        if (adapter->document_generation == (std::numeric_limits<uint64_t>::max)())
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
         for (const auto& [run_id, binding] : adapter->runs)
             enqueue_unique(adapter->orphan_run_ids, run_id);
         for (const auto& [execution_id, pending] : adapter->workflows)
@@ -4169,8 +5322,6 @@ sao_status_t native_adapter_set_document(NativeAdapter* adapter,
         adapter->orphan_cleanup_deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(2);
         ++adapter->document_generation;
-        if (adapter->document_generation == 0)
-            ++adapter->document_generation;
         adapter->document_token.assign(document_token);
         adapter->jobs.clear();
         adapter->completions.clear();
@@ -4200,6 +5351,68 @@ sao_status_t native_adapter_set_document(NativeAdapter* adapter,
     }
 }
 
+sao_status_t native_adapter_bind_memory_target(NativeAdapter* adapter,
+                                               sao_rt_io_proxy_handle_t proxy, std::uint32_t pid,
+                                               std::uint64_t start_time_100ns,
+                                               std::uint64_t selection_generation) noexcept {
+    if (adapter == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!adapter_on_owner(*adapter))
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!adapter->memory_viewer)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (proxy == nullptr || pid == 0u || start_time_100ns == 0u || selection_generation == 0u)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const sao::ai_editor::native::MemoryViewerBindingIdentity requested{pid, start_time_100ns,
+                                                                        selection_generation};
+    {
+        std::lock_guard lock(adapter->mutex);
+        if (adapter->stopping || adapter->worker_exited)
+            return SAO_STATUS_ERR_CANCELLED;
+        if (adapter->memory_binding != requested &&
+            adapter->memory_binding_epoch == (std::numeric_limits<std::uint64_t>::max)())
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    }
+    const auto outcome =
+        adapter->memory_viewer->bind(proxy, pid, start_time_100ns, selection_generation);
+    if (!outcome.ok())
+        return outcome.rt_io_status;
+    {
+        std::lock_guard lock(adapter->mutex);
+        if (adapter->memory_binding != requested) {
+            ++adapter->memory_binding_epoch;
+            adapter->memory_binding = requested;
+        }
+    }
+    return SAO_STATUS_OK;
+}
+
+sao_status_t native_adapter_clear_memory_target(NativeAdapter* adapter) noexcept {
+    if (adapter == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (!adapter_on_owner(*adapter))
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (!adapter->memory_viewer)
+        return SAO_STATUS_OK;
+    {
+        std::lock_guard lock(adapter->mutex);
+        if (adapter->memory_binding.pid != 0u &&
+            adapter->memory_binding_epoch == (std::numeric_limits<std::uint64_t>::max)())
+            return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    }
+    const auto outcome = adapter->memory_viewer->clear();
+    if (!outcome.ok())
+        return outcome.rt_io_status;
+    {
+        std::lock_guard lock(adapter->mutex);
+        if (adapter->memory_binding.pid != 0u) {
+            ++adapter->memory_binding_epoch;
+            adapter->memory_binding = {};
+        }
+    }
+    return SAO_STATUS_OK;
+}
+
 sao_status_t native_adapter_submit(NativeAdapter* adapter, std::string_view document_token,
                                    std::string_view request_id, std::string_view method,
                                    const json& args) noexcept {
@@ -4215,6 +5428,16 @@ sao_status_t native_adapter_submit(NativeAdapter* adapter, std::string_view docu
     try {
         if (!json_within_budget(args) || args.dump().size() > kMaximumRequestBytes)
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        sao::ai_editor::native::MemoryViewerBindingIdentity memory_binding{};
+        const bool capture_memory_binding = method == "memviewer_status" ||
+                                            method == "memviewer_read" ||
+                                            method == "memviewer_read_value" ||
+                                            method == "memviewer_regions";
+        if (capture_memory_binding) {
+            if (!adapter->memory_viewer)
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+            memory_binding = adapter->memory_viewer->status().binding;
+        }
         std::lock_guard lock(adapter->mutex);
         if (adapter->stopping || adapter->worker_exited || adapter->worker_failed)
             return SAO_STATUS_ERR_CANCELLED;
@@ -4230,8 +5453,12 @@ sao_status_t native_adapter_submit(NativeAdapter* adapter, std::string_view docu
                 kMaximumCompletions) {
             return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
         }
-        adapter->jobs.push_back({std::string(document_token), std::string(request_id),
-                                 std::string(method), args, adapter->document_generation});
+        AdapterJob job{std::string(document_token), std::string(request_id), std::string(method),
+                       args, adapter->document_generation};
+        job.memory_binding = memory_binding;
+        job.memory_binding_epoch = adapter->memory_binding_epoch;
+        job.memory_binding_captured = capture_memory_binding;
+        adapter->jobs.push_back(std::move(job));
         request_event_poll_locked(*adapter, kRequestEventPollLifetime);
         return SAO_STATUS_OK;
     } catch (...) {
@@ -4248,6 +5475,9 @@ sao_status_t native_adapter_drain(NativeAdapter* adapter,
         return SAO_STATUS_ERR_ACCESS_DENIED;
     if (completions == nullptr || events == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    sao::ai_editor::native::MemoryViewerBindingIdentity current_memory_binding{};
+    if (adapter->memory_viewer)
+        current_memory_binding = adapter->memory_viewer->status().binding;
     try {
         std::lock_guard lock(adapter->mutex);
         if (adapter->worker_failed)
@@ -4263,8 +5493,44 @@ sao_status_t native_adapter_drain(NativeAdapter* adapter,
             adapter->dropped_events = 0;
         }
         while (!adapter->completions.empty()) {
-            completions->push_back(std::move(adapter->completions.front()));
+            NativeAdapterCompletion completion = std::move(adapter->completions.front());
             adapter->completions.pop_front();
+            const bool memory_result_succeeded = completion.memory_binding_captured &&
+                                                 completion.ok && completion.result.is_object() &&
+                                                 completion.result.value("ok", false);
+            const bool memory_epoch_matches =
+                completion.memory_binding_epoch == adapter->memory_binding_epoch;
+            const bool memory_binding_matches =
+                completion.memory_pid == current_memory_binding.pid &&
+                completion.memory_start_time_100ns == current_memory_binding.start_time_100ns &&
+                completion.memory_selection_generation ==
+                    current_memory_binding.selection_generation;
+            if (completion.memory_binding_captured &&
+                (!memory_epoch_matches || (memory_result_succeeded && !memory_binding_matches))) {
+                const json captured_binding =
+                    completion.memory_pid == 0u
+                        ? json(nullptr)
+                        : json{{"pid", completion.memory_pid},
+                               {"startTime100ns",
+                                std::to_string(completion.memory_start_time_100ns)},
+                               {"selectionGeneration",
+                                std::to_string(completion.memory_selection_generation)}};
+                completion.result = {{"ok", false},
+                                     {"error", "stale"},
+                                     {"details",
+                                      {{"ok", false},
+                                       {"status", "error"},
+                                       {"binding", captured_binding},
+                                       {"error",
+                                        {{"code", "stale"},
+                                         {"message", "process selection changed before delivery"},
+                                         {"rtIoStatus", SAO_STATUS_ERR_CANCELLED}}}}}};
+                completion.ok = true;
+                completion.error_code.clear();
+                completion.error_message.clear();
+                completion.error_data = nullptr;
+            }
+            completions->push_back(std::move(completion));
         }
         while (!adapter->events.empty()) {
             events->push_back(std::move(adapter->events.front()));
@@ -4309,6 +5575,12 @@ sao_status_t native_adapter_try_destroy(NativeAdapter* adapter) noexcept {
         }
         if (adapter->worker.joinable())
             adapter->worker.join();
+        if (adapter->memory_viewer) {
+            const auto outcome = adapter->memory_viewer->close();
+            if (!outcome.ok())
+                return outcome.rt_io_status;
+            adapter->memory_viewer.reset();
+        }
         delete adapter;
         return SAO_STATUS_OK;
     } catch (...) {
